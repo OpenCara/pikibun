@@ -14,7 +14,7 @@ import type { AuthorizationRequest, AuthorizationResult, GitHubEffectAuthority, 
 import type { SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import { MAX_CLONE_BRANCHES } from "./clone-branches.js";
 import { sessionActivities } from "../../../packages/shared/src/types.js";
-import { buildVersion, CONNECTOR_VERSION_HEADER } from "../../../packages/shared/src/version.js";
+import { buildVersion, CONNECTOR_VERSION_HEADER, DEVELOPMENT_CONNECTOR_VERSION } from "../../../packages/shared/src/version.js";
 import { acquireRunnerLease } from "./lease.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { CREATE_FILE, exactMode, OPEN_DIRECTORY, OPEN_FILE, windows } from "./platform.js";
@@ -762,7 +762,7 @@ export class LocalConnector {
 
   private async callbackResponse(generation: Generation, path: string, body: unknown, signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal, AbortSignal.timeout(15_000)])): Promise<Response> {
     this.requireGeneration(generation);
-    const version = this.options.version ?? buildVersion;
+    const version = this.options.version ?? buildVersion ?? DEVELOPMENT_CONNECTOR_VERSION;
     const response = await (this.options.fetch ?? fetch)(`${this.state!.controlPlaneUrl}${path}`, {
       method: "POST", redirect: "error", credentials: "omit",
       headers: { authorization: `Bearer ${this.state!.token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json",
