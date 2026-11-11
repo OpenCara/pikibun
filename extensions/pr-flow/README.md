@@ -35,6 +35,7 @@ with **Edit**. See [the design](../../docs/design/piki-extensions.md#the-pull-re
 ## In Pi
 
 ```bash
+pi install npm:@opencara/pi-pr-flow   # from npm
 pi install ./extensions/pr-flow      # from a clone of this repository
 pi -e ./extensions/pr-flow           # or for one run only
 ```

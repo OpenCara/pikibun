@@ -10,6 +10,7 @@ but Pi's own packages and Node's, so it runs in Pi as it does in Pikibun.
 ## In Pi
 
 ```bash
+pi install npm:@opencara/pi-prompt-audit   # from npm
 pi install ./extensions/prompt-audit      # from a clone of this repository
 pi -e ./extensions/prompt-audit           # or for one run only
 ```
