@@ -431,7 +431,6 @@ test('a sweep that ends frees only the hosts it still holds, never one a later s
   const previous = globalThis.fetch;
   const submitted: string[] = [];
   globalThis.fetch = async (input, init) => {
-    const path = new URL(String(input)).pathname;
     const content = init?.body ? (JSON.parse(String(init.body)) as { content?: string }).content : undefined;
     if (content) submitted.push(content);
     if (content === 'Slow') await first.promise;
