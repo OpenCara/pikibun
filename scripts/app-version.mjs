@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// Stamps the version a release packages into the client (apps/nsh/src/app-version.ts), which NSH can't read at
-// runtime: the app shows it and compares it with GitHub's releases to offer an update. Run before `nsh package`:
-//   node scripts/app-version.mjs 1.2.3-beta.1
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

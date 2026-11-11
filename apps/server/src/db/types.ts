@@ -23,6 +23,14 @@ export interface Database {
 
 export interface InstanceLock {
   release(): Promise<void>;
+  onLost?(listener: (error: Error) => void): void;
+}
+
+export class InstanceLockLostError extends Error {
+  constructor(reason: string) {
+    super(`This server lost its single-instance lock on the database: ${reason}. It stops rather than run beside another server.`);
+    this.name = 'InstanceLockLostError';
+  }
 }
 
 export class InstanceLockedError extends Error {

@@ -4,7 +4,6 @@ import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
 
-/** A phone's window, or one as narrow: at most 600 points wide. */
 export const phoneWidth = () => windowSize().width > 0 && windowSize().width <= 600;
 
 type ButtonVariant = "primary" | "default" | "outline" | "ghost" | "danger" | "accent";
@@ -207,7 +206,6 @@ export function NavItem(props: { icon?: IconName; leading?: JSX.Element; label: 
 
 export function Chip(props: {
   label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean; small?: boolean; expanded?: boolean; maxWidth?: number;
-  /** Tighter padding and a smaller chevron, for a row of them that has to fit on one line of a phone. */
   dense?: boolean;
 }) {
   const color = () => (props.tone ? palette().tones[props.tone].text : palette().muted);
@@ -469,50 +467,56 @@ export function DropdownMenu(props: { label: string; items: (MenuAction | "separ
   );
 }
 
-/**
- * A row's right-click menu, which a finger held on the row opens as a sheet on touch screens. `open` and `onOpenChange` control it, to open it
- * from elsewhere too (a swiped row's More). `detached`, it doesn't wrap the row: the row opens it itself (`open`, from its own long press).
- * A context menu's trigger takes every touch on touch screens, so a row that slides (`SwipeRow`) needs its menu beside it.
- */
+let heldMenu: object | undefined;
+
+export const rowPress = (action: () => void) => () => {
+  if (heldMenu) {
+    heldMenu = undefined;
+    return;
+  }
+  action();
+};
+
 export function RowMenu(props: {
   items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string; open?: boolean; onOpenChange?: (open: boolean) => void; detached?: boolean;
 }) {
+  const held = {};
+  const release = () => { if (heldMenu === held) heldMenu = undefined; };
+  cleanup(release);
   const menu = (trigger: JSX.Element) => (
-    <ContextMenu testID={props.testID} trigger={trigger} disabled={!props.items().some(item => item !== "separator")} offset={2}
-      open={props.open} onOpenChange={event => props.onOpenChange?.(event.open)}
+    <ContextMenu testID={props.testID} trigger={trigger} disabled={!props.items().some(item => item !== "separator")} offset={2} open={props.open}
+      onOpenChange={change => {
+        if (change.open && change.reason === "longPress") heldMenu = held;
+        else release();
+        props.onOpenChange?.(change.open);
+      }}
       backdropStyle={{ backgroundColor: palette().backdrop }} popupStyle={menuPopupStyle()}>
       <MenuActions items={props.items()} />
     </ContextMenu>
   );
-  if (untracked(() => props.detached)) return <>{props.children}{menu(<View style={{ height: 0 }} />)}</>;
-  return menu(props.children);
+  if (!untracked(() => props.detached)) return menu(props.children);
+  effect(() => {
+    if (props.open) heldMenu = held;
+    else release();
+  });
+  return <>{props.children}{menu(<View style={{ height: 0 }} />)}</>;
 }
 
-/** An action behind a `SwipeRow`: a tile with its icon and label. */
 export interface SwipeAction {
   label: string;
   icon: IconName;
-  /** Its tile's color: a tone's, the accent's, or the neutral control's (the default). */
   tone?: Tone | "accent";
   disabled?: boolean;
   testID?: string;
   onPress: () => void;
 }
 
-/** Whether rows slide sideways under a finger to show actions: on phones and tablets, and browsers on them; not on the desktops (and
- * browsers in their idiom), whose mouse opens the rows' right-click menus instead. */
 export const swipesRows = !platform.desktop;
 
 const swipeTileWidth = 72;
 
-/** Points a second past which a let-go swipe is a flick. */
 const swipeFling = 400;
 
-/**
- * Where a swiped row comes to rest, let go `from` points off its place (negative: left) at `velocity` points a second, with `leading` and
- * `trailing` points of tiles: open on the side it was dragged to past half of them unless flicked back, or flicked toward short of that;
- * shut otherwise.
- */
 export function swipeRest(from: number, velocity: number, leading: number, trailing: number): number {
   if (from < 0 && trailing > 0 && (from < -trailing / 2 ? velocity < swipeFling : velocity < -swipeFling)) return -trailing;
   if (from > 0 && leading > 0 && (from > leading / 2 ? velocity > -swipeFling : velocity > swipeFling)) return leading;
@@ -523,7 +527,6 @@ function swipeColors(tone: SwipeAction["tone"]): { background: string; text: str
   const p = palette();
   if (tone === "accent") return { background: p.accent, text: p.onAccent };
   if (!tone || tone === "neutral") return { background: p.control, text: p.text };
-  // A status color is dark on the light theme and light on the dark ones: the page's own background reads on it in each.
   return { background: p.tones[tone].text, text: p.background };
 }
 
@@ -541,28 +544,15 @@ function SwipeTile(props: { action: SwipeAction; dense?: boolean; onPress: () =>
   );
 }
 
-/**
- * A row that slides sideways under a finger to show actions behind it, as mail and chat apps' lists do: dragged left it shows
- * `trailing` at its right edge, dragged right `leading` at its left. Let go past half of them (or flung) it stays open, else it
- * springs back. A tile runs its action and closes the row. `open` and `onOpenChange` let a list keep one row open at a time:
- * setting `open` false closes it. The drag only takes horizontal moves, so the list around it still scrolls. On the desktops
- * (`swipesRows`) it is the row alone. A `ContextMenu` wrapping it takes its drags: give its row a `detached` `RowMenu`.
- */
 export function SwipeRow(props: {
   leading?: SwipeAction[]; trailing?: SwipeAction[]; open: boolean; onOpenChange: (open: boolean) => void;
-  /** The row's backdrop while it slides, over the tiles: the list's background. */
   background: string;
-  /** Icon-only tiles, for short rows. */
   dense?: boolean;
   testID?: string;
   children: JSX.Element;
 }) {
   if (!swipesRows) return props.children;
-  // The offset is where the row rests (0, the leading tiles' width, or minus the trailing ones'); a drag moves the value by its
-  // translation, and a settle springs the value back to 0 with the offset at its new rest.
   const x = createAnimatedValue(0);
-  // The tiles there are: both sides while a finger drags it (the drag's direction is only known where it moves, natively), the open side
-  // once it rests open, none once it has closed.
   const shown = signal<"both" | "leading" | "trailing" | null>(null);
   let rest = 0;
   let moves = 0;
@@ -573,7 +563,6 @@ export function SwipeRow(props: {
   const leadingWidth = () => leading().length * swipeTileWidth;
   const trailingWidth = () => trailing().length * swipeTileWidth;
   const enabled = () => leadingWidth() + trailingWidth() > 0;
-  // Past its tiles the row gives a little, then stops.
   const track = computed(() => {
     const low = -trailingWidth();
     const high = leadingWidth();
@@ -592,7 +581,6 @@ export function SwipeRow(props: {
     clearTimeout(hiding);
     if (target > 0) shown.set("leading");
     else if (target < 0) shown.set("trailing");
-    // Once it has sprung shut.
     else hiding = setTimeout(() => { if (move === moves && rest === 0) shown.set(null); }, 450);
     if ((target !== 0) !== untracked(() => props.open)) props.onOpenChange(target !== 0);
   }

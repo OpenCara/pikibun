@@ -16,6 +16,7 @@ export function ownerViewRequest(c: AppContext, row: SessionRow): Promise<Respon
 async function actorRequest(c: AppContext, actorId: string, row: SessionRow, action: RunnerAction, suffix = '', body?: unknown, pin?: ConnectionPin): Promise<Response> {
   const current = await requireRunnerAccess(c, actorId, row, action);
   if (current.connector_id) return connectorRequest(c, current, action, suffix, body, actorId, pin);
+  if (!testMode(c.env)) fail(503, 'runner_unavailable', 'This session has no host.');
   const secret = c.env.RUNNER_SHARED_SECRET;
   if (!secret || secret.length < 32 || !c.env.RUNNER_URL) fail(503, 'runner_unavailable', 'The external runner is not configured.');
   let base: URL;

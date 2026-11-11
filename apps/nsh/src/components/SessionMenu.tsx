@@ -13,7 +13,6 @@ export const sessionLink = (id: string): string => `${session().origin}/${routeH
 export interface SessionMenu {
   action: Action;
   items: (current: SessionRecord) => (MenuAction | "separator")[];
-  /** The tiles behind a swiped row: dragged right, copying its link and renaming it; dragged left, `more` (the whole menu) and archiving it. */
   swipe: (current: SessionRecord, more: () => void) => { leading: SwipeAction[]; trailing: SwipeAction[] };
   renaming: Accessor<SessionRecord | null>;
   rename: (title: string) => void;
@@ -47,7 +46,6 @@ export function createSessionMenu(): SessionMenu {
     if (await action.run(async () => { await session().api(base(current), { method: "PATCH", body: { title: next } }); changed(); }, "Session renamed")) renaming.set(null);
   }
 
-  /** What the person can do with the session, each where they may: the menu and the swipe tiles are made of these. */
   function actions(current: SessionRecord) {
     const { user } = untracked(session);
     const role = data.workspaces().find(workspace => workspace.id === current.workspaceId)?.role;

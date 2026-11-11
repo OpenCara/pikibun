@@ -417,7 +417,6 @@ function binding(id: string): RunnerBinding {
   };
 }
 
-// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
 const sandboxed = !linuxSandboxMissing();
 
 test("a sandboxed git clone of a workspace repository goes through the proxy and the relay", { skip: !sandboxed }, async t => {
@@ -452,7 +451,7 @@ test("a sandboxed git clone of a workspace repository goes through the proxy and
   await sandbox.initialize();
   const shell = (command: string) => sandbox.execute({ kind: "bash", command }, false, async () => {}, { allowTestShell: true });
 
-  await shell(`test "$(ls -A /etc)" = ssl && test "$(ls -A /etc/ssl/certs)" = ca-certificates.crt && test "$SSL_CERT_FILE" = ${CA_BUNDLE}`);
+  await shell(`test "$(echo $(ls -A /etc))" = "group hosts nsswitch.conf passwd ssl" && test "$(ls -A /etc/ssl/certs)" = ca-certificates.crt && test "$SSL_CERT_FILE" = ${CA_BUNDLE}`);
   await shell("python3 -c \"import ssl, sys; sys.exit(0 if ssl.create_default_context().cert_store_stats()['x509_ca'] > 0 else 1)\"");
   await assert.rejects(shell("echo changed > /etc/ssl/certs/ca-certificates.crt"), /Read-only|Permission denied/);
 

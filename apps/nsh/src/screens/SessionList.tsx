@@ -8,7 +8,7 @@ import { session } from "../lib/auth";
 import type { Action } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
-import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, StatusDot, SwipeRow, swipesRows, type MenuAction } from "../ui";
+import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, StatusDot, SwipeRow, swipesRows, type MenuAction } from "../ui";
 
 type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; canCreate: boolean }
@@ -36,7 +36,6 @@ export function SessionList(props: {
   const query = signal("");
   const showArchived = signal(false);
   const collapsed = signal<readonly string[]>([]);
-  // The session whose row is swiped open: one at a time, closed when another opens or the list starts scrolling.
   const swiped = signal<string | null>(null);
   const swipe = (id: string, open: boolean) => swiped.update(current => (open ? id : current === id ? null : current));
   const archivedCount = () => data.sessions().filter(item => item.status === "archived").length;
@@ -177,7 +176,7 @@ function WorkspaceRow(props: {
   return (
     <RowMenu items={options} testID={`workspace-menu-${props.row.id}`}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 8 }}>
-        <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={() => props.onToggle(props.row.id)}
+        <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={rowPress(() => props.onToggle(props.row.id))}
           style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingHorizontal: 8, paddingVertical: 6,
             borderRadius: radius.medium }}
           hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
@@ -206,8 +205,7 @@ function SessionRow(props: {
   const { user } = untracked(session);
   const menuOpen = signal(false);
   const swipe = computed(() => props.menu.swipe(props.item, () => menuOpen.set(true)));
-  // A tap on a row swiped open closes it rather than opening the session.
-  const press = () => (props.swiped ? props.onSwipe(false) : props.onOpen(props.item.id));
+  const press = rowPress(() => (props.swiped ? props.onSwipe(false) : props.onOpen(props.item.id)));
   const status = () => {
     const live = data.liveActivity();
     return sessionStatus(props.item, live?.sessionId === props.item.id ? live.activity : undefined);
@@ -219,8 +217,6 @@ function SessionRow(props: {
     return tone ? palette().tones[tone].text : palette().muted;
   };
   const details = () => Boolean(status().label) || Boolean(props.item.pullRequest) || Boolean(props.item.tunnel) || Boolean(relation());
-  // Where the row slides, a finger held on it opens its menu itself, and the menu is beside it: a context menu's trigger would take its
-  // drags. The row is a view rather than a button for that, as a button hears no long press.
   return (
     <RowMenu items={() => props.menu.items(props.item)} testID={`session-menu-${props.item.id}`} open={menuOpen()} onOpenChange={open => menuOpen.set(open)}
       detached={swipesRows}>

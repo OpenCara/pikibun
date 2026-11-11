@@ -3,22 +3,21 @@ import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
-import type { ApprovalRecord, ChatOptions, Operation, Permission, RunnerBinding, SessionRole, SessionView, SubmitResult, WithdrawResult, WorkspaceRole } from '../../../packages/shared/src/types.js';
+import type { ChatOptions, Permission, RunnerBinding, SessionRole, SessionView, SubmitResult, WithdrawResult, WorkspaceRole } from '../../../packages/shared/src/types.js';
 import { accessModes, permissions, sessionRoles, thinkingLevels } from '../../../packages/shared/src/types.js';
 import { connectorLimits, type ConnectorCapabilities, type LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { parseChatImages, type ChatImage } from '../../../packages/shared/src/chat-images.js';
-import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { isRevision } from '../../../packages/shared/src/view-patch.js';
 import { hasPermission, managesSession, normalizePermissions, roleSessionCeiling, sessionRoleOf, sessionRolePermissions, validateUserEnv } from '../../../packages/shared/src/policy.js';
 import type { AgentRow, AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
-import { agentVersion, getUser, modelDefinition, requireActiveSession, requireUnfrozen, runnerSessionRecord, sessionRecord, userProfile } from './db.js';
+import { agentVersion, getUser, modelDefinition, requireUnfrozen, runnerSessionRecord, sessionRecord, userProfile } from './db.js';
 import {
   auditStatement, cloneRepositories, hostAuthority, issueRunAdmission, legacyRepositoryFixture, listSessionAccess, requireConnectorSession, requireMember,
-  requireRunnerAccess, requireSession, requireSessionCreator, requireSessionManager, runsShellCommands, sessionAccess, sessionCreatorSQL, sessionManagerSQL,
+  requireRunnerAccess, requireSession, requireSessionCreator, requireSessionManager, runsShellCommands, sessionCreatorSQL, sessionManagerSQL,
   audienceSharing,
 } from './authority/index.js';
 import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
-import { fail, id, identifier, jsonObject, now, randomToken, testMode, text, userIdentifier } from './http.js';
+import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { connectorUtf8Bytes } from './connector-transport.js';
 import { hostSessionsNeedConsent, hostSessionsSupported } from './connectors.js';
@@ -39,8 +38,6 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
   if (Object.keys(input).some(key => !['model', 'thinkingLevel', 'access', 'autoMerge'].includes(key))) fail(400, 'invalid_options', 'Invalid chat options.');
   if (input.access !== undefined && (mode !== 'submit' || !accessModes.includes(input.access as never))) fail(400, 'invalid_options', 'Side asks are always read-only.');
   if (input.autoMerge !== undefined && typeof input.autoMerge !== 'boolean') fail(400, 'invalid_options', 'Invalid auto-merge choice.');
-  // Nobody approves anything any more: a message acts, or with Read only it only reads. The access of before (approval,
-  // auto) and auto-merge go with nothing, on any host.
   if (input.model === undefined && input.thinkingLevel === undefined && input.access !== 'read') return undefined;
   if (!row.connector_id) fail(400, 'options_unsupported', 'This session\'s runner cannot change model, reasoning or access.');
   const host = await c.env.DB.query<{ models_json: string; capabilities_json: string }>('SELECT models_json, capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')

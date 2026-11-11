@@ -97,6 +97,7 @@ export type TunnelStopReason = (typeof tunnelStopReasons)[number];
 
 export interface SessionTunnelView {
   url: string;
+  access?: "link" | "public";
   startedBy: string;
   startedAt: string;
   expiresAt: string;

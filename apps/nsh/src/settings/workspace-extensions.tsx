@@ -7,7 +7,7 @@ import {
 } from "../../../../packages/shared/src/workspace-tools";
 import {
   extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings,
-  type ExtensionToolMode, type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension,
+  type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension,
 } from "../../../../packages/shared/src/host-extensions";
 import { segment, type Workspace } from "../shared";
 import { session } from "../lib/auth";
@@ -16,7 +16,7 @@ import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { monospace, palette, text } from "../theme";
 import { Checkbox, Field, TextField } from "../form";
-import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Row, Section, Segmented, Small } from "../ui";
+import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Row, Section, Small } from "../ui";
 import { ExtensionSettingsFields } from "./extension-fields";
 
 interface ExtensionHost {

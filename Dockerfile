@@ -40,18 +40,19 @@ COPY apps/server apps/server
 COPY packages/shared packages/shared
 COPY packages/client packages/client
 COPY tsconfig.json ./
+COPY scripts/build-server.mjs scripts/
 RUN pnpm build:server
 COPY --from=web /app/dist/client dist/client
 
-FROM base AS runtime
+# The server is one bundle with its dependencies (scripts/build-server.mjs), so the runtime image installs no packages:
+# not the root manifest's, which also holds the connector's Pi packages.
+FROM ${NODE_IMAGE} AS runtime
+WORKDIR /app
 ENV NODE_ENV=production
 # The release this image is, which /api/health reports and the web app's settings show: release-server.yml passes the
 # tag's version; a local build reports none.
 ARG PIKIBUN_VERSION=
 ENV PIKIBUN_VERSION=${PIKIBUN_VERSION}
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/cli/package.json packages/cli/
-RUN pnpm install --frozen-lockfile --prod
 # dist/server/migrations is produced by `pnpm build:server`; the server resolves it next to the bundle.
 COPY --from=build /app/dist ./dist
 RUN mkdir -p /data && chown node:node /data

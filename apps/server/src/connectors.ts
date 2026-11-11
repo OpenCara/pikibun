@@ -124,8 +124,6 @@ export function hostSessionsSupported(capabilities: ConnectorCapabilities, grant
   return capabilities.hostConfig === true && capabilities.unsandboxed !== true && (!granted || capabilities.hostSessionGrants === true);
 }
 
-// Whether a host's configuration must accept sessions on the host before this one starts there: always for a member
-// the owner granted them, never for the host's owner, once its connector runs the owner's without that consent.
 export function hostSessionsNeedConsent(capabilities: ConnectorCapabilities, granted: boolean): boolean {
   return granted || capabilities.ownerHostSessions !== true;
 }

@@ -580,7 +580,7 @@ test('a host configured in Pikibun uses its Git credentials for pushes only whil
   await assert.rejects(config.pushCredential!(request));
 });
 
-test('a host names its version in its manifest, and a development build names none', { timeout: 10000 }, async t => {
+test('a host names its version in its manifest, and a development build names itself dev, which the minimum version never refuses', { timeout: 10000 }, async t => {
   const manifest = (fixture: Awaited<ReturnType<typeof connectorFixture>>) => fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
   const released = await connectorFixture(t, { version: '0.24.0' });
   await startFixture(released);
@@ -588,7 +588,7 @@ test('a host names its version in its manifest, and a development build names no
   assert.deepEqual(Object.keys(JSON.parse(manifest(released).body)).sort(), ['capabilities', 'models']);
   const development = await connectorFixture(t);
   await startFixture(development);
-  assert.equal(manifest(development).request.headers.get('x-pikibun-version'), null);
+  assert.equal(manifest(development).request.headers.get('x-pikibun-version'), 'dev');
 });
 
 test('a host keeps the repository cache its configuration names for the whole connection, and says so', { timeout: 10000 }, async t => {

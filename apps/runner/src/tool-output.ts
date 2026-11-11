@@ -84,10 +84,6 @@ export function savedOutput(text: string): string {
   return excerpt(text, { bytes: SAVED_OUTPUT_BYTES, lines: Number.MAX_SAFE_INTEGER }, omitted => `[… ${omitted} bytes of the output left out here …]`);
 }
 
-/**
- * What a code mode script gets of an output: all of it while it fits (by default, while it is at most
- * SAVED_OUTPUT_BYTES), else its head and tail with a note of what was left out, so a runaway can't exhaust memory.
- */
 export function scriptOutput(text: string, fits: (shown: string) => boolean = shown => byteLength(shown) <= SAVED_OUTPUT_BYTES): string {
   if (fits(text)) return text;
   const note = (omitted: number) => `[… ${omitted} bytes of the output left out here …]`;

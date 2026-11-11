@@ -73,7 +73,6 @@ describe("swiping a session's row on a phone", () => {
   test("a short flick opens it, a flick back shuts it, and a tap on an open row closes it without opening the session", async () => {
     const app = await phone();
     await app.waitFor("id:session-row-s1");
-    // The test's drags move 600 points a second: flicks.
     await app.drag("id:session-row-s1", { x: -30 });
     await app.waitFor("id:swipe-more-s1");
     await app.drag("id:session-row-s1", { x: 30 });
@@ -133,7 +132,6 @@ describe("swiping a session's row on a phone", () => {
 });
 
 test("a let-go swipe rests open past half its tiles or flicked toward them, else shut", () => {
-  // 72 points of tiles on the right (one), 144 on the left (two).
   expect(swipeRest(-30, 0, 72, 144)).toBe(0);
   expect(swipeRest(-80, 0, 72, 144)).toBe(-144);
   expect(swipeRest(-200, 0, 72, 144)).toBe(-144);
@@ -143,7 +141,6 @@ test("a let-go swipe rests open past half its tiles or flicked toward them, else
   expect(swipeRest(40, 0, 72, 144)).toBe(72);
   expect(swipeRest(20, 600, 72, 144)).toBe(72);
   expect(swipeRest(60, -600, 72, 144)).toBe(0);
-  // No tiles on a side: it never rests open there.
   expect(swipeRest(100, 900, 0, 144)).toBe(0);
   expect(swipeRest(-100, -900, 72, 0)).toBe(0);
 });

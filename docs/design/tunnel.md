@@ -84,6 +84,7 @@ quick tunnel that the connector runs on the host.
 11. **A stop wins over a start.** A stop or the session closing cancels every start asked for before it: one under way,
     one waiting for the one it replaces to go offline, and one waiting its turn behind another. Nothing goes online after
     a stop has returned.
+12. **Only through its link, by default.** `start` takes `access`: `link` (the default) or `public`. With `link`, the connector's forward is not a byte pipe but a small HTTP proxy (`tunnel-gate.ts`, `createTunnelGate`) that holds a random 24-byte secret for the tunnel. A request carrying it as `?pikibun_tunnel=` is answered `303` to the same address without it and a `Set-Cookie` (`HttpOnly`, `Secure`, `SameSite=Lax`, a day); a request whose cookie carries it is passed on with that cookie taken out, WebSocket upgrades too; anything else gets `401`. The link (`QuickTunnel.link`) goes to the call, the session's view and its panel; the bare address goes to the control plane's reports and audit log, which never hold the secret. `public` keeps the byte pipe, for clients that can't follow a link. The gate stands between Cloudflare's edge and the server, so it doesn't depend on Cloudflare: named tunnels can put Cloudflare Access in front instead.
 
 ## Where things are
 
@@ -103,7 +104,6 @@ quick tunnel that the connector runs on the host.
 - **Named tunnels**: the host's owner (or the workspace, as a secret never sent to sandboxes) stores a tunnel token and a
   hostname pattern such as `*.preview.example.com`, and each session gets `<session-slug>.preview.example.com`, a stable
   address. The token stays in the connector, as cloudflared does.
-- **An access gate**: the address behind a shared secret, or Cloudflare Access for named tunnels, for previews that
-  shouldn't be public.
+- **Cloudflare Access for named tunnels**, beside the link's secret (decision 12).
 - **The browser's `serve` as a service**, so a browser that lives across calls can test an app that does too.
 - Services on the macOS and Windows sandboxes, and on sessions that run on the host.

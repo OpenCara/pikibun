@@ -8,6 +8,7 @@ import { HelperWorkspace, type HelperBackend, type HelperContext, type HelperLau
 import { HostWorkspace } from "../../apps/runner/src/host-workspace.js";
 import { NODE_HELPER, NODE_HELPER_KINDS } from "../../apps/runner/src/node-helper.js";
 import { HELPER, Sandbox, type SandboxRequest } from "../../apps/runner/src/sandbox.js";
+import { SeatbeltBackend } from "../../apps/runner/src/seatbelt.js";
 import type { SessionWorkspace } from "../../apps/runner/src/workspace.js";
 import type { RunnerBinding } from "../../packages/shared/src/types.js";
 
@@ -25,6 +26,12 @@ export function linuxSandboxMissing(): string | undefined {
     "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib", "--ro-bind-try", "/lib64", "/lib64", "--symlink", "usr/bin", "/bin", "--proc", "/proc", "--dev", "/dev",
     "--", "/usr/bin/true"], { encoding: "utf8" });
   return probe.status === 0 ? undefined : `bubblewrap can't make a sandbox here (${(probe.stderr || "no user namespaces").trim().slice(0, 120)})`;
+}
+
+export function seatbeltMissing(): string | undefined {
+  if (process.platform !== "darwin") return "the Seatbelt sandbox runs only on macOS";
+  try { new SeatbeltBackend(); } catch (error) { return error instanceof Error ? error.message : String(error); }
+  return undefined;
 }
 
 export function binding(id: string): RunnerBinding {
@@ -78,6 +85,12 @@ export const workspaceKinds: readonly WorkspaceKind[] = [
     name: "the Linux sandbox (bubblewrap, Python helper)", missing: linuxSandboxMissing(),
     open: async t => {
       return opened(t, new Sandbox(binding("conformance-linux"), join(await scratch(t, "conformance-linux-"), "session")));
+    },
+  },
+  {
+    name: "the macOS sandbox (Seatbelt, Python helper)", missing: seatbeltMissing(),
+    open: async t => {
+      return opened(t, new HelperWorkspace(binding("conformance-seatbelt"), join(await scratch(t, "conformance-seatbelt-"), "sandbox"), new SeatbeltBackend()));
     },
   },
   {

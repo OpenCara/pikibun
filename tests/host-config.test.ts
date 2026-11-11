@@ -12,7 +12,6 @@ import type { RunnerBinding } from "../packages/shared/src/types.js";
 import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
 const MiB = 1024 * 1024;
-// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
 const sandboxed = !linuxSandboxMissing();
 
 const GPU_DEVICE = "sys/devices/pci0000:00/0000:00:02.0";

@@ -9,6 +9,11 @@ import { fixWebSite } from "./nsh-web-fixes.mjs";
 
 export const NSH_VERSION = "v0.4.0";
 export const NSH_COMMIT = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3";
+export const NSH_ASSET_SHA256 = Object.freeze({
+  "nsh-linux-x86_64.tar.gz": "8806121aebf40bb51f8fb6aa703722fbb01253f9a435759c18d53beece1ec976",
+  "nsh-macos-arm64.tar.gz": "f63c3d57c31b28c9b34227aac81f099d1e0e61f1db552a6ec5127d114eaf59cb",
+  "nsh-windows-x86_64.zip": "e4cc3893700a1fcceb974c73ef8e08bc94a47a7a85c96d797d49c16dde95dff3",
+});
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const app = path.join(repository, "apps", "nsh");
@@ -40,7 +45,7 @@ async function apiAsset(source) {
   return new URL(url);
 }
 
-export async function releaseAsset(url, { checksum = false, attempts = 4, delayMs = 2000 } = {}) {
+export async function releaseAsset(url, { attempts = 4, delayMs = 2000 } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       const source = new URL(url);
@@ -50,10 +55,7 @@ export async function releaseAsset(url, { checksum = false, attempts = 4, delayM
       if (attempt > 1) request.searchParams.set('_pikibun_retry', `${Date.now()}-${attempt}`);
       const response = await fetch(request, { headers: { 'Cache-Control': 'no-cache', ...(viaApi ? { Accept: 'application/octet-stream' } : {}) } });
       if (!response.ok) throw new Error(`downloading ${new URL(url).pathname}: HTTP ${response.status}`);
-      if (!checksum) return Buffer.from(await response.arrayBuffer());
-      const hash = (await response.text()).trim().split(/\s+/)[0];
-      if (!/^[0-9a-f]{64}$/i.test(hash)) throw new Error('The release checksum response is not a SHA-256 hash');
-      return hash.toLowerCase();
+      return Buffer.from(await response.arrayBuffer());
     } catch (error) {
       if (attempt === attempts) throw error;
       console.error(`Release download attempt ${attempt}/${attempts} failed: ${error.message}; retrying`);
@@ -62,13 +64,24 @@ export async function releaseAsset(url, { checksum = false, attempts = 4, delayM
   }
 }
 
+function pinnedDigest(asset) {
+  const expected = NSH_ASSET_SHA256[asset];
+  if (!expected) throw new Error(`No SHA-256 is pinned for ${asset} of Native Shell ${NSH_VERSION}: add it to NSH_ASSET_SHA256 in scripts/nsh.mjs.`);
+  return expected;
+}
+
+export function checkAsset(asset, bytes) {
+  const expected = pinnedDigest(asset);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expected) throw new Error(`${asset} does not match the SHA-256 pinned for Native Shell ${NSH_VERSION} (${actual} != ${expected})`);
+}
+
 async function download(asset, directory) {
   const base = `https://github.com/longbridge/nsh/releases/download/${NSH_VERSION}`;
-  const expected = await releaseAsset(`${base}/${asset}.sha256`, { checksum: true });
+  pinnedDigest(asset);
   console.error(`Downloading Native Shell ${NSH_VERSION} (${asset}, several hundred MB, once)…`);
   const bytes = await releaseAsset(`${base}/${asset}`);
-  const actual = createHash("sha256").update(bytes).digest("hex");
-  if (actual !== expected) throw new Error(`${asset} does not match its published SHA-256 (${actual} != ${expected})`);
+  checkAsset(asset, bytes);
   const partial = `${directory}.partial`;
   rmSync(partial, { recursive: true, force: true });
   mkdirSync(partial, { recursive: true });

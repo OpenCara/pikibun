@@ -12,7 +12,7 @@ import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { REDACTED } from '../packages/shared/src/redaction.js';
 import type { SessionLink, SharedSession, SharedSessionView } from '../packages/shared/src/sharing.js';
-import type { ApprovalRecord, EntryView, ModelDefinition, SessionRecord, SessionView } from '../packages/shared/src/types.js';
+import type { EntryView, ModelDefinition, SessionRecord, SessionView } from '../packages/shared/src/types.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'session-links-test-secret-not-for-deployment';

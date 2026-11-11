@@ -94,7 +94,7 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
   const sessionId = identifier(input.sessionId, 'sessionId');
   const actorId = userIdentifier(input.actorId, 'actorId');
   const admissionId = text(input.admissionId, 'admissionId', 128);
-  const callId = identifier(input.callId, 'callId');
+  identifier(input.callId, 'callId');
   const sourceId = identifier(input.source, 'source');
   if (input.item !== undefined && !validSourceItem(input.item)) fail(400, 'invalid_input', 'item must be an id or link of one line.');
   const item = input.item === undefined ? null : (input.item as string).trim();

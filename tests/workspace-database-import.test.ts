@@ -104,7 +104,7 @@ test('what Postgres cannot store is replaced, keys stay data, and repeated activ
   }), workspace);
   const [session] = data.sessions;
   assert.equal(session?.title, 'Nul\uFFFDtitle');
-  const approval = (session?.data?.approvals as Record<string, unknown>[])[0]!;
+  const approval = (session!.data!.approvals as Record<string, unknown>[])[0]!;
   assert.equal(approval.note, 'a\uFFFDb');
   assert.ok(Object.hasOwn(approval, '__proto__'), 'A "__proto__" key is kept as data');
   assert.equal(({} as { polluted?: boolean }).polluted, undefined);

@@ -8,6 +8,7 @@ import type { ApprovalRecord } from "../packages/shared/src/types.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import { MIRROR_ROOT } from "../apps/runner/src/sandbox.js";
 import { ApprovalWaits, boundedResult } from "../apps/runner/src/session/approval-waits.js";
+import { BranchReports } from "../apps/runner/src/session/branch-reports.js";
 import { CRASHED_TEXT, endView, refusedView } from "../apps/runner/src/session/entries.js";
 import { MessageInputs } from "../apps/runner/src/session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "../apps/runner/src/session/mirrors.js";
@@ -153,4 +154,49 @@ test("mirrors: borrowed only while the grant names the repository and the relay 
   assert.equal(relayed, 3);
   assert.ok(MIRROR_CONFIRM_MS > 0 && MIRROR_ROOT.startsWith("/"));
   assert.ok(refused(new RunnerError(404, "gone")) && !refused(new RunnerError(429, "slow")) && !refused(new RunnerError(408, "late")));
+});
+
+test("branch reports send each change once, fold reports asked for meanwhile into one more, and stop when the session closes", async () => {
+  const repository = { bindingId: "b1", provider: "github", host: "github.com", owner: "acme", name: "app", repositoryId: "1", fullName: "acme/app" } as unknown as EgressRepository;
+  const sent: string[][] = [];
+  let branch = "feature";
+  let grants = 0;
+  let closing = false;
+  const gate: { open?: () => void } = {};
+  const warnings: string[] = [];
+  const reports = new BranchReports({
+    sessionId: "s1", closing: () => closing, warn: message => warnings.push(message),
+    send: async (_session, branches) => { sent.push(branches.map(item => item.branch)); if (gate.open === undefined) return; await new Promise<void>(resolve => { gate.open = resolve; }); },
+    repositories: async () => { grants++; return [repository]; },
+    clones: async () => [{ directory: "app", origin: "https://github.com/acme/app.git", branch }],
+  });
+  reports.request();
+  await reports.settled();
+  assert.deepEqual(sent, [["feature"]]);
+  assert.equal(grants, 1, "the repositories are asked for once");
+  reports.request();
+  await reports.settled();
+  assert.equal(sent.length, 1, "an unchanged report isn't sent again");
+  branch = "second";
+  gate.open = () => {};
+  reports.request();
+  reports.request();
+  reports.request();
+  branch = "third";
+  await new Promise(resolve => setTimeout(resolve, 10));
+  gate.open?.();
+  gate.open = undefined;
+  await reports.settled();
+  await reports.settled();
+  assert.deepEqual(sent.map(list => list[0]), ["feature", "second", "third"], "reports asked for while one was sent become one more, with the latest branches");
+  closing = true;
+  branch = "after";
+  reports.request();
+  await reports.settled();
+  assert.equal(sent.length, 3, "nothing after the session closes");
+  const failing = new BranchReports({ sessionId: "s2", closing: () => false, warn: message => warnings.push(message),
+    send: async () => { throw new Error("offline"); }, repositories: async () => [repository], clones: async () => [{ directory: "app", origin: "https://github.com/acme/app.git", branch: "x" }] });
+  failing.request();
+  await failing.settled();
+  assert.match(warnings.at(-1) ?? "", /Session s2: could not report its clones' branches: offline/);
 });

@@ -369,6 +369,89 @@ test('schedules due together for one session send one message; the rest find it 
   assert.equal(f.submitted.length, 1, 'not queued behind the first');
 });
 
+test('a slow host holds up only its own schedules: hosts run at once, and a later sweep leaves a busy host alone', async t => {
+  const f = await fixture(t);
+  const agent = f.sqlite.prepare("SELECT agent_version_id, workspace_id FROM sessions WHERE id = 'scheduled-session'").get()!;
+  f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility) VALUES (?,?,?,?,?,?,?,'private')")
+    .run('other-session', agent.workspace_id, f.owner.user.id, agent.agent_version_id, 'other', 'ready', new Date().toISOString());
+  const slow = (await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Slow' })).json() as { schedule: SessionSchedule }).schedule;
+  const later = (await (await f.owner.request('POST', base, { cron: '5 9 * * *', content: 'Later' })).json() as { schedule: SessionSchedule }).schedule;
+  const fast = (await (await f.owner.request('POST', '/api/sessions/other-session/schedules', { cron: '0 9 * * *', content: 'Fast' })).json() as { schedule: SessionSchedule }).schedule;
+  const gate = Promise.withResolvers<void>();
+  const previous = globalThis.fetch;
+  const done: string[] = [];
+  let held = false;
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/v1/sessions/scheduled-session/submit' && !held) { held = true; await gate.promise; }
+    const response = await previous(input, init);
+    done.push(path);
+    return response;
+  };
+  const sweep = runScheduledPrompts(f.env, Date.parse(slow.nextRunAt!) + 1000);
+  for (let i = 0; i < 200 && !done.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(done, ['/v1/sessions/other-session/submit'], 'the other host\'s prompt is sent while the slow one waits');
+  const overlapping = await runScheduledPrompts(f.env, Date.parse(later.nextRunAt!) + 1000);
+  assert.deepEqual(overlapping, [], 'a sweep during the slow run leaves its host alone and finds nothing else due');
+  gate.resolve();
+  const outcomes = await sweep;
+  assert.deepEqual(outcomes.map(outcome => outcome.scheduleId).sort(), [slow.id, fast.id].sort());
+  assert.ok(outcomes.every(outcome => 'submissionId' in outcome));
+  const next = await runScheduledPrompts(f.env, Date.parse(later.nextRunAt!) + 1000);
+  assert.deepEqual(next.map(outcome => outcome.scheduleId), [later.id], 'once the host is free, its next schedule runs');
+});
+
+test('a run the database fails is recorded as failed, and its host is free for the next sweep', async t => {
+  const f = await fixture(t);
+  const { schedule } = await (await f.owner.request('POST', base, { cron: '0 * * * *', content: 'Hourly' })).json() as { schedule: SessionSchedule };
+  const due = Date.parse(schedule.nextRunAt!);
+  let failed = false;
+  f.setBeforeQuery(sql => {
+    if (!failed && sql.startsWith('UPDATE session_schedules SET last_submission_id')) { failed = true; throw new Error('database unavailable'); }
+  });
+  const [outcome] = await runScheduledPrompts(f.env, due + 1000);
+  f.setBeforeQuery(undefined);
+  assert.ok(outcome && 'error' in outcome, 'the failure is the run\'s outcome, not the sweep\'s');
+  const next = await runScheduledPrompts(f.env, due + 3600_000 + 1000);
+  assert.deepEqual(next.map(item => item.scheduleId), [schedule.id], 'the host was freed: its next run goes ahead');
+});
+
+test('a sweep that ends frees only the hosts it still holds, never one a later sweep took meanwhile', async t => {
+  const f = await fixture(t);
+  const agent = f.sqlite.prepare("SELECT agent_version_id, workspace_id FROM sessions WHERE id = 'scheduled-session'").get()!;
+  f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility) VALUES (?,?,?,?,?,?,?,'private')")
+    .run('other-session', agent.workspace_id, f.owner.user.id, agent.agent_version_id, 'other', 'ready', new Date().toISOString());
+  const other = '/api/sessions/other-session/schedules';
+  const slow = (await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Slow' })).json() as { schedule: SessionSchedule }).schedule;
+  await f.owner.request('POST', other, { cron: '0 9 * * *', content: 'Quick' });
+  const second = (await (await f.owner.request('POST', other, { cron: '5 9 * * *', content: 'Held' })).json() as { schedule: SessionSchedule }).schedule;
+  const third = (await (await f.owner.request('POST', other, { cron: '10 9 * * *', content: 'Third' })).json() as { schedule: SessionSchedule }).schedule;
+  const first = Promise.withResolvers<void>();
+  const held = Promise.withResolvers<void>();
+  const previous = globalThis.fetch;
+  const submitted: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const content = init?.body ? (JSON.parse(String(init.body)) as { content?: string }).content : undefined;
+    if (content) submitted.push(content);
+    if (content === 'Slow') await first.promise;
+    if (content === 'Held') await held.promise;
+    return previous(input, init);
+  };
+  const until = async (what: string) => { for (let i = 0; i < 200 && !submitted.includes(what); i++) await new Promise(resolve => setTimeout(resolve, 5)); };
+  const at = (schedule: SessionSchedule) => Date.parse(schedule.nextRunAt!) + 1000;
+  const sweepA = runScheduledPrompts(f.env, at(slow));
+  await until('Quick');
+  await until('Slow');
+  const sweepB = runScheduledPrompts(f.env, at(second));
+  await until('Held');
+  first.resolve();
+  await sweepA;
+  assert.deepEqual(await runScheduledPrompts(f.env, at(third)), [], 'the host the second sweep holds stays its own after the first sweep ends');
+  held.resolve();
+  await sweepB;
+  assert.deepEqual((await runScheduledPrompts(f.env, at(third))).map(outcome => outcome.scheduleId), [third.id]);
+});
+
 test('an edit never brings back a run a sweep claimed while it was being saved', async t => {
   const f = await fixture(t);
   const { schedule } = await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Report' })).json() as { schedule: SessionSchedule };

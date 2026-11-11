@@ -40,12 +40,10 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-/** What the session's tools ran, as the session records it: nobody decides any of it. */
 async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
   return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
 }
 
-/** The program call the session ran last, once its message settled. */
 async function ranLast(session: RunnerSession): Promise<ApprovalRecord> {
   await idle(session);
   const ran = (await records(session)).at(-1);
@@ -171,6 +169,43 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool node is not available/);
   assert.equal((await records(session)).length, 1);
+});
+
+test("a program call's timeout_seconds ends it sooner than the host's command time limit; one out of range runs nothing", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-call-timeout-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("node", { program: "node", args: ["-e", "setTimeout(() => {}, 1000)"], timeout_seconds: 0 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("node", { program: "node", args: ["-e", "setTimeout(() => console.log('woke'), 25000)"], timeout_seconds: 2 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("git", { args: ["init", "-q", "repo"], timeout_seconds: 600 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Done."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-timeout-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "timeout-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const started = Date.now();
+  await session.submit(await ticket(id, "submit"), { content: "Wait.", requestId: "wait", admissionId: await sha256("timeout admission") }, "write");
+  for (let count = 0; count < 1000 && (await records(session)).filter(record => record.status !== "executing").length < 2; count++) await delay(20);
+  await idle(session);
+  const ran = await records(session);
+  assert.equal(ran.length, 2, "the call out of range left no card");
+  assert.equal(ran[0]!.status, "failed");
+  assert.match(ran[0]!.result!, /2000ms time limit/);
+  assert.doesNotMatch(ran[0]!.result!, /woke/);
+  assert.ok(Date.now() - started < 20_000, `the 2-second timeout took ${Date.now() - started} ms`);
+  assert.equal(ran[1]!.status, "executed", "a timeout longer than the host's limit keeps the host's");
+  assert.match(await session.sandbox.readFile("repo/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
+  assert.match((await session.view()).entries.map(entry => entry.text).join("\n"), /timeout_seconds: expected >= 1/);
 });
 
 test("the python tool runs Python without a shell, in a virtual environment it names; piki:python turns it off", { skip: process.platform === "win32" }, async t => {

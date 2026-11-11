@@ -9,8 +9,8 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
-import type { AuthorizationRequest, PermissionRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
-import { audienceTarget, sessionsToolTarget, type SessionsToolRequest, type SessionsToolResult } from "../packages/shared/src/cross-session.js";
+import type { AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
+import { audienceTarget, type SessionsToolRequest, type SessionsToolResult } from "../packages/shared/src/cross-session.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 
 function binding(id: string): RunnerBinding {
