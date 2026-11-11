@@ -28,7 +28,12 @@ function packageName(specifier) {
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
 }
 
-export function packageProblems(directory, files = packedFiles(directory)) {
+function importTargets(target) {
+  const stem = target.replace(/\.[cm]?js$/, "");
+  return [target, `${stem}.ts`, `${stem}.mts`, `${stem}.cts`, `${target}.ts`, `${target}.js`, `${target}/index.ts`, `${target}/index.js`];
+}
+
+export function packageProblems(directory, { files = packedFiles(directory), release = false } = {}) {
   const problems = [];
   const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
   const packed = new Set(files);
@@ -43,6 +48,7 @@ export function packageProblems(directory, files = packedFiles(directory)) {
     problems.push(`has no repository at https://github.com/OpenCara/pikibun.git, directory ${expectedDirectory}: npm provenance needs it`);
   }
   if (!packed.has("README.md")) problems.push("packs no README.md");
+  if (release && !files.some(path => /^licen[cs]e(\.(md|txt))?$/i.test(path))) problems.push("packs no LICENSE: the release copies the repository's in first");
 
   const entries = manifest.pi?.extensions ?? [];
   if (entries.length === 0) problems.push("names no pi.extensions");
@@ -55,7 +61,7 @@ export function packageProblems(directory, files = packedFiles(directory)) {
     for (const { fileName: specifier } of ts.preProcessFile(source, true, true).importedFiles) {
       if (specifier.startsWith(".")) {
         const target = posix.normalize(posix.join(posix.dirname(file), specifier));
-        if (!packed.has(target) && !packed.has(target.replace(/\.js$/, ".ts"))) problems.push(`${file} imports ${specifier}, which the package doesn't pack`);
+        if (!importTargets(target).some(path => packed.has(path))) problems.push(`${file} imports ${specifier}, which the package doesn't pack`);
       } else if (!specifier.startsWith("node:") && !builtins.has(specifier) && !declared.has(packageName(specifier))) {
         problems.push(`${file} imports ${specifier}, which is in neither dependencies nor peerDependencies`);
       }
@@ -65,7 +71,8 @@ export function packageProblems(directory, files = packedFiles(directory)) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const names = process.argv.slice(2);
+  const release = process.argv.includes("--release");
+  const names = process.argv.slice(2).filter(argument => argument !== "--release");
   let failed = false;
   for (const name of names.length ? names : extensionNames()) {
     const directory = join(extensionsDirectory, name);
@@ -74,7 +81,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       failed = true;
       continue;
     }
-    const problems = packageProblems(directory);
+    const problems = packageProblems(directory, { release });
     for (const problem of problems) console.error(`extensions/${name} ${problem}`);
     if (problems.length === 0) console.log(`extensions/${name}: ready to publish`);
     failed ||= problems.length > 0;

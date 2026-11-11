@@ -3,8 +3,8 @@ name: Release Pi extensions (npm)
 # publishes the Pi package in extensions/<name> to npm, a prerelease to the `next` dist-tag: ext-pr-flow-v0.2.0
 # publishes @opencara/pi-pr-flow 0.2.0. Each extension is a release line of its own, with its own version. The tag
 # decides the version: scripts/set-release-version.mjs sets it in the extension's package.json before publishing, so no
-# version bump needs committing first. scripts/check-extension-packages.mjs checks what npm would pack (its modules,
-# what they import, pi.extensions) before it is published.
+# version bump needs committing first. scripts/check-extension-packages.mjs --release checks what npm would pack (its
+# modules, what they import, pi.extensions, the LICENSE copied in) before it is published.
 # npm auth: a trusted publisher on npmjs.com for each package, this workflow file (release-extensions.yml, keep its
 # name) and environment `release`, or an NPM_TOKEN secret. npm sets up a trusted publisher only for a package that
 # exists, so an extension's first release needs NPM_TOKEN, with publish rights to the @opencara scope.
@@ -79,7 +79,7 @@ jobs:
       - name: Check the package
         env:
           NAME: ${{ needs.extension.outputs.name }}
-        run: node scripts/check-extension-packages.mjs "$NAME"
+        run: node scripts/check-extension-packages.mjs --release "$NAME"
       - name: Publish the extension
         working-directory: extensions/${{ needs.extension.outputs.name }}
         env:
