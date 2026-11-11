@@ -88,7 +88,8 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
      Auto-approve), not run because the workspace sets the tools to automatic, and outside the read-only setting. Such a
      call gets a **write lease** from the proxy for as long as it runs, a placeholder naming it in the token variables.
      Its requests then go with the session owner's own credential (their GitHub sign-in, their GitLab or Azure DevOps
-     token), which the control plane gives only to the owner's own hosts: a host someone else owns could take it from
+     token; GitHub REST reads of the workspace's repositories keep the App token, note 39). The control plane gives
+     that credential only to the owner's own hosts: a host someone else owns could take it from
      its connector. Elsewhere writes are refused with that reason, and `github_comment`, `github_issue`, `github_merge`
      and `git_push` remain. Sandbox operations run one at a time per session, so no other command runs while a lease
      holds, and only a call `runExtensionTool` admitted runs a command at all.
@@ -354,6 +355,35 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     - **Pages.** The workspace page lists the session-tool extensions it has, each with **Remove**, and offers the
       others in **Add extension**. A page from before still shows them, as on or off, and turns one off, but turns one on
       by removing its entry, which now leaves it off: it needs this release.
+
+39. **The owner's rate limit, shared.** A session publishing three packages ran out its owner's GitHub quota
+    (5,000 requests an hour), and git, `gh` and `github_read` then all failed, the first two saying the owner's access
+    "could not be verified". Every GitHub request made as the owner counts against one quota, whichever session or
+    token makes it: the host's own `gh` sign-in, a lease's requests (rule 8), `github_read`, and Pikibun's own checks.
+    Over a day of sessions they spent it on:
+    - **`gh run watch`**, which reads the run and its jobs every 3 seconds, more than 2,000 requests an hour each, all
+      as the owner under a lease (note 37 assumed `gh` read with the App; under a lease it didn't).
+    - **`github_read` waits**: about eight requests a read (the issue, its comments, the pull request, its reviews,
+      review comments, check runs and statuses, and the pin's repository), every 30 seconds, so close to 1,000 an hour
+      for each session waiting out a review window (the pull request flow's 30 minutes).
+    - **The pull request states** (`refreshPullRequestStates`): every two minutes, five requests for each session's
+      open pull request and one for each other branch a live session reports, `main` included.
+    - **Each credential grant** (`apiCredential`): a `verifyRepository` per workspace repository, once a minute for a
+      session using `gh`, and once more for a lease's.
+    So: (a) under a lease, REST reads of a repository the App's token covers keep it (`ApiAccess`, `appRead`), and only
+    writes, GraphQL and other reads ask for the owner's credential, or a read the App's token is refused for want of a
+    permission (`ownerInstead`), which goes once more as the owner rather than fail where it used to work; (b) the `gh` tool gives `run watch` and
+    `pr checks --watch` `--interval 30` unless the agent names one (`watchInterval`, `CliSpec.prepare`), and its
+    description and the agent's instructions say not to poll instead; (c) the control plane's reads as the owner
+    (`github-broker.ts`, `verifyRepository`'s `githubJSON`, `pull-request-states.ts`) send the `ETag` they last got
+    (`github-reads.ts`): GitHub answers `304 Not Modified` without counting it, so a wait where nothing happens, the
+    access checks and the state sweep cost nearly nothing. The remembered bodies are keyed by a digest of the token
+    and the URL, so one account never gets another's; they are held in the server's memory, at most 1,000 and 64 MB, the
+    least recently used going first, so the saving is best effort (a restart, or another server process, starts
+    afresh). A read GitHub refuses forgets its own, unless it was refused for the rate limit: then what it remembered
+    is what makes the first reads after the reset cheap. (d) A rate-limited answer (`429`, or `403`
+    with no requests left or a `Retry-After`) now says so (`github_rate_limited`; the grant's reason), rather than that
+    access couldn't be verified, which sent agents and people to reconnect accounts that were fine.
 
 Next: other ecosystems as usage asks for them (`jvm`).
 

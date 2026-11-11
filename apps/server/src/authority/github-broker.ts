@@ -15,6 +15,7 @@ import { requireCallbackScope } from './hosts.js';
 import { requireOperationTool, requireToolCall } from './tool-checks.js';
 import { cloneSessionRepository, recheckAccess, verifyRepository, type GitHubAccess } from './repositories.js';
 import { requireBinding, requireNoRestore } from './push/broker.js';
+import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, rememberRead } from './github-reads.js';
 
 const githubApi = 'https://api.github.com';
 const remoteTimeout = 20000;
@@ -108,6 +109,14 @@ async function approvedEffect<T>(c: AppContext, connectorId: string | null, appr
 }
 
 export async function boundedJson(response: Response, limit: number): Promise<unknown> {
+  return parseJson(await boundedBytes(response, limit));
+}
+
+function parseJson(bytes: Uint8Array): unknown {
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+}
+
+export async function boundedBytes(response: Response, limit: number): Promise<Uint8Array> {
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -126,7 +135,7 @@ export async function boundedJson(response: Response, limit: number): Promise<un
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  return bytes;
 }
 
 export async function githubComment(c: AppContext, connectorId: string | null): Promise<Response> {
@@ -246,13 +255,21 @@ export async function githubIssue(c: AppContext, connectorId: string | null): Pr
 }
 
 async function githubGet(github: GitHubAccess, path: string): Promise<{ value: unknown; last: number | null }> {
+  const url = `${githubApi}${path}`;
+  const remembered = recallRead(github.token, url);
   let response: Response;
   try {
-    response = await fetch(`${githubApi}${path}`, { redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout), headers: githubHeaders(github.token) });
+    response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout),
+      headers: { ...githubHeaders(github.token), ...conditionalHeaders(remembered) } });
   } catch { return fail(502, 'github_unavailable', 'GitHub could not be reached. Try again later.'); }
-  if (response.status !== 200) {
+  if (response.status === 304 && remembered) {
     await response.body?.cancel();
-    if (response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0')) {
+    return { value: parseJson(remembered.bytes), last: lastPage(remembered.link) };
+  }
+  if (response.status !== 200) {
+    if (!githubRateLimited(response)) forgetRead(github.token, url);
+    await response.body?.cancel();
+    if (githubRateLimited(response)) {
       fail(429, 'github_rate_limited', 'The session owner\'s GitHub rate limit is used up. Try again later.');
     }
     if (response.status === 404 || response.status === 410) fail(404, 'github_not_found', 'GitHub has no such issue or pull request in this repository.');
@@ -260,10 +277,16 @@ async function githubGet(github: GitHubAccess, path: string): Promise<{ value: u
     fail(502, 'github_unavailable', 'GitHub could not complete the read. Try again later.');
   }
   let value: unknown;
-  try { value = await boundedJson(response, pageBytes); }
+  let bytes: Uint8Array;
+  try { bytes = await boundedBytes(response, pageBytes); value = parseJson(bytes); }
   catch { return fail(502, 'invalid_github_response', 'GitHub returned a response too large or malformed to read.'); }
-  const last = /<[^>]*[?&]page=(\d{1,6})[^>]*>;\s*rel="last"/.exec(response.headers.get('link') ?? '');
-  return { value, last: last ? Number(last[1]) : null };
+  rememberRead(github.token, url, response, bytes);
+  return { value, last: lastPage(response.headers.get('link')) };
+}
+
+function lastPage(link: string | null): number | null {
+  const last = /<[^>]*[?&]page=(\d{1,6})[^>]*>;\s*rel="last"/.exec(link ?? '');
+  return last ? Number(last[1]) : null;
 }
 
 function record(value: unknown): Record<string, unknown> {

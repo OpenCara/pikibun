@@ -18,6 +18,7 @@ export interface CliSpec {
   setEnv: Record<string, string>;
   refused(args: readonly string[]): string | undefined;
   writes(args: readonly string[]): string | undefined;
+  prepare?(args: readonly string[]): readonly string[];
 }
 
 export function commandWords(args: readonly string[]): string[] {
@@ -243,8 +244,8 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
       name: spec.info.tool ?? spec.command, label: spec.info.title, description: spec.description,
       parameters,
       async execute(toolCallId, params: Static<typeof parameters>, signal, _onUpdate, ctx) {
-        const args = params.args;
-        if (args.some(arg => arg.includes("\0"))) throw new Error("An argument holds a NUL character.");
+        if (params.args.some(arg => arg.includes("\0"))) throw new Error("An argument holds a NUL character.");
+        const args = spec.prepare ? [...spec.prepare(params.args)] : params.args;
         const refused = spec.refused(args);
         if (refused) throw new Error(`Refused: ${refused}. Nothing ran.`);
         const readOnly = pi.getFlag(READ_ONLY) === true;
