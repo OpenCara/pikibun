@@ -13,7 +13,7 @@ import { resumeThisComputer } from "./lib/this-computer";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
-import { drawsHeaders, headerProps, pageStyle } from "./screens/PageHeader";
+import { drawsHeaders, headerInPage, Page, pageStyle } from "./screens/PageHeader";
 import { SessionList } from "./screens/SessionList";
 import { Sessions } from "./screens/Sessions";
 import { SessionView } from "./screens/SessionView";
@@ -204,17 +204,17 @@ function Shell() {
               return (
                 <If when={wide()}
                   else={
-                    <NavPage title="Sessions" {...headerProps({ title: "Sessions", leading: drawsHeaders ? <Logo size={22} /> : settingsButton(), actions: drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions() })}>
+                    <Page title="Sessions" leading={drawsHeaders ? <Logo size={22} /> : settingsButton()} actions={drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions()}>
                       <SessionList onOpen={openSession} onNew={() => startNew()} onNewIn={startNew} onWorkspaceSettings={workspaceSettings}
                         onNewWorkspace={() => creatingWorkspace.set(true)} />
-                    </NavPage>
+                    </Page>
                   }>
                   <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
                     <View style={{ flex: 1, flexDirection: "row" }}>
                       <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()}
                         onOpenById={() => nav.push({ name: "open" })} onAll={() => nav.push({ name: "all-sessions" })} onSettings={section => openSettings(section)}
                         onNewIn={startNew} onWorkspaceSettings={workspaceSettings} onNewWorkspace={() => creatingWorkspace.set(true)} />
-                      <View style={{ flex: 1, backgroundColor: palette().background }}>
+                      <View style={{ flex: 1, paddingTop: headerInPage ? safeArea().top : 0, backgroundColor: palette().background }}>
                         <If when={selected()}
                           else={
                             <Each of={[homeKey()]} key={value => String(value)}>
@@ -234,41 +234,41 @@ function Shell() {
               return <SessionView id={route.id} page openSession={openSession} onBack={back} go={go} />;
             case "new":
               return (
-                <NavPage title="New session" {...headerProps({ title: "New session", onBack: back })}>
+                <Page title="New session" onBack={back}>
                   <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} go={go} />
-                </NavPage>
+                </Page>
               );
             case "all-sessions":
               return (
-                <NavPage title="Sessions" {...headerProps({ title: "Sessions", onBack: back })}>
+                <Page title="Sessions" onBack={back}>
                   <Sessions onOpen={openFromPage} onOpenById={() => nav.push({ name: "open" })} onNew={() => startNew()} />
-                </NavPage>
+                </Page>
               );
             case "open":
               return (
-                <NavPage title="Open a session" {...headerProps({ title: "Open a session", onBack: back })}>
+                <Page title="Open a session" onBack={back}>
                   <OpenSession onOpen={openFromPage} />
-                </NavPage>
+                </Page>
               );
             case "settings":
               return (
-                <NavPage title="Settings" {...headerProps({ title: "Settings", onBack: back })}>
+                <Page title="Settings" onBack={back}>
                   <SettingsPage section={settingsAt().section} id={settingsAt().id} wide={wide()} onOpen={id => openSettings(id)} go={go} />
-                </NavPage>
+                </Page>
               );
             case "settings-section": {
               const section = findSection(route.section);
               return (
-                <NavPage title={section.label} {...headerProps({ title: section.label, onBack: back })}>
+                <Page title={section.label} onBack={back}>
                   <section.Component id={route.id} go={go} />
-                </NavPage>
+                </Page>
               );
             }
             case "join":
               return (
-                <NavPage title="Join a workspace" {...headerProps({ title: "Join a workspace", onBack: back })}>
+                <Page title="Join a workspace" onBack={back}>
                   <JoinWorkspace token={route.token} onDone={() => nav.popToRoot()} go={go} />
-                </NavPage>
+                </Page>
               );
           }
         }}

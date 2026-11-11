@@ -1,9 +1,11 @@
-import { platform, Text, View, type JSX } from "nsh";
-import { Button as BaseButton } from "nsh/base";
+import { platform, safeArea, Text, View, type JSX } from "nsh";
+import { Button as BaseButton, NavPage } from "nsh/base";
 import { Icon } from "../icons";
 import { palette, radius, text, weight } from "../theme";
 
 export const drawsHeaders = platform.desktop || platform.os === "web";
+
+export const headerInPage = platform.os === "ios";
 
 export const pageStyle = () => ({ backgroundColor: palette().background });
 
@@ -11,6 +13,28 @@ export function headerProps(options: { title: string; subtitle?: string; onBack?
   return drawsHeaders
     ? { style: pageStyle(), header: <PageHeader title={options.title} subtitle={options.subtitle} onBack={options.onBack} actions={options.actions} leading={options.leading} /> }
     : { style: pageStyle(), headerLeft: options.leading, headerRight: options.actions };
+}
+
+export function PageFrame(props: { children?: JSX.Element }) {
+  return (
+    <View style={{ flex: 1, paddingTop: safeArea().top, backgroundColor: palette().background }}>
+      {props.children}
+    </View>
+  );
+}
+
+export function Page(props: { title: string; subtitle?: string; onBack?: () => void; actions?: JSX.Element; leading?: JSX.Element; testID?: string; children?: JSX.Element }) {
+  if (!headerInPage) {
+    return <NavPage title={props.title} {...headerProps(props)}>{props.children}</NavPage>;
+  }
+  return (
+    <NavPage title={props.title} headerVisible={false} style={pageStyle()}>
+      <PageFrame>
+        <PageHeader title={props.title} subtitle={props.subtitle} onBack={props.onBack} actions={props.actions} leading={props.leading} testID={props.testID} />
+        <View style={{ flex: 1 }}>{props.children}</View>
+      </PageFrame>
+    </NavPage>
+  );
 }
 
 export function BackButton(props: { onPress: () => void; label?: string }) {
