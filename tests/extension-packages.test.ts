@@ -47,7 +47,7 @@ test("the package check finds what would break a published extension", async t =
   const problems = packageProblems(directory, { files: ["package.json", "index.ts", "util.ts", "bare.ts", "lib/index.ts"], release: true });
   assert.deepEqual(problems.filter(problem => !problem.startsWith("has no repository")), [
     "is private: npm refuses to publish it",
-    "is named pi-thing, not @opencara/pi-…",
+    "is named pi-thing, not @pikibun/pi-…",
     "lacks the pi-package keyword Pi's package gallery lists",
     "names no license",
     "packs no README.md",

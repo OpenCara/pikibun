@@ -1,5 +1,5 @@
 {
-  "name": "@opencara/pi-prompt-audit",
+  "name": "@pikibun/pi-prompt-audit",
   "version": "0.1.0",
   "description": "A Pi extension that has a model check each message before it reaches the agent, and refuses ones that reach for the machine's credentials, files, environment or network.",
   "type": "module",

@@ -76,7 +76,7 @@ npx pikibun@latest extensions add ./extensions/context-files             # dev m
 ## In Pi
 
 ```bash
-pi install npm:@opencara/pi-context-files   # from npm
+pi install npm:@pikibun/pi-context-files   # from npm
 pi install ./extensions/context-files      # from a clone of this repository
 pi -e ./extensions/context-files           # or for one run only
 ```

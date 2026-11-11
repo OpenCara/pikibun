@@ -41,7 +41,7 @@ export function packageProblems(directory, { files = packedFiles(directory), rel
   const expectedDirectory = relative(root, directory).split("\\").join("/");
 
   if (manifest.private) problems.push("is private: npm refuses to publish it");
-  if (typeof manifest.name !== "string" || !manifest.name.startsWith("@opencara/pi-")) problems.push(`is named ${manifest.name}, not @opencara/pi-…`);
+  if (typeof manifest.name !== "string" || !manifest.name.startsWith("@pikibun/pi-")) problems.push(`is named ${manifest.name}, not @pikibun/pi-…`);
   if (!manifest.keywords?.includes("pi-package")) problems.push("lacks the pi-package keyword Pi's package gallery lists");
   if (!manifest.license) problems.push("names no license");
   if (manifest.repository?.url !== "https://github.com/OpenCara/pikibun.git" || manifest.repository?.directory !== expectedDirectory) {

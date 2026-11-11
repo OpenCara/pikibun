@@ -78,7 +78,7 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
 - **`prepareArguments` runs in the child.** It is a function, so the connector sends the arguments and awaits the
   prepared ones, under the hook timeout.
 - **`ctx.ui`** keeps its present behaviour: `notify` becomes a notice, the rest does nothing, as `noActions` does now.
-- **Host paths.** An extension that reads host files (`@opencara/pi-context-files`' `host:` files) gets them only from
+- **Host paths.** An extension that reads host files (`@pikibun/pi-context-files`' `host:` files) gets them only from
   directories the host's owner lists in the extension's settings, mounted read-only.
 - **State in memory** lasts as long as the child: across messages, but not across a connector restart, as now.
 
