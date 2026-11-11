@@ -191,19 +191,25 @@ test("without a credential from Pikibun, the proxy says why", async t => {
 
 test("with the network open, a request Pikibun had no credential for that GitHub turns away says why, rather than look like GitHub's own limit", async t => {
   const reason = "GitHub no longer accepts Pikibun's sign-in for the session owner (its token was revoked or replaced): they sign in to Pikibun with GitHub again";
+  const missing = "{\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest\"}";
   const { socketPath, upstream, log } = await proxy(t, { policy: { mode: "open" }, credential: async () => ({ available: false, reason, cacheSeconds: 60 }),
-    answer: request => request.url.pathname === "/repos/acme/app" ? { status: 200, body: "{\"id\":1701}" }
+    answer: (request): Answer => request.url.pathname === "/repos/acme/app" ? { status: 200, body: "{\"id\":1701}" }
+      : request.url.pathname === "/repos/acme/app/nothing" ? { status: 404, headers: { "x-ratelimit-remaining": "0" }, body: missing }
+      : request.url.pathname === "/repos/acme/app/secondary" ? { status: 403, headers: { "retry-after": "60" }, body: "{\"message\":\"secondary\"}" }
       : { status: 403, headers: { "x-ratelimit-remaining": "0" }, body: "{\"message\":\"API rate limit exceeded for 203.0.113.9.\"}" } });
   const fine = await call(socketPath, "/repos/acme/app");
   assert.equal(fine.status, 200, "what GitHub answers without a credential still passes");
   assert.equal(fine.body, "{\"id\":1701}");
+  const notFound = await call(socketPath, "/repos/acme/app/nothing");
+  assert.deepEqual([notFound.status, notFound.body], [404, missing], "GitHub's own refusals other than its limit pass as they are");
+  assert.equal(JSON.parse((await call(socketPath, "/repos/acme/app/secondary")).body).message, "secondary");
   const limited = await call(socketPath, "/repos/acme/app/actions/runs/7");
   assert.equal(limited.status, 403);
   const message = JSON.parse(limited.body).message as string;
-  assert.ok(message.startsWith(`${reason}. So this request reached GitHub without a credential, and it answered 403, its limit for requests without one`), message);
-  assert.doesNotMatch(message, /203\.0\.113\.9/);
-  assert.deepEqual(upstream.map(request => request.headers.authorization), [undefined, undefined]);
-  assert.deepEqual(log().map(entry => entry.reason), ["without a credential (200)", "without a credential (403)"]);
+  assert.equal(message, "GitHub's rate limit for requests without a credential is used up (60 an hour for each address). "
+    + `This request went without one, as Pikibun gave this session none: ${reason}. Retrying helps only once Pikibun gives this session its credential again`);
+  assert.deepEqual(upstream.map(request => request.headers.authorization), [undefined, undefined, undefined, undefined]);
+  assert.deepEqual(log().map(entry => entry.reason), ["without a credential (200)", "without a credential (404)", "without a credential (403)", "without a credential (403)"]);
 });
 
 test("downloads GitHub redirects to its storage are fetched by the proxy without the credential; other redirects pass", async t => {

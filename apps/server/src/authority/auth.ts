@@ -241,20 +241,27 @@ export async function resetGitHubToken(env: Env, userId: string, token: string, 
     headers: { Accept: 'application/vnd.github+json', Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`, 'Content-Type': 'application/json',
       'User-Agent': 'pikibun', 'X-GitHub-Api-Version': '2022-11-28' },
   });
-  const dead = async (): Promise<true> => {
+  const dead = async (settledIfAlive: boolean): Promise<boolean> => {
+    let status: number;
+    try {
+      status = (await githubRequest('https://api.github.com/user', { headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`,
+        'User-Agent': 'pikibun', 'X-GitHub-Api-Version': '2022-11-28' } })).status;
+    } catch { return false; }
+    if (status === 200) return settledIfAlive;
+    if (status !== 401) return false;
     await forgetDeadGitHubToken(env, userId, ciphertext, 'token reset');
     return true;
   };
   let replacement: string;
   try {
     const reset = await request('PATCH', token);
-    if (reset.status === 404) return await dead();
+    if (reset.status === 404) return await dead(true);
     const issued = record(reset.body) ? reset.body.token : undefined;
     if (reset.status !== 200 || typeof issued !== 'string' || !issued || issued.length > 16_384 || /[^\x21-\x7e]/.test(issued)) return false;
     replacement = issued;
   } catch {
     try {
-      if ((await request('POST', token)).status === 404) return await dead();
+      if ((await request('POST', token)).status === 404) return await dead(false);
     } catch { }
     return false;
   }

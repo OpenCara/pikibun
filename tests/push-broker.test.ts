@@ -93,7 +93,7 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   const calls: Call[] = [];
   const state = { canPush: options.canPush ?? true, bitbucketWrite: options.bitbucketWrite ?? true, githubTip: tip, githubPrivate: true, githubPullExists: false, bitbucketPullExists: false,
     githubBranch: null as Record<string, unknown> | null, gitlabBranch: null as Record<string, unknown> | null,
-    giteaBranch: null as Record<string, unknown> | null, azureAllow: true, resetStatus: 200, resetToken: 'owner-oauth-token-2', resetLost: false, tokenAlive: true,
+    giteaBranch: null as Record<string, unknown> | null, azureAllow: true, resetStatus: 200, resetToken: 'owner-oauth-token-2', resetLost: false, tokenAlive: true, userAlive: true,
     githubPulls: {} as Record<number, { state: string; merged: boolean; draft: boolean; reviews: unknown[]; checkRuns: unknown[]; statuses: unknown[] }>,
     branchPulls: {} as Record<string, { number: number; html_url: string; created_at: string }[]> };
   const routes: Route[] = [
@@ -113,6 +113,9 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
         return Response.json({ token: 'ghs_installation_token', expires_at: new Date(Date.now() + 3600000).toISOString() }, { status: 201 });
       }
       if (method === 'DELETE' && url.pathname === '/installation/token') return new Response(null, { status: 204 });
+      if (method === 'GET' && url.pathname === '/user') {
+        return state.userAlive ? Response.json({ login: 'owner' }) : Response.json({ message: 'Bad credentials' }, { status: 401 });
+      }
       if (method === 'POST' && url.pathname === '/applications/oauth-client/token') {
         return state.tokenAlive ? Response.json({ id: 1 }) : Response.json({ message: 'Not Found' }, { status: 404 });
       }
@@ -776,6 +779,7 @@ test('an owner-token reset GitHub went through with unanswered, or whose token G
   assert.equal(signedIn(), 1);
 
   f.state.tokenAlive = false;
+  f.state.userAlive = false;
   await settlePushCredentials(f.env);
   assert.equal(row(lost.credentialId).revocation_ciphertext, null);
   assert.equal(signedIn(), 0, 'a token GitHub replaced without telling Pikibun is forgotten, not kept dead');
@@ -783,8 +787,16 @@ test('an owner-token reset GitHub went through with unanswered, or whose token G
 
   f.state.resetLost = false;
   f.state.tokenAlive = true;
+  f.state.userAlive = true;
   f.sqlite.prepare('INSERT INTO github_tokens (user_id,ciphertext,updated_at) VALUES (?,?,?)').run(owner, await encryptToken(f.env, owner, 'owner-oauth-token'), new Date().toISOString());
   f.state.resetStatus = 404;
+  const unknown = await issue('tool-unknown-1');
+  assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-unknown-1', credentialId: unknown.credentialId, outcome: 'pushed', tip })).status, 200);
+  assert.equal(row(unknown.credentialId).revocation_ciphertext, null);
+  assert.equal(signedIn(), 1, 'a token the app doesn\'t know but that still works (another client ID, say) is kept');
+  assert.equal(expired(), 1);
+
+  f.state.userAlive = false;
   const gone = await issue('tool-gone-1');
   assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-gone-1', credentialId: gone.credentialId, outcome: 'pushed', tip })).status, 200);
   assert.equal(row(gone.credentialId).revocation_ciphertext, null);

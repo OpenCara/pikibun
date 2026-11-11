@@ -399,11 +399,14 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
       and every tool says it has no GitHub connection, until they do.
     - **A reset that dies with the token forgets it too.** A `404` for the old token, or no answer and then a `404`
       from GitHub's check of it (`POST /applications/{client_id}/token`), forget the row if it still holds the old
-      token; a newer sign-in or reset is left alone. An unanswered reset whose token still works is retried as before.
+      token and GitHub refuses that token itself (`GET /user` answers `401`), so a misconfigured client ID, for which
+      GitHub also answers `404`, never signs anyone out; a newer sign-in or reset is left alone. An unanswered reset
+      whose token still works is retried as before.
     - **The proxy says why GitHub turned a request away** (`ApiAccess`, `unaided`): a request that went without a
-      credential because Pikibun had none to give, and that GitHub answers `401`, `403`, `404` or `429`, gets
-      Pikibun's reason, and whether GitHub's limit for anonymous requests was the one used up, instead of GitHub's
-      answer. What GitHub serves without a credential still passes.
+      credential because Pikibun had none to give, and that GitHub turns away for its rate limit (`429`, or `403`
+      with no requests left), gets Pikibun's reason with it, instead of GitHub's answer naming the host's address.
+      Every other answer, a `404` included, passes as GitHub gave it, since the reason may be a setting (API access
+      off, no GitHub App) rather than the sign-in. The figure of 60 an hour is GitHub's, so only GitHub's say it.
 
 Next: other ecosystems as usage asks for them (`jvm`).
 

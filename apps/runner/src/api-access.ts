@@ -370,12 +370,12 @@ export class ApiAccess {
       return refuse(502, error instanceof RunnerError ? error.message : `${host} could not be reached`);
     }
     if (upstream.status === 401 && credential) this.#credentials.delete(`${access} ${host}`);
-    if (unaided && [401, 403, 404, 429].includes(upstream.status)) {
+    if (unaided && (upstream.status === 429 || (upstream.status === 403 && upstream.headers["x-ratelimit-remaining"] === "0"))) {
       upstream.body.resume();
-      const limited = upstream.status === 429 || upstream.headers["x-ratelimit-remaining"] === "0" || upstream.headers["retry-after"] !== undefined;
       this.#options.record({ target, outcome: "allowed", reason: `${reason} (${upstream.status})` });
-      return json(response, upstream.status, `${unaided}. So this request reached ${rules.name} without a credential, and it answered ${upstream.status}`
-        + `${limited ? ", its limit for requests without one (60 an hour for each address) being used up" : ""}. Retrying helps only once Pikibun gives this session its credential again`);
+      return json(response, upstream.status, `${rules.name}'s rate limit for requests without a credential is used up`
+        + `${rules.provider === "github" ? " (60 an hour for each address)" : ""}. This request went without one, as Pikibun gave this session none: ${unaided}. `
+        + "Retrying helps only once Pikibun gives this session its credential again");
     }
     this.#options.record({ target, outcome: "allowed", reason: `${reason} (${upstream.status})` });
     const answer: Record<string, string | string[]> = {};
