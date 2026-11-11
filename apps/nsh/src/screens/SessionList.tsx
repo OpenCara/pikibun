@@ -8,7 +8,7 @@ import { session } from "../lib/auth";
 import type { Action } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
-import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, StatusDot, type MenuAction } from "../ui";
+import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, StatusDot, type MenuAction } from "../ui";
 
 type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; canCreate: boolean }
@@ -171,7 +171,7 @@ function WorkspaceRow(props: {
   return (
     <RowMenu items={options} testID={`workspace-menu-${props.row.id}`}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 8 }}>
-        <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={() => props.onToggle(props.row.id)}
+        <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={rowPress(() => props.onToggle(props.row.id))}
           style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingHorizontal: 8, paddingVertical: 6,
             borderRadius: radius.medium }}
           hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
@@ -208,7 +208,7 @@ function SessionRow(props: { item: SessionRecord; depth: number; selected: boole
   const details = () => Boolean(status().label) || Boolean(props.item.pullRequest) || Boolean(props.item.tunnel) || Boolean(relation());
   return (
     <RowMenu items={() => props.menu.items(props.item)} testID={`session-menu-${props.item.id}`}>
-      <BaseButton testID={`session-row-${props.item.id}`} selected={props.selected} accessibilityLabel={props.item.title} onPress={() => props.onOpen(props.item.id)}
+      <BaseButton testID={`session-row-${props.item.id}`} selected={props.selected} accessibilityLabel={props.item.title} onPress={rowPress(() => props.onOpen(props.item.id))}
         style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8,
           paddingLeft: 32 + props.depth * 12, borderRadius: radius.medium, backgroundColor: props.selected ? palette().selection : "transparent" }}
         activeStyle={{ backgroundColor: palette().selection }} hoverStyle={{ backgroundColor: props.selected ? palette().selection : palette().hover }}>

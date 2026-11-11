@@ -1,4 +1,4 @@
-import { Clipboard, Image, Scroll, signal, Text, View, windowSize, type JSX, type ViewStyle } from "nsh";
+import { cleanup, Clipboard, Image, Scroll, signal, Text, View, windowSize, type JSX, type ViewStyle } from "nsh";
 import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
 import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
@@ -467,9 +467,23 @@ export function DropdownMenu(props: { label: string; items: (MenuAction | "separ
   );
 }
 
+let heldMenu: object | undefined;
+
+export const rowPress = (action: () => void) => () => {
+  if (heldMenu) {
+    heldMenu = undefined;
+    return;
+  }
+  action();
+};
+
 export function RowMenu(props: { items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string }) {
+  const menu = {};
+  const release = () => { if (heldMenu === menu) heldMenu = undefined; };
+  cleanup(release);
   return (
     <ContextMenu testID={props.testID} trigger={props.children} disabled={!props.items().some(item => item !== "separator")} offset={2}
+      onOpenChange={change => { if (change.open && change.reason === "longPress") heldMenu = menu; else release(); }}
       backdropStyle={{ backgroundColor: palette().backdrop }} popupStyle={menuPopupStyle()}>
       <MenuActions items={props.items()} />
     </ContextMenu>
