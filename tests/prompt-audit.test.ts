@@ -324,7 +324,7 @@ test("the prompt audit is a Pi package of its own: Pi's loader finds it through 
   await store.add(parseExtensionSource(directory));
   const [loaded] = await loadInstalled(store, []);
   const summary = loaded!.summary;
-  assert.equal(summary.name, "@opencara/pi-prompt-audit");
+  assert.equal(summary.name, "@pikibun/pi-prompt-audit");
   assert.equal(summary.dev, true);
   assert.equal(summary.modules.length, 1);
   assert.equal(summary.modules[0]!.error, undefined);

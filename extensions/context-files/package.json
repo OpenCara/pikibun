@@ -1,5 +1,5 @@
 {
-  "name": "@opencara/pi-context-files",
+  "name": "@pikibun/pi-context-files",
   "version": "0.1.0",
   "description": "A Pi extension that adds the files you choose to each message's system prompt: AGENTS.md or CLAUDE.md, other files in the repository, files on the host, or pages on the web.",
   "type": "module",
