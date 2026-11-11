@@ -339,6 +339,11 @@ function nativeStart(c: AppContext) {
   const state = states?.length === 1 ? states[0] : undefined;
   if (!challenge || !OPAQUE_TOKEN.test(challenge) || !state || !APP_STATE.test(state)) fail(400, 'invalid_native_request', 'Invalid native sign-in request.');
   if (callbacks !== undefined && (callbacks.length !== 1 || callbacks[0] !== 'page')) fail(400, 'invalid_native_request', 'Invalid native sign-in request.');
+  const claims = c.req.queries('claim');
+  if (claims !== undefined) {
+    if (!localMode(c.env) || claims.length !== 1) fail(400, 'invalid_native_request', 'Invalid native sign-in request.');
+    keepLocalClaim(c, claims[0]);
+  }
   return githubStart(c, { challenge, state, callback: callbacks ? 'page' : 'scheme' });
 }
 
@@ -451,13 +456,16 @@ async function settleLocalClaim(env: Env, userId: string): Promise<void> {
   fail(403, 'local_server_owner_only', 'This Pikibun runs on its owner\'s computer, and only the GitHub account that set it up can sign in.');
 }
 
-async function localClaim(c: AppContext) {
-  if (!localMode(c.env)) fail(404, 'not_found', 'Not found.');
-  const tokens = c.req.queries('token');
-  const token = tokens?.length === 1 ? tokens[0] : undefined;
+function keepLocalClaim(c: AppContext, token: string | undefined): void {
   if (!token || !OPAQUE_TOKEN.test(token) || !constantTimeEqual(token, c.env.LOCAL_CLAIM_SECRET!)) fail(403, 'invalid_claim', 'This sign-in link is not valid for this Pikibun.');
   const config = cookies(c.env);
   setCookie(c, config.claim, token, { ...config.options, maxAge: STATE_TTL / 1000, expires: new Date(Date.now() + STATE_TTL) });
+}
+
+async function localClaim(c: AppContext) {
+  if (!localMode(c.env)) fail(404, 'not_found', 'Not found.');
+  const tokens = c.req.queries('token');
+  keepLocalClaim(c, tokens?.length === 1 ? tokens[0] : undefined);
   return githubStart(c);
 }
 
