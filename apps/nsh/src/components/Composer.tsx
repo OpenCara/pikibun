@@ -15,6 +15,8 @@ export function Composer(props: {
   sendText?: string;
   attachments?: Attachments;
   onRecall?: () => void;
+  /** The hint on a phone, where the controls have one line: what the pickers already say left out. The hint itself where left out. */
+  phoneHint?: string;
 }) {
   const focused = signal(false);
   const dragging = signal(false);
@@ -23,9 +25,12 @@ export function Composer(props: {
   const canSend = () => !props.disabled && !props.busy && (props.ready ?? (props.value.trim() !== "" || (props.attachments?.count() ?? 0) > 0));
   const submit = () => { if (canSend()) props.onSubmit(); };
   // On a phone the chat box keeps its controls on one line under the text, scrolling sideways where they don't fit, and
-  // its hint shows only while it can't send: the pickers already say how a message runs.
+  // its hint, if it has one there, goes on a line of its own under them.
   const narrow = phoneWidth;
-  const hint = () => (narrow() && !props.disabled ? "" : props.hint);
+  const hint = () => (narrow() ? props.phoneHint ?? props.hint : props.hint);
+  const hasTools = () => Boolean(props.tools || (props.attachments && !props.disabled));
+  const hintBelow = () => narrow() && hasTools();
+  const inlineHint = () => (hintBelow() ? "" : hint());
   const tools = () => (
     <>
       <If when={props.attachments && !props.disabled ? props.attachments : null}>
@@ -64,22 +69,21 @@ export function Composer(props: {
       </View>
       <If when={props.attachments?.notice()}>{notice => <Small testID="composer-notice" tone="warning">{notice()}</Small>}</If>
       <View testID="composer-controls" style={{ flexDirection: "row", flexWrap: narrow() ? "nowrap" : "wrap", alignItems: "center", rowGap: 4, columnGap: narrow() ? 4 : 8 }}>
-        <If when={props.tools || (props.attachments && !props.disabled)}>
+        <If when={hasTools()}>
           <If when={narrow()}
             else={
-              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, flexShrink: 1, ...(hint() ? {} : { flexGrow: 1, flexBasis: 0, minWidth: 0 }) }}>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, flexShrink: 1, ...(inlineHint() ? {} : { flexGrow: 1, flexBasis: 0, minWidth: 0 }) }}>
                 {tools()}
               </View>
             }>
             <Scroll testID="composer-tools" horizontal scrollbar={false} style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 }}
-              contentStyle={{ flexDirection: "row", alignItems: "center", gap: 0 }}>
+              contentStyle={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
               {tools()}
             </Scroll>
           </If>
         </If>
-        <If when={hint()}>
-          <Text style={{ flexGrow: 1, flexShrink: 1, flexBasis: narrow() ? 0 : 160, minWidth: 0, fontSize: text.caption, color: palette().muted,
-            ...(narrow() ? { numberOfLines: 2 } : {}) }}>{hint()}</Text>
+        <If when={inlineHint()}>
+          <Text testID="composer-hint" style={{ flexGrow: 1, flexShrink: 1, flexBasis: narrow() ? 0 : 160, minWidth: 0, fontSize: text.caption, color: palette().muted }}>{inlineHint()}</Text>
         </If>
         <View style={{ flexDirection: "row", gap: 4, marginLeft: "auto", alignSelf: "flex-end", flexShrink: 0 }}>
           <If when={props.onStop}>
@@ -100,6 +104,9 @@ export function Composer(props: {
           </BaseButton>
         </View>
       </View>
+      <If when={hintBelow() ? hint() : ""}>
+        {below => <Text testID="composer-hint" style={{ fontSize: text.caption, lineHeight: 17, color: palette().muted, paddingHorizontal: 4 }}>{below()}</Text>}
+      </If>
     </View>
   );
 }
