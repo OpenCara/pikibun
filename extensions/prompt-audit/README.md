@@ -26,7 +26,8 @@ Its settings are Pi flags:
 ## In Pikibun
 
 Every connector has it built in as `piki:prompt-audit`, at the connector's version: a host's owner requires it of
-every session on their host (Host → Extensions), and a workspace can add it for its own sessions. There it audits every
+every session on their host (Host → Extensions), and every workspace has it, turned off, among its extensions, for its
+owners and admins to turn on for its own sessions. There it audits every
 message but the host owner's own. See [the design](../../docs/design/piki-extensions.md#the-prompt-audit-piki-prompt-audit).
 
 A host can also run this directory as a dev extension instead (`pikibun extensions add ./extensions/prompt-audit`), to

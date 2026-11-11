@@ -143,6 +143,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     description: "Has the agent carry each change through a pull request (a merge request on GitLab): a draft as soon as it starts changing a repository's files, ready for review once the change is done, then a review window (review-minutes) in which it fixes the valid review points and waits again for a re-review, then the merge. A review-minutes of 0 merges as soon as it is ready. Each step is the session's own tools, approved as always.",
     providers: [],
   },
+  {
+    name: "context-files", source: "piki:context-files", title: "Context files",
+    description: "Adds the files its context-files setting names to each message's system prompt, as Pi does with a project's AGENTS.md: each clone's AGENTS.md or CLAUDE.md by default, other files in a clone, host:<name> files from the host owner's context directory, or https:// pages.",
+    providers: [],
+  },
 ] as const satisfies readonly PikiExtensionInfo[]);
 
 export function pikiExtension(source: string): PikiExtensionInfo | undefined {

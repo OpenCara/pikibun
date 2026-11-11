@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { EgressGrant, EgressRepository } from "../packages/shared/src/network.js";
-import type { ApprovalRecord } from "../packages/shared/src/types.js";
+import type { ApprovalRecord, AuthorizationResult, Operation } from "../packages/shared/src/types.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import { MIRROR_ROOT } from "../apps/runner/src/sandbox.js";
 import { ApprovalWaits, boundedResult } from "../apps/runner/src/session/approval-waits.js";
 import { BranchReports } from "../apps/runner/src/session/branch-reports.js";
 import { CRASHED_TEXT, endView, refusedView } from "../apps/runner/src/session/entries.js";
+import { HOST_COMMANDS_RULE, HostCommandPolicy, type HostCommandPolicyOptions } from "../apps/runner/src/session/host-commands.js";
+import { defaultHostConfig } from "../packages/shared/src/host-config.js";
 import { MessageInputs } from "../apps/runner/src/session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "../apps/runner/src/session/mirrors.js";
 import { MAX_STAGED_UPLOADS, SessionUploads, STALE_UPLOAD_MS } from "../apps/runner/src/session/uploads.js";
@@ -199,4 +201,62 @@ test("branch reports send each change once, fold reports asked for meanwhile int
   failing.request();
   await failing.settled();
   assert.match(warnings.at(-1) ?? "", /Session s2: could not report its clones' branches: offline/);
+});
+
+function hostPolicy(options: Partial<HostCommandPolicyOptions> = {}, grants: Record<string, Partial<AuthorizationResult>> = {}) {
+  const asked: string[] = [];
+  const policy = new HostCommandPolicy({
+    ownerId: "github:2", connectorOwnerId: "github:1", hostSession: false, onHost: false, limitedSandbox: false, windowsSandbox: false, testShell: false,
+    authorize: async (actorId, _permission, host, hostSessions) => {
+      asked.push(`${actorId}${host ? " host" : ""}${hostSessions ? " sessions" : ""}`);
+      return { allowed: true, policyVersion: 1, ownerId: "github:2", ...grants[actorId] };
+    },
+    hostConfig: async () => ({ ...defaultHostConfig, hostSessions: true }),
+    ...options,
+  });
+  return { policy, asked };
+}
+
+const bash: Operation = { kind: "bash", command: "true" } as Operation;
+
+test("host commands need both the session's owner and the actor granted, and the host's owner always is", async () => {
+  const { policy, asked } = hostPolicy({}, { "github:2": { hostCommands: "approve" }, "github:3": {} });
+  assert.equal(await policy.allowed("github:2"), true);
+  assert.equal(await policy.allowed("github:3"), false);
+  await assert.rejects(policy.require("github:3", "Putting a server online"), (error: unknown) =>
+    error instanceof RunnerError && error.status === 403 && error.message === `Putting a server online ${HOST_COMMANDS_RULE}`);
+  assert.deepEqual(asked, ["github:2 host", "github:2 host", "github:3 host", "github:2 host", "github:3 host"]);
+  const own = hostPolicy({ ownerId: "github:1" });
+  assert.equal(await own.policy.allowed("github:1"), true);
+  assert.deepEqual(own.asked, []);
+});
+
+test("a command runs on the host in a host session, or unbounded in a session a grant lets use the host's shell", () => {
+  assert.equal(hostPolicy().policy.runsOnHost(bash, false), false);
+  assert.equal(hostPolicy().policy.runsOnHost(bash, true), true);
+  assert.equal(hostPolicy({ ownerId: "github:1" }).policy.runsOnHost(bash, true), false);
+  assert.equal(hostPolicy({ hostSession: true, onHost: true }).policy.runsOnHost(bash, false), true);
+  assert.match(hostPolicy({ hostSession: true }).policy.onHostMachine(), /directly on its host/);
+  assert.match(hostPolicy().policy.onHostMachine(), /no resource limits/);
+});
+
+test("the shell needs a limited sandbox, the host, a Windows sandbox or a test session, unless the command is unbounded", () => {
+  assert.throws(() => hostPolicy().policy.requireShell(bash), /quota-backed runner/);
+  hostPolicy().policy.requireShell(bash, true);
+  hostPolicy().policy.requireShell({ kind: "git.push" } as Operation);
+  for (const options of [{ limitedSandbox: true }, { onHost: true }, { windowsSandbox: true }, { testShell: true }]) {
+    assert.equal(hostPolicy(options).policy.shellAllowed(), true);
+  }
+  assert.equal(hostPolicy({ onHost: true, windowsSandbox: true }).policy.shellAllowed(), true);
+});
+
+test("a member's host session runs while the host allows host sessions and their grant lasts", async () => {
+  await hostPolicy().policy.requireHostEnvironment();
+  await hostPolicy({ hostSession: true, ownerId: "github:1" }).policy.requireHostEnvironment();
+  const granted = hostPolicy({ hostSession: true }, { "github:2": { hostSessions: true } });
+  await granted.policy.requireHostEnvironment();
+  assert.deepEqual(granted.asked, ["github:2 host sessions"]);
+  await assert.rejects(hostPolicy({ hostSession: true }).policy.requireHostEnvironment(), /grant that let them has ended/);
+  await assert.rejects(hostPolicy({ hostSession: true, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: false }) }).policy.requireHostEnvironment(),
+    /owner turned that off/);
 });

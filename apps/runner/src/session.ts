@@ -10,7 +10,7 @@ import { getSupportedThinkingLevels, StringEnum, type ClientIdentity, type Messa
 import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, HostCommandLevel, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
+import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
 import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleRunIns, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
 import { crossSessionLimits, sessionsToolActions, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import type { CompactionFailure, ModelFailureCause } from "../../../packages/shared/src/types.js";
@@ -59,6 +59,7 @@ import { HelperWorkspace } from "./helper-workspace.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { BranchReports } from "./session/branch-reports.js";
+import { HOST_COMMANDS_RULE, HostCommandPolicy } from "./session/host-commands.js";
 import { ApprovalWaits } from "./session/approval-waits.js";
 import { endView, entryImages, entryView, refusedView } from "./session/entries.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
@@ -89,7 +90,6 @@ import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import { documentKindNames, type DocumentKind, type GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
 import { CALL_TIMEOUT_MAX_SECONDS, callLimits, callTimeout, commandLimits, type CommandLimits } from "./host-config.js";
-import { runsOnHost, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
 
 export type Run = {
   key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
@@ -142,8 +142,6 @@ const readOnlyTools = ["identity", "read_file", "list_files", "search"];
 const WAIT_POLL_MS = 3000;
 const callTimeoutParameter = () => opt(int({ minimum: 1, maximum: CALL_TIMEOUT_MAX_SECONDS,
   description: "End it after this many seconds, sooner than the host's command time limit (never later)" }));
-const HOST_COMMANDS_RULE = "runs on the host's own machine, outside the sandbox: only in sessions of the host's owner and of members they granted host "
-  + "commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran.";
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
   + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
   + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells); with message_id, also the outcome of a message this session sent it (status, done, reply). "
@@ -279,6 +277,7 @@ export class RunnerSession {
   #packed = false;
   readonly #onHost: boolean;
   readonly #hostSession: boolean;
+  private readonly hostCommands: HostCommandPolicy;
   #cloneRepositories: string[] = [];
   #sources: GrantSource[] = [];
   #lfsRepositories: string[] = [];
@@ -304,6 +303,12 @@ export class RunnerSession {
     if (this.#hostSession && !binding.session.connectorOwnerId) {
       throw new RunnerError(403, "Only sessions of the host's owner, or of members they granted that, run directly on the host");
     }
+    this.hostCommands = new HostCommandPolicy({
+      ownerId: binding.owner.id, connectorOwnerId: binding.session.connectorOwnerId, hostSession: this.#hostSession, onHost: this.#onHost,
+      limitedSandbox: !!config.resources && !config.sandboxBackend, windowsSandbox: config.sandboxBackend?.kind === "windows",
+      testShell: this.testShell(), authorize: (actorId, permission, host, hostSessions) => this.authorize(actorId, permission, undefined, host, hostSessions),
+      hostConfig: () => this.hostConfig(),
+    });
     const directGrant = config.gitDirect ? (request: Omit<GitDirectRequest, "sessionId">) => config.gitDirect!(binding.session.id, request)
       : config.gitRelay ? undefined
       : (request: Omit<GitDirectRequest, "sessionId">) => this.controlPlane("/api/internal/git/direct", { sessionId: binding.session.id, ...request });
@@ -411,12 +416,6 @@ export class RunnerSession {
     if (!result.allowed || result.ownerId !== this.binding.owner.id || !Number.isSafeInteger(result.policyVersion)
       || (expectedPolicyVersion !== undefined && result.policyVersion !== expectedPolicyVersion)) throw new RunnerError(403, "Authorization revoked or stale policy");
     return result;
-  }
-
-  private async hostCommandLevel(actorId: string, permission: Permission): Promise<HostCommandLevel | undefined> {
-    if (this.binding.session.connectorOwnerId && actorId === this.binding.session.connectorOwnerId) return "auto";
-    const result = await this.authorize(actorId, permission, undefined, true);
-    return result.hostCommands === "approve" || result.hostCommands === "auto" ? result.hostCommands : undefined;
   }
 
   async prepareRestore(manifest: RestoreManifest, { conversationOnly = false }: { conversationOnly?: boolean } = {}): Promise<void> {
@@ -1291,7 +1290,7 @@ export class RunnerSession {
     const operation: ExtensionToolOperation = { kind: "extension.tool", source: call.source, tool: call.tool,
       arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
       digest: createHash("sha256").update(json).digest("hex") };
-    const trusted = await this.hostCommandsAllowed(attribution.initiatedBy);
+    const trusted = await this.hostCommands.allowed(attribution.initiatedBy);
     if (!trusted && !automaticTools) throw new RunnerError(403, `${call.tool} comes from an extension, which ${HOST_COMMANDS_RULE}`);
     const approval = await this.runOperation(attribution.initiatedBy, operation, String(call.api.taskId), { hostChecked: true });
     if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
@@ -1643,22 +1642,8 @@ export class RunnerSession {
     return { output };
   }
 
-  private shellAllowed(): boolean {
-    return (!!this.config.resources && !this.config.sandboxBackend) || (!this.#onHost && this.config.sandboxBackend?.kind === "windows") || this.#onHost || (this.binding.model.provider === "faux" && this.config.allowFaux && this.config.allowTestShell === true);
-  }
-
-  private async requireHostEnvironment(): Promise<void> {
-    if (!this.#hostSession) return;
-    if (this.binding.session.connectorOwnerId === this.binding.owner.id) return;
-    if (!(await this.hostConfig()).hostSessions) {
-      throw new RunnerError(403, "This host no longer runs members' sessions directly on it: its owner turned that off in Pikibun (Settings → Hosts → the host → Configuration). "
-        + "Nothing ran. Start a new session to work in the sandbox.");
-    }
-    const result = await this.authorize(this.binding.owner.id, "write", undefined, true, true);
-    if (result.hostSessions !== true) {
-      throw new RunnerError(403, "The session's owner may no longer run sessions directly on this host: the grant that let them has ended. "
-        + "Nothing ran. Start a new session to work in the sandbox.");
-    }
+  private testShell(): boolean {
+    return this.binding.model.provider === "faux" && this.config.allowFaux === true && this.config.allowTestShell === true;
   }
 
   private async hostConfig(): Promise<HostConfig> {
@@ -1672,25 +1657,6 @@ export class RunnerSession {
     return { limits: callLimits(commandLimits(config.commandTimeoutSeconds), timeoutSeconds), gpu: config.gpu };
   }
 
-  private requireShellCapability(operation: Operation, unbounded = false): void {
-    if ((operation.kind === "bash" || operation.kind === "program") && !unbounded && !this.shellAllowed()) {
-      throw new RunnerError(403, "Production shell requires a quota-backed runner; bash needs verified resources or explicitly enabled faux test sessions");
-    }
-  }
-
-  private hostCommandSession(): HostCommandSession {
-    return { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId, hostEnvironment: this.#hostSession };
-  }
-
-  private async hostCommandsAllowed(actorId: string): Promise<boolean> {
-    for (const id of new Set([this.binding.owner.id, actorId])) if (!await this.hostCommandLevel(id, "write")) return false;
-    return true;
-  }
-
-  private async requireHostCommands(actorId: string, what: string): Promise<void> {
-    if (!await this.hostCommandsAllowed(actorId)) throw new RunnerError(403, `${what} ${HOST_COMMANDS_RULE}`);
-  }
-
   private async checkCall(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean } = {}): Promise<{ unbounded: boolean }> {
     const state = await this.metadata();
     const actor = state.toolActors[String(api.taskId)];
@@ -1699,7 +1665,7 @@ export class RunnerSession {
     if (effect.write && run.options?.access === "read") {
       throw new RunnerError(403, `${tool} changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.`);
     }
-    return { unbounded: effect.shell === true && !this.shellAllowed() };
+    return { unbounded: effect.shell === true && !this.hostCommands.shellAllowed() };
   }
 
   private buildTools(): ToolRegistration[] {
@@ -1828,7 +1794,7 @@ export class RunnerSession {
           try { request = gitRequest(args); command = gitShellCommand(request); timeoutSeconds = callTimeout(args.timeout_seconds); }
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid git call"}. Nothing ran.`); }
           const attribution = await this.toolActor(api, true);
-          await this.requireHostEnvironment();
+          await this.hostCommands.requireHostEnvironment();
           const { unbounded } = await this.checkCall(api, "git", { write: true, shell: true });
           return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "git");
         } }),
@@ -1846,7 +1812,7 @@ export class RunnerSession {
           const missing = request.venv ? undefined : this.programMissing({ programs: pythonPrograms, path: "/usr/local/bin" }, request.program);
           if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
           const attribution = await this.toolActor(api, true);
-          await this.requireHostEnvironment();
+          await this.hostCommands.requireHostEnvironment();
           const { unbounded } = await this.checkCall(api, "python", { write: true, shell: true });
           return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "python");
         } })]),
@@ -1890,7 +1856,7 @@ export class RunnerSession {
             command = browserShellCommand(request, browser, { seconds: (await this.commandOptions()).limits.seconds, nodeBin: this.sandbox.nodeBin });
           } catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid browser call"}. Nothing ran.`); }
           const attribution = await this.toolActor(api, true);
-          await this.requireHostEnvironment();
+          await this.hostCommands.requireHostEnvironment();
           const { unbounded } = await this.checkCall(api, "browser", { write: true, shell: true });
           const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { unbounded }, call.abortSignal);
           return this.browserOutcome(approval, () => this.recheckTool(attribution), approvalText);
@@ -1937,7 +1903,7 @@ export class RunnerSession {
           const operation: ExtensionToolOperation = { kind: "extension.tool", source: "piki:tunnel", tool: "tunnel",
             arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
             digest: createHash("sha256").update(json).digest("hex") };
-          await this.requireHostCommands(attribution.initiatedBy, "Putting a server online with cloudflared");
+          await this.hostCommands.require(attribution.initiatedBy, "Putting a server online with cloudflared");
           const approval = await this.runOperation(attribution.initiatedBy, operation, String(api.taskId), { hostChecked: true }, call.abortSignal);
           if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? "The tunnel didn't start.");
           const id = approval.id;
@@ -2126,7 +2092,7 @@ export class RunnerSession {
           const missing = this.programMissing(definition, request.program);
           if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
           const attribution = await this.toolActor(api, true);
-          await this.requireHostEnvironment();
+          await this.hostCommands.requireHostEnvironment();
           const { unbounded } = await this.checkCall(api, definition.name, { write: true, shell: true });
           const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal);
           return text(await this.shownApproval(approval, api, definition.name));
@@ -2208,7 +2174,7 @@ export class RunnerSession {
       throw new RunnerError(400, "Commit and switch branches with the git tool; a push names a clone's directory");
     }
     if (operation.kind === "host.bash") throw new RunnerError(400, "Commands on the host were removed with host_bash; run programs with the git, node and python tools");
-    this.requireShellCapability(operation, consent.unbounded);
+    this.hostCommands.requireShell(operation, consent.unbounded);
     if (operation.kind === "extension.tool" && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
       throw new RunnerError(403, "Host commands require a connected host with a known owner");
     }
@@ -2224,7 +2190,7 @@ export class RunnerSession {
     if (this.config.connectorId && !admissionId) throw new RunnerError(403, "The operation lacks Worker write admission");
     const brokered = operation.kind === "git.push" || operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
     if (brokered && admissionId === undefined) throw new RunnerError(403, "Pushes and GitHub effects need a write message");
-    if (!consent.hostChecked && runsOnHost(operation, this.hostCommandSession(), consent.unbounded === true)) await this.requireHostCommands(actorId, this.onHostMachine());
+    if (!consent.hostChecked && this.hostCommands.runsOnHost(operation, consent.unbounded === true)) await this.hostCommands.require(actorId, this.hostCommands.onHostMachine());
     const id = `tool-${toolTaskId}`;
     const record: StoredApproval = { id, sessionId: this.binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)),
       createdAt: new Date().toISOString(), status: "executing",
@@ -2235,10 +2201,6 @@ export class RunnerSession {
     if (!created) return this.#waits.whole((await this.metadata()).approvals[id]!);
     if (operation.kind === "extension.tool") return record;
     return this.#waits.whole(await this.execute(id, actorId, signal, consent.timeoutSeconds));
-  }
-
-  private onHostMachine(): string {
-    return this.#hostSession ? "This session runs directly on its host, so its commands run" : "This host has no resource limits for commands, so they run";
   }
 
   private async execute(id: string, actorId: string, signal?: AbortSignal, timeoutSeconds?: number): Promise<StoredApproval> {
@@ -2271,14 +2233,14 @@ export class RunnerSession {
       return (await this.metadata()).approvals[id]!;
     }
     if (operation.kind !== "bash" && operation.kind !== "program") throw new RunnerError(400, "Unsupported operation");
-    const onHost = runsOnHost(operation, this.hostCommandSession(), approval.unbounded === true);
+    const onHost = this.hostCommands.runsOnHost(operation, approval.unbounded === true);
     try {
       result = await this.sandbox.execute(operation, false, async () => {
-        this.requireShellCapability(operation, approval.unbounded === true);
-        await this.requireHostEnvironment();
-        if (onHost) await this.requireHostCommands(actorId, this.onHostMachine());
+        this.hostCommands.requireShell(operation, approval.unbounded === true);
+        await this.hostCommands.requireHostEnvironment();
+        if (onHost) await this.hostCommands.require(actorId, this.hostCommands.onHostMachine());
         await this.authorize(actorId, "write");
-      }, { allowTestShell: this.binding.model.provider === "faux" && this.config.allowFaux && this.config.allowTestShell === true, unbounded: approval.unbounded === true,
+      }, { allowTestShell: this.testShell(), unbounded: approval.unbounded === true,
         ...await this.commandOptions(timeoutSeconds), signal });
       status = "executed";
     } catch (error) {

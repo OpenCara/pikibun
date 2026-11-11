@@ -1,4 +1,3 @@
-import { workspaceAdminSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import { pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
@@ -7,7 +6,8 @@ import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExte
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, AppEnv } from './types.js';
 import {
-  auditStatement, authenticateConnector, automaticTools, managedConnector, memberToolGroups, requireMember, sessionToolSources, workspaceExtensions,
+  auditStatement, authenticateConnector, automaticTools, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
+  saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
 
@@ -34,8 +34,6 @@ function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExte
 }
 
 const coreSources: readonly string[] = pikiSessionToolExtensions().filter(item => item.core).map(item => item.source);
-
-const adminSql = workspaceAdminSQL;
 
 export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined,
   options: { toolDefinitions?: boolean } = {}): WorkspaceExtension[] {
@@ -140,15 +138,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     const sessionTool = sessionToolSources.includes(key);
     if (sessionTool) extension = { ...extension, tools: 'automatic', settings: {} };
     if (coreSources.includes(key) && !extension.enabled) fail(400, 'invalid_extension', `${key} offers the tools every session needs; it can't be turned off.`);
-    const saved = await c.env.DB.query(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
-      SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), ?, ?, ?, ?, ?
-      WHERE ${adminSql} AND (? = 1 OR (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ? AND package_key NOT IN (${sessionToolSources.map(() => '?').join(', ')})) < ?
-        OR EXISTS (SELECT 1 FROM workspace_extensions WHERE workspace_id = ? AND package_key = ?))
-      ON CONFLICT (workspace_id, package_key) DO UPDATE SET source = excluded.source, enabled = excluded.enabled, tools_mode = excluded.tools_mode,
-        settings_json = excluded.settings_json, updated_by = excluded.updated_by, updated_at = excluded.updated_at
-      RETURNING package_key`)
-      .bind(workspaceId, key, extension.source, workspaceId, extension.enabled ? 1 : 0, extension.tools, JSON.stringify(extension.settings), actor, now(),
-        workspaceId, actor, sessionTool ? 1 : 0, workspaceId, ...sessionToolSources, extensionLimits.workspace, workspaceId, key).first();
+    const saved = await saveWorkspaceExtensionStatement(c.env.DB, { workspaceId, extension, actor, at: now() }).first();
     if (!saved) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
       fail(409, 'extension_limit', `A workspace uses at most ${extensionLimits.workspace} extensions.`);
@@ -165,8 +155,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     let key: string;
     try { key = extensionPackageKey(normalizeExtensionSource(c.req.query('source') ?? '')); }
     catch { return fail(400, 'invalid_extension', 'Name the extension by its source, such as npm:<package>@<version>.'); }
-    const removed = await c.env.DB.query<{ source: string }>(`DELETE FROM workspace_extensions WHERE workspace_id = ? AND package_key = ? AND ${adminSql} RETURNING source`)
-      .bind(workspaceId, key, workspaceId, actor).first();
+    const removed = await removeWorkspaceExtensionStatement(c.env.DB, workspaceId, key, actor).first();
     if (!removed) fail(404, 'not_found', 'The workspace doesn\'t use that extension.');
     await auditStatement(c.env, actor, 'workspace.extension.removed', workspaceId, null, { source: removed.source }).run();
     return c.json({ extensions: await workspaceExtensions(c.env, workspaceId) });

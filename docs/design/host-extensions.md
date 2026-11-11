@@ -49,7 +49,10 @@ its host has.
    which Pikibun has none of.
 11. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
     off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0049 (postgres/0042) added them to existing
-    workspaces after their own, except where a workspace already used the package or was at its limit.
+    workspaces after their own, except where a workspace already used the package or was at its limit. It starts with
+    Pikibun's `piki:prompt-audit` and `piki:context-files` too, turned off; migration sqlite/0064 (postgres/0057) added
+    them to existing workspaces the same way, counting, like the extensions page, none of Pikibun's session-tool
+    extensions against the limit.
 
 11. **The host's owner requires extensions.** A host's owner can require any extension the host has, Pikibun's own
    (`piki:<name>`) or an installed one, of every session on it, with settings of their own
@@ -214,8 +217,9 @@ has without installing them and a workspace gets with its first repository on th
 
 Pi adds a project's `AGENTS.md` or `CLAUDE.md` to its system prompt as its agent session starts. Pikibun's sessions
 don't run that session, so they load neither. `@opencara/pi-context-files` (`extensions/context-files/`, tests in
-`tests/context-files.test.ts`) brings them back. It is a separate Pi package, not built into the connector: a host
-installs it like any other extension. Its `context-files` setting chooses the files: paths in each clone (alternatives
+`tests/context-files.test.ts`) brings them back. It is a separate Pi package, also built into the connector as
+`piki:context-files`, like the prompt audit, so a host installs nothing and every workspace has it, turned off, among
+its default extensions (rule 11). Its `context-files` setting chooses the files: paths in each clone (alternatives
 and wildcards), `host:` files from the host owner's context directory, and `https://` pages. Its `before_agent_start`
 adds them as a prompt section, and its `tool_result` adds a clone's files to the result of the call that cloned it
 during a message. It reads nothing that links outside its repository, into `.git`, or outside that context directory, and fetches no page from
@@ -223,7 +227,8 @@ a private network address. See its [README](../../extensions/context-files/READM
 
 ## Later
 
-- Isolation in a worker or child process.
+- Isolation in a per-session child process, in the session's sandbox and behind its egress proxy: planned in
+  [extension-isolation.md](extension-isolation.md).
 - `registerMcpServer` as tools, `registerProvider` feeding the host's models.
 - `ctx.ui.confirm`/`select` as cards; asking the session owner instead of refusing tools in Read-only messages.
 - `tool-search` as a built-in, once Pikibun defers tools (MCP servers' tools, say).

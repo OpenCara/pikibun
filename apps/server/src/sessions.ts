@@ -14,7 +14,7 @@ import { agentVersion, getUser, modelDefinition, requireUnfrozen, runnerSessionR
 import {
   auditStatement, cloneRepositories, hostAuthority, issueRunAdmission, legacyRepositoryFixture, listSessionAccess, requireConnectorSession, requireMember,
   requireRunnerAccess, requireSession, requireSessionCreator, requireSessionManager, runsShellCommands, sessionCreatorSQL, sessionManagerSQL,
-  audienceSharing,
+  audienceSharing, grantSessionStatement, revokeSessionGrantStatement,
 } from './authority/index.js';
 import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
@@ -569,11 +569,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     if (!grants.length) fail(400, 'empty_grant', 'Use DELETE to revoke a grant.');
     if (grants.some(permission => !hasPermission(access.permissions, permission))) fail(403, 'grant_escalation', 'You cannot grant permissions you do not hold.');
     const result = await c.env.DB.batch([
-      c.env.DB.query(`INSERT INTO session_grants (session_id, user_id, permissions_json, created_at)
-        SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND policy_version = ?)
-          AND EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?)
-        ON CONFLICT(session_id, user_id) DO UPDATE SET permissions_json = excluded.permissions_json`)
-        .bind(row.id, userId, JSON.stringify(grants), now(), row.id, row.policy_version, row.workspace_id, userId),
+      grantSessionStatement(c.env.DB, { sessionId: row.id, policyVersion: row.policy_version, workspaceId: row.workspace_id, userId, permissionsJson: JSON.stringify(grants), at: now() }),
       c.env.DB.query('UPDATE sessions SET policy_version = policy_version + 1 WHERE id = ? AND policy_version = ?').bind(row.id, row.policy_version),
       auditStatement(c.env, c.get('auth').userId, 'grant.updated', row.workspace_id, row.id, { userId, permissions: grants }),
     ]);
@@ -585,8 +581,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     const userId = userIdentifier(c.req.param('userId'));
     if (userId === row.owner_id) fail(400, 'owner_grant_immutable', 'The session owner cannot be revoked.');
     const results = await c.env.DB.batch([
-      c.env.DB.query('DELETE FROM session_grants WHERE session_id = ? AND user_id = ? AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND policy_version = ?)')
-        .bind(row.id, userId, row.id, row.policy_version),
+      revokeSessionGrantStatement(c.env.DB, { sessionId: row.id, policyVersion: row.policy_version, userId }),
       c.env.DB.query('UPDATE sessions SET policy_version = policy_version + 1 WHERE id = ? AND policy_version = ?').bind(row.id, row.policy_version),
       auditStatement(c.env, c.get('auth').userId, 'grant.revoked', row.workspace_id, row.id, { userId }),
     ]);

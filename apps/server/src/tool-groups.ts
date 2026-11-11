@@ -6,7 +6,8 @@ import { workspaceRoles, type WorkspaceRole } from '../../../packages/shared/src
 import { auditStatement, requireMember, workspaceAdminSQL } from './authority/index.js';
 import { requireMemberManagement } from './catalog.js';
 import { ConstraintError } from './db/types.js';
-import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
+import { fail, id, identifier, now, userIdentifier } from './http.js';
+import { body, fields, identifier as identifierField, parsed, text } from './schemas.js';
 import type { AppEnv, Env } from './types.js';
 
 type GroupRow = { id: string; name: string; tools_json: string; created_at: string; updated_at: string };
@@ -34,16 +35,13 @@ export async function toolGroupSettings(env: Env, workspaceId: string, admin: bo
   };
 }
 
-function groupName(value: unknown): string {
-  const name = text(value, 'name', toolGroupLimits.name).trim();
-  if (!name || /[\r\n]/.test(name)) fail(400, 'invalid_input', 'A tool group\'s name is one non-empty line.');
-  return name;
-}
-
-function groupToolsInput(value: unknown): GroupTool[] {
-  try { return parseGroupTools(value); }
-  catch (error) { return fail(400, 'invalid_input', error instanceof Error ? error.message : 'Invalid tools.'); }
-}
+const groupName = text('name', toolGroupLimits.name).transform(name => name.trim())
+  .refine(name => name !== '' && !/[\r\n]/.test(name), 'A tool group\'s name is one non-empty line.');
+const groupToolsInput = parsed(parseGroupTools, 'Invalid tools.');
+const newGroup = fields({ name: groupName, tools: groupToolsInput }, 'A tool group has a name and tools.');
+const groupChange = fields({ name: groupName.optional(), tools: groupToolsInput.optional() }, 'Change a tool group\'s name or tools.', { some: true });
+const memberGroup = fields({ groupId: identifierField('groupId').nullable() }, 'Set groupId to a tool group of the workspace, or null for the member\'s role.',
+  { required: ['groupId'] });
 
 function sameName(error: unknown): never {
   if (error instanceof ConstraintError || (error instanceof Error && /UNIQUE|unique|duplicate/.test(error.message))) {
@@ -63,10 +61,7 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id'));
     const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const input = await jsonObject(c, 16 * 1024);
-    if (Object.keys(input).some(key => key !== 'name' && key !== 'tools')) fail(400, 'invalid_input', 'A tool group has a name and tools.');
-    const name = groupName(input.name);
-    const tools = groupToolsInput(input.tools);
+    const { name, tools } = await body(c, newGroup, { maxBytes: 16 * 1024 });
     const groupId = id();
     const at = now();
     const saved = await c.env.DB.query<GroupRow>(`INSERT INTO workspace_tool_groups (id, workspace_id, name, tools_json, created_by, created_at, updated_by, updated_at)
@@ -84,13 +79,12 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
     const groupId = identifier(c.req.param('groupId'));
     const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const input = await jsonObject(c, 16 * 1024);
-    if (!Object.keys(input).length || Object.keys(input).some(key => key !== 'name' && key !== 'tools')) fail(400, 'invalid_input', 'Change a tool group\'s name or tools.');
+    const input = await body(c, groupChange, { maxBytes: 16 * 1024 });
     const current = await c.env.DB.query<GroupRow>('SELECT id, name, tools_json, created_at, updated_at FROM workspace_tool_groups WHERE id = ? AND workspace_id = ?')
       .bind(groupId, workspaceId).first();
     if (!current) fail(404, 'not_found', 'Tool group not found.');
-    const name = input.name === undefined ? current.name : groupName(input.name);
-    const tools = input.tools === undefined ? groupRecord(current).tools : groupToolsInput(input.tools);
+    const name = input.name ?? current.name;
+    const tools: GroupTool[] = input.tools ?? groupRecord(current).tools;
     const saved = await c.env.DB.query(`UPDATE workspace_tool_groups SET name = ?, tools_json = ?, updated_by = ?, updated_at = ?
       WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
       .bind(name, JSON.stringify(tools), actor, now(), groupId, workspaceId, workspaceId, actor).first().catch(sameName);
@@ -122,9 +116,7 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id'));
     const targetId = userIdentifier(c.req.param('userId'), 'userId');
     const actor = c.get('auth').userId;
-    const input = await jsonObject(c, 1024);
-    if (Object.keys(input).length !== 1 || !('groupId' in input)) fail(400, 'invalid_input', 'Set groupId to a tool group of the workspace, or null for the member\'s role.');
-    const groupId = input.groupId === null ? null : identifier(input.groupId, 'groupId');
+    const { groupId } = await body(c, memberGroup, { maxBytes: 1024 });
     const targetRole = await requireMemberManagement(c.env, workspaceId, actor, targetId);
     if (!targetRole) fail(404, 'not_found', 'Membership not found.');
     if (groupId === null) {

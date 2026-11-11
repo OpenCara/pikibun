@@ -96,6 +96,14 @@ test('workspace owners and admins create tool groups and put members in them; th
   assert.equal((await f.member.request('POST', `${f.path}/tool-groups`, { name: 'Mine', tools: ['git_push'] })).status, 403);
   await body(await f.admin.request('POST', `${f.path}/tool-groups`, { name: 'Bad', tools: ['bash'] }), 400);
   await body(await f.admin.request('POST', `${f.path}/tool-groups`, { name: ' ', tools: [] }), 400);
+  const refused = async (method: string, path: string, input: unknown) => (await body<{ error: string; code: string }>(await f.admin.request(method, `${f.path}${path}`, input), 400)).error;
+  assert.equal(await refused('POST', '/tool-groups', { name: '', tools: [], extra: 1 }), 'A tool group has a name and tools.', 'the shape is named before a field');
+  assert.equal(await refused('POST', '/tool-groups', { tools: [] }), 'Invalid name.');
+  assert.equal(await refused('POST', '/tool-groups', { name: ' ', tools: [] }), 'A tool group\'s name is one non-empty line.');
+  assert.equal(await refused('PUT', `/members/${f.member.user.id}/tool-group`, {}), 'Set groupId to a tool group of the workspace, or null for the member\'s role.');
+  assert.equal(await refused('PUT', `/members/${f.member.user.id}/tool-group`, { groupId: null, extra: 1 }), 'Set groupId to a tool group of the workspace, or null for the member\'s role.');
+  assert.equal(await refused('PUT', `/members/${f.member.user.id}/tool-group`, { groupId: 'bad id' }), 'Invalid groupId.');
+  assert.equal(await refused('PUT', `/members/${f.member.user.id}/tool-group`, { groupId: 7 }), 'Invalid groupId.');
   const created = await body<ToolGroupSettings>(await f.admin.request('POST', `${f.path}/tool-groups`, { name: 'Releasers', tools: ['read_file', 'git', 'git_push', 'github_merge'] }), 201);
   const releasers = created.groups[0]!;
   assert.deepEqual([releasers.name, releasers.tools], ['Releasers', ['read_file', 'git', 'git_push', 'github_merge']]);

@@ -1,9 +1,11 @@
 import { documentSourceExtensionOf, pikiExtensionsFor, pikiSessionToolExtensions } from '../../../../packages/shared/src/piki-extensions.js';
-import { extensionLimits, withSessionToolsListed, type ExtensionToolMode, type WorkspaceExtension } from '../../../../packages/shared/src/host-extensions.js';
+import { defaultWorkspaceExtensions, extensionLimits, extensionPackageKey, withSessionToolsListed, type ExtensionToolMode, type WorkspaceExtension } from '../../../../packages/shared/src/host-extensions.js';
 import type { DocumentKind } from '../../../../packages/shared/src/sources.js';
 import type { Env } from '../types.js';
 import { now } from '../http.js';
 import { auditStatement } from './audit.js';
+import { workspaceAdminSQL } from './access.js';
+import type { Database, Query } from '../db/types.js';
 
 interface ExtensionRow { source: string; enabled: number | string; tools_mode: ExtensionToolMode; settings_json: string }
 
@@ -61,3 +63,28 @@ export async function addDocumentSourceExtension(env: Env, workspaceId: string, 
   return await addPikiExtension(env, workspaceId, extension.source, actor, first, { reason: 'source', kind }) ? [extension.source] : [];
 }
 
+export function defaultWorkspaceExtensionStatements(db: Pick<Database, 'query'>, workspaceId: string, ownerId: string, at: string): Query<never>[] {
+  return defaultWorkspaceExtensions.map((source, index) => db.query<never>(`INSERT INTO workspace_extensions
+      (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, 0, 'automatic', '{}', ?, ?)`)
+    .bind(workspaceId, extensionPackageKey(source), source, index + 1, ownerId, at));
+}
+
+export function saveWorkspaceExtensionStatement(db: Pick<Database, 'query'>, save: { workspaceId: string; extension: WorkspaceExtension; actor: string; at: string }): Query<{ package_key: string }> {
+  const key = extensionPackageKey(save.extension.source);
+  const sessionTool = sessionToolSources.includes(key);
+  return db.query<{ package_key: string }>(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
+    SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), ?, ?, ?, ?, ?
+    WHERE ${workspaceAdminSQL} AND (? = 1 OR (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ? AND package_key NOT IN (${sessionToolSources.map(() => '?').join(', ')})) < ?
+      OR EXISTS (SELECT 1 FROM workspace_extensions WHERE workspace_id = ? AND package_key = ?))
+    ON CONFLICT (workspace_id, package_key) DO UPDATE SET source = excluded.source, enabled = excluded.enabled, tools_mode = excluded.tools_mode,
+      settings_json = excluded.settings_json, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+    RETURNING package_key`)
+    .bind(save.workspaceId, key, save.extension.source, save.workspaceId, save.extension.enabled ? 1 : 0, save.extension.tools, JSON.stringify(save.extension.settings),
+      save.actor, save.at, save.workspaceId, save.actor, sessionTool ? 1 : 0, save.workspaceId, ...sessionToolSources, extensionLimits.workspace, save.workspaceId, key);
+}
+
+export function removeWorkspaceExtensionStatement(db: Pick<Database, 'query'>, workspaceId: string, key: string, actor: string): Query<{ source: string }> {
+  return db.query<{ source: string }>(`DELETE FROM workspace_extensions WHERE workspace_id = ? AND package_key = ? AND ${workspaceAdminSQL} RETURNING source`)
+    .bind(workspaceId, key, workspaceId, actor);
+}
