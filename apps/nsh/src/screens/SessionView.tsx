@@ -24,7 +24,7 @@ import { createUsername, createWorkspacePeople, PeopleContext } from "../lib/peo
 import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text } from "../theme";
-import { Badge, Banner, Button, Chip, confirm, DropdownMenu, EmptyState, Feedback, IconButton, Loading, Picker, Small, type MenuAction } from "../ui";
+import { Badge, Banner, Button, Chip, confirm, DropdownMenu, EmptyState, Feedback, IconButton, Loading, phoneWidth, Picker, Small, type MenuAction } from "../ui";
 import { drawsHeaders, PageHeader, pageStyle } from "./PageHeader";
 import type { PageRoute } from "../lib/page";
 import { SessionPanel } from "../session-panel";
@@ -441,6 +441,9 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     : !permitted() ? (canAsk() ? "Read-only · switch to Side ask to ask questions" : "Read-only · submitting needs write permission")
     : actualMode() === "ask" ? "Read-only · anyone who can view this session can see side asks"
     : `Runs as ${view().owner.displayName}${view().owner.id === user.id ? " (you)" : ""}`;
+  // Only "Runs as … (you)" goes unsaid on a phone, where the chat box's controls have one line: every other hint warns or
+  // says whose work a message becomes.
+  const runsAsYou = () => hint().startsWith("Runs as") && view().owner.id === user.id;
   const bottomInset = () => (platform.desktop ? 12 : Math.max(keyboardFrame().height, safeArea().bottom, 12));
 
   const statusShown = () => working() || activeQueue().length > 0 || queueOpen();
@@ -539,11 +542,12 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
               : actualMode() === "ask" ? "Ask a side question without changing anything" : "Message the agent"}
             sendLabel={actualMode() === "ask" ? "Send side ask" : "Submit to session"}
             hint={hint()}
+            phoneHint={runsAsYou() ? "" : undefined}
             tools={
               <If when={canAsk() || permitted()}>
                 <If when={canAsk()}>
                   <Picker<"write" | "ask"> title="Send as" value={actualMode()} onSelect={value => mode.set(value)}
-                    trigger={<Chip testID="composer-mode" icon={actualMode() === "ask" ? "message-question" : "users"} label={actualMode() === "ask" ? "Side ask" : "Shared"} />}
+                    trigger={<Chip testID="composer-mode" dense={phoneWidth()} icon={actualMode() === "ask" ? "message-question" : "users"} label={actualMode() === "ask" ? "Side ask" : "Shared"} />}
                     options={[
                       { value: "write", label: "Shared", icon: "users", hint: "Goes into the shared conversation; the agent can change the work" },
                       { value: "ask", label: "Side ask", icon: "message-question", hint: "A question on the side that doesn't change the work" },
@@ -551,7 +555,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                 </If>
                 <If when={actualMode() === "ask" && sideConversations().length > 0}>
                   <Picker<string> title="Side conversation" value={conversationId()} onSelect={value => conversationId.set(value)}
-                    trigger={<Chip label={sideIndex() < 0 ? "All my side asks" : `Side ask ${sideIndex() + 1}`} />}
+                    trigger={<Chip dense={phoneWidth()} label={sideIndex() < 0 ? "All my side asks" : `Side ask ${sideIndex() + 1}`} />}
                     options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
                 </If>
                 <If when={permitted()}>
