@@ -31,6 +31,9 @@ Options:
                            isolation (macOS or Linux without bubblewrap); asks
                            for confirmation
   --state-dir PATH         Private state (default ~/.local/share/pikibun/server)
+  --stdio                  Run for the Pikibun app, which starts this command
+                           itself and talks to it over stdin and stdout (JSON
+                           lines); takes only --state-dir besides
   --help                   Show this help
 
 Share it with others (a full multi-user server, from the same data):
@@ -130,6 +133,12 @@ export function sharedSettings(saved: SharedConfig | undefined, values: {
 }
 
 export async function serveMain(args = process.argv.slice(2)): Promise<void> {
+  if (args.includes('--stdio') && !args.includes('--help')) {
+    const { runAppServer } = await import('./app-server.js');
+    try { runAppServer(args); }
+    catch (error) { throw error instanceof ConnectorSetupError ? error : new ConnectorSetupError('pikibun serve --stdio takes only --state-dir. Run "pikibun serve --help".'); }
+    return;
+  }
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
     help: { type: 'boolean' }, port: { type: 'string' }, 'github-client-id': { type: 'string' }, 'no-host': { type: 'boolean' },
     'unsafe-no-sandbox': { type: 'boolean' }, 'state-dir': { type: 'string' }, 'pi-agent-dir': { type: 'string' },
