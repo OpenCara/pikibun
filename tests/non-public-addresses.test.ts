@@ -5,7 +5,6 @@ import { publicAddress as proxyPublic } from '../apps/runner/src/egress.js';
 import { publicAddress as databasePublic } from '../apps/server/src/workspace-databases/hosts.js';
 import { blockedAddress } from '../extensions/context-files/context-files.ts';
 import { NON_PUBLIC_IPV4, NON_PUBLIC_IPV6 } from '../packages/shared/src/non-public-addresses.js';
-// @ts-expect-error The script is plain JavaScript without declarations.
 import { staleCopies } from '../scripts/copy-shared-files.mjs';
 
 test('the extension\'s copy of the non-public address table is the shared one', () => {

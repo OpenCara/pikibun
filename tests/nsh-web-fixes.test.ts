@@ -5,7 +5,6 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-// @ts-expect-error: a plain .mjs build script
 import { BEFORE_BOOTSTRAP, DRAWN_WIDTH, EARLY_MAP, LATE_MAP, MEASURE_TEXT, PATCHED_MEASURE_TEXT, fixWebSite } from "../scripts/nsh-web-fixes.mjs";
 
 const LOADER = `import(\`./browser.991ab24c49/runtime.js\`);const imports={nsh:{${MEASURE_TEXT},measure_numeric_text:()=>0}};`;
