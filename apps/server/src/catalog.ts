@@ -5,9 +5,8 @@ import type { AnyToolName, AssignableWorkspaceRole, Workspace, WorkspaceRole } f
 import { bundledToolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
-import { defaultWorkspaceExtensions, extensionPackageKey } from '../../../packages/shared/src/host-extensions.js';
 import {
-  addMemberStatement, auditAfterChange, auditStatement, changeMemberRoleStatement, personalWorkspaceName, removeMemberStatements, requireMember,
+  addMemberStatement, auditAfterChange, defaultWorkspaceExtensionStatements, auditStatement, changeMemberRoleStatement, personalWorkspaceName, removeMemberStatements, requireMember,
   requireSharedWorkspace, workspaceOwnerStatement,
 } from './authority/index.js';
 import { modelDefinition } from './db.js';
@@ -211,10 +210,7 @@ function newWorkspaceStatements(env: Env, workspace: { id: string; name: string;
       .bind(workspace.id, workspace.name, workspace.ownerId, createdAt),
     workspaceOwnerStatement(env.DB, workspace.id, workspace.ownerId, createdAt),
     auditStatement(env, workspace.ownerId, 'workspace.create', workspace.id, null, detail),
-    ...defaultWorkspaceExtensions.map((source, index) => env.DB.query<never>(`INSERT INTO workspace_extensions
-        (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
-        VALUES (?, ?, ?, ?, 0, 'automatic', '{}', ?, ?)`)
-      .bind(workspace.id, extensionPackageKey(source), source, index + 1, workspace.ownerId, createdAt)),
+    ...defaultWorkspaceExtensionStatements(env.DB, workspace.id, workspace.ownerId, createdAt),
     ...ownerHostStatements(env, workspace.ownerId, workspace.id),
   ];
 }

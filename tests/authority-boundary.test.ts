@@ -89,3 +89,18 @@ test("only the authority writes the audit log", () => {
     .filter(file => /\b(insert\s+into|update|delete\s+from)\s+audit\b(?!_)/i.test(readFileSync(join(repository, file), "utf8")));
   assert.deepEqual(writes, [], "outside the authority, audit entries go through auditStatement or auditAfterChange");
 });
+
+const authorityTables = [
+  "auth_sessions", "automatic_github_effects", "connector_admins", "connector_host_grants", "connector_shares", "document_sources", "git_credentials",
+  "github_tokens", "native_auth_codes", "oauth_states", "password_credentials", "push_credentials", "push_identities", "push_oauth_states",
+  "repository_lfs_settings", "repository_push_policies", "run_admissions", "session_grants", "session_tool_grants", "source_accounts", "source_oauth_states",
+  "source_read_settings", "users", "workspace_connections", "workspace_extensions", "workspace_members", "workspace_network_policies",
+  "workspace_repositories", "workspace_sources",
+];
+
+test("only the authority writes the tables it decides from: the rest of the server goes through its statements", () => {
+  const write = new RegExp(`\\b(?:insert\\s+(?:or\\s+\\w+\\s+)?into|update|delete\\s+from)\\s+(${authorityTables.join("|")})\\b`, "gi");
+  const writes = sources(server).filter(file => !inAuthority(file))
+    .flatMap(file => [...readFileSync(join(repository, file), "utf8").matchAll(write)].map(match => `${file}: ${match[1]}`));
+  assert.deepEqual(writes, []);
+});

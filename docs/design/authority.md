@@ -67,24 +67,26 @@ authority never reaches into them.
 
 ## Not yet
 
-- **The authority's tables aren't only its own.** Other modules still write tables it decides from:
-  - `workspace_members`: `catalog.ts` and `workspace-invites.ts`.
-  - `session_grants`: `catalog.ts` and `sessions.ts`.
-  - `session_tool_grants`: `sessions.ts`.
-  - `connector_shares`, and host grants and admins when a host is removed: `connectors.ts`.
-  - Extension settings: `extensions.ts`, `catalog.ts` and `connectors.ts`.
-  - `auth_sessions`: `password-accounts-cli.ts`.
-
-  The authority also reads the rest of the server's tables: `sessions` everywhere, and `restore_jobs` and `host_migrations`
-  through `db.ts`. Running it on its own would need an interface for each of these, not shared tables.
+- **The authority reads tables that aren't its own.** It writes its own alone: a fifth rule in
+  `tests/authority-boundary.test.ts` lists the tables it decides from (memberships, session grants, host shares, grants
+  and admins, workspace extensions, credentials, sign-ins and the rest), and fails if anything outside `authority/`
+  writes one. The rest of the server changes them through statements the authority returns (`memberships.ts`,
+  `host-access.ts`, `extension-policy.ts`, `password-auth.ts`), which callers batch with their own writes and audit
+  entries, so each change stays one atomic batch. But the authority still reads the rest of the server's tables:
+  `sessions` everywhere, and `restore_jobs` and `host_migrations` through `db.ts`. Running it on its own would need an
+  interface for each of these.
+- **Guards stay SQL.** The fragments it exports (`workspaceAdminSQL`, `sessionCreatorSQL`, `sessionManagerSQL`,
+  `managesConnectorSQL`, `personalWorkspaceSQL`) guard other modules' writes to their own tables (`INSERT ... SELECT
+  ... WHERE <who may>`), so the check and the write are one statement and a revoked role can't slip between them. A
+  function that checked first and returned a boolean would reopen that race, so they stay SQL, named by the authority.
+  `workspaceHasSourceSQL` is no longer exported: its only outside user now calls `shareHostStatements`.
 - **The routes hosts call are registered together.** `connectors.ts` and `internal.ts` register the authority's routes
   (authorize, credentials, brokers) beside the coordinating ones (activity, schedules, sessions, restores).
 - **The relay mints the tickets it carries.** `runner.ts` and `connector-transport.ts` build them, and the authority
   only checks them (`runner-access.ts`). For the apps to reach hosts without the relay, the authority would have to
   issue them, signed with a key the hosts can check.
-- **The interface is wide.** It is everything the server used when the boundary was drawn, about 120 names. Some of it
-  is SQL fragments (`sessionCreatorSQL`, `sessionManagerSQL`, `managesConnectorSQL`, `workspaceHasSourceSQL`,
-  `repositorySettingsSelect`) that callers embed in their own queries, which ties them to the authority's tables.
+- **The interface is wide.** It is everything the server used when the boundary was drawn, about 130 names now that
+  writes go through it. `repositorySettingsSelect` is still a read that `data-export.ts` embeds.
 - **Two permission tables for host requests.** `runner-access.ts` kept both: `requireRunnerAccess`'s and the
   connector ticket's (`connectorPermissions`). They differ only for `restore` (`write` against `manage`), which only the
   session's owner asks for anyway.

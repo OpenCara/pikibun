@@ -1,5 +1,5 @@
 export { authenticate, csrfGuard, localOwner, registerAuth } from './auth.js';
-export { hashPassword, newPassword, passwordAccountStatements, passwordUsername, registerPasswordAuth, USERNAME_MATCH, usernameMatch } from './password-auth.js';
+export { hashPassword, newPassword, operatorPasswordResetStatements, passwordAccountStatements, passwordUsername, registerPasswordAuth, USERNAME_MATCH, usernameMatch } from './password-auth.js';
 export { adminUserId, instanceAdmins, registerAdmin } from './admin.js';
 export { INVALID_LINK, INVITE_TOKEN, joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 
@@ -19,19 +19,21 @@ export { authorizeConnectorTicket, connectorPermissions, requireRunnerAccess } f
 export { authorizeSession } from './authorize.js';
 export {
   connectorAdmins, connectorHostGrants, hostAuthority, hostCommandSession, managedConnector, managedConnectorFor, managesConnectorSQL,
-  registerHostAccess, requireManagedWorkspace, runsShellCommands, viewerHostAuthority,
+  registerHostAccess, removedHostStatements, requireManagedWorkspace, runsShellCommands, shareHostStatements, unshareHostStatements, viewerHostAuthority,
 } from './host-access.js';
 
 export { parseOperation } from './operations.js';
 export { audienceSharing, registerAudienceSharing, requireOperationTool, requireToolCall, sessionsNeedGranted, setAudienceSharing } from './tool-checks.js';
 export { issueRunAdmission } from './run-admissions.js';
-export { automaticTools, sessionToolSources, workspaceExtensions } from './extension-policy.js';
+export {
+  automaticTools, defaultWorkspaceExtensionStatements, removeWorkspaceExtensionStatement, saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
+} from './extension-policy.js';
 export { memberToolGroup, memberToolGroups, requireOwnerTool } from './tool-groups.js';
 
 export { assertVaultConfigured, decryptToken, encryptToken } from './vault.js';
 export {
   cloneRepositories, legacyRepositoryFixture, publicRepository, registerRepositories, type RepositorySettingsRow, repositorySettingsSelect,
-  requireConfiguredWorkspace, workspaceHasSourceSQL,
+  requireConfiguredWorkspace,
 } from './repositories.js';
 export { registerGitAccounts } from './git/accounts.js';
 export { registerWorkspaceConnections } from './workspace-connections.js';
