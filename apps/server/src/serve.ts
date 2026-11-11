@@ -69,6 +69,7 @@ function sweep(name: string, ms: number, run: () => Promise<unknown>): NodeJS.Ti
 export interface RunningServer {
   address: AddressInfo;
   close(): Promise<void>;
+  lost: Promise<Error>;
 }
 
 export async function startServer(config: ServerConfig): Promise<RunningServer> {
@@ -148,8 +149,10 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
   server.off('error', listening.reject);
 
   let closing: Promise<void> | undefined;
-  return {
+  const lost = Promise.withResolvers<Error>();
+  const running: RunningServer = {
     address: server.address() as AddressInfo,
+    lost: lost.promise,
     close() {
       closing ??= (async () => {
         for (const timer of timers) clearInterval(timer);
@@ -164,4 +167,9 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
       return closing;
     },
   };
+  instanceLock.onLost?.(error => {
+    console.error(`pikibun: ${error.message}`);
+    void running.close().catch(() => {}).finally(() => lost.resolve(error));
+  });
+  return running;
 }
