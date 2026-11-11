@@ -252,7 +252,8 @@ export function definedToolOn(definition: ToolDefinition, isOn: (extension: stri
   return definition.extensions.some(isOn);
 }
 
-const approvalSentence = "It stops at the host's command time limit.";
+const approvalSentence = "It stops at the host's command time limit, or sooner at timeout_seconds: give one to a run that could wait forever, such as a test suite or a server it starts. "
+  + "Make Unix sockets in /tmp (TMPDIR): the worktree's path leaves too little of a socket path's 107 bytes.";
 
 const registryAccountWords = ["publish", "unpublish", "deprecate", "undeprecate", "adduser", "login", "logout", "owner", "access", "token", "dist-tag", "tag",
   "team", "profile", "org"];
@@ -261,7 +262,7 @@ const nodePrograms = ["node", "npm", "npx", "pnpm", "yarn", "corepack"];
 
 const nodeTool: ProgramToolDefinition = {
   kind: "program", name: "node", extensions: ["piki:node"],
-  description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. In the Linux sandbox, pnpm, yarn and corepack are there only where the host installed them (Node.js 25 and newer don't bundle corepack): a call to one it lacks is refused, saying how the host's owner installs it. ${approvalSentence}`,
+  description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. In the Linux sandbox, pnpm, yarn and corepack are there only where the host installed them (Node.js 25 and newer don't bundle corepack): a call to one it lacks is refused, saying how the host's owner installs it. Where npm warns that it skipped a dependency's install scripts, npm install-scripts approve <pkg> then npm rebuild <pkg> runs them. ${approvalSentence}`,
   programs: nodePrograms, example: '["test"]',
   environment: [["NO_COLOR", "1"], ["COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"], ["npm_config_yes", "true"]],
   path: ["/usr/local/bin"], toolchain: "node",
@@ -290,7 +291,8 @@ function ecosystemTool(name: string, extension: string, what: string, programs: 
       + `args is its arguments as a list, such as ${examples}; directory is where it runs, a path in the worktree such as a clone (app), the worktree by default. `
       + "It runs exactly that program there. "
       + "Commands that act on a package registry as an account are refused: sessions have none. "
-      + "In the Linux sandbox, its programs are those the host installed for the whole system (the sandbox sees only its /usr): a call to one it lacks is refused, saying how the host's owner installs it.",
+      + "In the Linux sandbox, its programs are those the host installed for the whole system (the sandbox sees only its /usr): a call to one it lacks is refused, saying how the host's owner installs it. "
+      + approvalSentence,
     programs, example, environment, path, ...(systemDefaults ? { systemDefaults } : {}), grammar,
     refusal: "acts on a package registry as an account, which sessions don't have", windowsSandbox: false, summary,
   };

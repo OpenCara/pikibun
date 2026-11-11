@@ -62,6 +62,20 @@ export function commandLimits(seconds: number, cpus = availableParallelism()): C
   return { seconds: bounded, cpuSeconds: bounded * Math.max(1, Math.trunc(cpus)), fileBytes: 16 * 1024 * MiB, openFiles: 8192 };
 }
 
+export const CALL_TIMEOUT_MAX_SECONDS = hostConfigLimits.commandTimeoutSeconds.max;
+
+export function callTimeout(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > CALL_TIMEOUT_MAX_SECONDS) {
+    throw new Error(`timeout_seconds is whole seconds, from 1 to ${CALL_TIMEOUT_MAX_SECONDS}`);
+  }
+  return value as number;
+}
+
+export function callLimits(limits: CommandLimits, timeoutSeconds?: number): CommandLimits {
+  return timeoutSeconds === undefined || timeoutSeconds >= limits.seconds ? limits : { ...limits, seconds: timeoutSeconds };
+}
+
 export interface GpuMounts { kind: GpuKind; args: string[]; env: Record<string, string> }
 
 const DXG = "dev/dxg";
