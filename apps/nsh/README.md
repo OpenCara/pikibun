@@ -132,9 +132,10 @@ invite link, and every settings section (Profile, Notifications, Hosts, Workspac
 Administration). What is left out, and why:
 
 - **This Computer**: the desktop builds have it ([below](#this-computer)) for this computer as a host of the server
-  signed in to. What the Electron app's had is left out: hosts for several servers at once, WSL2 on Windows, running
-  Pikibun itself here (`pikibun serve`), installing prerequisites itself, and hosting while the app is closed (its tray).
-  In a browser there is no such section.
+  signed in to, and **Self host** ([below](#self-host)) runs Pikibun itself here. What the Electron app's had is left
+  out: hosts for several servers at once, WSL2 on Windows, sharing the Pikibun it runs with others (`pikibun serve
+  --share`, in a terminal), installing prerequisites itself, and hosting while the app is closed (its tray). In a
+  browser there are no such sections.
 - **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058), and NSH
   has no local notifications either; the web build turns them on in the browser as the web app does (Web Push through
   the `sw.js` the build ships, or while a tab is open), and every build manages the account's preferences and devices.
@@ -181,6 +182,34 @@ when the app quit, with the consent given then (`src/lib/this-computer.ts`).
 
 `tests/this-computer.test.tsx` runs the page against a stand-in for the command that speaks its protocol
 (`tests/harness/this-computer.tsx`); `tests/host-cli.test.ts`, at the repository's root, runs the command itself.
+
+## Self host
+
+In the macOS, Windows and Linux builds, **Settings → Self host** (`#/settings/self-host`), and **Run Pikibun on this
+Mac** on the sign-in screen while signed out, run Pikibun itself on this computer, as `pikibun serve` does in a
+terminal: the server and its web app on `http://127.0.0.1:7878`, for its owner alone, with this computer as the host
+that runs their sessions.
+
+- **Start and stop** it. The first start takes the owner's GitHub OAuth app (its client ID and secret, entered on the
+  page with the two addresses to register it with); later starts use the saved one. Where this computer has no
+  sandbox, it asks the same consent as This Mac before this computer runs sessions.
+- **Sign in to it**: the app switches its server to the running Pikibun (from Settings, after signing out of the one it
+  is signed in to), and while nobody owns it yet, its GitHub sign-in carries the server's claim secret
+  (`/api/auth/native/start?…&claim=`), so the account that signs in becomes its owner without the link `pikibun serve`
+  prints for a browser.
+- It runs while the app is open, and starts again at the next launch if it was running when the app quit, after which
+  the app tries its sign-in again.
+
+The app runs `pikibun serve --stdio` (`apps/server/src/local/app-server.ts`, protocol in `packages/shared/src/app-server-protocol.ts`)
+through the same login shell or `cmd` as `pikibun host --stdio` (`src/lib/pikibun-command.ts`), with JSON lines on
+its stdin and stdout, where the OAuth app's secret travels. When the command is missing or too old for `--stdio`, the
+page offers This Mac's **Install pikibun** or **Update pikibun**. It uses `pikibun serve`'s state directory, so a
+Pikibun set up in a terminal carries over, and only one of them runs at a time. Its host is the server's own (paired
+with the server's state, as `pikibun serve` pairs it), not This Mac's: This Mac stays a host of whichever server it is
+paired with.
+
+`tests/self-host.test.tsx` runs the page, the sign-in screen and Settings against a stand-in for the command
+(`tests/harness/self-host.tsx`); `tests/serve-stdio.test.ts`, at the repository's root, runs the command itself.
 
 ## Known gaps, from NSH itself
 

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { STDIO_FRAME } from "../apps/runner/src/app-host-protocol.js";
-import type { ServerEvent } from "../apps/server/src/local/app-server-protocol.js";
+import type { ServerEvent } from "../packages/shared/src/app-server-protocol.js";
 import { loadLocalState, peekLocalState } from "../apps/server/src/local/state.js";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));

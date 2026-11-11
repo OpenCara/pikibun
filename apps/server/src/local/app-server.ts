@@ -5,7 +5,7 @@ import { assertConnectorPlatform, assertPrerequisites, hostIsolation, loadConnec
 import type { LocalModels } from '../../../runner/src/local-pi.js';
 import { ConnectorSetupError } from '../../../runner/src/protocol.js';
 import { ConfigurationError } from '../config.js';
-import type { ServerEvent, ServerHostState, ServerInspection, ServerRequest, ServerStartRequest, ServerStatus } from './app-server-protocol.js';
+import type { ServerEvent, ServerHostState, ServerInspection, ServerRequest, ServerStartRequest, ServerStatus } from '../../../../packages/shared/src/app-server-protocol.js';
 import { startLocalHost, type LocalHost } from './host.js';
 import { LocalServerError, startLocalServer, type LocalServer } from './launch.js';
 import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState } from './state.js';

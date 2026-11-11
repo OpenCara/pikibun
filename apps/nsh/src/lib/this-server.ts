@@ -1,5 +1,5 @@
 import { signal, Storage, untracked } from "nsh";
-import type { ServerEvent, ServerInspection, ServerRequest, ServerStatus } from "../../../server/src/local/app-server-protocol";
+import type { ServerEvent, ServerInspection, ServerRequest, ServerStatus } from "../../../../packages/shared/src/app-server-protocol";
 import { auth, restore } from "./auth";
 import { CommandChannel, commandProblem, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine } from "./pikibun-command";
 import { computerName, computerTitle, hostsHere } from "./this-computer";

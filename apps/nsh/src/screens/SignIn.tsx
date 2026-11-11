@@ -27,6 +27,8 @@ export function SignIn(props: { inviteToken?: string }) {
     return current.status === "signedOut" || current.status === "unreachable" ? current.origin : "";
   };
   const action = createAction();
+  const selfHostOpen = signal(false);
+  const loopback = () => selfHosting && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin());
   return (
     <View style={{ flex: 1, backgroundColor: palette().background, paddingTop: safeArea().top, paddingBottom: safeArea().bottom }}>
       <If when={state().status === "unreachable" ? state() as Extract<ReturnType<typeof auth>, { status: "unreachable" }> : null}
@@ -37,11 +39,36 @@ export function SignIn(props: { inviteToken?: string }) {
             <Text style={{ fontSize: 26, fontWeight: "300", color: palette().text }}>Can't reach Pikibun</Text>
             <Banner tone="warning" title={displayOrigin(origin())}>{unreachable().error}</Banner>
             <Button variant="primary" label="Try again" disabled={action.busy()} onPress={() => void restore()} />
+            <If when={loopback()}>
+              <Button testID="unreachable-self-host" variant="outline" icon="database" label={`Pikibun on ${computerName}`} onPress={() => selfHostOpen.set(true)} />
+            </If>
             <Button variant="ghost" label={action.busy() ? "Signing out…" : "Sign out"} disabled={action.busy()} onPress={() => void action.run(signOut)} />
+            <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={() => { selfHostOpen.set(false); void restore(); }} />
           </View>
         )}
       </If>
     </View>
+  );
+}
+
+const selfHosting = !usesBrowserSession && hostsHere;
+
+function SelfHostSheet(props: { open: boolean; onClose: () => void; onUse: (origin: string) => void }) {
+  return (
+    <If when={selfHosting}>
+      <Dialog open={props.open} onOpenChange={event => { if (!event.open) props.onClose(); }}
+        style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
+        <View style={{ flex: 1 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
+            <Text style={{ flex: 1, fontSize: 14, fontWeight: "500", color: palette().text }}>{`Pikibun on ${computerName}`}</Text>
+            <Button testID="sign-in-self-host-close" small variant="ghost" label="Close" onPress={props.onClose} />
+          </View>
+          <If when={props.open}>
+            <ThisServerPanel server={thisServer()} onUse={props.onUse} />
+          </If>
+        </View>
+      </Dialog>
+    </If>
   );
 }
 
@@ -89,7 +116,6 @@ function SignInForm(props: { inviteToken?: string }) {
   const passwords = () => methods()?.passwordAuth === true;
   const unconfigured = () => githubUnconfigured() && !passwords();
   const local = () => methods()?.localServer;
-  const selfHosting = !usesBrowserSession && hostsHere;
   const ownClaim = () => {
     const target = origin();
     return selfHosting && target && local()?.claimed === false ? thisServer().claimFor(target) : undefined;
@@ -272,20 +298,7 @@ function SignInForm(props: { inviteToken?: string }) {
           ? "On the web this app uses the server's own browser sign-in."
           : "Your sign-in is kept in this app's storage on this device (NSH has no Keychain or Keystore storage yet)."}
       </Small>
-      <If when={selfHosting}>
-        <Dialog open={selfHostOpen()} onOpenChange={event => { if (!event.open) selfHostOpen.set(false); }}
-          style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
-              <Text style={{ flex: 1, fontSize: 14, fontWeight: "500", color: palette().text }}>{`Pikibun on ${computerName}`}</Text>
-              <Button testID="sign-in-self-host-close" small variant="ghost" label="Close" onPress={() => selfHostOpen.set(false)} />
-            </View>
-            <If when={selfHostOpen()}>
-              <ThisServerPanel server={thisServer()} onUse={useServer} />
-            </If>
-          </View>
-        </Dialog>
-      </If>
+      <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={useServer} />
       <Dialog open={github() !== null} onOpenChange={event => { if (!event.open) github.set(null); }}
         style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
         <View style={{ flex: 1 }}>

@@ -38,11 +38,11 @@ Nothing has to be reinstalled. You switch with one setting, or by signing in to 
 | --- | --- |
 | Client → Host | **Settings → This Mac** (**This Computer** on Windows and Linux) → **Pair This Mac**. After that, use **Start host**. See [Host](host.md). |
 | Host → Client | **Settings → This Mac → Stop host**. The pairing is kept, so **Start host** brings it back later without a new code. |
-| Any → Self host | Start `pikibun serve` in a terminal, then sign in to `http://127.0.0.1:7878`: **Settings → Profile → Sign out**, then **Change** next to **Server** on the sign-in screen. See [Self host](self-host.md). |
-| Self host → Client or Host | Sign out, then **Change** the server back (for example to `https://pikibun.com`). Stop `pikibun serve` in its terminal with Ctrl+C when you no longer need it. |
+| Any → Self host | **Settings → Self host → Start Pikibun**, then **Sign in to it**. Signed out, the sign-in screen's **Run Pikibun on this Mac** opens the same page. See [Self host](self-host.md). |
+| Self host → Client or Host | **Settings → Profile → Sign out**, then **Change** the server back on the sign-in screen (for example to `https://pikibun.com`). Choose **Stop** under **Settings → Self host** when you no longer need your own Pikibun. |
 
 Keep in mind:
 
 - **The app is signed in to one server at a time.** Signing out of one and in to another doesn't change any server: your sessions, workspaces and hosts stay on the server they belong to.
 - **This Mac hosts for one server at a time.** It keeps running for the server it's paired with even after you sign in to another one. The page then reads *This Mac is a host of …* with that server's name. To host for the server you're signed in to now, choose **Stop host**, then pair again. Pairing again replaces the old pairing. The old host stays on the previous server, offline, until you remove it there.
-- **Hosting lasts while the app is open.** Quitting the app stops the host. If the host was running when you quit, it starts again at the next launch.
+- **Hosting and self hosting last while the app is open.** Quitting the app stops them. Whatever was running when you quit starts again at the next launch.

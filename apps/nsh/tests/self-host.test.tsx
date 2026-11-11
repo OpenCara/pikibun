@@ -1,6 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { serverCommand, serverLaunchProblem } from "../src/lib/this-server";
-import { server as remote, signedIn } from "./fixtures";
+import { ORIGIN, server as remote, signedIn, TOKEN, user } from "./fixtures";
 
 const LOCAL = "http://127.0.0.1:7878";
 const CLAIM = "c".repeat(43);
@@ -161,6 +161,33 @@ describe("Self host in the app", () => {
     expect(app.dialogs()[0]).toMatchObject({ title: "Sign in to Pikibun on this Mac?" });
     expect(app.texts()).toContain(LOCAL);
     await app.waitFor("id:sign-in-self-host-claim");
+  });
+
+  function servedLocally() {
+    let asked = 0;
+    const network: Record<string, unknown> = Object.fromEntries(Object.entries(remote()).map(([key, value]) => [key.replace(ORIGIN, LOCAL), value]));
+    network[`GET ${LOCAL}/api/me`] = () => (++asked === 1 ? { status: 503, body: { error: { code: "unavailable", message: "Pikibun isn't running." } } } : { body: { user } });
+    return { ...network, ...localHealth(true) };
+  }
+
+  test("signed in to a Pikibun on this Mac that isn't running, the app offers to start it, then carries on signed in", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, saved: true, sandboxed: true } },
+      network: servedLocally(), storage: { "pikibun.token": TOKEN, "pikibun.origin": LOCAL } });
+    await app.waitFor("text:Can't reach Pikibun");
+    await app.press("id:unreachable-self-host");
+    await app.waitFor("id:self-host-start");
+    await app.press("id:self-host-start");
+    await app.waitFor("id:self-host-use");
+    await app.press("id:self-host-use");
+    await app.waitFor("id:session-row-s1");
+    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
+  });
+
+  test("a Pikibun left running when the app quit starts again at launch, and the app signs back in to it", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, saved: true, sandboxed: true } },
+      network: servedLocally(), storage: { "pikibun.token": TOKEN, "pikibun.origin": LOCAL, "pikibun.thisServer": JSON.stringify({ resume: { unsandboxedConsent: false } }) } });
+    await app.waitFor("id:session-row-s1");
+    expect(app.storage()["pikibun.thisServer"]).toBe(JSON.stringify({ resume: { unsandboxedConsent: false } }));
   });
 
   test("Settings lists Self host in the desktop builds only", async () => {

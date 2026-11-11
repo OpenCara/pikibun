@@ -1,89 +1,67 @@
 # Self host: run your own Pikibun on this computer
 
-When you self host, all of Pikibun runs on this computer: the server, its data, and this computer as the host that runs your sessions. The app is your client for it. You don't need an account at any Pikibun service, and nothing is deployed anywhere.
+When you self host, all of Pikibun runs on this computer: the server, its data, and this computer as the host that runs your sessions. The app starts it, stops it and signs in to it. You don't need an account at any Pikibun service, and nothing is deployed anywhere.
 
 Choose this mode when:
 
 - you want Pikibun just for yourself, and your work shouldn't leave this computer, or
 - you want to try a server of your own before running one for a team. The same server can later [serve a team](#sharing-it-with-your-team).
 
-The app can't start the server itself yet. You start it with one command in a terminal, and the app signs in to it like any other server. Everything else happens in the app.
-
 ## Before you start
 
-- **Node.js 24 or newer**, from [nodejs.org](https://nodejs.org) (on a Mac, `brew install node` also works).
-- **A GitHub OAuth app of your own**, which signs you in to your server. Register it once at <https://github.com/settings/applications/new>:
-  - **Homepage URL:** `http://127.0.0.1`
-  - **Authorization callback URL:** `http://127.0.0.1/api/auth/github/callback`
+- **Node.js 24 or newer**, from [nodejs.org](https://nodejs.org) (on a Mac, `brew install node` also works). The app runs Pikibun's server with it.
+- **A GitHub account.** Your Pikibun signs you in with GitHub, through an OAuth app you register once. The app shows you how.
+- **Pi signed in to a model provider** on this computer, so that your sessions have models. If you don't use Pi yet, sign it in under **Settings → This Mac → Sign Pi in to a provider** once you're signed in, then stop and start your Pikibun so it offers the new models. Pi keeps the credential on this computer.
 
-  Then keep the page open: you'll need its **Client ID**, and a **client secret** you generate there.
-- **Pi signed in to a model provider** on this computer, so that your sessions have models. Run `pi` in a terminal and use `/login`. Or, once you've [signed in from the app](#3-sign-in-from-the-app), use **Settings → This Mac → Sign Pi in to a provider**. That section works without pairing, and Pi keeps the credential on this computer either way. Restart `pikibun serve` after you sign Pi in, so it offers the new models.
+## 1. Open Self host
 
-## 1. Start your server
+- **Signed out** (a fresh install, say): on the sign-in screen, choose **Run Pikibun on this Mac** (**this computer** on Windows and Linux).
+- **Signed in** to another server: open **Settings → Self host**.
 
-Open a terminal and run:
+Both open the same page. If **Install Pikibun's command** appears, choose **Install pikibun**: npm installs it into the app's own folder in about a minute, with no `sudo`. When the app is newer than the command, the page offers **Update pikibun** instead.
 
-```sh
-npx pikibun@latest serve
-```
+## 2. Add your GitHub OAuth app
 
-How this computer runs sessions depends on its system:
+The first time, **GitHub sign-in** asks for an OAuth app of your own:
 
-| This computer | What to run |
-| --- | --- |
-| **Linux** with bubblewrap, Python 3, Git and `flock` | `npx pikibun@latest serve`: sessions run in the bubblewrap sandbox |
-| **macOS**, **Windows**, or Linux without bubblewrap | `npx pikibun@latest serve --unsafe-no-sandbox`: sessions run directly as you. Read the warning and type `unsandboxed` to confirm. It's asked at every start. |
-| Any, to let the app host instead | `npx pikibun@latest serve --no-host`: see [Let the app be the host](#let-the-app-be-the-host) |
+1. Choose **Register it on GitHub**. GitHub's page for a new OAuth app opens in your browser.
+2. Fill it in with the two addresses the page shows, using **Copy** for each:
+   - **Homepage URL:** `http://127.0.0.1`
+   - **Authorization callback URL:** `http://127.0.0.1/api/auth/github/callback`
+3. Register it, then **Generate a new client secret**.
+4. Back in Pikibun, enter the **Client ID** and **Client secret**.
 
-The first run asks for your OAuth app's **Client ID** and then its secret, at a hidden prompt. Then it prints:
+They're saved when Pikibun starts. The secret is kept with your server's private state on this computer, and sent nowhere else. Later starts use the saved app. **Replace** swaps it for another.
 
-```
-Pikibun is running at http://127.0.0.1:7878 (this computer only).
-Sign in for the first time with this link; the GitHub account that opens it becomes this Pikibun's owner:
-  http://127.0.0.1:7878/api/auth/local/claim?token=…
-```
+## 3. Start Pikibun
 
-Keep the terminal open: your server runs while it does.
+Choose **Start Pikibun**. Where this computer has no sandbox (macOS and Windows, or Linux without bubblewrap), the app first asks whether to **Run unsandboxed**: your sessions' commands then run as you, with access to your files and network. Read [Running without the sandbox](../hosts.md#running-without-the-sandbox) before you agree. If you cancel, nothing starts.
 
-## 2. Claim it in your browser
+The badge turns **Running**, and the page shows your Pikibun's address, `http://127.0.0.1:7878`. It is reachable from this computer only.
 
-Open the printed link **in your web browser**, not in the app, and sign in with GitHub. That GitHub account becomes your server's owner, and from then on the only account that can sign in. Keep the link private until you've used it.
+## 4. Sign in to it
 
-The first sign-in has to go through this link in a browser. The app's own sign-in window can't open it, so the app is refused until your server has an owner.
+Choose **Sign in to it**:
 
-## 3. Sign in from the app
+- From the sign-in screen, the app switches its **Server** to your Pikibun.
+- From Settings, the app asks first, then signs out of the server you were using and switches to your Pikibun. Nothing moves: your sessions and workspaces there stay where they are.
 
-1. If the app is signed in to another server, sign out: **Settings → Profile → Sign out**.
-2. On the sign-in screen, choose **Change** next to **Server**, and enter `http://127.0.0.1:7878`.
-3. Choose **Continue with GitHub**, and sign in with the GitHub account that claimed the server.
+Then choose **Continue with GitHub**. While nobody has signed in yet, the sign-in screen says **Set up Pikibun on this Mac**: the GitHub account you sign in with becomes your Pikibun's owner, and the only account that can ever sign in to it.
 
-## 4. Check your host and start working
+Once you're signed in, this computer pairs itself with your Pikibun as its host. **This Mac as its host** on the Self host page turns **Online**, and the computer appears under **Settings → Hosts**. Start a session in your **Private** workspace, as in [Client](client.md#3-work-in-sessions).
 
-Once you're signed in, `pikibun serve` pairs this computer with your server by itself, with no code to copy. The terminal says *This computer: connected*, and **Settings → Hosts** lists the computer as online. Start a session in your **Private** workspace, pinned at the top of the sidebar, as in [Client](client.md#3-work-in-sessions).
-
-**Don't also choose Pair This Mac** under **Settings → This Mac** while `pikibun serve` runs this computer as its host. That would add a second host for the same computer. It would also move the app's pairing (the one `pikibun connect` uses) away from any other server you host for.
-
-### Let the app be the host
-
-On macOS and Windows, you may prefer the app's host to `pikibun serve`'s. With the app's host, you choose the macOS sandbox, pick the models to offer, and sign Pi in from **Settings → This Mac**. To use it:
-
-1. Start the server with `npx pikibun@latest serve --no-host`.
-2. Sign in from the app, as above.
-3. Follow [Host](host.md) to pair This Mac with `127.0.0.1:7878`.
-
-The app hosts for one server at a time. If This Mac is already a host of your team's server, pairing it with your own server replaces that pairing. In that case, keep `pikibun serve`'s own host instead.
+Your Pikibun runs its own host for this computer. **Settings → This Mac** stays the host of whichever server it is paired with (your team's, say), so there's no need to pair This Mac with your Pikibun as well.
 
 ## Day to day
 
-- **Start:** run the same `npx pikibun@latest serve` command, with the same options. Later runs remember the OAuth app and port, and need no sign-in link.
-- **Stop:** press Ctrl+C in its terminal. While it's stopped, the app shows **Can't reach Pikibun**. Start the server again, then choose **Try again**.
-- **Switch to another server:** sign out and **Change** the server, as in [Switching between modes](README.md#switching-between-modes). Your own server keeps its data while you're away.
-- **Your data** (the database, session backups, the server's secrets and this computer's pairing) is in `~/.local/share/pikibun/server`. It's separate from `pikibun connect`'s, so this computer stays a host of a team's server too. Use `--state-dir` to keep it somewhere else.
-
-Run `npx pikibun@latest serve --help` for every option, and see [Running Pikibun on your own computer](../local.md) for the details.
+- **It runs while the app is open.** Quitting the app stops it. If it was running when you quit, it starts again at the next launch, and the app signs back in to it.
+- **Stop** on the Self host page stops it. It won't start again at the next launch until you start it.
+- **Switch to another server:** **Settings → Profile → Sign out**, then **Change** the server on the sign-in screen (see [Switching between modes](README.md#switching-between-modes)). Your Pikibun keeps running, and keeps its data, until you stop it.
+- **Your data** (the database, session backups, the server's secrets and this computer's pairing with it) is in `~/.local/share/pikibun/server`, shown under **State directory**. It is the same state `pikibun serve` uses in a terminal, so a Pikibun you set up there carries over. Only one of the two runs at a time.
+- **Recent activity** at the bottom of the page shows what the server did, and why it couldn't start.
 
 ## Sharing it with your team
 
-The same server, with the same data, can serve others too: `pikibun serve --share`. For that, it needs a public HTTPS address served by a TLS proxy or tunnel you run (Tailscale Serve or Funnel, Cloudflare Tunnel, Caddy), administrators, and a GitHub OAuth app whose callback is on that address. See [Sharing it with others](../local.md#sharing-it-with-others).
+The app runs your Pikibun for you alone. The same server, with the same data, can serve others too, from a terminal: stop it in the app, then run `npx pikibun@latest serve --share`. It needs a public HTTPS address served by a TLS proxy or tunnel you run (Tailscale Serve or Funnel, Cloudflare Tunnel, Caddy), administrators, and a GitHub OAuth app whose callback is on that address. See [Sharing it with others](../local.md#sharing-it-with-others).
 
 Your teammates then use the app as [clients](client.md) of your server's public address, and can make their own computers [hosts](host.md) for it.

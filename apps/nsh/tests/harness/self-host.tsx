@@ -1,6 +1,6 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection } from "../../../runner/src/app-host-protocol";
-import type { ServerInspection } from "../../../server/src/local/app-server-protocol";
+import type { ServerInspection } from "../../../../packages/shared/src/app-server-protocol";
 import { startGitHubSignIn } from "../../src/lib/auth";
 import { appCliFolder, installCommand, setHostLauncher, setInstaller, type HostLink, type InstallRun } from "../../src/lib/this-computer";
 import { setServerLauncher, thisServer } from "../../src/lib/this-server";

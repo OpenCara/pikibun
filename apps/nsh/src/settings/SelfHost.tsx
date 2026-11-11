@@ -1,5 +1,5 @@
 import { signal, untracked, View } from "nsh";
-import type { ServerHostState, ServerState } from "../../../server/src/local/app-server-protocol";
+import type { ServerHostState, ServerState } from "../../../../packages/shared/src/app-server-protocol";
 import { session, signOut } from "../lib/auth";
 import { openExternal } from "../lib/links";
 import { createAction } from "../lib/resource";
