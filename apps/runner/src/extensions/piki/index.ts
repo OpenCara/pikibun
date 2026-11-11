@@ -6,9 +6,10 @@ import { ghSpec } from "./gh.js";
 import { glabSpec } from "./glab.js";
 import { promptAuditExtension } from "../../../../../extensions/prompt-audit/prompt-audit.js";
 import { prFlowExtension } from "../../../../../extensions/pr-flow/pr-flow.js";
+import { contextFilesExtension } from "../../../../../extensions/context-files/context-files.js";
 
 const specs: Record<string, CliSpec> = { gh: ghSpec, glab: glabSpec, "azure-cli": azureCliSpec };
-const factories: Record<string, ExtensionFactory> = { "prompt-audit": promptAuditExtension, "pr-flow": prFlowExtension };
+const factories: Record<string, ExtensionFactory> = { "prompt-audit": promptAuditExtension, "pr-flow": prFlowExtension, "context-files": contextFilesExtension };
 
 export interface PikiExtension {
   info: PikiExtensionInfo;
