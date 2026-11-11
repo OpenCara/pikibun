@@ -70,10 +70,10 @@ authority never reaches into them.
 - **The authority reads tables that aren't its own.** It writes the tables it decides from alone: a fifth rule in
   `tests/authority-boundary.test.ts` lists them (memberships, session grants, host shares, grants and admins, workspace
   extensions, credentials, sign-ins and the rest), and fails if anything outside `authority/` writes one of the listed
-  tables. Tables it writes together with the rest of the server (`connector_workspaces`, `connector_pairings`,
-  `workspace_join_requests`) aren't on the list. The rest of the server changes them through statements the authority returns (`memberships.ts`,
+  tables. The rest of the server changes the listed tables through statements the authority returns (`memberships.ts`,
   `host-access.ts`, `extension-policy.ts`, `password-auth.ts`), which callers batch with their own writes and audit
-  entries, so each change stays one atomic batch. But the authority still reads the rest of the server's tables:
+  entries, so each change stays one atomic batch. Tables it writes together with the rest of the server
+  (`connector_workspaces`, `connector_pairings`, `workspace_join_requests`) aren't on the list. But the authority still reads the rest of the server's tables:
   `sessions` everywhere, and `restore_jobs` and `host_migrations` through `db.ts`. Running it on its own would need an
   interface for each of these.
 - **Guards stay SQL.** The fragments it exports (`workspaceAdminSQL`, `sessionCreatorSQL`, `sessionManagerSQL`,
