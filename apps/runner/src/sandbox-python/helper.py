@@ -850,6 +850,12 @@ def pack_ignored_files(directory, path, nested):
     def inside_clone(relative):
         return any(relative == clone or relative.startswith(clone + b'/') for clone in clones)
 
+    def lstat_of(relative):
+        try:
+            return os.lstat(os.path.join(os.fsencode(directory), relative))
+        except FileNotFoundError:
+            return None
+
     def keep(relative, info):
         nonlocal total
         if stat.S_ISREG(info.st_mode):
@@ -865,9 +871,9 @@ def pack_ignored_files(directory, path, nested):
     def walk(relative):
         for name in sorted(os.listdir(os.path.join(os.fsencode(directory), relative))):
             child = relative + b'/' + name
-            if inside_clone(child):
+            info = None if inside_clone(child) else lstat_of(child)
+            if info is None:
                 continue
-            info = os.lstat(os.path.join(os.fsencode(directory), child))
             if stat.S_ISDIR(info.st_mode):
                 if name == b'.git':
                     raise ValueError('the clone ' + path + ' has a Git repository among its ignored files, which a pack can\'t keep')
@@ -885,7 +891,9 @@ def pack_ignored_files(directory, path, nested):
         parts = relative.split(b'/')
         if not relative or inside_clone(relative) or any(part in dirs for part in parts[:-1]):
             continue
-        info = os.lstat(os.path.join(os.fsencode(directory), relative))
+        info = lstat_of(relative)
+        if info is None:
+            continue
         if stat.S_ISDIR(info.st_mode):
             if parts[-1] not in dirs:
                 if os.path.lexists(os.path.join(os.fsencode(directory), relative, b'.git')):
@@ -924,6 +932,7 @@ def clone_backup_one(path, nested, budget, pack=False):
         branches.append([name[len('refs/heads/'):], oid])
     if len(branches) > MAX_CLONE_BRANCHES:
         raise ValueError('the clone ' + path + ' has too many branches to back up')
+    kept = pack_ignored_files(directory, path, nested) if pack else []
     index = os.path.join(directory, '.git', 'pikibun-backup-index')
     extra = dict(BACKUP_IDENTITY, GIT_INDEX_FILE=index)
     try:
@@ -933,11 +942,9 @@ def clone_backup_one(path, nested, budget, pack=False):
             clone_git_checked(directory, ['read-tree', head] if head else ['read-tree', '--empty'], extra=extra, reason=reason)
         no_lfs = ['-c', 'filter.lfs.process=', '-c', 'filter.lfs.clean=', '-c', 'filter.lfs.required=false']
         clone_git_checked(directory, no_lfs + ['add', '-A'], extra=extra, reason=reason)
-        if pack:
-            kept = pack_ignored_files(directory, path, nested)
-            if kept:
-                clone_git_checked(directory, no_lfs + ['add', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'],
-                                  b'\0'.join(kept), extra=extra, reason=reason)
+        if kept:
+            clone_git_checked(directory, no_lfs + ['add', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'],
+                              b'\0'.join(kept), extra=extra, reason=reason)
         if nested:
             clone_git_checked(directory, ['update-index', '--force-remove', '--'] + nested, extra=extra, reason=reason)
         tree = clone_git_checked(directory, ['write-tree'], extra=extra, reason=reason)

@@ -64,13 +64,13 @@ export async function runAutomaticPacking(env: Env, at = Date.now()): Promise<Au
   const due = await env.DB.query<SessionRow>(`SELECT s.* FROM sessions s
     JOIN connectors c ON c.id = s.connector_id
     LEFT JOIN workspace_packing_settings p ON p.workspace_id = s.workspace_id
-    WHERE s.pack_due_at IS NOT NULL AND s.pack_due_at <= ? AND s.status = 'archived' AND s.packed_at IS NULL
+    WHERE s.pack_due_at IS NOT NULL AND s.pack_due_at <= ? AND s.status = 'archived'
       AND COALESCE(p.automatic, 1) = 1 AND c.connection_hash IS NOT NULL AND c.revoked_at IS NULL
     ORDER BY s.pack_due_at, s.id LIMIT ?`).bind(timestamp, sweepLimit).all();
   const outcomes: AutomaticPackOutcome[] = [];
   for (const row of due) {
     const later = (minutes: number) => new Date(at + minutes * 60_000).toISOString();
-    const claimed = await env.DB.query("UPDATE sessions SET pack_due_at = ? WHERE id = ? AND pack_due_at = ? AND status = 'archived' AND packed_at IS NULL")
+    const claimed = await env.DB.query("UPDATE sessions SET pack_due_at = ? WHERE id = ? AND pack_due_at = ? AND status = 'archived'")
       .bind(later(retryMinutes), row.id, row.pack_due_at ?? null).run();
     if (claimed.changes !== 1) continue;
     const settle = (dueAt: string | null) => env.DB.query("UPDATE sessions SET pack_due_at = ? WHERE id = ? AND status = 'archived'").bind(dueAt, row.id).run();
@@ -97,7 +97,6 @@ export async function runAutomaticPacking(env: Env, at = Date.now()): Promise<Au
         await auditStatement(env, row.owner_id, 'session.pack_refused', row.workspace_id, row.id, { automatic: true, code, ...(reason ? { reason } : {}) }).run();
         outcomes.push({ sessionId: row.id, refused: code });
       } else {
-        await env.DB.query('UPDATE sessions SET pack_due_at = NULL WHERE id = ? AND packed_at IS NOT NULL').bind(row.id).run();
         outcomes.push({ sessionId: row.id, deferred: code });
       }
     }

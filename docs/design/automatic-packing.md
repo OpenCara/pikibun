@@ -17,9 +17,11 @@ building bring back: anything in a directory named in `PACK_REBUILDABLE_DIRS`, a
   same temporary index the backup's worktree commit is written from, so it travels in the clone's bundle and unpacking
   checks it out with the rest (`read-tree --reset -u`), then resets the index to `HEAD`: the files are back, ignored as
   before. The clone's own index is never touched.
-- **Limits before Git.** `git add -f` writes each file into the clone's object store before the bundle's budget is
-  known, and a failed pack leaves those objects behind. So the files are counted and their sizes summed first, up to
-  `MAX_PACK_IGNORED_BYTES` and `MAX_PACK_IGNORED_FILES`. A clone over either is refused, and nothing is written.
+- **Limits before Git.** `git add` writes each file into the clone's object store before the bundle's budget is
+  known, and a failed pack leaves those objects behind. So the ignored files are listed, counted and their sizes summed
+  before the clone's first `git add`, up to `MAX_PACK_IGNORED_BYTES` and `MAX_PACK_IGNORED_FILES`. A clone over either,
+  or with a Git repository among them (below), is refused before Git writes anything. A file that goes while they are
+  listed is skipped.
 - **Git repositories among ignored files.** Clones are looked for only so deep (`find_clones`). A repository deeper
   than that in an ignored directory would be added as a bare gitlink, its contents lost, so it is refused instead.
 - **Backups don't keep ignored files.** A backup deletes nothing, so it keeps what it did, and stays as small as before.
@@ -48,7 +50,11 @@ The sweep (`runAutomaticPacking`, `apps/server/src/automatic-packing.ts`, every 
   that the ticket's actor is the owner for `pack` and `unpack`, and nothing else may ask it to.
 - **A refusal is final.** A 422 from the host (too large, a stash, a macOS host ...), a frozen session, or an owner who
   lost access clears `pack_due_at` and is audited as `session.pack_refused` with the host's reason, so it isn't asked
-  again every few minutes. Anything else (the host busy, gone mid-way) tries again an hour later.
+  again every few minutes. Anything else tries again an hour later. A busy host (409) has `packed_at` cleared by
+  `packSession`, as nothing was packed. A pack whose outcome is unclear (the host gone mid-way, a timeout, an invalid
+  answer) keeps `packed_at`, so unarchiving meanwhile unpacks whatever the host packed (`unpack` answers
+  `{unpacked: false}` where it packed nothing), and the sweep asks again: a host that did pack answers `{packed: true}`
+  at once, and one that didn't packs now. Either way `pack_due_at` is cleared and the pack audited once it succeeds.
 
 ## Unarchiving a packed session
 

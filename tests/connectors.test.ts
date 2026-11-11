@@ -1752,8 +1752,12 @@ test('archived sessions are packed a week on, where their host is online and kee
   assert.deepEqual(await runAutomaticPacking(f.env, at), [{ sessionId: id, deferred: 'runner_error' }]);
   assert.deepEqual(row(), { pack_due_at: new Date(at + hour).toISOString(), packed_at: null }, 'tried again an hour on');
   assert.deepEqual(await runAutomaticPacking(f.env, at + hour - 1000), []);
+  packReply = () => Response.json({ error: 'Runner operation failed' }, { status: 500 });
+  assert.deepEqual(await runAutomaticPacking(f.env, at + hour), [{ sessionId: id, deferred: 'runner_error' }]);
+  assert.equal(row().pack_due_at, new Date(at + 2 * hour).toISOString(), 'an unclear outcome is asked about again an hour on');
+  assert.ok(row().packed_at, 'meanwhile it counts as packed, so unarchiving unpacks whatever the host packed');
   packReply = () => Response.json({ packed: true, files: 3, clones: 1, bytes: 2048 });
-  assert.deepEqual(await runAutomaticPacking(f.env, at + hour), [{ sessionId: id, packed: true }]);
+  assert.deepEqual(await runAutomaticPacking(f.env, at + 2 * hour), [{ sessionId: id, packed: true }]);
   assert.equal(row().pack_due_at, null);
   assert.ok(row().packed_at);
   assert.deepEqual(audits('session.packed'), [{ files: 3, clones: 1, bytes: 2048, automatic: true }]);
@@ -1769,7 +1773,7 @@ test('archived sessions are packed a week on, where their host is online and kee
   assert.deepEqual(audits('session.pack_refused'), [{ automatic: true, code: 'runner_error',
     reason: 'One of this session\'s clones has stashed changes (git stash), which a pack can\'t keep. Unarchive it to apply or drop them, or leave it unpacked' }]);
   assert.deepEqual(await runAutomaticPacking(f.env, at + week), []);
-  assert.deepEqual(actions, ['pack', 'pack', 'unpack', 'restart', 'pack'], 'each made as the owner');
+  assert.deepEqual(actions, ['pack', 'pack', 'pack', 'unpack', 'restart', 'pack'], 'each made as the owner');
 });
 
 test('the host\'s authorization callback admits reads of an archived session, packing and unpacking it, and nothing else of it', async t => {
