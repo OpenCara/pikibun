@@ -26,10 +26,11 @@ const READS: Record<string, readonly string[] | true> = {
 export const GH_WATCH_INTERVAL_SECONDS = 30;
 
 export function watchInterval(args: readonly string[]): readonly string[] {
-  const [group, command] = commandWords(args);
-  const watching = (group === "run" && command === "watch") || (group === "pr" && command === "checks" && hasOption(args, ["--watch"]));
-  if (!watching || hasOption(args, ["--interval"]) || hasShortOption(args, "i")) return args;
   const end = args.indexOf("--");
+  const words = positionals(end === -1 ? args : args.slice(0, end));
+  const follows = (group: string, command: string) => words.some((word, index) => word === group && words[index + 1] === command);
+  const watching = follows("run", "watch") || (follows("pr", "checks") && hasOption(args, ["--watch"]));
+  if (!watching || hasOption(args, ["--interval"]) || hasShortOption(args, "i")) return args;
   const at = end === -1 ? args.length : end;
   return [...args.slice(0, at), "--interval", String(GH_WATCH_INTERVAL_SECONDS), ...args.slice(at)];
 }

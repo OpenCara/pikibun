@@ -267,7 +267,7 @@ async function githubGet(github: GitHubAccess, path: string): Promise<{ value: u
     return { value: parseJson(remembered.bytes), last: lastPage(remembered.link) };
   }
   if (response.status !== 200) {
-    forgetRead(github.token, url);
+    if (!githubRateLimited(response)) forgetRead(github.token, url);
     await response.body?.cancel();
     if (githubRateLimited(response)) {
       fail(429, 'github_rate_limited', 'The session owner\'s GitHub rate limit is used up. Try again later.');

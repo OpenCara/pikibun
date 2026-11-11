@@ -1,6 +1,6 @@
 import type { PullRequestState } from '../../../../packages/shared/src/types.js';
 import { boundedBytes } from './github-broker.js';
-import { conditionalHeaders, forgetRead, recallRead, rememberRead } from './github-reads.js';
+import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, rememberRead } from './github-reads.js';
 import { now } from '../http.js';
 import type { Env } from '../types.js';
 import { decryptToken } from './vault.js';
@@ -71,7 +71,7 @@ async function githubGet(token: string, path: string): Promise<unknown> {
     return parse(remembered.bytes);
   }
   if (response.status !== 200) {
-    forgetRead(token, url);
+    if (!githubRateLimited(response)) forgetRead(token, url);
     await response.body?.cancel();
     throw new ReadError(`GitHub answered ${response.status}`);
   }

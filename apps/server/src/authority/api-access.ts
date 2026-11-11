@@ -105,7 +105,7 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
       await verifyRepository(owner, { repositoryId: binding.repository_id, fullName: binding.full_name });
       readable.push({ fullName: binding.full_name, repositoryId: binding.repository_id });
     } catch (error) {
-      if (error instanceof HTTPException && error.status === 429) limited = true;
+      if (error instanceof HTTPException && error.status === 429) { limited = true; break; }
     }
   }
   if (!readable.length) {

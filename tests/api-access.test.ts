@@ -338,6 +338,27 @@ test("under a write lease, reads of the workspace's repositories keep the App's 
   assert.equal(upstream[6]!.headers.authorization, "Bearer ghs_acme");
 });
 
+test("under a write lease, a read the App's token is refused goes again as the owner; one it is rate limited on doesn't", async t => {
+  const answer = (request: UpstreamRequest): Answer => request.headers.authorization !== "Bearer ghs_acme" ? { status: 200, body: "{\"as\":\"owner\"}" }
+    : request.url.pathname.endsWith("/logs") ? { status: 403, body: "{\"message\":\"Resource not accessible by integration\"}" }
+    : { status: 403, headers: { "x-ratelimit-remaining": "0" }, body: "{\"message\":\"API rate limit exceeded\"}" };
+  const { instance, socketPath, upstream, log } = await proxy(t, { credential: async (_host, access) => access === "write" ? owners : credentials, answer });
+  const lease = instance.apiLease()!;
+  t.after(() => lease.release());
+  const logs = await call(socketPath, "/repos/acme/app/actions/jobs/9/logs", { headers: { authorization: `token ${lease.token}` } });
+  assert.equal(logs.status, 200);
+  assert.equal(logs.body, "{\"as\":\"owner\"}");
+  assert.deepEqual(upstream.map(request => request.headers.authorization), ["Bearer ghs_acme", "Bearer gho_owner"]);
+  assert.equal(log()[0]!.reason, "the session owner's token for session-owner, as the read-only token was refused (403) (200)");
+
+  const limited = await call(socketPath, "/repos/acme/app/actions/runs/7", { headers: { authorization: `token ${lease.token}` } });
+  assert.equal(limited.status, 403);
+  assert.equal(upstream.length, 3);
+  const unleased = await call(socketPath, "/repos/acme/app/actions/jobs/9/logs");
+  assert.equal(unleased.status, 403, "without a lease nothing goes as the owner");
+  assert.equal(upstream.length, 4);
+});
+
 test("a write lease on a host that doesn't get the owner's credential reads as before, and its writes say why", async t => {
   const reason = "Writes through the API act as the session owner, so Pikibun allows them only on the session owner's own hosts";
   const { instance, socketPath, upstream } = await proxy(t, { credential: async (_host, access) => access === "write" ? { available: false, reason, cacheSeconds: 60 } : credentials });

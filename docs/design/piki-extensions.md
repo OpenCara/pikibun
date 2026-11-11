@@ -371,14 +371,17 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     - **Each credential grant** (`apiCredential`): a `verifyRepository` per workspace repository, once a minute for a
       session using `gh`, and once more for a lease's.
     So: (a) under a lease, REST reads of a repository the App's token covers keep it (`ApiAccess`, `appRead`), and only
-    writes, GraphQL and other reads ask for the owner's credential; (b) the `gh` tool gives `run watch` and
+    writes, GraphQL and other reads ask for the owner's credential, or a read the App's token is refused for want of a
+    permission (`ownerInstead`), which goes once more as the owner rather than fail where it used to work; (b) the `gh` tool gives `run watch` and
     `pr checks --watch` `--interval 30` unless the agent names one (`watchInterval`, `CliSpec.prepare`), and its
     description and the agent's instructions say not to poll instead; (c) the control plane's reads as the owner
     (`github-broker.ts`, `verifyRepository`'s `githubJSON`, `pull-request-states.ts`) send the `ETag` they last got
     (`github-reads.ts`): GitHub answers `304 Not Modified` without counting it, so a wait where nothing happens, the
     access checks and the state sweep cost nearly nothing. The remembered bodies are keyed by a digest of the token
-    and the URL, so one account never gets another's; they are held in memory, at most 1,000 and 64 MB, the least
-    recently used going first, and a read GitHub refuses forgets its own. (d) A rate-limited answer (`429`, or `403`
+    and the URL, so one account never gets another's; they are held in the server's memory, at most 1,000 and 64 MB, the
+    least recently used going first, so the saving is best effort (a restart, or another server process, starts
+    afresh). A read GitHub refuses forgets its own, unless it was refused for the rate limit: then what it remembered
+    is what makes the first reads after the reset cheap. (d) A rate-limited answer (`429`, or `403`
     with no requests left or a `Retry-After`) now says so (`github_rate_limited`; the grant's reason), rather than that
     access couldn't be verified, which sent agents and people to reconnect accounts that were fine.
 

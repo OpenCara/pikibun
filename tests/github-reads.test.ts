@@ -57,11 +57,12 @@ test('a changed or refused read replaces or forgets what was remembered', async 
 
   answer = () => Response.json({ message: 'API rate limit exceeded' }, { status: 403, headers: { 'x-ratelimit-remaining': '0' } });
   await assert.rejects(verifyRepository(access, expected), (error: unknown) => error instanceof HTTPException && error.status === 429);
-  assert.equal(recallRead('gho_owner', api), undefined);
   answer = () => Response.json({ message: 'You have exceeded a secondary rate limit' }, { status: 403, headers: { 'retry-after': '60' } });
   await assert.rejects(verifyRepository(access, expected), (error: unknown) => error instanceof HTTPException && error.status === 429);
+  assert.equal(recallRead('gho_owner', api)?.etag, '"b"', 'a rate-limited read keeps what was remembered, for when the limit resets');
   answer = () => Response.json({ message: 'Not Found' }, { status: 404 });
   await assert.rejects(verifyRepository(access, expected), (error: unknown) => error instanceof HTTPException && error.status === 403);
+  assert.equal(recallRead('gho_owner', api), undefined);
 });
 
 test('only well-formed tags and bounded bodies are remembered, the least recently used going first', t => {
@@ -82,6 +83,8 @@ test('gh watches read again every 30 seconds unless they name their own interval
   assert.deepEqual(watchInterval(['run', 'watch', '42', '--repo', 'acme/app']), ['run', 'watch', '42', '--repo', 'acme/app', ...interval]);
   assert.deepEqual(watchInterval(['pr', 'checks', '5', '--watch']), ['pr', 'checks', '5', '--watch', ...interval]);
   assert.deepEqual(watchInterval(['run', 'watch', '42', '--', 'x']), ['run', 'watch', '42', ...interval, '--', 'x']);
+  assert.deepEqual(watchInterval(['--repo', 'acme/app', 'run', 'watch', '42']), ['--repo', 'acme/app', 'run', 'watch', '42', ...interval]);
+  assert.deepEqual(watchInterval(['-R', 'acme/app', 'pr', 'checks', '5', '--watch']), ['-R', 'acme/app', 'pr', 'checks', '5', '--watch', ...interval]);
   for (const args of [['pr', 'checks', '5'], ['run', 'view', '42'], ['run', 'watch', '42', '-i', '5'], ['run', 'watch', '42', '--interval=60'],
     ['pr', 'checks', '5', '--watch', '--interval', '15']]) {
     assert.deepEqual(watchInterval(args), args, args.join(' '));

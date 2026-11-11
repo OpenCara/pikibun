@@ -473,7 +473,9 @@ could use it. Instead the proxy adds the credential, the way the Git relay does,
   under a lease: the owner's sign-in has one hourly quota for all of their sessions and Pikibun's own reads, and a
   lease's call is usually one that mostly reads (`gh run watch` polls; `gh pr create` reads before it writes), so those
   reads go on the App's quota instead. GraphQL, which may ask about the owner (`viewer`), and reads outside the
-  workspace's repositories (`/user`) still go as the owner.
+  workspace's repositories (`/user`) still go as the owner, and so does a read the App's token is refused (`403` or
+  `404` without a rate limit's headers, as where the installation lacks a permission the owner has): the proxy asks
+  once more with the owner's credential, as the lease's reads went before.
 - **The credential** (`apps/server/src/authority/api-access.ts`, `apiCredential`; `POST /api/connectors/self/api/credential` or
   `/api/internal/api/credential`, with `access: write` for a lease's). The session's authority as for its Git requests
   (owner, not archived, connector and connection), a clone session, then the workspace's repositories of the host's

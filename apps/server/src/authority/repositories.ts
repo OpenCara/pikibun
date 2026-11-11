@@ -164,7 +164,7 @@ async function githubJSON(access: GitHubAccess, path: string, limit = jsonBytes)
     return parse(remembered.bytes);
   }
   if (!response.ok || response.status !== 200) {
-    forgetRead(access.token, url);
+    if (!githubRateLimited(response)) forgetRead(access.token, url);
     await response.body?.cancel();
     if (githubRateLimited(response)) {
       fail(429, 'github_rate_limited', 'The session owner\'s GitHub rate limit is used up, so Pikibun can\'t check their access to the repository now. Try again after it resets.');
