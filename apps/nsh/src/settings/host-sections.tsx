@@ -359,7 +359,6 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
   const members = createMembers(() => target()?.id);
   const eligible = () => (members.data()?.members ?? []).filter(member => member.userId !== props.connector.ownerId && member.role !== "viewer");
   const grantee = signal(EVERYONE);
-  // Both levels of before approvals were removed grant the same; new grants take the one that ran commands without asking.
   const level = (): HostCommandLevel => "auto";
   const expiry = signal<Expiry>("7");
   const capabilities = () => props.connector.capabilities;

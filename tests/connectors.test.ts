@@ -128,14 +128,12 @@ async function addMember(admin: Client, workspaceId: string, member: Client) {
   await json(await admin.request('POST', `/api/workspaces/${workspaceId}/members`, { userId: member.user.id, role: 'member' }));
 }
 
-/** These members' sessions get every Pikibun tool, as a workspace admin may choose, beyond their role's. */
 async function allTools(admin: Client, workspaceId: string, ...members: Client[]) {
   const created = await json<ToolGroupSettings>(await admin.request('POST', `/api/workspaces/${workspaceId}/tool-groups`, { name: 'All tools', tools: groupTools }), 201);
   const group = created.groups.find(item => item.name === 'All tools')!;
   for (const member of members) await json(await admin.request('PUT', `/api/workspaces/${workspaceId}/members/${member.user.id}/tool-group`, { groupId: group.id }));
 }
 
-/** Puts a member in the workspace's group of this name, making it with these tools if it isn't there yet. */
 async function inGroup(admin: Client, workspaceId: string, member: Client, name: string, tools: string[] = []) {
   let settings = await json<ToolGroupSettings>(await admin.request('GET', `/api/workspaces/${workspaceId}/tool-groups`));
   if (!settings.groups.some(group => group.name === name)) {
@@ -249,7 +247,6 @@ function authorization(session: SessionRecord, actorId = session.ownerId) {
   return { sessionId: session.id, actorId, ownerId: session.ownerId, permission: 'write' };
 }
 
-/** A GitHub effect runs for the write message that asked for it: its requester's admission, and the tool call's id. */
 async function approvedOperation(f: Fixture, session: SessionRecord, _operation: Operation, _actorId: string, requestedBy: string) {
   const admissionId = admit(f, session.id, requestedBy);
   return { sessionId: session.id, actorId: requestedBy, approvalId: `tool-${token().slice(0, 32)}`, admissionId };

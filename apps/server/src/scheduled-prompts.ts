@@ -58,7 +58,6 @@ function validTimeZone(value: unknown): string {
   return value;
 }
 
-/** A schedule's access: read, Read only; anything else (auto, or approval from before approvals were removed) acts. */
 function validAccess(value: unknown): AccessMode {
   if (!accessModes.includes(value as AccessMode)) fail(400, 'invalid_input', 'Access is read or auto.');
   return value === 'read' ? 'read' : 'auto';

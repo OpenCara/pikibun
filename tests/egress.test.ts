@@ -417,7 +417,6 @@ function binding(id: string): RunnerBinding {
   };
 }
 
-// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
 const sandboxed = !linuxSandboxMissing();
 
 test("a sandboxed git clone of a workspace repository goes through the proxy and the relay", { skip: !sandboxed }, async t => {

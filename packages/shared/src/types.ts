@@ -98,7 +98,6 @@ export interface SessionRecord {
   hostUnsandboxed?: boolean;
   viewable?: boolean;
   hostEnvironment?: true;
-  /** The owner lets content pass between this session and sessions whose readers differ (the sessions tool). */
   audienceSharing?: true;
   activity?: SessionActivity;
   nextScheduledAt?: string;

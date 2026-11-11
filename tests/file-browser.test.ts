@@ -13,7 +13,6 @@ import { fileBrowserLimits, type RunnerBinding } from "../packages/shared/src/ty
 import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
 const authorize: SandboxAuthorize = async () => {};
-// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
 const sandboxed = !linuxSandboxMissing();
 const hostMode = { skip: !["linux", "darwin"].includes(process.platform) || spawnSync("git", ["--version"]).status !== 0 };
 const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(100)]);

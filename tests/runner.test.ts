@@ -91,7 +91,6 @@ async function settledCard(session: RunnerSession, id: string): Promise<Approval
   }
   assert.fail("the card did not settle");
 }
-/** What the session's tools ran, as the session records it: nobody decides any of it. */
 async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
   return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
 }

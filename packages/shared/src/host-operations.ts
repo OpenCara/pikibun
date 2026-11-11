@@ -12,16 +12,10 @@ export interface HostCommandSession {
   hostEnvironment?: boolean;
 }
 
-/** A session of someone other than its host's owner: its commands without resource limits run on the host's machine. */
 export function grantedShell(session: HostCommandSession): boolean {
   return session.connectorOwnerId !== session.ownerId;
 }
 
-/**
- * Whether an operation runs on its host's own machine, outside the sandbox: host commands and extension tools, the commands of a
- * session run directly on its host, and commands on a host without resource limits in a session of someone other than its owner.
- * Those run only for the host's owner and members they granted host commands; everything else runs as the session's tools allow.
- */
 export function runsOnHost(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
   if (operation.kind === "host.bash" || operation.kind === "extension.tool") return true;
   return (operation.kind === "bash" || operation.kind === "program") && (session.hostEnvironment === true || (unbounded && grantedShell(session)));

@@ -39,8 +39,6 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
   if (Object.keys(input).some(key => !['model', 'thinkingLevel', 'access', 'autoMerge'].includes(key))) fail(400, 'invalid_options', 'Invalid chat options.');
   if (input.access !== undefined && (mode !== 'submit' || !accessModes.includes(input.access as never))) fail(400, 'invalid_options', 'Side asks are always read-only.');
   if (input.autoMerge !== undefined && typeof input.autoMerge !== 'boolean') fail(400, 'invalid_options', 'Invalid auto-merge choice.');
-  // Nobody approves anything any more: a message acts, or with Read only it only reads. The access of before (approval,
-  // auto) and auto-merge go with nothing, on any host.
   if (input.model === undefined && input.thinkingLevel === undefined && input.access !== 'read') return undefined;
   if (!row.connector_id) fail(400, 'options_unsupported', 'This session\'s runner cannot change model, reasoning or access.');
   const host = await c.env.DB.query<{ models_json: string; capabilities_json: string }>('SELECT models_json, capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')

@@ -54,8 +54,6 @@ export interface EgressOptions {
   apiCredential?: (host: string, access: ApiAccessKind) => Promise<unknown>;
   apiAuthority?: InterceptionAuthority;
   apiUpstream?: ApiUpstream;
-  // The host owner's HostConfig.fakeIpTunnels: whether any host the policy allows may resolve to a local proxy's fake-IP
-  // addresses, not only those it names exactly. Asked on each such tunnel; an error counts as off.
   fakeIpTunnels?: () => Promise<boolean>;
 }
 

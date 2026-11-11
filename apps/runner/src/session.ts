@@ -134,7 +134,6 @@ interface RunnerBackup {
   createdAt: string;
 }
 type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Record<string, Run>; approvals: Record<string, StoredApproval>; toolActors: Record<string, { initiatedBy: string; ownerId: string; runKey: string; callId?: string }>; usedTickets?: Record<string, number>; nextSequence?: number;
-  /** Session-wide permission grants from before approvals were removed; restores drop them. */
   grants?: unknown;
   conversationOnlyRestore?: true;
   forkedFrom?: { sessionId: string; entryId: string } };
@@ -1160,11 +1159,6 @@ export class RunnerSession {
     return off;
   }
 
-  /**
-   * The tool group of the session's owner, where it leaves out some of Pikibun's tools: a ceiling on the session's tools, for
-   * every message. It follows the last answer the connector read, however old, so a failed fetch
-   * lifts nothing; and until the connector has read one, the session only reads its files.
-   */
   private async ownerToolGroup(): Promise<MemberToolGroup | undefined> {
     const config = this.config.extensions;
     if (!config) return undefined;
@@ -1311,8 +1305,6 @@ export class RunnerSession {
     const operation: ExtensionToolOperation = { kind: "extension.tool", source: call.source, tool: call.tool,
       arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
       digest: createHash("sha256").update(json).digest("hex") };
-    // Extension tools run on the host's own machine: for its owner and members they granted host commands, with their API
-    // credentials; for anyone else only where the host's owner lets every session run them (automatic tools), without.
     const trusted = await this.hostCommandsAllowed(attribution.initiatedBy);
     if (!trusted && !automaticTools) throw new RunnerError(403, `${call.tool} comes from an extension, which ${HOST_COMMANDS_RULE}`);
     const approval = await this.runOperation(attribution.initiatedBy, operation, String(call.api.taskId), { hostChecked: true });
@@ -1704,11 +1696,6 @@ export class RunnerSession {
     return { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId, hostEnvironment: this.#hostSession };
   }
 
-  /**
-   * Whether this person may run what runs on the host's own machine, outside the sandbox (extension tools, the commands of a
-   * session run directly on its host, commands on a host without resource limits): the host's owner, and members they
-   * granted host commands. Both the session's owner and the message's sender must be, as it runs as the one for the other.
-   */
   private async hostCommandsAllowed(actorId: string): Promise<boolean> {
     for (const id of new Set([this.binding.owner.id, actorId])) if (!await this.hostCommandLevel(id, "write")) return false;
     return true;
@@ -1718,10 +1705,6 @@ export class RunnerSession {
     if (!await this.hostCommandsAllowed(actorId)) throw new RunnerError(403, `${what} ${HOST_COMMANDS_RULE}`);
   }
 
-  /**
-   * Whether a tool call may go on, before it acts: never once its message's sender may no longer write, and never what changes
-   * anything in a Read-only message. Nobody is asked: a call either runs or is refused.
-   */
   private async checkCall(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean } = {}): Promise<{ unbounded: boolean }> {
     const state = await this.metadata();
     const actor = state.toolActors[String(api.taskId)];
@@ -2221,12 +2204,6 @@ export class RunnerSession {
     return value;
   }
 
-  /**
-   * Runs a tool call's operation at once, as the session owner, where the rules let it: nobody is asked. What runs on the host's
-   * own machine (the commands of a session run directly on its host, commands on a host without resource limits in someone
-   * else's session, extension tools) runs only for the host's owner and members they granted host commands (hostCommandsAllowed);
-   * callers that checked that themselves pass hostChecked. Its record keeps the outcome, which the tool call returns.
-   */
   async runOperation(actorId: string, input: Operation, toolTaskId: string, consent: { unbounded?: boolean; hostChecked?: boolean } = {}, signal?: AbortSignal): Promise<StoredApproval> {
     this.requireUnfrozen();
     const operation = validateOperation(input);

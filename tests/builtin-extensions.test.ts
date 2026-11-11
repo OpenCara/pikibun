@@ -165,7 +165,6 @@ test("code mode runs in every session, and its scripts' calls run as the model's
   await store.add(parseExtensionSource(join(root, "shout.ts")));
   const [dev] = await loadInstalled(store, []);
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
-  // The host's owner lets every session run its workspace's extension tools: a call runs at once, as the model's own would.
   const answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: true };
   let config: HostConfig = { ...defaultHostConfig, builtinExtensions: ["pi:codemode"] };
   const offered: string[][] = [];

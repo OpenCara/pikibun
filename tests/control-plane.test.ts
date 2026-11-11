@@ -74,7 +74,6 @@ function seedLegacySchema(sqlite: DatabaseSync) {
     INSERT INTO audit (id, workspace_id, session_id, actor_id, action, created_at)
       VALUES ('schema-audit', 'schema-workspace', 'schema-session', 'schema-owner', 'created', '2026-01-01');
   `);
-  // Approval capabilities were dropped with approvals (0063_approvals_removed); a legacy database still has them.
   if (sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'broker_capabilities'").get()) {
     sqlite.exec(`INSERT INTO broker_capabilities (token_hash, session_id, approval_id, actor_id, requested_by, operation_hash, expires_at, created_at)
       VALUES ('schema-token', 'schema-session', 'schema-approval', 'schema-owner', 'schema-owner', 'schema-operation', 1, '2026-01-01')`);

@@ -60,10 +60,6 @@ function approvalInput(input: Record<string, unknown>): ApprovalInput {
   return { ...base, admissionId: text(input.admissionId, 'admissionId', 128) };
 }
 
-/**
- * A GitHub comment, issue or merge of a tool call runs for the message that asked for it, once: for anyone who may still write
- * to the session, as its owner, with a tool of the owner's group. Nobody is asked.
- */
 async function approvedEffect<T>(c: AppContext, connectorId: string | null, approval: ApprovalInput, operation: Operation,
   action: 'github.comment' | 'github.merge' | 'github.issue', prepare: (row: SessionRow, github: GitHubAccess) => Promise<T>): Promise<{ row: SessionRow; github: GitHubAccess; prepared: T }> {
   const { sessionId, actorId, approvalId, admissionId } = approval;

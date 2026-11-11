@@ -166,7 +166,6 @@ export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
   const tools = value.tools ?? "automatic";
   if (typeof enabled !== "boolean") throw new Error("Invalid extension setting");
   if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("Invalid extension tools mode");
-  // "approval" is still read, from clients and backups of before approvals were removed; every extension's tools now run alike.
   return { source, enabled, tools: "automatic", settings: parseExtensionSettings(value.settings ?? {}) };
 }
 
@@ -292,7 +291,6 @@ export interface ExtensionsSyncAnswer {
 export interface WorkspaceExtensionsAnswer {
   extensions: WorkspaceExtension[];
   automaticTools: boolean;
-  /** The tool group of each member whose sessions lack some of Pikibun's tools (tool-groups.ts), by user ID. */
   toolGroups?: Record<string, MemberToolGroup>;
 }
 

@@ -41,7 +41,6 @@ const notes: BrokeredToolDefinition = {
   target: ["note", "line"], route: "notes/read", write: false, instructions: "Read the workspace's notes with notes_read {note}.",
 };
 
-/** What the session's tools ran, as the session records it. */
 async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
   return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
 }
