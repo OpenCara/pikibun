@@ -29,6 +29,21 @@ export function userIdentifier(field = 'userId') {
     `Invalid ${field}.`);
 }
 
+export interface FieldsOptions {
+  required?: readonly string[];
+  some?: true;
+}
+
+export function fields<T extends z.ZodRawShape>(shape: T, message: string, options: FieldsOptions = {}) {
+  const names = Object.keys(shape);
+  return z.record(z.string(), z.unknown(), { error: message })
+    .refine(value => {
+      const keys = Object.keys(value);
+      return keys.every(key => names.includes(key)) && (options.required ?? []).every(key => keys.includes(key)) && (!options.some || keys.length > 0);
+    }, message)
+    .pipe(z.object(shape));
+}
+
 export function parsed<T>(parse: (value: unknown) => T, fallback: string) {
   return z.unknown().transform((value, context) => {
     try { return parse(value); } catch (error) {

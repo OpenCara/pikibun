@@ -330,7 +330,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     if (previous === role) return c.json({ members: await membersStatement(c.env, workspaceId, actorId).all() });
     const auditId = id();
     const result = await c.env.DB.batch<SafeMember>([
-      changeMemberRoleStatement(c.env.DB, { workspaceId, actorId, userId: targetId, role: role as AssignableWorkspaceRole, previous, at: now() }),
+      changeMemberRoleStatement(c.env.DB, { workspaceId, actorId, userId: targetId, role: role as AssignableWorkspaceRole, previous }),
       auditAfterChange(c.env, actorId, 'workspace.member.role', workspaceId, { userId: targetId, from: previous, role }, auditId),
       c.env.DB.query<never>(`UPDATE sessions SET policy_version = policy_version + 1
         WHERE workspace_id = ? AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)

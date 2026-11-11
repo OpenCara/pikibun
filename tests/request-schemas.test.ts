@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { body, identifier, parsed, text, userIdentifier } from '../apps/server/src/schemas.ts';
+import { body, fields, identifier, parsed, text, userIdentifier } from '../apps/server/src/schemas.ts';
 import type { AppEnv } from '../apps/server/src/types.ts';
 
 function app(schema: z.ZodType, options?: Parameters<typeof body>[2]) {
@@ -35,6 +35,19 @@ test('a route can answer every invalid body with one message', async () => {
   for (const value of [{}, { on: 'yes' }, { on: true, off: false }]) {
     assert.deepEqual(await post(value), { status: 400, body: { error: 'Set on to true or false.', code: 'invalid_input' } });
   }
+});
+
+test('fields checks the keys first, with the route\'s message, and only then each field', async () => {
+  const post = app(fields({ name: text('name'), id: identifier().nullable().optional() }, 'A thing has a name and an id.', { required: ['name'] }));
+  const refused = (error: string) => ({ status: 400, body: { error, code: 'invalid_input' } });
+  assert.deepEqual(await post({ name: '', extra: 1 }), refused('A thing has a name and an id.'));
+  assert.deepEqual(await post({ id: 'a' }), refused('A thing has a name and an id.'));
+  assert.deepEqual(await post({ name: '' }), refused('Invalid name.'));
+  assert.deepEqual(await post({ name: 'a', id: 'a b' }), refused('Invalid id.'));
+  assert.deepEqual(await post({ name: 'a', id: null }), { status: 200, body: { value: { name: 'a', id: null } } });
+  const some = app(fields({ a: z.boolean().optional(), b: z.boolean().optional() }, 'Change a or b.', { some: true }));
+  assert.deepEqual(await some({}), refused('Change a or b.'));
+  assert.deepEqual(await some({ b: true }), { status: 200, body: { value: { b: true } } });
 });
 
 test('a parser of packages/shared keeps its own error message', async () => {

@@ -17,9 +17,17 @@ three things:
 `apps/server/src/schemas.ts` checks a body against a zod schema: `body(c, schema, { maxBytes, message })`. It reads the
 body with `jsonObject`, so the media type, size and JSON checks stay as they were. It then answers the first issue
 as `400 invalid_input`, with the issue's message or the route's one `message`, and returns the parsed value with its
-type. Its field schemas (`text`, `identifier`, `userIdentifier`) give the messages the hand-written checks gave
-(`Invalid name.`), and `parsed(parseX, fallback)` wraps a parser from `packages/shared`, keeping its error message.
-So a converted route answers clients and tests exactly as before. `z.strictObject` rejects unknown keys.
+type.
+
+- **Field schemas** (`text`, `identifier`, `userIdentifier`) give the messages the hand-written checks gave
+  (`Invalid name.`), and `parsed(parseX, fallback)` wraps a parser from `packages/shared`, keeping its error message.
+- **`fields(shape, message, { required, some })`** states a body as the routes checked it: first its keys (no unknown
+  ones, the required ones present, at least one with `some`), answered with the route's message, and only then each
+  field. A plain `z.strictObject` reports a field's fault before an unknown key, and a union's fault as zod's own
+  "Invalid input", so routes use `fields`, not `z.strictObject`, where they name the shape and a field differently.
+
+`tests/request-schemas.test.ts` pins this order, and the converted routes' tests pin their messages, so a converted
+route answers clients and tests as before.
 
 `tool-groups.ts`, `child-session-settings.ts` and `transcript-settings.ts` use it. Their schemas (`newGroup`,
 `groupChange`, `memberGroup`, `transcriptChange`) state each body, and the routes no longer cast.

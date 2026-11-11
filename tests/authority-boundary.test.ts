@@ -99,7 +99,7 @@ const authorityTables = [
 ];
 
 test("only the authority writes the tables it decides from: the rest of the server goes through its statements", () => {
-  const write = new RegExp(`\\b(?:insert\\s+(?:or\\s+\\w+\\s+)?into|update|delete\\s+from)\\s+(${authorityTables.join("|")})\\b`, "gi");
+  const write = new RegExp(`\\b(?:(?:insert|replace)\\s+(?:or\\s+\\w+\\s+)?into|update(?:\\s+or\\s+\\w+)?|delete\\s+from)\\s+(${authorityTables.join("|")})\\b`, "gi");
   const writes = sources(server).filter(file => !inAuthority(file))
     .flatMap(file => [...readFileSync(join(repository, file), "utf8").matchAll(write)].map(match => `${file}: ${match[1]}`));
   assert.deepEqual(writes, []);

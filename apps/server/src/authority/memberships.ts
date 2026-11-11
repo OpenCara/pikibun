@@ -34,7 +34,7 @@ export function addMemberStatement(db: Pick<Database, 'query'>, change: MemberCh
     .bind(change.role, change.at, change.actorId, change.userId, change.workspaceId, change.role, change.previous ?? '');
 }
 
-export function changeMemberRoleStatement(db: Pick<Database, 'query'>, change: MemberChange & { previous: string }): Query<never> {
+export function changeMemberRoleStatement(db: Pick<Database, 'query'>, change: Omit<MemberChange, 'at'> & { previous: string }): Query<never> {
   return db.query<never>(`UPDATE workspace_members SET role = ?
     WHERE workspace_id = ? AND user_id = ? AND role = ? AND role <> 'owner'
       AND EXISTS (SELECT 1 FROM workspaces w

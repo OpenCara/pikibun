@@ -6,9 +6,8 @@ import { workspaceRoles, type WorkspaceRole } from '../../../packages/shared/src
 import { auditStatement, requireMember, workspaceAdminSQL } from './authority/index.js';
 import { requireMemberManagement } from './catalog.js';
 import { ConstraintError } from './db/types.js';
-import { z } from 'zod';
 import { fail, id, identifier, now, userIdentifier } from './http.js';
-import { body, identifier as identifierField, parsed, text } from './schemas.js';
+import { body, fields, identifier as identifierField, parsed, text } from './schemas.js';
 import type { AppEnv, Env } from './types.js';
 
 type GroupRow = { id: string; name: string; tools_json: string; created_at: string; updated_at: string };
@@ -39,11 +38,10 @@ export async function toolGroupSettings(env: Env, workspaceId: string, admin: bo
 const groupName = text('name', toolGroupLimits.name).transform(name => name.trim())
   .refine(name => name !== '' && !/[\r\n]/.test(name), 'A tool group\'s name is one non-empty line.');
 const groupToolsInput = parsed(parseGroupTools, 'Invalid tools.');
-const newGroup = z.strictObject({ name: groupName, tools: groupToolsInput }, { error: 'A tool group has a name and tools.' });
-const groupChange = z.strictObject({ name: groupName.optional(), tools: groupToolsInput.optional() }, { error: 'Change a tool group\'s name or tools.' })
-  .refine(change => change.name !== undefined || change.tools !== undefined, 'Change a tool group\'s name or tools.');
-const memberGroup = z.strictObject({ groupId: z.null().or(identifierField('groupId')) },
-  { error: 'Set groupId to a tool group of the workspace, or null for the member\'s role.' });
+const newGroup = fields({ name: groupName, tools: groupToolsInput }, 'A tool group has a name and tools.');
+const groupChange = fields({ name: groupName.optional(), tools: groupToolsInput.optional() }, 'Change a tool group\'s name or tools.', { some: true });
+const memberGroup = fields({ groupId: identifierField('groupId').nullable() }, 'Set groupId to a tool group of the workspace, or null for the member\'s role.',
+  { required: ['groupId'] });
 
 function sameName(error: unknown): never {
   if (error instanceof ConstraintError || (error instanceof Error && /UNIQUE|unique|duplicate/.test(error.message))) {
