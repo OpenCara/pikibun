@@ -12,6 +12,7 @@ import { documentItemTypes, documentKind, sourceLimits, type DocumentItemType, t
 import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, credentialedApiProviders, type ApiAccessKind, type CredentialedApiProvider, egressPushService, hostAllowed, hostNamed, lfsLimits, parseLfsBatchRequest, parseNetworkPolicy, validLfsOid, validLfsSize,
   type EgressApi, type EgressGitService, type EgressGrant, type EgressRepository, type LfsBatchResult, type NetworkPolicy } from "../../../packages/shared/src/network.js";
 import { boundedStream, drainStream, PUSH_REQUEST_BYTES, pushRejection, PushRequestError, readPushCommands, sessionBranchRefusal, type PushCommand } from "../../../packages/shared/src/git-push.js";
+import { NON_PUBLIC_IPV4, NON_PUBLIC_IPV6 } from "../../../packages/shared/src/non-public-addresses.js";
 import { RunnerError } from "./protocol.js";
 import { CA_BUNDLE, CA_BUNDLE_VARIABLES } from "./trust-store.js";
 import { ApiAccess, type ApiUpstream } from "./api-access.js";
@@ -100,20 +101,18 @@ export function egressSocketPath(sessionId: string, dataDir: string): string {
   return join(directory, `${createHash("sha256").update(`${dataDir}\0${sessionId}`).digest("hex").slice(0, 24)}.sock`);
 }
 
-const blocked = new BlockList();
-for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16],
-  ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24],
-  ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4]] as const) blocked.addSubnet(network, prefix, "ipv4");
-for (const [network, prefix] of [["::", 128], ["::1", 128], ["64:ff9b::", 96], ["100::", 64], ["2001:db8::", 32], ["fc00::", 7],
-  ["fe80::", 10], ["ff00::", 8]] as const) blocked.addSubnet(network, prefix, "ipv6");
+const blockedIpv4 = new BlockList();
+for (const [network, prefix] of NON_PUBLIC_IPV4) blockedIpv4.addSubnet(network, prefix, "ipv4");
+const blockedIpv6 = new BlockList();
+for (const [network, prefix] of NON_PUBLIC_IPV6) blockedIpv6.addSubnet(network, prefix, "ipv6");
 
 export function publicAddress(address: string): boolean {
   const family = isIP(address);
-  if (family === 4) return !blocked.check(address, "ipv4");
+  if (family === 4) return !blockedIpv4.check(address, "ipv4");
   if (family !== 6) return false;
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
   if (mapped) return publicAddress(mapped[1]!);
-  return !blocked.check(address, "ipv6");
+  return !blockedIpv6.check(address, "ipv6");
 }
 
 const fakeIp = new BlockList();
