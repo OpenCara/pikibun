@@ -4,7 +4,6 @@ import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
 
-/** A phone's window, or one as narrow: at most 600 points wide. */
 export const phoneWidth = () => windowSize().width > 0 && windowSize().width <= 600;
 
 type ButtonVariant = "primary" | "default" | "outline" | "ghost" | "danger" | "accent";
@@ -207,7 +206,6 @@ export function NavItem(props: { icon?: IconName; leading?: JSX.Element; label: 
 
 export function Chip(props: {
   label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean; small?: boolean; expanded?: boolean; maxWidth?: number;
-  /** Tighter padding and a smaller chevron, for a row of them that has to fit on one line of a phone. */
   dense?: boolean;
 }) {
   const color = () => (props.tone ? palette().tones[props.tone].text : palette().muted);

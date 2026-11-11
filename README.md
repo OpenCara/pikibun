@@ -18,7 +18,7 @@ Two things set it apart:
 And around them:
 
 - **Your machines, your models.** Sessions run on members' own hosts with the models and credentials configured in Pi there. A host connects over an outbound WebSocket: no inbound port or tunnel.
-- **Isolated work.** Each session clones the workspace's repositories into its own sandbox, whose only way out is a proxy that reads them with the session owner's account and follows the workspace's network policy.
+- **Isolated work.** Each session in a shared workspace clones the workspace's repositories into its own sandbox, whose only way out is a proxy that reads them with the session owner's account and follows the workspace's network policy. In your [private workspace](docs/workspaces.md#your-private-workspace), new sessions on your own host run [directly on it](docs/hosts.md#sessions-on-the-host) by default, as you, with your files, credentials and network; choose **Where it runs → Sandbox** to keep one isolated.
 - **Tool groups decide.** A session runs at once the tools of its owner's tool group, which workspace owners and admins choose, and refuses everything else; nothing waits for anyone's approval. A **Read only** message changes nothing, and what runs on a host's own machine runs only for its owner and members they granted host commands.
 - **Built for teams.** Workspace roles (viewer, member, collaborator, admin) set what each person can do by default, with the workspace's owner and admins managing every session in it, and session grants add more for one session at a time.
 

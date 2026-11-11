@@ -1,12 +1,12 @@
 import type { BrowserServe } from "../../../../packages/shared/src/browser.js";
 import type { SessionTunnelReport, SessionTunnelView, TunnelStopReason } from "../../../../packages/shared/src/tunnel.js";
 import { SessionService, type ServiceProcess } from "../session-service.js";
-import type { QuickTunnel } from "../tunnel-host.js";
+import type { QuickTunnel, TunnelAccess } from "../tunnel-host.js";
 import { serveCommand } from "../tunnel-command.js";
 
 export interface SessionTunnelOptions {
   startService: (serve: BrowserServe, onOutput: (chunk: Buffer) => void, signal: AbortSignal) => Promise<ServiceProcess>;
-  openTunnel: (signal: AbortSignal) => Promise<QuickTunnel>;
+  openTunnel: (signal: AbortSignal, access: TunnelAccess) => Promise<QuickTunnel>;
   lifetimeMs: () => Promise<number>;
   report: (report: Omit<SessionTunnelReport, "sessionId">) => Promise<void>;
   recheck: (actorId: string) => Promise<void>;
@@ -27,6 +27,7 @@ interface Online {
 export interface TunnelState {
   online: boolean;
   url?: string;
+  access?: TunnelAccess;
   startedBy?: string;
   startedAt?: string;
   expiresAt?: string;
@@ -54,7 +55,7 @@ export class SessionTunnel {
     return result;
   }
 
-  start(serve: BrowserServe, actorId: string, signal?: AbortSignal): Promise<TunnelState> {
+  start(serve: BrowserServe, actorId: string, signal?: AbortSignal, access: TunnelAccess = "link"): Promise<TunnelState> {
     const stops = this.#stops;
     return this.#turn(async () => {
       if (this.#closed) throw new Error("The session is closing");
@@ -82,7 +83,7 @@ export class SessionTunnel {
           throw new Error(`${why}. Nothing is online.${lines.length ? `\nThe server's last output:\n${lines.join("\n")}` : ""}`);
         }
         let tunnel: QuickTunnel;
-        try { tunnel = await this.options.openTunnel(controller.signal); }
+        try { tunnel = await this.options.openTunnel(controller.signal, access); }
         catch (error) {
           await service.stop("failed");
           throw new Error(`${error instanceof Error ? error.message : "The tunnel didn't open"}. Nothing is online; the server was stopped.`);
@@ -153,7 +154,7 @@ export class SessionTunnel {
     const online = this.#online;
     const now = (this.options.now ?? Date.now)();
     if (!online) return { online: false, ...(this.#last ? { stopped: this.#last } : {}) };
-    return { online: true, url: online.tunnel.url, startedBy: online.startedBy, startedAt: new Date(online.startedAt).toISOString(),
+    return { online: true, url: online.tunnel.link, access: online.tunnel.access, startedBy: online.startedBy, startedAt: new Date(online.startedAt).toISOString(),
       expiresAt: new Date(online.service.expiresAt).toISOString(), uptimeSeconds: Math.max(0, Math.round((now - online.startedAt) / 1000)),
       connected: online.tunnel.connected(), command: serveCommand(online.serve), port: online.serve.port, output: online.service.lines() };
   }
@@ -161,7 +162,7 @@ export class SessionTunnel {
   view(): SessionTunnelView | undefined {
     const online = this.#online;
     if (!online) return undefined;
-    return { url: online.tunnel.url, startedBy: online.startedBy, startedAt: new Date(online.startedAt).toISOString(),
+    return { url: online.tunnel.link, access: online.tunnel.access, startedBy: online.startedBy, startedAt: new Date(online.startedAt).toISOString(),
       expiresAt: new Date(online.service.expiresAt).toISOString(), command: serveCommand(online.serve), port: online.serve.port, connected: online.tunnel.connected() };
   }
 }

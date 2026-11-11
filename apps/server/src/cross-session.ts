@@ -8,7 +8,7 @@ import {
 } from '../../../packages/shared/src/cross-session.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  auditStatement, hostCapabilities, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
+  auditStatement, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
   sessionsNeedGranted, workspaceSessionAccess,
 } from './authority/index.js';
 import { getUser } from './db.js';
@@ -430,14 +430,11 @@ async function notify(env: Env, message: MessageRow): Promise<{ delivered: strin
     const { row: origin } = await requireSession(c, message.origin_session_id, 'write');
     if (busyActivities.includes(origin.activity ?? '')) return { waiting: 'session_busy' };
     if (!await audienceCovered(env, origin, target, 'in')) {
-      // The owner's setting (call_id ''), or the one call a person allowed before approvals were removed, for a message
-      // still on its way back from then.
       const granted = await env.DB.query("SELECT 1 FROM session_tool_grants WHERE session_id = ? AND tool = 'sessions:audience' AND (call_id = '' OR call_id = ?)")
         .bind(origin.id, message.origin_call_id ?? '').first();
       if (!granted) fail(403, 'audience_changed', 'The two sessions\' readers changed since the message was sent.');
     }
     const notifyId = `${message.id}-n`;
-    // The outcome comes back as the message that sent it went: Read only after a Read-only message, else able to act.
     const sender = message.origin_admission_id ? await env.DB.query<Pick<AdmissionRow, 'access'>>(
       'SELECT access FROM run_admissions WHERE id = ? AND session_id = ?').bind(message.origin_admission_id, origin.id).first() : null;
     const actor = await getUser(env, message.actor_id);

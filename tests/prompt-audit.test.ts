@@ -17,7 +17,7 @@ import { RunnerError } from "../apps/runner/src/protocol.js";
 import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
-import { defaultHostConfig, type HostConfig, type RequiredExtension } from "../packages/shared/src/host-config.js";
+import { defaultHostConfig, type RequiredExtension } from "../packages/shared/src/host-config.js";
 import { missingRequiredExtensions, parseWorkspaceExtensions, sessionExtensions, type ExtensionSettings, type WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import type { RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 

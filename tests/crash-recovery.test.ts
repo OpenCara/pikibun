@@ -206,6 +206,7 @@ test("SIGKILL runner reopens pi SQLite, resumes pending generation, and preserve
   });
   controlPlane.requestTimeout = 5000;
   let active: RunnerChild | undefined;
+  let stopped: PromiseSettledResult<unknown>[] = [];
   try {
     const unsupported = isolationUnavailable(temporary);
     if (unsupported) {
@@ -380,12 +381,12 @@ test("SIGKILL runner reopens pi SQLite, resumes pending generation, and preserve
     for (const runner of children) t.diagnostic(`Runner ${runner.process.pid ?? "unspawned"}:\n${runner.output()}`);
     throw error;
   } finally {
-    const stopped = await Promise.allSettled(children.map(stopRunner));
+    stopped = await Promise.allSettled(children.map(stopRunner));
     try {
       await closeServer(controlPlane);
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }
-    for (const result of stopped) if (result.status === "rejected") throw result.reason;
   }
+  for (const result of stopped) if (result.status === "rejected") throw result.reason;
 });

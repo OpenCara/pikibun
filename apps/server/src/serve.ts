@@ -53,14 +53,14 @@ async function lockThenMigrate(db: Database): Promise<InstanceLock> {
   }
 }
 
-function sweep(name: string, ms: number, run: () => Promise<unknown>): NodeJS.Timeout {
-  let busy = false;
+function sweep(name: string, ms: number, run: () => Promise<unknown>, overlapping = 1): NodeJS.Timeout {
+  let busy = 0;
   const timer = setInterval(() => {
-    if (busy) return;
-    busy = true;
+    if (busy >= overlapping) return;
+    busy++;
     void run()
       .catch(error => { console.error(`pikibun: ${name} failed:`, error instanceof Error ? error.message : error); })
-      .finally(() => { busy = false; });
+      .finally(() => { busy--; });
   }, ms);
   timer.unref();
   return timer;
@@ -69,6 +69,7 @@ function sweep(name: string, ms: number, run: () => Promise<unknown>): NodeJS.Ti
 export interface RunningServer {
   address: AddressInfo;
   close(): Promise<void>;
+  lost: Promise<Error>;
 }
 
 export async function startServer(config: ServerConfig): Promise<RunningServer> {
@@ -87,7 +88,7 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
     sweep('push credential settling', 5 * 60_000, () => settlePushCredentials(env).catch(() => {})),
     sweep('pull request states', 30_000, () => refreshPullRequestStates(env)),
     sweep('automatic backups', 60_000, async () => { if (env.WORKSPACE_DATABASES) await runAutomaticBackups(env); }),
-    sweep('scheduled prompts', 30_000, () => runScheduledPrompts(env)),
+    sweep('scheduled prompts', 30_000, () => runScheduledPrompts(env), 4),
     sweep('one-shot sessions', 30_000, async () => {
       for (const outcome of await archiveFinishedOneShots(env)) {
         if ('error' in outcome) console.error(`pikibun: one-shot session ${outcome.sessionId} was not archived (${outcome.error}); it stays open.`);
@@ -148,8 +149,10 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
   server.off('error', listening.reject);
 
   let closing: Promise<void> | undefined;
-  return {
+  const lost = Promise.withResolvers<Error>();
+  const running: RunningServer = {
     address: server.address() as AddressInfo,
+    lost: lost.promise,
     close() {
       closing ??= (async () => {
         for (const timer of timers) clearInterval(timer);
@@ -164,4 +167,9 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
       return closing;
     },
   };
+  instanceLock.onLost?.(error => {
+    console.error(`pikibun: ${error.message}`);
+    void running.close().catch(() => {}).finally(() => lost.resolve(error));
+  });
+  return running;
 }

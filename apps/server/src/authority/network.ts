@@ -7,7 +7,6 @@ import { defaultNetworkPolicy, egressGitServices, egressGrantPolicy, egressLfsSe
 import { sessionBranchRefusal, type PushCommand } from '../../../../packages/shared/src/git-push.js';
 import { fetchGit, gitUpstreamHeaders } from '../../../../packages/shared/src/git-transfer.js';
 import { hasPermission } from '../../../../packages/shared/src/policy.js';
-import type { ConnectorCapabilities } from '../../../../packages/shared/src/connector.js';
 import type { AppContext, Env, RepositoryRow, SessionRow, AppEnv } from '../types.js';
 import type { Database } from '../db/types.js';
 import { auditStatement } from './audit.js';

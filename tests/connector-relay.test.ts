@@ -516,7 +516,7 @@ test('allocation-free byte counts and JSON validation handle UTF-8, escapes and 
   for (const raw of ['null', 'false', '12.5e-2', ' [1, {"escaped":"\\u0041"}] ', '"\\\\"']) assert.equal(connectorJsonValid(raw), true);
   for (const raw of ['', '<html>', 'NaN', '01', '1.', '[1,]', '{"a":1,}', '"\\q"', '{} trailing']) assert.equal(connectorJsonValid(raw), false);
   assert.equal(connectorJsonValid('['.repeat(130) + '0' + ']'.repeat(130)), false);
-  assert.equal(connectorJsonValid('{\"body\":{\"unexpected\":\"object\"}}', 1, 8), false);
+  assert.equal(connectorJsonValid('{"body":{"unexpected":"object"}}', 1, 8), false);
 });
 
 test('backup may finish after ticket admission expiry but never beyond its relay deadline', async t => {

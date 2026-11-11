@@ -32,7 +32,6 @@ export interface ConnectorCapabilities {
   sessionBranches?: boolean;
   conversationBackups?: boolean;
   sessionPacking?: boolean;
-  /** The host runs a session's tools or refuses them, never asking anyone (Pikibun requires it). */
   approvalFree?: boolean;
   automaticGitHub?: boolean;
   requesterAutoApprove?: boolean;

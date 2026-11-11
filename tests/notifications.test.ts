@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { createDecipheriv, createECDH, createPublicKey, hkdfSync, randomBytes, verify, type ECDH } from 'node:crypto';
-import type { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
 import { activityNotification, notificationText, settleNotificationDeliveries } from '../apps/server/src/notifications.js';

@@ -122,7 +122,7 @@ test("a tunnel start runs at once for the host's owner and is refused in Read-on
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
     extensions: { installed: () => [], workspace: async () => ({ extensions: [{ source: "piki:tunnel", enabled: true, tools: "automatic", settings: {} }], automaticTools: true }) },
-    tunnels: { open: (socket, signal) => hostTunnels.open(socket, signal), status: () => ready },
+    tunnels: { open: (socket, signal, access) => hostTunnels.open(socket, signal, access), status: () => ready },
     reportTunnel: async report => { reports.push(report); },
   });
   await service.initialize();
@@ -140,18 +140,22 @@ test("a tunnel start runs at once for the host's owner and is refused in Read-on
   await idle(session);
   let view = await session.view();
   assert.deepEqual(view.approvals, [], "nobody is asked");
-  const url = view.tunnel?.url;
-  assert.match(url ?? "", /^https:\/\/fake-quick-tunnel\.trycloudflare\.com$/);
+  const link = view.tunnel?.url;
+  const url = "https://fake-quick-tunnel.trycloudflare.com";
+  assert.match(link ?? "", /^https:\/\/fake-quick-tunnel\.trycloudflare\.com\/\?pikibun_tunnel=[A-Za-z0-9_-]{32}$/, "the session shows the link, secret and all");
+  assert.equal(view.tunnel!.access, "link");
   assert.deepEqual([view.tunnel!.command, view.tunnel!.port, view.tunnel!.startedBy], [`node server.js ${port}`, port, "test:alice"]);
   assert.match(view.entries.map(entry => entry.text).join("\n"), /fake-quick-tunnel\.trycloudflare\.com/);
   assert.deepEqual(reports.map(report => [report.sessionId, report.event, report.url, report.actorId]), [[id, "started", url, "test:alice"]]);
-  assert.equal(await (await fetch(`http://127.0.0.1:${await edge()}/phone`)).text(), "hello from the sandbox /phone");
+  assert.equal((await fetch(`http://127.0.0.1:${await edge()}/phone`)).status, 401, "the bare address opens nothing");
+  const secret = new URL(link!).searchParams.get("pikibun_tunnel");
+  assert.equal(await (await fetch(`http://127.0.0.1:${await edge()}/phone`, { headers: { Cookie: `pikibun_tunnel=${secret}` } })).text(), "hello from the sandbox /phone");
 
   await send("read", { access: "read" });
   await idle(session);
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /a Read-only message doesn't take/);
-  assert.equal(view.tunnel?.url, url, "the tunnel online stays");
+  assert.equal(view.tunnel?.url, link, "the tunnel online stays");
 
   assert.deepEqual(await session.tunnelAction(await ticket(id, "tunnel", "test:alice", true), { action: "stop" }), { stopped: true, url });
   assert.equal((await session.view()).tunnel, undefined);

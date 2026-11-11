@@ -12,7 +12,6 @@ export const levelLabels: Record<ThinkingLevel, string> = {
   off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max",
 };
 
-/** A message either acts, with the tools of the session owner's tool group, or only reads: nobody is asked to approve anything. */
 export const accessLabels: Record<AccessMode, { label: string; hint: string }> = {
   read: { label: "Read only", hint: "Inspect files; edits, commands, commits and pushes are refused" },
   approval: { label: "Act", hint: "Runs the session's tools, as its owner's tool group allows" },
@@ -104,7 +103,6 @@ export function initialSelection(view: SessionView): ChatSelection {
   };
 }
 
-/** A Read-only message waits until the session's host is known, which takes its options; any other message goes, and acts. */
 export function accessUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): string | undefined {
   if (mode !== "submit" || host || selection.access !== "read") return undefined;
   return `Still checking this session's host, so "${accessLabels.read.label}" can't be applied yet. Try again in a moment.`;

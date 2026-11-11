@@ -21,13 +21,11 @@ const memberGroupsSQL = `SELECT m.user_id, m.role, g.name AS group_name, g.tools
   LEFT JOIN workspace_tool_groups g ON g.id = a.group_id AND g.workspace_id = m.workspace_id
   WHERE m.workspace_id = ?`;
 
-/** The tool group of a workspace member, and the tools their sessions have; none for someone who isn't a member. */
 export async function memberToolGroup(env: Env, workspaceId: string, userId: string): Promise<{ name: string; tools: GroupTool[] }> {
   const row = await env.DB.query<MemberGroupRow>(`${memberGroupsSQL} AND m.user_id = ?`).bind(workspaceId, userId).first();
   return row ? groupOf(row) : { name: 'No membership', tools: [] };
 }
 
-/** For the hosts of a workspace: the group of each member whose sessions lack some of Pikibun's tools, and those tools. */
 export async function memberToolGroups(env: Env, workspaceId: string): Promise<Record<string, MemberToolGroup>> {
   const rows = await env.DB.query<MemberGroupRow>(memberGroupsSQL).bind(workspaceId).all();
   const result: Record<string, MemberToolGroup> = {};
@@ -39,10 +37,6 @@ export async function memberToolGroups(env: Env, workspaceId: string): Promise<R
   return result;
 }
 
-/**
- * A session runs only the tools of its owner's group: refused outside it, whoever asks and under any access,
- * and permission requests included. Tools that aren't Pikibun's own are left to the workspace's extensions.
- */
 export async function requireOwnerTool(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>, tool: string): Promise<void> {
   const retired = retiredGroupTools.includes(tool);
   if (!isGroupTool(tool) && !retired) return;

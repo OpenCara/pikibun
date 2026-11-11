@@ -6,7 +6,6 @@ export function boundedResult(value: string): string {
   return `${value.slice(0, 2000)}\n… ${value.length - 7500} characters omitted …\n${value.slice(-5500)}`;
 }
 
-/** The whole results of operations whose kept record is cut short, until their tool call takes them. */
 export class ApprovalWaits {
   readonly #wholeResults = new Map<string, string>();
 

@@ -3,7 +3,7 @@ import type { HostCommandOperation } from "../../../packages/shared/src/types.js
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { BigIntStats, Stats } from "node:fs";
-import { lstat, mkdir, open, readdir, realpath, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Operation, RunnerBinding } from "../../../packages/shared/src/types.js";

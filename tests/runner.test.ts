@@ -47,57 +47,17 @@ async function idle(session: RunnerSession): Promise<void> {
   }
   assert.fail("runner did not settle");
 }
-async function permissionRequest(session: RunnerSession): Promise<ApprovalRecord> {
-  for (let count = 0; count < 500; count++) {
-    const request = (await session.view()).approvals.find(approval => approval.operation.kind === "permission" && approval.status === "pending");
-    if (request) return request;
-    await delay(20);
-  }
-  assert.fail("no permission request");
-}
-function commandTarget(command: string) {
-  return `.: node ${testCommandArgs(command).args.join(" ")}`;
-}
 function commandOperation(session: RunnerSession, command: string) {
   return { kind: "program" as const, tool: "node" as const, command: nodeShellCommand(nodeRequest(testCommandArgs(command)), session.sandbox.nodeBin) };
 }
 
-function autoApproved(view: SessionView) {
-  assert.deepEqual(view.approvals.filter(approval => approval.automatic && approval.operation.kind === "program"), [], "no card repeats an auto-approved command");
-  return marks(view);
-}
-function marks(view: SessionView) {
-  return view.entries.flatMap(entry => (entry.autoApproved ?? []).map(({ callId, ...mark }) => {
-    assert.ok(callId && entry.toolCalls?.some(call => call.id === callId && call.name === mark.tool), "the mark names its call");
-    return mark;
-  }));
-}
 const toolOutput = (view: SessionView, marker: RegExp) => view.entries.some(entry => entry.role === "toolResult" && marker.test(entry.text));
 
-async function operationRequests(session: RunnerSession, count = 1): Promise<ApprovalRecord[]> {
-  for (let attempt = 0; attempt < 500; attempt++) {
-    const requests = (await session.view()).approvals.filter(approval => approval.operation.kind !== "permission" && approval.status === "pending");
-    if (requests.length >= count) return requests;
-    await delay(20);
-  }
-  assert.fail("no operation request");
-}
-async function settledCard(session: RunnerSession, id: string): Promise<ApprovalRecord> {
-  const metadata = () => (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata();
-  for (let attempt = 0; attempt < 500; attempt++) {
-    const card = (await metadata()).approvals[id];
-    if (card && !["pending", "approved", "executing"].includes(card.status)) return card;
-    await delay(20);
-  }
-  assert.fail("the card did not settle");
-}
-/** What the session's tools ran, as the session records it: nobody decides any of it. */
 async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
   return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
 }
 const ranCommands = async (session: RunnerSession) => (await records(session)).filter(record => record.operation.kind === "program" || record.operation.kind === "bash");
 const hostRule = /only in sessions of the host's owner and of members they granted host commands/;
-const rejectedWith = (code: number, message: RegExp) => (error: unknown) => error instanceof RunnerError && error.status === code && message.test(error.message);
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const directory = await mkdtemp(join(tmpdir(), "runner-unit-"));
   const grants: Record<string, Permission[]> = { "test:alice": ["read", "ask", "write", "approve", "manage"], "test:bob": ["read", "ask", "write"] };
