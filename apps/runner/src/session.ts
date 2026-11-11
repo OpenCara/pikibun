@@ -58,7 +58,7 @@ import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { HelperWorkspace } from "./helper-workspace.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
-import { reportedBranches } from "./clone-branches.js";
+import { BranchReports } from "./session/branch-reports.js";
 import { ApprovalWaits } from "./session/approval-waits.js";
 import { endView, entryImages, entryView, refusedView } from "./session/entries.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
@@ -280,10 +280,7 @@ export class RunnerSession {
   #cloneRepositories: string[] = [];
   #sources: GrantSource[] = [];
   #lfsRepositories: string[] = [];
-  #branchRepositories: EgressRepository[] = [];
-  #branchesSent: string | undefined;
-  #branchesReporting = false;
-  #branchesWanted = false;
+  #branchReports: BranchReports | undefined;
   #cloneFailures: { path: string; reason: string }[] = [];
   #conversationOnlyRestore = false;
   #configuredCompaction: HostCompaction | undefined;
@@ -671,8 +668,8 @@ export class RunnerSession {
     if (this.#packed) {
     } else if (this.#clone && !this.#egress) {
       const grant = await this.requestGrant().catch(() => null);
-      this.#branchRepositories = grant?.repositories ?? [];
-      this.#cloneRepositories = this.#branchRepositories.map(repository => bindingRemote(repository));
+      this.branchReports()?.useRepositories(grant?.repositories ?? []);
+      this.#cloneRepositories = (grant?.repositories ?? []).map(repository => bindingRemote(repository));
       this.#sources = grant?.sources ?? [];
     } else if (this.#clone) {
       const grant = await this.#egress!.grant().catch(() => null);
@@ -852,29 +849,17 @@ export class RunnerSession {
     this.#activity?.changed();
   }
 
-  private reportBranches(): void {
+  private branchReports(): BranchReports | undefined {
     const send = this.config.reportBranches;
-    if (!send || !this.#onHost || !this.#clone || this.closing) return;
-    if (this.#branchesReporting) { this.#branchesWanted = true; return; }
-    this.#branchesReporting = true;
-    void (async () => {
-      try {
-        do {
-          this.#branchesWanted = false;
-          if (!this.#branchRepositories.length) this.#branchRepositories = (await this.requestGrant()).repositories;
-          if (!this.#branchRepositories.length) break;
-          const clones = await (this.sandbox as HostWorkspace).cloneBranches(async () => {});
-          const branches = reportedBranches(clones, this.#branchRepositories);
-          const json = JSON.stringify(branches);
-          if (json === this.#branchesSent) continue;
-          await send(this.binding.session.id, branches);
-          this.#branchesSent = json;
-        } while (this.#branchesWanted && !this.closing);
-      } catch (error) {
-        console.warn(`Session ${this.binding.session.id}: could not report its clones' branches: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      finally { this.#branchesReporting = false; }
-    })();
+    if (!send || !this.#onHost || !this.#clone) return undefined;
+    this.#branchReports ??= new BranchReports({ sessionId: this.binding.session.id, send, closing: () => this.closing,
+      repositories: async () => (await this.requestGrant()).repositories,
+      clones: () => (this.sandbox as HostWorkspace).cloneBranches(async () => {}) });
+    return this.#branchReports;
+  }
+
+  private reportBranches(): void {
+    this.branchReports()?.request();
   }
 
   private async activity(): Promise<SessionActivity> {
