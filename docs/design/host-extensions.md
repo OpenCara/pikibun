@@ -223,7 +223,8 @@ a private network address. See its [README](../../extensions/context-files/READM
 
 ## Later
 
-- Isolation in a worker or child process.
+- Isolation in a per-session child process, in the session's sandbox and behind its egress proxy: planned in
+  [extension-isolation.md](extension-isolation.md).
 - `registerMcpServer` as tools, `registerProvider` feeding the host's models.
 - `ctx.ui.confirm`/`select` as cards; asking the session owner instead of refusing tools in Read-only messages.
 - `tool-search` as a built-in, once Pikibun defers tools (MCP servers' tools, say).
