@@ -1,91 +1,32 @@
 import { platform, signal, Storage, untracked } from "nsh";
-import { homedir } from "os";
 import nshProcess from "process";
 import type {
   HostEvent, HostInspection, HostRequest, HostState, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
 } from "../../../runner/src/app-host-protocol";
+import {
+  appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine,
+} from "./pikibun-command";
+
+export { appCliFolder, INSTALL_COMMAND, installCommand } from "./pikibun-command";
+export type { LaunchProblem, LogLine } from "./pikibun-command";
 
 export const hostsHere = platform.os === "macos" || platform.os === "windows" || platform.os === "linux";
 export const computerTitle = platform.os === "macos" ? "This Mac" : "This Computer";
 export const computerName = platform.os === "macos" ? "this Mac" : "this computer";
 
-const STDIO_FRAME = "\u001epikibun ";
-const SHELLS = ["zsh", "bash", "sh"];
-const CMD = "cmd";
-export const INSTALL_COMMAND = "npm install -g pikibun@latest";
-const CLI_FOLDER = "cli";
+const HOST_ARGS = ["host", "--stdio"];
 const INSTALL_TIMEOUT_MS = 5 * 60_000;
 const LOG_LIMIT = 200;
 const NOTICES = 20;
 
-function loginShell(os: string, shell: string | undefined): string {
-  const name = shell?.split("/").pop();
-  return name && SHELLS.includes(name) ? name : os === "macos" ? "zsh" : "bash";
-}
-
-const shellWord = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
-
-export function appCliFolder(os: string, dataDir: string | null | undefined): string | null {
-  if (!dataDir) return null;
-  const separator = os === "windows" ? "\\" : "/";
-  return `${dataDir.replace(/[\\/]+$/, "")}${separator}${CLI_FOLDER}`;
-}
-
 export function hostCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[] } {
-  if (os === "windows") {
-    if (!cli) return { command: CMD, args: ["/d", "/c", "pikibun", "host", "--stdio"] };
-    const own = `${CLI_FOLDER}\\node_modules\\.bin\\pikibun.cmd`;
-    return { command: CMD, args: ["/d", "/c", "if", "exist", own, "(", own, "host", "--stdio", ")", "else", "pikibun", "host", "--stdio"] };
-  }
-  const path = cli ? `PATH=${shellWord(`${cli}/node_modules/.bin`)}:"$PATH"; export PATH; ` : "";
-  return { command: loginShell(os, shell), args: ["-ilc", `${path}exec pikibun host --stdio`] };
+  return pikibunCommand(os, shell, cli, HOST_ARGS);
 }
 
-export function installCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[]; line: string } {
-  const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", "pikibun@latest"];
-  if (os === "windows") {
-    const words = cli ? own : INSTALL_COMMAND.split(" ");
-    return { command: CMD, args: ["/d", "/c", ...words], line: words.join(" ") };
-  }
-  const line = cli ? own.map((word, index) => (index === 3 ? shellWord(word) : word)).join(" ") : INSTALL_COMMAND;
-  return { command: loginShell(os, shell), args: ["-ilc", line], line };
-}
-
-export interface HostLink {
-  send(message: object): void;
-  onMessage(listener: (value: unknown) => void): void;
-  onOutput(listener: (line: string) => void): void;
-  onExit(listener: (result: { code?: number | null; error?: string | null }) => void): void;
-  end(): void;
-  kill(): void;
-}
-
+export type HostLink = CommandLink;
 export type HostLauncher = () => HostLink;
 
-export const spawnHost: HostLauncher = () => {
-  const { command, args } = hostCommand(platform.os, nshProcess.env.SHELL, appCliFolder(platform.os, nshProcess.dataDir));
-  let cwd: string | undefined;
-  if (!nshProcess.dataDir) { try { cwd = homedir(); } catch { cwd = undefined; } }
-  const child = nshProcess.spawn(command, args, { stdin: "pipe", lines: true, ...(cwd ? { cwd } : {}) });
-  const messages: ((value: unknown) => void)[] = [];
-  const output: ((line: string) => void)[] = [];
-  const say = (line: string) => { if (line.trim()) for (const listener of output) listener(line.slice(0, 1000)); };
-  child.on("stdout", line => {
-    if (!line.startsWith(STDIO_FRAME)) { say(line); return; }
-    let value: unknown;
-    try { value = JSON.parse(line.slice(STDIO_FRAME.length)); } catch { say("The host sent a malformed message."); return; }
-    for (const listener of messages) listener(value);
-  });
-  child.on("stderr", say);
-  return {
-    send: message => { try { child.write(`${JSON.stringify(message)}\n`); } catch { } },
-    onMessage: listener => { messages.push(listener); },
-    onOutput: listener => { output.push(listener); },
-    onExit: listener => { child.on("exit", result => listener(result)); },
-    end: () => { try { child.end(); } catch { } },
-    kill: () => { try { child.kill(); } catch { } },
-  };
-};
+export const spawnHost: HostLauncher = () => spawnPikibun(HOST_ARGS);
 
 let launcher: HostLauncher = spawnHost;
 export function setHostLauncher(next: HostLauncher): void { launcher = next; }
@@ -102,8 +43,7 @@ export type Installer = () => InstallRun;
 export const spawnInstall: Installer = () => {
   const cli = appCliFolder(platform.os, nshProcess.dataDir);
   const { command, args, line } = installCommand(platform.os, nshProcess.env.SHELL, cli);
-  let cwd: string | undefined;
-  if (!nshProcess.dataDir) { try { cwd = homedir(); } catch { cwd = undefined; } }
+  const cwd = commandDirectory();
   const child = nshProcess.spawn(command, args, { lines: true, timeoutMs: INSTALL_TIMEOUT_MS, ...(cwd ? { cwd } : {}) });
   return {
     line,
@@ -132,116 +72,13 @@ export function installFailure(lines: readonly string[], result: { code?: number
   return last ? `npm couldn't install pikibun: ${last}` : `npm couldn't install pikibun (exit code ${result.code ?? "unknown"}).`;
 }
 
-export type LaunchProblem =
-  | { kind: "missing" }
-  | { kind: "outdated" }
-  | { kind: "failed"; message: string };
-
 export function launchProblem(lines: readonly string[], code: number | null | undefined): LaunchProblem {
-  const text = lines.join("\n");
-  if (/Unknown command: host/.test(text)) return { kind: "outdated" };
-  if (code === 127 || code === 9009 || /pikibun: (command )?not found|not found: pikibun|'pikibun' is not recognized/i.test(text)) return { kind: "missing" };
-  const node = lines.find(line => line.startsWith("pikibun needs Node.js"));
-  if (node) return { kind: "failed", message: `${node} Install Node.js 24 (from https://nodejs.org, or nvm install 24), then choose Refresh.` };
-  const last = lines.filter(line => line.trim()).slice(-3).join(" ");
-  return { kind: "failed", message: last ? `The host could not start: ${last}` : `The host could not start (exit code ${code ?? "unknown"}).` };
+  return commandProblem(lines, code, /Unknown command: host/, "The host");
 }
 
-type Request = HostRequest extends infer R ? R extends HostRequest ? Omit<R, "id"> : never : never;
 type HostResult = Extract<HostEvent, { type: "result" }>;
-const eventTypes = new Set(["ready", "result", "status", "log", "failed", "login"]);
-const isHostEvent = (value: unknown): value is HostEvent => typeof value === "object" && value !== null
-  && "type" in value && typeof value.type === "string" && eventTypes.has(value.type);
+const hostEventTypes: ReadonlySet<string> = new Set(["ready", "result", "status", "log", "failed", "login"]);
 
-class HostChannel {
-  private link?: HostLink;
-  private ready?: Promise<void>;
-  private readonly pending = new Map<number, (result: HostResult) => void>();
-  private nextId = 1;
-  private stopping = false;
-  private problem?: LaunchProblem;
-
-  constructor(private readonly handlers: {
-    onEvent(event: Exclude<HostEvent, HostResult | { type: "ready" }>): void;
-    onOutput(line: string): void;
-    onExit(code: number | null | undefined, expected: boolean): void;
-  }) {}
-
-  get running(): boolean { return this.link !== undefined; }
-
-  private spawn(): Promise<void> {
-    this.problem = undefined;
-    let link: HostLink;
-    try { link = launcher(); }
-    catch (error) {
-      this.problem = { kind: "failed", message: `The host could not be started: ${error instanceof Error ? error.message : String(error)}` };
-      return Promise.reject(error);
-    }
-    this.link = link;
-    this.stopping = false;
-    let isReady = false;
-    let settled = false;
-    const early: string[] = [];
-    return new Promise<void>((resolve, reject) => {
-      link.onOutput(line => {
-        if (isReady) { this.handlers.onOutput(line); return; }
-        early.push(line);
-        if (early.length > 40) early.shift();
-      });
-      link.onMessage(value => {
-        if (!isHostEvent(value)) return;
-        if (value.type === "ready") { isReady = true; settled = true; resolve(); return; }
-        if (value.type !== "result") { this.handlers.onEvent(value); return; }
-        const settle = this.pending.get(value.id);
-        this.pending.delete(value.id);
-        settle?.(value);
-      });
-      link.onExit(result => {
-        if (this.link !== link) return;
-        this.link = undefined;
-        this.ready = undefined;
-        if (!isReady) this.problem = launchProblem(early, result.code);
-        if (!settled) { settled = true; reject(new Error("exited")); }
-        for (const [id, settle] of this.pending) settle({ type: "result", id, ok: false, error: { code: "failed", message: "The host process exited before it answered." } });
-        this.pending.clear();
-        this.handlers.onExit(result.code, this.stopping || !isReady);
-      });
-    });
-  }
-
-  get launchFailure(): LaunchProblem | undefined { return this.problem; }
-
-  async request(message: Request, sent?: (id: number) => void): Promise<HostResult> {
-    this.ready ??= this.spawn();
-    const starting = this.ready;
-    try { await starting; }
-    catch {
-      if (this.ready === starting) this.ready = undefined;
-      const problem = this.problem;
-      return { type: "result", id: 0, ok: false, error: { code: "unsupported", message: problem?.kind === "failed" ? problem.message : "The pikibun command isn't ready on this computer." } };
-    }
-    const link = this.link!;
-    const id = this.nextId++;
-    const result = new Promise<HostResult>(resolve => this.pending.set(id, resolve));
-    sent?.(id);
-    link.send({ ...message, id });
-    return result;
-  }
-
-  async shutdown(timeoutMs = 10_000): Promise<void> {
-    const link = this.link;
-    if (!link) { this.ready = undefined; return; }
-    this.stopping = true;
-    const exited = new Promise<void>(resolve => link.onExit(() => resolve()));
-    const deadline = setTimeout(() => link.kill(), timeoutMs);
-    void this.request({ type: "stop" }).then(() => link.end());
-    await exited;
-    clearTimeout(deadline);
-  }
-}
-
-export interface LogLine { time: number; level: "info" | "warning" | "error"; message: string }
-export interface ModelChoice { provider: string; modelId: string }
 export type MacSandbox = "none" | "seatbelt";
 
 export interface SignInView {
@@ -254,6 +91,7 @@ export interface SignInView {
   notices: Exclude<LoginEvent, { kind: "prompt" | "prompt-closed" }>[];
 }
 
+export interface ModelChoice { provider: string; modelId: string }
 interface Saved {
   sandbox?: MacSandbox;
   models?: ModelChoice[];
@@ -291,7 +129,9 @@ export class ThisComputerHost {
   private loaded?: Promise<void>;
   private server?: string;
   private inspectError = false;
-  private readonly channel = new HostChannel({
+  private readonly channel = new CommandChannel<HostEvent, HostRequest>({
+    launch: () => launcher(), eventTypes: hostEventTypes, problem: launchProblem, subject: "The host",
+    failure: (id, message, notReady) => ({ type: "result", id, ok: false, error: { code: notReady ? "unsupported" : "failed", message } }),
     onEvent: event => this.handleEvent(event),
     onOutput: line => this.log("info", line),
     onExit: (code, expected) => this.handleExit(code, expected),
