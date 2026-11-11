@@ -172,7 +172,6 @@ function binding(id: string): RunnerBinding {
   };
 }
 
-// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
 const sandboxed = !linuxSandboxMissing();
 
 test("a sandboxed clone borrows the host mirror's objects through the git shim", { skip: !sandboxed }, async t => {

@@ -1,5 +1,4 @@
 import type { Hono } from 'hono';
-import { hostCapabilities } from './hosts.js';
 import type { ConnectorAdmin, ConnectorCapabilities, HostCommandGrant } from '../../../../packages/shared/src/connector.js';
 import { hasPermission, readOnlyRoles } from '../../../../packages/shared/src/policy.js';
 import { grantedShell, type HostCommandSession } from '../../../../packages/shared/src/host-operations.js';

@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { parseCapabilities } from '../../../packages/shared/src/connector.js';
-import type { ConnectorCapabilities, HostModelSettings, LocalModelSummary } from '../../../packages/shared/src/connector.js';
+import type { HostModelSettings, LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import type { ChatOptions } from '../../../packages/shared/src/types.js';
 import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import { auditAfterChange, managedConnector, managedConnectorFor, managesConnectorSQL } from './authority/index.js';

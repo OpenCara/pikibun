@@ -3,6 +3,8 @@ import { mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSy
 import { createServer, connect, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { hostTunnelStatusLimits, quickTunnelUrl, type HostTunnelConfig, type HostTunnelStatus } from "../../../packages/shared/src/tunnel.js";
+import { createTunnelGate, gatedLink, tunnelGateToken } from "./tunnel-gate.js";
+import type { TunnelAccess } from "./tunnel-command.js";
 import { cloudflaredAsset, downloadCloudflared, downloadedCloudflareds, hostCloudflared, inspectCloudflared, latestCloudflared, pruneCloudflareds,
   type CloudflaredToolchain } from "./cloudflared.js";
 
@@ -117,8 +119,12 @@ export class HostTunnelSource {
 
 export function cloudflaredDownloads(directory: string): string { return join(directory, "cloudflared"); }
 
+export type { TunnelAccess };
+
 export interface QuickTunnel {
   readonly url: string;
+  readonly link: string;
+  readonly access: TunnelAccess;
   connected(): boolean;
   readonly closed: Promise<void>;
   close(): Promise<void>;
@@ -165,11 +171,16 @@ export class HostTunnels {
     }
   }
 
-  async open(socket: string, signal?: AbortSignal): Promise<QuickTunnel> {
+  async open(socket: string, signal?: AbortSignal, access: TunnelAccess = "link"): Promise<QuickTunnel> {
     const cloudflared = this.options.cloudflared();
     if (!cloudflared) throw new Error("This host has no cloudflared for the tunnel");
-    const connections = new Set<Socket>();
-    const forward: Server = createServer({ allowHalfOpen: true }, client => {
+    const connections = new Set<Socket | NodeJS.ReadWriteStream & { destroy(): void }>();
+    const token = access === "link" ? tunnelGateToken() : undefined;
+    const track = (connection: Socket | NodeJS.ReadWriteStream & { destroy(): void }) => {
+      connections.add(connection);
+      connection.once("close", () => connections.delete(connection));
+    };
+    const forward: Server = token ? createTunnelGate(socket, token, track) : createServer({ allowHalfOpen: true }, client => {
       const upstream = connect({ path: socket, allowHalfOpen: true });
       connections.add(client);
       connections.add(upstream);
@@ -251,7 +262,7 @@ export class HostTunnels {
     }
     await Promise.race([edge.promise, exited, new Promise(resolve => setTimeout(resolve, this.options.connectMs ?? 15_000).unref())]);
     const tunnel: QuickTunnel = {
-      url: url!, connected: () => connections_ > 0 && child.exitCode === null && child.signalCode === null,
+      url: url!, link: token ? gatedLink(url!, token) : url!, access, connected: () => connections_ > 0 && child.exitCode === null && child.signalCode === null,
       closed: exited, close: stop,
     };
     this.#open.add(tunnel);

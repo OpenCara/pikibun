@@ -1,7 +1,7 @@
 import { workspaceAdminSQL } from './access.js';
 import type { Hono } from 'hono';
 import type { GitProvider, ProviderRepository, ProviderRepositoryList, SessionRepository, TokenGitProvider, WorkspaceRepository, WorkspaceRepositoryList } from '../../../../packages/shared/src/repositories.js';
-import { gitProviderNames, gitProviders, repositoryLimits, repositoryPath, validRepositoryId, validRepositoryName } from '../../../../packages/shared/src/repositories.js';
+import { gitProviderNames, gitProviders, repositoryPath, validRepositoryId, validRepositoryName } from '../../../../packages/shared/src/repositories.js';
 import type { Env, RepositoryRow, SessionRow, AppEnv } from '../types.js';
 import { auditStatement } from './audit.js';
 import { getUser } from '../db.js';
@@ -10,7 +10,7 @@ import { isPersonalWorkspace } from './personal-workspaces.js';
 import { fail, id, identifier, jsonObject, now, testMode } from '../http.js';
 import { decryptToken } from './vault.js';
 import {
-  credentialOrganization, gitAccountRequired, gitHost, loadCredential, providerRepository, recheckCredential, tokenProvider, validProviderHost,
+  credentialOrganization, gitAccountRequired, gitHost, loadCredential, providerRepository, recheckCredential,
   type LoadedCredential,
 } from './git/accounts.js';
 import { collectRepositories, gitProviderAdapters, listBytes, listPageSize } from './git/providers.js';
@@ -40,7 +40,7 @@ function repositoryName(provider: GitProvider, value: unknown): string {
 }
 export function validRepositoryRef(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 1 && value.length <= 255 &&
-    !/[\s\x00-\x1f\x7f\\~^:?*\[]/.test(value) && !/[\uD800-\uDFFF]/u.test(value) &&
+    !/[\s\x00-\x1f\x7f\\~^:?*[]/.test(value) && !/[\uD800-\uDFFF]/u.test(value) &&
     value !== '@' && !value.includes('..') && !value.includes('@{') && !value.endsWith('.') &&
     !value.split('/').some(part => !part || part.startsWith('.') || part.endsWith('.lock'));
 }

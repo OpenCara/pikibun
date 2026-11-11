@@ -17,14 +17,6 @@ function git(cwd: string, args: string[], input?: Buffer | string): string {
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
   return result.stdout.toString().trim();
 }
-function exists(cwd: string, object: string): boolean {
-  return spawnSync("git", ["cat-file", "-e", object], { cwd }).status === 0;
-}
-async function collect(pack: AsyncIterable<Uint8Array>): Promise<Buffer> {
-  const parts: Buffer[] = [];
-  for await (const chunk of pack) parts.push(Buffer.from(chunk));
-  return Buffer.concat(parts);
-}
 
 async function fixture(t: TestContext, options: { protocolV2?: boolean } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-git-remote-")));

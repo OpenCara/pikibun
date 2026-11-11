@@ -1,7 +1,6 @@
 import { workspaceAdminSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import { hostCapabilities } from './authority/index.js';
-import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { base64Bytes, fileUploadLimits, formatBytes, parseUploadChunk, type UploadResult } from '../../../packages/shared/src/file-uploads.js';
 import { signToken, verifyToken } from '../../../packages/shared/src/crypto.js';
 import type { RunnerTicket } from '../../../packages/shared/src/types.js';

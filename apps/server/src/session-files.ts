@@ -1,6 +1,5 @@
 import type { Hono } from 'hono';
 import { hostCapabilities } from './authority/index.js';
-import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
 import { checkBrowseResult, InvalidBrowseResult, type BrowseResult } from '../../../packages/shared/src/file-browser.js';
 import type { SessionFiles } from '../../../packages/shared/src/types.js';

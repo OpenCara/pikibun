@@ -7,7 +7,6 @@ import type { Env } from '../apps/server/src/types.js';
 import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
 import { userIdentifier } from '../apps/server/src/http.js';
 import { sessionAccess } from '../apps/server/src/authority/access.js';
-import { sha256 } from '../packages/shared/src/crypto.js';
 import type { SessionView } from '../packages/shared/src/types.js';
 import { applyViewPatch, diffView, type SessionViewPatch } from '../packages/shared/src/view-patch.js';
 import { seedAgentVersion, testDatabase } from './helpers/control-plane.js';
@@ -74,7 +73,6 @@ function seedLegacySchema(sqlite: DatabaseSync) {
     INSERT INTO audit (id, workspace_id, session_id, actor_id, action, created_at)
       VALUES ('schema-audit', 'schema-workspace', 'schema-session', 'schema-owner', 'created', '2026-01-01');
   `);
-  // Approval capabilities were dropped with approvals (0063_approvals_removed); a legacy database still has them.
   if (sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'broker_capabilities'").get()) {
     sqlite.exec(`INSERT INTO broker_capabilities (token_hash, session_id, approval_id, actor_id, requested_by, operation_hash, expires_at, created_at)
       VALUES ('schema-token', 'schema-session', 'schema-approval', 'schema-owner', 'schema-owner', 'schema-operation', 1, '2026-01-01')`);
@@ -342,9 +340,16 @@ test('internal broker rejects wrong operations and posts once per tool call of a
     method: 'POST', headers: { Authorization: `Bearer ${internalSecret}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId: 'session', actorId: ownerId, ownerId, permission: 'write' }),
   }, f.env);
-  assert.equal(disabled.status, 200);
-  assert.equal((await disabled.json() as { allowed: boolean }).allowed, false);
+  assert.equal(disabled.status, 404, 'the legacy runner\'s routes exist only in test mode, whatever secret a request carries');
   f.env.TEST_AUTH_ENABLED = 'true';
+  const allowed = await app.request('/api/internal/authorize', {
+    method: 'POST', headers: { Authorization: `Bearer ${internalSecret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'session', actorId: ownerId, ownerId, permission: 'write' }),
+  }, f.env);
+  assert.equal(allowed.status, 200);
+  assert.equal((await allowed.json() as { allowed: boolean }).allowed, true);
+  const health = await (await app.request('/api/health', {}, { ...f.env, RUNNER_URL: 'https://runner.example.test', TEST_AUTH_ENABLED: 'false' })).json() as { runnerConfigured: boolean };
+  assert.equal(health.runnerConfigured, false, 'outside test mode a configured external runner is never used');
   const expiry = f.env.TEST_AUTH_EXPIRES_AT;
   f.env.TEST_AUTH_EXPIRES_AT = new Date(Date.now() - 1000).toISOString();
   assert.equal(await sessionAccess(f.env, 'session', ownerId), null, 'Faux sessions stop at the test-mode expiry');

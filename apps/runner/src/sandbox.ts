@@ -63,14 +63,8 @@ export interface SandboxOptions {
 export interface MirrorMount { source: string; target: string }
 export const MIRROR_ROOT = "/repository-mirrors";
 const SHIM_DIRECTORY = "/opt/pikibun/bin";
-// The session's temporary directory, ~/.tmp, seen at a short path: its own (/sessions/<64 hex digits>/home/.tmp) leaves
-// too little of a Unix socket path's 107 bytes for the sockets test suites, language servers and browsers make there, and
-// programs that fall back to /tmp find it.
 export const SANDBOX_TMP = "/tmp";
 export const CA_BUNDLE_FILE = "ca-certificates.crt";
-// The sandbox's /etc, which has none of the host's: who the session's user is, so programs that look their user up (initdb,
-// ssh, Node.js's os.userInfo(), Python's getpass) find one, and where localhost is, so a test or server that names it
-// reaches its own loopback. The files are the session's own, under its root, and mounted read-only.
 export const SANDBOX_USER = "pikibun";
 const SANDBOX_ETC = "etc";
 export function sandboxEtc(home: string, uid: number, gid: number): Readonly<Record<string, string>> {

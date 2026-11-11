@@ -14,7 +14,7 @@ import type { AuthorizationRequest, AuthorizationResult, GitHubEffectAuthority, 
 import type { SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import { MAX_CLONE_BRANCHES } from "./clone-branches.js";
 import { sessionActivities } from "../../../packages/shared/src/types.js";
-import { buildVersion, CONNECTOR_VERSION_HEADER } from "../../../packages/shared/src/version.js";
+import { buildVersion, CONNECTOR_VERSION_HEADER, DEVELOPMENT_CONNECTOR_VERSION } from "../../../packages/shared/src/version.js";
 import { acquireRunnerLease } from "./lease.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { CREATE_FILE, exactMode, OPEN_DIRECTORY, OPEN_FILE, windows } from "./platform.js";
@@ -34,7 +34,7 @@ import { HostExtensions } from "./extensions/host.js";
 import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
-import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
+import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions, type TunnelAccess } from "./tunnel-host.js";
 import type { SessionTunnelReport } from "../../../packages/shared/src/tunnel.js";
 
 const STATE_FILE = "connector.json";
@@ -637,7 +637,7 @@ export class LocalConnector {
       compaction: this.options.localModels.compaction, identity: this.options.localModels.identity,
       ...(this.hostExtensions ? { extensions: this.runnerExtensions(this.hostExtensions) } : {}),
       ...(this.browser ? { browser: () => this.browser?.current(), browserStatus: () => this.browser?.status() } : {}),
-      ...(this.tunnels && this.tunnel ? { tunnels: { open: (socket: string, signal?: AbortSignal) => this.tunnels!.open(socket, signal), status: () => this.tunnel?.status() } } : {}),
+      ...(this.tunnels && this.tunnel ? { tunnels: { open: (socket: string, signal?: AbortSignal, access?: TunnelAccess) => this.tunnels!.open(socket, signal, access), status: () => this.tunnel?.status() } } : {}),
       reportTunnel: async report => this.reportTunnel(await this.connection(), report),
       authorize: async request => this.authorize(await this.connection(), request),
       reportActivity: async (sessionId, activity) => this.reportActivity(await this.connection(), sessionId, activity),
@@ -762,7 +762,7 @@ export class LocalConnector {
 
   private async callbackResponse(generation: Generation, path: string, body: unknown, signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal, AbortSignal.timeout(15_000)])): Promise<Response> {
     this.requireGeneration(generation);
-    const version = this.options.version ?? buildVersion;
+    const version = this.options.version ?? buildVersion ?? DEVELOPMENT_CONNECTOR_VERSION;
     const response = await (this.options.fetch ?? fetch)(`${this.state!.controlPlaneUrl}${path}`, {
       method: "POST", redirect: "error", credentials: "omit",
       headers: { authorization: `Bearer ${this.state!.token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json",

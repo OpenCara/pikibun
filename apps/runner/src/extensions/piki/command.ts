@@ -205,7 +205,6 @@ export interface PikiSession {
   sandbox?: (run: PikiSandboxRun) => Promise<CliRun>;
   hostSignIn: boolean;
   saveOutput?: (callId: string, tool: string, output: string) => Promise<string>;
-  /** Whether a code mode script made the call: it gets the whole output (up to about 1 MB), not the model's excerpt. */
   fromScript?: (callId: string) => boolean;
 }
 

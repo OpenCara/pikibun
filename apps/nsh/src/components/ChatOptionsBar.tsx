@@ -8,7 +8,6 @@ import { palette, text } from "../theme";
 import { Chip, phoneWidth, Picker } from "../ui";
 
 const accessIcons: Record<AccessMode, IconName> = { read: "eye", approval: "shield-check", auto: "zap" };
-/** On a phone the model's name is cut shorter, so the pickers after it stay in sight on the chat box's one line of controls. */
 const modelChipWidth = () => (phoneWidth() ? 120 : undefined);
 
 export function ChatOptionsBar(props: {

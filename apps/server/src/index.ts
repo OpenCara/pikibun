@@ -17,7 +17,7 @@ import { registerBackups } from './backups.js';
 import { registerSessionFiles } from './session-files.js';
 import { registerSessionTunnels } from './session-tunnels.js';
 import { registerFileUploads } from './file-uploads.js';
-import { registerInternal } from './internal.js';
+import { legacyRunnerEnabled, registerLegacyRunner } from './legacy-runner.js';
 import { fail, localMode, passwordAuthEnabled, signupMode, testMode } from './http.js';
 import { registerConnectorCredentials, registerConnectors } from './connectors.js';
 import { registerHostConfig } from './host-config.js';
@@ -59,7 +59,7 @@ app.get('/api/health', async c => {
   return c.json({ ok: true,
     version: validVersion(c.env.PIKIBUN_VERSION) ?? buildVersion ?? null,
     githubConfigured: !!c.env.GITHUB_CLIENT_ID && !!c.env.GITHUB_CLIENT_SECRET && vaultReady,
-    runnerConfigured: !!c.env.RUNNER_URL && !!c.env.RUNNER_SHARED_SECRET && c.env.RUNNER_SHARED_SECRET.length >= 32,
+    runnerConfigured: legacyRunnerEnabled(c.env) && !!c.env.RUNNER_URL && !!c.env.RUNNER_SHARED_SECRET && c.env.RUNNER_SHARED_SECRET.length >= 32,
     databaseConfigured: true, databaseProvider: c.env.DB.provider,
     backupsConfigured: !!c.env.BUCKET, storageProvider: c.env.BUCKET?.provider ?? null,
     workspaceDatabasesConfigured: !!c.env.WORKSPACE_DATABASES,
@@ -72,7 +72,7 @@ app.get('/api/health', async c => {
 });
 registerAuth(app);
 registerPasswordAuth(app);
-registerInternal(app);
+registerLegacyRunner(app);
 registerConnectorCredentials(app);
 registerConnectorExtensions(app);
 registerOidc(app);

@@ -12,37 +12,26 @@ const operationTools: Record<Exclude<Operation['kind'], 'permission' | 'extensio
   'git.push': 'git_push', 'git.repin': 'git_repin', 'host.bash': 'host_bash',
 };
 
-/**
- * A session runs an operation only with a tool of its owner's tool group; nobody is asked. Extension tools are left to the
- * workspace's extensions and their host's rules.
- */
 export async function requireOperationTool(env: Env, row: SessionRow, operation: Operation): Promise<void> {
   if (operation.kind === 'permission') fail(400, 'invalid_operation', 'Permission requests were removed: a session runs its tools or refuses them.');
   if (operation.kind === 'extension.tool') return;
   await requireOwnerTool(env, row, operation.kind === 'program' ? operation.tool : operationTools[operation.kind]);
 }
 
-/** A tool call Pikibun brokers (github_read, source_read, schedule, sessions) runs only with a tool of the owner's group. */
 export async function requireToolCall(env: Env, row: SessionRow, tool: ToolName): Promise<void> {
   await requireOwnerTool(env, row, tool);
 }
 
-/**
- * What the sessions tool may do beyond the plain rules: a Read-only message never changes another session ('write'), and
- * content passes between sessions whose readers differ ('audience') only where the session's owner allows it for the session.
- */
 export async function sessionsNeedGranted(env: Env, row: SessionRow, need: 'write' | 'audience'): Promise<boolean> {
   if (need === 'write') return false;
   return audienceSharing(env, row.id);
 }
 
-/** Whether the session's owner lets content pass between it and sessions whose readers differ. */
 export async function audienceSharing(env: Env, sessionId: string): Promise<boolean> {
   return !!await env.DB.query(`SELECT 1 AS n FROM session_tool_grants WHERE session_id = ? AND tool = 'sessions:audience' AND call_id = ''`)
     .bind(sessionId).first();
 }
 
-/** Lets, or stops, content pass between this session and sessions whose readers differ. */
 export async function setAudienceSharing(env: Env, row: SessionRow, actorId: string, enabled: boolean, at: string): Promise<void> {
   if (!enabled) {
     await env.DB.query(`DELETE FROM session_tool_grants WHERE session_id = ? AND tool = 'sessions:audience'`).bind(row.id).run();
@@ -52,7 +41,6 @@ export async function setAudienceSharing(env: Env, row: SessionRow, actorId: str
     ON CONFLICT DO NOTHING`).bind(row.id, actorId, at).run();
 }
 
-/** The session owner's setting: PUT /api/sessions/:id/audience-sharing {enabled}. */
 export function registerAudienceSharing(app: Hono<AppEnv>): void {
   app.put('/api/sessions/:id/audience-sharing', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');

@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ConstraintError, InstanceLockedError, lockInstance, openDatabase, sqliteHandle, type Database } from '../apps/server/src/db/index.js';
+import pg from 'pg';
+import { ConstraintError, InstanceLockedError, InstanceLockLostError, lockInstance, openDatabase, sqliteHandle, type Database } from '../apps/server/src/db/index.js';
 
 const postgresUrl = process.env.TEST_DATABASE_URL;
 const providers: { name: 'sqlite' | 'postgres'; url: string | undefined }[] = [
@@ -359,4 +360,47 @@ test('a database file serves one server at a time', async t => {
 
 test('a Postgres database serves one server at a time', { skip: postgresUrl ? false : 'TEST_DATABASE_URL is not set; skipping the Postgres instance lock' }, async t => {
   await refusesSecondInstance(t, postgresUrl!);
+});
+
+test('a Postgres server whose lock connection is killed takes the lock again, or stops if another server got it', { skip: postgresUrl ? false : 'TEST_DATABASE_URL is not set; skipping the Postgres lock watch' }, async t => {
+  const first = await openDatabase(postgresUrl!);
+  const second = await openDatabase(postgresUrl!);
+  const admin = new pg.Client({ connectionString: postgresUrl });
+  await admin.connect();
+  t.after(async () => { await admin.end(); await first.close(); await second.close(); });
+  const holders = async () => (await admin.query(`SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objid = $1::bigint::oid`, [0x70696b69])).rows as { pid: number }[];
+  const lock = await lockInstance(first, { heartbeatMs: 50, graceMs: 5000 });
+  const lost: Error[] = [];
+  lock.onLost?.(error => lost.push(error));
+  const [original] = await holders();
+  assert.ok(original);
+  await admin.query('SELECT pg_terminate_backend($1, 5000)', [original.pid]);
+  for (let i = 0; i < 100; i++) {
+    const now = await holders();
+    if (now.length === 1 && now[0].pid !== original.pid) break;
+    await sleep(50);
+  }
+  const [retaken] = await holders();
+  assert.ok(retaken && retaken.pid !== original.pid, 'the lock is held again, on a new connection');
+  assert.equal(lost.length, 0);
+
+  const waiter = new pg.Client({ connectionString: postgresUrl });
+  await waiter.connect();
+  t.after(() => waiter.end());
+  const waiterPid = (await waiter.query('SELECT pg_backend_pid() AS pid')).rows[0]?.pid as number;
+  const waiting = waiter.query('SELECT pg_advisory_lock($1)', [0x70696b69]);
+  for (let i = 0; i < 100; i++) {
+    if ((await admin.query(`SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND pid = $1`, [waiterPid])).rowCount) break;
+    await sleep(20);
+  }
+  await admin.query('SELECT pg_terminate_backend($1, 5000)', [retaken.pid]);
+  await waiting;
+  assert.equal((await holders())[0]?.pid, waiterPid, 'the server waiting for the lock gets it the moment the first one\'s connection goes');
+  for (let i = 0; i < 100 && !lost.length; i++) await sleep(50);
+  assert.equal(lost.length, 1, 'the first server hears that the lock is lost');
+  assert.ok(lost[0] instanceof InstanceLockLostError);
+  await lock.release();
+  await assert.rejects(lockInstance(second, { heartbeatMs: 60_000 }), InstanceLockedError);
+  await waiter.query('SELECT pg_advisory_unlock($1)', [0x70696b69]);
+  await (await lockInstance(second, { heartbeatMs: 60_000 })).release();
 });

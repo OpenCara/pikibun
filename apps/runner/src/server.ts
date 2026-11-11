@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
-import type { RunnerAction, RunnerBinding, RunnerTicket, SubmitInput, Operation } from "../../../packages/shared/src/types.js";
+import type { RunnerAction, RunnerBinding, RunnerTicket, SubmitInput } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor, RestoreInput } from "../../../packages/shared/src/connector.js";
 import { ViewRevisions } from "../../../packages/shared/src/view-patch.js";
 import { assertId, permissionFor, RunnerError, stableJson, validateBinding, verifyRunnerTicket } from "./protocol.js";

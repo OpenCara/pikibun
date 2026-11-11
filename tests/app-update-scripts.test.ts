@@ -28,9 +28,6 @@ const until = async (condition: () => boolean, ms = 8000) => {
   return true;
 };
 
-// A stand-in for the app: a copy of sh named Pikibun in an app folder (as the release's tarball unpacks), which runs the
-// script as its child, as NSH's process.run does, and exits. Then, as NSH does once a child it started has exited, its
-// whole process group is killed.
 async function runAsTheApp(root: string, appFolder: string, tarball: string) {
   const app = path.join(appFolder, 'Pikibun');
   const child = spawn(app, ['-c', 'sh -c "$1" pikibun-update "$2"; status=$?; exit $status', 'pikibun', LINUX_INSTALL, tarball],

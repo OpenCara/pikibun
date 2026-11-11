@@ -1,11 +1,5 @@
 import { toolNames, type WorkspaceRole } from "./types.js";
 
-/**
- * Tool groups: which of Pikibun's own session tools a session has, decided by its owner's place in the workspace. Each
- * member's sessions get the tools of their role (roleTools) unless a workspace owner or admin put them in a group of the
- * workspace's own, with the tools it chose. It is a ceiling: a session never runs a tool outside its owner's group, under
- * under any access. Tools of other extensions are switched under the workspace's Extensions.
- */
 export const groupTools = [
   "identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file",
   "git", "git_push", "node", "python", "rust", "go", "dotnet", "make", "browser", "tunnel",
@@ -46,7 +40,6 @@ const readTools: readonly GroupTool[] = ["identity", "list_files", "read_file", 
 const sandboxTools: readonly GroupTool[] = [...readTools, "write_file", "edit_file", "move_file", "copy_file", "delete_file",
   "git", "node", "python", "rust", "go", "dotnet", "make", "browser", "github_read", "source_read"];
 
-/** The tools of each role's sessions, unless its member is in a group of the workspace's own. */
 export const roleTools: Readonly<Record<WorkspaceRole, readonly GroupTool[]>> = {
   owner: groupTools,
   admin: groupTools,
@@ -86,7 +79,6 @@ export interface ToolGroupSettings {
   admin: boolean;
 }
 
-/** What a session's runner needs of its owner's group: its name, for messages, and the tools it leaves out. */
 export interface MemberToolGroup {
   name: string;
   off: string[];
@@ -96,7 +88,6 @@ export function isGroupTool(value: unknown): value is GroupTool {
   return typeof value === "string" && (groupTools as readonly string[]).includes(value);
 }
 
-/** A group's tools, in the catalog's order, each once; throws on anything else. */
 export function parseGroupTools(value: unknown): GroupTool[] {
   if (!Array.isArray(value) || value.length > groupTools.length * 2) throw new Error("Tools are a list of Pikibun's session tools.");
   const unknown = value.find(item => !isGroupTool(item));
@@ -104,7 +95,6 @@ export function parseGroupTools(value: unknown): GroupTool[] {
   return groupTools.filter(tool => value.includes(tool));
 }
 
-/** The tools of a member's sessions: their group's, or else their role's. */
 export function memberTools(role: WorkspaceRole, group?: { tools: readonly string[] } | null): GroupTool[] {
   return group ? groupTools.filter(tool => group.tools.includes(tool)) : [...roleTools[role]];
 }
@@ -113,16 +103,13 @@ export function toolsLeftOut(tools: readonly string[]): GroupTool[] {
   return groupTools.filter(tool => !tools.includes(tool));
 }
 
-/** Pikibun's retired tools (bash, host_bash ...), which old agent versions may still pin: only sessions with every tool keep them. */
 export const retiredGroupTools: readonly string[] = toolNames.filter(tool => !isGroupTool(tool));
 
-/** What a session whose owner has these tools runs without: the group tools they lack and, unless they lack none, the retired ones. */
 export function toolsOff(tools: readonly string[]): string[] {
   const out: string[] = toolsLeftOut(tools);
   return out.length ? [...out, ...retiredGroupTools] : [];
 }
 
-/** Until a host has heard of a workspace, its sessions run only the tools that read the session's files. */
 export const unknownToolGroup: MemberToolGroup = { name: "not known yet: Pikibun hasn't answered", off: toolsOff(roleTools.viewer) };
 
 export function parseMemberToolGroups(value: unknown): Record<string, MemberToolGroup> {

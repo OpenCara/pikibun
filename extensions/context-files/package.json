@@ -10,7 +10,7 @@
     "url": "https://github.com/OpenCara/pikibun.git",
     "directory": "extensions/context-files"
   },
-  "files": ["index.ts", "context-files.ts", "README.md"],
+  "files": ["index.ts", "context-files.ts", "non-public-addresses.ts", "README.md"],
   "pi": {
     "extensions": ["./index.ts"]
   },

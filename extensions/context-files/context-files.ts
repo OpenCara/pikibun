@@ -6,6 +6,7 @@ import { BlockList, isIP } from "node:net";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { ExtensionContext, ExtensionFactory, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import { NON_PUBLIC_IPV4, NON_PUBLIC_IPV6 } from "./non-public-addresses.ts";
 
 export const contextFilesFlags = Object.freeze({
   "context-files": "The files to add to the system prompt, separated by commas or new lines: a path in the repository (AGENTS.md, "
@@ -177,15 +178,10 @@ async function readInside(path: string, boundary: string): Promise<Read> {
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 const label = (base: string, path: string) => relative(base, path).split(sep).join("/");
 
-const privateNetworks = new BlockList();
-for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16],
-  ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["224.0.0.0", 4], ["240.0.0.0", 4]] as const) {
-  privateNetworks.addSubnet(network, prefix, "ipv4");
-}
-for (const [network, prefix] of [["::", 128], ["::1", 128], ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["2001::", 32], ["2001:db8::", 32],
-  ["2002::", 16], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]] as const) {
-  privateNetworks.addSubnet(network, prefix, "ipv6");
-}
+const privateIpv4 = new BlockList();
+for (const [network, prefix] of NON_PUBLIC_IPV4) privateIpv4.addSubnet(network, prefix, "ipv4");
+const privateIpv6 = new BlockList();
+for (const [network, prefix] of NON_PUBLIC_IPV6) privateIpv6.addSubnet(network, prefix, "ipv6");
 
 export function allowedRanges(setting = process.env.PI_CONTEXT_FILES_ALLOW_RANGES ?? ""): BlockList {
   const allowed = new BlockList();
@@ -203,7 +199,7 @@ export function blockedAddress(address: string, allowed: BlockList = allowedRang
   const family = isIP(address);
   if (!family) return true;
   const type = family === 4 ? "ipv4" : "ipv6";
-  return privateNetworks.check(address, type) && !allowed.check(address, type);
+  return (family === 4 ? privateIpv4 : privateIpv6).check(address, type) && !allowed.check(address, type);
 }
 
 const TEXT_TYPE = /^(text\/|application\/(json|xml|yaml|x-yaml|markdown|toml)\b)/i;

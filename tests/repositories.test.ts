@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
-import { crc32, deflateRawSync, gunzipSync, gzipSync } from 'node:zlib';
+import { gzipSync } from 'node:zlib';
 import { HTTPException } from 'hono/http-exception';
 import { app } from '../apps/server/src/index.js';
 import type { ConnectorRelayEnvelope } from '../apps/server/src/connector-transport.js';
 import { boundedRepositoryBody } from '../apps/server/src/authority/repositories.js';
 import { parseManifest } from '../apps/server/src/connectors.js';
-import { gitProviderAdapters } from '../apps/server/src/authority/git/providers.js';
 import type { Env } from '../apps/server/src/types.js';
 import { encryptToken } from '../apps/server/src/authority/vault.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase } from './helpers/control-plane.js';
@@ -16,7 +15,7 @@ import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { defaultWorkspaceExtensions, withSessionToolsListed } from '../packages/shared/src/host-extensions.js';
 import type { LfsBatchResult } from '../packages/shared/src/network.js';
-import { repositoryLimits, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type SessionRepository, type WorkspaceRepository, type WorkspaceRepositoryList } from '../packages/shared/src/repositories.js';
+import { type GitAccount, type ProviderRepository, type ProviderRepositoryList, type SessionRepository, type WorkspaceRepository, type WorkspaceRepositoryList } from '../packages/shared/src/repositories.js';
 import type { ModelDefinition, RunnerBinding, SessionRecord } from '../packages/shared/src/types.js';
 
 const origin = 'http://localhost:8787';
@@ -201,32 +200,6 @@ async function connectedSetup(t: TestContext) {
   remote.calls.length = 0;
   return { f, remote, admin, host, owner, team, repository, connector, model, provisions, input, start };
 }
-function download(f: Fixture, session: SessionRecord, pin: SessionRepository, connector?: Connected, body: unknown = { sessionId: session.id, commit: pin.commit }) {
-  return f.request('POST', connector ? `/api/connectors/self/repositories/${pin.bindingId}/download` : `/api/internal/repositories/${pin.bindingId}/download`,
-    body, connector ? { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken } : { Authorization: `Bearer ${internalSecret}` });
-}
-function authorizeCache(f: Fixture, session: SessionRecord, pin: SessionRepository, connector?: Connected, body: unknown = { sessionId: session.id, commit: pin.commit }) {
-  return f.request('POST', connector ? `/api/connectors/self/repositories/${pin.bindingId}/authorize` : `/api/internal/repositories/${pin.bindingId}/authorize`,
-    body, connector ? { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken } : { Authorization: `Bearer ${internalSecret}` });
-}
-
-async function legacySetup(t: TestContext) {
-  const f = await fixture(t); const remote = github(t); const owner = await f.client('legacy-owner');
-  const team = await workspace(owner); const repository = await bindRepository(owner, team.id);
-  const { model } = await json<{ model: ModelDefinition }>(await owner.request('POST', `/api/workspaces/${team.id}/models`, {
-    name: 'Legacy model', provider: 'openai', modelId: 'legacy-model',
-  }), 201);
-  const agent = seedAgentVersion(f.sqlite, { authorId: owner.user.id, modelId: model.id, tools: ['identity'] });
-  const pin: SessionRepository = { bindingId: repository.id, repositoryId: metadata.id, fullName: metadata.full_name,
-    ref: repository.ref, commit: commitA, path: metadata.full_name };
-  const session: SessionRecord = { id: 'legacy-session', workspaceId: team.id, ownerId: owner.user.id, agentVersionId: agent.id,
-    title: 'Existing session', policyVersion: 1, status: 'ready', createdAt: new Date().toISOString(), repositories: [pin] };
-  f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,policy_version,status,created_at,repositories_json)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(session.id, team.id, owner.user.id, agent.id, session.title, 1, 'ready', session.createdAt, JSON.stringify([pin]));
-  remote.calls.length = 0;
-  return { f, remote, owner, team, repository, session, pin };
-}
-
 test('repository API separates cookie/CSRF authentication, administrator writes, and member reads', async t => {
   const f = await fixture(t); const remote = github(t);
   const owner = await f.client('owner'); const admin = await f.client('admin'); const reader = await f.client('reader'); const outsider = await f.client('outsider');
@@ -575,7 +548,7 @@ for (const scoped of [false, true]) {
 }
 
 test('legacy pairing claim rechecks test-mode expiry without consuming its code', async t => {
-  const f = await fixture(t); const owner = await f.client('synthetic', false); const team = await workspace(owner);
+  const f = await fixture(t); const owner = await f.client('synthetic', false); await workspace(owner);
   const pending = await pair(owner);
   beforeStatement(t, f, /^INSERT INTO connectors\b/, () => {
     f.env.TEST_AUTH_EXPIRES_AT = new Date(Date.now() - 1000).toISOString();
@@ -590,7 +563,7 @@ test('legacy pairing claim rechecks test-mode expiry without consuming its code'
 
 test('legacy sharing rechecks test-mode expiry before sharing an unconfigured workspace', async t => {
   const f = await fixture(t); const owner = await f.client('synthetic', false);
-  const existing = await workspace(owner); const target = await workspace(owner);
+  await workspace(owner); const target = await workspace(owner);
   const connector = await connect(f, owner);
   beforeStatement(t, f, /^INSERT INTO connector_shares\b/, () => {
     f.env.TEST_AUTH_EXPIRES_AT = new Date(Date.now() - 1000).toISOString();
@@ -599,20 +572,6 @@ test('legacy sharing rechecks test-mode expiry before sharing an unconfigured wo
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_shares WHERE workspace_id = ?').get(target.id)!.n, 0);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_workspaces WHERE workspace_id = ?').get(target.id)!.n, 1);
 });
-
-function pausedArchive() {
-  const started = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>(); let first = true;
-  const response = new Response(new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (first) { first = false; controller.enqueue(archiveBytes.slice(0, 2)); return; }
-      started.resolve();
-      await release.promise;
-      controller.enqueue(archiveBytes.slice(2));
-      controller.close();
-    },
-  }, { highWaterMark: 0 }));
-  return { response, started: started.promise, release: () => release.resolve() };
-}
 
 test('repository body bound accepts the exact byte limit and cancels streamed overflow even with a lying length', async () => {
   const exact = new Uint8Array([1, 2, 3, 4]);
@@ -729,26 +688,6 @@ async function connectGitea(client: Client, input: Record<string, unknown> = {})
     provider: 'gitea', host: 'https://Git.Acme.dev/', token: giteaToken(client), ...input,
   }), 201)).account;
 }
-function zipArchive(files: Record<string, string>): Uint8Array<ArrayBuffer> {
-  const locals: Buffer[] = []; const centrals: Buffer[] = []; let offset = 0;
-  for (const [name, content] of Object.entries(files)) {
-    const data = Buffer.from(content); const packed = deflateRawSync(data); const path = Buffer.from(name);
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6); local.writeUInt16LE(8, 8);
-    local.writeUInt32LE(crc32(data), 14); local.writeUInt32LE(packed.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(path.length, 26);
-    const central = Buffer.alloc(46);
-    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(0x0800, 8);
-    central.writeUInt16LE(8, 10); central.writeUInt32LE(crc32(data), 16); central.writeUInt32LE(packed.length, 20);
-    central.writeUInt32LE(data.length, 24); central.writeUInt16LE(path.length, 28); central.writeUInt32LE(offset, 42);
-    locals.push(local, path, packed); centrals.push(central, path);
-    offset += local.length + path.length + packed.length;
-  }
-  const directory = Buffer.concat(centrals); const end = Buffer.alloc(22); const count = Object.keys(files).length;
-  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10);
-  end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
-  return new Uint8Array(Buffer.concat([...locals, directory, end]));
-}
-
 async function providerSetup(t: TestContext, claim: object = providerManifest) {
   const f = await fixture(t); const remote = gitea(t);
   const admin = await f.client('admin'); const host = await f.client('host'); const owner = await f.client('owner');

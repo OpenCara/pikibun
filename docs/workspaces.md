@@ -1,6 +1,6 @@
 # Workspaces and members
 
-Every account also has a [private workspace](#your-private-workspace) of its own, pinned at the top of the sidebar. Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Extensions**, **Tool groups**, **Members' tools**, **Transcripts**, **Approvals**, **Sub-task sessions**, **Session database**, **Members** and, for owners and admins, **Data export**.
+Every account also has a [private workspace](#your-private-workspace) of its own, pinned at the top of the sidebar. Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Extensions**, **Tool groups**, **Members' tools**, **Transcripts**, **Sub-task sessions**, **Session database**, **Members** and, for owners and admins, **Data export**.
 
 Owners and admins rename a workspace with **General → Rename** (`PATCH /api/workspaces/:id` with `{"name": "…"}`); everyone in it sees the new name. The audit log records who renamed it, not the names.
 

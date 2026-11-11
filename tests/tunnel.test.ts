@@ -86,13 +86,15 @@ test("the tunnel tool takes start with serve, checked as the browser's serve is,
   assert.deepEqual(tunnelRequest({ action: "status" }), { action: "status" });
   assert.deepEqual(tunnelRequest({ action: "stop" }), { action: "stop" });
   assert.deepEqual(tunnelRequest({ action: "start", serve: { program: "pnpm", args: ["preview", "--port", "4173"], directory: "app", port: 4173 } }),
-    { action: "start", serve: { program: "pnpm", args: ["preview", "--port", "4173"], directory: "app", port: 4173 } });
+    { action: "start", serve: { program: "pnpm", args: ["preview", "--port", "4173"], directory: "app", port: 4173 }, access: "link" });
   assert.deepEqual(tunnelRequest({ action: "start", serve: { program: "python3", args: ["-m", "http.server", "8000"], venv: ".venv", port: 8000, timeout_seconds: 120 } }),
-    { action: "start", serve: { program: "python3", args: ["-m", "http.server", "8000"], venv: ".venv", port: 8000, timeout_seconds: 120 } });
+    { action: "start", serve: { program: "python3", args: ["-m", "http.server", "8000"], venv: ".venv", port: 8000, timeout_seconds: 120 }, access: "link" });
+  assert.equal(tunnelRequest({ action: "start", serve: { program: "node", port: 3000 }, access: "public" }).access, "public");
   const refusals: [unknown, RegExp][] = [
     [undefined, /takes \{action/], [{}, /action is one of start, status, stop/], [{ action: "open" }, /action is one of/],
     [{ action: "start" }, /start needs serve/], [{ action: "status", serve: { program: "node", port: 1 } }, /status takes nothing else/],
-    [{ action: "stop", url: "https://x" }, /takes action and serve, not url/],
+    [{ action: "stop", url: "https://x" }, /takes action, serve and access, not url/],
+    [{ action: "stop", access: "public" }, /stop takes nothing else/], [{ action: "start", serve: { program: "node", port: 1 }, access: "private" }, /access is link or public/],
     [{ action: "start", serve: { program: "bash", args: ["-c", "nc -l 80"], port: 80 } }, /serve.program is one of the node and python tools' programs/],
     [{ action: "start", serve: { program: "node", port: 0 } }, /serve.port is a whole number from 1 to 65535/],
     [{ action: "start", serve: { program: "node", port: 70_000 } }, /serve.port/],
@@ -164,7 +166,7 @@ test("a session service keeps its last lines, says when its port answers, and st
 function fakeTunnel(url = "https://test-tunnel.trycloudflare.com") {
   const closed = Promise.withResolvers<void>();
   let closes = 0;
-  const tunnel: QuickTunnel = { url, connected: () => true, closed: closed.promise, close: async () => { closes++; closed.resolve(); } };
+  const tunnel: QuickTunnel = { url, link: url, access: "public", connected: () => true, closed: closed.promise, close: async () => { closes++; closed.resolve(); } };
   return { tunnel, closes: () => closes, fail: () => closed.resolve() };
 }
 
@@ -258,7 +260,7 @@ test("a stop or a close while a start waits for the one it replaces to go offlin
       const closed = Promise.withResolvers<void>();
       const hold = held;
       held = false;
-      return { url: `https://held-${opened}.trycloudflare.com`, connected: () => true, closed: closed.promise,
+      return { url: `https://held-${opened}.trycloudflare.com`, link: `https://held-${opened}.trycloudflare.com`, access: "public" as const, connected: () => true, closed: closed.promise,
         close: async () => { if (hold) await release.promise; closed.resolve(); } };
     },
     lifetimeMs: async () => 60_000,
@@ -415,8 +417,9 @@ test("the connector's quick tunnel runs cloudflared on the host, pointed at a lo
   t.after(() => { delete process.env.PIKIBUN_TUNNEL_TEST_SECRET; });
   const lines: string[] = [];
   const tunnels = new HostTunnels({ cloudflared: () => ({ executable }), directory: join(root, "state"), log: line => lines.push(line), connectMs: 5000 });
-  const tunnel = await tunnels.open(socket);
+  const tunnel = await tunnels.open(socket, undefined, "public");
   assert.equal(tunnel.url, "https://fake-quick-tunnel.trycloudflare.com", "the address, never api.trycloudflare.com from its errors");
+  assert.equal(tunnel.link, tunnel.url, "a public tunnel's link is its address");
   await until(() => tunnel.connected() || undefined, "the edge connection");
   const edge = Number(await until(() => lines.map(line => /^FAKE_EDGE=(\d+)$/.exec(line)?.[1]).find(Boolean), "the fake edge"));
   const response = await fetch(`http://127.0.0.1:${edge}/page?x=1`);
@@ -434,6 +437,69 @@ test("the connector's quick tunnel runs cloudflared on the host, pointed at a lo
   assert.equal(tunnel.connected(), false);
   await assert.rejects(fetch(`http://127.0.0.1:${edge}/`), "cloudflared ended");
   await assert.rejects(fetch(`${url}/`), "and so did the forwarding");
+});
+
+test("by default a quick tunnel opens only through its link: the secret becomes a cookie the server never sees, and anyone without it gets 401, WebSockets too", async t => {
+  const root = await directory(t, "gated-tunnel");
+  const executable = await fakeCloudflared(root);
+  const socket = shortSocket(join(root, "http.sock"));
+  const service: Server = createServer((request, response) => response.end(`served ${request.url} cookie=${request.headers.cookie ?? ""}`));
+  service.on("upgrade", (request, upgraded) => {
+    upgraded.end(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nX-Seen-Cookie: ${request.headers.cookie ?? ""}\r\n\r\n`);
+  });
+  await new Promise<void>(resolve => service.listen(socket, resolve));
+  t.after(() => new Promise<void>(resolve => service.close(() => resolve())));
+  const lines: string[] = [];
+  const tunnels = new HostTunnels({ cloudflared: () => ({ executable }), directory: join(root, "state"), log: line => lines.push(line), connectMs: 5000 });
+  const tunnel = await tunnels.open(socket);
+  t.after(() => tunnel.close());
+  assert.equal(tunnel.access, "link");
+  assert.equal(tunnel.url, "https://fake-quick-tunnel.trycloudflare.com", "the address Pikibun reports and audits carries no secret");
+  const token = /^https:\/\/fake-quick-tunnel\.trycloudflare\.com\/\?pikibun_tunnel=([A-Za-z0-9_-]{32})$/.exec(tunnel.link)?.[1];
+  assert.ok(token, tunnel.link);
+  const edge = Number(await until(() => lines.map(line => /^FAKE_EDGE=(\d+)$/.exec(line)?.[1]).find(Boolean), "the fake edge"));
+  const at = (path: string, headers: Record<string, string> = {}) => fetch(`http://127.0.0.1:${edge}${path}`, { headers, redirect: "manual" });
+  const bare = await at("/page");
+  assert.equal(bare.status, 401);
+  assert.match(await bare.text(), /private: open it with the link/);
+  assert.equal((await at("/?pikibun_tunnel=not-the-secret")).status, 401);
+  assert.equal((await at("/page", { Cookie: "pikibun_tunnel=not-the-secret" })).status, 401);
+  const opened = await at(`/?pikibun_tunnel=${token}&tab=2`);
+  assert.equal(opened.status, 303);
+  assert.equal(opened.headers.get("location"), "/?tab=2", "the secret leaves the address, the rest of it stays");
+  assert.match(opened.headers.get("set-cookie") ?? "", new RegExp(`^pikibun_tunnel=${token}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax$`));
+  const page = await at("/page?x=1", { Cookie: `theme=dark; pikibun_tunnel=${token}` });
+  assert.equal(page.status, 200);
+  assert.equal(await page.text(), "served /page?x=1 cookie=theme=dark", "the server gets its own cookies, never the tunnel's secret");
+  const call = JSON.parse((await readFile(join(root, "calls.jsonl"), "utf8")).trim().split("\n").at(-1)!) as { args: string[] };
+  const forward = new URL(call.args[call.args.indexOf("--url") + 1]!);
+  const upgrade = async (cookie: string) => {
+    const { connect } = await import("node:net");
+    const client = connect(Number(forward.port), "127.0.0.1");
+    let answer = "";
+    client.on("data", chunk => { answer += chunk; });
+    client.write(`GET /socket HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n${cookie ? `Cookie: ${cookie}\r\n` : ""}\r\n`);
+    await new Promise(resolve => client.once("close", resolve));
+    return answer;
+  };
+  assert.match(await upgrade(""), /^HTTP\/1\.1 401/);
+  const upgraded = await upgrade(`a=1; pikibun_tunnel=${token}`);
+  assert.match(upgraded, /^HTTP\/1\.1 101/);
+  assert.match(upgraded, /X-Seen-Cookie: a=1\r\n/);
+  const linked = async (path: string) => {
+    const { connect } = await import("node:net");
+    const client = connect(Number(forward.port), "127.0.0.1");
+    let answer = "";
+    client.on("data", chunk => { answer += chunk; });
+    client.write(`GET ${path} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+    await new Promise(resolve => client.once("close", resolve));
+    return answer;
+  };
+  assert.match(await linked(`/socket?pikibun_tunnel=${token}`), /^HTTP\/1\.1 101/, "a WebSocket client given the link gets in too");
+  assert.match(await linked("/socket?pikibun_tunnel=not-the-secret"), /^HTTP\/1\.1 401/);
+  const sideways = await fetch(`http://127.0.0.1:${forward.port}/\\evil.example/?pikibun_tunnel=${token}`, { redirect: "manual" });
+  assert.equal(sideways.status, 303);
+  assert.equal(sideways.headers.get("location"), "/evil.example/", "the redirect stays on the tunnel's own address");
 });
 
 test("a cloudflared that gives no address is ended, and the call says what the host needs, not the host's errors", async t => {

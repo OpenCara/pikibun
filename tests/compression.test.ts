@@ -11,7 +11,7 @@ function server() {
   const app = new Hono();
   app.use('*', compression);
   app.get('/api/view', c => c.json(view));
-  app.get('/api/internal/download', c => new Response(JSON.stringify(view), { headers: { 'Content-Type': 'application/json', 'Content-Length': String(JSON.stringify(view).length) } }));
+  app.get('/api/internal/download', _c => new Response(JSON.stringify(view), { headers: { 'Content-Type': 'application/json', 'Content-Length': String(JSON.stringify(view).length) } }));
   let release!: () => void;
   const released = new Promise<void>(resolve => { release = resolve; });
   let aborted = false;
