@@ -282,6 +282,19 @@ describe("on a desktop", () => {
     expect(app.shows("id:session-row-s1")).toBe(true);
   });
 
+  test("the chat box keeps its controls on one line on a phone-wide window, and wraps them with its hint on a wide one", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 390, height: 800 });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:composer-input");
+    expect(app.shows("id:composer-tools")).toBe(true);
+    expect(app.shows("id:composer-mode")).toBe(true);
+    expect(app.shows("text:Runs as Ada Lovelace (you)")).toBe(false);
+    await app.setViewport(1200, 800);
+    await app.waitFor("text:Runs as Ada Lovelace (you)");
+    expect(app.shows("id:composer-tools")).toBe(false);
+    expect(app.shows("id:composer-mode")).toBe(true);
+  });
+
   test("a session opened on a narrow window moves beside the list when the window widens, and back", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 500, height: 800 });
     await app.press("id:session-row-s1");

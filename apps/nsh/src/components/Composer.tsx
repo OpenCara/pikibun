@@ -1,9 +1,9 @@
-import { effect, keymap, platform, signal, Text, View, type JSX } from "nsh";
+import { effect, keymap, platform, Scroll, signal, Text, View, type JSX } from "nsh";
 import { Button as BaseButton, Input } from "nsh/base";
 import type { Attachments } from "../lib/attachments";
 import { Icon } from "../icons";
 import { control, palette, radius, text } from "../theme";
-import { Small } from "../ui";
+import { phoneWidth, Small } from "../ui";
 import { AttachButton, AttachmentStrip } from "./Attachments";
 
 const MAX_TEXT_HEIGHT = 220;
@@ -22,6 +22,18 @@ export function Composer(props: {
   const attachLocal = (uris: readonly string[]) => { if (accepting() && uris.length) void props.attachments!.attachLocal(uris); };
   const canSend = () => !props.disabled && !props.busy && (props.ready ?? (props.value.trim() !== "" || (props.attachments?.count() ?? 0) > 0));
   const submit = () => { if (canSend()) props.onSubmit(); };
+  // On a phone the chat box keeps its controls on one line under the text, scrolling sideways where they don't fit, and
+  // its hint shows only while it can't send: the pickers already say how a message runs.
+  const narrow = phoneWidth;
+  const hint = () => (narrow() && !props.disabled ? "" : props.hint);
+  const tools = () => (
+    <>
+      <If when={props.attachments && !props.disabled ? props.attachments : null}>
+        {attachments => <AttachButton attachments={attachments()} disabled={props.busy} />}
+      </If>
+      {props.tools}
+    </>
+  );
   effect(() => {
     const recall = props.onRecall;
     if (!recall || !focused() || props.value || props.disabled || props.busy || (props.attachments?.count() ?? 0) > 0) return;
@@ -32,7 +44,7 @@ export function Composer(props: {
     }
   });
   return (
-    <View testID="composer" style={{ gap: 8, padding: 12, borderWidth: 1, borderRadius: radius.large,
+    <View testID="composer" style={{ gap: narrow() ? 6 : 8, padding: narrow() ? 8 : 12, paddingLeft: narrow() ? 10 : 12, borderWidth: 1, borderRadius: radius.large,
       borderColor: dragging() ? palette().accent : focused() ? palette().borderStrong : palette().border, backgroundColor: palette().surface }}
       onFileDragEnter={() => dragging.set(accepting())} onFileDragLeave={() => dragging.set(false)}
       onFileDrop={event => { dragging.set(false); attachLocal(event.uris); }}>
@@ -51,20 +63,25 @@ export function Composer(props: {
             color: palette().text, placeholderColor: palette().muted }} />
       </View>
       <If when={props.attachments?.notice()}>{notice => <Small testID="composer-notice" tone="warning">{notice()}</Small>}</If>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", rowGap: 4, columnGap: 8 }}>
+      <View testID="composer-controls" style={{ flexDirection: "row", flexWrap: narrow() ? "nowrap" : "wrap", alignItems: "center", rowGap: 4, columnGap: narrow() ? 4 : 8 }}>
         <If when={props.tools || (props.attachments && !props.disabled)}>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, flexShrink: 1,
-            ...(props.hint ? {} : { flexGrow: 1, flexBasis: 0, minWidth: 0 }) }}>
-            <If when={props.attachments && !props.disabled ? props.attachments : null}>
-              {attachments => <AttachButton attachments={attachments()} disabled={props.busy} />}
-            </If>
-            {props.tools}
-          </View>
+          <If when={narrow()}
+            else={
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, flexShrink: 1, ...(hint() ? {} : { flexGrow: 1, flexBasis: 0, minWidth: 0 }) }}>
+                {tools()}
+              </View>
+            }>
+            <Scroll testID="composer-tools" horizontal scrollbar={false} style={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 }}
+              contentStyle={{ flexDirection: "row", alignItems: "center", gap: 0 }}>
+              {tools()}
+            </Scroll>
+          </If>
         </If>
-        <If when={props.hint}>
-          <Text style={{ flexGrow: 1, flexShrink: 1, flexBasis: 160, fontSize: text.caption, color: palette().muted }}>{props.hint}</Text>
+        <If when={hint()}>
+          <Text style={{ flexGrow: 1, flexShrink: 1, flexBasis: narrow() ? 0 : 160, minWidth: 0, fontSize: text.caption, color: palette().muted,
+            ...(narrow() ? { numberOfLines: 2 } : {}) }}>{hint()}</Text>
         </If>
-        <View style={{ flexDirection: "row", gap: 4, marginLeft: "auto", alignSelf: "flex-end" }}>
+        <View style={{ flexDirection: "row", gap: 4, marginLeft: "auto", alignSelf: "flex-end", flexShrink: 0 }}>
           <If when={props.onStop}>
             <BaseButton testID="composer-stop" accessibilityLabel={props.stopping ? "Stopping..." : "Stop"} disabled={props.stopping} onPress={() => props.onStop?.()}
               style={{ width: control.small, height: control.small, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: palette().borderStrong }}

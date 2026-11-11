@@ -4,6 +4,9 @@ import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
 
+/** A phone's window, or one as narrow: at most 600 points wide. */
+export const phoneWidth = () => windowSize().width > 0 && windowSize().width <= 600;
+
 type ButtonVariant = "primary" | "default" | "outline" | "ghost" | "danger" | "accent";
 
 export function Button(props: {
@@ -203,21 +206,23 @@ export function NavItem(props: { icon?: IconName; leading?: JSX.Element; label: 
 }
 
 export function Chip(props: {
-  label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean; small?: boolean; expanded?: boolean;
+  label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean; small?: boolean; expanded?: boolean; maxWidth?: number;
+  /** Tighter padding and a smaller chevron, for a row of them that has to fit on one line of a phone. */
+  dense?: boolean;
 }) {
   const color = () => (props.tone ? palette().tones[props.tone].text : palette().muted);
   return (
     <BaseButton testID={props.testID} accessibilityLabel={props.label} disabled={props.disabled} onPress={() => props.onPress?.()}
       selected={props.expanded}
-      style={{ flexDirection: "row", alignItems: "center", gap: props.icon ? 4 : 8, borderRadius: radius.small, paddingHorizontal: props.small ? 8 : 12,
-        height: props.small ? control.xsmall : control.small, flexShrink: 1, maxWidth: 260,
+      style={{ flexDirection: "row", alignItems: "center", gap: props.dense ? 3 : props.icon ? 4 : 8, borderRadius: radius.small, paddingHorizontal: props.dense ? 6 : props.small ? 8 : 12,
+        height: props.small ? control.xsmall : control.small, flexShrink: 1, maxWidth: props.maxWidth ?? 260,
         borderWidth: 1, borderColor: props.bordered ? palette().borderStrong : "transparent",
         backgroundColor: props.tone ? palette().tones[props.tone].background : "transparent" }}
       hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.8 }} disabledStyle={{ opacity: 0.5 }}>
       <If when={props.icon}>{name => <Icon name={name()} size={14} color={color()} />}</If>
       <Text style={{ fontSize: props.small ? text.small : text.body, color: color(), numberOfLines: 1, flexShrink: 1 }}>{props.label}</Text>
       <If when={!props.disabled}>
-        <Icon name={props.expanded === false ? "chevron-right" : "chevron-down"} size={props.small ? 12 : 14} color={color()} />
+        <Icon name={props.expanded === false ? "chevron-right" : "chevron-down"} size={props.small || props.dense ? 12 : 14} color={color()} />
       </If>
     </BaseButton>
   );
@@ -542,7 +547,7 @@ export function Note(props: { children?: JSX.Element; testID?: string }) {
 }
 
 export function FormSheet(props: { open: boolean; title: string; onClose: () => void; children?: JSX.Element; footer?: JSX.Element; wide?: boolean; testID?: string }) {
-  const phone = () => windowSize().width > 0 && windowSize().width <= 600;
+  const phone = phoneWidth;
   const body = () => (
     <View testID={props.testID} style={{ flexShrink: 1, maxHeight: "100%" }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: phone() ? 12 : 16, paddingHorizontal: phone() ? 16 : 20 }}>

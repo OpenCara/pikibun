@@ -48,7 +48,8 @@ needs a decision stand out:
 - **Session**: a header with where the session lives and runs and its connection; the transcript in one readable column,
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
   the chat box's pickers (shared or side ask, model, reasoning, access)
-  along its bottom edge. Details (owner, host, visibility, ID) are in the session's panel.
+  along its bottom edge: on a phone one line of them, tighter, that scrolls sideways where it doesn't fit, with the hint
+  only while the box can't send. Details (owner, host, visibility, ID) are in the session's panel.
 - **Kit**: first drawn as the React web client's. `src/tokens.ts` has its three themes (light, dark and Pikibun's night
   theme) under its CSS variables' names; `src/theme.ts` builds the palettes from
   them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget was drawn from
