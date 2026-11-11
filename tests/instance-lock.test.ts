@@ -51,7 +51,7 @@ test('a lock whose connection dropped is taken again, and nobody hears it was lo
   db.state.owner = null;
   await until(() => db.state.owner !== null && db.state.owner !== first, 'the lock is taken again');
   assert.equal(first.released, true, 'the dropped connection is closed');
-  assert.deepEqual(lost, []);
+  assert.equal(lost.length, 0);
   await lock.release();
 });
 
@@ -83,7 +83,7 @@ test('another server taking the lock first means it is lost, and the listener he
   lock.onLost?.(error => late.push(error));
   assert.equal(late.length, 1, 'a listener added after the loss hears it at once');
   await lock.release();
-  assert.ok(db.state.owner?.held, 'releasing a lost lock leaves the other server\'s alone');
+  assert.ok((db.state.owner as FakeLock | null)?.held, 'releasing a lost lock leaves the other server\'s alone');
   await other.release();
 });
 
@@ -96,12 +96,12 @@ test('an unreachable database is tolerated for the grace period, then the lock i
   db.state.reachable = false;
   const before = db.state.takes;
   await until(() => db.state.takes > before + 2, 'it keeps trying to take the lock again');
-  assert.deepEqual(lost, []);
+  assert.equal(lost.length, 0);
   clock = 999;
   db.state.reachable = true;
   db.state.owner = null;
   await until(() => db.state.owner?.held === true, 'a database back within the grace period gives the lock back');
-  assert.deepEqual(lost, []);
+  assert.equal(lost.length, 0);
   db.state.reachable = false;
   clock = 2000;
   await sleep(30);

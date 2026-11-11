@@ -11,7 +11,7 @@ import {
 } from './authority/index.js';
 import { requireUnfrozen, runnerSessionRecord, sessionRecord, successorBranch } from './db.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
-import { fail, id, identifier, jsonObject, now, randomToken, text } from './http.js';
+import { fail, id, identifier, jsonObject, now, randomToken, testMode, text } from './http.js';
 import { bindingForSession } from './sessions.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { bindingIdentity, loadBackupSnapshot, repositoryIdentity, type BackupRow } from './restore-snapshot.js';
@@ -177,6 +177,7 @@ export async function downloadRestoreSnapshot(c: AppContext, expectedConnectorId
     const connector = await authenticateConnector(c, true);
     if (connector.id !== expectedConnectorId) fail(403, 'invalid_restore_grant', 'The authenticated connector does not match.');
   } else {
+    if (!testMode(c.env)) fail(404, 'not_found', 'Not found.');
     const secret = c.env.RUNNER_SHARED_SECRET;
     const authorization = c.req.header('authorization');
     if (!secret || secret.length < 32 || !authorization?.startsWith('Bearer ') ||

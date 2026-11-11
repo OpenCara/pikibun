@@ -110,7 +110,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `SANDBOX_GITHUB_API` | `on` | Whether sessions' `gh` and other GitHub API clients read the workspace's github.com repositories (see [Network access](hosts.md#network-access)): `on` gives every host running a session a read-only GitHub App token for them, which its egress proxy adds, `own-hosts` only session owners' own hosts, `off` none. It applies to gitlab.com and dev.azure.com too, whose credentials (the session owner's own access tokens) only owners' own hosts ever get |
 | `WEB_PUSH_CONTACT` | none | [Notifications](notifications.md#for-operators): the contact push services are given with Web Push (the server's `https://` origin by default) |
 | `ADMIN_USER_IDS` | none | Comma-separated user IDs of the server's administrators (see [Administration](#administration)) |
-| `RUNNER_URL`, `RUNNER_EVENT_TRANSPORT`, `RUNNER_SHARED_SECRET` | none | Legacy operator-managed runner, for development only; leave empty |
+| `RUNNER_URL`, `RUNNER_EVENT_TRANSPORT`, `RUNNER_SHARED_SECRET` | none | The legacy operator-managed runner, kept only as a test harness: the server uses it, and answers its `/api/internal/*` routes, only in test mode (`TEST_AUTH_ENABLED`); leave empty |
 | `TEST_AUTH_ENABLED`, `TEST_AUTH_SECRET`, `TEST_AUTH_EXPIRES_AT` | off | Local test mode, for development only |
 | `PIKIBUN_VERSION` | the release image's version | The version `/api/health` reports and **Settings** shows; release images set it, and a local server (`pikibun serve`) reports its package's |
 | `PASSWORD_AUTH` | off (`true` in the Docker image) | `true` offers sign-in with a username and password (see [Username and password](accounts.md#username-and-password)); not with `LOCAL_MODE` |

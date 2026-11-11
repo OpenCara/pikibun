@@ -17,7 +17,9 @@ import type { AppContext, Env, ModelRow, SessionRow, AppEnv } from './types.js';
 export const MAX_SCHEDULES_PER_SESSION = 20;
 export const MAX_SCHEDULED_CHILDREN = 20;
 const sweepLimit = 20;
+const hostConcurrency = 8;
 const oneShotSweepLimit = 50;
+const busyHosts = new WeakMap<Env['DB'], Set<string>>();
 
 interface ScheduleRow {
   id: string; session_id: string; created_by: string; name: string; cron: string; time_zone: string; content: string;
@@ -193,44 +195,70 @@ export async function archiveFinishedOneShots(env: Env): Promise<OneShotOutcome[
 export type ScheduledPromptOutcome = { scheduleId: string; sessionId: string; submissionId: string; childSessionId?: string }
   | { scheduleId: string; sessionId: string; error: string };
 
-type DueSchedule = ScheduleRow & { owner_id: string };
+type DueSchedule = ScheduleRow & { owner_id: string; connector_id: string | null };
+
+const hostKey = (schedule: DueSchedule) => schedule.connector_id ?? `session:${schedule.session_id}`;
 
 export async function runScheduledPrompts(env: Env, at = Date.now()): Promise<ScheduledPromptOutcome[]> {
   const timestamp = new Date(at).toISOString();
-  const due = await env.DB.query<DueSchedule>(`SELECT p.*, s.owner_id
+  let busy = busyHosts.get(env.DB);
+  if (!busy) busyHosts.set(env.DB, busy = new Set());
+  const skipped = [...busy].filter(key => !key.startsWith('session:'));
+  const due = await env.DB.query<DueSchedule>(`SELECT p.*, s.owner_id, s.connector_id
     FROM session_schedules p JOIN sessions s ON s.id = p.session_id
     WHERE p.enabled = 1 AND p.next_run_at IS NOT NULL AND p.next_run_at <= ? AND s.status = 'ready'
-    ORDER BY p.next_run_at, p.id LIMIT ?`).bind(timestamp, sweepLimit).all();
-  const outcomes: ScheduledPromptOutcome[] = [];
-  const sent = new Set<string>();
-  for (const schedule of due) {
-    const claimed = await env.DB.query(`UPDATE session_schedules SET next_run_at = ?, last_run_at = ?
-      WHERE id = ? AND enabled = 1 AND next_run_at = ?`)
-      .bind(nextRun(schedule.cron, schedule.time_zone, at), timestamp, schedule.id, schedule.next_run_at).run();
-    if (claimed.changes !== 1) continue;
-    let outcome: ScheduledPromptOutcome;
-    const child = schedule.run_in === 'child';
-    const activity = child ? null : sent.has(schedule.session_id) ? 'working'
-      : await env.DB.query<{ activity: string | null }>('SELECT activity FROM sessions WHERE id = ?').bind(schedule.session_id).first('activity');
-    if (activity === 'working' || activity === 'waiting') {
-      outcome = { scheduleId: schedule.id, sessionId: schedule.session_id, error: 'session_busy' };
-    } else {
+    ${skipped.length ? `AND (s.connector_id IS NULL OR s.connector_id NOT IN (${skipped.map(() => '?').join(', ')}))` : ''}
+    ORDER BY p.next_run_at, p.id LIMIT ?`).bind(timestamp, ...skipped, sweepLimit).all();
+  const hosts = new Map<string, { schedule: DueSchedule; index: number }[]>();
+  due.forEach((schedule, index) => {
+    const key = hostKey(schedule);
+    if (busy.has(key)) return;
+    hosts.set(key, [...hosts.get(key) ?? [], { schedule, index }]);
+  });
+  for (const key of hosts.keys()) busy.add(key);
+  const outcomes: (ScheduledPromptOutcome | undefined)[] = [];
+  const queue = [...hosts.entries()];
+  const worker = async () => {
+    for (let next = queue.shift(); next; next = queue.shift()) {
+      const [key, schedules] = next;
       try {
-        const result = await send(env, schedule, schedule.owner_id, at, 'schedule');
-        if (!child) sent.add(schedule.session_id);
-        outcome = { scheduleId: schedule.id, sessionId: schedule.session_id, submissionId: result.submissionId,
-          ...(result.childSessionId ? { childSessionId: result.childSessionId } : {}) };
-      } catch (error) {
-        outcome = { scheduleId: schedule.id, sessionId: schedule.session_id, error: await errorCode(error) };
+        const sent = new Set<string>();
+        for (const { schedule, index } of schedules) outcomes[index] = await runDueSchedule(env, schedule, at, timestamp, sent);
+      } finally {
+        busy.delete(key);
       }
     }
-    await env.DB.query('UPDATE session_schedules SET last_submission_id = ?, last_session_id = ?, last_error = ? WHERE id = ?')
-      .bind('submissionId' in outcome ? outcome.submissionId : null, 'childSessionId' in outcome ? outcome.childSessionId ?? null : null,
-        'error' in outcome ? outcome.error : null, schedule.id).run();
-    await refreshNextScheduled(env, schedule.session_id);
-    outcomes.push(outcome);
+  };
+  await Promise.all(Array.from({ length: Math.min(hostConcurrency, queue.length) }, worker));
+  return outcomes.filter((outcome): outcome is ScheduledPromptOutcome => outcome !== undefined);
+}
+
+async function runDueSchedule(env: Env, schedule: DueSchedule, at: number, timestamp: string, sent: Set<string>): Promise<ScheduledPromptOutcome | undefined> {
+  const claimed = await env.DB.query(`UPDATE session_schedules SET next_run_at = ?, last_run_at = ?
+    WHERE id = ? AND enabled = 1 AND next_run_at = ?`)
+    .bind(nextRun(schedule.cron, schedule.time_zone, at), timestamp, schedule.id, schedule.next_run_at).run();
+  if (claimed.changes !== 1) return undefined;
+  let outcome: ScheduledPromptOutcome;
+  const child = schedule.run_in === 'child';
+  const activity = child ? null : sent.has(schedule.session_id) ? 'working'
+    : await env.DB.query<{ activity: string | null }>('SELECT activity FROM sessions WHERE id = ?').bind(schedule.session_id).first('activity');
+  if (activity === 'working' || activity === 'waiting') {
+    outcome = { scheduleId: schedule.id, sessionId: schedule.session_id, error: 'session_busy' };
+  } else {
+    try {
+      const result = await send(env, schedule, schedule.owner_id, at, 'schedule');
+      if (!child) sent.add(schedule.session_id);
+      outcome = { scheduleId: schedule.id, sessionId: schedule.session_id, submissionId: result.submissionId,
+        ...(result.childSessionId ? { childSessionId: result.childSessionId } : {}) };
+    } catch (error) {
+      outcome = { scheduleId: schedule.id, sessionId: schedule.session_id, error: await errorCode(error) };
+    }
   }
-  return outcomes;
+  await env.DB.query('UPDATE session_schedules SET last_submission_id = ?, last_session_id = ?, last_error = ? WHERE id = ?')
+    .bind('submissionId' in outcome ? outcome.submissionId : null, 'childSessionId' in outcome ? outcome.childSessionId ?? null : null,
+      'error' in outcome ? outcome.error : null, schedule.id).run();
+  await refreshNextScheduled(env, schedule.session_id);
+  return outcome;
 }
 
 const scheduleFields = ['name', 'cron', 'timeZone', 'content', 'access', 'runIn', 'oneShot', 'enabled'] as const;

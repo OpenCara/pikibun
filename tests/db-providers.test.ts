@@ -382,7 +382,7 @@ test('a Postgres server whose lock connection is killed takes the lock again, or
   }
   const [retaken] = await holders();
   assert.ok(retaken && retaken.pid !== original.pid, 'the lock is held again, on a new connection');
-  assert.deepEqual(lost, []);
+  assert.equal(lost.length, 0);
 
   const waiter = new pg.Client({ connectionString: postgresUrl });
   await waiter.connect();

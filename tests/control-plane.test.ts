@@ -342,9 +342,16 @@ test('internal broker rejects wrong operations and posts once per tool call of a
     method: 'POST', headers: { Authorization: `Bearer ${internalSecret}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId: 'session', actorId: ownerId, ownerId, permission: 'write' }),
   }, f.env);
-  assert.equal(disabled.status, 200);
-  assert.equal((await disabled.json() as { allowed: boolean }).allowed, false);
+  assert.equal(disabled.status, 404, 'the legacy runner\'s routes exist only in test mode, whatever secret a request carries');
   f.env.TEST_AUTH_ENABLED = 'true';
+  const allowed = await app.request('/api/internal/authorize', {
+    method: 'POST', headers: { Authorization: `Bearer ${internalSecret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'session', actorId: ownerId, ownerId, permission: 'write' }),
+  }, f.env);
+  assert.equal(allowed.status, 200);
+  assert.equal((await allowed.json() as { allowed: boolean }).allowed, true);
+  const health = await (await app.request('/api/health', {}, { ...f.env, RUNNER_URL: 'https://runner.example.test', TEST_AUTH_ENABLED: 'false' })).json() as { runnerConfigured: boolean };
+  assert.equal(health.runnerConfigured, false, 'outside test mode a configured external runner is never used');
   const expiry = f.env.TEST_AUTH_EXPIRES_AT;
   f.env.TEST_AUTH_EXPIRES_AT = new Date(Date.now() - 1000).toISOString();
   assert.equal(await sessionAccess(f.env, 'session', ownerId), null, 'Faux sessions stop at the test-mode expiry');
