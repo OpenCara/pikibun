@@ -232,7 +232,6 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
   const { user } = untracked(session);
   const form = createAction();
   const people = createWorkspacePeople(() => props.current.workspaceId);
-  const name = createUsername();
   const own = () => props.current.permissions ?? [];
   const isOwner = () => props.current.ownerId === user.id;
   const manages = () => managesSession(user.id, props.current.ownerId, props.workspaceRole);

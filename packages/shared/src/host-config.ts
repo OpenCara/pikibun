@@ -42,8 +42,6 @@ export interface HostConfig {
   browser: HostBrowserConfig;
   serviceLifetimeSeconds: number;
   tunnel: HostTunnelConfig;
-  // Lets the egress proxy tunnel to a local proxy's fake-IP addresses (198.18.0.0/15) for any host the network policy
-  // allows, not only the ones it names exactly: the host's owner trusts that proxy with every name (docs/design/egress.md).
   fakeIpTunnels: boolean;
 }
 

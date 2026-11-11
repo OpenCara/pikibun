@@ -23,7 +23,6 @@ function mockFetch(t: TestContext, routes: Record<string, Route>): Call[] {
   return calls;
 }
 const json = (body: unknown, init: ResponseInit = {}): Route => () => Response.json(body, init);
-const redirect = (location: string, status = 302): Route => () => new Response(null, { status, headers: { location } });
 const text = (body: string, status = 200): Route => () => new Response(body, { status });
 
 async function failure(promise: Promise<unknown>): Promise<{ status: number; code: string }> {

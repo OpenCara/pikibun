@@ -19,7 +19,6 @@ const kinds: { kind: (typeof groupToolInfo)[GroupTool]["kind"]; title: string }[
 
 const label = (tool: GroupTool) => groupToolInfo[tool].label;
 
-/** "Every tool", or the tools a set leaves out, for a row's hint. */
 function summary(tools: readonly GroupTool[]): string {
   const out = toolsLeftOut(tools);
   if (!out.length) return "Every tool";
@@ -33,10 +32,6 @@ const roleRows: { role: WorkspaceRole; roles: string }[] = [
   { role: "member", roles: "Members" },
 ];
 
-/**
- * A workspace's tool groups: the tools of each role's sessions, and groups of the workspace's own that its owners and admins
- * create, with the tools they choose, and put members in.
- */
 export function ToolGroups(props: { workspace: Workspace; owner: boolean }) {
   const path = () => `/api/workspaces/${segment(props.workspace.id)}/tool-groups`;
   const resource = createResource<ToolGroupSettings>(path);

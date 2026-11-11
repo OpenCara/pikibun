@@ -483,7 +483,7 @@ test('the workspace owner imports dumps of this workspace into its database; nob
   assert.deepEqual(data.workspace, { id: 'workspace', name: 'Workspace', ownerId: 'test:owner' });
   assert.deepEqual(data.sessions.map(session => [session.id, session.ownerId, session.data === null]), [['session', 'test:member', false], ['owner-session', 'test:owner', false]]);
   assert.deepEqual(Object.keys(data.workspaceData ?? {}).sort(), ['agents', 'database', 'members', 'models', 'pushIdentities', 'repositories']);
-  assert.equal((data.workspaceData?.database as { id: string }).id, database.id);
+  assert.equal((data.workspaceData!.database as { id: string }).id, database.id);
   const audit = f.sqlite.prepare("SELECT actor_id, workspace_id, detail_json FROM audit WHERE action = 'workspace.database.imported'").get()!;
   assert.equal(audit.actor_id, 'test:owner');
   assert.deepEqual(JSON.parse(String(audit.detail_json)), { databaseId: database.id, ...expected });

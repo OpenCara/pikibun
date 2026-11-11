@@ -9,7 +9,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
-import type { AuthorizationRequest, PermissionRequest, RunnerAction, RunnerBinding, RunnerTicket, ScheduleToolRequest, SessionSchedule } from "../packages/shared/src/types.js";
+import type { AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket, ScheduleToolRequest, SessionSchedule } from "../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../packages/shared/src/cron.js";
 import { documentKindsOff, sessionToolExtensionOn, sessionToolsOff } from "../packages/shared/src/piki-extensions.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";

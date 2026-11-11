@@ -1,5 +1,3 @@
-// What installs an update the app downloaded, kept free of NSH's modules so the repository's own tests run the
-// scripts in a real shell (tests/app-update-scripts.test.ts).
 
 const xmlText = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 

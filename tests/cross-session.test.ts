@@ -427,7 +427,6 @@ test('a session an agent starts, messages or notifies acts, unless the agent cho
   assert.equal((chosen.body.message as CrossSessionMessage).access, 'read', 'Read only, the agent\'s choice, stands');
   assert.equal(sentAccess(), 'read');
 
-  // The worker's message asked session-b for a review, to be notified of its outcome.
   const inWorker = f.admit(worker, ownerId);
   const message = { id: 'review-1', submissionId: 'review-sub' };
   f.sqlite.prepare(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, origin_admission_id, origin_call_id,

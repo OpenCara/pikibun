@@ -1,13 +1,23 @@
 import pg from 'pg';
+import { watchInstanceLock, type HeldLock } from './instance-lock.js';
 import { readMigrations } from './migrations.js';
 import { translateToPostgres } from './sql.js';
-import { ConstraintError, InstanceLockedError, type Database, type ExecResult, type InstanceLock, type Query, type SqlValue, type Transaction } from './types.js';
+import { ConstraintError, type Database, type ExecResult, type InstanceLock, type Query, type SqlValue, type Transaction } from './types.js';
 
 const { Client, Pool, types } = pg;
 types.setTypeParser(types.builtins.INT8, Number);
 
 const MIGRATION_LOCK = 0x70697374;
 const INSTANCE_LOCK = 0x70696b69;
+const INSTANCE_LOCK_HEARTBEAT_MS = 15_000;
+const INSTANCE_LOCK_GRACE_MS = 60_000;
+const INSTANCE_LOCK_HELD = `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
+  AND classid = 0 AND objid = $1::bigint::oid AND objsubid = 1) AS held`;
+
+export interface InstanceLockOptions {
+  heartbeatMs?: number;
+  graceMs?: number;
+}
 
 const RENAME_RAISE_FUNCTION = `DO $$ BEGIN
   IF to_regprocedure('pistead_raise()') IS NOT NULL AND to_regprocedure('pikibun_raise()') IS NULL THEN
@@ -102,19 +112,39 @@ export class PostgresDatabase implements Database {
     }
   }
 
-  async lockInstance(): Promise<InstanceLock> {
-    const holder = new Client({ connectionString: this.url });
-    holder.on('error', error => { console.error('pikibun: the single-instance lock connection failed:', error.message); });
-    await holder.connect();
-    let held = false;
-    try {
-      held = (await holder.query('SELECT pg_try_advisory_lock($1) AS held', [INSTANCE_LOCK])).rows[0]?.held === true;
-    } finally {
-      if (!held) await holder.end();
-    }
-    if (!held) throw new InstanceLockedError();
-    let released = false;
-    return { release: async () => { if (!released) { released = true; await holder.end(); } } };
+  async lockInstance(options: InstanceLockOptions = {}): Promise<InstanceLock> {
+    const heartbeatMs = options.heartbeatMs ?? INSTANCE_LOCK_HEARTBEAT_MS;
+    const take = async (wake: () => void): Promise<HeldLock | null> => {
+      const holder = new Client({ connectionString: this.url, keepAlive: true, keepAliveInitialDelayMillis: Math.min(10_000, heartbeatMs),
+        connectionTimeoutMillis: 10_000, query_timeout: 10_000 });
+      let open = true;
+      const broken = (error?: Error) => {
+        if (!open) return;
+        open = false;
+        if (error) console.error('pikibun: the single-instance lock connection failed:', error.message);
+        wake();
+      };
+      holder.on('error', broken);
+      holder.on('end', () => broken());
+      try {
+        await holder.connect();
+        const held = (await holder.query('SELECT pg_try_advisory_lock($1) AS held', [INSTANCE_LOCK])).rows[0]?.held === true;
+        if (held) {
+          return {
+            stillHeld: async () => open && (await holder.query(INSTANCE_LOCK_HELD, [INSTANCE_LOCK])).rows[0]?.held === true,
+            release: async () => { open = false; await holder.end(); },
+          };
+        }
+      } catch (error) {
+        open = false;
+        await holder.end().catch(() => {});
+        throw error;
+      }
+      open = false;
+      await holder.end().catch(() => {});
+      return null;
+    };
+    return watchInstanceLock(take, { intervalMs: heartbeatMs, graceMs: options.graceMs ?? INSTANCE_LOCK_GRACE_MS });
   }
 
   async close(): Promise<void> {

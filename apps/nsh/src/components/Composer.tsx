@@ -15,7 +15,6 @@ export function Composer(props: {
   sendText?: string;
   attachments?: Attachments;
   onRecall?: () => void;
-  /** The hint on a phone, where the controls have one line: what the pickers already say left out. The hint itself where left out. */
   phoneHint?: string;
 }) {
   const focused = signal(false);
@@ -24,8 +23,6 @@ export function Composer(props: {
   const attachLocal = (uris: readonly string[]) => { if (accepting() && uris.length) void props.attachments!.attachLocal(uris); };
   const canSend = () => !props.disabled && !props.busy && (props.ready ?? (props.value.trim() !== "" || (props.attachments?.count() ?? 0) > 0));
   const submit = () => { if (canSend()) props.onSubmit(); };
-  // On a phone the chat box keeps its controls on one line under the text, scrolling sideways where they don't fit, and
-  // its hint, if it has one there, goes on a line of its own under them.
   const narrow = phoneWidth;
   const hint = () => (narrow() ? props.phoneHint ?? props.hint : props.hint);
   const hasTools = () => Boolean(props.tools || (props.attachments && !props.disabled));

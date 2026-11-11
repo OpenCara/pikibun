@@ -202,7 +202,9 @@ async function session(t: test.TestContext, source: string, root: string, option
     const shown = new Map<string, string>();
     for (const message of request.messages) {
       if (message.role !== "system" || !("sections" in message) || !message.sections) continue;
-      for (const [key, value] of Object.entries(message.sections as Record<string, string | null>)) value === null ? shown.delete(key) : shown.set(key, value);
+      for (const [key, value] of Object.entries(message.sections as Record<string, string | null>)) {
+        if (value === null) shown.delete(key); else shown.set(key, value);
+      }
     }
     prompts.push([...shown.values()].join("\n"));
     const last = request.messages.findLast(message => message.role !== "system");

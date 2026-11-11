@@ -180,6 +180,8 @@ when the app quit, with the consent given then (`src/lib/this-computer.ts`).
 
 ## Known gaps, from NSH itself
 
+Each workaround below is on the [list of upstream workarounds](../../docs/design/upstream-workarounds.md), with what tracks it upstream and when to remove it.
+
 - **App Store builds**: NSH 0.4's prebuilt iPhone runner was linked with the iOS 18.5 SDK, which App Store Connect no
   longer takes, and `nsh package` writes none of the build keys it requires in Info.plist (`DT*`, `arm64` in
   `UIRequiredDeviceCapabilities`). `release-app.yml` builds the runner from NSH's source with its own Xcode

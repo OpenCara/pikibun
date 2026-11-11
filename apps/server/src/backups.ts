@@ -1,7 +1,6 @@
 import type { Hono } from 'hono';
 import { hostCapabilities } from './authority/index.js';
 import type { BackupLocation } from '../../../packages/shared/src/types.js';
-import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { bindingForSession } from './sessions.js';
 import type { AppContext, Env, SessionRow, AppEnv, WorkspaceRow } from './types.js';

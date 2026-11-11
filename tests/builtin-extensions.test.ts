@@ -18,7 +18,7 @@ import { inScriptCall, wholeForScripts } from "../apps/runner/src/script-output.
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { defaultHostConfig, type HostConfig } from "../packages/shared/src/host-config.js";
 import { parseWorkspaceExtensions } from "../packages/shared/src/host-extensions.js";
-import type { ApprovalRecord, RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
+import type { RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
 
 test("code mode is core: every session runs it, whatever the host's configuration lists, unless a workspace's extension offers its tool", async t => {
   const builtins = new SessionBuiltins();
@@ -165,7 +165,6 @@ test("code mode runs in every session, and its scripts' calls run as the model's
   await store.add(parseExtensionSource(join(root, "shout.ts")));
   const [dev] = await loadInstalled(store, []);
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
-  // The host's owner lets every session run its workspace's extension tools: a call runs at once, as the model's own would.
   const answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: true };
   let config: HostConfig = { ...defaultHostConfig, builtinExtensions: ["pi:codemode"] };
   const offered: string[][] = [];

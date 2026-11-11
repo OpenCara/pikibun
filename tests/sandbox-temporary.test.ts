@@ -20,7 +20,6 @@ test("in the Linux sandbox, TMPDIR is a short /tmp that is the session's own ~/.
   assert.equal(await shell("printf %s \"$TMPDIR\""), SANDBOX_TMP);
   await shell("echo kept > /tmp/marker");
   assert.equal(await readFile(join(root, "home", ".tmp", "marker"), "utf8"), "kept\n", "/tmp is the session's ~/.tmp");
-  // The same socket, made where a test suite makes one: in a fresh directory under the temporary directory.
   const bind = (base: string) => shell(`python3 -c "import os, socket, tempfile; d = tempfile.mkdtemp(dir='${base}'); `
     + `s = socket.socket(socket.AF_UNIX); s.bind(os.path.join(d, 'proxy-' + 'x' * 24 + '.sock')); print('bound')"`);
   await assert.rejects(bind(`${sandbox.home}/.tmp`), /path too long/, "the session's own ~/.tmp leaves too little of a socket path");

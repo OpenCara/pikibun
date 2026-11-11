@@ -586,7 +586,6 @@ export function thisComputer(): ThisComputerHost {
   return shared;
 }
 
-// The host this computer runs for the app, once it has connected: new sessions in a private workspace go to it by default.
 export function thisComputerHostId(): string | undefined {
   return hostsHere ? thisComputer().running()?.connectorId : undefined;
 }

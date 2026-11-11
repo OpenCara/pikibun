@@ -1,4 +1,3 @@
-import type { ConnectorCapabilities } from '../../../../../packages/shared/src/connector.js';
 import { parseCapabilities } from '../../../../../packages/shared/src/connector.js';
 import type { GitProvider } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviderNames } from '../../../../../packages/shared/src/repositories.js';

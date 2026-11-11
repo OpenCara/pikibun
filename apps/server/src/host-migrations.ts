@@ -3,7 +3,7 @@ import { hostCapabilities } from './authority/index.js';
 import { constantTimeEqual, sha256 } from '../../../packages/shared/src/crypto.js';
 import type { RunnerBinding } from '../../../packages/shared/src/types.js';
 import { permissions } from '../../../packages/shared/src/types.js';
-import type { ConnectorCapabilities, RestoreInput } from '../../../packages/shared/src/connector.js';
+import type { RestoreInput } from '../../../packages/shared/src/connector.js';
 import type { AgentRow, AppContext, SessionRow, AppEnv } from './types.js';
 import { agentVersion, modelDefinition, requireNoMigration, requireUnfrozen, runnerSessionRecord, sessionRecord, successorBranch } from './db.js';
 import {
