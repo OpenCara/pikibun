@@ -68,6 +68,21 @@ const SHIM_DIRECTORY = "/opt/pikibun/bin";
 // programs that fall back to /tmp find it.
 export const SANDBOX_TMP = "/tmp";
 export const CA_BUNDLE_FILE = "ca-certificates.crt";
+// The sandbox's /etc, which has none of the host's: who the session's user is, so programs that look their user up (initdb,
+// ssh, Node.js's os.userInfo(), Python's getpass) find one, and where localhost is, so a test or server that names it
+// reaches its own loopback. The files are the session's own, under its root, and mounted read-only.
+export const SANDBOX_USER = "pikibun";
+const SANDBOX_ETC = "etc";
+export function sandboxEtc(home: string, uid: number, gid: number): Readonly<Record<string, string>> {
+  const user = uid === 0 ? "" : `${SANDBOX_USER}:x:${uid}:${gid}:Pikibun session:${home}:/bin/bash\n`;
+  const group = gid === 0 ? "" : `${SANDBOX_USER}:x:${gid}:\n`;
+  return Object.freeze({
+    passwd: `${user}root:x:0:0:root:${uid === 0 ? home : "/root"}:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n`,
+    group: `${group}root:x:0:\nnogroup:x:65534:\n`,
+    hosts: "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n",
+    "nsswitch.conf": "passwd: files\ngroup: files\nshadow: files\nhosts: files dns\n",
+  });
+}
 export const PACK_SKIPPED_HOME: readonly string[] = Object.freeze([".tmp", ".cache", ".npm", ".pnpm-store", ".yarn", ".bun", ".local/share/pnpm",
   ".cargo/registry", ".cargo/git", "go/pkg/mod", ".m2/repository", ".gradle/caches", ".nuget/packages"]);
 
@@ -413,6 +428,15 @@ export class Sandbox implements IsolatedWorkspace {
         await temporary.close();
         await placeholder(home, ".gitconfig");
         const config = await pinOwnerConfig(fdPath(root, "owner.gitconfig"), ownerGitConfig(this.#identity));
+        await mkdir(join(this.#root, SANDBOX_ETC), { recursive: true, mode: 0o700 });
+        for (const [name, content] of Object.entries(sandboxEtc(this.home, process.getuid?.() ?? 0, process.getgid?.() ?? 0))) {
+          const file = join(this.#root, SANDBOX_ETC, name);
+          const staged = `${file}.new`;
+          await rm(staged, { force: true });
+          await writeFile(staged, content, { mode: 0o444 });
+          await chmod(staged, 0o444);
+          await rename(staged, file);
+        }
         if (this.#shim) {
           const shim = join(this.#root, "bin", "git");
           await mkdir(join(this.#root, "bin"), { recursive: true, mode: 0o700 });
@@ -686,6 +710,7 @@ export class Sandbox implements IsolatedWorkspace {
       mount, "4", this.worktree,
       gitWritable ? "--bind-fd" : "--ro-bind-fd", "5", `${this.worktree}/.git`,
       "--ro-bind-fd", "6", `${this.home}/.gitconfig`,
+      ...Object.keys(sandboxEtc("", 0, 0)).flatMap(name => ["--ro-bind", join(this.#root, SANDBOX_ETC, name), `/etc/${name}`]),
       ...(egress ? ["--ro-bind-try", egress, EGRESS_SOCKET, "--ro-bind", join(this.#root, CA_BUNDLE_FILE), CA_BUNDLE] : []),
       ...(egress && this.#shim ? ["--ro-bind-try", join(this.#root, "bin"), SHIM_DIRECTORY] : []),
       ...mirrors.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
