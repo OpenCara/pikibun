@@ -43,4 +43,4 @@ A few things work only in a browser, at the server's web address: downloading ba
 
 **Settings → Profile → Sign out** signs this app out and forgets its sign-in. The next sign-in screen keeps the same server address, and **Change** switches to another server. Your sessions and workspaces stay on the server you left; nothing is moved or deleted.
 
-If the app can't reach its server, it shows **Can't reach Pikibun** with **Try again** and **Sign out**. A [self-hosted](self-host.md) Pikibun does this whenever `pikibun serve` isn't running.
+If the app can't reach its server, it shows **Can't reach Pikibun** with **Try again** and **Sign out**. The app shows it for your [self-hosted](self-host.md) Pikibun too, whenever that isn't running: start it under **Settings → Self host**, or choose **Sign out** to reach the sign-in screen's **Run Pikibun on this Mac**.

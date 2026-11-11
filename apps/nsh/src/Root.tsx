@@ -10,6 +10,7 @@ import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
 import { usesBrowserSession } from "./lib/server";
 import { takeRememberedInvite, takeReturn } from "./lib/sign-in-memory";
 import { resumeThisComputer } from "./lib/this-computer";
+import { resumeThisServer } from "./lib/this-server";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
@@ -42,6 +43,7 @@ export function Root() {
   void applyStoredAppearance();
   void restore();
   resumeThisComputer();
+  resumeThisServer();
   startUpdateChecks();
   const signedIn = () => auth().status === "signedIn";
   const shared = () => {

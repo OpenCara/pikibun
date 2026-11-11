@@ -174,6 +174,8 @@ runs the Pikibun server and its web app on `http://127.0.0.1:7878`, reachable fr
 
 Everything is kept in `~/.local/share/pikibun/server` (`--state-dir`), apart from `connect`'s own state, so later runs need no options. Run `npx pikibun serve --help` for the rest.
 
+The Pikibun app for Mac, Windows and Linux runs the same server for you under **Settings › Self host**: it starts `pikibun serve --stdio` itself and talks to it over stdin and stdout, where your GitHub OAuth app's secret goes, and signs in to it, claiming it in its own GitHub sign-in. It uses the same state directory, so a Pikibun set up in a terminal carries over, and only one of the two runs at a time.
+
 ### Sharing it with others
 
 ```sh

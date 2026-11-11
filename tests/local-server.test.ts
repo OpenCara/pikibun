@@ -11,6 +11,7 @@ import { startLocalServer } from "../apps/server/src/local/launch.js";
 import { loadLocalState, LocalStateError, openLocalState, peekLocalState } from "../apps/server/src/local/state.js";
 import type { Env } from "../apps/server/src/types.js";
 import { createFauxLocalModels } from "../apps/runner/src/local-pi.js";
+import { sha256 } from "../packages/shared/src/crypto.js";
 import { testDatabase } from "./helpers/control-plane.js";
 
 const claimSecret = "c".repeat(43);
@@ -175,10 +176,46 @@ test("a local server admits the GitHub account that claims it with its sign-in l
   assert.equal((await f.signIn("/api/auth/github")).status, 302);
 });
 
+test("the app that runs a local server claims it in its own GitHub sign-in, with the claim secret, and gets a native sign-in", async t => {
+  const f = await localFixture(t);
+  const verifier = "v".repeat(43) + "-native_verifier";
+  const challenge = await sha256(verifier);
+  const native = (claim?: string) => `/api/auth/native/start?challenge=${challenge}&state=app-state-0123456789&callback=page${claim === undefined ? "" : `&claim=${claim}`}`;
+
+  const unclaimed = await f.signIn(native());
+  assert.equal(unclaimed.status, 302);
+  assert.equal(new URL(unclaimed.headers.get("location")!).searchParams.get("error"), "local_server_unclaimed");
+  const wrong = await f.request(native("x".repeat(43)));
+  assert.equal(wrong.status, 403);
+  assert.equal(await errorCode(wrong), "invalid_claim");
+  assert.equal((await f.request(`${native(claimSecret)}&claim=${claimSecret}`)).status, 400);
+  assert.deepEqual(await f.health(), { claimed: false });
+
+  const claimed = await f.signIn(native(claimSecret));
+  assert.equal(claimed.status, 302);
+  const done = new URL(claimed.headers.get("location")!);
+  assert.equal(`${done.origin}${done.pathname}`, `${origin}/api/auth/native/done`);
+  assert.equal(done.searchParams.get("state"), "app-state-0123456789");
+  assert.ok(claimed.headers.getSetCookie().some(cookie => cookie.startsWith("local-claim=;")));
+  assert.deepEqual(await f.health(), { claimed: true });
+  const exchanged = await app.request("/api/auth/native/token", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: done.searchParams.get("code"), verifier, deviceName: "Pikibun NSH (macos)" }) }, f.env);
+  assert.equal(exchanged.status, 200);
+  const signIn = await exchanged.json() as { token: string; user: { id: string } };
+  assert.equal(signIn.user.id, "github:4242");
+  assert.equal((await f.request("/api/me", { Authorization: `Bearer ${signIn.token}` })).status, 200);
+
+  f.account.id = 5151; f.account.login = "mallory";
+  const other = await f.signIn(native(claimSecret));
+  assert.equal(new URL(other.headers.get("location")!).searchParams.get("error"), "local_server_owner_only");
+});
+
 test("a server outside local mode has no claim link and says nothing of one", async t => {
   const f = await localFixture(t, false);
   assert.equal(await f.health(), undefined);
   assert.equal((await f.request(`/api/auth/local/claim?token=${claimSecret}`)).status, 404);
+  const native = await f.request(`/api/auth/native/start?challenge=${"c".repeat(43)}&state=app-state-0123456789&callback=page&claim=${claimSecret}`);
+  assert.equal(native.status, 400);
 });
 
 async function freePort(): Promise<number> {
