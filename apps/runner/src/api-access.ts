@@ -312,7 +312,9 @@ export class ApiAccess {
       const none = (what: string): ApiCredentialGrant => ({ available: false, cacheSeconds: 0,
         reason: `Pikibun gives this session no credential for the ${rules.name} API (only sessions that clone their workspace's ${what} repositories get one)` });
       let available: ApiCredentialGrant = named ? await this.#credential(host, "read") : none(rules.name);
-      if (leased && named) {
+      const appRead = rules.provider === "github" && rule === "read" && scope.repository !== undefined && available.available
+        && credentialFor(available.credentials, scope) !== undefined;
+      if (leased && named && !appRead) {
         const write = await this.#credential(host, "write");
         if (write.available) { available = write; access = "write"; }
         else if (rule === "write" || mutates) {
