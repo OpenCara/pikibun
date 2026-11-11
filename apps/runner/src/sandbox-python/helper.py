@@ -832,6 +832,72 @@ def clone_pack_check(path, directory, reason):
         raise ValueError('the clone ' + path + ' has tags on commits its origin doesn\'t have, which a pack can\'t keep')
 
 
+# What a pack leaves out of the files a clone's .gitignore ignores: dependencies and build output, which installing and
+# building again bring back. A pack keeps every other ignored file (.env files, local databases and the like).
+PACK_REBUILDABLE_DIRS = ('node_modules', 'bower_components', '.pnpm-store', '.yarn', '.venv', 'venv', '__pycache__',
+                         '.pytest_cache', '.mypy_cache', '.ruff_cache', '.tox', '.nox', '.gradle', 'target', 'dist',
+                         'build', 'out', '.next', '.nuxt', '.svelte-kit', '.turbo', '.parcel-cache', '.cache', 'coverage',
+                         '.nyc_output')
+PACK_REBUILDABLE_SUFFIXES = ('.pyc', '.pyo', '.log', '.tsbuildinfo')
+MAX_PACK_IGNORED_BYTES = 16 * 1024 * 1024
+MAX_PACK_IGNORED_FILES = 5000
+
+
+def pack_ignored_files(directory, path, nested):
+    dirs = {os.fsencode(name) for name in PACK_REBUILDABLE_DIRS}
+    suffixes = tuple(os.fsencode(suffix) for suffix in PACK_REBUILDABLE_SUFFIXES)
+    clones = [os.fsencode(item) for item in nested]
+    kept, total = [], 0
+
+    def inside_clone(relative):
+        return any(relative == clone or relative.startswith(clone + b'/') for clone in clones)
+
+    def keep(relative, info):
+        nonlocal total
+        if stat.S_ISREG(info.st_mode):
+            total += info.st_size
+        elif not stat.S_ISLNK(info.st_mode):
+            return
+        if len(kept) >= MAX_PACK_IGNORED_FILES:
+            raise ValueError('the clone ' + path + ' has too many ignored files to pack')
+        if total > MAX_PACK_IGNORED_BYTES:
+            raise ValueError('the clone ' + path + ' has ignored files too large to pack')
+        kept.append(relative)
+
+    def walk(relative):
+        for name in sorted(os.listdir(os.path.join(os.fsencode(directory), relative))):
+            child = relative + b'/' + name
+            if inside_clone(child):
+                continue
+            info = os.lstat(os.path.join(os.fsencode(directory), child))
+            if stat.S_ISDIR(info.st_mode):
+                if name == b'.git':
+                    raise ValueError('the clone ' + path + ' has a Git repository among its ignored files, which a pack can\'t keep')
+                if name not in dirs:
+                    walk(child)
+            elif not name.endswith(suffixes):
+                keep(child, info)
+
+    code, output = clone_git(directory, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory',
+                                         '--no-empty-directory'])
+    if code:
+        raise ValueError('the clone ' + path + ' could not be backed up')
+    for entry in output.split(b'\0'):
+        relative = entry.rstrip(b'/')
+        parts = relative.split(b'/')
+        if not relative or inside_clone(relative) or any(part in dirs for part in parts[:-1]):
+            continue
+        info = os.lstat(os.path.join(os.fsencode(directory), relative))
+        if stat.S_ISDIR(info.st_mode):
+            if parts[-1] not in dirs:
+                if os.path.lexists(os.path.join(os.fsencode(directory), relative, b'.git')):
+                    raise ValueError('the clone ' + path + ' has a Git repository among its ignored files, which a pack can\'t keep')
+                walk(relative)
+        elif not parts[-1].endswith(suffixes):
+            keep(relative, info)
+    return kept
+
+
 def clone_backup_one(path, nested, budget, pack=False):
     directory = os.path.join(WORK, *path.split('/'))
     reason = 'the clone ' + path + ' could not be backed up'
@@ -867,8 +933,13 @@ def clone_backup_one(path, nested, budget, pack=False):
             shutil.copyfile(os.path.join(directory, '.git', 'index'), index, follow_symlinks=False)
         except FileNotFoundError:
             clone_git_checked(directory, ['read-tree', head] if head else ['read-tree', '--empty'], extra=extra, reason=reason)
-        clone_git_checked(directory, ['-c', 'filter.lfs.process=', '-c', 'filter.lfs.clean=', '-c', 'filter.lfs.required=false',
-                                      'add', '-A'], extra=extra, reason=reason)
+        no_lfs = ['-c', 'filter.lfs.process=', '-c', 'filter.lfs.clean=', '-c', 'filter.lfs.required=false']
+        clone_git_checked(directory, no_lfs + ['add', '-A'], extra=extra, reason=reason)
+        if pack:
+            kept = pack_ignored_files(directory, path, nested)
+            if kept:
+                clone_git_checked(directory, no_lfs + ['add', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'],
+                                  b'\0'.join(kept), extra=extra, reason=reason)
         if nested:
             clone_git_checked(directory, ['update-index', '--force-remove', '--'] + nested, extra=extra, reason=reason)
         tree = clone_git_checked(directory, ['write-tree'], extra=extra, reason=reason)
