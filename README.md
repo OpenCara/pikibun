@@ -44,7 +44,7 @@ Just for yourself, on one computer:
 npx pikibun@latest serve
 ```
 
-It runs the server, the web app and your computer as its host, at `http://127.0.0.1:7878`. See [Running Pikibun on your own computer](docs/local.md).
+It runs the server, the web app and your computer as its host, at `http://127.0.0.1:7878`. See [Running Pikibun on your own computer](docs/local.md). The Mac, Windows and Linux app does the same under **Settings → Self host**, with no terminal: see [Self host](docs/desktop/self-host.md).
 
 For a team, [run the server](docs/self-hosting.md) with Docker, then pair each member's machine as a host:
 

@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { stdioTransport, type Transport } from '../../../runner/src/app-host-transport.js';
@@ -10,6 +11,7 @@ import { startLocalHost, type LocalHost } from './host.js';
 import { LocalServerError, startLocalServer, type LocalServer } from './launch.js';
 import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState } from './state.js';
 
+const CLAIM_POLL_MS = 1000;
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const githubApp = z.object({ clientId: z.string().min(1).max(100), clientSecret: z.string().min(1).max(200) }).strict();
 const requestSchema: z.ZodType<ServerRequest> = z.discriminatedUnion('type', [
@@ -86,9 +88,11 @@ async function start(request: ServerStartRequest): Promise<void> {
     running = current;
     log('info', `Pikibun is running at ${server.origin}, reachable from this computer only.`);
     const unsandboxed = host.mode === 'unsandboxed';
-    if (host.problem || !host.models) log('warning', `This computer can't run sessions yet: ${host.problem ?? "Pi has no models."} Start Pikibun again once that is fixed.`);
-    else if (unsandboxed && request.unsandboxedConsent !== true) log('warning', 'This computer runs no sessions: running them without a sandbox needs your consent.');
-    else {
+    if (host.problem || !host.models || (unsandboxed && request.unsandboxedConsent !== true)) {
+      log('warning', host.problem || !host.models ? `This computer can't run sessions yet: ${host.problem ?? 'Pi has no models.'} Start Pikibun again once that is fixed.`
+        : 'This computer runs no sessions: running them without a sandbox needs your consent.');
+      void reportClaim(current);
+    } else {
       const setHost = (next: ServerHostState) => { if (running === current) { current.hostState = next; void status(); } };
       current.host = startLocalHost(server, stateDir, {
         localModels: host.models, unsandboxed,
@@ -107,6 +111,11 @@ async function start(request: ServerStartRequest): Promise<void> {
     }
     await status();
   } finally { starting = false; }
+}
+
+async function reportClaim(current: Running): Promise<void> {
+  while (running === current && !current.stopping && await claimOf(current.server)) await delay(CLAIM_POLL_MS);
+  if (running === current && !current.stopping) await status();
 }
 
 async function stop(): Promise<void> {

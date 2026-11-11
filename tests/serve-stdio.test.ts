@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { STDIO_FRAME } from "../apps/runner/src/app-host-protocol.js";
 import type { ServerEvent } from "../packages/shared/src/app-server-protocol.js";
@@ -110,6 +111,15 @@ test("pikibun serve --stdio runs the local server for the app: its GitHub app ov
   assert.equal(native.status, 302);
   assert.equal(new URL(native.headers.get("location")!).origin, "https://github.com");
   assert.ok(native.headers.getSetCookie().some(cookie => cookie.startsWith(`local-claim=${claimSecret}`)));
+
+  assert.ok(server.output.some(line => line.includes("This computer can't run sessions yet")), "this sandbox has no Pi models, so the server runs without its host");
+  const claiming = server.events.length;
+  const database = new DatabaseSync(join(stateDir, "pikibun.sqlite"));
+  database.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES ('github:4242', '4242', 'octo', 'Octo', 'Octo', 'octo@example.test', '{}', 'github', ?)`).run(new Date().toISOString());
+  database.close();
+  const claimed = await server.next(event => event.type === "status" && event.state === "running", claiming);
+  assert.ok(claimed.type === "status" && claimed.claim === undefined, "once someone owns it, its status carries no claim");
 
   const again = await server.request({ type: "start" });
   assert.ok(again.type === "result" && !again.ok);
