@@ -4,7 +4,9 @@ import type { ChildSessionSettings } from '../../../packages/shared/src/cross-se
 import type { Database } from './db/types.js';
 import type { AppEnv } from './types.js';
 import { auditStatement, requireMember } from './authority/index.js';
-import { fail, identifier, jsonObject, now } from './http.js';
+import { z } from 'zod';
+import { fail, identifier, now } from './http.js';
+import { body } from './schemas.js';
 
 const adminSql = workspaceAdminSQL;
 
@@ -24,12 +26,7 @@ export function registerChildSessionSettings(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id'));
     const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const input = await jsonObject(c, 1024);
-    const keys = Object.keys(input);
-    if (keys.length !== 1 || keys[0] !== 'childModels' || typeof input.childModels !== 'boolean') {
-      fail(400, 'invalid_input', 'Set childModels to true or false.');
-    }
-    const enabled = input.childModels as boolean;
+    const { childModels: enabled } = await body(c, z.strictObject({ childModels: z.boolean() }), { maxBytes: 1024, message: 'Set childModels to true or false.' });
     const saved = await c.env.DB.query<{ child_models: number }>(`INSERT INTO workspace_child_session_settings
         (workspace_id, child_models, updated_by, updated_at)
       SELECT ?,?,?,? WHERE ${adminSql}

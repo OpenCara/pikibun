@@ -56,7 +56,10 @@ needs a decision stand out:
   (buttons, badges, alerts, sections of rows, nav items, chips, pickers on `Menu`: a popup on the desktops and the web,
   a sheet on phones; right-click menus on `ContextMenu` (`RowMenu`), which a finger held on the row opens as a sheet on
   touch screens, its rows taking presses through `rowPress` so that finger's lift doesn't open the row: see
-  [upstream workarounds](../../docs/design/upstream-workarounds.md)); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
+  [upstream workarounds](../../docs/design/upstream-workarounds.md); and on touch screens a session's row in the list
+  slides sideways under a finger, as mail and chat apps' rows do, to show its main actions (`SwipeRow`): right, Copy link
+  and Rename; left, More (its whole menu) and Archive or Unarchive); `src/icons.tsx` has the same Lucide outlines, drawn
+  with `Canvas` as NSH has no icon font. Where
   it differs from the React client on purpose: the sidebar keeps a search box, tool rows
   name what they work on, and message actions open a sheet rather than
   appear on hover.

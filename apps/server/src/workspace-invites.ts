@@ -5,7 +5,7 @@ import { adminManagedRoles, workspaceManagerRoles } from '../../../packages/shar
 import type { OwnJoinRequest, WorkspaceInvite, WorkspaceInviteLink, WorkspaceJoinRequest } from '../../../packages/shared/src/invites.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import {
-  auditAfterChange, auditStatement, decryptToken, encryptToken, INVALID_LINK, INVITE_TOKEN, joinRequestStatement, personalWorkspaceSQL,
+  acceptJoinRequestStatement, auditAfterChange, auditStatement, decryptToken, encryptToken, INVALID_LINK, INVITE_TOKEN, joinRequestStatement, personalWorkspaceSQL,
   requireInvitedWorkspace, requireMember, requireSharedWorkspace,
 } from './authority/index.js';
 import { appOrigin, fail, identifier, id, jsonObject, now, randomToken, userIdentifier } from './http.js';
@@ -175,16 +175,7 @@ export function registerWorkspaceInvites(app: Hono<AppEnv>): void {
     }
     const auditId = id();
     const result = await c.env.DB.batch([
-      c.env.DB.query(`INSERT INTO workspace_members (workspace_id, user_id, role, created_at)
-        SELECT r.workspace_id, r.user_id, ?, ?
-        FROM workspace_join_requests r
-        INNER JOIN workspaces w ON w.id = r.workspace_id
-        INNER JOIN workspace_members actor ON actor.workspace_id = w.id AND actor.user_id = ?
-        WHERE r.workspace_id = ? AND r.user_id = ? AND r.user_id <> w.owner_id AND NOT ${personalWorkspaceSQL('w.id')}
-          AND ((actor.role = 'owner' AND actor.user_id = w.owner_id)
-            OR (actor.role = 'admin' AND ? IN (${roleList(adminManagedRoles)})))
-        ON CONFLICT (workspace_id, user_id) DO NOTHING`)
-        .bind(role, now(), actorId, workspaceId, targetId, role),
+      acceptJoinRequestStatement(c.env.DB, { workspaceId, actorId, userId: targetId, role: role as AssignableWorkspaceRole, at: now() }),
       auditAfterChange(c.env, actorId, 'workspace.join.accept', workspaceId, { userId: targetId, role }, auditId),
       c.env.DB.query(`DELETE FROM workspace_join_requests WHERE workspace_id = ? AND user_id = ?
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`).bind(workspaceId, targetId, auditId),

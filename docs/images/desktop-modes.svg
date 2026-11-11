@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="410" viewBox="0 0 960 410" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>The desktop app's three modes</title>
+  <desc>Client: the app on this computer signs in to a server elsewhere, and sessions run on other hosts. Host: the app signs in to a server elsewhere, and this computer runs sessions as one of the hosts. Self host: the server and the host both run on this computer, and the app signs in to it at 127.0.0.1.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="410" rx="16" fill="#ffffff"/>
+
+  <!-- Client -->
+  <rect x="20" y="20" width="290" height="370" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="165" y="50" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">Client</text>
+  <text x="165" y="70" text-anchor="middle" font-size="12" fill="#57606a">use a server someone else runs</text>
+
+  <rect x="35" y="86" width="260" height="170" rx="10" fill="#ffffff" stroke="#0969da" stroke-width="1.5"/>
+  <text x="50" y="106" font-size="12" font-weight="600" fill="#0969da">This computer</text>
+  <rect x="50" y="118" width="230" height="46" rx="8" fill="#ddf4ff"/>
+  <text x="165" y="138" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Pikibun app</text>
+  <text x="165" y="155" text-anchor="middle" font-size="12" fill="#57606a">start and follow sessions</text>
+  <text x="165" y="214" text-anchor="middle" font-size="12" font-style="italic" fill="#57606a">no sessions run here</text>
+
+  <line x1="165" y1="256" x2="165" y2="296" stroke="#57606a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="175" y="281" font-size="11" fill="#57606a">signs in</text>
+
+  <rect x="35" y="300" width="260" height="76" rx="10" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="50" y="318" font-size="12" font-weight="600" fill="#57606a">Elsewhere</text>
+  <text x="165" y="340" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Pikibun server</text>
+  <text x="165" y="360" text-anchor="middle" font-size="12" fill="#57606a">and the hosts that run sessions</text>
+
+  <!-- Host -->
+  <rect x="335" y="20" width="290" height="370" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="480" y="50" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">Host</text>
+  <text x="480" y="70" text-anchor="middle" font-size="12" fill="#57606a">also run sessions on this computer</text>
+
+  <rect x="350" y="86" width="260" height="170" rx="10" fill="#ffffff" stroke="#0969da" stroke-width="1.5"/>
+  <text x="365" y="106" font-size="12" font-weight="600" fill="#0969da">This computer</text>
+  <rect x="365" y="118" width="230" height="46" rx="8" fill="#ddf4ff"/>
+  <text x="480" y="138" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Pikibun app</text>
+  <text x="480" y="155" text-anchor="middle" font-size="12" fill="#57606a">Settings → This Mac</text>
+  <rect x="365" y="172" width="230" height="72" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+  <text x="480" y="193" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Host + Pi</text>
+  <text x="480" y="212" text-anchor="middle" font-size="12" fill="#1f2328">runs sessions with your models</text>
+  <text x="480" y="230" text-anchor="middle" font-size="12" fill="#7d4e00">credentials stay here</text>
+
+  <line x1="480" y1="256" x2="480" y2="296" stroke="#57606a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="490" y="281" font-size="11" fill="#57606a">outbound WebSocket</text>
+
+  <rect x="350" y="300" width="260" height="76" rx="10" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="365" y="318" font-size="12" font-weight="600" fill="#57606a">Elsewhere</text>
+  <text x="480" y="340" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Pikibun server</text>
+  <text x="480" y="360" text-anchor="middle" font-size="12" fill="#57606a">pikibun.com or your team's</text>
+
+  <!-- Self host -->
+  <rect x="650" y="20" width="290" height="370" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="795" y="50" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">Self host</text>
+  <text x="795" y="70" text-anchor="middle" font-size="12" fill="#57606a">all of Pikibun on this computer</text>
+
+  <rect x="665" y="86" width="260" height="170" rx="10" fill="#ffffff" stroke="#0969da" stroke-width="1.5"/>
+  <text x="680" y="106" font-size="12" font-weight="600" fill="#0969da">This computer</text>
+  <rect x="680" y="118" width="230" height="46" rx="8" fill="#ddf4ff"/>
+  <text x="795" y="138" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Pikibun app</text>
+  <text x="795" y="155" text-anchor="middle" font-size="12" fill="#57606a">signs in to 127.0.0.1:7878</text>
+  <rect x="680" y="172" width="230" height="72" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+  <text x="795" y="193" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">pikibun serve</text>
+  <text x="795" y="212" text-anchor="middle" font-size="12" fill="#1f2328">your server and its data,</text>
+  <text x="795" y="230" text-anchor="middle" font-size="12" fill="#1f2328">with this computer as its host</text>
+
+  <rect x="665" y="300" width="260" height="76" rx="10" fill="#ffffff" stroke="#d0d7de" stroke-dasharray="5 4"/>
+  <text x="680" y="318" font-size="12" font-weight="600" fill="#57606a">Elsewhere</text>
+  <text x="795" y="340" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">No Pikibun server</text>
+  <text x="795" y="360" text-anchor="middle" font-size="12" fill="#57606a">GitHub sign-in and your model provider</text>
+</svg>

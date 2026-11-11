@@ -1,6 +1,6 @@
 # Quick start
 
-Just for yourself, on one computer? `npx pikibun@latest serve` runs all of it there, with no server to deploy: see [Running Pikibun on your own computer](local.md). For a team:
+Just for yourself, on one computer? `npx pikibun@latest serve` runs all of it there, with no server to deploy: see [Running Pikibun on your own computer](local.md). Using the Mac, Windows or Linux app? The [desktop app user guide](desktop/README.md) helps you choose between client, host and self host. For a team:
 
 1. **Run the server** with Docker and create its first administrator with `--create-admin`: the image signs people in with a [username and password](accounts.md#username-and-password), and with GitHub once you add a GitHub OAuth app, and takes new accounts only through invite links. See [Running the server](self-hosting.md).
 2. **Sign in** with **Continue with GitHub** or your username and password, then choose **New workspace** and name it.

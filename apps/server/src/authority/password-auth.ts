@@ -5,7 +5,7 @@ import { authenticate, csrfGuard, dbResult, newSession, ownProfile, privateRespo
 import { sha256 } from '../../../../packages/shared/src/crypto.js';
 import { auditAfterChange } from './audit.js';
 import { getUser } from '../db.js';
-import { ConstraintError, type Database } from '../db/types.js';
+import { ConstraintError, type Database, type Query } from '../db/types.js';
 import { fail, id, jsonObject, now, PASSWORD_USERNAME, passwordAuthEnabled, requireOrigin, signupMode, testMode } from '../http.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 import type { AppContext, Env, UserRow, AppEnv } from '../types.js';
@@ -132,6 +132,13 @@ async function recordFailure(env: Env, userId: string): Promise<void> {
   if (failures < FREE_FAILURES) return;
   const pause = Math.min(MAX_LOCK_MS, FIRST_LOCK_MS * 2 ** Math.min(failures - FREE_FAILURES, 16));
   await dbResult(env.DB.query('UPDATE password_credentials SET locked_until = ? WHERE user_id = ?').bind(Date.now() + pause, userId).run());
+}
+
+export function operatorPasswordResetStatements(db: Pick<Database, 'query'>, userId: string, hash: string, at: string): Query<never>[] {
+  return [
+    db.query<never>('UPDATE password_credentials SET password_hash = ?, failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?').bind(hash, at, userId),
+    db.query<never>('DELETE FROM auth_sessions WHERE user_id = ?').bind(userId),
+  ];
 }
 
 export function passwordAccountStatements(db: Pick<Database, 'query'>, name: string, displayName: string, hash: string) {
