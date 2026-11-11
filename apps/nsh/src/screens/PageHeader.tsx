@@ -15,7 +15,7 @@ export function headerProps(options: { title: string; subtitle?: string; onBack?
     : { style: pageStyle(), headerLeft: options.leading, headerRight: options.actions };
 }
 
-export function InPageHeader(props: { children?: JSX.Element }) {
+export function PageFrame(props: { children?: JSX.Element }) {
   return (
     <View style={{ flex: 1, paddingTop: safeArea().top, backgroundColor: palette().background }}>
       {props.children}
@@ -29,10 +29,10 @@ export function Page(props: { title: string; subtitle?: string; onBack?: () => v
   }
   return (
     <NavPage title={props.title} headerVisible={false} style={pageStyle()}>
-      <InPageHeader>
+      <PageFrame>
         <PageHeader title={props.title} subtitle={props.subtitle} onBack={props.onBack} actions={props.actions} leading={props.leading} testID={props.testID} />
         <View style={{ flex: 1 }}>{props.children}</View>
-      </InPageHeader>
+      </PageFrame>
     </NavPage>
   );
 }
