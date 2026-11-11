@@ -11,6 +11,7 @@ import { Notifications } from "./Notifications";
 import { Password } from "./Password";
 import type { SectionProps } from "./parts";
 import { Profile } from "./Profile";
+import { SelfHost } from "./SelfHost";
 import { ThisComputer } from "./ThisComputer";
 import { Workspaces } from "./Workspaces";
 
@@ -45,6 +46,7 @@ export const settingsSections: readonly SettingsSection[] = [
   { id: "notifications", label: "Notifications", icon: "bell", Component: Notifications },
   { id: "hosts", label: "Hosts", icon: "server", Component: Hosts },
   { id: "desktop", label: computerTitle, icon: "monitor", desktop: true, Component: ThisComputer },
+  { id: "self-host", label: "Self host", icon: "database", desktop: true, Component: SelfHost },
   { id: "workspaces", label: "Workspaces", icon: "users", Component: Workspaces },
   { id: "appearance", label: "Appearance", icon: "palette", Component: Appearance },
   { id: "admin", label: "Administration", icon: "shield", admin: true, Component: Administration },

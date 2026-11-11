@@ -162,14 +162,14 @@ export interface GitHubSignIn {
   finish(callbackUrl: string): Promise<void>;
 }
 
-export async function startGitHubSignIn(origin: string): Promise<GitHubSignIn> {
+export async function startGitHubSignIn(origin: string, claim?: string): Promise<GitHubSignIn> {
   const health = await signInMethods(origin);
   if (health.githubConfigured === false) {
     throw new Error("GitHub sign-in is not configured on this server. The operator needs to configure the GitHub OAuth app and the server's GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and VAULT_KEY settings.");
   }
   const { verifier, challenge, state } = await createPkce();
   return {
-    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}&callback=page`,
+    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}&callback=page${claim ? `&claim=${encodeURIComponent(claim)}` : ""}`,
     isCallback: url => isCallbackPage(origin, url),
     async finish(callbackUrl: string) {
       if (!isCallbackPage(origin, callbackUrl)) throw new Error("The sign-in ended somewhere unexpected. Try again.");
@@ -240,7 +240,7 @@ export const checkBrowserSession = establishBrowserSession;
 
 const LOGOUT_TIMEOUT_MS = 10_000;
 
-export async function signOut(): Promise<void> {
+export async function signOut(next: { origin?: string } = {}): Promise<void> {
   const state = auth();
   if (state.status !== "signedIn" && state.status !== "unreachable") return;
   const origin = state.origin;
@@ -268,5 +268,5 @@ export async function signOut(): Promise<void> {
     }
   }
   await clearCredentials();
-  setAuth({ status: "signedOut", origin, notice });
+  setAuth({ status: "signedOut", origin: next.origin ?? origin, notice });
 }

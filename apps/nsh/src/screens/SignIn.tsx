@@ -9,6 +9,9 @@ import {
 import { createAction } from "../lib/resource";
 import { displayOrigin, parseOrigin, usesBrowserSession } from "../lib/server";
 import { rememberInvite } from "../lib/sign-in-memory";
+import { computerName, hostsHere } from "../lib/this-computer";
+import { thisServer } from "../lib/this-server";
+import { ThisServerPanel } from "../settings/SelfHost";
 import { palette, radius, text } from "../theme";
 import { Banner, Button, Logo, Small } from "../ui";
 
@@ -59,6 +62,7 @@ function SignInForm(props: { inviteToken?: string }) {
   const methods = signal<SignInMethods | null>(null);
   const github = signal<GitHubSignIn | null>(null);
   const callbackError = signal("");
+  const selfHostOpen = signal(false);
   const parsed = () => parseOrigin(server());
   const origin = () => {
     if (usesBrowserSession) return stored;
@@ -85,6 +89,13 @@ function SignInForm(props: { inviteToken?: string }) {
   const passwords = () => methods()?.passwordAuth === true;
   const unconfigured = () => githubUnconfigured() && !passwords();
   const local = () => methods()?.localServer;
+  const selfHosting = !usesBrowserSession && hostsHere;
+  const ownClaim = () => {
+    const target = origin();
+    return selfHosting && target && local()?.claimed === false ? thisServer().claimFor(target) : undefined;
+  };
+  const ownServer = () => (selfHosting ? thisServer().running() : undefined);
+  const useServer = (address: string) => { server.set(address); editingServer.set(false); selfHostOpen.set(false); };
   const passwordSignup = () => methods()?.passwordSignup ?? "off";
   const canSignUp = () => usesBrowserSession && passwords() && (passwordSignup() === "open" || (passwordSignup() === "invite" && invited()));
   const signingUp = () => passwordMode() === "signup" && canSignUp();
@@ -109,7 +120,7 @@ function SignInForm(props: { inviteToken?: string }) {
         if (!openServerPage("/api/auth/github")) await openUrl(`${target}/api/auth/github`);
         return;
       }
-      github.set(await startGitHubSignIn(target));
+      github.set(await startGitHubSignIn(target, ownClaim()));
     });
   }
 
@@ -154,6 +165,12 @@ function SignInForm(props: { inviteToken?: string }) {
       <If when={usesBrowserSession && !unconfigured() && local() && !local()!.claimed}>
         <Banner tone="info" title="Set up this Pikibun">This Pikibun runs on this computer and has no owner yet. Sign in with the link `pikibun serve` printed when it started, or from the Pikibun app, which opens it for you: your GitHub account becomes its owner, and the only one that can sign in.</Banner>
       </If>
+      <If when={!usesBrowserSession && local() && !local()!.claimed}>
+        <If when={ownClaim()}
+          else={<Banner tone="info" title="This Pikibun has no owner yet">It runs on this computer. Open the sign-in link `pikibun serve` printed in a browser first: your GitHub account becomes its owner, and the only one that can sign in. Then sign in here.</Banner>}>
+          <Banner testID="sign-in-self-host-claim" tone="info" title={`Set up Pikibun on ${computerName}`}>Nobody has signed in to it yet. Continue with GitHub: your account becomes its owner, and the only one that can sign in.</Banner>
+        </If>
+      </If>
       <If when={!usesBrowserSession}>
         <View style={{ gap: 6 }}>
           <Small>Server</Small>
@@ -170,6 +187,15 @@ function SignInForm(props: { inviteToken?: string }) {
               {error => <Small tone="danger">{error()}</Small>}
             </If>
             <Small>For a self-hosted Pikibun, enter its address.</Small>
+          </If>
+          <If when={selfHosting}>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              <If when={ownServer() && ownServer() !== origin() ? ownServer() : null}>
+                {running => <Button testID="sign-in-self-host-use" small variant="outline" icon="database" label={`Use Pikibun on ${computerName}`} onPress={() => useServer(running())} />}
+              </If>
+              <Button testID="sign-in-self-host" small variant="ghost" icon="database" label={ownServer() ? `Pikibun on ${computerName}` : `Run Pikibun on ${computerName}`}
+                onPress={() => selfHostOpen.set(true)} />
+            </View>
           </If>
         </View>
       </If>
@@ -246,6 +272,20 @@ function SignInForm(props: { inviteToken?: string }) {
           ? "On the web this app uses the server's own browser sign-in."
           : "Your sign-in is kept in this app's storage on this device (NSH has no Keychain or Keystore storage yet)."}
       </Small>
+      <If when={selfHosting}>
+        <Dialog open={selfHostOpen()} onOpenChange={event => { if (!event.open) selfHostOpen.set(false); }}
+          style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
+              <Text style={{ flex: 1, fontSize: 14, fontWeight: "500", color: palette().text }}>{`Pikibun on ${computerName}`}</Text>
+              <Button testID="sign-in-self-host-close" small variant="ghost" label="Close" onPress={() => selfHostOpen.set(false)} />
+            </View>
+            <If when={selfHostOpen()}>
+              <ThisServerPanel server={thisServer()} onUse={useServer} />
+            </If>
+          </View>
+        </Dialog>
+      </If>
       <Dialog open={github() !== null} onOpenChange={event => { if (!event.open) github.set(null); }}
         style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
         <View style={{ flex: 1 }}>
