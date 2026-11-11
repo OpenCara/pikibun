@@ -53,16 +53,22 @@ function admitted(request: IncomingMessage, token: string): { cookie: string | u
   return same(gate, token) ? { cookie: rest } : undefined;
 }
 
+function target(request: IncomingMessage): URL | undefined {
+  try { return new URL(`http://tunnel/${(request.url ?? "/").replace(/^[/\\]+/, "")}`); } catch { return undefined; }
+}
+
+const pathOf = (url: URL) => `/${url.pathname.replace(/^[/\\]+/, "")}${url.search}`;
+
 export function createTunnelGate(socket: string, token: string, track: (connection: Socket | Duplex) => void): Server {
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    let url: URL;
-    try { url = new URL(request.url ?? "/", "http://tunnel"); } catch { response.writeHead(400).end(); return; }
+    const url = target(request);
+    if (!url) { response.writeHead(400).end(); return; }
     if (url.searchParams.has(TUNNEL_GATE_NAME)) {
       const given = url.searchParams.get(TUNNEL_GATE_NAME) ?? undefined;
       if (!same(given, token)) { response.writeHead(401, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }).end(DENIED); return; }
       url.searchParams.delete(TUNNEL_GATE_NAME);
       response.writeHead(303, {
-        Location: `${url.pathname}${url.search}`,
+        Location: pathOf(url),
         "Set-Cookie": `${TUNNEL_GATE_NAME}=${token}; Path=/; Max-Age=${COOKIE_SECONDS}; HttpOnly; Secure; SameSite=Lax`,
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
       }).end();
@@ -70,18 +76,23 @@ export function createTunnelGate(socket: string, token: string, track: (connecti
     }
     const admission = admitted(request, token);
     if (!admission) { response.writeHead(401, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }).end(DENIED); return; }
-    const upstream = httpRequest({ socketPath: socket, method: request.method, path: request.url, headers: forwardedHeaders(request, admission.cookie) }, answer => {
+    const upstream = httpRequest({ socketPath: socket, method: request.method, path: pathOf(url), headers: forwardedHeaders(request, admission.cookie) }, answer => {
+      answer.on("error", () => response.destroy());
       response.writeHead(answer.statusCode ?? 502, answer.statusMessage, answer.rawHeaders);
       answer.pipe(response);
     });
     upstream.on("error", () => { if (!response.headersSent) response.writeHead(502).end(); else response.destroy(); });
+    response.on("close", () => { if (!response.writableFinished) upstream.destroy(); });
     request.pipe(upstream);
   });
   server.on("connection", connection => track(connection));
   server.on("upgrade", (request: IncomingMessage, client: Duplex, head: Buffer) => {
     track(client);
-    const admission = admitted(request, token);
-    if (!admission) { client.end("HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n" + DENIED); return; }
+    const url = target(request);
+    const given = url?.searchParams.get(TUNNEL_GATE_NAME) ?? undefined;
+    const admission = given === undefined ? admitted(request, token) : same(given, token) ? { cookie: cookies(request.headers.cookie).rest } : undefined;
+    if (url && given !== undefined) url.searchParams.delete(TUNNEL_GATE_NAME);
+    if (!admission || !url) { client.end("HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n" + DENIED); return; }
     const upstream = connect({ path: socket });
     track(upstream);
     const end = () => { client.destroy(); upstream.destroy(); };
@@ -89,7 +100,7 @@ export function createTunnelGate(socket: string, token: string, track: (connecti
     upstream.on("error", end).on("close", end);
     upstream.once("connect", () => {
       const headers = forwardedHeaders(request, admission.cookie);
-      const lines = [`${request.method} ${request.url} HTTP/${request.httpVersion}`];
+      const lines = [`${request.method} ${pathOf(url)} HTTP/${request.httpVersion}`];
       for (const [name, value] of Object.entries(headers)) for (const item of Array.isArray(value) ? value : [value]) lines.push(`${name}: ${item}`);
       upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
       if (head.length) upstream.write(head);

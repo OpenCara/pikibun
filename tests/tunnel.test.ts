@@ -486,6 +486,20 @@ test("by default a quick tunnel opens only through its link: the secret becomes 
   const upgraded = await upgrade(`a=1; pikibun_tunnel=${token}`);
   assert.match(upgraded, /^HTTP\/1\.1 101/);
   assert.match(upgraded, /X-Seen-Cookie: a=1\r\n/);
+  const linked = async (path: string) => {
+    const { connect } = await import("node:net");
+    const client = connect(Number(forward.port), "127.0.0.1");
+    let answer = "";
+    client.on("data", chunk => { answer += chunk; });
+    client.write(`GET ${path} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+    await new Promise(resolve => client.once("close", resolve));
+    return answer;
+  };
+  assert.match(await linked(`/socket?pikibun_tunnel=${token}`), /^HTTP\/1\.1 101/, "a WebSocket client given the link gets in too");
+  assert.match(await linked("/socket?pikibun_tunnel=not-the-secret"), /^HTTP\/1\.1 401/);
+  const sideways = await fetch(`http://127.0.0.1:${forward.port}/\\evil.example/?pikibun_tunnel=${token}`, { redirect: "manual" });
+  assert.equal(sideways.status, 303);
+  assert.equal(sideways.headers.get("location"), "/evil.example/", "the redirect stays on the tunnel's own address");
 });
 
 test("a cloudflared that gives no address is ended, and the call says what the host needs, not the host's errors", async t => {

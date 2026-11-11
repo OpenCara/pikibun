@@ -203,11 +203,13 @@ export async function runScheduledPrompts(env: Env, at = Date.now()): Promise<Sc
   let busy = busyHosts.get(env.DB);
   if (!busy) busyHosts.set(env.DB, busy = new Set());
   const skipped = [...busy].filter(key => !key.startsWith('session:'));
+  const skippedSessions = [...busy].filter(key => key.startsWith('session:')).map(key => key.slice('session:'.length));
   const due = await env.DB.query<DueSchedule>(`SELECT p.*, s.owner_id, s.connector_id
     FROM session_schedules p JOIN sessions s ON s.id = p.session_id
     WHERE p.enabled = 1 AND p.next_run_at IS NOT NULL AND p.next_run_at <= ? AND s.status = 'ready'
     ${skipped.length ? `AND (s.connector_id IS NULL OR s.connector_id NOT IN (${skipped.map(() => '?').join(', ')}))` : ''}
-    ORDER BY p.next_run_at, p.id LIMIT ?`).bind(timestamp, ...skipped, sweepLimit).all();
+    ${skippedSessions.length ? `AND p.session_id NOT IN (${skippedSessions.map(() => '?').join(', ')})` : ''}
+    ORDER BY p.next_run_at, p.id LIMIT ?`).bind(timestamp, ...skipped, ...skippedSessions, sweepLimit).all();
   const hosts = new Map<string, { schedule: DueSchedule; index: number }[]>();
   due.forEach((schedule, index) => {
     const key = hostKey(schedule);
@@ -222,13 +224,20 @@ export async function runScheduledPrompts(env: Env, at = Date.now()): Promise<Sc
       const [key, schedules] = next;
       try {
         const sent = new Set<string>();
-        for (const { schedule, index } of schedules) outcomes[index] = await runDueSchedule(env, schedule, at, timestamp, sent);
+        for (const { schedule, index } of schedules) {
+          try { outcomes[index] = await runDueSchedule(env, schedule, at, timestamp, sent); }
+          catch (error) { outcomes[index] = { scheduleId: schedule.id, sessionId: schedule.session_id, error: await errorCode(error).catch(() => 'internal_error') }; }
+        }
       } finally {
         busy.delete(key);
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(hostConcurrency, queue.length) }, worker));
+  try {
+    await Promise.allSettled(Array.from({ length: Math.min(hostConcurrency, queue.length) }, worker));
+  } finally {
+    for (const key of hosts.keys()) busy.delete(key);
+  }
   return outcomes.filter((outcome): outcome is ScheduledPromptOutcome => outcome !== undefined);
 }
 

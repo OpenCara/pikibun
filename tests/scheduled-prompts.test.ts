@@ -401,6 +401,21 @@ test('a slow host holds up only its own schedules: hosts run at once, and a late
   assert.deepEqual(next.map(outcome => outcome.scheduleId), [later.id], 'once the host is free, its next schedule runs');
 });
 
+test('a run the database fails is recorded as failed, and its host is free for the next sweep', async t => {
+  const f = await fixture(t);
+  const { schedule } = await (await f.owner.request('POST', base, { cron: '0 * * * *', content: 'Hourly' })).json() as { schedule: SessionSchedule };
+  const due = Date.parse(schedule.nextRunAt!);
+  let failed = false;
+  f.setBeforeQuery(sql => {
+    if (!failed && sql.startsWith('UPDATE session_schedules SET last_submission_id')) { failed = true; throw new Error('database unavailable'); }
+  });
+  const [outcome] = await runScheduledPrompts(f.env, due + 1000);
+  f.setBeforeQuery(undefined);
+  assert.ok(outcome && 'error' in outcome, 'the failure is the run\'s outcome, not the sweep\'s');
+  const next = await runScheduledPrompts(f.env, due + 3600_000 + 1000);
+  assert.deepEqual(next.map(item => item.scheduleId), [schedule.id], 'the host was freed: its next run goes ahead');
+});
+
 test('an edit never brings back a run a sweep claimed while it was being saved', async t => {
   const f = await fixture(t);
   const { schedule } = await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Report' })).json() as { schedule: SessionSchedule };
