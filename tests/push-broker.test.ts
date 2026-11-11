@@ -93,7 +93,7 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   const calls: Call[] = [];
   const state = { canPush: options.canPush ?? true, bitbucketWrite: options.bitbucketWrite ?? true, githubTip: tip, githubPrivate: true, githubPullExists: false, bitbucketPullExists: false,
     githubBranch: null as Record<string, unknown> | null, gitlabBranch: null as Record<string, unknown> | null,
-    giteaBranch: null as Record<string, unknown> | null, azureAllow: true, resetStatus: 200, resetToken: 'owner-oauth-token-2',
+    giteaBranch: null as Record<string, unknown> | null, azureAllow: true, resetStatus: 200, resetToken: 'owner-oauth-token-2', resetLost: false, tokenAlive: true, userAlive: true,
     githubPulls: {} as Record<number, { state: string; merged: boolean; draft: boolean; reviews: unknown[]; checkRuns: unknown[]; statuses: unknown[] }>,
     branchPulls: {} as Record<string, { number: number; html_url: string; created_at: string }[]> };
   const routes: Route[] = [
@@ -113,7 +113,14 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
         return Response.json({ token: 'ghs_installation_token', expires_at: new Date(Date.now() + 3600000).toISOString() }, { status: 201 });
       }
       if (method === 'DELETE' && url.pathname === '/installation/token') return new Response(null, { status: 204 });
+      if (method === 'GET' && url.pathname === '/user') {
+        return state.userAlive ? Response.json({ login: 'owner' }) : Response.json({ message: 'Bad credentials' }, { status: 401 });
+      }
+      if (method === 'POST' && url.pathname === '/applications/oauth-client/token') {
+        return state.tokenAlive ? Response.json({ id: 1 }) : Response.json({ message: 'Not Found' }, { status: 404 });
+      }
       if (method === 'PATCH' && url.pathname === '/applications/oauth-client/token') {
+        if (state.resetLost) throw new Error('the connection closed before GitHub answered');
         return state.resetStatus === 200 ? Response.json({ token: state.resetToken }) : Response.json({ message: 'unavailable' }, { status: state.resetStatus });
       }
       if (method === 'DELETE' && url.pathname === '/applications/oauth-client/token') return new Response(null, { status: 204 });
@@ -753,6 +760,50 @@ test('owner-token resets that fail or whose push goes unreported are settled lat
   assert.equal(await code(refused), 'owner_token_reset_unavailable');
 });
 
+test('an owner-token reset GitHub went through with unanswered, or whose token GitHub no longer knows, forgets the dead token', async t => {
+  const f = await fixture(t, { host: { owner } });
+  f.pushIdentity('github', 'github.com', '', 'owner-account');
+  const issue = async (approvalId: string) => (await (await f.post(credential, { sessionId: 'session', approvalId, actorId: owner,
+    operation: f.operation(), admissionId: f.admit('auto') })).json()) as { credentialId: string };
+  const row = (credentialId: string) => f.ledger().find(item => item.id === credentialId)!;
+  const signedIn = () => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM github_tokens WHERE user_id = ?').get(owner)!.n);
+  const expired = () => Number(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'git.account.expired'").get()!.n);
+  const checks = () => f.calls.filter(call => call.method === 'POST' && call.url === 'https://api.github.com/applications/oauth-client/token');
+
+  f.state.resetLost = true;
+  const lost = await issue('tool-lost-1');
+  assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-lost-1', credentialId: lost.credentialId, outcome: 'pushed', tip })).status, 200);
+  assert.equal(checks().length, 1, 'an unanswered reset asks GitHub whether the old token still works');
+  assert.deepEqual(checks()[0]!.body, { access_token: 'owner-oauth-token' });
+  assert.notEqual(row(lost.credentialId).revocation_ciphertext, null, 'it still works, so the reset is tried again later');
+  assert.equal(signedIn(), 1);
+
+  f.state.tokenAlive = false;
+  f.state.userAlive = false;
+  await settlePushCredentials(f.env);
+  assert.equal(row(lost.credentialId).revocation_ciphertext, null);
+  assert.equal(signedIn(), 0, 'a token GitHub replaced without telling Pikibun is forgotten, not kept dead');
+  assert.equal(expired(), 1);
+
+  f.state.resetLost = false;
+  f.state.tokenAlive = true;
+  f.state.userAlive = true;
+  f.sqlite.prepare('INSERT INTO github_tokens (user_id,ciphertext,updated_at) VALUES (?,?,?)').run(owner, await encryptToken(f.env, owner, 'owner-oauth-token'), new Date().toISOString());
+  f.state.resetStatus = 404;
+  const unknown = await issue('tool-unknown-1');
+  assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-unknown-1', credentialId: unknown.credentialId, outcome: 'pushed', tip })).status, 200);
+  assert.equal(row(unknown.credentialId).revocation_ciphertext, null);
+  assert.equal(signedIn(), 1, 'a token the app doesn\'t know but that still works (another client ID, say) is kept');
+  assert.equal(expired(), 1);
+
+  f.state.userAlive = false;
+  const gone = await issue('tool-gone-1');
+  assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-gone-1', credentialId: gone.credentialId, outcome: 'pushed', tip })).status, 200);
+  assert.equal(row(gone.credentialId).revocation_ciphertext, null);
+  assert.equal(signedIn(), 0);
+  assert.equal(expired(), 2);
+});
+
 test('the owner\'s account and the host\'s Git credentials push only from the session owner\'s own host', async t => {
   const shared = await fixture(t, { host: { owner: approver, gitCredentials: true } });
   for (const kind of ['owner-account', 'host-credentials']) {
@@ -1143,6 +1194,11 @@ test('sandboxed GitHub API reads follow SANDBOX_GITHUB_API and the session\'s au
     globalThis.fetch = async (input, init) => new URL(String(input)).pathname === '/repos/owner/repo'
       ? Response.json({ message: 'API rate limit exceeded' }, { status: 403, headers: { 'x-ratelimit-remaining': '0' } }) : previousFetch(input, init);
     assert.match((await apiCredential(f)).body.reason, /^The session owner's GitHub rate limit is used up/);
+    globalThis.fetch = async (input, init) => new URL(String(input)).pathname === '/repos/owner/repo'
+      ? Response.json({ message: 'Bad credentials' }, { status: 401 }) : previousFetch(input, init);
+    assert.match((await apiCredential(f)).body.reason, /^GitHub no longer accepts Pikibun's sign-in for the session owner .*they sign in to Pikibun with GitHub again$/);
+    assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM github_tokens WHERE user_id = ?').get(owner)!.n, 0, 'the dead token is forgotten, so the owner shows as not connected');
+    assert.match((await apiCredential(f)).body.reason, /has no GitHub connection.*sign in to Pikibun with GitHub again$/);
   } finally { globalThis.fetch = previousFetch; }
 
   f.sqlite.prepare("UPDATE sessions SET status = 'archived' WHERE id = 'session'").run();

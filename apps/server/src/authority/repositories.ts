@@ -17,8 +17,9 @@ import { collectRepositories, gitProviderAdapters, listBytes, listPageSize } fro
 import { workspaceGitAccess } from './workspace-connections.js';
 import { addPikiExtensions } from './extension-policy.js';
 import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, rememberRead } from './github-reads.js';
+import { failGitHubSignInExpired, forgetDeadGitHubToken } from './github-sign-in.js';
 
-export interface GitHubAccess { token: string; ciphertext: string; userId: string; githubId: string }
+export interface GitHubAccess { token: string; ciphertext: string; userId: string; githubId: string; expired?: (reason: string) => Promise<void> }
 export type RepositoryAccess = { provider: 'github'; github: GitHubAccess } | { provider: TokenGitProvider; account: LoadedCredential };
 interface ExpectedRepository { repositoryId: string; fullName: string }
 interface RepositoryResolution {
@@ -99,7 +100,8 @@ async function githubAccess(env: Env, userId: string): Promise<GitHubAccess> {
   if (!user || user.auth_kind !== 'github' || !user.github_id) fail(409, 'github_not_connected', 'The acting user must connect GitHub. Workspace sharing does not grant repository access.');
   const vault = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM github_tokens WHERE user_id = ?').bind(userId).first();
   if (!vault) fail(409, 'github_not_connected', 'The acting user must connect GitHub.');
-  return { token: await decryptToken(env, userId, vault.ciphertext), ciphertext: vault.ciphertext, userId, githubId: user.github_id };
+  return { token: await decryptToken(env, userId, vault.ciphertext), ciphertext: vault.ciphertext, userId, githubId: user.github_id,
+    expired: reason => forgetDeadGitHubToken(env, userId, vault.ciphertext, reason) };
 }
 async function recheckGitHubAccess(env: Env, access: GitHubAccess): Promise<void> {
   const row = await env.DB.query<{ ciphertext: string }>(`SELECT t.ciphertext FROM github_tokens t JOIN users u ON u.id = t.user_id
@@ -166,6 +168,10 @@ async function githubJSON(access: GitHubAccess, path: string, limit = jsonBytes)
   if (!response.ok || response.status !== 200) {
     if (!githubRateLimited(response)) forgetRead(access.token, url);
     await response.body?.cancel();
+    if (response.status === 401) {
+      await access.expired?.('repository check').catch(() => {});
+      failGitHubSignInExpired();
+    }
     if (githubRateLimited(response)) {
       fail(429, 'github_rate_limited', 'The session owner\'s GitHub rate limit is used up, so Pikibun can\'t check their access to the repository now. Try again after it resets.');
     }

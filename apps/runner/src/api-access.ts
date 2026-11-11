@@ -295,6 +295,7 @@ export class ApiAccess {
     let credential: ApiCredential | undefined;
     let access: ApiAccessKind = "read";
     let ownerInstead: (() => Promise<ApiCredential | undefined>) | undefined;
+    let unaided: string | undefined;
     if (!isApi) {
       if (!open) return refuse(403, `This workspace's network policy doesn't allow ${host}; Pikibun answers only its API (${rules.name}'s command-line tool) for this session`);
       if (carried.own) {
@@ -332,8 +333,10 @@ export class ApiAccess {
       if (credential) {
         headers.authorization = credential.authorization;
         reason = access === "write" || rules.provider !== "github" ? `the session owner's token for ${credential.account}` : `read-only token for ${credential.account}`;
-      } else if (open) reason = "without a credential";
-      else if (!available.available) return refuse(403, `${available.reason}; ${host} is reachable only with that credential under this workspace's network policy`);
+      } else if (open) {
+        reason = "without a credential";
+        if (!available.available) unaided = available.reason;
+      } else if (!available.available) return refuse(403, `${available.reason}; ${host} is reachable only with that credential under this workspace's network policy`);
       else if (scope.account !== undefined) return refuse(403, `${scope.account.slice(0, 100)} is not an organization of this workspace's repositories that the session owner has an account for`);
       else return refuse(403, `${scope.repository ?? pathname.slice(0, 200)} is not one of this workspace's repositories that the session owner can read`);
     }
@@ -367,6 +370,13 @@ export class ApiAccess {
       return refuse(502, error instanceof RunnerError ? error.message : `${host} could not be reached`);
     }
     if (upstream.status === 401 && credential) this.#credentials.delete(`${access} ${host}`);
+    if (unaided && (upstream.status === 429 || (upstream.status === 403 && upstream.headers["x-ratelimit-remaining"] === "0"))) {
+      upstream.body.resume();
+      this.#options.record({ target, outcome: "allowed", reason: `${reason} (${upstream.status})` });
+      return json(response, upstream.status, `${rules.name}'s rate limit for requests without a credential is used up`
+        + `${rules.provider === "github" ? " (60 an hour for each address)" : ""}. This request went without one, as Pikibun gave this session none: ${unaided}. `
+        + "Retrying helps only once Pikibun gives this session its credential again");
+    }
     this.#options.record({ target, outcome: "allowed", reason: `${reason} (${upstream.status})` });
     const answer: Record<string, string | string[]> = {};
     for (const [name, value] of Object.entries(upstream.headers)) {

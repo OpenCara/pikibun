@@ -41,6 +41,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - Before tagging, look at what changed since each line's last tag to decide which lines need a release, and follow the earlier bumps (a minor version for a feature).
 - A release step that succeeds may not have delivered: an upload can be accepted and still be held by the store. Check the outcome where it lands before saying it shipped.
 - When git, `gh` and `github_read` all fail with "access could not be verified", the session's GitHub access is stale and the session can't repair it. Keep the commit, save any drafted text in the worktree, and tell the person to reconnect their GitHub account.
+- When they say GitHub no longer accepts Pikibun's sign-in, or that the owner has no GitHub connection, only the owner can fix it, by signing in to Pikibun with GitHub again. Say so and stop retrying. A "rate limit" that never lifts, with requests going "without a credential", is the same thing on servers from before #288.
 - When they fail because the owner's GitHub rate limit is used up, nothing in the session can fix it either: retrying only spends the next hour's quota. Stop reading GitHub, say when it resets (`gh api rate_limit` shows `reset`, in Unix seconds), and carry on with work that doesn't need it.
 
 ## Sessions and schedules

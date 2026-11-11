@@ -16,6 +16,7 @@ import { requireOperationTool, requireToolCall } from './tool-checks.js';
 import { cloneSessionRepository, recheckAccess, verifyRepository, type GitHubAccess } from './repositories.js';
 import { requireBinding, requireNoRestore } from './push/broker.js';
 import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, rememberRead } from './github-reads.js';
+import { failGitHubSignInExpired, forgetDeadGitHubToken } from './github-sign-in.js';
 
 const githubApi = 'https://api.github.com';
 const remoteTimeout = 20000;
@@ -36,7 +37,8 @@ async function ownerGitHub(env: Env, ownerId: string): Promise<GitHubAccess> {
   if (!owner || owner.auth_kind !== 'github' || !owner.github_id) fail(409, 'github_not_connected', 'The session owner has no real GitHub connection.');
   const vault = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM github_tokens WHERE user_id = ?').bind(owner.id).first();
   if (!vault) fail(409, 'github_not_connected', 'The session owner has no GitHub connection.');
-  return { token: await decryptToken(env, owner.id, vault.ciphertext), ciphertext: vault.ciphertext, userId: owner.id, githubId: owner.github_id };
+  return { token: await decryptToken(env, owner.id, vault.ciphertext), ciphertext: vault.ciphertext, userId: owner.id, githubId: owner.github_id,
+    expired: reason => forgetDeadGitHubToken(env, owner.id, vault.ciphertext, reason) };
 }
 
 async function pinnedGitHubRepository(c: AppContext, row: SessionRow, name: string): Promise<GitHubSessionRepository> {
@@ -159,6 +161,10 @@ export async function githubComment(c: AppContext, connectorId: string | null): 
   if (!response.ok) {
     await response.body?.cancel();
     await auditStatement(c.env, actorId, 'github.comment.failed', row.workspace_id, sessionId, { approvalId, status: response.status }).run();
+    if (response.status === 401) {
+      await github.expired?.('github_comment').catch(() => {});
+      failGitHubSignInExpired();
+    }
     fail(502, 'github_rejected', 'GitHub rejected the approved comment. The capability cannot be reused.');
   }
   let result: unknown;
@@ -269,6 +275,10 @@ async function githubGet(github: GitHubAccess, path: string): Promise<{ value: u
   if (response.status !== 200) {
     if (!githubRateLimited(response)) forgetRead(github.token, url);
     await response.body?.cancel();
+    if (response.status === 401) {
+      await github.expired?.('github_read').catch(() => {});
+      failGitHubSignInExpired();
+    }
     if (githubRateLimited(response)) {
       fail(429, 'github_rate_limited', 'The session owner\'s GitHub rate limit is used up. Try again later.');
     }

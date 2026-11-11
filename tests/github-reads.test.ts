@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { forgetGitHubReads, recallRead, rememberRead } from '../apps/server/src/authority/github-reads.js';
 import { readPullRequestState } from '../apps/server/src/authority/pull-request-states.js';
 import { verifyRepository } from '../apps/server/src/authority/repositories.js';
+import { failureCode } from '../apps/server/src/authority/github-sign-in.js';
 import { GH_WATCH_INTERVAL_SECONDS, ghSpec, watchInterval } from '../apps/runner/src/extensions/piki/gh.js';
 
 const sha = 'c'.repeat(40);
@@ -63,6 +64,14 @@ test('a changed or refused read replaces or forgets what was remembered', async 
   answer = () => Response.json({ message: 'Not Found' }, { status: 404 });
   await assert.rejects(verifyRepository(access, expected), (error: unknown) => error instanceof HTTPException && error.status === 403);
   assert.equal(recallRead('gho_owner', api), undefined);
+
+  const expired: string[] = [];
+  const dead = { provider: 'github' as const, github: { ...access.github, expired: async (reason: string) => { expired.push(reason); } } };
+  answer = () => Response.json({ message: 'Bad credentials' }, { status: 401 });
+  let error: unknown;
+  try { await verifyRepository(dead, expected); } catch (caught) { error = caught; }
+  assert.equal(await failureCode(error), 'github_sign_in_expired');
+  assert.deepEqual(expired, ['repository check'], 'a token GitHub rejects is forgotten');
 });
 
 test('only well-formed tags and bounded bodies are remembered, the least recently used going first', t => {
