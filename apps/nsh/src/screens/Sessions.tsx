@@ -7,7 +7,7 @@ import { session } from "../lib/auth";
 import { relativeTime } from "../lib/format";
 import { layout, palette, text, weight } from "../theme";
 import { TextField } from "../form";
-import { Button, EmptyState, Feedback, IdentityBadge, InfoTip, Loading, Note, Row, RowMenu, StatusDot } from "../ui";
+import { Button, EmptyState, Feedback, IdentityBadge, InfoTip, Loading, Note, Row, RowMenu, rowPress, StatusDot } from "../ui";
 import { Card } from "../settings/accounts";
 
 const PAGE_SIZE = 50;
@@ -77,7 +77,7 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
                             const viewerOnly = () => !owner() && record().permissions?.includes("read") && record().permissions!.every(permission => permission === "read");
                             return (
                               <RowMenu items={() => menu.items(record())} testID={`sessions-menu-${record().id}`}>
-                                <Row testID={`sessions-row-${record().id}`} chevron onPress={() => props.onOpen(record().id)}
+                                <Row testID={`sessions-row-${record().id}`} chevron onPress={rowPress(() => props.onOpen(record().id))}
                                   leading={<StatusDot tone={status().tone} label={status().label ?? record().status} />}
                                   title={`${item().depth > 0 ? `${"  ".repeat(item().depth - 1)}↳ ` : ""}${record().title}`}
                                   hint={`${status().label ? `${status().label} · ` : ""}${record().tunnel ? "Online · " : ""}${record().pullRequest

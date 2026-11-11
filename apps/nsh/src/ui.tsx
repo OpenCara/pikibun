@@ -469,9 +469,22 @@ export function DropdownMenu(props: { label: string; items: (MenuAction | "separ
   );
 }
 
+/**
+ * A row's context menu opened by a finger held on it, while it is open. The menu only watches the finger (its trigger's
+ * presses go on), and the platforms report the finger's lift as a press of the row whenever the row hears no long
+ * presses of its own: that press would open the row under the menu.
+ */
+let heldMenuOpen = false;
+
+/** A `RowMenu` row's press: none while a finger held on a row opened its menu (that finger's lift is no press of the row). */
+export const rowPress = (action: () => void) => () => {
+  if (!heldMenuOpen) action();
+};
+
 export function RowMenu(props: { items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string }) {
   return (
     <ContextMenu testID={props.testID} trigger={props.children} disabled={!props.items().some(item => item !== "separator")} offset={2}
+      onOpenChange={(change: { open: boolean; reason: string }) => { heldMenuOpen = change.open && change.reason === "longPress"; }}
       backdropStyle={{ backgroundColor: palette().backdrop }} popupStyle={menuPopupStyle()}>
       <MenuActions items={props.items()} />
     </ContextMenu>
