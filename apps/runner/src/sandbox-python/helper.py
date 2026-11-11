@@ -832,8 +832,6 @@ def clone_pack_check(path, directory, reason):
         raise ValueError('the clone ' + path + ' has tags on commits its origin doesn\'t have, which a pack can\'t keep')
 
 
-# What a pack leaves out of the files a clone's .gitignore ignores: dependencies and build output, which installing and
-# building again bring back. A pack keeps every other ignored file (.env files, local databases and the like).
 PACK_REBUILDABLE_DIRS = ('node_modules', 'bower_components', '.pnpm-store', '.yarn', '.venv', 'venv', '__pycache__',
                          '.pytest_cache', '.mypy_cache', '.ruff_cache', '.tox', '.nox', '.gradle', 'target', 'dist',
                          'build', 'out', '.next', '.nuxt', '.svelte-kit', '.turbo', '.parcel-cache', '.cache', 'coverage',

@@ -62,7 +62,7 @@ export function createSessionMenu(): SessionMenu {
         testID: "menu-visibility", disabled: busy, onSelect: () => void changeVisibility(current) },
       { label: "Archive", icon: "archive", testID: "menu-archive", disabled: busy, onSelect: () => void archive(current) });
     if (manages && archived) menu.push("separator", { label: "Unarchive", icon: "archive", testID: "menu-unarchive",
-      disabled: busy || (Boolean(current.packed) && current.ownerId !== user.id), hint: current.packed && current.ownerId !== user.id ? "Its files are packed: only its owner can" : undefined,
+      disabled: busy,
       onSelect: () => void action.run(async () => { await session().api(`${base(current)}/unarchive`, { method: "POST" }); changed(); }, unarchiveNotice(current)) });
     return menu;
   }

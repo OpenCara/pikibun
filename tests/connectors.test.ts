@@ -1727,6 +1727,8 @@ test('archived sessions are packed a week on, where their host is online and kee
   let at = Date.parse(row().pack_due_at!);
   assert.deepEqual(await runAutomaticPacking(f.env, at - 1000), [], 'not before its week is out');
 
+  assert.deepEqual(await runAutomaticPacking(f.env, at), [{ sessionId: id, deferred: 'connector_outdated' }], 'a host that can\'t pack yet');
+  at += 24 * hour;
   host({ sessionPacking: true });
   assert.deepEqual(await runAutomaticPacking(f.env, at), [{ sessionId: id, deferred: 'connector_outdated' }], 'an older host would drop ignored files');
   assert.equal(row().pack_due_at, new Date(at + 24 * hour).toISOString());

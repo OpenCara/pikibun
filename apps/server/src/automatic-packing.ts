@@ -60,9 +60,6 @@ export type AutomaticPackOutcome = { sessionId: string; packed: true } | { sessi
 
 const finalCodes = ['session_frozen', 'pack_unavailable', 'owner_required', 'permission_revoked', 'not_found', 'forbidden'];
 
-// Packs archived sessions whose week has passed, on hosts that are online and keep ignored files in packs, as each session's
-// owner would with Pack files. A refusal (too large, a stash, a macOS host ...) is final and audited; anything else that
-// stops it (the host busy or gone mid-way) tries again an hour later.
 export async function runAutomaticPacking(env: Env, at = Date.now()): Promise<AutomaticPackOutcome[]> {
   const timestamp = new Date(at).toISOString();
   const due = await env.DB.query<SessionRow>(`SELECT s.* FROM sessions s
@@ -79,13 +76,12 @@ export async function runAutomaticPacking(env: Env, at = Date.now()): Promise<Au
     if (claimed.changes !== 1) continue;
     const settle = (dueAt: string | null) => env.DB.query("UPDATE sessions SET pack_due_at = ? WHERE id = ? AND status = 'archived'").bind(dueAt, row.id).run();
     const capabilities = await hostCapabilities(env, row.connector_id);
-    if (Number(row.host_environment ?? 0) === 1 || capabilities?.unsandboxed || capabilities?.sessionPacking !== true) {
+    if (Number(row.host_environment ?? 0) === 1 || capabilities?.unsandboxed) {
       await settle(null);
       outcomes.push({ sessionId: row.id, refused: 'pack_unavailable' });
       continue;
     }
-    if (capabilities.packIgnoredFiles !== true) {
-      // An older connector would drop the clones' ignored files: wait for the host to update.
+    if (capabilities?.sessionPacking !== true || capabilities.packIgnoredFiles !== true) {
       await settle(later(24 * 60));
       outcomes.push({ sessionId: row.id, deferred: 'connector_outdated' });
       continue;

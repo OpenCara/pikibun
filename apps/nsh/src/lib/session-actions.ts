@@ -126,7 +126,7 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
     const current = options.session();
     if (!current || !isOwner() || action.busy() || current.status !== "archived" || current.packed) return;
     if (!await confirm({ title: "Pack this session's files?", confirmLabel: "Pack files",
-      message: "Its files on the host become one compressed file, to save the host's disk. Package caches and temporary files in its home folder are left out, and so are the files its clones' .gitignore ignores, such as node_modules: install them again when you need them. Clones keep their branches and uncommitted changes, and are cloned again when the session is unarchived, which unpacks the rest. The conversation stays as it is." })) return;
+      message: "Its files on the host become one compressed file, to save the host's disk. Package caches and temporary files in its home folder are left out, and so are the dependencies and build output its clones' .gitignore ignores, such as node_modules, .venv and dist: install them again when you need them. Clones keep their branches, uncommitted changes and other ignored files, such as .env files (on hosts with a current connector), and are cloned again when the session is unarchived, which unpacks the rest. The conversation stays as it is." })) return;
     await action.run(async () => {
       await session().api(`${base()}/pack`, { method: "POST" });
       options.onChange();

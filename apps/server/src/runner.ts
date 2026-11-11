@@ -13,7 +13,6 @@ export function ownerViewRequest(c: AppContext, row: SessionRow): Promise<Respon
   return actorRequest(c, row.owner_id, row, 'view');
 }
 
-// Unarchiving a packed session unpacks and reopens it on its host as its owner, whoever of those who manage it unarchives it.
 export function ownerRequest(c: AppContext, row: SessionRow, action: 'unpack' | 'restart', body: unknown = {}): Promise<Response> {
   return actorRequest(c, row.owner_id, row, action, '', body);
 }
