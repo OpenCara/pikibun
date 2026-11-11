@@ -50,7 +50,7 @@ jobs:
           if [ ! -s "$RUNNER_TEMP/changed" ] || grep -qvE '(\.md$|^docs/images/|^LICENSE$)' "$RUNNER_TEMP/changed"; then code=true; fi
           # What the image is built from, as the Dockerfile copies it, and this workflow.
           image=false
-          if grep -qE '^(Dockerfile|\.dockerignore|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig\.json|packages/cli/package\.json|apps/server/|apps/nsh/|packages/shared/|packages/client/|scripts/nsh\.mjs|scripts/nsh-web-fixes\.mjs|\.github/workflows/ci\.yml)' "$RUNNER_TEMP/changed"; then image=true; fi
+          if grep -qE '^(Dockerfile|\.dockerignore|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig\.json|packages/cli/package\.json|apps/server/|apps/nsh/|packages/shared/|packages/client/|scripts/nsh\.mjs|scripts/nsh-web-fixes\.mjs|scripts/build-server\.mjs|\.github/workflows/ci\.yml)' "$RUNNER_TEMP/changed"; then image=true; fi
           { echo "code=$code"; echo "image=$image"; } >> "$GITHUB_OUTPUT"
           echo "Code: $code. Container image: $image."
 

@@ -15,7 +15,7 @@
     "connect": "node --import tsx packages/cli/src/pikibun.ts connect",
     "build": "pnpm build:client",
     "build:client": "node scripts/nsh.mjs --build-web dist/client",
-    "build:server": "esbuild apps/server/src/main.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=dist/server/main.js && rm -rf dist/server/migrations && cp -R apps/server/migrations dist/server/migrations",
+    "build:server": "node scripts/build-server.mjs",
     "build:cli": "pnpm run build && pnpm --filter pikibun run build",
     "nsh": "node scripts/nsh.mjs",
     "test:client": "node scripts/nsh.mjs test",

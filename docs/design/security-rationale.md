@@ -37,6 +37,16 @@ The source code has no comments (see [Comments](../development.md#comments)), so
 - **Only the system's `sandbox-exec`**, never one found on `PATH`. It is deprecated in Apple's headers but still ships, and Chromium and others depend on it.
 - **No hard memory or process limits** (macOS has no cgroups), so shell commands run there only where the host's owner allows commands without them.
 
+## Sessions on the host
+
+In the private workspace, **Where it runs** starts on the host for the host's owner (#259): the session's commands run as the owner, with their files, credentials and network, and since approvals were removed (#271) nothing asks before they run. That is a product decision, not a gap in the code, and it rests on these:
+
+- **Only the host's owner, and members they grant host commands.** Everyone else's calls to anything that runs on the host's own machine are refused, on the host (`HOST_COMMANDS_RULE` in `apps/runner/src/session.ts`) and by the server.
+- **It is chosen visibly and recorded.** The new-session screen shows a red **On host** chip and a warning while it is chosen, and the choice is audited with the session (`hostEnvironment`).
+- **Read only** changes nothing on the host either.
+
+What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. Extensions run in the connector process, on the host, for every session (`apps/runner/src/extensions/`), so a workspace's extensions are trusted code whichever environment a session uses.
+
 ## Password authentication
 
 `apps/server/src/authority/password-auth.ts`, for servers with `PASSWORD_AUTH=true`.
