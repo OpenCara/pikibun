@@ -7,7 +7,10 @@ import type { AppContext, Env, SessionAccess, SessionRow, AppEnv } from '../type
 import type { ConnectorRow } from './hosts.js';
 import { auditStatement } from './audit.js';
 import { requireMember } from './access.js';
-import { fail, identifier, jsonObject, now, text, userIdentifier } from '../http.js';
+import { personalWorkspaceSQL } from './personal-workspaces.js';
+import { workspaceHasSourceSQL } from './repositories.js';
+import type { Database, Query } from '../db/types.js';
+import { fail, identifier, jsonObject, now, testMode, text, userIdentifier } from '../http.js';
 
 const maxAdmins = 20;
 const maxGrants = 200;
@@ -195,4 +198,38 @@ export function registerHostAccess(app: Hono<AppEnv>): void {
     ]);
     return c.body(null, 204);
   });
+}
+
+export function shareHostStatements(env: Env, share: { connectorId: string; ownerId: string; workspaceId: string; at: string; legacy: boolean }): {
+  share: Query<{ connector_id: string }>; workspace: Query<never>;
+} {
+  return {
+    share: env.DB.query<{ connector_id: string }>(`INSERT INTO connector_shares (connector_id,workspace_id,created_at)
+      SELECT ?,?,? WHERE ((SELECT COUNT(*) FROM connector_shares WHERE connector_id = ?) < 50
+        OR EXISTS (SELECT 1 FROM connector_shares WHERE connector_id = ? AND workspace_id = ?))
+      AND EXISTS (SELECT 1 FROM connectors WHERE id = ? AND owner_id = ? AND revoked_at IS NULL)
+      AND EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?)
+      AND NOT ${personalWorkspaceSQL('?')}
+      AND (${workspaceHasSourceSQL('?')}
+        OR (? = 1 AND EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind = 'test')))
+      ON CONFLICT (connector_id, workspace_id) DO UPDATE SET created_at = connector_shares.created_at
+      RETURNING connector_id`)
+      .bind(share.connectorId, share.workspaceId, share.at, share.connectorId, share.connectorId, share.workspaceId, share.connectorId, share.ownerId,
+        share.workspaceId, share.ownerId, share.workspaceId, share.workspaceId, share.legacy && testMode(env) ? 1 : 0, share.ownerId),
+    workspace: env.DB.query<never>(`INSERT INTO connector_workspaces (connector_id,workspace_id,created_at)
+      SELECT ?,?,? WHERE changes() = 1
+      ON CONFLICT (connector_id, workspace_id) DO NOTHING`).bind(share.connectorId, share.workspaceId, share.at),
+  };
+}
+
+export function unshareHostStatements(db: Pick<Database, 'query'>, connectorId: string, workspaceId: string): Query<never>[] {
+  return [
+    db.query<never>('DELETE FROM connector_shares WHERE connector_id = ? AND workspace_id = ?').bind(connectorId, workspaceId),
+    db.query<never>('DELETE FROM connector_host_grants WHERE connector_id = ? AND workspace_id = ?').bind(connectorId, workspaceId),
+  ];
+}
+
+export function removedHostStatements(db: Pick<Database, 'query'>, connectorId: string): Query<never>[] {
+  return ['connector_shares', 'connector_workspaces', 'connector_host_grants', 'connector_admins']
+    .map(table => db.query<never>(`DELETE FROM ${table} WHERE connector_id = ?`).bind(connectorId));
 }

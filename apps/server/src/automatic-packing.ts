@@ -5,7 +5,9 @@ import { automaticPackingDays } from '../../../packages/shared/src/packing.js';
 import { auditStatement, hostCapabilities, requireMember, workspaceAdminSQL } from './authority/index.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import type { Database } from './db/types.js';
-import { fail, identifier, jsonObject, now } from './http.js';
+import { z } from 'zod';
+import { fail, identifier, now } from './http.js';
+import { body } from './schemas.js';
 import { packSession } from './session-packing.js';
 import type { AppEnv, Env, SessionRow } from './types.js';
 
@@ -32,10 +34,7 @@ export function registerPackingSettings(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id'));
     const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const input = await jsonObject(c, 1024);
-    const keys = Object.keys(input);
-    if (keys.length !== 1 || keys[0] !== 'automatic' || typeof input.automatic !== 'boolean') fail(400, 'invalid_input', 'Set automatic to true or false.');
-    const automatic = input.automatic as boolean;
+    const { automatic } = await body(c, z.strictObject({ automatic: z.boolean() }), { maxBytes: 1024, message: 'Set automatic to true or false.' });
     const saved = await c.env.DB.query<{ automatic: number }>(`INSERT INTO workspace_packing_settings (workspace_id, automatic, updated_by, updated_at)
       SELECT ?,?,?,? WHERE ${workspaceAdminSQL}
       ON CONFLICT (workspace_id) DO UPDATE SET automatic = excluded.automatic, updated_by = excluded.updated_by, updated_at = excluded.updated_at

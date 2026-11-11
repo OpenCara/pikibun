@@ -104,9 +104,25 @@ describe("a session's right-click menu", () => {
     await app.longPress("id:session-row-s1");
     await app.waitFor("id:menu-copy-id");
     expect(app.shows("id:menu-rename")).toBe(true);
+    await app.press("id:session-row-s1");
+    expect(app.shows("id:menu-copy-id")).toBe(true);
     expect(app.shows("id:session-actions")).toBe(false);
     await app.press("id:menu-copy-id");
     expect(app.clipboard()).toBe("s1");
+    await app.waitUntil(() => !app.shows("id:menu-copy-id"));
+
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:session-actions");
+  });
+
+  test("a finger held on a workspace's row on a phone opens its menu without folding it", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn });
+    await app.waitFor("id:workspace-row-w1");
+    await app.longPress("id:workspace-row-w1");
+    await app.waitFor("id:workspace-copy-id-w1");
+    await app.press("id:workspace-row-w1");
+    expect(app.shows("id:session-row-s1")).toBe(true);
+    expect(app.shows("text:Collapse")).toBe(true);
   });
 });
 

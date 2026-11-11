@@ -5,12 +5,12 @@ import test from 'node:test';
 import { automaticPackingDays } from '../packages/shared/src/packing.js';
 
 const migrations = new URL('../apps/server/migrations/sqlite/', import.meta.url);
-const migration = '0064_automatic_packing.sql';
+const migration = '0065_automatic_packing.sql';
 
 test('sessions archived before automatic packing get their week from when it arrives; packed and open ones none', () => {
   const files = readdirSync(migrations).filter(name => name.endsWith('.sql')).sort();
   assert.ok(files.includes(migration));
-  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0057_automatic_packing.sql'), 'Postgres has the same migration');
+  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0058_automatic_packing.sql'), 'Postgres has the same migration');
   const sqlite = new DatabaseSync(':memory:');
   for (const file of files.filter(name => name < migration)) sqlite.exec(readFileSync(new URL(file, migrations), 'utf8'));
   sqlite.exec('PRAGMA foreign_keys = OFF');

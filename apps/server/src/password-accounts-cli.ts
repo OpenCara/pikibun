@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import { auditStatement, hashPassword, instanceAdmins, newPassword, passwordAccountStatements, passwordUsername, USERNAME_MATCH, usernameMatch } from './authority/index.js';
+import { auditStatement, hashPassword, instanceAdmins, newPassword, operatorPasswordResetStatements, passwordAccountStatements, passwordUsername, USERNAME_MATCH, usernameMatch } from './authority/index.js';
 import { ConstraintError, type Database } from './db/types.js';
 import { now } from './http.js';
 import type { Env } from './types.js';
@@ -67,8 +67,7 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
   const password = await plain(async () => newPassword(await readPassword(), name));
   const hash = await hashPassword(password);
   await db.batch([
-    db.query('UPDATE password_credentials SET password_hash = ?, failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?').bind(hash, now(), account.id),
-    db.query('DELETE FROM auth_sessions WHERE user_id = ?').bind(account.id),
+    ...operatorPasswordResetStatements(db, account.id, hash, now()),
     auditStatement({ DB: db } as Env, null, 'account.password.reset_by_operator', null, null, { userId: account.id }),
   ]);
   return `pikibun: set a new password for ${account.id} and signed it out everywhere`;

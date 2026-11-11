@@ -6,13 +6,14 @@ import { pageAvailable, routeHash } from "../lib/page";
 import { createAction, type Action } from "../lib/resource";
 import { confirmArchive, confirmVisibilityChange, unarchiveNotice, visibilityNotice } from "../lib/session-actions";
 import { Field, TextField } from "../form";
-import { Button, Feedback, FormSheet, type MenuAction } from "../ui";
+import { Button, Feedback, FormSheet, type MenuAction, type SwipeAction } from "../ui";
 
 export const sessionLink = (id: string): string => `${session().origin}/${routeHash({ name: "session", sessionId: id })}`;
 
 export interface SessionMenu {
   action: Action;
   items: (current: SessionRecord) => (MenuAction | "separator")[];
+  swipe: (current: SessionRecord, more: () => void) => { leading: SwipeAction[]; trailing: SwipeAction[] };
   renaming: Accessor<SessionRecord | null>;
   rename: (title: string) => void;
   closeRename: () => void;
@@ -45,29 +46,52 @@ export function createSessionMenu(): SessionMenu {
     if (await action.run(async () => { await session().api(base(current), { method: "PATCH", body: { title: next } }); changed(); }, "Session renamed")) renaming.set(null);
   }
 
-  function items(current: SessionRecord): (MenuAction | "separator")[] {
+  function actions(current: SessionRecord) {
     const { user } = untracked(session);
     const role = data.workspaces().find(workspace => workspace.id === current.workspaceId)?.role;
     const manages = managesSession(user.id, current.ownerId, role);
     const archived = current.status === "archived";
     const busy = action.busy();
-    const menu: (MenuAction | "separator")[] = [
-      ...(pageAvailable() ? [{ label: "Open in new tab", icon: "external-link" as const, testID: "menu-open-tab", onSelect: () => void openUrl(sessionLink(current.id)).catch(() => undefined) }] : []),
-      { label: "Copy link", icon: "link", testID: "menu-copy-link", onSelect: () => void action.run(() => Clipboard.writeText(sessionLink(current.id)), "Link copied") },
-      { label: "Copy session ID", icon: "copy", testID: "menu-copy-id", onSelect: () => void action.run(() => Clipboard.writeText(current.id), "Session ID copied") },
-    ];
-    if (manages && !archived) menu.push("separator",
-      { label: "Rename", icon: "pencil", testID: "menu-rename", disabled: busy, onSelect: () => { action.clear(); renaming.set(current); } },
-      { label: current.visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: current.visibility === "workspace" ? "lock" : "globe",
-        testID: "menu-visibility", disabled: busy, onSelect: () => void changeVisibility(current) },
-      { label: "Archive", icon: "archive", testID: "menu-archive", disabled: busy, onSelect: () => void archive(current) });
-    if (manages && archived) menu.push("separator", { label: "Unarchive", icon: "archive", testID: "menu-unarchive",
-      disabled: busy,
-      onSelect: () => void action.run(async () => { await session().api(`${base(current)}/unarchive`, { method: "POST" }); changed(); }, unarchiveNotice(current)) });
+    const editable = manages && !archived;
+    return {
+      openTab: pageAvailable()
+        ? { label: "Open in new tab", icon: "external-link", testID: "menu-open-tab", onSelect: () => void openUrl(sessionLink(current.id)).catch(() => undefined) } satisfies MenuAction
+        : null,
+      copyLink: { label: "Copy link", icon: "link", testID: "menu-copy-link", onSelect: () => void action.run(() => Clipboard.writeText(sessionLink(current.id)), "Link copied") } satisfies MenuAction,
+      copyId: { label: "Copy session ID", icon: "copy", testID: "menu-copy-id", onSelect: () => void action.run(() => Clipboard.writeText(current.id), "Session ID copied") } satisfies MenuAction,
+      rename: editable ? { label: "Rename", icon: "pencil", testID: "menu-rename", disabled: busy, onSelect: () => { action.clear(); renaming.set(current); } } satisfies MenuAction : null,
+      visibility: editable
+        ? { label: current.visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: current.visibility === "workspace" ? "lock" : "globe",
+          testID: "menu-visibility", disabled: busy, onSelect: () => void changeVisibility(current) } satisfies MenuAction
+        : null,
+      archive: editable ? { label: "Archive", icon: "archive", testID: "menu-archive", disabled: busy, onSelect: () => void archive(current) } satisfies MenuAction : null,
+      unarchive: manages && archived
+        ? { label: "Unarchive", icon: "archive", testID: "menu-unarchive", disabled: busy,
+          onSelect: () => void action.run(async () => { await session().api(`${base(current)}/unarchive`, { method: "POST" }); changed(); }, unarchiveNotice(current)) } satisfies MenuAction
+        : null,
+    };
+  }
+
+  function items(current: SessionRecord): (MenuAction | "separator")[] {
+    const { openTab, copyLink, copyId, rename, visibility, archive, unarchive } = actions(current);
+    const menu: (MenuAction | "separator")[] = [...(openTab ? [openTab] : []), copyLink, copyId];
+    if (rename && visibility && archive) menu.push("separator", rename, visibility, archive);
+    if (unarchive) menu.push("separator", unarchive);
     return menu;
   }
 
-  return { action, items, renaming, rename: title => void rename(title), closeRename: () => renaming.set(null) };
+  function swipe(current: SessionRecord, more: () => void): { leading: SwipeAction[]; trailing: SwipeAction[] } {
+    const { copyLink, rename, archive, unarchive } = actions(current);
+    const tile = (item: MenuAction, tone: SwipeAction["tone"], name: string): SwipeAction =>
+      ({ label: item.label, icon: item.icon ?? "more", tone, disabled: item.disabled, testID: `swipe-${name}-${current.id}`, onPress: item.onSelect });
+    const shelve = archive ? tile(archive, "warning", "archive") : unarchive ? tile(unarchive, "info", "unarchive") : null;
+    return {
+      leading: [tile(copyLink, "accent", "copy-link"), ...(rename ? [tile(rename, "info", "rename")] : [])],
+      trailing: [{ label: "More", icon: "more", testID: `swipe-more-${current.id}`, onPress: more }, ...(shelve ? [shelve] : [])],
+    };
+  }
+
+  return { action, items, swipe, renaming, rename: title => void rename(title), closeRename: () => renaming.set(null) };
 }
 
 export function RenameSheet(props: { open: boolean; title: string; busy: boolean; error?: string; onClose: () => void; onSave: (title: string) => void }) {

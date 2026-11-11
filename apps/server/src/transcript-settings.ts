@@ -3,7 +3,9 @@ import type { Hono } from 'hono';
 import type { Database } from './db/types.js';
 import type { AppEnv } from './types.js';
 import { auditStatement, requireMember } from './authority/index.js';
-import { fail, identifier, jsonObject, now } from './http.js';
+import { z } from 'zod';
+import { fail, identifier, now } from './http.js';
+import { body } from './schemas.js';
 import { toolOutputs, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 
 export interface TranscriptSettings {
@@ -12,6 +14,9 @@ export interface TranscriptSettings {
 }
 
 const adminSql = workspaceAdminSQL;
+
+const transcriptChange = z.strictObject({ paging: z.boolean().optional(), toolOutput: z.enum(toolOutputs).optional() })
+  .refine(change => change.paging !== undefined || change.toolOutput !== undefined);
 
 interface SettingsRow { paging: number; tool_output: string }
 
@@ -38,15 +43,7 @@ export function registerTranscriptSettings(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id'));
     const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const input = await jsonObject(c, 1024);
-    const keys = Object.keys(input);
-    if (!keys.length || keys.some(key => key !== 'paging' && key !== 'toolOutput')
-      || ('paging' in input && typeof input.paging !== 'boolean')
-      || ('toolOutput' in input && !toolOutputs.includes(input.toolOutput as ToolOutput))) {
-      fail(400, 'invalid_input', 'Set paging to true or false, toolOutput to full or brief, or both.');
-    }
-    const paging = typeof input.paging === 'boolean' ? input.paging : undefined;
-    const toolOutput = 'toolOutput' in input ? input.toolOutput as ToolOutput : undefined;
+    const { paging, toolOutput } = await body(c, transcriptChange, { maxBytes: 1024, message: 'Set paging to true or false, toolOutput to full or brief, or both.' });
     const updates = [...(paging !== undefined ? ['paging = excluded.paging'] : []), ...(toolOutput !== undefined ? ['tool_output = excluded.tool_output'] : []),
       'updated_by = excluded.updated_by', 'updated_at = excluded.updated_at'];
     const saved = await c.env.DB.query<SettingsRow>(`INSERT INTO workspace_transcript_settings (workspace_id, paging, tool_output, updated_by, updated_at)

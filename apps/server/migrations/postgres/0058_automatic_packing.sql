@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0064_automatic_packing.sql.
+-- Postgres translation of sqlite/0065_automatic_packing.sql.
 
 -- Archived sessions' files are packed on their hosts automatically (apps/server/src/automatic-packing.ts), as their owners
 -- would with Pack files. pack_due_at: when the server next asks the session's host to pack them. Set a week after a

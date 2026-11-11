@@ -18,6 +18,7 @@ import type { RestoreDescriptor, RestoreInput } from "../packages/shared/src/con
 import { RunnerError, assertId, requestKey, stableJson, validateBinding, validateOperation, verifyRunnerTicket } from "../apps/runner/src/protocol.js";
 import { RunnerService, createRunnerApp } from "../apps/runner/src/server.js";
 import { RunnerSession } from "../apps/runner/src/session.js";
+import type { HostCommandPolicy } from "../apps/runner/src/session/host-commands.js";
 import { commandLimits, type CommandLimits } from "../apps/runner/src/host-config.js";
 import { HostWorkspace } from "../apps/runner/src/host-workspace.js";
 import { defaultHostConfig } from "../packages/shared/src/host-config.js";
@@ -379,7 +380,7 @@ test("queued sandbox effects recheck authority after admission and fail closed o
 test("generic shell requires both explicit test flags and a faux binding", { skip: process.platform !== "linux" }, async t => {
   const { service, directory } = await fixture(t);
   const operation = { kind: "bash" as const, command: "true" };
-  const refuses = (session: RunnerSession) => assert.throws(() => (session as unknown as { requireShellCapability(op: typeof operation): void }).requireShellCapability(operation), /quota-backed/);
+  const refuses = (session: RunnerSession) => assert.throws(() => (session as unknown as { hostCommands: HostCommandPolicy }).hostCommands.requireShell(operation), /quota-backed/);
   refuses(new RunnerSession(binding("shell-disabled"), join(directory, "shell-disabled"), { ...service.config, allowTestShell: false }));
   const realBinding = binding("shell-real");
   realBinding.model.provider = "openai";

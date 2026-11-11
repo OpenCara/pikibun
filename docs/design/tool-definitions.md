@@ -91,6 +91,12 @@ So the connector is now an engine for both kinds, and the control plane describe
     (`source_kind_off`), before and after the read. Connectors from before the split, which offer `source_read` for every
     kind, are held to it too.
 
+11. **A call's own timeout.** Every program tool, `git` and `python` take `timeout_seconds` (1 to the longest command
+    time limit a host can have, 3600). It ends the call sooner than the host's command time limit, never later
+    (`callLimits`), and leaves the host's other limits as they are, so a test run or server that may wait forever costs
+    minutes, not the host's whole limit. It is part of the call, not of its operation: the operation, the card and what the
+    control plane checks stay `{ kind: "program", tool, command }`, so a connector with it needs no newer control plane.
+
 ## Adding a tool
 
 - A program tool or brokered tool the engine can express: add its definition to `bundledToolDefinitions`, its switch

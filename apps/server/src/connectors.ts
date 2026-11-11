@@ -2,8 +2,8 @@ import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import {
   apiCredential, auditStatement, authenticateConnector, authorizeSession, connectorAdmins, connectorHostGrants, type ConnectorRow, egressGrant,
   gitDirect, githubComment, githubIssue, githubMerge, githubRead, gitRelay, legacyRepositoryFixture, managedConnector, pushComplete,
-  personalWorkspaceSQL, pushCredential, requireCallbackScope, requireConfiguredWorkspace, requireConnectorTLS, requireManagedWorkspace, requireMember,
-  requireSharedWorkspace, sourceRead, viewerHostAuthority, workspaceHasSourceSQL,
+  pushCredential, requireCallbackScope, requireConfiguredWorkspace, requireConnectorTLS, requireManagedWorkspace, requireMember,
+  removedHostStatements, requireSharedWorkspace, shareHostStatements, sourceRead, unshareHostStatements, viewerHostAuthority,
 } from './authority/index.js';
 import { withHostToolCapabilities } from './host-capabilities.js';
 import { verifyDirectUpload } from './file-uploads.js';
@@ -375,23 +375,8 @@ export function registerConnectors(app: Hono<AppEnv>): void {
     await requireSharedWorkspace(c.env, workspaceId);
     await requireConfiguredWorkspace(c.env, workspaceId, row.owner_id);
     const legacy = testMode(c.env) && await legacyRepositoryFixture(c.env, row.owner_id);
-    const results = await c.env.DB.batch([
-      c.env.DB.query(`INSERT INTO connector_shares (connector_id,workspace_id,created_at)
-      SELECT ?,?,? WHERE ((SELECT COUNT(*) FROM connector_shares WHERE connector_id = ?) < 50
-        OR EXISTS (SELECT 1 FROM connector_shares WHERE connector_id = ? AND workspace_id = ?))
-      AND EXISTS (SELECT 1 FROM connectors WHERE id = ? AND owner_id = ? AND revoked_at IS NULL)
-      AND EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?)
-      AND NOT ${personalWorkspaceSQL('?')}
-      AND (${workspaceHasSourceSQL('?')}
-        OR (? = 1 AND EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind = 'test')))
-      ON CONFLICT (connector_id, workspace_id) DO UPDATE SET created_at = connector_shares.created_at
-      RETURNING connector_id`)
-      .bind(row.id, workspaceId, now(), row.id, row.id, workspaceId, row.id, row.owner_id, workspaceId, row.owner_id,
-        workspaceId, workspaceId, legacy && testMode(c.env) ? 1 : 0, row.owner_id),
-      c.env.DB.query(`INSERT INTO connector_workspaces (connector_id,workspace_id,created_at)
-        SELECT ?,?,? WHERE changes() = 1
-        ON CONFLICT (connector_id, workspace_id) DO NOTHING`).bind(row.id, workspaceId, now()),
-    ]);
+    const statements = shareHostStatements(c.env, { connectorId: row.id, ownerId: row.owner_id, workspaceId, at: now(), legacy: Boolean(legacy) });
+    const results = await c.env.DB.batch<{ connector_id: string }>([statements.share, statements.workspace]);
     const shared = results[0].results[0];
     if (!shared) {
       const atLimit = await c.env.DB.query(`SELECT 1 WHERE
@@ -410,8 +395,7 @@ export function registerConnectors(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('workspaceId'));
     await requireManagedWorkspace(c.env, row, workspaceId, c.get('auth').userId);
     await c.env.DB.batch([
-      c.env.DB.query('DELETE FROM connector_shares WHERE connector_id = ? AND workspace_id = ?').bind(row.id, workspaceId),
-      c.env.DB.query('DELETE FROM connector_host_grants WHERE connector_id = ? AND workspace_id = ?').bind(row.id, workspaceId),
+      ...unshareHostStatements(c.env.DB, row.id, workspaceId),
       auditStatement(c.env, c.get('auth').userId, 'connector.share.removed', workspaceId, null, { connectorId: row.id }),
       c.env.DB.query(`UPDATE sessions SET policy_version = policy_version + 1
         WHERE connector_id = ? AND workspace_id = ? AND owner_id <> ?`).bind(row.id, workspaceId, row.owner_id),
@@ -425,10 +409,7 @@ export function registerConnectors(app: Hono<AppEnv>): void {
       c.env.DB.query(`UPDATE connectors SET removed_at = ?, revoked_at = COALESCE(revoked_at, ?),
         connection_hash = NULL, credential_hash = ?, name = 'Removed host', models_json = '[]', capabilities_json = '{}', connector_version = NULL
         WHERE id = ?`).bind(timestamp, timestamp, await sha256(randomToken()), row.id),
-      c.env.DB.query('DELETE FROM connector_shares WHERE connector_id = ?').bind(row.id),
-      c.env.DB.query('DELETE FROM connector_workspaces WHERE connector_id = ?').bind(row.id),
-      c.env.DB.query('DELETE FROM connector_host_grants WHERE connector_id = ?').bind(row.id),
-      c.env.DB.query('DELETE FROM connector_admins WHERE connector_id = ?').bind(row.id),
+      ...removedHostStatements(c.env.DB, row.id),
       c.env.DB.query('DELETE FROM connector_disabled_models WHERE connector_id = ?').bind(row.id),
       c.env.DB.query('DELETE FROM connector_extensions WHERE connector_id = ?').bind(row.id),
       c.env.DB.query('DELETE FROM connector_extension_settings WHERE connector_id = ?').bind(row.id),
