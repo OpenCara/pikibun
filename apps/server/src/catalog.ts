@@ -7,7 +7,8 @@ import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { defaultWorkspaceExtensions, extensionPackageKey } from '../../../packages/shared/src/host-extensions.js';
 import {
-  auditAfterChange, auditStatement, personalWorkspaceName, personalWorkspaceSQL, requireMember, requireSharedWorkspace,
+  addMemberStatement, auditAfterChange, auditStatement, changeMemberRoleStatement, personalWorkspaceName, removeMemberStatements, requireMember,
+  requireSharedWorkspace, workspaceOwnerStatement,
 } from './authority/index.js';
 import { modelDefinition } from './db.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
@@ -208,8 +209,7 @@ function newWorkspaceStatements(env: Env, workspace: { id: string; name: string;
   return [
     env.DB.query<never>('INSERT INTO workspaces (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)')
       .bind(workspace.id, workspace.name, workspace.ownerId, createdAt),
-    env.DB.query<never>("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)")
-      .bind(workspace.id, workspace.ownerId, createdAt),
+    workspaceOwnerStatement(env.DB, workspace.id, workspace.ownerId, createdAt),
     auditStatement(env, workspace.ownerId, 'workspace.create', workspace.id, null, detail),
     ...defaultWorkspaceExtensions.map((source, index) => env.DB.query<never>(`INSERT INTO workspace_extensions
         (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
@@ -306,18 +306,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     if (!user) fail(404, 'not_found', 'User not found.');
     const auditId = id();
     const result = await c.env.DB.batch<SafeMember>([
-      c.env.DB.query<never>(`INSERT INTO workspace_members (workspace_id, user_id, role, created_at)
-        SELECT w.id, u.id, ?, ?
-        FROM workspaces w
-        INNER JOIN workspace_members actor ON actor.workspace_id = w.id AND actor.user_id = ?
-        INNER JOIN users u ON u.id = ?
-        LEFT JOIN workspace_members target ON target.workspace_id = w.id AND target.user_id = u.id
-        WHERE w.id = ? AND u.id <> w.owner_id AND (target.role IS NULL OR target.role <> 'owner') AND NOT ${personalWorkspaceSQL('w.id')}
-          AND ((actor.role = 'owner' AND actor.user_id = w.owner_id)
-            OR (actor.role = 'admin' AND ? IN (${adminManagedRoles.map(item => `'${item}'`).join(', ')}) AND (target.role IS NULL OR target.role IN (${adminManagedRoles.map(item => `'${item}'`).join(', ')}))))
-        ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = excluded.role
-          WHERE workspace_members.role = ?`)
-        .bind(role, now(), actorId, targetId, workspaceId, role, previous ?? ''),
+      addMemberStatement(c.env.DB, { workspaceId, actorId, userId: targetId, role: role as AssignableWorkspaceRole, previous, at: now() }),
       auditAfterChange(c.env, actorId, 'workspace.member.upsert', workspaceId, { userId: targetId, role }, auditId),
       c.env.DB.query<never>(`UPDATE sessions SET policy_version = policy_version + 1
         WHERE workspace_id = ? AND ? = 1 AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
@@ -343,17 +332,9 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     const previous = await requireMemberManagement(c.env, workspaceId, actorId, targetId, role as AssignableWorkspaceRole);
     if (!previous) fail(404, 'not_found', 'Membership not found.');
     if (previous === role) return c.json({ members: await membersStatement(c.env, workspaceId, actorId).all() });
-    const managed = adminManagedRoles.map(item => `'${item}'`).join(', ');
     const auditId = id();
     const result = await c.env.DB.batch<SafeMember>([
-      c.env.DB.query<never>(`UPDATE workspace_members SET role = ?
-        WHERE workspace_id = ? AND user_id = ? AND role = ? AND role <> 'owner'
-          AND EXISTS (SELECT 1 FROM workspaces w
-            INNER JOIN workspace_members actor ON actor.workspace_id = w.id AND actor.user_id = ?
-            WHERE w.id = workspace_members.workspace_id AND w.owner_id <> workspace_members.user_id
-              AND ((actor.role = 'owner' AND actor.user_id = w.owner_id)
-                OR (actor.role = 'admin' AND ? IN (${managed}) AND workspace_members.role IN (${managed}))))`)
-        .bind(role, workspaceId, targetId, previous, actorId, role),
+      changeMemberRoleStatement(c.env.DB, { workspaceId, actorId, userId: targetId, role: role as AssignableWorkspaceRole, previous, at: now() }),
       auditAfterChange(c.env, actorId, 'workspace.member.role', workspaceId, { userId: targetId, from: previous, role }, auditId),
       c.env.DB.query<never>(`UPDATE sessions SET policy_version = policy_version + 1
         WHERE workspace_id = ? AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
@@ -371,20 +352,11 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     const targetRole = await requireMemberManagement(c.env, workspaceId, actorId, targetId);
     if (!targetRole) fail(404, 'not_found', 'Membership not found.');
     const auditId = id();
+    const removal = removeMemberStatements(c.env.DB, { workspaceId, actorId, userId: targetId, auditId });
     const result = await c.env.DB.batch([
-      c.env.DB.query(`DELETE FROM workspace_members
-        WHERE workspace_id = ? AND user_id = ? AND role <> 'owner'
-          AND EXISTS (SELECT 1 FROM workspaces w
-            INNER JOIN workspace_members actor ON actor.workspace_id = w.id AND actor.user_id = ?
-            WHERE w.id = workspace_members.workspace_id AND w.owner_id <> workspace_members.user_id
-              AND ((actor.role = 'owner' AND actor.user_id = w.owner_id)
-                OR (actor.role = 'admin' AND workspace_members.role IN (${adminManagedRoles.map(item => `'${item}'`).join(', ')}))))`)
-        .bind(workspaceId, targetId, actorId),
+      removal.member,
       auditAfterChange(c.env, actorId, 'workspace.member.remove', workspaceId, { userId: targetId }, auditId),
-      c.env.DB.query(`DELETE FROM session_grants WHERE user_id = ?
-        AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ?)
-        AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
-        .bind(targetId, workspaceId, auditId),
+      removal.grants,
       c.env.DB.query(`DELETE FROM workspace_database_consents WHERE workspace_id = ? AND user_id = ?
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, targetId, auditId),
