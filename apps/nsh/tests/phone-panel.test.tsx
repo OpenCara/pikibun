@@ -8,6 +8,25 @@ const sizes: [string, { width?: number; height?: number }][] = [
   ["ipad mini portrait", { width: 744, height: 1133 }],
 ];
 
+describe("pages' headers on an iPhone", () => {
+  test("are the app's own, in the page: their buttons and back work", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "ios", safeArea: { top: 47, bottom: 34 } });
+    await app.waitFor("id:new-session");
+    await app.press("id:open-settings");
+    await app.waitFor("id:header-back");
+    await app.press("id:header-back");
+    await app.waitFor("id:session-row-s1");
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:session-header");
+    expect(app.shows("id:session-actions")).toBe(true);
+    await app.press("id:session-actions");
+    await app.waitFor("id:session-copy-id");
+    await app.press("id:session-copy-id");
+    await app.press("id:header-back");
+    await app.waitFor("id:session-row-s1");
+  });
+});
+
 describe("a session's panel on iOS", () => {
   for (const [name, size] of sizes) {
     test(`opens from the session's header (${name})`, async () => {
