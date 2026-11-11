@@ -41,10 +41,10 @@ import { browserActions, browserKeys, browserLimits, browserUnavailableReason, b
   type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import { tunnelActions, tunnelUnavailableReason, tunnelUnavailableText, type HostTunnelStatus, type SessionTunnelReport,
   type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
-import { tunnelRequest, type TunnelRequest } from "./tunnel-command.js";
+import { tunnelAccesses, tunnelRequest, type TunnelRequest } from "./tunnel-command.js";
 import { SessionTunnel } from "./session/tunnel.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
-import type { QuickTunnel } from "./tunnel-host.js";
+import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { programLimits } from "./program-command.js";
 import { githubInstructions, githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
@@ -185,7 +185,7 @@ export type RunnerConfig = {
   resources?: ResourceConfig;
   browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
   browserStatus?: () => HostBrowserStatus | undefined;
-  tunnels?: { open(socket: string, signal?: AbortSignal): Promise<QuickTunnel>; status(): HostTunnelStatus | undefined };
+  tunnels?: { open(socket: string, signal?: AbortSignal, access?: TunnelAccess): Promise<QuickTunnel>; status(): HostTunnelStatus | undefined };
   reportTunnel?: (report: SessionTunnelReport) => Promise<void>;
   unsandboxed?: boolean;
   pikiHostSignIn?: boolean;
@@ -1117,7 +1117,7 @@ export class RunnerSession {
           limits: serviceLimits(config.serviceLifetimeSeconds, availableParallelism()),
           unbounded: true, gpu: config.gpu, socketDirectory: sockets, onOutput, signal });
       },
-      openTunnel: async signal => tunnels.open(pinServiceSocket(sockets), signal),
+      openTunnel: async (signal, access) => tunnels.open(pinServiceSocket(sockets), signal, access),
       lifetimeMs: async () => (await this.hostConfig()).serviceLifetimeSeconds * 1000,
       report: async item => { await report?.({ sessionId: this.binding.session.id, ...item }); },
       recheck: async actorId => { await this.authorize(actorId, "write"); },
@@ -1913,10 +1913,12 @@ export class RunnerSession {
         + "A start replaces the one online. status gives the address, whether cloudflared is connected, the uptime and the server's last lines of output; stop takes it offline. "
         + "It stays online until stopped, until someone stops the session's work, until the session closes or is archived, or for the host's service lifetime at most. "
         + "It starts only for the host's owner or a member they granted host commands, and isn't taken in a read-only request. "
-        + "Only the declared port is reachable through it, and it is public: anyone with the address can open it.",
+        + "Only the declared port is reachable through it. By default (access: link) only its link opens it: the address the call answers with carries a secret, which a browser that opens it keeps as a cookie for a day, and the bare address answers 401; anyone the link is given to, and everyone who can read this session, can open it. "
+        + "access: public makes it open to anyone with the address, for clients that can't follow a link, such as webhooks.",
         executionMode: "sequential",
         parameters: obj({
           action: StringEnum(tunnelActions),
+          access: opt(StringEnum(tunnelAccesses)),
           serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
             directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
             timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
@@ -1942,7 +1944,7 @@ export class RunnerSession {
           if (run.options?.access === "read") {
             throw new RunnerError(403, "Putting a server online is an effect a Read-only message doesn't take: ask in a message that may act. Nothing ran.");
           }
-          const json = JSON.stringify({ action: "start", serve: request.serve });
+          const json = JSON.stringify({ action: "start", serve: request.serve, access: request.access });
           const operation: ExtensionToolOperation = { kind: "extension.tool", source: "piki:tunnel", tool: "tunnel",
             arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
             digest: createHash("sha256").update(json).digest("hex") };
@@ -1952,7 +1954,7 @@ export class RunnerSession {
           const id = approval.id;
           try {
             await this.recheckTool(attribution);
-            const started = await this.sessionTunnel().start(request.serve!, attribution.initiatedBy, call.abortSignal);
+            const started = await this.sessionTunnel().start(request.serve!, attribution.initiatedBy, call.abortSignal, request.access);
             await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.#waits.kept(id, `Online at ${started.url}`) }); });
             return text({ ...attribution, ...started });
           } catch (error) {

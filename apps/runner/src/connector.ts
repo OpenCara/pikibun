@@ -34,7 +34,7 @@ import { HostExtensions } from "./extensions/host.js";
 import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
-import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
+import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions, type TunnelAccess } from "./tunnel-host.js";
 import type { SessionTunnelReport } from "../../../packages/shared/src/tunnel.js";
 
 const STATE_FILE = "connector.json";
@@ -637,7 +637,7 @@ export class LocalConnector {
       compaction: this.options.localModels.compaction, identity: this.options.localModels.identity,
       ...(this.hostExtensions ? { extensions: this.runnerExtensions(this.hostExtensions) } : {}),
       ...(this.browser ? { browser: () => this.browser?.current(), browserStatus: () => this.browser?.status() } : {}),
-      ...(this.tunnels && this.tunnel ? { tunnels: { open: (socket: string, signal?: AbortSignal) => this.tunnels!.open(socket, signal), status: () => this.tunnel?.status() } } : {}),
+      ...(this.tunnels && this.tunnel ? { tunnels: { open: (socket: string, signal?: AbortSignal, access?: TunnelAccess) => this.tunnels!.open(socket, signal, access), status: () => this.tunnel?.status() } } : {}),
       reportTunnel: async report => this.reportTunnel(await this.connection(), report),
       authorize: async request => this.authorize(await this.connection(), request),
       reportActivity: async (sessionId, activity) => this.reportActivity(await this.connection(), sessionId, activity),
