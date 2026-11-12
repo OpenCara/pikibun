@@ -1,6 +1,7 @@
 import { signal, Text, untracked, View } from "nsh";
 import {
-  pikiCommandExtensions, pikiExtension, pikiSessionToolExtensions, pikiWorkflowExtensions, sessionToolExtensionOn, type PikiExtensionInfo,
+  pikiCommandExtensions, pikiControlPlaneExtensions, pikiExtension, pikiSessionToolExtensions, pikiWorkflowExtensions, sessionToolExtensionOn,
+  type PikiExtensionInfo,
 } from "../../../../packages/shared/src/piki-extensions";
 import {
   descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, workspaceTools, type ExtensionOffer, type ShadowKind, type WorkspaceTool, type WorkspaceTools,
@@ -184,17 +185,22 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
               <Each of={listed()} key={extension => extension.source}>
                 {extension => {
                   const cli = () => pikiExtension(extension().source);
+                  const controlPlane = () => cli()?.controlPlane === true;
                   const offer = () => extensionOffer(extension().source, installed());
                   const hostsWithIt = () => current().hosts.filter(host => host.availability?.[extension().source]?.status === "installed").length;
                   return (
-                    <CollapsibleRow leading={<Icon name="tool" size={16} color={palette().muted} />} title={cli() ? `${cli()!.title} · ${extension().source}` : extension().source}
-                      hint={extensionHint(offer(), extension().enabled ? shadowedOf(extension().source) : undefined, 300, undefined,
+                    <CollapsibleRow leading={<Icon name={controlPlane() ? "sparkles" : "tool"} size={16} color={palette().muted} />} title={cli() ? `${cli()!.title} · ${extension().source}` : extension().source}
+                      hint={controlPlane() ? `${descriptionSummary(cli()!.description, 300)}\nRuns in Pikibun itself: hosts install nothing`
+                        : extensionHint(offer(), extension().enabled ? shadowedOf(extension().source) : undefined, 300, undefined,
                         `${cli() ? "On" : "Installed on"} ${hostsWithIt()} of ${current().hosts.length} ${current().hosts.length === 1 ? "host" : "hosts"}`)}
                       trailing={<Badge tone={extension().enabled ? "success" : "neutral"}>{extension().enabled ? "On" : "Off"}</Badge>}>
                       <If when={offer()?.tools.length}>
                         <ToolList tools={offer()!.tools.map(tool => ({ ...tool, source: extension().source }))} shadowed={extension().enabled ? shadowedOf(extension().source) : undefined} />
                       </If>
-                      <Each of={current().hosts} key={host => host.id}>
+                      <If when={controlPlane()}>
+                        <Small>{`${cli()?.description ?? ""} Members see Auto in the new session's host and model menus, and in a session's model menu, while it is on.`}</Small>
+                      </If>
+                      <Each of={controlPlane() ? [] : current().hosts} key={host => host.id}>
                         {host => {
                           const availability = () => host().availability?.[extension().source];
                           const installable = () => !cli() && host().ownerId === user.id && host().report?.remoteInstalls === true && availability() && availability()!.status !== "installed";
@@ -213,7 +219,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                           );
                         }}
                       </Each>
-                      <If when={!current().hosts.length}><Small>No host is connected to this workspace yet</Small></If>
+                      <If when={!current().hosts.length && !controlPlane()}><Small>No host is connected to this workspace yet</Small></If>
                       <If when={cli()?.tool && cli()?.install && cli()?.account}>
                         <Small>{`Each host needs ${cli()?.tool} installed (${cli()?.install}) where its sandbox finds it. It acts as the session's owner, with ${cli()?.account} in Pikibun: it reads the workspace's repositories, and writes only outside Read only, on the session owner's own host. Turn on read-only under Edit to keep it from writing.`}</Small>
                         <View style={{ flexDirection: "row" }}><Button small variant="ghost" icon="external-link" label="How to install it" onPress={() => openExternal(cli()!.install!)} /></View>
@@ -288,6 +294,7 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
   const offer = () => (normalized() ? extensionOffer(normalized()!, props.installed) : undefined);
   const offered = () => pikiCommandExtensions().filter(item => !props.taken.some(used => used.source === item.source));
   const workflows = () => pikiWorkflowExtensions().filter(item => !props.taken.some(used => used.source === item.source));
+  const features = () => pikiControlPlaneExtensions().filter(item => !props.taken.some(used => used.source === item.source));
   const editingCli = Boolean(existing && isPikiExtensionSource(existing.source));
   const extra = () => Object.keys(settings()).filter(name => !props.flags?.some(flag => flag.name === name));
   function submit() {
@@ -328,12 +335,22 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
           </View>
         </Field>
       </If>
-      <Field label="Source" error={parsed().invalid} hint={editingCli ? "Built into the connector: its version is each host's connector's"
+      <If when={!existing && features().length}>
+        <Field label="Pikibun features" hint="These run in Pikibun itself, not on hosts, so nothing is installed anywhere: they change what members can choose.">
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            <Each of={features()} key={item => item.source}>
+              {item => <Button small variant={normalized() === item().source ? "primary" : "outline"} label={item().title} disabled={props.busy} onPress={() => source.set(item().source)} />}
+            </Each>
+          </View>
+        </Field>
+      </If>
+      <Field label="Source" error={parsed().invalid} hint={editingCli ? (cli()?.controlPlane ? "Part of Pikibun itself, not of hosts' connectors" : "Built into the connector: its version is each host's connector's")
         : existing ? "Change the version to move every host to it: until a host's owner installs it there, sessions on that host run without it"
         : "npm:<package>@<exact version>, git:<https URL>@<full commit>, or piki:<name>. A Pi extension package, pinned"}>
         <TextField monospace value={source()} onChange={value => source.set(value)} disabled={props.busy || editingCli} maxLength={512} placeholder="npm:cc-safety-net@2.7.2" autoFocus={!existing} />
       </Field>
-      <If when={offer()} else={<If when={normalized()}><Note>What it is and its tools show here once a host that has it installed at this version reports them.</Note></If>}>
+      <If when={cli()?.controlPlane}><Note>{`${cli()!.description} It has no settings.`}</Note></If>
+      <If when={cli()?.controlPlane ? undefined : offer()} else={<If when={normalized() && !cli()?.controlPlane}><Note>What it is and its tools show here once a host that has it installed at this version reports them.</Note></If>}>
         {current => (
           <View style={{ gap: 8 }}>
             <If when={current().description}><Note>{`${current().description!.trim()}${cli()?.tool ? ` It runs ${cli()!.tool} as the host's owner is signed in to it.` : ""}`}</Note></If>
@@ -344,7 +361,7 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
         )}
       </If>
       <If when={replacing()}><Note>{`The workspace uses ${replacing()?.source}: this replaces it, in its place.`}</Note></If>
-      <If when={existing}>
+      <If when={existing && !cli()?.controlPlane}>
         <If when={props.flags !== undefined} else={<Note>Its settings show here once a host that has it installed reports them.</Note>}>
           <If when={props.flags?.length || extra().length} else={<Note>This extension has no settings.</Note>}>
             <ExtensionSettingsFields flags={props.flags ?? []} settings={settings()} onChange={value => settings.set(value)} busy={props.busy} />

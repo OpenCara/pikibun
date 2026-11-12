@@ -1,14 +1,16 @@
 import { computed, effect, Scroll, signal, Text, untracked, View, type JSX } from "nsh";
 import { Switch } from "nsh/base";
 import {
-  canCreateSessions, chatOptionsBody, preferredSelection, segment, type ChatSelection, type ConnectorInfo, type ModelDefinition,
-  type SessionRecord, type Workspace, type WorkspaceRepositoryList,
+  AUTO_TASK_LIMIT, canCreateSessions, chatOptionsBody, errorMessage, preferredSelection, segment, type AccessMode, type AutoChoiceAnswer,
+  type AutoChoiceRequest, type ChatSelection, type ConnectorInfo, type ModelDefinition, type SessionRecord, type ThinkingLevel, type Workspace,
+  type WorkspaceRepositoryList,
 } from "../shared";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
 import { Composer } from "../components/Composer";
 import { NewWorkspaceSheet } from "../components/NewWorkspaceSheet";
 import { HostDetails, UnsandboxedHost } from "../hosts";
-import { useAppData } from "../lib/app-data";
+import { useAppData, type AutoPreference } from "../lib/app-data";
+import { AUTO, createAutoMode } from "../lib/auto-mode";
 import { createAttachments, createFileOptions, encodeImages, handOverAttachments, imagesUnavailable, withFilesNote } from "../lib/attachments";
 import { session } from "../lib/auth";
 import { createDraft, forgetSentDraft, newSessionDraftId, saveDraft } from "../lib/drafts";
@@ -107,18 +109,61 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       .sort((a, b) => Number(b.ownerId === user.id) - Number(a.ownerId === user.id));
   });
   const thisComputerHost = () => { const id = personal() ? thisComputerHostId() : undefined; return id ? hosts().find(item => item.id === id && item.online) : undefined; };
-  const host = () => hosts().find(item => item.id === choice()) ?? thisComputerHost() ?? hosts().find(item => item.id === data.lastChat()?.connectorId)
+  const manualHost = () => hosts().find(item => item.id === choice()) ?? thisComputerHost() ?? hosts().find(item => item.id === data.lastChat()?.connectorId)
     ?? hosts().find(item => item.online) ?? hosts()[0];
+  const autoMode = createAutoMode(() => props.workspace.id);
+  const autoPick = signal<AutoPreference | null>(null);
+  const autoWanted = () => autoPick() ?? data.lastAuto();
+  const autoHost = () => autoMode.enabled() && autoWanted().host;
+  const autoModel = () => autoMode.enabled() && autoWanted().model;
+  const autoOn = () => autoHost() || autoModel();
+  const setAuto = (value: AutoPreference) => { autoPick.set(value); data.rememberAuto(value); };
+  const kept = signal<ChatSelection | null>(null);
+  const autoExtras = signal<{ thinkingLevel?: ThinkingLevel; access: AccessMode }>({ access: "auto" });
+  const resolution = signal<{ key: string; choice: AutoChoiceAnswer } | null>(null);
+  const autoError = signal("");
+  const autoRequest = (): AutoChoiceRequest | null => {
+    if (!autoOn()) return null;
+    const fixedHost = autoHost() ? undefined : manualHost();
+    if (!autoHost() && !fixedHost) return null;
+    const keptModel = autoHost() && !autoModel() ? kept()?.model : undefined;
+    return { task: content().trim().slice(0, AUTO_TASK_LIMIT), ...(fixedHost ? { connectorId: fixedHost.id } : {}), ...(keptModel ? { model: keptModel } : {}) };
+  };
+  const host = () => {
+    if (!autoHost()) return manualHost();
+    const chosen = resolution()?.choice.connectorId;
+    return chosen ? hosts().find(item => item.id === chosen) : undefined;
+  };
   const hostModel = (wanted?: { provider: string; modelId: string }) => {
     const current = host();
     return wanted && current && current.models.some(item => sameModel(item, wanted)) ? modelList()?.find(item => item.connectorId === current.id && sameModel(item, wanted)) : undefined;
   };
   const chat = signal<{ key: string; value: ChatSelection } | null>(null);
-  const selection = (): ChatSelection => {
+  const manualSelection = (): ChatSelection => {
     const current = host();
     const picked = chat();
     return current && picked?.key === current.id ? picked.value
       : preferredSelection(current, data.lastChat(), current?.models.map(item => hostModel(item)).find(Boolean), item => Boolean(hostModel(item)));
+  };
+  const autoSelection = (): ChatSelection => {
+    const choice = resolution()?.choice;
+    const extras = autoExtras();
+    if (!choice || choice.connectorId !== host()?.id) return { access: extras.access };
+    const thinkingLevel = extras.thinkingLevel ?? choice.thinkingLevel;
+    return { model: { provider: choice.provider, modelId: choice.modelId }, ...(thinkingLevel ? { thinkingLevel } : {}), access: extras.access };
+  };
+  const selection = (): ChatSelection => (autoModel() ? autoSelection() : autoHost() ? kept() ?? autoSelection() : manualSelection());
+  const changeSelection = (value: ChatSelection) => {
+    const extras = () => autoExtras.set({ ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel } : {}), access: value.access });
+    if (autoModel()) { extras(); return; }
+    if (autoHost()) {
+      const chosen = autoSelection().model;
+      if (!kept() && chosen && value.model && sameModel(chosen, value.model)) { extras(); return; }
+      kept.set(value);
+      return;
+    }
+    const current = host();
+    if (current) chat.set({ key: current.id, value });
   };
   const model = () => hostModel(selection().model);
   const foreign = () => Boolean(host() && host()!.ownerId !== user.id);
@@ -146,8 +191,40 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     if (environmentHost !== undefined && id !== environmentHost) onHost.set(null);
     environmentHost = id;
   });
+  let autoAsked = false;
+  effect(() => {
+    const request = autoRequest();
+    if (!request) { resolution.set(null); autoError.set(""); autoAsked = false; return; }
+    const key = JSON.stringify(request);
+    if (untracked(resolution)?.key === key) return;
+    const controller = new AbortController();
+    const run = () => {
+      autoMode.choose(request, controller.signal).then(
+        choice => { if (!controller.signal.aborted) { resolution.set({ key, choice }); autoError.set(""); } },
+        reason => { if (!controller.signal.aborted) autoError.set(errorMessage(reason)); },
+      );
+    };
+    if (!autoAsked) { autoAsked = true; run(); return () => controller.abort(); }
+    const timer = setTimeout(run, 600);
+    return () => { controller.abort(); clearTimeout(timer); };
+  });
+  async function resolveAuto(): Promise<boolean> {
+    const request = autoRequest();
+    if (!request) return !autoOn();
+    const key = JSON.stringify(request);
+    if (untracked(resolution)?.key === key) return true;
+    try {
+      resolution.set({ key, choice: await autoMode.choose(request) });
+      autoError.set("");
+      return true;
+    } catch (reason) {
+      autoError.set(errorMessage(reason));
+      return false;
+    }
+  }
 
   async function start() {
+    if (autoOn() && !await resolveAuto()) return;
     const current = host();
     const picked = model();
     if (!canStart() || !picked || !current) return;
@@ -157,6 +234,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     const attached = untracked(attachments.files);
     const options = chatOptionsBody(current, selection(), "submit");
     const hostEnvironment = runOnHost();
+    const chosenByAuto = autoOn();
     void action.run(async () => {
       const { api } = session();
       const images = await encodeImages(pasted);
@@ -166,7 +244,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       } });
       const sessionId = result.session.id;
       data.setLastWorkspaceId(props.workspace.id);
-      data.rememberChat(current, selection());
+      if (!chosenByAuto) data.rememberChat(current, selection());
       if (message || images.length || attached.length) {
         try {
           const note = await attachments.upload(sessionId, attached);
@@ -204,6 +282,9 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       return { tone: "info", title: "No host to chat with yet", text: "Pair your own Pi to chat with its models, or ask a workspace member to share their host here.",
         action: settings({ name: "settings", section: "hosts" }, "Pair a host", "new-pair-host") };
     }
+    if (autoOn() && autoError()) {
+      return { tone: "warning", title: "Auto couldn't choose", text: `${autoError()} Choose a host and model yourself, or try again.`, retry: () => { resolution.set(null); autoError.set(""); void resolveAuto(); } };
+    }
     const current = host();
     if (!current) return null;
     if (!model()) return { tone: "warning", title: `No model on ${current.name}`, text: `${current.name} offers no model you can use in this workspace.`, refresh: true };
@@ -213,12 +294,33 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     return null;
   };
 
+  const hostLabel = () => {
+    const current = host();
+    if (autoHost()) return current ? `Auto · ${current.name}` : autoError() ? "Auto" : "Auto · choosing…";
+    return current ? current.name : loading() ? "Loading…" : "No host";
+  };
+  const selectHost = (value: string) => {
+    if (value === AUTO) { kept.set(null); setAuto({ ...autoWanted(), host: true }); return; }
+    choice.set(value);
+    if (autoHost()) setAuto({ ...autoWanted(), host: false });
+  };
   const hostPicker = () => (
-    <Picker<string> title="Host" value={host()?.id} onSelect={value => choice.set(value)} placement="bottom"
-      trigger={<Chip small testID="new-host" icon="monitor" label={host() ? host()!.name : loading() ? "Loading…" : "No host"} disabled={hosts().length < 2 || action.busy()}
+    <Picker<string> title="Host" value={autoHost() ? AUTO : host()?.id} onSelect={selectHost} placement="bottom"
+      trigger={<Chip small testID="new-host" icon={autoHost() ? "sparkles" : "monitor"} label={hostLabel()} disabled={(hosts().length < 2 && !autoMode.enabled()) || action.busy()}
         tone={host() && !host()!.online ? "warning" : undefined} />}
-      options={hosts().map(item => ({ value: item.id, label: item.name, icon: "monitor" as const, hint: `${item.ownerId === user.id ? "Your host" : `${item.ownerName}'s host`} · ${hostState(item)}` }))} />
+      options={[
+        ...(autoMode.enabled() ? [{ value: AUTO, label: "Auto", icon: "sparkles" as const,
+          hint: "Chooses the host for the task: online, shared here, yours first, the least busy, with a GPU or the model the task needs" }] : []),
+        ...hosts().map(item => ({ value: item.id, label: item.name, icon: "monitor" as const, hint: `${item.ownerId === user.id ? "Your host" : `${item.ownerName}'s host`} · ${hostState(item)}` })),
+      ]} />
   );
+  const autoModelOption = () => (autoMode.enabled() ? {
+    selected: autoModel(),
+    hint: "Chooses the model and reasoning for the task: a light model for simple ones, a frontier model with more reasoning for complex ones",
+    onSelect: () => { autoExtras.set({ access: selection().access }); setAuto({ ...autoWanted(), model: true }); },
+    onLeave: () => setAuto({ ...autoWanted(), model: false }),
+  } : undefined);
+  const autoReasons = () => (autoOn() && resolution() && host()?.id === resolution()!.choice.connectorId ? resolution()!.choice.reasons.join(" ") : "");
   const environmentPicker = () => (
     <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} onSelect={value => onHost.set(value === "host")} placement="bottom"
       trigger={<Chip small testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} tone={runOnHost() ? "danger" : undefined} disabled={action.busy()} />}
@@ -261,8 +363,9 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
           placeholder="Describe a task, or start without one"
           hint=""
           tools={
-            <ChatOptionsBar host={host()} value={selection()} onChange={value => { const current = host(); if (current) chat.set({ key: current.id, value }); }}
-              showAccess />
+            <If when={host() || !autoHost()} else={<Chip testID="chat-model" icon="sparkles" label={autoError() ? "Auto" : "Auto · choosing…"} disabled />}>
+              <ChatOptionsBar host={host()} value={selection()} onChange={changeSelection} showAccess auto={autoModelOption()} />
+            </If>
           } />
         <View testID="new-context" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", rowGap: 4, columnGap: 2, paddingHorizontal: 4 }}>
           {props.workspacePicker}
@@ -281,6 +384,9 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
             </If>
           </View>
         </View>
+        <If when={autoReasons()}>
+          {reasons => <View style={{ paddingHorizontal: 8 }}><Small testID="new-auto-reasons">{`Auto: ${reasons()}`}</Small></View>}
+        </If>
         <If when={showDetails() && !action.busy() ? host() : undefined}>
           {current => (
             <View testID="new-host-details-panel" style={{ gap: 10, padding: 16, borderWidth: 1, borderColor: palette().border, borderRadius: radius.large }}>

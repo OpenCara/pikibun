@@ -627,6 +627,46 @@ again by its source.
 Later: waiting on GitLab and Azure DevOps reviews without polling (a `wait` for the forges' own read tools); a window
 kept by the session rather than the agent, so a long one survives the session closing (a scheduled prompt at its end).
 
+## Auto mode: piki:auto-mode
+
+Choosing a host and a model is a decision made before a session exists, from what the control plane knows: which hosts
+the member may use, which are online, what each offers and how busy it is. `piki:auto-mode` adds **Auto** to the new
+session's host and model menus, and to a session's model menu, and makes that decision for the task.
+
+41. **A control-plane extension.** It is in the catalogue (`controlPlane: true`, `optIn: true`), so a workspace chooses
+    it like the others, but no connector loads it: `connectorPikiExtensions` builds factories only for what has one, the
+    server leaves it out of the list a connector gets (`connectorWorkspaceExtensions`) and of a host page's workspaces,
+    and a host can't require it (`invalid_host_config`). A connector never learning of it means no host shows it
+    missing and older connectors are unaffected. It is off until added, and a workspace that removes or turns it off
+    has no Auto: `GET /api/workspaces/:id/auto-mode` answers `{ enabled }`, which the client reads before offering it,
+    and `POST` refuses with `auto_mode_off`. It isn't among the default extensions, so no migration adds it; the add
+    sheet offers it under **Pikibun features**, and it has no settings.
+42. **Deterministic, not a model call.** The control plane has no model of its own, and a host's model would need a
+    host chosen first, cost a request per keystroke, and send the task to whichever host answers. So the choice is a
+    pure function in `packages/shared/src/auto-mode.ts`, the same in tests as in the server: `assessTask` scores the
+    task (length, listed points, several requirements, code, file names, words that ask for depth such as
+    refactor, migration, concurrency, security, performance, and ones that ask for little such as a typo, explain,
+    small) into simple, moderate or complex, and notes a GPU where it names one; an empty task is moderate.
+    `modelTier` puts each model in a light, standard or frontier tier by its id and name (mini, haiku, lite, small
+    parameter counts; opus, pro, o3, gpt-5, large ones). A task gets the model whose tier is closest to its own,
+    falling short costing three times what going over does, so a complex task takes the strongest there is rather
+    than nothing; the reasoning level is low, medium or high, clamped to what the model offers.
+43. **The host from its details.** Only online hosts the member may start a session on (theirs, or shared with the
+    workspace) and only models the member may use there (`usableModels`) count. Each scores by its best model's fit,
+    then: the member's own host first (no trust to give), the sandboxed before an unverified sandbox before an
+    unsandboxed host, a GPU where the task needs one, and fewer sessions working on it now (sessions with activity
+    `working`, all workspaces, capped). The answer says why in three sentences (the task, the host, the model), which
+    the new session shows under its menus; how busy a host is shows only as busy or idle.
+44. **What the member keeps.** Auto host and Auto model are separate: a host the member picked is sent as
+    `connectorId` and only the model is chosen; a model picked while the host is Auto is sent as `model` and the host is
+    chosen among those offering it; changing only the access or reasoning keeps nothing. The new session asks at once
+    the first time, then 600 ms after the last change, a failed answer included, and once more on Start if the task
+    changed, so it starts with the choice for what was sent; a shared host it picks
+    still needs the member's trust, as when picked by hand. The client remembers Auto per menu
+    (`pikibun.lastAuto`), and never what Auto chose as the member's last host and model (`pikibun.lastChat`), which
+    manual choices start from. In a session, Auto in the model menu is per message, on the session's host, and never
+    remembered: a short follow-up ("go ahead") would otherwise drop a complex task to a light model.
+
 ## Where things are
 
 | Part | Where |
@@ -652,6 +692,7 @@ kept by the session rather than the agent, so a long one survives the session cl
 | Added on binding; a connector's list; install requests refused | `apps/server/src/authority/extension-policy.ts` (`addPikiExtensions`), called from `authority/repositories.ts`; `apps/server/src/extensions.ts`; migrations `0048`/`0041` |
 | Session tools added with a source or by hand, listed off until then (note 38) | `packages/shared/src/host-extensions.ts` (`withSessionToolsListed`); `extension-policy.ts` (`workspaceExtensions`, `addPikiExtensions`, `addDocumentSourceExtension`, called from `authority/sources/sources.ts`); migrations `0058`/`0051`; tests in `tests/extensions.test.ts`, `tests/session-tool-extensions-migration.test.ts` |
 | Workspace and host pages | `apps/nsh/src/settings/workspace-extensions.tsx`, `host-extensions.tsx` |
+| Auto mode: the task, the tiers, the choice | `packages/shared/src/auto-mode.ts`; `apps/server/src/auto-mode.ts` (the API, `workspaceConnectorInfos` in `connectors.ts`); `apps/nsh/src/lib/auto-mode.ts`, `screens/NewSession.tsx`, `components/ChatOptionsBar.tsx`, `screens/SessionView.tsx`; tests in `tests/auto-mode.test.ts`, `apps/nsh/tests/parity.test.tsx` |
 | Tests | `tests/piki-extensions.test.ts`, `api-access.test.ts`, and in `push-broker`, `host-extensions`, `extensions`, `repositories`, `local-connector` |
 
 ## Later
@@ -666,3 +707,5 @@ kept by the session rather than the agent, so a long one survives the session cl
   app's installations, instead of the owner's sign-in for writes.
 - Report on the host's page whether each command is installed where its sandboxes find it.
 - `tea` for Gitea and Forgejo; Bitbucket has no official CLI.
+- Auto mode: learn from what members switch away from, take a model's price and context window from Pi's model
+  registry once connectors report them, and let a workspace weigh speed against strength in settings.

@@ -19,6 +19,7 @@ export interface PikiExtensionInfo {
   replaces?: `piki:${string}`;
   documentKinds?: readonly DocumentKind[];
   workflow?: boolean;
+  controlPlane?: boolean;
 }
 
 function documentSourceExtension(name: string, kind: DocumentKind, title: string): PikiExtensionInfo {
@@ -148,6 +149,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     description: "Adds the files its context-files setting names to each message's system prompt, as Pi does with a project's AGENTS.md: each clone's AGENTS.md or CLAUDE.md by default, other files in a clone, host:<name> files from the host owner's context directory, or https:// pages.",
     providers: [],
   },
+  {
+    name: "auto-mode", source: "piki:auto-mode", title: "Auto mode", controlPlane: true, optIn: true,
+    description: "Adds Auto to the host and model dropdowns: Pikibun picks the session's host, model and reasoning level for the task, from how complex it looks (simple ones get a light model, complex ones a frontier model with more reasoning) and the hosts' details (online, shared here, yours, sandboxed, with a GPU where the task needs one, how busy). Pikibun runs it itself: hosts install nothing. Without it, the dropdowns have no Auto.",
+    providers: [],
+  },
 ] as const satisfies readonly PikiExtensionInfo[]);
 
 export function pikiExtension(source: string): PikiExtensionInfo | undefined {
@@ -160,6 +166,14 @@ export function pikiCommandExtensions(): PikiExtensionInfo[] {
 
 export function pikiWorkflowExtensions(): PikiExtensionInfo[] {
   return pikiExtensions.filter(item => item.workflow === true);
+}
+
+export function pikiControlPlaneExtensions(): PikiExtensionInfo[] {
+  return pikiExtensions.filter(item => item.controlPlane === true);
+}
+
+export function isControlPlaneExtension(source: string): boolean {
+  return pikiExtension(source)?.controlPlane === true;
 }
 
 export function pikiSessionToolExtensions(): PikiExtensionInfo[] {
