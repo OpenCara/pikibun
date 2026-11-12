@@ -367,10 +367,31 @@ function nativeCallback(c: AppContext, native: NativeRequest, params: Record<str
   return native.callback === 'page' ? `${appOrigin(c.env)}${NATIVE_PAGE_PATH}?${query}` : `${NATIVE_CALLBACK}?${query}`;
 }
 
+// Hands a native sign-in's result back to the app. Its own web view watches for this server's page, so that one is a
+// redirect. The system browser gets a page with an Open Pikibun link instead of a redirect to pikibun://auth: browsers
+// launch another app only on a user's gesture, and drop a redirect to one without a word when nothing was pressed
+// since the app opened the browser, as when GitHub skips its authorize page for an app the account authorized
+// before. The page also tries the link at once, which browsers that allow it ask about or follow.
+function nativeReturn(c: AppContext, native: NativeRequest, params: Record<string, string>): Response {
+  const link = nativeCallback(c, native, params);
+  if (native.callback === 'page') return c.redirect(link);
+  const href = link.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const [title, detail] = params.error === undefined
+    ? ['Return to Pikibun', 'You signed in with GitHub. Open Pikibun to finish: this link works for two minutes.']
+    : ['Sign-in did not complete', 'Open Pikibun to see why, and try again from there.'];
+  return c.html('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+    + `<meta name="color-scheme" content="light dark"><meta http-equiv="refresh" content="0;url=${href}"><title>Pikibun</title>`
+    + '<main style="font:16px/1.5 system-ui,sans-serif;text-align:center;max-width:28em;margin:25vh auto 0;padding:0 16px">'
+    + `<h1 style="font-size:24px;font-weight:400">${title}</h1><p>${detail}</p>`
+    + `<p style="margin:24px 0"><a id="open-app" href="${href}" style="display:inline-block;padding:10px 22px;border-radius:8px;`
+    + 'background:#1f6feb;color:#fff;text-decoration:none;font-weight:500">Open Pikibun</a></p>'
+    + '<p style="font-size:13px;opacity:.7">If your browser asks, let it open Pikibun. Then you can close this tab.</p></main></html>');
+}
+
 async function nativeFailure(c: AppContext, error: unknown, native: NativeRequest): Promise<Response> {
   if (!(error instanceof HTTPException)) throw error;
   const body = await error.getResponse().json().catch(() => null) as { code?: unknown } | null;
-  return c.redirect(nativeCallback(c, native, { error: typeof body?.code === 'string' ? body.code : 'sign_in_failed' }));
+  return nativeReturn(c, native, { error: typeof body?.code === 'string' ? body.code : 'sign_in_failed' });
 }
 
 function nativeDone(c: AppContext) {
@@ -513,8 +534,8 @@ async function githubCallback(c: AppContext) {
     signedIn = await githubUser(c, config, code, saved.verifier, saved.invite_token_hash, !!native);
   } catch (error) {
     if (error instanceof SignupRefusal) {
-      return c.redirect(native ? nativeCallback(c, native, { error: error.code })
-        : `${appOrigin(c.env)}/?${new URLSearchParams({ error: error.message }).toString()}`);
+      return native ? nativeReturn(c, native, { error: error.code })
+        : c.redirect(`${appOrigin(c.env)}/?${new URLSearchParams({ error: error.message }).toString()}`);
     }
     if (native) return nativeFailure(c, error, native);
     throw error;
@@ -533,7 +554,7 @@ async function githubCallback(c: AppContext) {
     } catch (error) {
       return nativeFailure(c, error, native);
     }
-    return c.redirect(nativeCallback(c, native, { code }));
+    return nativeReturn(c, native, { code });
   }
   const session = await newSession(c.env, user.id, 'github');
   await dbResult(c.env.DB.batch([tokenStatement, session.statement]));
