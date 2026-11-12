@@ -112,11 +112,17 @@ async function download(asset, directory) {
 
 const distribution = () => path.join(repository, ".cache", "nsh", NSH_VERSION, "nsh");
 
-export async function nshComponent(name) {
+export async function nshComponent(name, { required = false } = {}) {
   const component = NSH_COMPONENTS[name];
   if (!component) throw new Error(`No Native Shell component ${name} is pinned (${Object.keys(NSH_COMPONENTS).join(", ")}).`);
-  if (process.env.NSH_BIN || !release()) return;
-  if (component.host && component.host !== `${platform()}-${arch()}`) return;
+  const skipped = process.env.NSH_BIN ? "NSH_BIN names another nsh, which adds its own components"
+    : !release() ? `no Native Shell CLI is pinned for ${platform()}-${arch()}`
+    : component.host && component.host !== `${platform()}-${arch()}` ? `it is published for ${component.host} only`
+    : "";
+  if (skipped) {
+    if (required) throw new Error(`The pinned ${name} component can't be added here: ${skipped}.`);
+    return;
+  }
   const root = distribution();
   const record = path.join("components", `${name}.json`);
   if ([record, ...component.paths].every(item => existsSync(path.join(root, item)))) return;
@@ -137,9 +143,11 @@ export async function nshComponent(name) {
 }
 
 export function targetComponent(args) {
-  const at = args.findIndex(argument => argument === "--target" || argument.startsWith("--target="));
+  const end = args.indexOf("--");
+  const own = end < 0 ? args : args.slice(0, end);
+  const at = own.findIndex(argument => argument === "--target" || argument.startsWith("--target="));
   if (at < 0) return null;
-  const target = args[at].startsWith("--target=") ? args[at].slice("--target=".length) : args[at + 1];
+  const target = own[at].startsWith("--target=") ? own[at].slice("--target=".length) : own[at + 1];
   return TARGET_COMPONENTS[target] ?? null;
 }
 
@@ -189,7 +197,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (first === "--build-web") await buildWeb(rest[0] ? path.resolve(rest[0]) : undefined);
     else if (first === "--component") {
       await nshBinary();
-      for (const name of rest) await nshComponent(name);
+      for (const name of rest) await nshComponent(name, { required: true });
     } else {
       const args = [first, ...rest].filter(argument => argument !== undefined);
       const bin = await nshBinary();

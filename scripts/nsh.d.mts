@@ -3,7 +3,7 @@ export const NSH_COMMIT: string;
 export const NSH_ASSET_SHA256: Readonly<Record<string, string>>;
 export const NSH_COMPONENTS: Readonly<Record<string, { asset: string; paths: string[]; host?: string }>>;
 export function nshBinary(): Promise<string>;
-export function nshComponent(name: string): Promise<void>;
+export function nshComponent(name: string, options?: { required?: boolean }): Promise<void>;
 export function targetComponent(args: string[]): string | null;
 export function releaseAsset(url: string, options?: { attempts?: number; delayMs?: number }): Promise<Buffer>;
 export function checkAsset(asset: string, bytes: Uint8Array): void;
