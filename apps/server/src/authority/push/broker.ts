@@ -102,7 +102,7 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
       fail(403, 'automatic_push_not_admitted', 'Pushes run only for an unexpired message that may act, from the person who sent it.');
     }
     await requireCallbackScope(c, owner.row, connectorId);
-    await requireOperationTool(c.env, owner.row, operation);
+    await requireOperationTool(c.env, owner.row, actorId, operation);
     const used = await c.env.DB.query<{ count: number }>('SELECT COUNT(*) AS count FROM push_credentials WHERE admission_id = ? AND id <> ?')
       .bind(admissionId, credentialId).first();
     if ((used?.count ?? 0) >= automaticPushesPerAdmission) fail(429, 'automatic_push_limit', 'This message already used its automatic pushes.');

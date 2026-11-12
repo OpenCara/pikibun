@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import type { Operation, ToolName } from '../../../../packages/shared/src/types.js';
 import { fail, identifier, jsonObject, now } from '../http.js';
 import type { AppEnv, Env, SessionRow } from '../types.js';
-import { requireOwnerTool } from './tool-groups.js';
+import { requireSessionTool } from './tool-groups.js';
 import { requireSession } from './access.js';
 import { auditStatement } from './audit.js';
 import { sessionChanged } from './changes.js';
@@ -12,14 +12,14 @@ const operationTools: Record<Exclude<Operation['kind'], 'permission' | 'extensio
   'git.push': 'git_push', 'git.repin': 'git_repin', 'host.bash': 'host_bash',
 };
 
-export async function requireOperationTool(env: Env, row: SessionRow, operation: Operation): Promise<void> {
+export async function requireOperationTool(env: Env, row: SessionRow, actorId: string, operation: Operation): Promise<void> {
   if (operation.kind === 'permission') fail(400, 'invalid_operation', 'Permission requests were removed: a session runs its tools or refuses them.');
   if (operation.kind === 'extension.tool') return;
-  await requireOwnerTool(env, row, operation.kind === 'program' ? operation.tool : operationTools[operation.kind]);
+  await requireSessionTool(env, row, actorId, operation.kind === 'program' ? operation.tool : operationTools[operation.kind]);
 }
 
-export async function requireToolCall(env: Env, row: SessionRow, tool: ToolName): Promise<void> {
-  await requireOwnerTool(env, row, tool);
+export async function requireToolCall(env: Env, row: SessionRow, actorId: string, tool: ToolName): Promise<void> {
+  await requireSessionTool(env, row, actorId, tool);
 }
 
 export async function sessionsNeedGranted(env: Env, row: SessionRow, need: 'write' | 'audience'): Promise<boolean> {
