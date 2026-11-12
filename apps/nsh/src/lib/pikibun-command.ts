@@ -101,6 +101,7 @@ type Request<R> = R extends unknown ? Omit<R, "id"> : never;
 
 export interface ChannelOptions<Event extends { type: string }> {
   launch(): CommandLink;
+  before?(): Promise<void>;
   eventTypes: ReadonlySet<string>;
   problem(lines: readonly string[], code: number | null | undefined): LaunchProblem;
   failure(id: number, message: string, notReady: boolean): Result<Event>;
@@ -117,6 +118,8 @@ export class CommandChannel<Event extends { type: string }, Req extends { id: nu
   private nextId = 1;
   private stopping = false;
   private problem?: LaunchProblem;
+  private waiting?: Promise<void>;
+  private starts = 0;
 
   constructor(private readonly options: ChannelOptions<Event>) {}
 
@@ -167,10 +170,21 @@ export class CommandChannel<Event extends { type: string }, Req extends { id: nu
     });
   }
 
+  private async start(): Promise<void> {
+    const start = ++this.starts;
+    if (this.options.before) {
+      const waiting = this.options.before().catch(() => undefined);
+      this.waiting = waiting;
+      try { await waiting; } finally { if (this.waiting === waiting) this.waiting = undefined; }
+      if (start !== this.starts) throw new Error("stopped");
+    }
+    return this.spawn();
+  }
+
   get launchFailure(): LaunchProblem | undefined { return this.problem; }
 
   async request(message: Request<Req>, sent?: (id: number) => void): Promise<Result<Event>> {
-    this.ready ??= this.spawn();
+    this.ready ??= this.start();
     const starting = this.ready;
     try { await starting; }
     catch {
@@ -188,7 +202,16 @@ export class CommandChannel<Event extends { type: string }, Req extends { id: nu
 
   async shutdown(timeoutMs = 10_000): Promise<void> {
     const link = this.link;
-    if (!link) { this.ready = undefined; return; }
+    if (!link) {
+      const waiting = this.waiting;
+      this.starts++;
+      this.ready = undefined;
+      if (!waiting) return;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([waiting, new Promise<void>(resolve => { deadline = setTimeout(resolve, timeoutMs); })]);
+      clearTimeout(deadline);
+      return;
+    }
     this.stopping = true;
     const exited = new Promise<void>(resolve => link.onExit(() => resolve()));
     const deadline = setTimeout(() => link.kill(), timeoutMs);

@@ -41,6 +41,15 @@ export function ThisServerPanel(props: { server: ThisServer; signedInTo?: string
   return (
     <SectionPage testID="settings-self-host">
       <If when={server.problem()}>{problem => <CommandProblem kind={problem().kind} message={"message" in problem() ? (problem() as { message: string }).message : ""} server={server} />}</If>
+      <If when={thisComputer().updating()}>
+        <Section title="Pikibun's command" testID="self-host-updating">
+          <CardBody>
+            <Banner tone="info" title={`Updating Pikibun's command on ${computerName}`}>
+              {`Pikibun was updated, so npm is updating its pikibun command to match: this takes a minute, and Pikibun on ${computerName} starts once it is done. Its output is under ${computerTitle}'s Recent activity.`}
+            </Banner>
+          </CardBody>
+        </Section>
+      </If>
       <ServerSection server={server} signedInTo={props.signedInTo} onUse={props.onUse} />
       <GitHubSection server={server} />
       <ActivitySection server={server} />

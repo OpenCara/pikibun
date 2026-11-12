@@ -60,6 +60,15 @@ export function ThisComputerPanel(props: { host: ThisComputerHost; server: strin
   return (
     <SectionPage testID="settings-this-computer">
       <If when={host.problem()}>{problem => <CommandProblem problem={problem()} host={host} server={props.server} />}</If>
+      <If when={host.updating()}>
+        <Section title="Pikibun's command" testID="this-computer-updating">
+          <CardBody>
+            <Banner tone="info" title={`Updating Pikibun's command on ${computerName}`}>
+              {`Pikibun was updated, so npm is updating its pikibun command to match: this takes a minute, and ${computerTitle} hosts again once it is done. Its output is under Recent activity below.`}
+            </Banner>
+          </CardBody>
+        </Section>
+      </If>
       <ThisServerSection host={host} server={props.server} createPairing={props.createPairing} />
       <If when={host.inspection()}>
         <SandboxSection host={host} server={props.server} />

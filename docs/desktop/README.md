@@ -28,7 +28,7 @@ Download the latest `app-v` release from [GitHub Releases](https://github.com/Op
 - **Windows** (x64): `Pikibun-<version>-windows-x64-setup.exe`. It installs Pikibun for your user only, with no administrator rights needed.
 - **Linux** (x86_64): `Pikibun-<version>-linux-x86_64.tar.gz`. Unpack it into a folder you can write to, and start `Pikibun` from that folder.
 
-The app checks for new releases when it starts and every six hours. You can also check under **Settings → Profile → This app**. See **Updates** on [the apps page](../apps.md) for how an update installs.
+The app checks for new releases when it starts and every six hours. You can also check under **Settings → Profile → This app**. See **Updates** on [the apps page](../apps.md) for how an update installs. The first time an updated app starts, it also updates the `pikibun` command it installed for [host](host.md) and [self host](self-host.md).
 
 ## Switching between modes
 

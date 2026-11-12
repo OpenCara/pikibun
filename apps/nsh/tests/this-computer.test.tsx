@@ -1,12 +1,14 @@
 import { describe, expect, open, test } from "nsh/test";
-import { appCliFolder, hostCommand, installCommand, installFailure, launchProblem } from "../src/lib/this-computer";
+import type { HostEvent, HostRequest } from "../../runner/src/app-host-protocol";
+import { CommandChannel } from "../src/lib/pikibun-command";
+import { appCliFolder, COMMAND_UPDATED_KEY, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, updateFailure } from "../src/lib/this-computer";
 import { server, signedIn } from "./fixtures";
 
 const SERVER = "https://pikibun.test";
 const PAIRING_ID = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
 
-async function openPanel(params: Record<string, unknown> = {}) {
-  const app = await open("./harness/this-computer.tsx", { platform: "macos", width: 900, height: 2400, host: { params } });
+async function openPanel(params: Record<string, unknown> = {}, storage: Record<string, string> = {}) {
+  const app = await open("./harness/this-computer.tsx", { platform: "macos", width: 900, height: 2400, host: { params }, storage });
   const sent = () => app.texts().filter(text => text.startsWith("sent ")).map(text => text.slice("sent ".length));
   const showsText = (part: string) => app.texts().some(text => text.includes(part));
   return { app, sent, showsText };
@@ -25,6 +27,8 @@ describe("starting Pikibun's command", () => {
     expect(appCliFolder("macos", "/Users/ada/Library/Application Support/com.pikibun.app/")).toBe("/Users/ada/Library/Application Support/com.pikibun.app/cli");
     expect(appCliFolder("windows", "C:\\Users\\Ada\\AppData\\Roaming\\com.pikibun.app")).toBe("C:\\Users\\Ada\\AppData\\Roaming\\com.pikibun.app\\cli");
     expect(appCliFolder("linux", null)).toBe(null);
+    expect(ownCopyManifest("macos", "/Users/ada/Library/Application Support/com.pikibun.app/cli")).toBe("/Users/ada/Library/Application Support/com.pikibun.app/cli/node_modules/pikibun/package.json");
+    expect(ownCopyManifest("windows", "C:\\data\\cli")).toBe("C:\\data\\cli\\node_modules\\pikibun\\package.json");
   });
 
   test("starts the app's own copy where there is one, else the one on PATH", () => {
@@ -58,6 +62,13 @@ describe("starting Pikibun's command", () => {
     expect(installFailure(["npm error code E404", "npm error 404 Not Found"], { code: 1 })).toBe("npm couldn't install pikibun: npm error code E404 npm error 404 Not Found");
   });
 
+  test("says why an automatic update failed, and that the command at hand stays", () => {
+    expect(updateFailure(["npm error code ENOTFOUND", "npm error network request to https://registry.npmjs.org/pikibun failed"], { code: 1 }))
+      .toMatch(/^npm couldn't update Pikibun's command \(npm error code ENOTFOUND npm error network request to https:\/\/registry\.npmjs\.org\/pikibun failed\)\. This (Computer|Mac) keeps the one it has, and Pikibun tries again the next time it opens\.$/);
+    expect(updateFailure([], { code: null, error: "timed out after 300000 ms" })).toMatch(/^npm couldn't update Pikibun's command \(timed out after 300000 ms\)\./);
+    expect(updateFailure([], { code: 1 })).toMatch(/^npm couldn't update Pikibun's command \(exit code 1\)\./);
+  });
+
   test("tells a missing command from an old one, and shows anything else as it said", () => {
     expect(launchProblem(["zsh:1: command not found: pikibun"], 127)).toEqual({ kind: "missing" });
     expect(launchProblem(["bash: line 1: exec: pikibun: not found"], 127)).toEqual({ kind: "missing" });
@@ -66,6 +77,120 @@ describe("starting Pikibun's command", () => {
     expect(launchProblem(["pikibun needs Node.js 24 or newer; this is Node.js 20.11.0."], 1)).toMatchObject({ kind: "failed" });
     expect(launchProblem(["bash: no job control in this shell", "Connector failed. Check --help."], 1))
       .toEqual({ kind: "failed", message: "The host could not start: bash: no job control in this shell Connector failed. Check --help." });
+  });
+});
+
+describe("a command that waits for its update", () => {
+  function waitingChannel(update: Promise<void>) {
+    const state = { launched: 0 };
+    const channel = new CommandChannel<HostEvent, HostRequest>({
+      launch: () => { state.launched++; throw new Error("launched"); }, before: () => update, eventTypes: new Set(["ready", "result"]), problem: launchProblem, subject: "The host",
+      failure: (id, message) => ({ type: "result", id, ok: false, error: { code: "failed", message } }),
+      onEvent: () => undefined, onOutput: () => undefined, onExit: () => undefined,
+    });
+    return { channel, state };
+  }
+  const soon = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+  test("shut down meanwhile, it waits for the update too and doesn't start until it is asked again", async () => {
+    let finish = () => {};
+    const { channel, state } = waitingChannel(new Promise<void>(resolve => { finish = resolve; }));
+    const asked = channel.request({ type: "inspect" });
+    let stopped = false;
+    const stopping = channel.shutdown().then(() => { stopped = true; });
+    await soon(30);
+    expect(stopped).toBe(false);
+    finish();
+    await stopping;
+    expect((await asked).ok).toBe(false);
+    expect(state.launched).toBe(0);
+    await channel.request({ type: "inspect" });
+    expect(state.launched).toBe(1);
+  });
+
+  test("shutting down gives up on an update that doesn't finish, and still starts nothing", async () => {
+    let finish = () => {};
+    const { channel, state } = waitingChannel(new Promise<void>(resolve => { finish = resolve; }));
+    const asked = channel.request({ type: "inspect" });
+    await channel.shutdown(30);
+    expect(state.launched).toBe(0);
+    finish();
+    expect((await asked).ok).toBe(false);
+    expect(state.launched).toBe(0);
+  });
+});
+
+describe("after the app is updated", () => {
+  const before = { [COMMAND_UPDATED_KEY]: "0.35.0" };
+  const installs = (sent: string[]) => sent.filter(line => line === "install").length;
+
+  test("its own copy of the command is updated from npm before the host is asked anything, once for that version", async () => {
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, appVersion: "0.36.0", ownCopy: "0.9.0" }, before);
+    await app.waitFor("id:this-computer-start");
+    expect(sent()[0]).toBe("install");
+    expect(installs(sent())).toBe(1);
+    expect(app.storage()[COMMAND_UPDATED_KEY]).toBe("0.36.0");
+    expect(app.shows("id:this-computer-updating")).toBe(false);
+    await app.press("id:this-computer-refresh");
+    await app.press("text:Recent activity");
+    await app.waitUntil(() => showsText("npm updated pikibun to 0.10.0 in Pikibun's own folder."));
+    expect(showsText("Pikibun is now 0.36.0: updating its own pikibun command (0.9.0) from npm.")).toBe(true);
+    expect(installs(sent())).toBe(1);
+  });
+
+  test("the page says so while npm runs, and the host waits for it", async () => {
+    const { app, sent } = await openPanel({ paired: SERVER, appVersion: "0.36.0", ownCopy: "0.9.0", npmMs: 1500 }, before);
+    await app.waitFor("id:this-computer-updating");
+    expect(app.shows("text:Updating Pikibun's command on this Mac")).toBe(true);
+    expect(sent()).toEqual(["install"]);
+    expect(app.shows("id:this-computer-start")).toBe(false);
+    await app.waitFor("id:this-computer-start");
+    expect(app.shows("id:this-computer-updating")).toBe(false);
+  });
+
+  test("a copy the same version of the app updated is left alone, as is a computer where the app has none", async () => {
+    const same = await openPanel({ paired: SERVER, appVersion: "0.36.0", ownCopy: "0.9.0" }, { [COMMAND_UPDATED_KEY]: "0.36.0" });
+    await same.app.waitFor("id:this-computer-start");
+    expect(installs(same.sent())).toBe(0);
+    const global = await openPanel({ paired: SERVER, appVersion: "0.36.0" }, before);
+    await global.app.waitFor("id:this-computer-start");
+    expect(installs(global.sent())).toBe(0);
+    expect(global.app.storage()[COMMAND_UPDATED_KEY]).toBe("0.35.0");
+  });
+
+  test("a copy installed before the app kept track is updated once", async () => {
+    const { app, sent } = await openPanel({ paired: SERVER, appVersion: "0.36.0", ownCopy: "0.9.0" });
+    await app.waitFor("id:this-computer-start");
+    expect(sent()[0]).toBe("install");
+    expect(app.storage()[COMMAND_UPDATED_KEY]).toBe("0.36.0");
+  });
+
+  test("an update that fails keeps the command at hand, says why, and is tried again at the next launch", async () => {
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, appVersion: "0.36.0", ownCopy: "0.9.0", npm: "missing" }, before);
+    await app.waitFor("id:this-computer-start");
+    expect(sent()[0]).toBe("install");
+    expect(app.storage()[COMMAND_UPDATED_KEY]).toBe("0.35.0");
+    expect(app.shows("id:this-computer-command")).toBe(false);
+    await app.press("text:Recent activity");
+    await app.waitUntil(() => showsText("warning: npm couldn't update Pikibun's command (zsh:1: command not found: npm). This Mac keeps the one it has, and Pikibun tries again the next time it opens."));
+  });
+
+  test("a copy the app can't look for is left as it is, and the host's activity says why", async () => {
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, appVersion: "0.36.0", ownCopy: "unreadable" }, before);
+    await app.waitFor("id:this-computer-start");
+    expect(installs(sent())).toBe(0);
+    expect(app.storage()[COMMAND_UPDATED_KEY]).toBe("0.35.0");
+    await app.press("text:Recent activity");
+    await app.waitUntil(() => showsText("warning: Pikibun couldn't look for its own pikibun command (filesystem read of `cli/node_modules/pikibun/package.json` is not granted by capabilities.fs.read), so it wasn't updated with the app."));
+  });
+
+  test("installing the command from the page counts as this version's update", async () => {
+    const { app } = await openPanel({ command: "missing", appVersion: "0.36.0" });
+    await app.waitFor("id:this-computer-install-button");
+    expect(app.storage()[COMMAND_UPDATED_KEY]).toBeUndefined();
+    await app.press("id:this-computer-install-button");
+    await app.waitFor("id:this-computer-pair-button");
+    expect(app.storage()[COMMAND_UPDATED_KEY]).toBe("0.36.0");
   });
 });
 

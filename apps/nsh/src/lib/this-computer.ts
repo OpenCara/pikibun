@@ -1,11 +1,14 @@
+import { readFile } from "fs/promises";
 import { platform, signal, Storage, untracked } from "nsh";
 import nshProcess from "process";
+import { APP_VERSION } from "../app-version";
 import type {
   HostEvent, HostInspection, HostRequest, HostState, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
 } from "../../../runner/src/app-host-protocol";
 import {
   appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine,
 } from "./pikibun-command";
+import { isVersion } from "./version";
 
 export { appCliFolder, INSTALL_COMMAND, installCommand } from "./pikibun-command";
 export type { LaunchProblem, LogLine } from "./pikibun-command";
@@ -56,7 +59,38 @@ export const spawnInstall: Installer = () => {
 let installer: Installer = spawnInstall;
 export function setInstaller(next: Installer): void { installer = next; }
 
-export function installFailure(lines: readonly string[], result: { code?: number | null; error?: string | null }): string {
+export const COMMAND_UPDATED_KEY = "pikibun.commandUpdatedFor";
+
+export function ownCopyManifest(os: string, cli: string): string {
+  return [cli, "node_modules", "pikibun", "package.json"].join(os === "windows" ? "\\" : "/");
+}
+
+async function ownCopyVersion(): Promise<string | null> {
+  const cli = appCliFolder(platform.os, nshProcess.dataDir);
+  if (!cli) return null;
+  let text: string;
+  try { text = await readFile(ownCopyManifest(platform.os, cli), "utf8"); }
+  catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const manifest = JSON.parse(text) as { version?: unknown };
+    return typeof manifest.version === "string" ? manifest.version : "";
+  } catch { return ""; }
+}
+
+export interface CommandUpdate {
+  appVersion: string;
+  ownCopy(): Promise<string | null>;
+}
+
+let commandUpdate: CommandUpdate = { appVersion: APP_VERSION, ownCopy: ownCopyVersion };
+export function setCommandUpdate(next: CommandUpdate): void { commandUpdate = next; }
+
+type InstallResult = { code?: number | null; error?: string | null };
+
+export function installFailure(lines: readonly string[], result: InstallResult): string {
   const text = lines.join("\n");
   const node = `Node.js 24 or newer (from nodejs.org${platform.os === "macos" ? ", or brew install node" : ""})`;
   if (result.code === 127 || result.code === 9009 || /npm: (command )?not found|not found: npm|'npm' is not recognized/i.test(text)) {
@@ -70,6 +104,12 @@ export function installFailure(lines: readonly string[], result: { code?: number
   if (result.error) return `The install didn't finish: ${result.error}`;
   const last = lines.filter(line => line.trim()).slice(-3).join(" ");
   return last ? `npm couldn't install pikibun: ${last}` : `npm couldn't install pikibun (exit code ${result.code ?? "unknown"}).`;
+}
+
+export function updateFailure(lines: readonly string[], result: InstallResult): string {
+  const last = lines.filter(line => line.trim()).slice(-3).join(" ");
+  const why = result.error || last || `exit code ${result.code ?? "unknown"}`;
+  return `npm couldn't update Pikibun's command (${why}). ${computerTitle} keeps the one it has, and Pikibun tries again the next time it opens.`;
 }
 
 export function launchProblem(lines: readonly string[], code: number | null | undefined): LaunchProblem {
@@ -117,6 +157,7 @@ export class ThisComputerHost {
   readonly inspecting = signal(false);
   readonly problem = signal<LaunchProblem | null>(null);
   readonly installing = signal(false);
+  readonly updating = signal(false);
   readonly installError = signal("");
   readonly error = signal("");
   readonly logs = signal<LogLine[]>([]);
@@ -129,8 +170,9 @@ export class ThisComputerHost {
   private loaded?: Promise<void>;
   private server?: string;
   private inspectError = false;
+  private updated?: Promise<void>;
   private readonly channel = new CommandChannel<HostEvent, HostRequest>({
-    launch: () => launcher(), eventTypes: hostEventTypes, problem: launchProblem, subject: "The host",
+    launch: () => launcher(), before: () => this.commandUpdated(), eventTypes: hostEventTypes, problem: launchProblem, subject: "The host",
     failure: (id, message, notReady) => ({ type: "result", id, ok: false, error: { code: notReady ? "unsupported" : "failed", message } }),
     onEvent: event => this.handleEvent(event),
     onOutput: line => this.log("info", line),
@@ -260,16 +302,12 @@ export class ThisComputerHost {
     return { ok: true };
   }
 
-  async install(server?: string): Promise<Outcome> {
-    if (untracked(this.installing)) return { ok: false, error: "pikibun is already being installed." };
-    if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first." };
+  private async runInstall(): Promise<{ where: InstallRun["where"]; lines: string[]; result: InstallResult }> {
     this.installing.set(true);
-    this.installError.set("");
     const lines: string[] = [];
-    let failure: string | undefined;
     let where = "global" as InstallRun["where"];
     try {
-      const result = await new Promise<{ code?: number | null; error?: string | null }>(resolve => {
+      const result = await new Promise<InstallResult>(resolve => {
         let run: InstallRun;
         try { run = installer(); }
         catch (error) { resolve({ code: null, error: error instanceof Error ? error.message : String(error) }); return; }
@@ -283,16 +321,54 @@ export class ThisComputerHost {
         });
         run.onExit(resolve);
       });
-      if (result.code !== 0) failure = installFailure(lines, result);
+      return { where, lines, result };
     } finally {
       this.installing.set(false);
     }
+  }
+
+  commandUpdated(): Promise<void> {
+    this.updated ??= this.updateOwnCommand().catch(() => undefined);
+    return this.updated;
+  }
+
+  private async updateOwnCommand(): Promise<void> {
+    const { appVersion, ownCopy } = commandUpdate;
+    if (!hostsHere || !isVersion(appVersion)) return;
+    if (await Storage.getItem(COMMAND_UPDATED_KEY).catch(() => null) === appVersion) return;
+    let had: string | null;
+    try { had = await ownCopy(); }
+    catch (error) {
+      this.log("warning", `Pikibun couldn't look for its own pikibun command (${error instanceof Error ? error.message : String(error)}), so it wasn't updated with the app. Pikibun tries again the next time it opens.`);
+      return;
+    }
+    if (had === null || untracked(this.installing)) return;
+    this.updating.set(true);
+    try {
+      this.log("info", `Pikibun is now ${appVersion}: updating its own pikibun command${had ? ` (${had})` : ""} from npm.`);
+      const { lines, result } = await this.runInstall();
+      if (result.code !== 0) { this.log("warning", updateFailure(lines, result)); return; }
+      const has = await ownCopy().catch(() => null);
+      this.log("info", has && has === had ? `pikibun ${has} is the latest already.` : `npm updated pikibun${has ? ` to ${has}` : ""} in Pikibun's own folder.`);
+      await Storage.setItem(COMMAND_UPDATED_KEY, appVersion).catch(() => undefined);
+    } finally {
+      this.updating.set(false);
+    }
+  }
+
+  async install(server?: string): Promise<Outcome> {
+    if (untracked(this.installing)) return { ok: false, error: "pikibun is already being installed." };
+    if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first." };
+    this.installError.set("");
+    const { where, lines, result } = await this.runInstall();
+    const failure = result.code !== 0 ? installFailure(lines, result) : undefined;
     if (failure) {
       this.installError.set(failure);
       this.log("error", failure);
       return { ok: false, error: failure };
     }
     this.log("info", where === "app" ? "npm installed pikibun in Pikibun's own folder." : "npm installed pikibun.");
+    if (where === "app" && isVersion(commandUpdate.appVersion)) await Storage.setItem(COMMAND_UPDATED_KEY, commandUpdate.appVersion).catch(() => undefined);
     await this.refresh(server);
     if (untracked(this.problem)?.kind === "missing") {
       const message = where === "app"
@@ -432,5 +508,6 @@ export function thisComputerHostId(): string | undefined {
 
 export function resumeThisComputer(): void {
   if (!hostsHere) return;
+  void thisComputer().commandUpdated();
   void thisComputer().resumeHosting();
 }

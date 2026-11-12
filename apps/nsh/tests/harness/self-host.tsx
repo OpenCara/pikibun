@@ -2,7 +2,7 @@ import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection } from "../../../runner/src/app-host-protocol";
 import type { ServerInspection } from "../../../../packages/shared/src/app-server-protocol";
 import { startGitHubSignIn } from "../../src/lib/auth";
-import { appCliFolder, installCommand, setHostLauncher, setInstaller, type HostLink, type InstallRun } from "../../src/lib/this-computer";
+import { appCliFolder, installCommand, setCommandUpdate, setHostLauncher, setInstaller, type HostLink, type InstallRun } from "../../src/lib/this-computer";
 import { setServerLauncher, thisServer } from "../../src/lib/this-server";
 import { Root } from "../../src/Root";
 import { ThisServerPanel } from "../../src/settings/SelfHost";
@@ -10,10 +10,14 @@ import { Button } from "../../src/ui";
 
 const LOCAL = "http://127.0.0.1:7878";
 const CLAIM = "c".repeat(43);
-const params = embedder.params as { app?: unknown; command?: unknown; saved?: unknown; sandboxed?: unknown; hostProblem?: unknown };
+const params = embedder.params as { app?: unknown; command?: unknown; saved?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown };
 let command = String(params.command ?? "ok");
 let saved = params.saved === true ? "Ov23liSaved" : undefined;
 const sent = signal<string[]>([]);
+if (typeof params.appVersion === "string") {
+  const ownCopy = typeof params.ownCopy === "string" ? params.ownCopy : null;
+  setCommandUpdate({ appVersion: params.appVersion, ownCopy: async () => ownCopy });
+}
 
 function link(answer: (request: { type: string; id: number; [key: string]: unknown }, emit: (value: unknown) => void) => void, refuse: () => string[] | null): HostLink {
   const messages: ((value: unknown) => void)[] = [];

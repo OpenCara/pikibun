@@ -111,6 +111,16 @@ describe("Self host", () => {
     expect(showsText("Update Pikibun's command on this Mac")).toBe(true);
     expect(app.shows("text:Update pikibun")).toBe(true);
   });
+
+  test("after the app is updated, its own copy of the command is updated before Pikibun's server is asked anything", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 900, height: 2400, network: localHealth(false),
+      host: { params: { saved: true, sandboxed: true, appVersion: "0.36.0", ownCopy: "0.9.0" } }, storage: { "pikibun.commandUpdatedFor": "0.35.0" } });
+    const sent = () => app.texts().filter(text => text.startsWith("sent ")).map(text => text.slice("sent ".length));
+    await app.waitFor("id:self-host-github-saved");
+    expect(sent().slice(0, 2)).toEqual(["install", JSON.stringify({ type: "inspect" })]);
+    expect(app.storage()["pikibun.commandUpdatedFor"]).toBe("0.36.0");
+    expect(app.shows("id:self-host-updating")).toBe(false);
+  });
 });
 
 describe("Self host in the app", () => {

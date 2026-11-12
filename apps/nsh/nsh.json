@@ -11,7 +11,7 @@
     "picker": true,
     "openUrl": true,
     "statusBar": true,
-    "fs": { "read": ["${homeDir}", "${dataDir}/updates"], "write": ["${dataDir}/updates"] },
+    "fs": { "read": ["${homeDir}", "${dataDir}/updates", "${dataDir}/cli"], "write": ["${dataDir}/updates"] },
     "process": {
       "execute": ["zsh", "bash", "sh", "cmd", "schtasks"],
       "exit": true,
