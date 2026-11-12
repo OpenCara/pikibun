@@ -78,7 +78,7 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    are refused with a reason; one that predates GitLab and Azure DevOps names only `api.github.com` in grants, and an
    older connector leaves out the API hosts it doesn't know.
 8. **In the sandbox, as the session owner.** A session with a sandbox and an egress proxy runs the command there, as
-   one sandbox operation (`RunnerSession.runPikiCommand`, through `bash` with every word quoted): it sees the host's
+   one sandbox operation (`SessionPiki`'s sandbox command in `apps/runner/src/session/piki.ts`, through `bash` with every word quoted): it sees the host's
    `/usr`, so the host's owner installs the command there. Its API requests go through the proxy, which adds the session
    owner's access (see [credentialed APIs](egress.md#credentialed-apis-gh-without-a-token-in-the-sandbox)):
    - **Reads, always**: of api.github.com with the read-only GitHub App token for the workspace's repositories the
@@ -92,7 +92,7 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
      that credential only to the owner's own hosts: a host someone else owns could take it from
      its connector. Elsewhere writes are refused with that reason, and `github_comment`, `github_issue`, `github_merge`
      and `git_push` remain. Sandbox operations run one at a time per session, so no other command runs while a lease
-     holds, and only a call `runExtensionTool` admitted runs a command at all.
+     holds, and only a call `SessionPiki` admitted for an extension's tool runs a command at all.
    The card is still decided like a host command (rule 1): it is the same card as before.
 9. **The host's own sign-in, only where the session is the host's.** The command runs on the host, as it first did,
    with the host's own sign-in to it (rule 4), only (a) where the session itself runs on its host (an unsandboxed host,
@@ -646,7 +646,7 @@ kept by the session rather than the agent, so a long one survives the session cl
 | Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`, `pikiExtensionOn`, `extensionSwitchOn`, `documentKindsOff`); `session.ts` (`applyOptions`, `requireSessionTool`, `documentKindsOff`); tests in `tests/runner-schedule.test.ts` |
 | Tools defined as data (node, rust, go, dotnet, make, source_read) | [tool-definitions.md](tool-definitions.md) |
 | gh, glab, az: refused and read-only arguments, token variables | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
-| A session's factories, where it runs the command, write leases | `apps/runner/src/extensions/piki/index.ts`, `adapter.ts`; `session.ts` (`pikiSession`, `runPikiCommand`) |
+| A session's factories, where it runs the command, write leases | `apps/runner/src/extensions/piki/index.ts`, `adapter.ts`; `session/piki.ts` (`SessionPiki`: the extension host, its piki session, extension tool calls and sandbox commands) |
 | The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/authority/api-access.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
 | Added on binding; a connector's list; install requests refused | `apps/server/src/authority/extension-policy.ts` (`addPikiExtensions`), called from `authority/repositories.ts`; `apps/server/src/extensions.ts`; migrations `0048`/`0041` |

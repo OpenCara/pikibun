@@ -1,15 +1,14 @@
-import type { ExtensionToolOperation } from "../../../packages/shared/src/types.js";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readFile, rm } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
-import { createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
+import { createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
-import { EXTENSION_ARGUMENTS_SHOWN, accessModes, thinkingLevels } from "../../../packages/shared/src/types.js";
+import { accessModes, thinkingLevels } from "../../../packages/shared/src/types.js";
 import type { SessionsToolRequest, SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import type { ModelFailureCause } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
@@ -17,11 +16,8 @@ import { bindingRemote } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
-import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
+import { ExtensionPrompts, SessionExtensions, settleToolNames, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
 import { SessionBuiltins } from "./extensions/builtin.js";
-import { toolOutputPath } from "./tool-output.js";
-import { inScriptCall } from "./script-output.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
@@ -46,7 +42,7 @@ import { HelperWorkspace } from "./helper-workspace.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { BranchReports } from "./session/branch-reports.js";
-import { HOST_COMMANDS_RULE, HostCommandPolicy } from "./session/host-commands.js";
+import { HostCommandPolicy } from "./session/host-commands.js";
 import { ApprovalWaits } from "./session/approval-waits.js";
 import { endView, entryImages, entryView, refusedView } from "./session/entries.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
@@ -62,8 +58,9 @@ import type { ToolContext } from "./session/tools/context.js";
 import { buildTools } from "./session/tools/index.js";
 import { definedTool } from "./session/tools/defined.js";
 import { SessionDefinitions } from "./session/definitions.js";
+import { SessionPiki } from "./session/piki.js";
 import {
-  Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SnapshotFile,
+  Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
 import { thumbnailImage } from "./images.js";
 import type { GitRemote } from "./git-remote.js";
@@ -81,7 +78,6 @@ import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRe
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import type { DocumentKind, GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
-import { commandLimits } from "./host-config.js";
 
 export type { Run } from "./session/state.js";
 export type ForkedEntry = { kind: string; model: readonly Message[] };
@@ -191,7 +187,7 @@ export class RunnerSession {
   readonly #mirrors: SessionMirrors | undefined;
   readonly #calls: ToolCalls;
   readonly #toolContext: ToolContext;
-  readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" }; script: boolean }>();
+  readonly #piki: SessionPiki;
   #hostExtensions?: SessionExtensions;
   #currentModel?: { provider: string; modelId: string; thinkingLevel?: string };
   #opening: Promise<void> = Promise.resolve();
@@ -293,6 +289,12 @@ export class RunnerSession {
       sessionId: binding.session.id, windows: process.platform === "win32" && this.sandbox.isolated, config,
       tool: definition => definedTool(this.#toolContext, definition), registry: () => this.#registry, toolNames: () => this.tools.map(tool => tool.name),
       added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); },
+    });
+    this.#piki = new SessionPiki({
+      binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
+      waits: this.#waits, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), model: () => this.#currentModel ?? this.modelRef,
+      thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
+      mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(),
     });
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
@@ -494,7 +496,7 @@ export class RunnerSession {
       for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
     }
     if (this.config.extensions && !this.#packed) {
-      this.#hostExtensions = new SessionExtensions(this.extensionHost(), this.tools.map(tool => tool.name));
+      this.#hostExtensions = new SessionExtensions(this.#piki.host(), this.tools.map(tool => tool.name));
       await this.chosenExtensions().catch(() => []);
     }
     const resolved = this.config.resolveModels ? await this.config.resolveModels(this.binding.model)
@@ -977,102 +979,6 @@ export class RunnerSession {
     const { selected, created } = host.select(chosen.map(item => item.source));
     for (const extension of created) this.#registry?.install(extension);
     return selected;
-  }
-
-  private extensionHost(): ExtensionHost {
-    return {
-      directory: this.sandbox.hostWorktree,
-      ...(this.config.extensions?.modelRegistry ? { modelRegistry: this.config.extensions.modelRegistry } : {}),
-      model: () => {
-        const current = this.#currentModel ?? this.modelRef;
-        return current && this.config.extensions?.modelRegistry?.find(current.provider, current.modelId) as never;
-      },
-      thinkingLevel: () => this.#currentModel?.thinkingLevel,
-      state: async source => {
-        const item = (await this.extensionChoice()).chosen.find(candidate => candidate.source === source);
-        return { active: !!item, settings: item?.required?.settings ?? item?.workspace?.settings ?? {} };
-      },
-      runTool: (call, execute) => this.runExtensionTool(call, execute),
-      piki: this.pikiSession(),
-      hookTimeoutMs: 30_000,
-      inputTimeoutMs: 60_000,
-      warn: (source, message) => { process.stderr.write(`Session ${this.binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
-    };
-  }
-
-  private pikiSession(): PikiSession {
-    const hostOwner = this.binding.session.connectorOwnerId;
-    const ownSession = !!hostOwner && hostOwner === this.binding.owner.id;
-    return {
-      hostSignIn: this.#onHost || (ownSession && this.config.pikiHostSignIn === true),
-      ...(this.#egress && !this.#onHost ? { sandbox: (run: PikiSandboxRun) => this.runPikiCommand(run) } : {}),
-      saveOutput: (callId, tool, output) => this.savePikiOutput(callId, tool, output),
-      fromScript: callId => this.#pikiCalls.get(callId)?.script === true,
-    };
-  }
-
-  private async savePikiOutput(callId: string, tool: string, output: string): Promise<string> {
-    const call = this.#pikiCalls.get(callId);
-    if (!call) throw new RunnerError(403, "its call no longer runs");
-    const path = toolOutputPath(tool, callId);
-    await this.#calls.saveOutput(path, output, async () => { await this.#calls.recheck(call.attribution); });
-    return path;
-  }
-
-  private async runPikiCommand(run: PikiSandboxRun): Promise<CliRun> {
-    const call = this.#pikiCalls.get(run.callId);
-    if (!call) throw new RunnerError(403, `${run.command} runs only in a call of its tool this session admitted. Nothing ran.`);
-    const lease = call.write && !run.readOnly ? this.#egress?.apiLease() : undefined;
-    try {
-      const env = { ...run.env };
-      if (lease) for (const name of run.tokenEnv) env[name] = lease.token;
-      const command = sandboxShellCommand(run.command, run.args, env, run.directory);
-      const output = await this.sandbox.execute({ kind: "bash", command }, run.readOnly, () => this.#calls.recheck(call.attribution), {
-        unbounded: true, ...await this.#calls.commandOptions(), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
-      return { exitCode: 0, signal: null, output };
-    } catch (error) {
-      if (!(error instanceof SandboxProcessError)) throw error;
-      const output = [error.stdout, error.stderr].filter(Boolean).join("\n");
-      return { exitCode: error.exitCode, signal: error.signal, output, ...(error.exitCode === null && !error.signal ? { failure: error.message } : {}) };
-    } finally {
-      lease?.release();
-    }
-  }
-
-  private async runExtensionTool(call: Parameters<ExtensionHost["runTool"]>[0], execute: Parameters<ExtensionHost["runTool"]>[1]): Promise<ToolExecutionResult> {
-    const attribution = await this.#calls.actor(call.api, true);
-    const state = await this.metadata();
-    const run = state.runs[state.toolActors[String(call.api.taskId)]!.runKey]!;
-    if (run.options?.access === "read") {
-      throw new RunnerError(403, `${call.tool} comes from an extension, which runs outside the sandbox: a Read-only message doesn't run it. Nothing ran.`);
-    }
-    const { chosen, automaticTools } = await this.extensionChoice();
-    const item = chosen.find(candidate => candidate.source === call.source);
-    if (!item) throw new RunnerError(403, `This extension (${call.source}) no longer applies to this session; ${call.tool} didn't run.`);
-    const json = JSON.stringify(call.arguments);
-    const operation: ExtensionToolOperation = { kind: "extension.tool", source: call.source, tool: call.tool,
-      arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
-      digest: createHash("sha256").update(json).digest("hex") };
-    const trusted = await this.hostCommands.allowed(attribution.initiatedBy);
-    if (!trusted && !automaticTools) throw new RunnerError(403, `${call.tool} comes from an extension, which ${HOST_COMMANDS_RULE}`);
-    const approval = await this.runOperation(attribution.initiatedBy, operation, String(call.api.taskId), { hostChecked: true });
-    if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
-    const id = approval.id;
-    await this.#calls.recheck(attribution);
-    const limits = commandLimits((await this.hostConfig()).commandTimeoutSeconds);
-    const callId = String(call.api.callId);
-    this.#pikiCalls.set(callId, { write: trusted, attribution, script: inScriptCall() });
-    try {
-      const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
-      const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: this.#waits.kept(id, shown || "(no output)") }); });
-      return result;
-    } catch (error) {
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.#waits.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
-      throw error;
-    } finally {
-      this.#pikiCalls.delete(callId);
-    }
   }
 
   private async chatOptions(input: unknown, mode: "write" | "ask", _actorId: string): Promise<ChatOptions | undefined> {

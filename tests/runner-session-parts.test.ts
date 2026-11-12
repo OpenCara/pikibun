@@ -29,6 +29,8 @@ import { buildTools } from "../apps/runner/src/session/tools/index.js";
 import type { Registry, ToolExecutionApi, ToolRegistration } from "@earendil-works/pi-durable";
 import { SessionDefinitions, type SessionDefinitionsOptions } from "../apps/runner/src/session/definitions.js";
 import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/src/tool-definitions.js";
+import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session/piki.js";
+import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -610,6 +612,82 @@ test("defined tools: a refresh adds what Pikibun defines now as one more extensi
   const unopened = definitionsFixture({ config: { toolDefinitions: async () => served }, registry: () => undefined });
   await unopened.definitions.refresh([]);
   assert.deepEqual([without.installed, unopened.installed], [[], []]);
+});
+
+function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {}, grants: Record<string, Partial<AuthorizationResult>> = { "github:2": { hostCommands: "auto" } }) {
+  const events: string[] = [];
+  const sandbox = { hostWorktree: "/worktree", execute: async (operation: { command: string }, readOnly: boolean, authorize: () => Promise<void>) => {
+    await authorize();
+    events.push(`execute ${readOnly ? "read-only " : ""}${operation.command}`);
+    return "done";
+  }, writeFile: async (path: string) => { events.push(`write ${path}`); }, listFiles: async () => [] } as unknown as SessionWorkspace;
+  const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
+  const calls = new ToolCalls({ ownerId: "github:1", sandbox, hostCommands: hostPolicy().policy, authorize, metadata: async () => structuredClone(state),
+    hostConfig: async () => defaultHostConfig });
+  const piki = new SessionPiki({
+    binding: { session: { id: "s1", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox, onHost: false,
+    sandboxed: true, calls, hostCommands: hostPolicy({ ownerId: "github:1" }, grants).policy, waits: new ApprovalWaits(),
+    operations: { run: async (_actorId, operation) => { events.push(`run ${(operation as { tool: string }).tool}`); return { id: "tool-1", status: "executing" } as never; } },
+    apiLease: () => { events.push("lease"); return { token: "lease-token", release: () => { events.push("release"); } }; },
+    model: () => undefined, thinkingLevel: () => undefined,
+    extensionChoice: async () => ({ chosen: [{ source: "npm:ext", dev: false }], automaticTools: false }),
+    metadata: async () => structuredClone(state), mutate: async change => { change(state); }, hostConfig: async () => defaultHostConfig,
+    ...options,
+  });
+  return { piki, host: piki.host(), events };
+}
+
+const pikiRun = (callId: string, readOnly = false): PikiSandboxRun => ({ callId, command: "gh", args: ["pr", "view"], env: {}, tokenEnv: ["GH_TOKEN"], readOnly,
+  signal: new AbortController().signal, timeoutSeconds: 30 });
+
+test("piki: an extension's tool runs for a message that may act, while its extension applies, for someone with host commands, and its record says how it ended", async () => {
+  const state = toolState();
+  state.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;
+  const { host, events } = pikiFixture(state);
+  const call = (source = "npm:ext") => ({ source, tool: "ext_tool", arguments: { a: 1 }, api: toolApi(state), signal: new AbortController().signal, context: {} as never });
+  const result = await host.runTool(call(), async () => {
+    events.push("tool ran");
+    return { output: [{ type: "text", text: "hello" }] };
+  });
+  assert.deepEqual(result.output, [{ type: "text", text: "hello" }]);
+  assert.deepEqual(events, ["authorize github:2 write", "run ext_tool", "authorize github:2 write", "tool ran"]);
+  assert.deepEqual([state.approvals["tool-1"]!.status, state.approvals["tool-1"]!.result], ["executed", "hello"]);
+  await assert.rejects(host.runTool(call(), async () => { throw new Error("broke"); }), /broke/);
+  assert.deepEqual([state.approvals["tool-1"]!.status, state.approvals["tool-1"]!.result], ["failed", "broke"]);
+  await assert.rejects(host.runTool(call("npm:other"), async () => ({ output: [] })), /no longer applies to this session/);
+  const readOnly = toolState({ options: { access: "read" } });
+  await assert.rejects(pikiFixture(readOnly).host.runTool({ ...call(), api: toolApi(readOnly) }, async () => ({ output: [] })), /a Read-only message doesn't run it/);
+  const ungranted = toolState();
+  const refused = pikiFixture(ungranted, {}, { "github:2": {} });
+  await assert.rejects(refused.host.runTool({ ...call(), api: toolApi(ungranted) }, async () => ({ output: [] })), (error: unknown) =>
+    error instanceof RunnerError && error.message === `ext_tool comes from an extension, which ${HOST_COMMANDS_RULE}`);
+  assert.ok(!refused.events.some(event => event.startsWith("run")));
+});
+
+test("piki: a CLI runs in the sandbox only inside a call the session admitted, with the API lease only for a call that may write", async () => {
+  const state = toolState();
+  state.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;
+  const { host, events } = pikiFixture(state);
+  const piki = host.piki!;
+  assert.equal(piki.hostSignIn, false);
+  await assert.rejects(piki.sandbox!(pikiRun("call-1")), /runs only in a call of its tool this session admitted/);
+  await assert.rejects(piki.saveOutput!("call-1", "gh", "x"), /its call no longer runs/);
+  assert.equal(piki.fromScript!("call-1"), false);
+  events.length = 0;
+  await host.runTool({ source: "npm:ext", tool: "gh", arguments: {}, api: toolApi(state), signal: new AbortController().signal, context: {} as never }, async () => {
+    const written = await piki.sandbox!(pikiRun("call-1"));
+    const read = await piki.sandbox!(pikiRun("call-1", true));
+    assert.deepEqual([written.output, read.output], ["done", "done"]);
+    assert.match(await piki.saveOutput!("call-1", "gh", "long"), /gh/);
+    return { output: [] };
+  });
+  assert.deepEqual(events.slice(3), ["lease", "authorize github:2 write",
+    `execute PATH="$PATH:/usr/local/bin" && export PATH && exec env 'GH_TOKEN=lease-token' 'gh' 'pr' 'view' </dev/null 2>&1`, "release",
+    "authorize github:2 write", `execute read-only PATH="$PATH:/usr/local/bin" && export PATH && exec env 'gh' 'pr' 'view' </dev/null 2>&1`,
+    "write tool-output/gh-call-1-d39038e4.txt"], "a read-only command gets no lease");
+  const onHost = pikiFixture(state, { onHost: true }).host.piki!;
+  assert.equal(onHost.sandbox, undefined);
+  assert.equal(onHost.hostSignIn, true);
 });
 
 function instructions(input: Partial<InstructionsInput> = {}): string {
