@@ -251,6 +251,38 @@ test("the sender's next shared message steers the run at work: the agent reads i
   assert.equal(view.activity, "done");
 });
 
+test("a steer the runner stopped before pi had it, whose run ended meanwhile, runs on its own after a restart", options, async t => {
+  const f = await fixture(t);
+  const first = await submit(f.session, OWNER, "write", { content: "TEST_WRITE first.txt\nfirst", requestId: "first" });
+  await idle(f.session);
+  await pauseQueue(f.session);
+  const steerInput = { content: "TEST_WRITE late.txt\nlate", requestId: "late" };
+  const steer = await submit(f.session, OWNER, "write", steerInput);
+  await f.stop();
+  await stored(f.session, async harness => {
+    const conversation = await harness.conversation((await metadata(harness)).runs[steer.submissionId].conversationId as ConversationId, context);
+    assert.ok(conversation);
+    await conversation.commit(async tx => {
+      const doc = await tx.doc(RunnerState);
+      const current = JSON.parse(doc.json) as Metadata;
+      Object.assign(current.runs[steer.submissionId], { status: "admitting", started: true, steered: first.submissionId });
+      doc.json = JSON.stringify(current);
+    }, context);
+  });
+  const recovered = await f.reopen();
+  const view = await idle(recovered);
+  assert.deepEqual(queue(view).map(run => run.status), ["settled", "settled"]);
+  assert.equal(await file(recovered, "late.txt"), "late");
+  assert.equal(userEntries(view, steer, steerInput.content).length, 1);
+  await f.stop();
+  await stored(recovered, async harness => {
+    const run = (await metadata(harness)).runs[steer.submissionId];
+    assert.equal(run.steered, undefined, "it ran as a message of its own, not as part of the run that had ended");
+    const conversation = await harness.conversation(run.conversationId as ConversationId, context);
+    assert.equal(await conversation!.commit(tx => tx.submissionByRequest(conversation!.id, `${run.key}:steer`), context), undefined, "the steer was never admitted");
+  });
+});
+
 test("queued write/ask FIFO and receipt identity survive a fresh service over the same SQLite", options, async t => {
   const f = await fixture(t);
   await pauseQueue(f.session);

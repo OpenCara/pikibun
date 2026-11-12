@@ -35,7 +35,7 @@ export function steersInto(runs: Record<string, Run>, run: Run): string | undefi
   return running[0]!.steered ?? running[0]!.key;
 }
 
-function requeue(run: Run): void {
+export function requeue(run: Run): void {
   run.status = "queued";
   delete run.started;
   delete run.steered;

@@ -5,7 +5,7 @@ import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
-import { createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
+import { ConversationIdle, createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
 import { accessModes, thinkingLevels } from "../../../packages/shared/src/types.js";
@@ -55,7 +55,7 @@ import { definedTool } from "./session/tools/defined.js";
 import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
-import { RunQueue, submissionRequestId } from "./session/run-queue.js";
+import { requeue, RunQueue, submissionRequestId } from "./session/run-queue.js";
 import {
   Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
@@ -578,9 +578,17 @@ export class RunnerSession {
           await this.#queue.endLostInputs(run.key);
           continue;
         }
-        await this.applyOptions(conversation, run, content);
-        submission = await conversation.submit({ type: "input", content, requestId: submissionRequestId(run),
-          ...(run.steered !== undefined ? { whenBusy: "steer" as const } : {}) }, context);
+        if (run.steered !== undefined) {
+          try { submission = await conversation.submit({ type: "input", content, requestId: submissionRequestId(run), whenBusy: "steer", whenIdle: "reject" }, context); }
+          catch (error) {
+            if (!(error instanceof ConversationIdle)) throw error;
+            await this.mutate(meta => { requeue(meta.runs[run.key]!); });
+            continue;
+          }
+        } else {
+          await this.applyOptions(conversation, run, content);
+          submission = await conversation.submit({ type: "input", content, requestId: submissionRequestId(run) }, context);
+        }
       } else submission = await this.harness.submission(run.submissionId as SubmissionId, context);
       if (submission) {
         await this.mutate(meta => { const saved = meta.runs[run.key]!; saved.submissionId = submission.id; saved.status = "running"; });
