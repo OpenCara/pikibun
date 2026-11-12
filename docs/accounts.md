@@ -1,6 +1,6 @@
 # Signing in and your profile
 
-Pikibun signs people in with GitHub, and asks GitHub for the `read:user user:email repo workflow` scopes. That token is kept encrypted on the server and used to read your repositories, open your pull requests and act on GitHub for your sessions; it reaches a host only when a push uses your own account. A browser sign-in lasts 7 days, an app's sign-in 30 days. Where the operator allows it, people can also sign in with a [username and password](#username-and-password).
+Pikibun signs people in with GitHub, and asks GitHub for the `read:user user:email repo workflow` scopes. That token is kept encrypted on the server and used to read your repositories, open your pull requests and act on GitHub for your sessions; it reaches a host only when a push uses your own account. A browser sign-in lasts 7 days, an app's sign-in 30 days. Where the operator allows it, people can also sign in with a [username and password](#username-and-password). An app can also [sign in with a code](#signing-in-an-app-with-a-code) made where you are already signed in.
 
 ## Who can create an account
 
@@ -43,8 +43,23 @@ A **GitHub account** can sign in with its username and a password too, once it s
 - **Identity**: **Display name**, **Git author name** and **Git author email**. Commits in sessions you own use this identity; new sessions pick up saved changes.
 - **Environment**: up to 32 non-secret `APP_` variables (for example `APP_PROJECT=web`) sent to the host of every session you own. Values are at most 2,048 characters, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE_KEY` or `API_KEY` are refused: credentials belong in Git accounts or in Pi on the host.
 - **Git accounts**: your GitHub sign-in plus personal access tokens for other Git providers (see [Repositories and Git accounts](repositories.md)).
-- **Signed-in apps**: the apps signed in as you, each of which you can sign out.
+- **Signed-in apps**: the apps signed in as you, each of which you can sign out, and **Sign in an app**, which [signs in another with a code](#signing-in-an-app-with-a-code).
 - **Account**: your **Username**, your **User ID** (owners add you to workspaces with it) and **Sign out**.
+
+## Signing in an app with a code
+
+The Pikibun app on a phone, tablet or computer can sign in without GitHub or a password there, with a code made where you are already signed in: Pikibun on the web, or another of your apps.
+
+1. There, open **Settings → Profile → Signed-in apps → Sign in an app**. It shows a QR code of the sign-in link (`pikibun://auth/code?server=…&code=…`), **Open in Pikibun** (on the web) and **Copy link**.
+2. On a phone or tablet, scan the QR code with the camera and open the link in Pikibun. On a computer, choose **Open in Pikibun** where the app is installed, or copy the link and paste it under **Sign in with a code** on the app's sign-in screen.
+3. The app shows the server the link is for and asks first; choose **Sign in**. The page that made the code says which app used it, and the app is listed under **Signed-in apps** as signed in "with a code", for 30 days like any other app.
+
+What keeps a code safe:
+
+- It works once and for 10 minutes. The server keeps only its hash, and you can have at most 5 waiting; **Cancel** ends one sooner.
+- Making one takes your password, or a GitHub sign-in from the last 15 minutes (**Sign in with GitHub again** brings you back), so a browser left signed in, or a stolen sign-in, can't turn itself into a 30-day app.
+- It ends with the browser or app that made it: signing that out, changing your password or a suspension makes it worthless. An app signed in with a password-made code ends, as the password's sign-ins do, when the operator turns `PASSWORD_AUTH` off.
+- Anyone who has the link or the QR code can sign in as you until it is used or expires, so show it to nobody. The app always asks before a link signs it in, so a link someone sends you can't sign your app in to their account or their server unnoticed.
 
 **Settings → Password**, where the server takes passwords (or your account still has one), shows how you sign in (your username, GitHub, and whether you have a password) and sets, changes or removes your password, as above.
 

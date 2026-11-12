@@ -36,11 +36,24 @@ export interface SignedInDevice {
   createdAt: string;
   expiresAt: string;
   current: boolean;
+  viaCode?: true;
 }
 export interface NativeSignIn {
   token: string;
   expiresAt: string;
   user: UserProfile;
+}
+export interface AppSignInCode {
+  id: string;
+  code: string;
+  link: string;
+  expiresAt: string;
+}
+export interface AppSignInCodeState {
+  id: string;
+  status: 'pending' | 'used';
+  expiresAt: string;
+  deviceName: string | null;
 }
 export interface Workspace {
   id: string;

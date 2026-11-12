@@ -136,6 +136,59 @@ describe("signing in", () => {
     await app.waitFor("text:Fix the flaky login test");
     expect(app.storage()["pikibun.origin"]).toBe(ORIGIN);
   });
+
+  const CODE = "c".repeat(40) + "_-0";
+  const codeLink = (origin = ORIGIN) => `pikibun://auth/code?${new URLSearchParams({ server: origin, code: CODE }).toString()}`;
+  const codeServer = () => server({
+    [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, codeSignIn: true } },
+    [`POST ${ORIGIN}/api/auth/native/code`]: { body: { token: TOKEN, expiresAt: "2099-01-01T00:00:00.000Z", user } },
+  });
+
+  test("a code made in another signed-in app signs in when its link is pasted, without GitHub or a password", async () => {
+    const app = await open("../App.tsx", { network: codeServer(), storage: { "pikibun.origin": ORIGIN } });
+    await app.waitFor("id:code-sign-in-open");
+    await app.press("id:code-sign-in-open");
+    await app.waitFor("id:code-input");
+    await app.type("id:code-input", "not a code");
+    await app.waitFor("id:code-hint");
+    expect(app.texts().join(" ")).toContain("isn't a sign-in link or code");
+    await app.clear("id:code-input");
+    await app.type("id:code-input", codeLink());
+    await app.waitFor("text:Signs in to pikibun.test.");
+    await app.press("id:code-sign-in");
+    await app.waitFor("text:Fix the flaky login test");
+    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/code`)).toMatchObject({ code: CODE });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/code`).deviceName).toContain("Pikibun NSH");
+    expect(app.requests().some(item => item.url.includes("/api/auth/native/start"))).toBe(false);
+  });
+
+  test("a sign-in link opened from a QR code asks first, naming its server, and signs in to that server", async () => {
+    const app = await open("../App.tsx", { network: codeServer(), storage: { "pikibun.origin": "https://elsewhere.test" } });
+    await app.waitFor("id:github-sign-in");
+    await app.openWithUrl(codeLink());
+    await app.waitFor("id:code-link-confirm");
+    expect(app.texts().join(" ")).toContain("Sign in to pikibun.test?");
+    expect(app.requests().some(item => item.url.endsWith("/api/auth/native/code"))).toBe(false);
+    await app.press("id:code-sign-in");
+    await app.waitFor("text:Fix the flaky login test");
+    expect(app.storage()["pikibun.origin"]).toBe(ORIGIN);
+    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
+  });
+
+  test("a sign-in link opened and then cancelled signs nobody in, and a broken one says so", async () => {
+    const app = await open("../App.tsx", { network: codeServer(), storage: { "pikibun.origin": ORIGIN } });
+    await app.waitFor("id:github-sign-in");
+    await app.openWithUrl(codeLink());
+    await app.waitFor("id:code-link-confirm");
+    await app.press("id:code-cancel");
+    expect(app.shows("id:code-form")).toBe(false);
+    await app.openWithUrl("pikibun://auth/code?code=short");
+    await app.waitFor("id:sign-in-problem");
+    expect(app.texts().join(" ")).toContain("isn't complete");
+    expect(app.requests().some(item => item.url.endsWith("/api/auth/native/code"))).toBe(false);
+    expect(app.storage()["pikibun.token"]).toBeUndefined();
+  });
 });
 
 describe("signing out", () => {

@@ -10,6 +10,7 @@ import {
   curlArguments, GNOME_PROXY_PROBE, gnomeProxy, PROXY_VARIABLES, SHELL_PROXY_PROBE, shellProxy, shownProxy, WINDOWS_INTERNET_SETTINGS, windowsProxy,
 } from "./update-proxy";
 import { LINUX_INSTALL, MAC_INSTALL, utf16le, windowsUpdateTask } from "./update-scripts";
+import { lastLines as lastOf } from "./windows-cmd";
 import { compareVersions, isPrerelease, isVersion } from "./version";
 
 export { compareVersions, isVersion } from "./version";
@@ -115,7 +116,7 @@ async function emptyFolder(dir: string, keep: readonly string[] = []): Promise<v
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
-const lastLines = (text: string) => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-3).join(" ");
+const lastLines = (text: string) => lastOf(text.split(/\r?\n/));
 
 async function joinParts(dir: string, parts: readonly string[], name: string): Promise<void> {
   const output = platform.os === "windows"

@@ -43,6 +43,45 @@ describe("settings", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/me/password`)).toEqual({ newPassword: "four unrelated words here" });
   });
 
+  const appCode = { id: "k1", code: "c".repeat(43), link: `pikibun://auth/code?server=${encodeURIComponent(ORIGIN)}&code=${"c".repeat(43)}`, expiresAt: "2099-01-01T00:00:00.000Z" };
+
+  test("Profile signs in another app with a code, shown as a QR code and a link, until the app uses it", async () => {
+    let polls = 0;
+    const app = await openSettings("profile", {
+      [`POST ${ORIGIN}/api/me/app-codes`]: { status: 201, body: appCode },
+      [`GET ${ORIGIN}/api/me/app-codes/k1`]: () => ({ body: { id: "k1", expiresAt: appCode.expiresAt, ...(++polls < 2 ? { status: "pending", deviceName: null } : { status: "used", deviceName: "Ada's MacBook" }) } }),
+    });
+    await app.waitFor("id:sign-in-app-start");
+    await app.press("id:sign-in-app-start");
+    await app.waitFor("id:sign-in-app-qr");
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/me/app-codes`)).toEqual({});
+    expect(app.texts().join(" ")).toContain("Works once");
+    expect(app.shows("id:sign-in-app-copy")).toBe(true);
+    await app.waitFor("text:Ada's MacBook signed in with the code.", { timeout: 10_000 });
+    expect(app.shows("id:sign-in-app-qr")).toBe(false);
+  });
+
+  test("Profile asks for a recent sign-in or the password before it makes a code", async () => {
+    const app = await openSettings("profile", {
+      [`GET ${ORIGIN}/api/me`]: { body: { user: { ...user, username: "ada", hasPassword: true } } },
+      [`POST ${ORIGIN}/api/me/app-codes`]: (request: { body?: string | null }) => (JSON.parse(request.body ?? "{}").currentPassword === "four unrelated words here"
+        ? { status: 201, body: appCode }
+        : { status: 403, body: { error: "Enter your password, or sign in with GitHub again.", code: "recent_sign_in_required" } }),
+      [`DELETE ${ORIGIN}/api/me/app-codes/k1`]: { body: { ok: true } },
+      [`GET ${ORIGIN}/api/me/app-codes/k1`]: { body: { id: "k1", status: "pending", expiresAt: appCode.expiresAt, deviceName: null } },
+    });
+    await app.waitFor("id:sign-in-app-start");
+    await app.press("id:sign-in-app-start");
+    await app.waitFor("text:Sign in with GitHub again");
+    await app.waitFor("id:sign-in-app-password");
+    await app.type("id:sign-in-app-password", "four unrelated words here");
+    await app.press("id:sign-in-app-make");
+    await app.waitFor("id:sign-in-app-qr");
+    await app.press("id:sign-in-app-cancel");
+    await app.waitUntil(() => app.requests().some(item => item.method === "DELETE" && item.url === `${ORIGIN}/api/me/app-codes/k1`));
+    expect(app.shows("id:sign-in-app")).toBe(false);
+  });
+
   test("Password is listed only where the server takes passwords or the account has one", async () => {
     const app = await openSettings("profile");
     await app.waitFor("id:settings-profile");

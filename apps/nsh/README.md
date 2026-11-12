@@ -32,8 +32,11 @@ GitHub's sign-in comes back with, and GitHub's authorization page for an invite'
 
 Native builds sign in to a server you enter: GitHub in the system browser, handed back as a `pikibun://auth` link
 ([GitHub sign-in](#known-gaps-from-nsh-itself)), a username and password where the
-server allows them (`POST /api/auth/native/password`, for a bearer token listed under Signed-in apps, as GitHub's), or
-a test-mode server's token. New password accounts are made on the web, whose sign-up starts a browser session.
+server allows them (`POST /api/auth/native/password`, for a bearer token listed under Signed-in apps, as GitHub's), a
+code made in a browser or app already signed in (`POST /api/auth/native/code`; **Settings → Profile → Signed-in apps →
+Sign in an app** shows its `pikibun://auth/code` link as a QR code, drawn by the app's own encoder, `src/lib/qr.ts`,
+as NSH has none; the sign-in screen takes the link pasted or opened, and asks before it signs in), or a test-mode
+server's token. New password accounts are made on the web, whose sign-up starts a browser session.
 
 ## Design
 

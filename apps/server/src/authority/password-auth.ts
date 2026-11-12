@@ -274,10 +274,33 @@ async function signedInUser(c: AppContext): Promise<UserRow> {
 
 async function recentGitHubSignIn(env: Env, user: UserRow, tokenHash: string): Promise<boolean> {
   if (user.auth_kind !== 'github' && !(user.auth_kind === 'test' && testMode(env))) return false;
-  const session = await dbResult(env.DB.query<{ created_at: string; method: string | null }>(
-    'SELECT created_at, method FROM auth_sessions WHERE token_hash = ? AND user_id = ?').bind(tokenHash, user.id).first());
+  const session = await dbResult(env.DB.query<{ created_at: string; method: string | null; via: string | null }>(
+    'SELECT created_at, method, via FROM auth_sessions WHERE token_hash = ? AND user_id = ?').bind(tokenHash, user.id).first());
   const signedInAt = session ? Date.parse(session.created_at) : NaN;
-  return !!session && session.method === null && Number.isFinite(signedInAt) && Date.now() - signedInAt <= RECENT_SIGN_IN_MS;
+  return !!session && session.method === null && session.via === null && Number.isFinite(signedInAt) && Date.now() - signedInAt <= RECENT_SIGN_IN_MS;
+}
+
+export async function requireRecentOwner(c: AppContext, current: unknown): Promise<'password' | 'github'> {
+  const user = await signedInUser(c);
+  const typed = current !== undefined && current !== null && current !== '';
+  if (typed) {
+    if (!passwordAuthEnabled(c.env)) fail(400, 'password_auth_off', 'This server doesn\'t take passwords now. Sign in with GitHub again instead.');
+    const row = await credential(c.env, user.id);
+    if (!row) fail(400, 'invalid_input', 'This account has no password yet, so there is no current one to enter.');
+    const locked = lockedFor(row);
+    if (locked) failLocked(locked);
+    if (typeof current !== 'string' || current.length > RAW_PASSWORD_MAX || !await verifyPassword(current, row.password_hash)) {
+      await recordFailure(c.env, user.id);
+      fail(403, 'invalid_credentials', 'The current password is incorrect.');
+    }
+    return 'password';
+  }
+  if (user.auth_kind === 'password') fail(403, 'current_password_required', 'Enter your password.');
+  if (!await recentGitHubSignIn(c.env, user, c.get('auth').tokenHash)) {
+    fail(403, 'recent_sign_in_required', user.has_password && passwordAuthEnabled(c.env)
+      ? 'Enter your password, or sign in with GitHub again: this needs a GitHub sign-in from the last 15 minutes.' : RECENT_SIGN_IN_REQUIRED);
+  }
+  return 'github';
 }
 
 const RECENT_SIGN_IN_REQUIRED = 'For your safety, this needs a GitHub sign-in from the last 15 minutes. Sign in with GitHub again, then try once more.';
