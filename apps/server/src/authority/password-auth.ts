@@ -6,7 +6,7 @@ import { sha256 } from '../../../../packages/shared/src/crypto.js';
 import { auditAfterChange } from './audit.js';
 import { getUser } from '../db.js';
 import { ConstraintError, type Database, type Query } from '../db/types.js';
-import { fail, id, jsonObject, now, PASSWORD_USERNAME, passwordAuthEnabled, requireOrigin, signupMode, testMode } from '../http.js';
+import { fail, id, jsonObject, localMode, now, PASSWORD_USERNAME, passwordAuthEnabled, requireOrigin, signupMode, testMode } from '../http.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 import type { AppContext, Env, UserRow, AppEnv } from '../types.js';
 import type { NativeSignIn } from '../../../../packages/shared/src/types.js';
@@ -273,7 +273,7 @@ async function signedInUser(c: AppContext): Promise<UserRow> {
 }
 
 async function recentGitHubSignIn(env: Env, user: UserRow, tokenHash: string): Promise<boolean> {
-  if (user.auth_kind !== 'github' && !(user.auth_kind === 'test' && testMode(env))) return false;
+  if (localMode(env) || (user.auth_kind !== 'github' && !(user.auth_kind === 'test' && testMode(env)))) return false;
   const session = await dbResult(env.DB.query<{ created_at: string; method: string | null; via: string | null }>(
     'SELECT created_at, method, via FROM auth_sessions WHERE token_hash = ? AND user_id = ?').bind(tokenHash, user.id).first());
   const signedInAt = session ? Date.parse(session.created_at) : NaN;

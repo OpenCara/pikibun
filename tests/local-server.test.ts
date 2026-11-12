@@ -202,6 +202,9 @@ test("without a username of its own a local owner is 'owner', and one who signed
   const { user } = await (await f.request("/api/me", { Cookie: session })).json() as { user: { id: string; githubConnected: boolean; usernameRequired?: true } };
   assert.deepEqual([user.id, user.githubConnected, user.usernameRequired], ["github:4242", true, undefined]);
   assert.deepEqual(f.sqlite.prepare("SELECT id FROM users").all().map(row => row.id), ["github:4242"]);
+  const post = (path: string) => app.request(path, { method: "POST", headers: { Cookie: session, "Content-Type": "application/json" }, body: "{}" }, f.env);
+  for (const path of ["/api/me/app-codes", "/api/auth/native/code"]) assert.equal((await post(path)).status, 404, `${path}: a link sign-in isn't a recent GitHub sign-in, and codes aren't offered`);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM app_sign_in_codes").get()!.n, 0);
 });
 
 test("a local server whose pinned owner is a password account signs only them in, and a suspended owner not at all", async t => {
