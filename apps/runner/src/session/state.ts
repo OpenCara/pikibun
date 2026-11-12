@@ -21,6 +21,7 @@ export type Run = {
   refused?: { by: string; notice: string };
   reverted?: true;
   withdrawn?: true;
+  steered?: string;
 };
 export type Branch = { id: number; mode: "write" | "ask"; actorId?: string; superseded?: true };
 export type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Record<string, Run>; approvals: Record<string, StoredApproval>; toolActors: Record<string, { initiatedBy: string; ownerId: string; runKey: string; callId?: string }>; usedTickets?: Record<string, number>; nextSequence?: number;

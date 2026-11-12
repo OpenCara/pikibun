@@ -57,7 +57,8 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
     refusedAt(run => !snapshot.entries.some(entry => entry.id <= run.startEntry));
     for (const entry of snapshot.entries) {
       const run = Object.values(state.runs).filter(candidate => (candidate.started || candidate.submissionId !== undefined || candidate.status === "admitting") && candidate.conversationId === entry.conversationId && candidate.startEntry < entry.id).sort((a, b) => b.startEntry - a.startEntry)[0];
-      const ending = run !== previous && previous && endView(previous, snapshot.branch.id);
+      const joins = run !== undefined && previous !== undefined && run.steered !== undefined && run.steered === (previous.steered ?? previous.key);
+      const ending = run !== previous && previous && !joins && endView(previous, snapshot.branch.id);
       if (ending) entries.push(ending);
       previous = run;
       entries.push(entryView(entry, snapshot.branch.id, run?.initiatedBy));

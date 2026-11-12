@@ -32,7 +32,8 @@ import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/s
 import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session/piki.js";
 import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
 import { contextView, extensionView, sessionView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
-import { INPUT_EMPTY, RunQueue, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
+import { INPUT_EMPTY, RunQueue, steersInto, submissionRequestId, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
+import { ConversationIdle, type ConversationId } from "@earendil-works/pi-durable";
 import { ToolAvailability, type ToolAvailabilityOptions } from "../apps/runner/src/session/availability.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import type { Run } from "../apps/runner/src/session.js";
@@ -784,7 +785,7 @@ async function queueFixture(t: TestContext, runs: Partial<Metadata["runs"][strin
 }
 
 test("run queue: the next queued message runs once nothing else does, as its sender may still, and a drain asked meanwhile runs again", async t => {
-  const { queue, state, events, settle, idle } = await queueFixture(t, [{ initiatedBy: "github:9" }, { content: "go" }, { content: "later" }]);
+  const { queue, state, events, settle, idle } = await queueFixture(t, [{ initiatedBy: "github:9" }, { content: "go" }, { content: "later", initiatedBy: "github:3" }]);
   queue.drain();
   queue.drain();
   await idle();
@@ -842,6 +843,131 @@ test("run queue: a run that settles after the session reopened is left alone; sc
   await images.queue.sweepInputs();
   assert.equal(await images.inputs.read("r0"), undefined, "a run that no longer waits loses its images");
   assert.deepEqual(events, ["options r0", "submit r0 \"go\""]);
+});
+
+test("run queue: only the running sender's next shared message, with the same options and no images, steers; anything else waits", () => {
+  const runs = (...queued: Partial<Run>[]) => {
+    const state = toolState({ submissionId: 7, sequence: 0, options: { access: "auto" } });
+    queued.forEach((run, index) => { state.runs[`q${index}`] = { ...state.runs.r1!, key: `q${index}`, status: "queued", sequence: index + 1, submissionId: undefined, ...run }; });
+    return state.runs;
+  };
+  const steers = (run: Partial<Run>, others: Partial<Run>[] = []) => { const all = runs(run, ...others); return steersInto(all, all.q0!); };
+  assert.equal(steers({}), "r1");
+  assert.equal(steers({ initiatedBy: "github:3" }), undefined, "someone else's message waits");
+  assert.equal(steers({ mode: "ask" }), undefined, "a side ask waits");
+  assert.equal(steers({ options: { access: "read" } }), undefined, "other options wait");
+  assert.equal(steers({ options: undefined }), undefined);
+  assert.equal(steers({ conversationId: 2 }), undefined, "another conversation waits");
+  assert.equal(steers({ images: { count: 1, bytes: 4 } }), undefined, "a message with images waits");
+  assert.equal(steers({ screening: true }), undefined, "a message still screened waits");
+  const stopping = runs({});
+  stopping.r1!.stopped = { by: "github:2", pending: true };
+  assert.equal(steersInto(stopping, stopping.q0!), undefined, "nothing steers a stopping run");
+  const admitting = runs({}, { status: "admitting" });
+  assert.equal(steersInto(admitting, admitting.q0!), undefined);
+  const chain = runs({});
+  chain.s = { ...chain.r1!, key: "s", sequence: 0.5, steered: "r1" };
+  chain.r1!.status = "settled";
+  assert.equal(steersInto(chain, chain.q0!), "r1", "a message steers into the first message of the run, after it answered too");
+  assert.equal(submissionRequestId({ key: "k" }), "k");
+  assert.equal(submissionRequestId({ key: "k", steered: "r1" }), "k:steer");
+});
+
+function steerHarness() {
+  const events: string[] = [];
+  const submissions = new Map<number, { record: Record<string, unknown>; settle: (value: Record<string, unknown>) => void; settled: Promise<Record<string, unknown>> }>();
+  let next = 7;
+  const flags = { idle: false };
+  const track = (status = "queued") => {
+    const id = next++;
+    let settle!: (value: Record<string, unknown>) => void;
+    const settled = new Promise<Record<string, unknown>>(resolve => { settle = resolve; });
+    const entry = { record: { status } as Record<string, unknown>, settle: (value: Record<string, unknown>) => { entry.record = value; settle(value); }, settled };
+    submissions.set(id, entry);
+    return id;
+  };
+  const harness = {
+    conversation: async () => ({
+      context: async () => ({ entries: [{ id: 4 }], messages: [] }),
+      submit: async (input: { content: unknown; requestId: string; whenBusy?: string; whenIdle?: string }) => {
+        events.push(`submit ${input.requestId}${input.whenBusy ? ` ${input.whenBusy}` : ""}${input.whenIdle ? ` ${input.whenIdle}` : ""}`);
+        if (input.whenIdle === "reject" && flags.idle) throw new ConversationIdle(1 as ConversationId);
+        return { id: track(input.whenBusy === "steer" ? "queued" : "placed") };
+      },
+      waitForIdle: async () => {}, agent: async () => ({}),
+    }),
+    submission: async (id: number) => {
+      const entry = submissions.get(id);
+      return entry && {
+        wait: () => entry.settled,
+        status: async () => entry.record,
+        abort: async () => { if (entry.record.status !== "queued") return "already_placed"; events.push(`abort ${id}`); entry.settle({ status: "unanswered", reason: "aborted" }); return "aborted"; },
+      };
+    },
+  };
+  const options = { harness: () => harness as never, applyOptions: async (_conversation: unknown, run: Run) => { events.push(`options ${run.key}`); } };
+  return { harness, options, events, submissions, flags, track };
+}
+
+test("run queue: the sender's next message steers the run at work, the queue behind it keeps its order, and both settle with it", async t => {
+  const steer = steerHarness();
+  const ends: boolean[] = [];
+  const host = { agentEnd: async (_messages: unknown, failed: boolean) => { ends.push(failed); } };
+  const { queue, state, idle } = await queueFixture(t, [{ content: "go" }, { content: "also this" }, { content: "other", initiatedBy: "github:3" }, { content: "after" }],
+    { ...steer.options, hostExtensions: () => host as never });
+  queue.drain();
+  await idle();
+  assert.deepEqual([state.runs.r0!.status, state.runs.r0!.submissionId], ["running", 7]);
+  queue.drain();
+  await idle();
+  assert.deepEqual([state.runs.r1!.status, state.runs.r1!.steered, state.runs.r1!.submissionId, state.runs.r1!.started], ["running", "r0", 8, true]);
+  assert.deepEqual([state.runs.r2!.status, state.runs.r3!.status], ["queued", "queued"], "someone else's message, and everything behind it, wait");
+  assert.deepEqual(steer.events, ["options r0", "submit r0", "submit r1:steer steer reject"], "a steer keeps the run's options");
+  steer.submissions.get(8)!.record = { status: "placed" };
+  steer.submissions.get(7)!.settle({ status: "done", answer: 20 });
+  steer.submissions.get(8)!.settle({ status: "done", answer: 20 });
+  await idle();
+  assert.deepEqual([state.runs.r0!.status, state.runs.r1!.status], ["settled", "settled"]);
+  assert.deepEqual(ends, [false], "the run ended once, so extensions hear of it once");
+  assert.equal(state.runs.r2!.status, "running", "then the queue goes on");
+});
+
+test("run queue: a steer that finds the run ended waits in the queue; one a failed run left unplaced runs on its own next", async t => {
+  const idleSteer = steerHarness();
+  const late = await queueFixture(t, [{ status: "running", submissionId: 7 }, { content: "late" }], idleSteer.options);
+  idleSteer.track();
+  idleSteer.flags.idle = true;
+  late.queue.drain();
+  await late.idle();
+  assert.deepEqual([late.state.runs.r1!.status, late.state.runs.r1!.steered, late.state.runs.r1!.started], ["queued", undefined, undefined]);
+  const steer = steerHarness();
+  const { queue, state, idle } = await queueFixture(t, [{ content: "go" }, { content: "also" }], steer.options);
+  queue.drain();
+  await idle();
+  queue.drain();
+  await idle();
+  assert.equal(state.runs.r1!.steered, "r0");
+  steer.submissions.get(7)!.settle({ status: "unanswered", reason: "model_error", detail: "500" });
+  await idle();
+  assert.equal(state.runs.r0!.status, "settled");
+  assert.deepEqual([state.runs.r1!.steered, state.runs.r1!.status, state.runs.r1!.submissionId], [undefined, "running", 9], "taken back from pi, then run as a message of its own");
+  assert.deepEqual(steer.events, ["options r0", "submit r0", "submit r1:steer steer reject", "abort 8", "options r1", "submit r1"]);
+});
+
+test("view: a message that steered a run continues it, so the run's end shows once, after both", async () => {
+  const state = toolState({ status: "interrupted", stopped: { by: "github:2" }, started: true, submissionId: 8, steered: "r0", startEntry: 2, sequence: 1 });
+  state.runs.r0 = { ...state.runs.r1!, key: "r0", submissionId: 7, startEntry: 0, sequence: 0 };
+  delete state.runs.r0.steered;
+  state.branches = [{ id: 1, mode: "write" }];
+  const entry = (id: number, role: string, text: string) => ({ id, conversationId: 1, kind: `pi.${role}`, model: [{ role, content: [{ type: "text", text }] }] });
+  const source: ViewSource = {
+    binding: { session: { id: "s1" }, owner: { id: "github:1", displayName: "Ada" } } as unknown as RunnerBinding,
+    tunnel: () => undefined, metadata: async () => structuredClone(state),
+    conversation: async () => ({ context: async () => ({ entries: [entry(1, "user", "go"), entry(2, "assistant", "working"), entry(3, "user", "also"), entry(4, "assistant", "done")], messages: [] }) }) as never,
+    agent: async () => ({}) as never, context: () => undefined, repositories: () => undefined, extensions: async () => ({}),
+  };
+  const view = await sessionView(source);
+  assert.deepEqual(view.entries.map(item => item.text), ["go", "working", "also", "done", "Stopped"]);
 });
 
 function availability(options: Partial<ToolAvailabilityOptions> = {}, answer?: Partial<WorkspaceExtensionsAnswer>, last?: Partial<WorkspaceExtensionsAnswer>) {

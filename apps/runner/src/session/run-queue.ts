@@ -1,5 +1,6 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import type { CompactionSettings, Conversation, ConversationId, Harness, SubmissionId } from "@earendil-works/pi-durable";
+import { ConversationIdle, type CompactionSettings, type Conversation, type ConversationId, type Harness, type SettledSubmissionRecord, type Submission,
+  type SubmissionId, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { parseChatImages } from "../../../../packages/shared/src/chat-images.js";
 import type { HostCompaction } from "../../../../packages/shared/src/host-config.js";
 import type { ChosenExtension } from "../../../../packages/shared/src/host-extensions.js";
@@ -7,6 +8,7 @@ import type { ModelFailureCause } from "../../../../packages/shared/src/types.js
 import { compactionFailure, configuredCompaction } from "../compaction.js";
 import type { InputOutcome, SessionExtensions } from "../extensions/adapter.js";
 import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "../model-failure.js";
+import { stableJson } from "../protocol.js";
 import { prepareMessageImages, type InputImage, type MessageInputs } from "./inputs.js";
 import type { RepositoryPreparation } from "./repositories.js";
 import type { Metadata, Run } from "./state.js";
@@ -17,6 +19,36 @@ export const INPUT_EMPTY = "An extension on this host left this message empty or
 export const INPUT_IMAGES = "An extension on this host changed this message's images into ones that can't be sent.";
 
 export type RunContent = string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
+
+export function submissionRequestId(run: Pick<Run, "key" | "steered">): string {
+  return run.steered === undefined ? run.key : `${run.key}:steer`;
+}
+
+export function steersInto(runs: Record<string, Run>, run: Run): string | undefined {
+  if (run.mode !== "write" || run.status !== "queued" || run.screening || run.images || run.stopped || run.withdrawn) return undefined;
+  const all = Object.values(runs);
+  if (all.some(other => other.status === "admitting" || other.stopped?.pending)) return undefined;
+  const running = all.filter(other => other.status === "running").sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+  if (!running.length || running.some(other => other.mode !== "write" || other.submissionId === undefined || other.stopped
+    || other.conversationId !== run.conversationId || other.initiatedBy !== run.initiatedBy
+    || stableJson(other.options ?? null) !== stableJson(run.options ?? null))) return undefined;
+  return running[0]!.steered ?? running[0]!.key;
+}
+
+export function requeue(run: Run): void {
+  run.status = "queued";
+  delete run.started;
+  delete run.steered;
+  delete run.submissionId;
+}
+
+type Settlement = Pick<SubmissionRecord, "status"> & { answer?: unknown; reason?: unknown; detail?: unknown };
+
+function sameEnd(a: Settlement, b: Settlement): boolean {
+  if (a.status !== b.status) return false;
+  if (a.status === "done") return a.answer === b.answer;
+  return a.status === "unanswered" && a.reason === b.reason && JSON.stringify(a.detail ?? null) === JSON.stringify(b.detail ?? null);
+}
 
 export interface RunQueueOptions {
   sessionId: string;
@@ -53,9 +85,12 @@ export class RunQueue {
       if (!submission) throw new Error("Missing durable submission");
       const settled = await submission.wait(context);
       if (generation !== this.options.generation() || this.options.closing()) return;
-      void this.options.hostExtensions()?.agentEnd([], settled.status !== "done").catch(() => {});
       const state = await this.options.metadata();
-      const conversation = await harness.conversation(state.runs[key]!.conversationId as ConversationId, context);
+      const observed = state.runs[key];
+      if (!observed || Number(observed.submissionId) !== Number(submissionId)) return;
+      const joined = await this.#joined(observed, settled, state);
+      if (!joined) void this.options.hostExtensions()?.agentEnd([], settled.status !== "done").catch(() => {});
+      const conversation = await harness.conversation(observed.conversationId as ConversationId, context);
       await conversation?.waitForIdle(context);
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
       const cause = settled.status === "unanswered" && settled.reason === "model_error" && !compaction ? modelFailureCause(settled.detail) : undefined;
@@ -63,17 +98,18 @@ export class RunQueue {
       const model = failed ? (await conversation?.agent(context))?.model : undefined;
       const failure: Run["failure"] = failed
         ? { reason: compaction ? "compaction_failed" : settled.reason, ...model, ...(compaction ? { compaction } : {}), ...(cause ? { cause } : {}) } : undefined;
-      const compacts = !!failure && !!conversation && await this.#compactsAfterFailure(conversation, state.runs[key]!.mode, cause, model);
+      const compacts = !joined && !!failure && !!conversation && await this.#compactsAfterFailure(conversation, observed.mode, cause, model);
       const crashed = settled.status === "unanswered" && (settled.reason === "restart_limit" || settled.reason === "interrupted");
       await this.options.exclusive(async () => {
         if (generation !== this.options.generation() || this.options.closing()) return;
+        await this.#unstick(observed.conversationId, key);
         if (compacts && !(await this.options.metadata()).runs[key]?.stopped) {
           try { await conversation!.compact(undefined, context); failure!.compacting = true; }
           catch { }
         }
         await this.options.mutate(meta => {
           const run = meta.runs[key]!;
-          if (run.stopped) return;
+          if (run.stopped || Number(run.submissionId) !== Number(submissionId)) return;
           if (crashed) Object.assign(run, { status: "interrupted", crashed: true });
           else run.status = "settled";
           if (failure) run.failure = failure;
@@ -81,6 +117,75 @@ export class RunQueue {
       });
       if (generation === this.options.generation() && !this.options.closing()) this.options.drain();
     })().catch(() => { });
+  }
+
+  async #joined(run: Run, settled: SettledSubmissionRecord, state: Metadata): Promise<boolean> {
+    if (run.steered === undefined) return false;
+    const earlier = Object.values(state.runs).filter(other => other.key !== run.key && (other.key === run.steered || other.steered === run.steered)
+      && (other.sequence ?? 0) < (run.sequence ?? 0) && other.submissionId !== undefined);
+    for (const other of earlier) {
+      try {
+        const submission = await this.options.harness().submission(other.submissionId as SubmissionId, context);
+        if (submission && sameEnd(await submission.status(context), settled)) return true;
+      }
+      catch { }
+    }
+    return false;
+  }
+
+  async #unstick(conversationId: number, key: string): Promise<void> {
+    const stuck = Object.values((await this.options.metadata()).runs).filter(run => run.key !== key && run.steered !== undefined && run.status === "running"
+      && !run.stopped && run.conversationId === conversationId && run.submissionId !== undefined);
+    for (const run of stuck) {
+      const submission = await this.options.harness().submission(run.submissionId as SubmissionId, context);
+      if (!submission || (await submission.status(context)).status !== "queued") continue;
+      if (await submission.abort(context) !== "aborted") continue;
+      await this.options.mutate(meta => {
+        const saved = meta.runs[run.key];
+        if (saved && saved.submissionId === run.submissionId) requeue(saved);
+      });
+    }
+  }
+
+  async #admissible(run: Run): Promise<boolean> {
+    try { await this.options.authorize(run.initiatedBy, run.mode === "ask" ? "ask" : "write"); }
+    catch {
+      if (run.images) await this.options.inputs.discard([run.key]);
+      await this.options.mutate(meta => { meta.runs[run.key]!.status = "interrupted"; });
+      return false;
+    }
+    const refusal = await this.options.requiredRefusal(true).catch(() => INPUT_FAILED);
+    if (refusal) {
+      if (run.images) await this.options.inputs.discard([run.key]);
+      await this.options.mutate(meta => { Object.assign(meta.runs[run.key]!, { status: "interrupted", refused: { by: "", notice: refusal } }); });
+      return false;
+    }
+    return true;
+  }
+
+  async #steer(run: Run, root: string): Promise<boolean> {
+    const conversation = await this.options.harness().conversation(run.conversationId as ConversationId, context);
+    if (!conversation) throw new Error("Persisted branch is missing");
+    const transcript = await conversation.context(context);
+    await this.options.mutate(meta => {
+      Object.assign(meta.runs[run.key]!, { status: "admitting", started: true, steered: root, startEntry: transcript.entries.at(-1)?.id ?? 0 });
+    });
+    let submission: Submission;
+    try {
+      submission = await conversation.submit({ type: "input", content: run.content, requestId: submissionRequestId({ key: run.key, steered: root }),
+        whenBusy: "steer", whenIdle: "reject" }, context);
+    }
+    catch (error) {
+      if (!(error instanceof ConversationIdle)) throw error;
+      await this.options.mutate(meta => { requeue(meta.runs[run.key]!); });
+      return false;
+    }
+    await this.options.mutate(meta => {
+      meta.runs[run.key]!.submissionId = submission.id;
+      meta.runs[run.key]!.status = "running";
+    });
+    this.observe(run.key, submission.id);
+    return true;
   }
 
   async #compactsAfterFailure(conversation: Conversation, mode: Run["mode"], cause: ModelFailureCause | undefined,
@@ -102,21 +207,16 @@ export class RunQueue {
     void this.options.exclusive(async () => {
       while (!this.options.closing()) {
         const state = await this.options.metadata();
-        if (Object.values(state.runs).some(run => run.status === "running" || run.status === "admitting" || run.stopped?.pending)
-          || Object.values(state.approvals).some(approval => approval.status === "executing")) return;
+        if (Object.values(state.approvals).some(approval => approval.status === "executing")) return;
+        const busy = Object.values(state.runs).some(run => run.status === "running" || run.status === "admitting" || run.stopped?.pending);
         const run = Object.values(state.runs).filter(candidate => candidate.status === "queued")
           .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))[0];
         if (!run || run.screening) return;
-        try { await this.options.authorize(run.initiatedBy, run.mode === "ask" ? "ask" : "write"); }
-        catch {
-          if (run.images) await this.options.inputs.discard([run.key]);
-          await this.options.mutate(meta => { meta.runs[run.key]!.status = "interrupted"; });
-          continue;
-        }
-        const refusal = await this.options.requiredRefusal(true).catch(() => INPUT_FAILED);
-        if (refusal) {
-          if (run.images) await this.options.inputs.discard([run.key]);
-          await this.options.mutate(meta => { Object.assign(meta.runs[run.key]!, { status: "interrupted", refused: { by: "", notice: refusal } }); });
+        const root = busy ? steersInto(state.runs, run) : undefined;
+        if (busy && root === undefined) return;
+        if (!(await this.#admissible(run))) continue;
+        if (root !== undefined) {
+          if (!(await this.#steer(run, root))) return;
           continue;
         }
         const content = await this.runInput(run);
