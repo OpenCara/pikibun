@@ -29,7 +29,7 @@ Everything in `apps/server/src/authority`:
 | Who people are | `auth.ts` (GitHub and session sign-in), `password-auth.ts`, `admin.ts` (the instance's administrators), `invites.ts` (what an invite link's token grants) |
 | Who hosts are | `hosts.ts`: a connector's credential and current connection, and whether it still serves a session |
 | Who may do what | `access.ts` (membership, roles, each person's access to a session), `host-access.ts` (host admins and host command grants), `runner-access.ts` (what the relay may ask a session's host), `authorize.ts` (the question hosts ask) |
-| What a session may run | `tool-groups.ts` and `tool-checks.ts` (the tools of the owner's tool group), `operations.ts`, `run-admissions.ts` (what a message that may act admits), `extension-policy.ts` (which extension tools a workspace's sessions have) |
+| What a session may run | `tool-groups.ts` and `tool-checks.ts` (the tools both the owner's and the message sender's tool groups have), `operations.ts`, `run-admissions.ts` (what a message that may act admits), `extension-policy.ts` (which extension tools a workspace's sessions have) |
 | Credentials | `vault.ts`, `repositories.ts`, `git/`, `workspace-connections.ts`, `network.ts` and `lfs.ts` (sessions' Git), `api-access.ts`, `push/`, `github-broker.ts`, `pull-request-states.ts`, `sources/` (document sources) |
 | The audit log | `audit.ts`, and `changes.ts`, through which the authority says what it changed |
 

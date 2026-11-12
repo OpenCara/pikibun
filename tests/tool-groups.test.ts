@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
+import type { HTTPException } from 'hono/http-exception';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { memberToolGroups, requireSessionTool } from '../apps/server/src/authority/tool-groups.js';
@@ -75,6 +76,16 @@ async function body<T>(response: Response, status = 200): Promise<T> {
 test('workspace owners and admins create tool groups and put members in them; the members\' sessions then run only those tools', async t => {
   const f = await fixture(t);
   const row = (userId: string) => ({ workspace_id: f.workspace.id, owner_id: userId });
+  const refusal = async (check: Promise<void>): Promise<string> => {
+    try { await check; } catch (error) {
+      const response = (error as HTTPException).getResponse();
+      assert.equal(response.status, 403);
+      const refused = await response.json() as { code: string; error: string };
+      assert.equal(refused.code, 'tool_not_in_group');
+      return refused.error;
+    }
+    return assert.fail('the tool was allowed');
+  };
   const refusedTool = async (userId: string, tool: string) => assert.rejects(requireSessionTool(f.env, row(userId), userId, tool),
     (error: { status?: number }) => error.status === 403);
 
@@ -91,6 +102,14 @@ test('workspace owners and admins create tool groups and put members in them; th
   await requireSessionTool(f.env, row(f.owner.user.id), f.owner.user.id, 'bash');
   await requireSessionTool(f.env, row(f.member.user.id), f.member.user.id, 'codemode');
   await refusedTool('test:stranger', 'read_file');
+  await requireSessionTool(f.env, row(f.owner.user.id), f.admin.user.id, 'github_merge');
+  assert.match(await refusal(requireSessionTool(f.env, row(f.owner.user.id), f.member.user.id, 'git_push')), /the person who sent this message \(Members\)/,
+    'a member\'s message to the owner\'s session can\'t borrow the owner\'s tools');
+  assert.match(await refusal(requireSessionTool(f.env, row(f.member.user.id), f.owner.user.id, 'git_push')), /this session's owner \(Members\)/,
+    'nor does the owner\'s message lend theirs to a member\'s session');
+  await assert.rejects(requireSessionTool(f.env, row(f.owner.user.id), f.member.user.id, 'bash'), (error: { status?: number }) => error.status === 403,
+    'retired tools need every tool of the sender too');
+  await requireSessionTool(f.env, row(f.owner.user.id), f.member.user.id, 'codemode');
   assert.deepEqual(Object.keys(await memberToolGroups(f.env, f.workspace.id)).sort(), [f.member.user.id, f.other.user.id].sort());
 
   assert.equal((await f.member.request('POST', `${f.path}/tool-groups`, { name: 'Mine', tools: ['git_push'] })).status, 403);

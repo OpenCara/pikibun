@@ -48,6 +48,16 @@ In the private workspace, **Where it runs** starts on the host for the host's ow
 
 What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. Extensions run in the connector process, on the host, for every session (`apps/runner/src/extensions/`), so a workspace's extensions are trusted code whichever environment a session uses.
 
+## Whose tools a message runs
+
+A session's tools run as its owner (their Git accounts, their GitHub token), for anyone who may send it messages: collaborators on every workspace-visible session, members with a session role of Collaborator, and the workspace's owner and admins on every session. Checked against the owner's tool group alone, that let anyone use the owner's tools by writing in their session: a collaborator, whose role leaves out `github_merge`, could have an admin's session merge a pull request as the admin, and a member could push to other branches and comment on GitHub through a session whose owner may. So a call is checked against both groups, the owner's and the message's sender's (`requireSessionTool` in `apps/server/src/authority/tool-groups.ts` for what Pikibun brokers; `sessionToolsOff` and `requireSenderTool` in `apps/runner/src/session.ts` on the host):
+
+- **The sender is the message's.** Brokered calls name the admission's actor, which the broker already checks is the message's sender; on the host it is the run's `initiatedBy`. Scheduled prompts are sent as the owner, so they run with the owner's group alone; a message the sessions tool delivers is sent as the person whose message made the call.
+- **Hidden, then refused.** A message isn't offered the tools its sender's group leaves out, so the agent doesn't plan around them, and a call made anyway (say, the group changed while the message ran) is refused before it runs. Side asks run only read tools and aren't checked against groups, as before.
+- **Stopping isn't gated.** Taking a tunnel offline needs no `tunnel`: anyone who may write to a session may stop its work.
+
+What it doesn't protect against: the conversation is shared. A sender can leave instructions in it, or in the files, that the agent follows on the owner's next message, with the owner's tools. That is the same as any text the agent reads (see [Sessions on the host](#sessions-on-the-host)); where it matters, keep sessions that hold tools others lack private, or give people a session role of Member (side asks only).
+
 ## Password authentication
 
 `apps/server/src/authority/password-auth.ts`, for servers with `PASSWORD_AUTH=true`.

@@ -6,7 +6,7 @@ Nobody approves a session's tool calls one by one. A call either runs at once, a
 
 | What | When it runs |
 |---|---|
-| A tool of the session | When it is among the tools of the session owner's [tool group](workspaces.md#tool-groups), for anyone who may send the session messages. Anything else is refused, whoever asks. |
+| A tool of the session | When it is among the tools of both the session owner's [tool group](workspaces.md#tool-groups) and the group of the person who sent the message, for anyone who may send the session messages. Nobody borrows the owner's tools: a collaborator's message to an admin's session doesn't merge pull requests. Anything else is refused, whoever asks. |
 | Anything that changes something (writing files, commands, commits, pushes, GitHub comments, issues and merges, schedules, messages to other sessions) | Never in a **Read only** message. Read only is the one access a message chooses: everything else acts. |
 | Anything that runs on the host's own machine, outside the sandbox: every command of an [unsandboxed host](hosts.md#running-without-the-sandbox) or of a session run directly on its host, commands without the host's [resource limits](hosts.md#the-sandbox) in someone else's session, and the tunnel | Only in sessions of the host's owner and of members they [granted host commands](hosts.md#host-admins-and-host-command-grants), for messages of theirs. Everyone else is refused. |
 | An [extension's](extensions.md) tool | Where the workspace has the extension on, for the host's owner and members they granted host commands; for everyone else only where the host's owner lets every session run extension tools (**Settings → Hosts →** the host **→ Extensions**). |
