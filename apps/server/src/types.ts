@@ -45,6 +45,7 @@ export interface Env {
   LOCAL_MODE?: string;
   LOCAL_CLAIM_SECRET?: string;
   LOCAL_OWNER_ID?: string;
+  LOCAL_OWNER_NAME?: string;
   PASSWORD_AUTH?: string;
   SIGNUP?: string;
 }

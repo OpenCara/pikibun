@@ -32,7 +32,6 @@ export interface LocalState {
   vaultKey: string;
   claimSecret: string;
   port: number;
-  github?: GitHubOAuthApp;
   shared?: SharedConfig;
   owner?: string;
   sharedOnce?: true;
@@ -50,8 +49,8 @@ export function validPort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1024 && value <= 65535;
 }
 
-const OWNER_ID = /^github:[1-9][0-9]{0,19}$/;
 const ADMIN_ID = /^(?:github:[1-9][0-9]{0,19}|password:[a-z0-9][a-z0-9_-]{2,38})$/;
+const OWNER_ID = ADMIN_ID;
 const SIGNUPS: readonly SharedConfig['signup'][] = ['open', 'invite', 'off'];
 
 export function sharedOrigin(input: string): { ok: true; origin: string } | { ok: false; error: string } {
@@ -91,12 +90,11 @@ function copyShared(config: SharedConfig): SharedConfig {
 function parseState(value: unknown): LocalState {
   const state = value as Partial<LocalState> | null;
   if (!state || typeof state !== 'object' || state.version !== 1 || ![state.sessionSecret, state.vaultKey, state.claimSecret].every(item => typeof item === 'string' && SECRET.test(item))
-    || !validPort(state.port) || (state.github !== undefined && !validGitHubApp(state.github)) || (state.shared !== undefined && sharedConfigError(state.shared) !== undefined)
+    || !validPort(state.port) || (state.shared !== undefined && sharedConfigError(state.shared) !== undefined)
     || (state.owner !== undefined && (typeof state.owner !== 'string' || !OWNER_ID.test(state.owner))) || (state.sharedOnce !== undefined && state.sharedOnce !== true)) {
     throw new LocalStateError('The local server state is damaged or from another version.');
   }
   return { version: 1, sessionSecret: state.sessionSecret!, vaultKey: state.vaultKey!, claimSecret: state.claimSecret!, port: state.port!,
-    ...(state.github ? { github: { clientId: state.github.clientId, clientSecret: state.github.clientSecret } } : {}),
     ...(state.shared ? { shared: copyShared(state.shared) } : {}), ...(state.owner ? { owner: state.owner } : {}),
     ...(state.sharedOnce ? { sharedOnce: true as const } : {}) };
 }
@@ -112,7 +110,7 @@ export async function privateStateDirectory(directory: string): Promise<string> 
   return path;
 }
 
-async function readState(directory: string): Promise<LocalState | undefined> {
+async function readState(directory: string): Promise<{ state: LocalState; raw: unknown } | undefined> {
   let file;
   try { file = await open(join(directory, STATE_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) {
@@ -126,7 +124,7 @@ async function readState(directory: string): Promise<LocalState | undefined> {
     }
     let value: unknown;
     try { value = JSON.parse(await file.readFile('utf8')); } catch { throw new LocalStateError('The local server state is damaged.'); }
-    return parseState(value);
+    return { state: parseState(value), raw: value };
   } finally { await file.close(); }
 }
 
@@ -149,13 +147,11 @@ async function lease(directory: string): Promise<() => Promise<void>> {
 }
 
 export interface LocalStateChanges {
-  github?: GitHubOAuthApp;
   port?: number;
   shared?: SharedConfig;
 }
 
 function changed(state: LocalState | undefined, changes: LocalStateChanges): LocalState {
-  if (changes.github !== undefined && !validGitHubApp(changes.github)) throw new LocalStateError('That is not a GitHub OAuth app client ID and secret.');
   if (changes.port !== undefined && !validPort(changes.port)) throw new LocalStateError('The port must be a number from 1024 to 65535.');
   const base: LocalState = state ?? { version: 1, sessionSecret: secret(), vaultKey: secret(), claimSecret: secret(), port: DEFAULT_LOCAL_PORT };
   let shared = base.shared;
@@ -168,11 +164,11 @@ function changed(state: LocalState | undefined, changes: LocalStateChanges): Loc
     if (error) throw new LocalStateError(error);
     shared = copyShared(candidate as unknown as SharedConfig);
   }
-  return { ...base, ...(changes.github ? { github: { ...changes.github } } : {}), ...(changes.port ? { port: changes.port } : {}), ...(shared ? { shared } : {}) };
+  return { ...base, ...(changes.port ? { port: changes.port } : {}), ...(shared ? { shared } : {}) };
 }
 
 export async function peekLocalState(directory: string): Promise<LocalState | undefined> {
-  return readState(await privateStateDirectory(directory));
+  return (await readState(await privateStateDirectory(directory)))?.state;
 }
 
 export async function openLocalState(directory: string, changes: LocalStateChanges = {}): Promise<{ state: LocalState; release(): Promise<void> }> {
@@ -180,8 +176,8 @@ export async function openLocalState(directory: string, changes: LocalStateChang
   const release = await lease(path);
   try {
     const saved = await readState(path);
-    const state = changed(saved, changes);
-    if (!saved || JSON.stringify(state) !== JSON.stringify(saved)) await writeState(path, state);
+    const state = changed(saved?.state, changes);
+    if (!saved || JSON.stringify(state) !== JSON.stringify(saved.raw)) await writeState(path, state);
     return { state, release };
   } catch (error) {
     await release();
@@ -190,7 +186,7 @@ export async function openLocalState(directory: string, changes: LocalStateChang
 }
 
 export async function recordLocalOwnership(directory: string, state: LocalState, changes: { owner?: string; sharedOnce?: true }): Promise<LocalState> {
-  if (changes.owner !== undefined && !OWNER_ID.test(changes.owner)) throw new LocalStateError('The owner must be a GitHub user ID such as github:12345.');
+  if (changes.owner !== undefined && !OWNER_ID.test(changes.owner)) throw new LocalStateError('The owner must be a user ID such as github:12345 or password:alice.');
   const next: LocalState = { ...state, ...(changes.owner ? { owner: changes.owner } : {}), ...(changes.sharedOnce ? { sharedOnce: true as const } : {}) };
   await writeState(await privateStateDirectory(directory), next);
   return next;

@@ -5,9 +5,10 @@ import { constantTimeEqual, sha256 } from '../../../../packages/shared/src/crypt
 import { validateUserEnv } from '../../../../packages/shared/src/policy.js';
 import type { NativeSignIn, SignedInDevice } from '../../../../packages/shared/src/types.js';
 import { isInstanceAdmin } from './admin.js';
+import { auditAfterChange } from './audit.js';
 import { getUser, userProfile } from '../db.js';
 import type { Database, Query, SqlValue } from '../db/types.js';
-import { appOrigin, fail, id, identifier, jsonObject, localMode, localOwnerQuery, now, passwordAuthEnabled, randomToken, requireOrigin, signupMode, testMode, text } from '../http.js';
+import { appOrigin, fail, id, identifier, jsonObject, localMode, localOwnerQuery, now, PASSWORD_USERNAME, passwordAuthEnabled, randomToken, requireOrigin, signupMode, testMode, text } from '../http.js';
 import type { AppContext, AuthIdentity, Env, UserRow, AppEnv } from '../types.js';
 import { assertVaultConfigured, encryptToken } from './vault.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
@@ -33,12 +34,11 @@ function cookies(env: Env) {
   return {
     auth: secure ? '__Host-auth' : 'test-auth',
     state: secure ? '__Host-oauth-state' : 'test-oauth-state',
-    claim: secure ? '__Host-local-claim' : 'local-claim',
     options: { secure, httpOnly: true, sameSite: 'Lax' as const, path: '/' },
   };
 }
 
-function expireCookie(c: AppContext, kind: 'auth' | 'state' | 'claim'): void {
+function expireCookie(c: AppContext, kind: 'auth' | 'state'): void {
   const config = cookies(c.env);
   setCookie(c, config[kind], '', { ...config.options, maxAge: 0, expires: new Date(0) });
 }
@@ -64,7 +64,7 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
       (session.auth_kind === 'test' && (!testMode(c.env) || !session.user_id.startsWith('test:'))) ||
       (session.auth_kind === 'github' && session.user_id.startsWith('test:')) ||
       (session.auth_kind !== 'password' && session.user_id.startsWith('password:')) ||
-      (session.auth_kind === 'password' && (!passwordAuthEnabled(c.env) || !session.user_id.startsWith('password:'))) ||
+      (session.auth_kind === 'password' && ((!passwordAuthEnabled(c.env) && !localMode(c.env)) || !session.user_id.startsWith('password:'))) ||
       (session.method !== null && (session.method !== 'password' || !passwordAuthEnabled(c.env)))) {
     if (client === 'browser') expireCookie(c, 'auth');
     fail(401, 'unauthorized', 'Authentication is required.');
@@ -155,7 +155,7 @@ export function ownProfile(env: Env, user: UserRow) {
     ...(usernameRequired(env, user) ? { usernameRequired: true as const } : {}) };
 }
 
-export async function newSession(env: Env, userId: string, kind: 'github' | 'test' | 'password', native?: { deviceName: string | null }) {
+export async function newSession(env: Env, userId: string, kind: 'github' | 'test' | 'password' | 'local', native?: { deviceName: string | null }) {
   const issuedAt = Date.now();
   let expiresAt = issuedAt + (native ? NATIVE_SESSION_TTL : SESSION_TTL);
   if (kind === 'test') {
@@ -189,6 +189,7 @@ interface GitHubConfig { clientId: string; clientSecret: string; redirectUri: st
 interface GitHubSignIn { user: UserRow; tokenStatement: Query<Record<string, SqlValue>> }
 
 function githubConfig(env: Env): GitHubConfig {
+  if (localMode(env)) fail(503, 'github_unavailable', LOCAL_WITHOUT_GITHUB);
   const origin = appOrigin(env);
   if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET ||
       env.GITHUB_CLIENT_ID.length > 256 || env.GITHUB_CLIENT_SECRET.length > 4096 ||
@@ -330,7 +331,6 @@ class SignupRefusal extends Error {
 class JoinRequestRefused extends Error {}
 
 async function githubSignup(c: AppContext, githubId: string, inviteTokenHash: string | null, native: boolean): Promise<{ workspaceId: string; tokenHash: string } | null> {
-  if (localMode(c.env)) return null;
   if (await dbResult(c.env.DB.query('SELECT 1 FROM users WHERE github_id = ?').bind(githubId).first())) return null;
   const invite = inviteTokenHash === null ? null : await dbResult(c.env.DB.query<{ workspace_id: string }>(
     'SELECT workspace_id FROM workspace_invite_links WHERE token_hash = ?').bind(inviteTokenHash).first());
@@ -354,11 +354,6 @@ function nativeStart(c: AppContext) {
   const state = states?.length === 1 ? states[0] : undefined;
   if (!challenge || !OPAQUE_TOKEN.test(challenge) || !state || !APP_STATE.test(state)) fail(400, 'invalid_native_request', 'Invalid native sign-in request.');
   if (callbacks !== undefined && (callbacks.length !== 1 || callbacks[0] !== 'page')) fail(400, 'invalid_native_request', 'Invalid native sign-in request.');
-  const claims = c.req.queries('claim');
-  if (claims !== undefined) {
-    if (!localMode(c.env) || claims.length !== 1) fail(400, 'invalid_native_request', 'Invalid native sign-in request.');
-    keepLocalClaim(c, claims[0]);
-  }
   return githubStart(c, { challenge, state, callback: callbacks ? 'page' : 'scheme' });
 }
 
@@ -407,7 +402,6 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
   const githubId = String(identity.id);
   const verifiedEmail: string = email;
   const login: string = identity.login;
-  if (localMode(c.env)) await admitLocalOwner(c, githubId);
   const invited = await githubSignup(c, githubId, inviteTokenHash, native);
   const upsert = (db: Pick<Database, 'query'>) => db.query<UserRow>(`INSERT INTO users
     (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
@@ -437,7 +431,6 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
   if (!user || user.auth_kind !== 'github' || user.id.startsWith('test:')) {
     fail(409, 'identity_conflict', 'GitHub identity cannot be used for this account.');
   }
-  if (localMode(c.env)) await settleLocalClaim(c.env, user.id);
   if (user.suspended_at) fail(403, 'account_suspended', SUSPENDED);
   const ciphertext = await encryptToken(c.env, user.id, exchange.access_token);
   return { user, tokenStatement: c.env.DB.query(`INSERT INTO github_tokens (user_id, ciphertext, updated_at) VALUES (?, ?, ?)
@@ -445,43 +438,64 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
     .bind(user.id, ciphertext, now()) };
 }
 
-export async function localOwner(env: Env): Promise<{ id: string; github_id: string } | null> {
+export async function localOwner(env: Env): Promise<{ id: string } | null> {
   const owner = localOwnerQuery(env);
-  return await dbResult(env.DB.query<{ id: string; github_id: string }>(owner.sql).bind(...owner.params).first()) ?? null;
+  return await dbResult(env.DB.query<{ id: string }>(owner.sql).bind(...owner.params).first()) ?? null;
 }
 
-async function admitLocalOwner(c: AppContext, githubId: string): Promise<void> {
-  const owner = await localOwner(c.env);
-  if (owner) {
-    if (owner.github_id !== githubId) fail(403, 'local_server_owner_only', 'This Pikibun runs on its owner\'s computer, and only the GitHub account that set it up can sign in.');
-    return;
+const LOCAL_WITHOUT_GITHUB = 'This Pikibun runs on its owner\'s computer and signs them in without GitHub: use the sign-in link it printed when it started, or the Pikibun app that runs it.';
+const LOCAL_LINK_INVALID = 'This sign-in link is not valid for this Pikibun. Use the one it printed when it started, or the Pikibun app that runs it.';
+
+function requireLocalToken(env: Env, token: unknown): void {
+  if (!localMode(env)) fail(404, 'not_found', 'Not found.');
+  if (typeof token !== 'string' || !OPAQUE_TOKEN.test(token) || !constantTimeEqual(token, env.LOCAL_CLAIM_SECRET!)) fail(403, 'invalid_local_sign_in', LOCAL_LINK_INVALID);
+}
+
+export function localOwnerName(env: Env): string {
+  const name = env.LOCAL_OWNER_NAME?.trim().toLowerCase();
+  return name && PASSWORD_USERNAME.test(name) ? name : 'owner';
+}
+
+async function localOwnerAccount(env: Env): Promise<UserRow> {
+  let owner = await localOwner(env);
+  if (!owner && !env.LOCAL_OWNER_ID) {
+    const name = localOwnerName(env);
+    const userId = `password:${name}`;
+    const created = now();
+    await dbResult(env.DB.batch([
+      env.DB.query(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+        SELECT ?, ?, NULL, NULL, ?, ?, ?, '{}', 'password', ? WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = ? OR username = ?)`)
+        .bind(userId, name, name, name, `${name}@users.pikibun.invalid`, created, userId, name),
+      auditAfterChange(env, userId, 'account.local.created', null, {}),
+    ]));
+    owner = await localOwner(env);
   }
-  const claim = getCookie(c, cookies(c.env).claim);
-  if (!claim || !OPAQUE_TOKEN.test(claim) || !constantTimeEqual(claim, c.env.LOCAL_CLAIM_SECRET!)) {
-    fail(403, 'local_server_unclaimed', 'Nobody has set up this Pikibun yet. Sign in with the link it printed when it started (or from the Pikibun app), which makes your GitHub account its owner.');
-  }
+  const user = owner && await dbResult(getUser(env, owner.id));
+  if (!user) fail(503, 'auth_unavailable', 'This Pikibun could not set up its owner\'s account. Check its state directory, then try again.');
+  if (user.suspended_at) fail(403, 'account_suspended', SUSPENDED);
+  return user;
 }
 
-async function settleLocalClaim(env: Env, userId: string): Promise<void> {
-  const owner = await localOwner(env);
-  if (owner?.id === userId) return;
-  await dbResult(env.DB.query(`DELETE FROM users WHERE id = ? AND auth_kind = 'github'
-    AND NOT EXISTS (SELECT 1 FROM github_tokens WHERE user_id = ?) AND NOT EXISTS (SELECT 1 FROM auth_sessions WHERE user_id = ?)`)
-    .bind(userId, userId, userId).run());
-  fail(403, 'local_server_owner_only', 'This Pikibun runs on its owner\'s computer, and only the GitHub account that set it up can sign in.');
-}
-
-function keepLocalClaim(c: AppContext, token: string | undefined): void {
-  if (!token || !OPAQUE_TOKEN.test(token) || !constantTimeEqual(token, c.env.LOCAL_CLAIM_SECRET!)) fail(403, 'invalid_claim', 'This sign-in link is not valid for this Pikibun.');
-  const config = cookies(c.env);
-  setCookie(c, config.claim, token, { ...config.options, maxAge: STATE_TTL / 1000, expires: new Date(Date.now() + STATE_TTL) });
-}
-
-async function localClaim(c: AppContext) {
-  if (!localMode(c.env)) fail(404, 'not_found', 'Not found.');
+async function localSignIn(c: AppContext) {
   const tokens = c.req.queries('token');
-  keepLocalClaim(c, tokens?.length === 1 ? tokens[0] : undefined);
-  return githubStart(c);
+  requireLocalToken(c.env, tokens?.length === 1 ? tokens[0] : undefined);
+  requireOrigin(c);
+  const user = await localOwnerAccount(c.env);
+  const session = await newSession(c.env, user.id, 'local');
+  await dbResult(session.statement.run());
+  sessionCookie(c, session);
+  return c.redirect(appOrigin(c.env) + '/');
+}
+
+async function nativeLocalSignIn(c: AppContext) {
+  const body = await jsonObject(c, 4096);
+  if (Object.keys(body).some(key => key !== 'token' && key !== 'deviceName')) fail(400, 'invalid_input', 'Only token and deviceName are accepted.');
+  requireLocalToken(c.env, body.token);
+  const deviceName = body.deviceName === undefined || body.deviceName === null ? null : safeText(body.deviceName, 'deviceName', 100);
+  const user = await localOwnerAccount(c.env);
+  const session = await newSession(c.env, user.id, 'local', { deviceName });
+  await dbResult(session.statement.run());
+  return c.json({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), user: ownProfile(c.env, user) } satisfies NativeSignIn);
 }
 
 async function githubCallback(c: AppContext) {
@@ -520,7 +534,6 @@ async function githubCallback(c: AppContext) {
     throw error;
   }
   const { user, tokenStatement } = signedIn;
-  if (localMode(c.env)) expireCookie(c, 'claim');
   if (native) {
     const code = randomToken();
     try {
@@ -615,7 +628,8 @@ export function registerAuth(app: Hono<AppEnv>): void {
   app.get('/api/auth/github', privateResponse, c => githubStart(c));
   app.post('/api/auth/github/start', privateResponse, githubInviteStart);
   app.get(CALLBACK_PATH, privateResponse, githubCallback);
-  app.get('/api/auth/local/claim', privateResponse, localClaim);
+  app.get('/api/auth/local', privateResponse, localSignIn);
+  app.post('/api/auth/native/local', privateResponse, nativeLocalSignIn);
   app.get('/api/auth/native/start', privateResponse, nativeStart);
   app.get(NATIVE_PAGE_PATH, privateResponse, nativeDone);
   app.post('/api/auth/native/token', privateResponse, nativeToken);

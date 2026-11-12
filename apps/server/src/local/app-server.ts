@@ -1,4 +1,3 @@
-import { setTimeout as delay } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { stdioTransport, type Transport } from '../../../runner/src/app-host-transport.js';
@@ -11,12 +10,10 @@ import { startLocalHost, type LocalHost } from './host.js';
 import { LocalServerError, startLocalServer, type LocalServer } from './launch.js';
 import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState } from './state.js';
 
-const CLAIM_POLL_MS = 1000;
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const githubApp = z.object({ clientId: z.string().min(1).max(100), clientSecret: z.string().min(1).max(200) }).strict();
 const requestSchema: z.ZodType<ServerRequest> = z.discriminatedUnion('type', [
   z.object({ type: z.literal('inspect'), id: requestId }).strict(),
-  z.object({ type: z.literal('start'), id: requestId, github: githubApp.optional(), unsandboxedConsent: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal('start'), id: requestId, unsandboxedConsent: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('stop'), id: requestId }).strict(),
 ]);
 
@@ -38,17 +35,17 @@ let starting: Promise<void> | undefined;
 function emit(event: ServerEvent): void { transport.send(event); }
 function log(level: 'info' | 'warning' | 'error', text: string): void { emit({ type: 'log', level, message: text }); }
 
-async function claimOf(server: LocalServer): Promise<string | undefined> {
-  const url = await server.claimUrl().catch(() => null);
+function signInToken(server: LocalServer): string | undefined {
+  const url = server.signInUrl();
   return url ? new URL(url).searchParams.get('token') ?? undefined : undefined;
 }
 
-async function status(): Promise<void> {
+function status(): void {
   const current = running;
   if (!current) { emit({ type: 'status', state: 'stopped', host: 'off' }); return; }
-  const claim = await claimOf(current.server);
-  const update: ServerStatus = { state: current.stopping ? 'stopping' : 'running', origin: current.server.origin, host: current.hostState, ...(claim ? { claim } : {}) };
-  if (running === current) emit({ type: 'status', ...update });
+  const token = signInToken(current.server);
+  const update: ServerStatus = { state: current.stopping ? 'stopping' : 'running', origin: current.server.origin, host: current.hostState, ...(token ? { signInToken: token } : {}) };
+  emit({ type: 'status', ...update });
 }
 
 async function hostCheck(): Promise<{ mode: ServerInspection['hostMode']; problem?: string; models?: LocalModels }> {
@@ -68,7 +65,6 @@ async function inspect(): Promise<ServerInspection> {
   const host = await hostCheck();
   return {
     stateDir, port: state?.port ?? DEFAULT_LOCAL_PORT, hostMode: host.mode,
-    ...(state?.github ? { githubClientId: state.github.clientId } : {}),
     ...(host.mode === 'unsandboxed' ? { unsandboxedWarning: unsandboxedWarning() } : {}),
     ...(host.problem ? { hostProblem: host.problem } : {}),
   };
@@ -82,10 +78,7 @@ async function start(request: ServerStartRequest): Promise<void> {
 }
 
 async function launch(request: ServerStartRequest): Promise<void> {
-  const github = request.github && { clientId: request.github.clientId.trim(), clientSecret: request.github.clientSecret.trim() };
-  request.github = undefined;
-  const { state, release } = await openLocalState(stateDir, github ? { github } : {});
-  if (!state.github) { await release(); throw new ServerFailure('Add your GitHub OAuth app first: Pikibun signs you in with it.'); }
+  const { state, release } = await openLocalState(stateDir);
   const host = await hostCheck().catch(async (error: unknown) => { await release(); throw error; });
   const server = await startLocalServer({ stateDir, state, release, mode: 'local', ...(staticDir ? { staticDir } : {}) });
   const current: Running = { server, hostState: 'off', stopping: false };
@@ -95,9 +88,8 @@ async function launch(request: ServerStartRequest): Promise<void> {
   if (host.problem || !host.models || (unsandboxed && request.unsandboxedConsent !== true)) {
     log('warning', host.problem || !host.models ? `This computer can't run sessions yet: ${host.problem ?? 'Pi has no models.'} Start Pikibun again once that is fixed.`
       : 'This computer runs no sessions: running them without a sandbox needs your consent.');
-    void reportClaim(current);
   } else {
-    const setHost = (next: ServerHostState) => { if (running === current) { current.hostState = next; void status(); } };
+    const setHost = (next: ServerHostState) => { if (running === current) { current.hostState = next; status(); } };
     current.host = startLocalHost(server, stateDir, {
       localModels: host.models, unsandboxed,
       onWaiting: () => setHost('waiting'),
@@ -113,12 +105,7 @@ async function launch(request: ServerStartRequest): Promise<void> {
       log('error', message(error, "This computer could not become Pikibun's host. Check its Pi configuration and prerequisites."));
     });
   }
-  await status();
-}
-
-async function reportClaim(current: Running): Promise<void> {
-  while (running === current && !current.stopping && await claimOf(current.server)) await delay(CLAIM_POLL_MS);
-  if (running === current && !current.stopping) await status();
+  status();
 }
 
 async function stop(): Promise<void> {
@@ -126,13 +113,13 @@ async function stop(): Promise<void> {
   const current = running;
   if (!current || current.stopping) return;
   current.stopping = true;
-  await status();
+  status();
   try {
     await current.host?.stop().catch(() => {});
     await current.server.close();
   } finally {
     running = undefined;
-    await status();
+    status();
   }
 }
 

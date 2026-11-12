@@ -1,9 +1,11 @@
 import { mkdir } from 'node:fs/promises';
+import { userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { instanceAdmins, localOwner } from '../authority/index.js';
 import { loadConfig } from '../config.js';
 import { InstanceLockedError } from '../db/index.js';
+import { PASSWORD_USERNAME } from '../http.js';
 import { PasswordCommandError, runPasswordCommand } from '../password-accounts-cli.js';
 import { startServer } from '../serve.js';
 import { webBuild } from '../static.js';
@@ -41,7 +43,7 @@ export interface LocalServer {
   readonly address: string;
   readonly env: Env;
   owner(): Promise<{ id: string } | null>;
-  claimUrl(): Promise<string | null>;
+  signInUrl(): string | null;
   createAdmin(username: string, password: string): Promise<string>;
   close(): Promise<void>;
 }
@@ -71,10 +73,11 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
     SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey,
   };
   if (shared && !state.sharedOnce) {
-    const first = await withData(state, stateDir, staticDir, firstGitHubUser);
+    const first = await withData(state, stateDir, staticDir, firstAccount);
     state = await recordLocalOwnership(stateDir, state, { ...(first && !state.owner ? { owner: first } : {}), sharedOnce: true });
   }
   const owner = shared ? undefined : await pinnedOwner(state, stateDir, staticDir);
+  const ownerName = shared ? undefined : localUsername();
   const settings: Record<string, string> = shared ? {
     ...common, TRUST_PROXY: String(shared.trustProxy), LOCAL_MODE: 'false', SIGNUP: shared.signup, PASSWORD_AUTH: String(shared.passwordAuth),
     ADMIN_USER_IDS: shared.admins.join(','),
@@ -82,7 +85,7 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
     ...options.extraEnv,
   } : {
     ...common, TRUST_PROXY: 'false', LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: state.claimSecret, ...(owner ? { LOCAL_OWNER_ID: owner } : {}),
-    ...(state.github ? { GITHUB_CLIENT_ID: state.github.clientId, GITHUB_CLIENT_SECRET: state.github.clientSecret } : {}),
+    ...(ownerName ? { LOCAL_OWNER_NAME: ownerName } : {}),
     ...options.extraEnv,
   };
   const config = await loadConfig(settings);
@@ -106,15 +109,16 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
       const first = admins.find(id => existing.has(id));
       return first ? { id: first } : null;
     },
-    async claimUrl() {
-      if (shared) return null;
-      return await localOwner(env) ? null : `${origin}/api/auth/local/claim?token=${state.claimSecret}`;
+    signInUrl() {
+      return shared ? null : `${origin}/api/auth/local?token=${state.claimSecret}`;
     },
     async createAdmin(username, password) {
-      if (!shared) throw new LocalServerError('Administrator accounts are for a shared Pikibun: for yourself alone, you sign in with GitHub.');
+      if (!shared) throw new LocalServerError('Administrator accounts are for a shared Pikibun: for yourself alone, you sign in with its sign-in link.');
       try {
-        await runPasswordCommand(env.DB, settings, { kind: 'create-admin', username }, async () => password);
-        return `Created the administrator password:${username.toLowerCase()}: sign in at ${origin} with the username ${username.toLowerCase()}.`;
+        const done = await runPasswordCommand(env.DB, settings, { kind: 'create-admin', username }, async () => password);
+        const name = username.trim().toLowerCase();
+        const gave = done.startsWith('pikibun: gave');
+        return `${gave ? 'Gave' : 'Created'} the administrator password:${name}${gave ? ' its first password' : ''}: sign in at ${origin} with the username ${name}.`;
       }
       catch (error) {
         if (error instanceof PasswordCommandError) throw new LocalServerError(error.message.replace(/^./, first => first.toUpperCase()).replace(/ADMIN_USER_IDS/g, 'the administrators').replace(/--reset-password \S+/, 'reset its password'));
@@ -127,20 +131,31 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   };
 }
 
-async function firstGitHubUser(env: Env): Promise<string | undefined> {
-  return (await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE auth_kind = 'github' AND github_id IS NOT NULL ORDER BY created_at, id LIMIT 1`).first())?.id;
+export function localUsername(name = safeUsername()): string | undefined {
+  const cleaned = name?.normalize('NFKD').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '').slice(0, 39);
+  return cleaned && PASSWORD_USERNAME.test(cleaned) ? cleaned : undefined;
+}
+
+function safeUsername(): string | undefined {
+  try { return userInfo().username; } catch { return undefined; }
+}
+
+const OWNER_ACCOUNT = `((auth_kind = 'github' AND github_id IS NOT NULL) OR (auth_kind = 'password' AND id LIKE 'password:%'))`;
+
+async function firstAccount(env: Env): Promise<string | undefined> {
+  return (await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE ${OWNER_ACCOUNT} ORDER BY created_at, id LIMIT 1`).first())?.id;
 }
 
 async function pinnedOwner(state: LocalState, stateDir: string, staticDir: string): Promise<string | undefined> {
   if (state.owner) return state.owner;
   if (!state.shared && !state.sharedOnce) return undefined;
-  const admins = (state.shared?.admins ?? []).filter(id => id.startsWith('github:'));
+  const admins = state.shared?.admins ?? [];
   const owner = await withData(state, stateDir, staticDir, async env => {
-    const rows = admins.length ? await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE auth_kind = 'github' AND id IN (${admins.map(() => '?').join(',')})`).bind(...admins).all() : [];
+    const rows = admins.length ? await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE ${OWNER_ACCOUNT} AND id IN (${admins.map(() => '?').join(',')})`).bind(...admins).all() : [];
     const admin = admins.find(id => rows.some(row => row.id === id));
     if (admin) return admin;
-    if (!await firstGitHubUser(env)) return undefined;
-    throw new LocalServerError('This Pikibun has served others: share it again and sign in as one of its GitHub administrators first, so it knows whose it is when it runs for you alone.');
+    if (!await firstAccount(env)) return undefined;
+    throw new LocalServerError('This Pikibun has served others: share it again and sign in as one of its administrators first, so it knows whose it is when it runs for you alone.');
   });
   if (owner) await recordLocalOwnership(stateDir, state, { owner });
   return owner;
@@ -158,14 +173,12 @@ async function withData<T>(state: LocalState, stateDir: string, staticDir: strin
   }
 }
 
-export function githubOAuthAppInstructions(): string {
-  return `Pikibun signs you in with GitHub through an OAuth app of your own. Register one once at
+export function githubOAuthAppInstructions(origin: string): string {
+  return `Shared, Pikibun can sign people in with GitHub through an OAuth app of yours. Register one at
   https://github.com/settings/applications/new
 with
-  Application name:            Pikibun on my computer (any name)
-  Homepage URL:                http://${LOCAL_ORIGIN_HOST}
-  Authorization callback URL:  http://${LOCAL_ORIGIN_HOST}${githubCallbackPath}
-(GitHub accepts that callback on any port of ${LOCAL_ORIGIN_HOST}.) Then generate a client secret and give Pikibun the
-client ID and secret.
+  Homepage URL:                ${origin}
+  Authorization callback URL:  ${origin}${githubCallbackPath}
+Then generate a client secret and give Pikibun the client ID and secret.
 `;
 }
