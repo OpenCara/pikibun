@@ -2,12 +2,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
-import { createConnector, controlPlaneOrigin, type LocalConnector } from "./connector.js";
+import { createConnector, controlPlaneOrigin, LocalViewUnavailable, type LocalConnector } from "./connector.js";
 import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, unsandboxedWarning, type HostIsolation } from "./connect-setup.js";
 import { stdioTransport, type Transport } from "./app-host-transport.js";
 import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "./app-host-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
-import { ConnectorSetupError } from "./protocol.js";
+import { ConnectorSetupError, RunnerError } from "./protocol.js";
+import { transcriptPage } from "../../../packages/shared/src/transcript-display.js";
 import { LoginError, LoginSession, loginProviders, piLogin, runLogin } from "./pi-login.js";
 import { DEFAULT_WINDOWS_LIMITS, windowsRuntimeDirectory, type SandboxBackendConfig } from "./sandbox-backend.js";
 
@@ -16,6 +17,9 @@ class HostFailure extends ConnectorSetupError {
 }
 
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const sessionId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/);
+const revision = z.string().regex(/^[0-9a-f]{32}$/);
+const entryName = z.string().regex(/^[^\u0000-\u001f\u007f]{1,300}$/);
 const developmentOptions = { allowFaux: z.boolean().optional(), allowInsecureLoopback: z.boolean().optional() };
 const isolationOptions = { experimentalSandbox: z.boolean().optional() };
 const hostRequestSchema: z.ZodType<HostRequest> = z.discriminatedUnion("type", [
@@ -33,10 +37,17 @@ const hostRequestSchema: z.ZodType<HostRequest> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("login"), id: requestId, provider: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), method: z.enum(["oauth", "api_key"]) }).strict(),
   z.object({ type: z.literal("login-answer"), id: requestId, login: requestId, prompt: requestId, value: z.string().max(8192) }).strict(),
   z.object({ type: z.literal("login-cancel"), id: requestId, login: requestId }).strict(),
+  z.object({ type: z.literal("view"), id: requestId, sessionId, since: revision.optional(), brief: z.boolean().optional() }).strict(),
+  z.object({
+    type: z.literal("entries"), id: requestId, sessionId, conversation: entryName, before: entryName,
+    limit: z.number().int().min(1).max(transcriptPage.max), brief: z.boolean().optional(),
+  }).strict(),
 ]);
 
 function hostError(error: unknown, fallback: string): HostError {
   if (error instanceof HostFailure) return { code: error.code, message: error.message };
+  if (error instanceof LocalViewUnavailable) return { code: "not-running", message: error.message };
+  if (error instanceof RunnerError && error.status === 404) return { code: "not-found", message: "This host has no such session." };
   if (error instanceof RunnerLeaseBusyError) return { code: "lease-busy", message: "Another Pikibun connector is already running with this computer's pairing, for example `pikibun connect` in a terminal. Stop it there, then start the host here." };
   if (error instanceof ConnectorSetupError) return { code: "setup", message: error.message };
   return { code: "failed", message: fallback };
@@ -186,6 +197,16 @@ async function handle(request: HostRequest): Promise<void> {
     } else if (request.type === "upload") {
       if (!running) throw new HostFailure("not-running", "The host isn't running.");
       emit({ type: "result", id: request.id, ok: true, reply: await running.connector.direct({ grant: request.grant, body: request.body }) });
+    } else if (request.type === "view" || request.type === "entries") {
+      if (!running) throw new HostFailure("not-running", "The host isn't running.");
+      const { sessionId: id, brief } = request;
+      if (request.type === "view") {
+        const view = await running.connector.localView(id, { ...(request.since ? { since: request.since } : {}), ...(brief ? { brief } : {}) });
+        emit({ type: "result", id: request.id, ok: true, view });
+      } else {
+        const page = await running.connector.localEntries(id, { conversation: request.conversation, before: request.before, limit: request.limit, ...(brief ? { brief } : {}) });
+        emit({ type: "result", id: request.id, ok: true, page });
+      }
     } else if (request.type === "inspect") {
       emit({ type: "result", id: request.id, ok: true, inspection: await inspect(request.allowFaux, request.allowInsecureLoopback, request.experimentalSandbox) });
     } else {
@@ -193,7 +214,8 @@ async function handle(request: HostRequest): Promise<void> {
       emit({ type: "result", id: request.id, ok: true });
     }
   } catch (error) {
-    emit({ type: "result", id: request.id, ok: false, error: hostError(error, request.type === "stop" ? "The host did not stop cleanly." : request.type === "upload" ? "The host could not take the file." : request.type.startsWith("login") || request.type === "providers" ? "Sign-in failed." : "The host could not start. Check this computer's pairing, Pi configuration and prerequisites.") });
+    emit({ type: "result", id: request.id, ok: false, error: hostError(error, request.type === "stop" ? "The host did not stop cleanly." : request.type === "upload" ? "The host could not take the file."
+      : request.type === "view" || request.type === "entries" ? "The host could not read the session." : request.type.startsWith("login") || request.type === "providers" ? "Sign-in failed." : "The host could not start. Check this computer's pairing, Pi configuration and prerequisites.") });
   }
 }
 

@@ -31,6 +31,7 @@ import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
 import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
+import type { LocalPage, LocalView } from "./app-host-protocol.js";
 
 const STATE_FILE = "connector.json";
 const EXTENSION_SYNC_MS = 30_000;
@@ -161,6 +162,13 @@ export interface ConnectorRuntime {
   fetch(request: Request): Response | Promise<Response>;
   close(): Promise<void>;
   resume?(): Promise<void>;
+  view?(sessionId: string, options: { since?: string; brief?: boolean }): Promise<LocalView>;
+  entries?(sessionId: string, options: { conversation: string; before: string; limit: number; brief?: boolean }): Promise<LocalPage | null>;
+}
+
+/** The host has no runtime to read sessions from: it hasn't connected since it started, or is replacing its runtime. */
+export class LocalViewUnavailable extends Error {
+  constructor() { super("The host isn't serving sessions yet"); }
 }
 
 export interface ConnectorOptions {
@@ -506,6 +514,27 @@ export class LocalConnector {
     return this.frames.direct(input);
   }
 
+  /**
+   * A session's view for the desktop app that started this host, read here rather than relayed through the server, so
+   * that it carries on while the server can't be reached (docs/design/local-views.md). It needs the runtime, made once
+   * the host first connects, and kept while the connection comes and goes.
+   */
+  localView(sessionId: string, options: { since?: string; brief?: boolean }): Promise<LocalView> {
+    const runtime = this.localRuntime();
+    return runtime.view!(assertId(sessionId), options);
+  }
+
+  localEntries(sessionId: string, options: { conversation: string; before: string; limit: number; brief?: boolean }): Promise<LocalPage | null> {
+    const runtime = this.localRuntime();
+    return runtime.entries!(assertId(sessionId), options);
+  }
+
+  private localRuntime(): ConnectorRuntime {
+    const runtime = this.runtime?.value;
+    if (this.lifetime.signal.aborted || this.restarting || !runtime?.view || !runtime.entries) throw new LocalViewUnavailable();
+    return runtime;
+  }
+
   stop(): Promise<void> {
     this.stopping ??= this.shutdown();
     return this.stopping;
@@ -538,7 +567,11 @@ async function defaultRuntime(config: RunnerConfig): Promise<ConnectorRuntime> {
   const service = new RunnerService(config);
   await service.initialize();
   const app = createRunnerApp(service);
-  return { fetch: request => app.fetch(request), close: () => service.close(), resume: () => service.resume() };
+  return {
+    fetch: request => app.fetch(request), close: () => service.close(), resume: () => service.resume(),
+    view: (sessionId, options) => service.localView(sessionId, options),
+    entries: (sessionId, options) => service.localEntries(sessionId, options),
+  };
 }
 
 export function createConnector(options: ConnectorOptions): LocalConnector { return new LocalConnector(options); }

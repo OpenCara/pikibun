@@ -12,6 +12,8 @@ import { assertId, permissionFor, RunnerError, stableJson, validateBinding, veri
 import { RunnerSession, WORK_MARKER, type RunnerConfig } from "./session.js";
 import { restoreSession } from "./restore.js";
 import { PACK_FILE, readPack, settlePack, unpackSandbox, writePack, type PackSummary } from "./pack.js";
+import { LocalViews } from "./local-view.js";
+import type { LocalPage, LocalView } from "./app-host-protocol.js";
 
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -24,6 +26,7 @@ function immutable<T>(value: T): T {
 export class RunnerService {
   private readonly sessions = new Map<string, Promise<RunnerSession>>();
   private readonly packing = new Map<string, Promise<unknown>>();
+  private readonly localViews = new LocalViews();
   private closed = false;
   readonly dataDir: string;
   constructor(readonly config: RunnerConfig) {
@@ -63,6 +66,17 @@ export class RunnerService {
     const opening = this.openSession(id);
     this.sessions.set(id, opening);
     try { return await opening; } catch (error) { if (this.sessions.get(id) === opening) this.sessions.delete(id); throw error; }
+  }
+
+  /** A session's view for the app that started this host, which may read every session on it (docs/design/local-views.md). */
+  async localView(id: string, options: { since?: string; brief?: boolean }): Promise<LocalView> {
+    const session = await this.get(id);
+    return this.localViews.view(session, await session.view(), options);
+  }
+
+  async localEntries(id: string, options: { conversation: string; before: string; limit: number; brief?: boolean }): Promise<LocalPage | null> {
+    const session = await this.get(id);
+    return this.localViews.entries(await session.view(), options);
   }
 
   private async openSession(id: string): Promise<RunnerSession> {

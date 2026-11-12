@@ -1,6 +1,6 @@
 import type { EntryView, SessionRecord, SessionView } from "../../shared/src/types";
 import { transcriptPage } from "../../shared/src/transcript-display";
-import { applyViewPatch, isViewPatch } from "../../shared/src/view-patch";
+import { applyViewPatch, isViewPatch, type SessionViewPatch } from "../../shared/src/view-patch";
 import { ApiError, errorMessage, segment } from "./api";
 import { carryEarlier, firstHeld, withEarlier, type EarlierEntries } from "./transcript-pages";
 
@@ -14,6 +14,9 @@ export const liveTiming = {
   firstBackoffMs: 2_000,
   maxBackoffMs: 60_000,
   accessCheckMs: 30_000,
+  localActiveMs: 500,
+  localIdleMs: 1_500,
+  localRetryMs: 30_000,
 } as const;
 
 export interface EventStream {
@@ -61,12 +64,30 @@ export function createViewCache(limit = 8): ViewCache {
   };
 }
 
+export type LocalViewReply = { view: SessionView; revision: string } | { patch: SessionViewPatch };
+
+/**
+ * The host on this device, which the desktop app started: a session it runs is read from it first, rather than through
+ * the server's relay, and still while the server can't be reached (docs/design/local-views.md).
+ */
+export interface LocalSessions {
+  /** Whether it runs this session, by the server's record of it, which it then remembers. */
+  runs(session: SessionRecord): boolean;
+  /** The record of a session the server said it runs, while it still does: for when the server can't be reached. */
+  ran(sessionId: string): SessionRecord | undefined;
+  /** The session's view, or a patch on the one at since; null where the host can't read it. */
+  view(sessionId: string, options: { since?: string; brief: boolean }): Promise<LocalViewReply | null>;
+  /** Entries before one in a conversation; null where the host can't read them. */
+  entries(sessionId: string, options: { conversation: string; before: string; limit: number; brief: boolean }): Promise<{ entries: EntryView[]; older: number } | null>;
+}
+
 export interface LiveSessionDependencies {
   api<T>(path: string, options: { signal: AbortSignal }): Promise<T>;
   openEvents(path: string): EventStream;
   hidden(): boolean;
   onVisibilityChange(listener: () => void): () => void;
   cache?: ViewCache;
+  local?: LocalSessions;
 }
 
 export interface LiveSession {
@@ -93,6 +114,16 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
   let earlier: EarlierEntries = new Map();
   const reading = new Map<string, Promise<void>>();
   const running = () => !revoked && !controller.signal.aborted;
+  const local = dependencies.local;
+  let here: SessionRecord | undefined;
+  let hereEpoch = 0;
+  let readingHere = false;
+  let cancelHere = () => {};
+  let herePaused = false;
+  let cancelPause = () => {};
+  let confirmed = false;
+  let held: LocalViewReply | null = null;
+  const brief = (record: SessionRecord) => record.toolOutput === "brief";
 
   function showView(view: SessionView, at?: string) {
     earlier = carryEarlier(earlier, current, view);
@@ -112,8 +143,10 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     const before = view && firstHeld(view, earlier, conversationId);
     if (!running() || !view || left <= 0 || !before) return;
     const query = `conversation=${encodeURIComponent(conversationId)}&before=${encodeURIComponent(before)}&limit=${transcriptPage.size}`;
+    const record = here;
     try {
-      const page = await dependencies.api<{ entries: EntryView[]; older: number }>(`${base}/entries?${query}`, { signal: controller.signal });
+      const page = (record && local ? await local.entries(id, { conversation: conversationId, before, limit: transcriptPage.size, brief: brief(record) }).catch(() => null) : null)
+        ?? await dependencies.api<{ entries: EntryView[]; older: number }>(`${base}/entries?${query}`, { signal: controller.signal });
       if (!running() || !current || firstHeld(current, earlier, conversationId) !== before || !Array.isArray(page?.entries)) return;
       const held = earlier.get(conversationId) ?? [];
       const next = new Map(earlier);
@@ -140,12 +173,89 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     handlers.view(null);
   }
 
+  function scheduleHere(delay: number) {
+    cancelHere();
+    if (!running() || !here || dependencies.hidden()) return;
+    const timer = setTimeout(() => void readHere(), delay);
+    cancelHere = () => clearTimeout(timer);
+  }
+
+  async function readHere(): Promise<void> {
+    cancelHere();
+    const record = here;
+    const epoch = hereEpoch;
+    if (!running() || !record || !local || dependencies.hidden() || readingHere) return;
+    readingHere = true;
+    let reply: LocalViewReply | null;
+    try { reply = await local.view(id, { ...(revision ? { since: revision } : {}), brief: brief(record) }); }
+    catch { reply = null; }
+    finally { readingHere = false; }
+    if (!running() || epoch !== hereEpoch) return;
+    if (!reply) { leaveHere(true); return; }
+    if (!confirmed) { held = reply; return; }
+    applyHere(reply);
+  }
+
+  // A view read here shows once the server has said, in this live session, that its account may read it, or can't be
+  // reached to say otherwise; until then the first read waits.
+  function confirmHere() {
+    confirmed = true;
+    const reply = held;
+    held = null;
+    if (reply && here) applyHere(reply);
+  }
+
+  function applyHere(reply: LocalViewReply) {
+    if ("patch" in reply) {
+      let view: SessionView | undefined;
+      if (current && isViewPatch(reply.patch) && reply.patch.base === revision) {
+        try { view = applyViewPatch(current, reply.patch); } catch { view = undefined; }
+      }
+      if (!view) { revision = undefined; scheduleHere(0); return; }
+      showView(view, reply.patch.revision);
+    } else showView(reply.view, reply.revision);
+    failures = 0;
+    handlers.status("online");
+    scheduleHere(active ? liveTiming.localActiveMs : liveTiming.localIdleMs);
+  }
+
+  function readFromHere(record: SessionRecord): boolean {
+    if (!local || herePaused || record.viewable === false) return false;
+    const switching = !here;
+    here = record;
+    if (!switching) return true;
+    hereEpoch++;
+    closeStream();
+    cancelReopen();
+    revision = undefined;
+    void readHere();
+    return true;
+  }
+
+  function leaveHere(pause: boolean) {
+    if (!here) return;
+    here = undefined;
+    held = null;
+    hereEpoch++;
+    cancelHere();
+    revision = undefined;
+    if (pause) {
+      herePaused = true;
+      const timer = setTimeout(() => { herePaused = false; }, liveTiming.localRetryMs);
+      cancelPause = () => clearTimeout(timer);
+    }
+    if (running()) openStream();
+  }
+
   function revoke() {
     revoked = true;
     current = null;
     revision = undefined;
     earlier = new Map();
     dependencies.cache?.delete(id);
+    here = undefined;
+    held = null;
+    cancelHere();
     closeStream();
     cancelReopen();
     handlers.session(null);
@@ -162,16 +272,23 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
       const metadata = await dependencies.api<{ session: SessionRecord }>(base, { signal: controller.signal });
       checkingAccess = false;
       if (!running()) return;
+      confirmed = true;
       handlers.session(metadata.session);
+      const onHost = metadata.session.viewable !== false && local?.runs(metadata.session) === true;
+      if (!onHost) leaveHere(false);
       if (metadata.session.viewable === false) forgetView();
       else if (!shown && current && metadata.session.viewable === true) showView(current, revision);
+      if (onHost && readFromHere(metadata.session)) { confirmHere(); return; }
       if (!withView) return;
       const snapshot = await dependencies.api<{ view: SessionView; revision?: string }>(`${base}/view`, { signal: controller.signal });
       if (running()) showView(snapshot.view, snapshot.revision);
     } catch (reason) {
       if (!running()) return;
+      const denied = reason instanceof ApiError && [401, 403, 404].includes(reason.status);
+      const known = denied ? undefined : local?.ran(id);
+      if ((here && !denied) || (known && readFromHere(known))) { confirmHere(); return; }
       handlers.error(errorMessage(reason));
-      if (reason instanceof ApiError && [401, 403, 404].includes(reason.status)) {
+      if (denied) {
         if (checkingAccess) revoke();
         else forgetView();
       }
@@ -194,7 +311,7 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
 
   function openStream() {
     cancelReopen();
-    if (!running() || dependencies.hidden() || stream) return;
+    if (!running() || dependencies.hidden() || stream || here) return;
     const opened = dependencies.openEvents(`${base}/events?since=${revision ?? ""}`);
     stream = opened;
     let delivered = false;
@@ -242,19 +359,23 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     if (dependencies.hidden()) {
       cancelReopen();
       closeStream();
+      cancelHere();
       return;
     }
     void load(false);
-    openStream();
+    if (here) void readHere();
+    else openStream();
   });
   const accessTimer = setInterval(() => { if (!dependencies.hidden()) void load(false); }, liveTiming.accessCheckMs);
   void load(false);
-  openStream();
+  const known = local?.ran(id);
+  if (!known || !readFromHere(known)) openStream();
 
   return {
     refresh() {
       void load(false);
-      if (stream) followUp = true;
+      if (here) void readHere();
+      else if (stream) followUp = true;
       else openStream();
     },
     loadOlder(conversationId) {
@@ -269,6 +390,8 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
       controller.abort();
       closeStream();
       cancelReopen();
+      cancelHere();
+      cancelPause();
       clearInterval(accessTimer);
       stopVisibility();
     },

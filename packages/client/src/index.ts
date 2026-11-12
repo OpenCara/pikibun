@@ -6,7 +6,7 @@ export {
 } from "./chat-options";
 export {
   activeStatuses, createViewCache, liveTiming, startLiveSession, type CachedView, type EventStream, type LiveSession, type LiveSessionDependencies,
-  type LiveSessionHandlers, type StreamStatus, type ViewCache,
+  type LiveSessionHandlers, type LocalSessions, type LocalViewReply, type StreamStatus, type ViewCache,
 } from "./live-session";
 export { COMPACTION_FAILED_TITLE, compactionFailureText } from "./compaction";
 export { createEntryImageCache, entryImageCaches, entryImageHref, imageSource, seesEntryImages, shownImages, textBesideImages, type EntryImageCache } from "./entry-images";
