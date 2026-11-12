@@ -165,7 +165,7 @@ export interface GitHubSignIn {
   finish(callbackUrl: string): Promise<void>;
 }
 
-export async function startGitHubSignIn(origin: string, claim?: string, options: { inApp?: boolean } = {}): Promise<GitHubSignIn> {
+export async function startGitHubSignIn(origin: string, options: { inApp?: boolean } = {}): Promise<GitHubSignIn> {
   const inApp = options.inApp === true;
   const health = await signInMethods(origin);
   if (health.githubConfigured === false) {
@@ -173,7 +173,7 @@ export async function startGitHubSignIn(origin: string, claim?: string, options:
   }
   const { verifier, challenge, state } = await createPkce();
   return {
-    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}${inApp ? "&callback=page" : ""}${claim ? `&claim=${encodeURIComponent(claim)}` : ""}`,
+    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}${inApp ? "&callback=page" : ""}`,
     inApp,
     isCallback: url => (inApp ? isCallbackPage(origin, url) : isSignInLink(url)),
     owns: url => (inApp ? isCallbackPage(origin, url) : isSignInLink(url)) && new URL(url).searchParams.get("state") === state,
@@ -212,6 +212,26 @@ function isCallbackPage(origin: string, url: string): boolean {
 
 export async function signInWithToken(origin: string, token: string): Promise<void> {
   await establish(origin, token.trim(), null);
+}
+
+const LOCAL_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
+export function localSignInToken(origin: string, link: string): string | null {
+  const typed = link.trim();
+  if (LOCAL_TOKEN.test(typed)) return typed;
+  try {
+    const url = new URL(typed);
+    const token = url.searchParams.get("token") ?? "";
+    return url.origin === new URL(origin).origin && url.pathname === "/api/auth/local" && LOCAL_TOKEN.test(token) ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function signInToLocalServer(origin: string, token: string): Promise<void> {
+  const signIn = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
+    "/api/auth/native/local", { method: "POST", body: { token, deviceName: deviceName() } });
+  await establish(origin, signIn.token, signIn.expiresAt, signIn.user);
 }
 
 async function signedOutRequest<T>(path: string, body: Record<string, string>, failed: string): Promise<T> {

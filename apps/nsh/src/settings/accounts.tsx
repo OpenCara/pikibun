@@ -83,7 +83,7 @@ function GitAccountsGroup() {
       <Card>
         <If when={!user().passwordSignIn}
           else={<Row leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
-            hint={`${gitProviderHosts.github.default} · Repositories on github.com need an account that signs in with GitHub; this account signs in with a password`}
+            hint={`${gitProviderHosts.github.default} · Repositories on github.com need an account that signs in with GitHub, which this one doesn't`}
             trailing={<Badge tone="warning">Not available</Badge>} />}>
           <Row leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
             hint={user().githubConnected ? `${gitProviderHosts.github.default} · ${user().githubLogin ? `@${user().githubLogin} · ` : ""}signed in` : `${gitProviderHosts.github.default} · Not connected`}

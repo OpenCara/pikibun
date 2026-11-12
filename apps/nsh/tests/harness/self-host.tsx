@@ -1,18 +1,15 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection } from "../../../runner/src/app-host-protocol";
 import type { ServerInspection } from "../../../../packages/shared/src/app-server-protocol";
-import { startGitHubSignIn } from "../../src/lib/auth";
 import { appCliFolder, installCommand, setCommandUpdate, setHostLauncher, setInstaller, type HostLink, type InstallRun } from "../../src/lib/this-computer";
 import { setServerLauncher, thisServer } from "../../src/lib/this-server";
 import { Root } from "../../src/Root";
 import { ThisServerPanel } from "../../src/settings/SelfHost";
-import { Button } from "../../src/ui";
 
 const LOCAL = "http://127.0.0.1:7878";
-const CLAIM = "c".repeat(43);
-const params = embedder.params as { app?: unknown; command?: unknown; saved?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown };
+const SIGN_IN_TOKEN = "c".repeat(43);
+const params = embedder.params as { app?: unknown; command?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown };
 let command = String(params.command ?? "ok");
-let saved = params.saved === true ? "Ov23liSaved" : undefined;
 const sent = signal<string[]>([]);
 if (typeof params.appVersion === "string") {
   const ownCopy = typeof params.ownCopy === "string" ? params.ownCopy : null;
@@ -45,21 +42,17 @@ const inspection = (): ServerInspection => ({
   stateDir: "/Users/ada/.local/share/pikibun/server", port: 7878,
   hostMode: params.sandboxed === true ? "sandboxed" : "unsandboxed",
   ...(params.sandboxed === true ? {} : { unsandboxedWarning: "WARNING: running WITHOUT a sandbox." }),
-  ...(saved ? { githubClientId: saved } : {}),
   ...(typeof params.hostProblem === "string" ? { hostProblem: params.hostProblem } : {}),
 });
 
 setServerLauncher(() => link((request, emit) => {
   const { id: _id, ...shown } = request;
-  if (shown.github) shown.github = { clientId: (shown.github as { clientId: string }).clientId, clientSecret: "<secret>" };
   sent.update(list => [...list, JSON.stringify(shown)]);
   const reply = (extra: object = {}) => emit({ type: "result", id: request.id, ok: true, ...extra });
   if (request.type === "inspect") reply({ inspection: inspection() });
   else if (request.type === "start") {
-    const github = request.github as { clientId: string } | undefined;
-    if (!github && !saved) { emit({ type: "result", id: request.id, ok: false, error: { message: "Add your GitHub OAuth app first: Pikibun signs you in with it." } }); return; }
-    if (github) saved = github.clientId;
-    emit({ type: "status", state: "running", origin: LOCAL, claim: CLAIM, host: "waiting" });
+    if (command === "old") { emit({ type: "result", id: request.id, ok: false, error: { message: "Add your GitHub OAuth app first: Pikibun signs you in with it." } }); return; }
+    emit({ type: "status", state: "running", origin: LOCAL, signInToken: SIGN_IN_TOKEN, host: "waiting" });
     emit({ type: "log", level: "info", message: `Pikibun is running at ${LOCAL}, reachable from this computer only.` });
     reply();
   } else if (request.type === "stop") {
@@ -90,13 +83,11 @@ setInstaller((): InstallRun => {
 if (params.app === true) mount(Root);
 else {
   const used = signal("");
-  const url = signal("");
   mount(() => (
     <View style={{ flex: 1 }}>
       <ThisServerPanel server={thisServer()} onUse={origin => used.set(origin)} />
       <Text>{`used: ${used()}`}</Text>
-      <Button testID="fake-sign-in" label="Sign in with GitHub" onPress={() => void startGitHubSignIn(LOCAL, thisServer().claimFor(LOCAL)).then(signIn => url.set(signIn.url))} />
-      <Text>{`sign-in url: ${url()}`}</Text>
+      <Text>{`sign-in token: ${thisServer().signInTokenFor(LOCAL) ?? "none"}`}</Text>
       <View testID="fake-server-sent">
         <Each of={sent()} key="index">{line => <Text>{`sent ${line()}`}</Text>}</Each>
       </View>

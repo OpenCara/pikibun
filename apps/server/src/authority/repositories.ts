@@ -96,7 +96,7 @@ function conflictingPaths(paths: string[]): boolean {
 async function githubAccess(env: Env, userId: string): Promise<GitHubAccess> {
   const user = await getUser(env, userId);
   if (user?.auth_kind === 'test') fail(403, 'github_not_connected', 'Synthetic users cannot access GitHub repositories.');
-  if (user?.auth_kind === 'password') fail(409, 'github_not_connected', 'github.com repositories need an account that signs in with GitHub. This account signs in with a password; its Git accounts reach other providers.');
+  if (user?.auth_kind === 'password') fail(409, 'github_not_connected', 'github.com repositories need an account that signs in with GitHub, which this one doesn\'t; its Git accounts reach other providers.');
   if (!user || user.auth_kind !== 'github' || !user.github_id) fail(409, 'github_not_connected', 'The acting user must connect GitHub. Workspace sharing does not grant repository access.');
   const vault = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM github_tokens WHERE user_id = ?').bind(userId).first();
   if (!vault) fail(409, 'github_not_connected', 'The acting user must connect GitHub.');
