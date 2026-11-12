@@ -75,7 +75,7 @@ export function createStaticHandler(root: string): (request: Request) => Promise
     try { html = await readFile(index, 'utf8'); } catch {
       return Response.json({ error: 'The web app is not built: run `pnpm build`.', code: 'not_found' }, { status: 404 });
     }
-    if (!/<base\s/i.test(html)) html = html.replace(/<head>/i, '<head>\n<base href="/">');
+    if (!/<base\s[^>]*\bhref\s*=/i.test(html)) html = html.replace(/<head>/i, '<head>\n<base href="/">');
     return new Response(request.method === 'HEAD' ? null : html, {
       status: 200,
       headers: { 'Content-Type': contentTypes['.html']!, 'Cache-Control': 'no-cache', 'Content-Security-Policy': pageContentSecurityPolicy() },
