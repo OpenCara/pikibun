@@ -71,9 +71,18 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
 
 - **`/git/<host>/<path>/info/refs?service=git-upload-pack` and `…/git-upload-pack`** for a workspace repository
   (matched against `bindingRemote`, case-insensitively, with or without `.git`) are relayed to the control plane.
-  Other repositories on a host the policy allows get a redirect to their real `https://` URL, which the client then
-  fetches through the tunnel below, without credentials. Everything else, and every `git-receive-pack`, is refused
-  with a `text/plain` reason that Git shows as `remote: …`.
+  Other repositories on a host the policy allows are read without credentials. On the big forges (`PUBLIC_GIT_HOSTS`:
+  github.com, gitlab.com, bitbucket.org, codeberg.org) the proxy makes both requests itself (`#relayPublic`, through
+  `fetchGit` with no authorization), for a plain repository path only (`publicGitRemote`: no percent-encoding, dot or
+  empty segments), so they reach nothing but that forge's upload-pack endpoints for that path. A moved or renamed
+  repository's redirect (301, 302, 307, 308) is followed up to three times (`publicGitFetch`), only to the same endpoint
+  of another such path on those forges, with the same query and body; any other redirect reaches Git as a refusal. The
+  upstream request is aborted when Git disconnects. Those names are fixed,
+  not picked by the session, so the host's own DNS and proxy may route them, as for workspace repositories read
+  directly; a tunnel would be refused where they resolve to fake-IP addresses, and gitlab.com's would be intercepted for
+  its API. Other hosts get a redirect to their real `https://` URL, which the client then fetches through the tunnel
+  below. Everything else, and every `git-receive-pack`, is refused with a `text/plain` reason that Git shows as
+  `remote: …`.
 - **`CONNECT host:443`** opens a tunnel if the policy allows the host and every address it resolves to is public
   (no loopback, private, CGNAT, link-local, multicast or documentation ranges, IPv4-mapped included); the
   connection goes to a checked address, so DNS can't be swapped in between. One exception: on a host whose DNS answers

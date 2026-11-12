@@ -22,7 +22,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - To show that a new test covers a fix, run it once with the fix removed and see it fail.
 - Chromium needs `--no-sandbox` inside a session's sandbox. Python Playwright downloads its own browser unless it is given the system Chromium's path.
 - The node tool can't set environment variables. When a script needs one, start it from Python with the variable set.
-- When a clone fails, the repository can still be read through `gh api` (trees and raw file contents). This also works for public repositories outside the workspace, which git can't reach.
+- When a clone fails, the repository can still be read through `gh api` (trees and raw file contents). This also works for public repositories outside the workspace; git can clone those on GitHub, GitLab, Bitbucket and Codeberg too, where the network access allows their host.
 
 ## CI and logs
 
