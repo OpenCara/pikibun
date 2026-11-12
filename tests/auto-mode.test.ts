@@ -72,7 +72,7 @@ test('auto chooses an online host it may use, preferring the user\'s own, the id
   assert.equal(autoChoice({ ...base, task: complexTask, hosts: [host({ online: false }), shared] })?.connectorId, 'c2');
   assert.equal(autoChoice({ ...base, task: complexTask, hosts: [host({ ownerId: 'u3', workspaceIds: [] })] }), undefined, 'not shared with the workspace');
   assert.equal(autoChoice({ ...base, task: complexTask, hosts: [own, host({ id: 'c3', models: [haiku] })] })?.connectorId, 'c1', 'the host with the model the task needs');
-  const gpu = host({ id: 'c4', ownerId: 'u2', capabilities: { ...own.capabilities, gpu: 'nvidia' } });
+  const gpu = host({ id: 'c4', ownerId: 'u2', capabilities: { ...own.capabilities, gpu: 'render' } });
   assert.equal(autoChoice({ ...base, task: 'Fine-tune the model with CUDA', hosts: [own, gpu] })?.connectorId, 'c4');
   assert.equal(autoChoice({ ...base, task: complexTask, hosts: [own, shared], connectorId: 'c2' })?.connectorId, 'c2', 'a host the user kept');
   assert.equal(autoChoice({ ...base, task: complexTask, hosts: [own], model: { provider: 'anthropic', modelId: 'claude-sonnet-4-5' } })?.modelId, 'claude-sonnet-4-5', 'a model the user kept');
