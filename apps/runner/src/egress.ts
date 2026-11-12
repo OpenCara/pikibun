@@ -23,7 +23,6 @@ export const EGRESS_PORT = 41080;
 export const EGRESS_SOCKET = "/run/pikibun/egress.sock";
 export const EGRESS_GIT_BASE = `http://127.0.0.1:${EGRESS_PORT}/git/`;
 const SSH_HOSTS = ["github.com", "gitlab.com", "bitbucket.org"];
-/** Forges whose public repositories the proxy reads itself, without credentials, for a repository outside the workspace. */
 export const PUBLIC_GIT_HOSTS: readonly string[] = Object.freeze(["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"]);
 
 const GRANT_TTL_MS = 60_000;
@@ -58,7 +57,6 @@ export interface EgressOptions {
   apiAuthority?: InterceptionAuthority;
   apiUpstream?: ApiUpstream;
   fakeIpTunnels?: () => Promise<boolean>;
-  /** How the proxy reads public repositories outside the workspace from PUBLIC_GIT_HOSTS (tests replace it). */
   publicFetch?: typeof fetch;
 }
 
@@ -206,11 +204,6 @@ function refuseLfs(response: ServerResponse, status: number, message: string): v
   response.end(`${JSON.stringify({ message })}\n`);
 }
 
-/**
- * The https:// remote of a repository on one of PUBLIC_GIT_HOSTS, named by its <host>/<path>, or undefined for another host
- * or a path that isn't plainly a repository's (no percent-encoding, dot segments or empty segments), so the request can
- * only go to that forge's Git endpoints for that path.
- */
 export function publicGitRemote(target: string): string | undefined {
   const slash = target.indexOf("/");
   if (slash < 0 || target.length > 512) return undefined;
@@ -594,11 +587,6 @@ export class EgressProxy {
       : `${target.slice(0, 300)} is not one of this workspace's repositories, and its network policy doesn't allow ${host.slice(0, 253)}`);
   }
 
-  /**
-   * Reads a public repository outside the workspace from one of PUBLIC_GIT_HOSTS: the proxy makes the request itself, without
-   * credentials, so it needs no tunnel (which a local proxy's fake-IP DNS, or the API interception of gitlab.com, would stop).
-   * Only the upload-pack endpoints of that path are reached.
-   */
   async #relayPublic(request: IncomingMessage, response: ServerResponse, service: "info-refs" | "upload-pack", remote: string, label: string): Promise<void> {
     const header = (name: string) => { const value = request.headers[name]; return typeof value === "string" ? value : undefined; };
     const { host, pathname } = new URL(remote);

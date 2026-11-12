@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn, spawnSync } from "node:child_process";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { createServer as createTcpServer, connect as tcpConnect, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { EgressProxy, egressEnvironment, parseEgressGrant, publicAddress, repositoryForRemote, type RelayRequest } from "../apps/runner/src/egress.js";
+import { EgressProxy, egressEnvironment, parseEgressGrant, publicAddress, publicGitRemote, repositoryForRemote, type RelayRequest } from "../apps/runner/src/egress.js";
 import { performClonePush, PushError, pushSummary } from "../apps/runner/src/push.js";
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
@@ -24,7 +24,7 @@ function grant(policy: Partial<EgressGrant["policy"]> = {}): EgressGrant {
 }
 
 async function proxy(t: TestContext, options: { grant?: () => Promise<EgressGrant>; relay?: (request: RelayRequest) => Promise<Response>;
-  lookup?: (host: string) => Promise<{ address: string; family: number }[]>; connectTo?: number; sessionBranch?: string } = {}) {
+  lookup?: (host: string) => Promise<{ address: string; family: number }[]>; connectTo?: number; sessionBranch?: string; publicFetch?: typeof fetch } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "egress-"));
   const relayed: RelayRequest[] = [];
   const instance = new EgressProxy({
@@ -37,6 +37,7 @@ async function proxy(t: TestContext, options: { grant?: () => Promise<EgressGran
     },
     lookup: options.lookup ?? (async () => [{ address: "93.184.216.34", family: 4 }]),
     ...(options.sessionBranch ? { sessionBranch: options.sessionBranch } : {}),
+    publicFetch: options.publicFetch ?? (async () => { throw new Error("no public fetch in this test"); }),
     ...(options.connectTo !== undefined ? { connect: (port: number) => { assert.equal(port, 443); return tcpConnect({ port: options.connectTo!, host: "127.0.0.1" }); } } : {}),
   });
   await instance.start();
@@ -245,16 +246,129 @@ test("a clone session's proxy relays pushes of its own branch, streaming the pac
 test("the relay's refusal reaches Git as text, and other repositories on allowed hosts are fetched directly", async t => {
   const { RunnerError } = await import("../apps/runner/src/protocol.js");
   const { instance } = await proxy(t, {
-    grant: async () => grant({ mode: "allowlist", domains: ["github.com"] }),
+    grant: async () => grant({ mode: "allowlist", domains: ["github.com", "git.example.org"] }),
     relay: async () => { throw new RunnerError(403, "GitHub did not let the session owner's account read acme/app."); },
   });
   const refused = await get(instance.socketPath, "/git/github.com/acme/app.git/info/refs?service=git-upload-pack");
   assert.equal(refused.status, 403);
   assert.equal(refused.headers["content-type"], "text/plain; charset=utf-8");
   assert.match(refused.body, /did not let the session owner's account read/);
-  const other = await get(instance.socketPath, "/git/github.com/public/tool.git/info/refs?service=git-upload-pack");
+  const other = await get(instance.socketPath, "/git/git.example.org/public/tool.git/info/refs?service=git-upload-pack");
   assert.equal(other.status, 302);
-  assert.equal(other.headers.location, "https://github.com/public/tool.git/info/refs?service=git-upload-pack");
+  assert.equal(other.headers.location, "https://git.example.org/public/tool.git/info/refs?service=git-upload-pack");
+});
+
+test("public repositories outside the workspace on the big forges are read by the proxy itself, without credentials", async t => {
+  let policy: EgressGrant["policy"] = { mode: "open", domains: [], packageRegistries: true };
+  const fetched: { url: string; method: string; headers: Headers; body: string }[] = [];
+  let answer = (url: string) => url.endsWith("/git-upload-pack")
+    ? new Response("pack", { headers: { "content-type": "application/x-git-upload-pack-result" } })
+    : new Response("refs", { headers: { "content-type": "application/x-git-upload-pack-advertisement" } });
+  const { instance, relayed } = await proxy(t, {
+    grant: async () => ({ policy, repositories: [repository] }),
+    publicFetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetched.push({ url: String(input), method: init?.method ?? "GET", headers: new Headers(init?.headers),
+        body: init?.body ? await new Response(init.body).text() : "" });
+      return answer(String(input));
+    }) as typeof fetch,
+  });
+  const refs = await get(instance.socketPath, "/git/github.com/longbridge/nsh/info/refs?service=git-upload-pack",
+    { headers: { "user-agent": "git/2.43.0", "git-protocol": "version=2" } });
+  assert.equal(refs.status, 200);
+  assert.equal(refs.body, "refs");
+  assert.equal(refs.headers["content-type"], "application/x-git-upload-pack-advertisement");
+  assert.equal(fetched[0]!.url, "https://github.com/longbridge/nsh/info/refs?service=git-upload-pack");
+  assert.equal(fetched[0]!.headers.get("git-protocol"), "version=2");
+  assert.equal(fetched[0]!.headers.get("authorization"), null);
+  const pack = await get(instance.socketPath, "/git/gitlab.com/group/sub/tool.git/git-upload-pack",
+    { method: "POST", headers: { "content-type": "application/x-git-upload-pack-request" }, body: "0032want" });
+  assert.equal(pack.status, 200);
+  assert.equal(pack.body, "pack");
+  assert.deepEqual([fetched[1]!.url, fetched[1]!.method, fetched[1]!.body], ["https://gitlab.com/group/sub/tool.git/git-upload-pack", "POST", "0032want"]);
+  assert.equal((await get(instance.socketPath, "/git/github.com/longbridge/nsh/git-upload-pack", { method: "POST", headers: { "content-type": "text/plain" }, body: "x" })).status, 415);
+  assert.equal((await get(instance.socketPath, "/git/github.com/longbridge/nsh/git-upload-pack")).status, 405);
+  assert.equal(relayed.length, 0);
+
+  answer = () => new Response("Not found", { status: 404 });
+  const missing = await get(instance.socketPath, "/git/github.com/someone/private/info/refs?service=git-upload-pack");
+  assert.equal(missing.status, 403);
+  assert.match(missing.body, /github\.com did not serve someone\/private without credentials/);
+  const push = await get(instance.socketPath, "/git/github.com/longbridge/nsh/info/refs?service=git-receive-pack");
+  assert.equal(push.status, 403);
+  const count = fetched.length;
+  const elsewhere = await get(instance.socketPath, "/git/git.example.org/public/tool/info/refs?service=git-upload-pack");
+  assert.equal(elsewhere.status, 302);
+
+  policy = { mode: "allowlist", domains: ["docs.example.com"], packageRegistries: true };
+  const { instance: allowlist } = await proxy(t, { grant: async () => ({ policy, repositories: [repository] }), publicFetch: (async () => answer("")) as typeof fetch });
+  const refused = await get(allowlist.socketPath, "/git/github.com/longbridge/nsh/info/refs?service=git-upload-pack");
+  assert.equal(refused.status, 403);
+  assert.match(refused.body, /network policy doesn't allow github\.com/);
+  assert.equal(fetched.length, count);
+  const status = JSON.parse((await get(instance.socketPath, "/__pikibun/status")).body) as { gitRemotes: string; recent: { reason?: string }[] };
+  assert.match(status.gitRemotes, /public ones on github\.com, gitlab\.com, bitbucket\.org, codeberg\.org/);
+  assert.ok(status.recent.some(entry => entry.reason === "not a workspace repository: info-refs, read from github.com without credentials"));
+});
+
+test("git clones a public repository outside the workspace through the proxy, as a session's Git does", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "egress-public-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const projects = join(directory, "projects");
+  await mkdir(join(projects, "longbridge"), { recursive: true });
+  const work = join(directory, "upstream");
+  const environment = { ...process.env, GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@example.test", GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@example.test" };
+  const git = (args: string[], cwd: string) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", env: environment });
+    return { ok: result.status === 0, output: `${result.stdout}${result.stderr}` };
+  };
+  await mkdir(work);
+  for (const args of [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "initial"]]) assert.ok(git(args, work).ok);
+  await writeFile(join(work, "README.md"), "public code\n");
+  assert.ok(git(["add", "README.md"], work).ok && git(["commit", "-q", "-m", "readme"], work).ok);
+  assert.ok(git(["clone", "-q", "--bare", work, join(projects, "longbridge", "nsh.git")], directory).ok);
+  const server = await startGitHttpServer(projects, { protocolV2: true });
+  t.after(() => server.close());
+
+  const upstreams: string[] = [];
+  const instance = new EgressProxy({
+    socketPath: join(directory, "unused.sock"), tcp: { token: "t".repeat(32) },
+    grant: async () => ({ policy: { mode: "open", domains: [], packageRegistries: true }, repositories: [repository] }),
+    relay: async () => { throw new Error("not a workspace repository"); },
+    publicFetch: ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      upstreams.push(`${url.host}${url.pathname}`);
+      assert.equal(url.host, "github.com");
+      return fetch(`${server.url("longbridge/nsh.git")}${url.pathname.replace(/^\/longbridge\/nsh/, "")}${url.search}`, init);
+    }) as typeof fetch,
+  });
+  await instance.start();
+  t.after(() => instance.close());
+  const session = { ...environment, ...egressEnvironment(undefined, instance.endpoint), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
+  const sessionGit = (args: string[], cwd: string) => new Promise<{ ok: boolean; output: string }>(resolve => {
+    const child = spawn("git", args, { cwd, env: session, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    child.on("close", code => resolve({ ok: code === 0, output }));
+  });
+  const cloned = await sessionGit(["clone", "-q", "https://github.com/longbridge/nsh", "nsh"], directory);
+  assert.ok(cloned.ok, cloned.output);
+  assert.equal(await readFile(join(directory, "nsh", "README.md"), "utf8"), "public code\n");
+  assert.deepEqual([...new Set(upstreams)].sort(), ["github.com/longbridge/nsh/git-upload-pack", "github.com/longbridge/nsh/info/refs"]);
+  const pushed = await sessionGit(["push", "origin", "HEAD:main"], join(directory, "nsh"));
+  assert.ok(!pushed.ok);
+  assert.match(pushed.output, /git_push/);
+});
+
+test("only plain repository paths on the big forges are read by the proxy", () => {
+  assert.equal(publicGitRemote("github.com/longbridge/nsh"), "https://github.com/longbridge/nsh");
+  assert.equal(publicGitRemote("GitHub.com/acme/.github.git"), "https://github.com/acme/.github.git");
+  assert.equal(publicGitRemote("gitlab.com/group/sub/project"), "https://gitlab.com/group/sub/project");
+  assert.equal(publicGitRemote("codeberg.org/forgejo/forgejo"), "https://codeberg.org/forgejo/forgejo");
+  for (const target of ["git.example.org/a/b", "github.com:443/a/b", "github.com/a", "github.com/a/../b", "github.com/a/%2e%2e/b",
+    "github.com/a//b", "github.com/a/b?x", "github.com/a/b c", "api.github.com/a/b", "github.com"]) {
+    assert.equal(publicGitRemote(target), undefined, target);
+  }
 });
 
 test("tunnels follow the network policy and never reach private addresses", async t => {
