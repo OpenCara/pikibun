@@ -17,7 +17,7 @@ export { sessionStatus, type SessionStatus, type SessionStatusTone } from "./ses
 export { openFetchEventStream, SseParser, type FetchEventStreamOptions } from "./sse";
 export { splitToolCalls, transcriptLines, type ToolCallLine } from "./transcript";
 export { callHeadline, pairToolResults, resultOutcome, resultOutput, toolCallRows, type PairedTranscript, type ToolCallRow } from "./tool-rows";
-export { callArguments, callTarget, readable, resultBody, resultSummary, type ResultSummary } from "../../shared/src/tool-summary";
+export { callArguments, callTarget, readable, resultBody, resultNotes, resultSummary, type ResultNote, type ResultSummary } from "../../shared/src/tool-summary";
 export { carryEarlier, firstHeld, withEarlier, type EarlierEntries } from "./transcript-pages";
 export {
   memberPerson, peopleDirectory, userIdFromInput, username, usernameWithId, withUsernames, type Person, type WorkspaceMember,

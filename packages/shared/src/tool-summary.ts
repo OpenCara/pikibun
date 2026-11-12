@@ -124,10 +124,6 @@ const HARNESS_OPEN = "<harness>\n";
 const HARNESS_CLOSE = /\n<\/harness>\s*$/;
 const NOTE_LINE = /^\[(info|warn|error)\] ?(.*)$/;
 
-/**
- * Split a result's text into what the tool printed and the notes the durable harness appends to it (a trailing
- * `<harness>` block of `[severity] message` lines, the reason a call failed among them), so neither shows the tags.
- */
 export function resultNotes(text: string): { output: string; notes: ResultNote[] } {
   const close = HARNESS_CLOSE.exec(text);
   if (!close) return { output: text, notes: [] };
@@ -272,9 +268,8 @@ export function readable(value: unknown, indent = ""): string {
 
 export function resultBody(whole: string): string {
   const { output, notes } = resultNotes(whole);
-  if (!notes.length) return outputBody(output);
   const body = outputBody(output);
-  return [body.replace(/\n+$/, ""), noteLines(notes)].filter(Boolean).join("\n");
+  return notes.length ? [body.replace(/\n+$/, ""), noteLines(notes)].filter(Boolean).join("\n") : body;
 }
 
 function outputBody(text: string): string {
