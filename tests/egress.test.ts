@@ -6,7 +6,7 @@ import { createServer as createTcpServer, connect as tcpConnect, type AddressInf
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { EgressProxy, egressEnvironment, parseEgressGrant, publicAddress, publicGitRemote, repositoryForRemote, type RelayRequest } from "../apps/runner/src/egress.js";
+import { EgressProxy, egressEnvironment, parseEgressGrant, publicAddress, publicGitFetch, publicGitRemote, repositoryForRemote, type RelayRequest } from "../apps/runner/src/egress.js";
 import { performClonePush, PushError, pushSummary } from "../apps/runner/src/push.js";
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
@@ -358,6 +358,57 @@ test("git clones a public repository outside the workspace through the proxy, as
   const pushed = await sessionGit(["push", "origin", "HEAD:main"], join(directory, "nsh"));
   assert.ok(!pushed.ok);
   assert.match(pushed.output, /git_push/);
+});
+
+test("a moved public repository is followed to its new path on the big forges, a few times, and nowhere else", async () => {
+  const asked: { url: string; body: string; aborted: boolean }[] = [];
+  const moves: Record<string, string> = {
+    "https://github.com/old/name/info/refs?service=git-upload-pack": "https://github.com/new/name/info/refs?service=git-upload-pack",
+    "https://github.com/old/name/git-upload-pack": "/new/name/git-upload-pack",
+    "https://github.com/away/name/info/refs?service=git-upload-pack": "https://evil.example/away/name/info/refs?service=git-upload-pack",
+    "https://github.com/other/name/info/refs?service=git-upload-pack": "https://github.com/other/name/info/lfs/objects",
+    "https://github.com/a/b/info/refs?service=git-upload-pack": "https://github.com/b/b/info/refs?service=git-upload-pack",
+    "https://github.com/b/b/info/refs?service=git-upload-pack": "https://github.com/c/b/info/refs?service=git-upload-pack",
+    "https://github.com/c/b/info/refs?service=git-upload-pack": "https://github.com/d/b/info/refs?service=git-upload-pack",
+    "https://github.com/d/b/info/refs?service=git-upload-pack": "https://github.com/e/b/info/refs?service=git-upload-pack",
+  };
+  const follow = publicGitFetch((async (input: RequestInfo | URL, init?: RequestInit) => {
+    asked.push({ url: String(input), body: init?.body ? Buffer.from(init.body as Uint8Array).toString() : "", aborted: init?.signal?.aborted ?? false });
+    const location = moves[String(input)];
+    return location ? new Response(null, { status: 301, headers: { location } }) : new Response("ok");
+  }) as typeof fetch);
+  assert.equal(await (await follow("https://github.com/old/name/info/refs?service=git-upload-pack", { redirect: "manual" })).text(), "ok");
+  assert.equal(asked.at(-1)!.url, "https://github.com/new/name/info/refs?service=git-upload-pack");
+  assert.equal(await (await follow("https://github.com/old/name/git-upload-pack", { method: "POST", body: new TextEncoder().encode("0032want") })).text(), "ok");
+  assert.deepEqual(asked.at(-1), { url: "https://github.com/new/name/git-upload-pack", body: "0032want", aborted: false });
+  assert.equal((await follow("https://github.com/away/name/info/refs?service=git-upload-pack")).status, 301);
+  assert.equal((await follow("https://github.com/other/name/info/refs?service=git-upload-pack")).status, 301);
+  const before = asked.length;
+  assert.equal((await follow("https://github.com/a/b/info/refs?service=git-upload-pack")).status, 301);
+  assert.equal(asked.length - before, 4);
+});
+
+test("a public read stops upstream when Git goes away", async t => {
+  let signal: AbortSignal | undefined;
+  const { instance } = await proxy(t, {
+    grant: async () => grant({ mode: "open" }),
+    publicFetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Response(new ReadableStream({ start: controller => controller.enqueue(new TextEncoder().encode("001e# service=git-upload-pack\n")),
+        pull: () => new Promise(resolve => setTimeout(resolve, 50)) }),
+        { headers: { "content-type": "application/x-git-upload-pack-advertisement" } });
+    }) as typeof fetch,
+  });
+  await new Promise<void>(resolve => {
+    const request = httpRequest({ socketPath: instance.socketPath, path: "/git/github.com/slow/repo/info/refs?service=git-upload-pack" }, response => {
+      response.destroy();
+      resolve();
+    });
+    request.on("error", () => resolve());
+    request.end();
+  });
+  for (let i = 0; i < 50 && !signal?.aborted; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(signal?.aborted, true);
 });
 
 test("only plain repository paths on the big forges are read by the proxy", () => {

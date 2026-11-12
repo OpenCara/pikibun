@@ -74,7 +74,10 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
   Other repositories on a host the policy allows are read without credentials. On the big forges (`PUBLIC_GIT_HOSTS`:
   github.com, gitlab.com, bitbucket.org, codeberg.org) the proxy makes both requests itself (`#relayPublic`, through
   `fetchGit` with no authorization), for a plain repository path only (`publicGitRemote`: no percent-encoding, dot or
-  empty segments), so they reach nothing but that forge's upload-pack endpoints for that path. Those names are fixed,
+  empty segments), so they reach nothing but that forge's upload-pack endpoints for that path. A moved or renamed
+  repository's redirect (301, 302, 307, 308) is followed up to three times (`publicGitFetch`), only to the same endpoint
+  of another such path on those forges, with the same query and body; any other redirect reaches Git as a refusal. The
+  upstream request is aborted when Git disconnects. Those names are fixed,
   not picked by the session, so the host's own DNS and proxy may route them, as for workspace repositories read
   directly; a tunnel would be refused where they resolve to fake-IP addresses, and gitlab.com's would be intercepted for
   its API. Other hosts get a redirect to their real `https://` URL, which the client then fetches through the tunnel

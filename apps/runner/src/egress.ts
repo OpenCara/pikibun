@@ -13,7 +13,7 @@ import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, credentialedApiProviders, 
   type EgressApi, type EgressGitService, type EgressGrant, type EgressRepository, type LfsBatchResult, type NetworkPolicy } from "../../../packages/shared/src/network.js";
 import { boundedStream, drainStream, PUSH_REQUEST_BYTES, pushRejection, PushRequestError, readPushCommands, sessionBranchRefusal, type PushCommand } from "../../../packages/shared/src/git-push.js";
 import { NON_PUBLIC_IPV4, NON_PUBLIC_IPV6 } from "../../../packages/shared/src/non-public-addresses.js";
-import { fetchGit, gitUpstreamHeaders, GitTransferError } from "../../../packages/shared/src/git-transfer.js";
+import { fetchGit, GIT_TRANSFER_TIMEOUT_MS, gitUpstreamHeaders, GitTransferError } from "../../../packages/shared/src/git-transfer.js";
 import { RunnerError } from "./protocol.js";
 import { CA_BUNDLE, CA_BUNDLE_VARIABLES } from "./trust-store.js";
 import { ApiAccess, type ApiUpstream } from "./api-access.js";
@@ -212,6 +212,27 @@ export function publicGitRemote(target: string): string | undefined {
   if (!PUBLIC_GIT_HOSTS.includes(host) || segments.length < 2 || segments.length > 20) return undefined;
   if (segments.some(segment => !/^[A-Za-z0-9_.-]{1,100}$/.test(segment) || segment === "." || segment === "..")) return undefined;
   return `https://${host}/${segments.join("/")}`;
+}
+
+const PUBLIC_GIT_REDIRECTS = 3;
+const FOLLOWED_REDIRECTS = new Set([301, 302, 307, 308]);
+
+export function publicGitFetch(base: typeof fetch): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    let url = new URL(String(input));
+    for (let hop = 0; ; hop++) {
+      const answer = await base(url.toString(), init);
+      const location = answer.headers.get("location");
+      if (!FOLLOWED_REDIRECTS.has(answer.status) || !location || hop >= PUBLIC_GIT_REDIRECTS) return answer;
+      const endpoint = url.pathname.endsWith("/info/refs") ? "/info/refs" : "/git-upload-pack";
+      let next: URL;
+      try { next = new URL(location, url); } catch { return answer; }
+      if (next.protocol !== "https:" || next.username || next.password || next.hash || next.search !== url.search || !next.pathname.endsWith(endpoint)
+        || !publicGitRemote(`${next.host}${next.pathname.slice(0, -endpoint.length)}`)) return answer;
+      await answer.body?.cancel().catch(() => {});
+      url = next;
+    }
+  }) as typeof fetch;
 }
 
 function gitRequest(path: string, search: string): { target: string; service: EgressGitService } | undefined {
@@ -575,7 +596,7 @@ export class EgressProxy {
     }
     const host = key.split("/")[0]!;
     const remote = hostAllowed(grant.policy, host) ? publicGitRemote(target) : undefined;
-    if (remote) return this.#relayPublic(request, response, parsed.service === "upload-pack" ? "upload-pack" : "info-refs", remote, label);
+    if (remote && (parsed.service === "info-refs" || parsed.service === "upload-pack")) return this.#relayPublic(request, response, parsed.service, remote, label);
     if (parsed.service === "info-refs" && hostAllowed(grant.policy, host)) {
       this.#record({ kind: "git", target: label, outcome: "allowed", reason: "not a workspace repository: fetched directly, without credentials" });
       response.writeHead(302, { Location: `https://${target}/info/refs${url.search}`, "Cache-Control": "no-store" });
@@ -593,12 +614,15 @@ export class EgressProxy {
     if (service === "upload-pack" && request.method !== "POST") return refuse(response, 405, "Git fetches use POST");
     if (service === "info-refs" && request.method !== "GET") return refuse(response, 405, "Git reference listings use GET");
     let upstream: Awaited<ReturnType<typeof fetchGit>>;
+    const gone = new AbortController();
+    response.once("close", () => gone.abort());
     try {
       const headers = gitUpstreamHeaders(service, { userAgent: header("user-agent"), gitProtocol: header("git-protocol"),
         contentType: header("content-type"), contentEncoding: header("content-encoding") });
       const body = service === "upload-pack" ? await boundedBody(request, UPLOAD_REQUEST_BYTES) : undefined;
       upstream = await fetchGit({ remote, service, authorization: null, headers, ...(body ? { body } : {}),
-        provider: host, fullName: pathname.slice(1).replace(/\.git$/, ""), identity: "owner", fetch: this.#options.publicFetch ?? fetch });
+        provider: host, fullName: pathname.slice(1).replace(/\.git$/, ""), identity: "owner", fetch: publicGitFetch(this.#options.publicFetch ?? fetch),
+        signal: AbortSignal.any([gone.signal, AbortSignal.timeout(GIT_TRANSFER_TIMEOUT_MS)]) });
     } catch (error) {
       const known = error instanceof GitTransferError || error instanceof RunnerError;
       const reason = known ? error.message : `${host} could not be reached`;
