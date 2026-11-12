@@ -17,6 +17,8 @@ import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "../apps/runner/src/s
 import { MAX_STAGED_UPLOADS, SessionUploads, STALE_UPLOAD_MS } from "../apps/runner/src/session/uploads.js";
 import { agentInstructions, lfsInstructions, type InstructionsInput } from "../apps/runner/src/session/instructions.js";
 import { bundledToolDefinitions } from "../packages/shared/src/tool-definitions.js";
+import { preparationFailure, SessionRepositories, type SessionRepositoriesOptions } from "../apps/runner/src/session/repositories.js";
+import type { IsolatedWorkspace } from "../apps/runner/src/workspace.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -261,6 +263,90 @@ test("a member's host session runs while the host allows host sessions and their
   await assert.rejects(hostPolicy({ hostSession: true }).policy.requireHostEnvironment(), /grant that let them has ended/);
   await assert.rejects(hostPolicy({ hostSession: true, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: false }) }).policy.requireHostEnvironment(),
     /owner turned that off/);
+});
+
+function repositoriesFixture(options: Partial<SessionRepositoriesOptions> & { restore?: (path: string, url: string, reference: string | null) => Promise<void> } = {}) {
+  const events: string[] = [];
+  let exclusive: Promise<void> = Promise.resolve();
+  const state = { opened: true, closing: false, resumed: false };
+  const grant = { policy: { mode: "off" as const, domains: [], packageRegistries: true },
+    repositories: [{ bindingId: "repo-1", provider: "github" as const, host: "github.com", repositoryId: "1", fullName: "acme/app" }] } as EgressGrant;
+  const workspace = { cloneRestore: async (path: string, url: string, reference: string | null, authorize: () => Promise<void>) => {
+    await authorize();
+    events.push(`restore ${path} ${url} ${reference}`);
+    await options.restore?.(path, url, reference);
+  } } as unknown as IsolatedWorkspace;
+  const repositories = new SessionRepositories({
+    grant: async () => grant, cached: true,
+    mirror: async (repository, onProgress) => { onProgress({ phase: "receiving", percent: 50, done: 1, total: 2, bytes: 10 } as never); return `/mirrors/${repository.fullName}`; },
+    workspace: () => workspace, authorize: async () => { events.push("authorize"); }, changed: () => { events.push("changed"); },
+    exclusive: operation => { exclusive = exclusive.then(operation); return exclusive; },
+    opened: () => state.opened, closing: () => state.closing, resumed: () => state.resumed, resume: async () => { events.push("resume"); },
+    ...options,
+  });
+  const settled = async () => {
+    const preparation = repositories.preparation;
+    if (preparation.status === "preparing") await preparation.done.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+    await exclusive.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  return { repositories, events, state, settled };
+}
+
+test("repositories: clones come back from the cache in order, failures are kept for the instructions, and work resumes once", async () => {
+  const { repositories, events, settled } = repositoriesFixture({
+    restore: async path => { if (path === "broken") throw new Error("sandbox: the clone failed"); },
+  });
+  assert.equal(repositories.view(), undefined);
+  repositories.prepareClones([{ path: "app", origin: "https://github.com/acme/app.git" }, { path: "other", origin: "https://github.com/acme/other.git" },
+    { path: "broken", origin: "https://github.com/acme/app.git" }]);
+  assert.equal(repositories.status, "preparing");
+  assert.throws(() => repositories.requireReady(), (error: unknown) => error instanceof RunnerError && error.status === 409);
+  assert.deepEqual(repositories.view()!.items.map(item => item.path), ["app", "other", "broken"]);
+  await settled();
+  assert.equal(repositories.status, "ready");
+  assert.equal(repositories.view(), undefined);
+  repositories.requireReady();
+  assert.deepEqual(repositories.cloneFailures, [{ path: "other", reason: "its origin is not one of this workspace's repositories" }, { path: "broken", reason: "the clone failed" }]);
+  assert.deepEqual(events, ["authorize", "restore app https://github.com/acme/app.git /mirrors/acme/app", "authorize",
+    "restore broken https://github.com/acme/app.git /mirrors/acme/app", "changed", "resume"]);
+  repositories.clearFailures();
+  assert.deepEqual(repositories.cloneFailures, []);
+});
+
+test("repositories: work doesn't resume in a session that closed, already resumed, or reset meanwhile", async () => {
+  for (const change of ["opened", "closing", "resumed"] as const) {
+    const { repositories, events, state, settled } = repositoriesFixture();
+    repositories.prepareClones([{ path: "app", origin: "https://github.com/acme/app.git" }]);
+    if (change === "opened") state.opened = false; else state[change] = true;
+    await settled();
+    assert.ok(!events.includes("resume"), change);
+  }
+  let release!: () => void;
+  const { repositories, events, settled } = repositoriesFixture({ restore: () => new Promise<void>(resolve => { release = resolve; }) });
+  repositories.prepareClones([{ path: "app", origin: "https://github.com/acme/app.git" }]);
+  const preparation = repositories.preparation;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  repositories.reset();
+  assert.equal(preparation.status === "preparing" && preparation.controller.signal.aborted, true);
+  assert.equal(repositories.status, "ready");
+  release();
+  await settled();
+  assert.ok(!events.includes("resume") && !events.includes("changed"));
+});
+
+test("repositories: a resume that fails leaves the preparation failed, with a reason that says to restart", async () => {
+  const { repositories, settled } = repositoriesFixture({ resume: async () => { throw new Error("no"); } });
+  repositories.prepareClones([{ path: "app", origin: "https://github.com/acme/app.git" }]);
+  await settled();
+  assert.equal(repositories.status, "failed");
+  assert.equal(repositories.view()!.error, "This session could not resume its work after preparing its repositories");
+  assert.throws(() => repositories.requireReady(), (error: unknown) => error instanceof RunnerError && error.status === 502
+    && error.message === preparationFailure("This session could not resume its work after preparing its repositories"));
+  assert.equal(preparationFailure("It broke."), "It broke. Restart the session to try again.");
+  repositories.reset();
+  assert.equal(repositories.status, "ready");
 });
 
 function instructions(input: Partial<InstructionsInput> = {}): string {

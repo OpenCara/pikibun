@@ -11,7 +11,7 @@ import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
-import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleRunIns, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
+import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, scheduleRunIns, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
 import { crossSessionLimits, sessionsToolActions, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import type { CompactionFailure, ModelFailureCause } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
@@ -67,6 +67,7 @@ import { MessageInputs, prepareMessageImages, type InputImage } from "./session/
 import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
+import { preparationFailure, SessionRepositories } from "./session/repositories.js";
 import {
   Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
 } from "./sandbox.js";
@@ -75,7 +76,6 @@ import { performClonePush, PushError, pushSummary, type PushResult } from "./pus
 import { HostCredentialError } from "./git-credentials.js";
 import type { GitRemote } from "./git-remote.js";
 import type { RepositoryCache } from "./repo-cache.js";
-import type { RepositoryPreparationItem, RepositoryPreparationView } from "../../../packages/shared/src/types.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
@@ -208,15 +208,6 @@ export type RunnerConfig = {
   };
 };
 
-function preparationFailure(reason: string): string {
-  return `${reason.replace(/\.$/, "")}. Restart the session to try again.`;
-}
-
-type RepositoryPreparation = { status: "ready" }
-  | { status: "preparing"; done: Promise<void>; controller: AbortController; items: RepositoryPreparationItem[] }
-  | { status: "failed"; reason: string; items: RepositoryPreparationItem[] };
-type ProgressUpdate = (path: string, change: Partial<Omit<RepositoryPreparationItem, "path">>) => void;
-
 const REQUIRED_UNKNOWN = "This host can't learn from Pikibun which extensions its owner requires right now, so no message is sent. Try again shortly";
 const REQUIRED_MISSING = "This host's owner requires an extension its connector can't run now, so no message is sent. Ask them to look at the host's extensions";
 const REFUSED = "An extension on this host refused this message.";
@@ -266,8 +257,7 @@ export class RunnerSession {
   #failed = false;
   #recovery: Promise<void> | undefined;
   readonly #waits = new ApprovalWaits();
-  #repositories: RepositoryPreparation = { status: "ready" };
-  #preparations = 0;
+  readonly #repositories: SessionRepositories;
   #opened = false;
   #resumed = false;
   readonly #activity: ActivityReporter | undefined;
@@ -283,7 +273,6 @@ export class RunnerSession {
   #sources: GrantSource[] = [];
   #lfsRepositories: string[] = [];
   #branchReports: BranchReports | undefined;
-  #cloneFailures: { path: string; reason: string }[] = [];
   #conversationOnlyRestore = false;
   #configuredCompaction: HostCompaction | undefined;
   #tunnel: SessionTunnel | undefined;
@@ -333,6 +322,12 @@ export class RunnerSession {
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
+    this.#repositories = new SessionRepositories({
+      grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
+      workspace: () => isolatedWorkspace(this.sandbox), authorize: async () => { await this.authorize(this.binding.owner.id, "write"); },
+      changed: () => this.#activity?.changed(), exclusive: operation => this.exclusive(operation),
+      opened: () => this.#opened, closing: () => this.closing, resumed: () => this.#resumed, resume: () => this.resumeWork(),
+    });
     const report = config.reportActivity;
     this.#activity = report && new ActivityReporter(() => this.activity(), async activity => {
       await this.markWork(activity).catch(() => {});
@@ -473,81 +468,11 @@ export class RunnerSession {
     await this.sandbox.initialize();
   }
 
-  private trackPreparation(epoch: number, preparing: Extract<RepositoryPreparation, { status: "preparing" }>): void {
-    const { done, items } = preparing;
-    this.#repositories = preparing;
-    done.then(() => {
-      if (this.#repositories !== preparing) return;
-      this.#repositories = { status: "ready" };
-      this.#activity?.changed();
-      void this.exclusive(async () => {
-        if (epoch !== this.#preparations || !this.#opened || this.closing || this.#resumed || this.#repositories.status !== "ready") return;
-        await this.resumeWork();
-      }).catch(() => {
-        if (epoch !== this.#preparations) return;
-        this.#repositories = { status: "failed", reason: "This session could not resume its work after preparing its repositories", items };
-        this.#activity?.changed();
-      });
-    }, (error: unknown) => {
-      if (this.#repositories !== preparing) return;
-      this.#repositories = { status: "failed", reason: error instanceof RunnerError ? error.message : "Repositories could not be prepared on this host", items };
-      this.#activity?.changed();
-    });
-  }
-
-  private prepareClones(pending: { path: string; origin: string | null }[]): void {
-    const epoch = ++this.#preparations;
-    const controller = new AbortController();
-    const authorize = async () => { controller.signal.throwIfAborted(); await this.authorize(this.binding.owner.id, "write"); };
-    const items: RepositoryPreparationItem[] = pending.map(({ path }) => ({ path, phase: "queued", percent: null, done: null, total: null, bytes: 0 }));
-    const update: ProgressUpdate = (path, change) => { const item = items.find(each => each.path === path); if (item) Object.assign(item, change); };
-    const done = (async () => {
-      const failures: { path: string; reason: string }[] = [];
-      for (const entry of pending) {
-        controller.signal.throwIfAborted();
-        update(entry.path, { phase: "connecting" });
-        try {
-          const repository = repositoryForRemote((await this.#egress!.grant()).repositories, entry.origin ?? "");
-          if (!repository) throw new RunnerError(409, "its origin is not one of this workspace's repositories");
-          let reference: string | null = null;
-          if (this.config.repositoryCache && repository.repositoryId !== undefined) {
-            const progress = ({ phase, percent, done, total, bytes }: MirrorProgress) => {
-              if (repositoryPreparationPhases.includes(phase as RepositoryPreparationItem["phase"])) update(entry.path, { phase: phase as RepositoryPreparationItem["phase"], percent, done, total, bytes });
-            };
-            try { reference = await this.mirror(repository, progress); } catch { }
-          }
-          update(entry.path, { phase: "receiving" });
-          await isolatedWorkspace(this.sandbox).cloneRestore(entry.path, bindingRemote(repository), reference, authorize);
-        } catch (error) {
-          if (controller.signal.aborted) throw error;
-          const reason = error instanceof RunnerError ? error.message
-            : error instanceof Error ? /sandbox: ([a-z0-9 ,.'()-]{1,160})$/i.exec(error.message.trim())?.[1] ?? "it could not be cloned again" : "it could not be cloned again";
-          failures.push({ path: entry.path, reason });
-        }
-        update(entry.path, { phase: "done" });
-      }
-      this.#cloneFailures = failures;
-    })();
-    this.trackPreparation(epoch, { status: "preparing", done, controller, items });
-  }
-
-  private requireRepositoriesReady(): void {
-    const preparation = this.#repositories;
-    if (preparation.status === "preparing") throw new RunnerError(409, "This session's repositories are still being prepared on its host. Try again once they are ready.");
-    if (preparation.status === "failed") throw new RunnerError(502, preparationFailure(preparation.reason));
-  }
-
-  private repositoryView(): RepositoryPreparationView | undefined {
-    const preparation = this.#repositories;
-    if (preparation.status === "ready") return undefined;
-    return { status: preparation.status, items: preparation.items.map(item => ({ ...item })), ...(preparation.status === "failed" ? { error: preparation.reason } : {}) };
-  }
-
   private agentInstructions(mode: InstructionsMode, off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason,
     tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set()): string {
     return agentInstructions({ base: this.binding.agent.instructions, agentTools: this.binding.agent.tools, mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
       extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
-      lfsRepositories: this.#lfsRepositories, cloneFailures: this.#cloneFailures, definitions: this.#definitions, sources: this.#sources,
+      lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.missingPrograms(off) : [],
       linuxSandbox: !!this.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser });
   }
@@ -579,10 +504,10 @@ export class RunnerSession {
       this.#cloneRepositories = repositories.map(repository => bindingRemote(repository));
       this.#lfsRepositories = repositories.filter(repository => repository.lfs).map(repository => bindingRemote(repository));
       await this.#mirrors?.restore(repositories);
-      this.#cloneFailures = [];
+      this.#repositories.clearFailures();
       if (await lstat(join(this.directory, "sandbox", "git", "pikibun-clones", "manifest.json")).then(() => true, () => false)) {
         const pending = await isolatedWorkspace(this.sandbox).clonePending(async () => {});
-        if (pending.length) this.prepareClones(pending);
+        if (pending.length) this.#repositories.prepareClones(pending);
       }
     }
     const registry = createRegistry();
@@ -1406,7 +1331,7 @@ export class RunnerSession {
     const { screen } = await this.extensionGate();
     return this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
-      const preparation = this.#repositories;
+      const preparation = this.#repositories.preparation;
       if (preparation.status === "failed") throw new RunnerError(502, preparationFailure(preparation.reason));
       await this.authorize(ticket.actorId, mode === "ask" ? "ask" : "write", ticket.policyVersion);
       await this.hostConfig();
@@ -2305,7 +2230,7 @@ export class RunnerSession {
     const usage = shared && this.contextView(shared.messages, agent.model);
     const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
     const access = latestWrite && (latestWrite.options?.access === "read" ? "read" : "auto");
-    const repositories = this.repositoryView();
+    const repositories = this.#repositories.view();
     const { id, displayName, gitName, gitEmail, githubLogin } = this.binding.owner;
     return { sessionId: this.binding.session.id, owner: { id, displayName, gitName, gitEmail, githubLogin }, entries,
       approvals: [],
@@ -2388,7 +2313,7 @@ export class RunnerSession {
       const state = await this.metadata();
       if (Object.values(state.runs).some(holdsQueue)
         || Object.values(state.approvals).some(approval => approval.status === "executing")) throw new RunnerError(409, "Backup requires an idle session including queued work");
-      this.requireRepositoriesReady();
+      this.#repositories.requireReady();
       this.requireUnfrozen();
       await this.close();
       try {
@@ -2417,7 +2342,7 @@ export class RunnerSession {
     const state = await this.metadata();
     if (Object.values(state.runs).some(holdsQueue)
       || Object.values(state.approvals).some(approval => approval.status === "executing")) throw new RunnerError(409, "Packing requires an idle session including queued work");
-    this.requireRepositoriesReady();
+    this.#repositories.requireReady();
   }
 
   async packContent(ticket: RunnerTicket): Promise<{ bytes: Buffer; files: number; clones: number }> {
@@ -2490,10 +2415,7 @@ export class RunnerSession {
   async close({ abortPushes = true }: { abortPushes?: boolean } = {}): Promise<void> {
     this.closing = true;
     this.#waits.dropResults();
-    const preparation = this.#repositories;
-    if (preparation.status === "preparing") preparation.controller.abort();
-    this.#repositories = { status: "ready" };
-    this.#preparations++;
+    this.#repositories.reset();
     this.#opened = false;
     this.#resumed = false;
     this.#activity?.stop();
