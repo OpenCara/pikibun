@@ -66,6 +66,10 @@ describe("signing in", () => {
     await app.press("id:github-in-app");
     await app.waitFor("text:Sign in with GitHub");
     expect(app.shows("id:github-browser-wait")).toBe(false);
+    await app.openWithUrl("pikibun://auth?code=c1&state=s1");
+    await app.waitFor("id:sign-in-problem");
+    expect(app.texts().join(" ")).toContain("from the browser you left");
+    expect(app.requests().some(item => item.url.endsWith("/api/auth/native/token"))).toBe(false);
   });
 
   test("a server that takes passwords signs in with a username and password, for a bearer token", async () => {

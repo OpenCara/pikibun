@@ -163,7 +163,11 @@ function SignInForm(props: { inviteToken?: string }) {
     cleanup(UrlScheme.on("open", ({ url }) => {
       if (!isSignInLink(url)) return;
       const attempt = untracked(github);
-      if (!attempt || attempt.inApp) {
+      if (attempt?.inApp) {
+        void action.run(async () => { throw new Error("That sign-in link is from the browser you left. Finish signing in on GitHub's page here, or cancel it and continue with GitHub again."); });
+        return;
+      }
+      if (!attempt) {
         void action.run(async () => { throw new Error("That sign-in link isn't from a sign-in this app started. Continue with GitHub again."); });
         return;
       }

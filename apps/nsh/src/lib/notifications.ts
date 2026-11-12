@@ -94,7 +94,7 @@ export async function currentDeviceId(userId: string): Promise<string | null> {
 const POLL_MS = 20_000;
 
 export function notificationRoute(id: string) {
-  const at = id.indexOf(" ");
+  const at = id.lastIndexOf(" ");
   return at < 0 ? null : parseRoute(id.slice(at + 1));
 }
 
