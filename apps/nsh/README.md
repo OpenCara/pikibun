@@ -124,6 +124,9 @@ The scripts are in `src/lib/update-scripts.ts`; `tests/app-update-scripts.test.t
 Linux one against a stand-in app and checks both parse. A failed update says why and offers the release page; one that
 didn't finish by the next launch says so then.
 
+The `pikibun` command isn't in the package, so an update of the app doesn't carry it: the new version's first start
+updates the app's own copy from npm ([below](#this-computer)).
+
 ## What the React client had that this client doesn't
 
 Every page of the React client is here: sign-in, the sidebar and Sessions, a new session, a
@@ -170,6 +173,12 @@ When the command is missing or too old, the page's **Install pikibun** or **Upda
 owner's Node.js, into a `cli` folder of the app's data directory (`npm install --prefix <data dir>/cli pikibun@latest`),
 not npm's global folder: nothing needs sudo or a PATH change, and the copy is the app's to update. npm's output goes to
 the host's activity, and the command to run in a terminal (`npm install -g pikibun@latest`) shows only when that fails.
+The app updates that copy with the app: it keeps the app version that last installed or updated it
+(`pikibun.commandUpdatedFor` in its storage), and a release build that starts as another version, with a copy in its
+`cli` folder (`node_modules/pikibun/package.json` there, `capabilities.fs.read`), runs the same npm command before
+either command starts, at launch (`commandUpdated` in `src/lib/this-computer.ts`, which `CommandChannel` waits for).
+The host and Self host wait for it, the two pages say so, and a failure is a warning in the host's activity: the
+command at hand runs, and the next launch tries again. A `pikibun` installed from a terminal is never touched.
 NSH starts a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,
 nvm's and npm's directories, so the owner's login shell starts it (`$SHELL -ilc 'PATH=<data dir>/cli/node_modules/.bin:"$PATH"; export PATH; exec pikibun host --stdio'`,
 as Terminal would; zsh, bash or sh, else the platform's), and on Windows cmd (`cmd /d /c if exist

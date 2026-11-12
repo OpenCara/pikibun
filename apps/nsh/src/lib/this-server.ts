@@ -2,7 +2,7 @@ import { signal, Storage, untracked } from "nsh";
 import type { ServerEvent, ServerInspection, ServerRequest, ServerStatus } from "../../../../packages/shared/src/app-server-protocol";
 import { auth, restore } from "./auth";
 import { CommandChannel, commandProblem, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine } from "./pikibun-command";
-import { computerName, computerTitle, hostsHere } from "./this-computer";
+import { computerName, computerTitle, hostsHere, thisComputer } from "./this-computer";
 
 const SERVE_ARGS = ["serve", "--stdio"];
 const SAVED_KEY = "pikibun.thisServer";
@@ -41,7 +41,7 @@ export class ThisServer {
   private resume: Saved["resume"];
   private loaded?: Promise<void>;
   private readonly channel = new CommandChannel<ServerEvent, ServerRequest>({
-    launch: () => launcher(), eventTypes: new Set(["ready", "result", "status", "log"]), problem: serverLaunchProblem, subject: "Pikibun",
+    launch: () => launcher(), before: () => thisComputer().commandUpdated(), eventTypes: new Set(["ready", "result", "status", "log"]), problem: serverLaunchProblem, subject: "Pikibun",
     failure: (id, message) => ({ type: "result", id, ok: false, error: { message } }),
     onEvent: event => {
       if (event.type === "log") { this.log(event.level, event.message); return; }

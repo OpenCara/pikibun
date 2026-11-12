@@ -18,7 +18,7 @@ Choose this mode when:
 - **Signed out** (a fresh install, say): on the sign-in screen, choose **Run Pikibun on this Mac** (**this computer** on Windows and Linux).
 - **Signed in** to another server: open **Settings → Self host**.
 
-Both open the same page. If **Install Pikibun's command** appears, choose **Install pikibun**: npm installs it into the app's own folder in about a minute, with no `sudo`. When the app is newer than the command, the page offers **Update pikibun** instead.
+Both open the same page. If **Install Pikibun's command** appears, choose **Install pikibun**: npm installs it into the app's own folder in about a minute, with no `sudo`. The app updates that copy itself the first time it starts after an update of the app, before your Pikibun starts again. When a `pikibun` you installed in a terminal is too old for the app, the page offers **Update pikibun** instead.
 
 ## 2. Add your GitHub OAuth app
 

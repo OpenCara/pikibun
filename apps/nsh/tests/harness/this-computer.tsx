@@ -1,13 +1,19 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection, LoginProvider } from "../../../runner/src/app-host-protocol";
-import { appCliFolder, installCommand, setHostLauncher, setInstaller, thisComputer, thisComputerHostId, type HostLink, type InstallRun } from "../../src/lib/this-computer";
+import {
+  appCliFolder, installCommand, setCommandUpdate, setHostLauncher, setInstaller, thisComputer, thisComputerHostId, type HostLink, type InstallRun,
+} from "../../src/lib/this-computer";
 import { Button } from "../../src/ui";
 import { ThisComputerPanel } from "../../src/settings/ThisComputer";
 
-const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; npm?: unknown };
+const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; npm?: unknown; npmMs?: unknown; appVersion?: unknown; ownCopy?: unknown };
 const SERVER = typeof params.server === "string" ? params.server : "https://pikibun.test";
 let command = String(params.command ?? "ok");
 const npm = String(params.npm ?? "ok");
+const npmMs = typeof params.npmMs === "number" ? params.npmMs : 5;
+const LATEST = "0.10.0";
+let ownCopy: string | null = typeof params.ownCopy === "string" ? params.ownCopy : null;
+if (typeof params.appVersion === "string") setCommandUpdate({ appVersion: params.appVersion, ownCopy: async () => ownCopy });
 const sent = signal<string[]>([]);
 let paired: string | undefined = typeof params.paired === "string" ? params.paired : undefined;
 let signedIn = params.piSignedIn !== false;
@@ -95,10 +101,11 @@ function fakeInstall(): InstallRun {
       code = 243;
     } else {
       if (npm === "ok") command = "ok";
+      if (!global) ownCopy = LATEST;
       say(["", "added 1 package in 2s"]);
     }
     for (const listener of exits) listener({ code });
-  }, 5);
+  }, npmMs);
   const global = npm === "elsewhere";
   return {
     line: installCommand("macos", "/bin/zsh", global ? null : appCliFolder("macos", "/Users/ada/Library/Application Support/com.pikibun.app")).line,
