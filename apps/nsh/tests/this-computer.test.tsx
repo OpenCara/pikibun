@@ -20,7 +20,8 @@ describe("starting Pikibun's command", () => {
     expect(hostCommand("linux", "/usr/bin/bash")).toEqual({ command: "bash", args: ["-ilc", "exec pikibun host --stdio"] });
     expect(hostCommand("macos", "/opt/homebrew/bin/fish").command).toBe("zsh");
     expect(hostCommand("linux", undefined).command).toBe("bash");
-    expect(hostCommand("windows", "/bin/zsh")).toEqual({ command: "cmd", args: ["/d", "/c", "pikibun", "host", "--stdio"] });
+    expect(hostCommand("windows", "/bin/zsh")).toEqual({ command: "cmd",
+      args: ["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "(", "where", "/q", "pikibun", "||", "exit", "9009", ")", "&&", "pikibun", "host", "--stdio"] });
   });
 
   test("keeps the app's own copy of the command in its data directory", () => {
@@ -38,7 +39,8 @@ describe("starting Pikibun's command", () => {
     expect(hostCommand("linux", "/bin/bash", "/home/o'neil/.local/share/pikibun/cli").args[1])
       .toBe("PATH='/home/o'\\''neil/.local/share/pikibun/cli/node_modules/.bin':\"$PATH\"; export PATH; exec pikibun host --stdio");
     expect(hostCommand("windows", undefined, "C:\\Users\\Ada Lovelace\\AppData\\Roaming\\com.pikibun.app\\cli")).toEqual({ command: "cmd",
-      args: ["/d", "/c", "if", "exist", "cli\\node_modules\\.bin\\pikibun.cmd", "(", "cli\\node_modules\\.bin\\pikibun.cmd", "host", "--stdio", ")", "else", "pikibun", "host", "--stdio"] });
+      args: ["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "if", "exist", "cli\\node_modules\\.bin\\pikibun.cmd", "(", "cli\\node_modules\\.bin\\pikibun.cmd", "host", "--stdio", ")",
+        "else", "(", "(", "where", "/q", "pikibun", "||", "exit", "9009", ")", "&&", "pikibun", "host", "--stdio", ")"] });
   });
 
   test("installs it with npm the same way, into the app's own folder, or npm's global one without it", () => {
@@ -47,9 +49,12 @@ describe("starting Pikibun's command", () => {
       args: ["-ilc", "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest"],
       line: "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest" });
     expect(installCommand("macos", "/opt/homebrew/bin/fish", mac).command).toBe("zsh");
-    expect(installCommand("windows", "/bin/zsh", "C:\\data\\cli").args).toEqual(["/d", "/c", "npm", "install", "--prefix", "cli", "--no-audit", "--no-fund", "pikibun@latest"]);
+    expect(installCommand("windows", "/bin/zsh", "C:\\data\\cli")).toEqual({ command: "cmd",
+      args: ["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "(", "where", "/q", "npm", "||", "exit", "9009", ")", "&&", "npm", "install", "--prefix", "cli", "--no-audit", "--no-fund", "pikibun@latest"],
+      line: "npm install --prefix cli --no-audit --no-fund pikibun@latest" });
     expect(installCommand("linux", "/usr/bin/bash", null)).toEqual({ command: "bash", args: ["-ilc", "npm install -g pikibun@latest"], line: "npm install -g pikibun@latest" });
-    expect(installCommand("windows", undefined, null).args).toEqual(["/d", "/c", "npm", "install", "-g", "pikibun@latest"]);
+    expect(installCommand("windows", undefined, null).args)
+      .toEqual(["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "(", "where", "/q", "npm", "||", "exit", "9009", ")", "&&", "npm", "install", "-g", "pikibun@latest"]);
   });
 
   test("says why an install failed in a way the owner can act on", () => {
@@ -60,6 +65,7 @@ describe("starting Pikibun's command", () => {
       .toMatch(/Fix them in a terminal with sudo chown -R 501:20 "\/Users\/ada\/\.npm", then choose Install again\.$/);
     expect(installFailure([], { code: null, error: "timed out after 300000 ms" })).toBe("The install didn't finish: timed out after 300000 ms");
     expect(installFailure(["npm error code E404", "npm error 404 Not Found"], { code: 1 })).toBe("npm couldn't install pikibun: npm error code E404 npm error 404 Not Found");
+    expect(installFailure(["\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD"], { code: 1 })).toBe("npm couldn't install pikibun (exit code 1).");
   });
 
   test("says why an automatic update failed, and that the command at hand stays", () => {
@@ -73,6 +79,8 @@ describe("starting Pikibun's command", () => {
     expect(launchProblem(["zsh:1: command not found: pikibun"], 127)).toEqual({ kind: "missing" });
     expect(launchProblem(["bash: line 1: exec: pikibun: not found"], 127)).toEqual({ kind: "missing" });
     expect(launchProblem(["'pikibun' is not recognized as an internal or external command,"], 9009)).toEqual({ kind: "missing" });
+    expect(launchProblem(["'pikibun' \uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD"], 9009)).toEqual({ kind: "missing" });
+    expect(launchProblem(["'pikibun' \uFFFD\uFFFD\uFFFD\uFFFD\uFFFD"], 1)).toEqual({ kind: "failed", message: "The host could not start (exit code 1)." });
     expect(launchProblem(["Unknown command: host", "", "Usage: pikibun <command> [options]"], 2)).toEqual({ kind: "outdated" });
     expect(launchProblem(["pikibun needs Node.js 24 or newer; this is Node.js 20.11.0."], 1)).toMatchObject({ kind: "failed" });
     expect(launchProblem(["bash: no job control in this shell", "Connector failed. Check --help."], 1))
