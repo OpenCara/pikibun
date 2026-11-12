@@ -12,6 +12,7 @@
     "picker": true,
     "openUrl": true,
     "statusBar": true,
+    "notifications": true,
     "fs": { "read": ["${homeDir}", "${dataDir}/updates", "${dataDir}/cli"], "write": ["${dataDir}/updates"] },
     "process": {
       "execute": ["zsh", "bash", "sh", "cmd", "schtasks"],

@@ -37,7 +37,7 @@ Sessions need a host that's online. Under **Settings → Hosts**:
 - **Follow and collaborate:** a session's panel holds its details, files, browser, schedules and activity. Share it, and grant teammates `read`, `ask`, `write` or `manage` (see [Collaborating on a session](../collaboration.md)).
 - **Attach files:** drop a file on the chat box, or paste one copied in your file manager.
 
-A few things work only in a browser, at the server's web address: downloading backups and exports, signing in to document sources (Notion, Google Drive and the like), and turning on notifications. The app can manage your notification preferences, but it doesn't show notifications yet.
+A few things work only in a browser, at the server's web address: downloading backups and exports, and signing in to document sources (Notion, Google Drive and the like). The app shows notifications while it's open, once you turn them on under **Settings → Notifications**; to be told while it's closed, turn them on in a browser too.
 
 ## Signing out, or changing servers
 

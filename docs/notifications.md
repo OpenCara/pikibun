@@ -1,6 +1,6 @@
 # Notifications
 
-Pikibun tells you when one of your sessions needs you or is done, in your browser:
+Pikibun tells you when one of your sessions needs you or is done, in your browser or the Pikibun app:
 
 - **Finished**: the agent finished the message it was working on.
 - **Failed**: the agent stopped on an error.
@@ -15,8 +15,10 @@ device.
   browsers with Web Push (Chrome, Edge, Firefox, and Safari on macOS), notifications arrive even when no Pikibun tab is
   open. In other browsers, and on servers that can't send Web Push (see below), they arrive while a Pikibun tab is
   open. On iPhone and iPad, Safari only allows Web Push for a site added to the Home Screen.
-- **Desktop and mobile apps**: they don't show notifications yet (Native Shell has none to show); their **Settings →
-  Notifications** manages what you're told and on which browsers.
+- **Desktop and mobile apps**: **Settings → Notifications → Notifications on this device**. The system asks for
+  permission first (on Windows and Linux there is no prompt). The app shows them while it's open, in front or behind
+  other windows, by asking Pikibun every 20 seconds. Phones pause an app in the background, so there they arrive once
+  you're back in it; notifications pushed while the app is closed wait on Native Shell.
 
 Clicking or tapping a notification opens its session. A notification about the session you're looking at isn't shown
 again as a banner.

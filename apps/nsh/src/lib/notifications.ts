@@ -1,12 +1,15 @@
-import { cleanup, effect, host, signal, Storage, untracked, type Accessor } from "nsh";
-import { notificationPath, type NotificationConfig, type NotificationDevice, type NotificationFeed } from "../../../../packages/shared/src/notifications";
+import { cleanup, effect, host, lifecycle, Notifications, platform, signal, Storage, untracked, type Accessor } from "nsh";
+import { notificationPath, type NotificationConfig, type NotificationDevice, type NotificationFeed, type PikibunNotification } from "../../../../packages/shared/src/notifications";
 import { ApiError, segment } from "../shared";
 import { session } from "./auth";
 import { inBackground } from "./resource";
-import { pageAvailable } from "./page";
+import { pageAvailable, pageRoute, parseRoute, shownRoute } from "./page";
 
-export type DeviceSupport = ({ kind: "push" } | { kind: "page" } | { kind: "unsupported"; reason: string }) & { permission?: NotificationPermission };
+export type DeviceSupport = ({ kind: "push" } | { kind: "page" } | { kind: "app" } | { kind: "unsupported"; reason: string }) & { permission?: NotificationPermission };
 type NotificationPermission = "default" | "granted" | "denied";
+
+const inApp = () => !pageAvailable() && platform.os !== "web";
+const UNAVAILABLE = "This device can't show Pikibun's notifications. Turn them on in Pikibun on the web, or in a browser, to be told there.";
 
 const choiceKey = (userId: string) => `pikibun.notifications.${userId}`;
 const deviceKey = (userId: string) => `pikibun.notificationDevice.${userId}`;
@@ -15,13 +18,17 @@ const on = signal(false);
 export const notificationsOn: Accessor<boolean> = on;
 
 export async function loadNotificationChoice(userId: string): Promise<boolean> {
-  const value = pageAvailable() && (await Storage.getItem(choiceKey(userId)).catch(() => null)) === "on";
+  const value = (pageAvailable() || inApp()) && (await Storage.getItem(choiceKey(userId)).catch(() => null)) === "on";
   on.set(value);
   return value;
 }
 
 export async function deviceSupport(webPushKey: string | null): Promise<DeviceSupport> {
-  if (!pageAvailable()) return { kind: "unsupported", reason: "This app can't show notifications yet. Turn them on in Pikibun on the web, or in a browser, to be told here." };
+  if (inApp()) {
+    const permission = await Notifications.permission().catch(() => "unavailable" as const);
+    return permission === "unavailable" ? { kind: "unsupported", reason: UNAVAILABLE } : { kind: "app", permission };
+  }
+  if (!pageAvailable()) return { kind: "unsupported", reason: UNAVAILABLE };
   try {
     return (await host.call<DeviceSupport>("page.notifications.support", { webPushKey })) ?? { kind: "unsupported", reason: "This browser can't show notifications." };
   } catch {
@@ -42,6 +49,17 @@ async function registerPush(userId: string, webPushKey: string): Promise<Notific
 export async function enableNotifications(userId: string, config: Pick<NotificationConfig, "webPushKey">): Promise<DeviceSupport> {
   const support = await deviceSupport(config.webPushKey);
   if (support.kind === "unsupported") throw new Error(support.reason);
+  if (support.kind === "app") {
+    const permission = await Notifications.requestPermission();
+    if (permission !== "granted") {
+      throw new Error(permission === "denied"
+        ? "Notifications from Pikibun are off in this device's settings. Turn them on there, then try again."
+        : "Notifications weren't allowed.");
+    }
+    await Storage.setItem(choiceKey(userId), "on");
+    on.set(true);
+    return { kind: "app", permission };
+  }
   const permission = await host.call<NotificationPermission>("page.notifications.permit", null, { timeout: 0 });
   if (permission !== "granted") {
     throw new Error(permission === "denied"
@@ -75,21 +93,35 @@ export async function currentDeviceId(userId: string): Promise<string | null> {
 
 const POLL_MS = 20_000;
 
+export function notificationRoute(id: string) {
+  const at = id.indexOf(" ");
+  return at < 0 ? null : parseRoute(id.slice(at + 1));
+}
+
+async function show(notification: PikibunNotification): Promise<void> {
+  const path = notificationPath(notification);
+  if (inApp()) {
+    const at = shownRoute();
+    if (untracked(lifecycle) === "active" && at.name === "session" && at.sessionId === notification.sessionId) return;
+    await Notifications.show({ id: `${notification.id} ${path.replace(/^\/#/, "#")}`, title: notification.title, body: notification.body });
+    return;
+  }
+  await host.call("page.notifications.show", { id: notification.id, title: notification.title, body: notification.body,
+    path, sessionId: notification.sessionId ?? null });
+}
+
 function deliver(userId: string): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cursor: string | undefined;
   async function poll() {
     if (stopped) return;
-    if (!inBackground()) {
+    if (!inBackground() || inApp()) {
       try {
         const feed = await session().api<NotificationFeed>(`/api/notifications/feed${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`);
         if (stopped) return;
         if (cursor) {
-          for (const notification of feed.notifications) {
-            await host.call("page.notifications.show", { id: notification.id, title: notification.title, body: notification.body,
-              path: notificationPath(notification), sessionId: notification.sessionId ?? null }).catch(() => undefined);
-          }
+          for (const notification of feed.notifications) await show(notification).catch(() => undefined);
         }
         cursor = feed.cursor;
       } catch { }
@@ -110,7 +142,7 @@ function deliver(userId: string): () => void {
     } catch {
       support = { kind: "page" };
     }
-    if (!stopped && support.kind === "page") void poll();
+    if (!stopped && (support.kind === "page" || (support.kind === "app" && support.permission === "granted"))) void poll();
   })();
   return () => {
     stopped = true;
@@ -119,7 +151,15 @@ function deliver(userId: string): () => void {
 }
 
 export function createNotificationDelivery(userId: string): void {
-  if (!pageAvailable()) return;
+  if (!pageAvailable() && !inApp()) return;
+  if (inApp()) {
+    try {
+      cleanup(Notifications.on("press", ({ id }) => {
+        const route = notificationRoute(id);
+        if (route) pageRoute.set(route);
+      }));
+    } catch { }
+  }
   void loadNotificationChoice(userId);
   effect(() => (on() ? untracked(() => deliver(userId)) : undefined));
   cleanup(() => on.set(false));

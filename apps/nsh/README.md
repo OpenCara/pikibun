@@ -139,9 +139,12 @@ Administration). What is left out, and why:
   out: hosts for several servers at once, WSL2 on Windows, sharing the Pikibun it runs with others (`pikibun serve
   --share`, in a terminal), installing prerequisites itself, and hosting while the app is closed (its tray). In a
   browser there are no such sections.
-- **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058); NSH 0.5's
-  system notifications are only the app's own, while it runs, and aren't used yet; the web build turns them on in the browser as the web app does (Web Push through
-  the `sw.js` the build ships, or while a tab is open), and every build manages the account's preferences and devices.
+- **Notifications while the app is closed**: the native apps show the account's notifications with NSH's
+  `Notifications` only while they run (`src/lib/notifications.ts` asks the server's feed every 20 seconds, as a browser
+  tab without Web Push does; pressing one opens its session, and one about the session in front isn't shown). Pushed
+  ones wait for NSH's push notifications (longbridge/nsh#1058). The web build turns them on in the browser as the web
+  app does (Web Push through the `sw.js` the build ships, or while a tab is open), and every build manages the
+  account's preferences and devices.
 - **Up** in an empty chat box takes back a queued message on the desktops and in desktop browsers; on phones the
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
