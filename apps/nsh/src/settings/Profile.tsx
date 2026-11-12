@@ -13,12 +13,20 @@ import { OwnJoinRequests } from "./join-requests";
 import { SectionPage, SettingsActions, type SectionProps } from "./parts";
 import { serverVersion } from "./index";
 import { AppUpdateRows } from "../components/AppUpdate";
+import { SignInApp } from "./sign-in-app";
 
 type EnvRow = { id: string; key: string; value: string };
 
 function SignedInAppsSection() {
   const devices = createResource<{ devices: SignedInDevice[] }>(() => "/api/me/devices");
   const action = createAction();
+  const adding = signal(false);
+  const signedInNotice = signal("");
+  function signedIn(name: string | null) {
+    adding.set(false);
+    signedInNotice.set(`${name ?? "An app"} signed in with the code.`);
+    void devices.refresh();
+  }
   async function revoke(device: SignedInDevice) {
     if (action.busy()) return;
     if (!await confirm({ title: "Sign out this app?", destructive: true, confirmLabel: "Sign out app",
@@ -30,12 +38,16 @@ function SignedInAppsSection() {
   }
   return (
     <Section title="Signed-in apps" testID="signed-in-apps"
-      info="The Pikibun apps on your phone, tablet or computer that signed in as you. Each stays signed in for 30 days unless you sign it out here or in the app.">
+      info="The Pikibun apps on your phone, tablet or computer that signed in as you. Each stays signed in for 30 days unless you sign it out here or in the app."
+      action={adding() ? undefined : <Button testID="sign-in-app-start" small variant="outline" icon="key" label="Sign in an app"
+        onPress={() => { signedInNotice.set(""); adding.set(true); }} />}>
+      <If when={adding()}><SignInApp onClose={() => adding.set(false)} onSignedIn={signedIn} /></If>
+      <If when={signedInNotice()}>{text => <CardBody><Feedback notice={text()} /></CardBody>}</If>
       <ResourceState inline loading={devices.loading() && !devices.data()} error={devices.error()} retry={devices.refresh}>
-        <If when={devices.data()?.devices.length} else={<Row title="No apps signed in" hint="Sign in from the Pikibun app on iPhone, iPad or Mac" />}>
+        <If when={devices.data()?.devices.length} else={<Row title="No apps signed in" hint="Sign in from the Pikibun app on a phone, tablet or computer, or with a code from Sign in an app" />}>
           <Each of={devices.data()?.devices ?? []} key={device => device.id}>
             {device => (
-              <Row title={device().name ?? "Unnamed app"} hint={`Signed in ${timestamp(device().createdAt)} · until ${timestamp(device().expiresAt)}`}
+              <Row title={device().name ?? "Unnamed app"} hint={`Signed in ${timestamp(device().createdAt)}${device().viaCode ? " with a code" : ""} · until ${timestamp(device().expiresAt)}`}
                 trailing={<Button small variant="outline" label="Sign out" disabled={action.busy()} onPress={() => void revoke(device())} />} />
             )}
           </Each>
