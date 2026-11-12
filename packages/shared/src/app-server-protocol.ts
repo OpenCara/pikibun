@@ -3,7 +3,6 @@ export interface ServerInspectRequest { type: "inspect"; id: number }
 export interface ServerStartRequest {
   type: "start";
   id: number;
-  github?: { clientId: string; clientSecret: string };
   unsandboxedConsent?: boolean;
 }
 
@@ -14,7 +13,6 @@ export type ServerRequest = ServerInspectRequest | ServerStartRequest | ServerSt
 export interface ServerInspection {
   stateDir: string;
   port: number;
-  githubClientId?: string;
   hostMode: "sandboxed" | "unsandboxed";
   unsandboxedWarning?: string;
   hostProblem?: string;
@@ -26,7 +24,7 @@ export type ServerHostState = "off" | "waiting" | "connecting" | "connected" | "
 export interface ServerStatus {
   state: ServerState;
   origin?: string;
-  claim?: string;
+  signInToken?: string;
   host: ServerHostState;
 }
 

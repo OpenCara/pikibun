@@ -25,7 +25,8 @@ export interface SettingsSection {
   Component: (props: SectionProps) => JSX.Element;
 }
 
-const health = signal<{ passwordAuth?: boolean; version?: string | null } | null>(null);
+type ServerHealth = { passwordAuth?: boolean; version?: string | null; codeSignIn?: boolean };
+const health = signal<ServerHealth | null>(null);
 let askedHealth: string | null = null;
 function serverHealth() {
   const { api, origin, user } = session();
@@ -33,12 +34,13 @@ function serverHealth() {
   if (askedHealth !== key) {
     askedHealth = key;
     health.set(null);
-    api<{ passwordAuth?: boolean; version?: string | null }>("/api/health").then(value => { if (askedHealth === key) health.set(value); }, () => undefined);
+    api<ServerHealth>("/api/health").then(value => { if (askedHealth === key) health.set(value); }, () => undefined);
   }
   return health();
 }
 const passwordsOffered = () => serverHealth()?.passwordAuth === true;
 export const serverVersion = () => serverHealth()?.version ?? null;
+export const codeSignInOffered = () => serverHealth()?.codeSignIn !== false;
 
 export const settingsSections: readonly SettingsSection[] = [
   { id: "profile", label: "Profile", icon: "user", Component: Profile },

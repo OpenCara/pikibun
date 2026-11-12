@@ -18,6 +18,7 @@ Every account has a unique username on the server: 3 to 39 letters, digits, `-` 
 
 - **GitHub accounts** choose theirs right after their first sign-in (the web app asks before anything else, invite links included; accounts from before usernames are asked at their next visit). It starts as your GitHub login where that is a valid username, and you can type another. Where the server takes passwords you can also set an optional password in the same step, to sign in later with your username and password as well as GitHub. A local server (`pikibun serve`) has only its owner and doesn't ask.
 - **Password accounts** chose theirs when signing up: it is the name in their user ID.
+- **The owner of a Pikibun on their own computer** (`pikibun serve`, or the app's Self host) signs in without GitHub or a password, and their account, `password:<username>`, takes its username from their user on that computer at the first sign-in (see [Running Pikibun on your own computer](local.md)).
 - A username listed as an administrator in `ADMIN_USER_IDS` (`password:<username>`) is reserved for that administrator.
 
 ## Username and password

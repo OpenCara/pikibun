@@ -1,4 +1,3 @@
-import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { assertConnectorPlatform, assertPrerequisites, checkPrerequisites, loadConnectorModels } from '../../../runner/src/connect-setup.js';
 import { confirmUnsandboxed, promptHidden, resourceConfig } from '../../../runner/src/connect-cli.js';
@@ -13,18 +12,15 @@ const HELP = `Usage: pikibun serve [options]
 
 Run Pikibun on this computer, for yourself: the server and its web app on
 http://127.0.0.1:7878, reachable from this computer only, and this computer as
-the host that runs your sessions. No account at a Pikibun service is needed.
+the host that runs your sessions. No account at a Pikibun service, and no
+GitHub sign-in, is needed.
 
-You sign in with GitHub through an OAuth app you register once (the first run
-says how). The first run prints a sign-in link: the GitHub account that opens
-it becomes this Pikibun's owner, and the only account that can sign in.
+Each run prints a private sign-in link: open it to sign in as this Pikibun's
+owner, the only account that can sign in. The Pikibun app signs you in itself.
 Everything is kept in the state directory; later runs need no options.
 
 Options:
   --port PORT              Listen on 127.0.0.1:PORT (default 7878; remembered)
-  --github-client-id ID    Your GitHub OAuth app's client ID (remembered); its
-                           secret is asked at a hidden prompt, or read from
-                           PIKIBUN_GITHUB_CLIENT_SECRET
   --no-host                Serve only: run no sessions on this computer (pair
                            other machines with \`pikibun connect\` instead)
   --unsafe-no-sandbox      Run agent work directly on this computer without
@@ -51,10 +47,14 @@ Share it with others (a full multi-user server, from the same data):
   --signup MODE            Who may create an account: invite (default), open
                            or off
   --password-auth          Also sign in with usernames and passwords
-  --create-admin USERNAME  Create the listed administrator password:USERNAME;
-                           asks for its password at a hidden prompt
-  With --share, --github-client-id names a GitHub OAuth app whose callback is
-  <public origin>/api/auth/github/callback (its secret as above).
+  --create-admin USERNAME  Create the listed administrator password:USERNAME
+                           (or give the owner you were alone its first
+                           password); asks for it at a hidden prompt
+  --github-client-id ID    Also sign in with GitHub, through your OAuth app
+                           whose callback is
+                           <public origin>/api/auth/github/callback
+                           (remembered); its secret is asked at a hidden
+                           prompt, or read from PIKIBUN_GITHUB_CLIENT_SECRET
 
 This computer as the host, as with \`pikibun connect\`:
   --pi-agent-dir PATH      Pi config/auth directory (default: Pi's own)
@@ -69,21 +69,10 @@ Development:
   --allow-test-shell       Fixture shell opt-in; requires --allow-faux
 `;
 
-async function ask(question: string): Promise<string> {
-  const prompt = createInterface({ input: process.stdin, output: process.stderr });
-  prompt.on('SIGINT', () => prompt.close());
-  try { return (await prompt.question(question).catch(() => '')).trim(); } finally { prompt.close(); }
-}
-
-async function githubApp(clientId: string | undefined, saved: boolean): Promise<GitHubOAuthApp | undefined> {
+async function githubApp(clientId: string, origin: string): Promise<GitHubOAuthApp> {
   const interactive = process.stdin.isTTY && process.stderr.isTTY;
-  if (!clientId) {
-    if (saved) return undefined;
-    process.stderr.write(`\n${githubOAuthAppInstructions()}\n`);
-    if (!interactive) throw new ConnectorSetupError('Run `pikibun serve --github-client-id CLIENT_ID` with the secret in PIKIBUN_GITHUB_CLIENT_SECRET, or run it in a terminal to be asked.');
-    clientId = await ask('Client ID: ');
-  }
   const fromEnvironment = process.env.PIKIBUN_GITHUB_CLIENT_SECRET?.trim();
+  if (!fromEnvironment && interactive) process.stderr.write(`\n${githubOAuthAppInstructions(origin)}\n`);
   const clientSecret = fromEnvironment || (interactive ? (await promptHidden('Client secret (hidden): ', 'Entering the client secret', 'client secret')).trim() : '');
   if (!clientSecret) throw new ConnectorSetupError('The GitHub OAuth app needs its client secret: type it at the prompt or set PIKIBUN_GITHUB_CLIENT_SECRET.');
   const app = { clientId, clientSecret };
@@ -149,9 +138,11 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
   } });
   if (values.help) { process.stdout.write(HELP); return; }
   const share = values.share === true;
-  const shareOnly = ['public-origin', 'admin', 'listen', 'trust-proxy', 'signup', 'password-auth', 'create-admin'] as const;
+  const shareOnly = ['public-origin', 'admin', 'listen', 'trust-proxy', 'signup', 'password-auth', 'create-admin', 'github-client-id'] as const;
   const misplaced = shareOnly.find(name => values[name] !== undefined);
-  if (!share && misplaced) throw new ConnectorSetupError(`--${misplaced} needs --share.`);
+  if (!share && misplaced) {
+    throw new ConnectorSetupError(misplaced === 'github-client-id' ? '--github-client-id needs --share: for yourself alone, Pikibun signs you in without GitHub.' : `--${misplaced} needs --share.`);
+  }
   const port = values.port === undefined ? undefined : Number(values.port);
   if (port !== undefined && !(Number.isInteger(port) && port >= 1024 && port <= 65535)) throw new ConnectorSetupError('--port must be a number from 1024 to 65535.');
   if (values['allow-faux'] && !values['test-mode']) throw new ConnectorSetupError('--allow-faux needs --test-mode: a server outside test mode offers no fixture models.');
@@ -161,13 +152,11 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
   try {
     const existing = await peekLocalState(stateDir);
     const shared = share ? sharedSettings(existing?.shared, values) : undefined;
-    const github = shared
-      ? (values['github-client-id'] ? await githubApp(values['github-client-id'], false) : undefined)
-      : await githubApp(values['github-client-id'], existing?.github !== undefined);
+    const github = shared && values['github-client-id'] ? await githubApp(values['github-client-id'], shared.origin) : undefined;
     if (values['create-admin'] && !values['create-admin'].trim()) throw new ConnectorSetupError('--create-admin needs a username.');
     const hostSetup = values['no-host'] ? undefined : await hostOptions(values);
     const { state, release } = await openLocalState(stateDir, {
-      ...(shared ? { shared: { ...shared, ...(github ? { github } : {}) } } : github ? { github } : {}), ...(port ? { port } : {}),
+      ...(shared ? { shared: { ...shared, ...(github ? { github } : {}) } } : {}), ...(port ? { port } : {}),
     });
     const testSecret = values['test-mode'] ? Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url') : undefined;
     server = await startLocalServer({ stateDir, state, release, mode: shared ? 'shared' : 'local', ...(testSecret ? { extraEnv: {
@@ -178,11 +167,8 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
         + `Administrators: ${state.shared!.admins.join(', ')}. New accounts: ${state.shared!.signup}.\n`);
       if (values['create-admin']) process.stderr.write(`${await server.createAdmin(values['create-admin'].trim(), await readNewPassword())}\n`);
     } else {
-      const claim = await server.claimUrl();
-      process.stderr.write(`\nPikibun is running at ${server.origin} (this computer only).\n`);
-      process.stderr.write(claim
-        ? `Sign in for the first time with this link; the GitHub account that opens it becomes this Pikibun's owner:\n  ${claim}\nKeep it private until you have signed in.\n`
-        : `Sign in at ${server.origin} with the GitHub account that owns it.\n`);
+      process.stderr.write(`\nPikibun is running at ${server.origin} (this computer only).\n`
+        + `Sign in as its owner with this link. It signs in whoever opens it, so keep it private:\n  ${server.signInUrl()}\n`);
     }
     if (testSecret) process.stderr.write(`Test mode for 24 hours. Test sign-in secret: ${testSecret}\n`);
     if (hostSetup) {

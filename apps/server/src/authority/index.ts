@@ -1,6 +1,6 @@
 export { authenticate, csrfGuard, localOwner, registerAuth } from './auth.js';
 export { registerAppCodes } from './app-codes.js';
-export { hashPassword, newPassword, operatorPasswordResetStatements, passwordAccountStatements, passwordUsername, registerPasswordAuth, USERNAME_MATCH, usernameMatch } from './password-auth.js';
+export { hashPassword, newPassword, operatorFirstPasswordStatement, operatorPasswordResetStatements, passwordAccountStatements, passwordUsername, registerPasswordAuth, USERNAME_MATCH, usernameMatch } from './password-auth.js';
 export { adminUserId, instanceAdmins, registerAdmin } from './admin.js';
 export { INVALID_LINK, INVITE_TOKEN, joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 

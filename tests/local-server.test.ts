@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,11 +7,10 @@ import test, { type TestContext } from "node:test";
 import { ConfigurationError, loadConfig } from "../apps/server/src/config.js";
 import { app } from "../apps/server/src/index.js";
 import { startLocalHost } from "../apps/server/src/local/host.js";
-import { startLocalServer } from "../apps/server/src/local/launch.js";
+import { localUsername, startLocalServer } from "../apps/server/src/local/launch.js";
 import { loadLocalState, LocalStateError, openLocalState, peekLocalState } from "../apps/server/src/local/state.js";
 import type { Env } from "../apps/server/src/types.js";
 import { createFauxLocalModels } from "../apps/runner/src/local-pi.js";
-import { sha256 } from "../packages/shared/src/crypto.js";
 import { testDatabase } from "./helpers/control-plane.js";
 
 const claimSecret = "c".repeat(43);
@@ -23,22 +22,19 @@ async function directory(t: TestContext): Promise<string> {
   return path;
 }
 
-test("a local server's state is created once, owner-only, and keeps its secrets as its GitHub app and port change", async t => {
+test("a local server's state is created once, owner-only, and keeps its secrets as its port changes", async t => {
   const stateDir = join(await directory(t), "server");
   const first = await loadLocalState(stateDir);
   assert.equal(first.port, 7878);
-  assert.equal(first.github, undefined);
   for (const value of [first.sessionSecret, first.vaultKey, first.claimSecret]) assert.match(value, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(new Set([first.sessionSecret, first.vaultKey, first.claimSecret]).size, 3);
   assert.equal((await stat(stateDir)).mode & 0o777, 0o700);
   assert.equal((await stat(join(stateDir, "server.json"))).mode & 0o777, 0o600);
 
-  const github = { clientId: "Ov23liAbCdEf", clientSecret: "0123456789abcdef0123456789abcdef01234567" };
-  const changed = await loadLocalState(stateDir, { github, port: 9000 });
-  assert.deepEqual(changed, { ...first, github, port: 9000 });
+  const changed = await loadLocalState(stateDir, { port: 9000 });
+  assert.deepEqual(changed, { ...first, port: 9000 });
   assert.deepEqual(await loadLocalState(stateDir), changed);
 
-  await assert.rejects(loadLocalState(stateDir, { github: { clientId: "has space", clientSecret: "x" } }), LocalStateError);
   await assert.rejects(loadLocalState(stateDir, { port: 80 }), LocalStateError);
   await writeFile(join(stateDir, "server.json"), "{}", { mode: 0o600 });
   await assert.rejects(loadLocalState(stateDir), /damaged/);
@@ -49,9 +45,18 @@ test("processes creating a local server's state at once all get the same secrets
   const states = await Promise.all(Array.from({ length: 8 }, () => loadLocalState(stateDir)));
   for (const state of states) assert.deepEqual(state, states[0]);
   assert.deepEqual(await loadLocalState(stateDir), states[0]);
-  const github = { clientId: "Ov23liAbCdEf", clientSecret: "0123456789abcdef0123456789abcdef01234567" };
-  await Promise.all([loadLocalState(stateDir, { github }), loadLocalState(stateDir, { port: 9001 })]);
-  assert.deepEqual(await loadLocalState(stateDir), { ...states[0], github, port: 9001 });
+  await Promise.all([loadLocalState(stateDir, { port: 9001 }), loadLocalState(stateDir, { port: 9001 })]);
+  assert.deepEqual(await loadLocalState(stateDir), { ...states[0], port: 9001 });
+});
+
+test("a local server's state from before forgets the GitHub OAuth app it was given, secret and all, when it is next opened", async t => {
+  const stateDir = join(await directory(t), "server");
+  const first = await loadLocalState(stateDir);
+  const secret = "0123456789abcdef0123456789abcdef01234567";
+  await writeFile(join(stateDir, "server.json"), JSON.stringify({ ...first, github: { clientId: "Ov23liAbCdEf", clientSecret: secret }, owner: "github:4242" }), { mode: 0o600 });
+  assert.deepEqual(await peekLocalState(stateDir), { ...first, owner: "github:4242" });
+  assert.deepEqual(await loadLocalState(stateDir), { ...first, owner: "github:4242" });
+  assert.doesNotMatch(await readFile(join(stateDir, "server.json"), "utf8"), new RegExp(secret));
 });
 
 test("a running local server holds its state's lease: another can't open it, a left-over lock file doesn't stop the next", async t => {
@@ -101,121 +106,147 @@ async function localFixture(t: TestContext, local = true) {
   t.after(() => db.close());
   const env: Env = { DB: db, APP_ORIGIN: origin, VAULT_KEY: Buffer.alloc(32, 7).toString("base64url"),
     GITHUB_CLIENT_ID: "local-client", GITHUB_CLIENT_SECRET: "local-secret",
-    ...(local ? { LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret } : {}) };
-  const account = { id: 4242, login: "octo" };
-  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url === "https://github.com/login/oauth/access_token") return Response.json({ access_token: `gho_${account.id}`, token_type: "bearer" });
-    if (url === "https://api.github.com/user") return Response.json({ id: account.id, login: account.login, name: account.login });
-    if (url === "https://api.github.com/user/emails?per_page=100") return Response.json([{ email: `${account.login}@example.test`, verified: true, primary: true }]);
-    throw new Error(`Unexpected request ${url}`);
-  });
+    ...(local ? { LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, LOCAL_OWNER_NAME: "ada" } : {}) };
   const request = (path: string, headers: Record<string, string> = {}) => app.request(path, { headers }, env);
+  const native = (body: Record<string, unknown>) => app.request("/api/auth/native/local", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
   const cookies = (response: Response) => response.headers.getSetCookie().map(cookie => cookie.split(";")[0]!).filter(cookie => !cookie.endsWith("="));
-  async function signIn(start: string) {
-    const begun = await request(start);
-    if (begun.status !== 302) return begun;
-    const state = new URL(begun.headers.get("location")!).searchParams.get("state")!;
-    return request(`/api/auth/github/callback?code=github-code&state=${state}`, { Cookie: cookies(begun).join("; ") });
-  }
   const health = async () => (await (await request("/api/health")).json() as { localServer?: { claimed: boolean } }).localServer;
-  return { env, sqlite, setBeforeQuery, account, request, signIn, health, cookies };
+  return { env, sqlite, setBeforeQuery, request, native, health, cookies };
 }
 
 const errorCode = async (response: Response) => (await response.json() as { code: string }).code;
 
-test("two claims at once leave one owner: the later sign-in is undone before its token is stored", async t => {
-  const f = await localFixture(t);
-  let raced = false;
-  f.setBeforeQuery(sql => {
-    if (raced || !sql.trimStart().startsWith("INSERT INTO users")) return;
-    raced = true;
-    f.sqlite.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
-      VALUES ('github:1', '1', 'early', 'Early', 'Early', 'e@example.test', '{}', 'github', '2000-01-01T00:00:00.000Z')`).run();
-  });
-  const late = await f.signIn(`/api/auth/local/claim?token=${claimSecret}`);
-  assert.ok(raced);
-  assert.equal(late.status, 403);
-  assert.equal(await errorCode(late), "local_server_owner_only");
-  assert.deepEqual(f.sqlite.prepare("SELECT id FROM users").all().map(row => row.id), ["github:1"]);
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM github_tokens").get()!.n, 0);
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM auth_sessions").get()!.n, 0);
-});
-
-test("a local server admits the GitHub account that claims it with its sign-in link, and no one else", async t => {
+test("a local server signs its owner in with its sign-in link, without GitHub: the first sign-in makes their account", async t => {
   const f = await localFixture(t);
   assert.deepEqual(await f.health(), { claimed: false });
-
-  const unclaimed = await f.signIn("/api/auth/github");
-  assert.equal(unclaimed.status, 403);
-  assert.equal(await errorCode(unclaimed), "local_server_unclaimed");
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM users").get()!.n, 0);
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM github_tokens").get()!.n, 0);
-
-  const wrong = await f.request(`/api/auth/local/claim?token=${"x".repeat(43)}`);
-  assert.equal(wrong.status, 403);
-  assert.equal(await errorCode(wrong), "invalid_claim");
-
-  const claimed = await f.signIn(`/api/auth/local/claim?token=${claimSecret}`);
-  assert.equal(claimed.status, 302);
-  assert.equal(claimed.headers.get("location"), `${origin}/`);
-  assert.ok(claimed.headers.getSetCookie().some(cookie => cookie.startsWith("local-claim=;")));
-  const session = f.cookies(claimed).find(cookie => cookie.startsWith("test-auth="))!;
-  assert.equal((await f.request("/api/me", { Cookie: session })).status, 200);
-  assert.deepEqual(await f.health(), { claimed: true });
-
-  f.account.id = 5151; f.account.login = "mallory";
-  for (const start of ["/api/auth/github", `/api/auth/local/claim?token=${claimSecret}`]) {
-    const other = await f.signIn(start);
-    assert.equal(other.status, 403);
-    assert.equal(await errorCode(other), "local_server_owner_only");
+  const health = await (await f.request("/api/health")).json() as { githubConfigured: boolean; passwordAuth: boolean; codeSignIn: boolean };
+  assert.deepEqual([health.githubConfigured, health.passwordAuth, health.codeSignIn], [false, false, false]);
+  for (const path of ["/api/auth/github", `/api/auth/native/start?challenge=${"c".repeat(43)}&state=app-state-0123456789`]) {
+    const github = await f.request(path);
+    assert.equal(github.status, 503, path);
+    assert.equal(await errorCode(github), "github_unavailable");
   }
-  assert.deepEqual(f.sqlite.prepare("SELECT user_id FROM github_tokens").all().map(row => row.user_id), ["github:4242"]);
 
-  f.account.id = 4242; f.account.login = "octo";
-  assert.equal((await f.signIn("/api/auth/github")).status, 302);
+  for (const token of ["", "x".repeat(43), claimSecret.slice(1)]) {
+    const wrong = await f.request(`/api/auth/local?token=${token}`);
+    assert.equal(wrong.status, 403);
+    assert.equal(await errorCode(wrong), "invalid_local_sign_in");
+  }
+  assert.equal((await f.request(`/api/auth/local?token=${claimSecret}&token=${claimSecret}`)).status, 403);
+  assert.equal((await f.request(`/api/auth/local?token=${claimSecret}`, { "Sec-Fetch-Site": "cross-site" })).status, 403);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM users").get()!.n, 0);
+
+  const signedIn = await f.request(`/api/auth/local?token=${claimSecret}`, { "Sec-Fetch-Site": "none" });
+  assert.equal(signedIn.status, 302);
+  assert.equal(signedIn.headers.get("location"), `${origin}/`);
+  const session = f.cookies(signedIn).find(cookie => cookie.startsWith("test-auth="))!;
+  const me = await f.request("/api/me", { Cookie: session });
+  assert.equal(me.status, 200);
+  const { user } = await me.json() as { user: { id: string; username: string; displayName: string; gitEmail: string; usernameRequired?: true; githubConnected: boolean } };
+  assert.deepEqual([user.id, user.username, user.displayName, user.gitEmail, user.usernameRequired, user.githubConnected],
+    ["password:ada", "ada", "ada", "ada@users.pikibun.invalid", undefined, false]);
+  assert.deepEqual(await f.health(), { claimed: true });
+  assert.deepEqual(f.sqlite.prepare("SELECT action FROM audit").all().map(row => row.action), ["account.local.created"]);
+
+  const again = await f.request(`/api/auth/local?token=${claimSecret}`);
+  assert.equal(again.status, 302);
+  assert.equal((await f.request("/api/me", { Cookie: f.cookies(again).find(cookie => cookie.startsWith("test-auth="))! })).status, 200);
+  assert.deepEqual(f.sqlite.prepare("SELECT id FROM users").all().map(row => row.id), ["password:ada"]);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM password_credentials").get()!.n, 0);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit").get()!.n, 1);
 });
 
-test("the app that runs a local server claims it in its own GitHub sign-in, with the claim secret, and gets a native sign-in", async t => {
+test("the app that runs a local server signs its owner in with its sign-in token for a native sign-in", async t => {
   const f = await localFixture(t);
-  const verifier = "v".repeat(43) + "-native_verifier";
-  const challenge = await sha256(verifier);
-  const native = (claim?: string) => `/api/auth/native/start?challenge=${challenge}&state=app-state-0123456789&callback=page${claim === undefined ? "" : `&claim=${claim}`}`;
-
-  const unclaimed = await f.signIn(native());
-  assert.equal(unclaimed.status, 302);
-  assert.equal(new URL(unclaimed.headers.get("location")!).searchParams.get("error"), "local_server_unclaimed");
-  const wrong = await f.request(native("x".repeat(43)));
-  assert.equal(wrong.status, 403);
-  assert.equal(await errorCode(wrong), "invalid_claim");
-  assert.equal((await f.request(`${native(claimSecret)}&claim=${claimSecret}`)).status, 400);
+  for (const body of [{}, { token: "x".repeat(43) }, { token: 42 }]) {
+    const wrong = await f.native(body);
+    assert.equal(wrong.status, 403, JSON.stringify(body));
+    assert.equal(await errorCode(wrong), "invalid_local_sign_in");
+  }
+  assert.equal((await f.native({ token: claimSecret, extra: 1 })).status, 400);
+  assert.equal((await f.native({ token: claimSecret, deviceName: "bad\u0000name" })).status, 400);
   assert.deepEqual(await f.health(), { claimed: false });
 
-  const claimed = await f.signIn(native(claimSecret));
-  assert.equal(claimed.status, 302);
-  const done = new URL(claimed.headers.get("location")!);
-  assert.equal(`${done.origin}${done.pathname}`, `${origin}/api/auth/native/done`);
-  assert.equal(done.searchParams.get("state"), "app-state-0123456789");
-  assert.ok(claimed.headers.getSetCookie().some(cookie => cookie.startsWith("local-claim=;")));
-  assert.deepEqual(await f.health(), { claimed: true });
-  const exchanged = await app.request("/api/auth/native/token", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: done.searchParams.get("code"), verifier, deviceName: "Pikibun NSH (macos)" }) }, f.env);
-  assert.equal(exchanged.status, 200);
-  const signIn = await exchanged.json() as { token: string; user: { id: string } };
-  assert.equal(signIn.user.id, "github:4242");
-  assert.equal((await f.request("/api/me", { Authorization: `Bearer ${signIn.token}` })).status, 200);
-
-  f.account.id = 5151; f.account.login = "mallory";
-  const other = await f.signIn(native(claimSecret));
-  assert.equal(new URL(other.headers.get("location")!).searchParams.get("error"), "local_server_owner_only");
+  const signedIn = await f.native({ token: claimSecret, deviceName: "Pikibun NSH (macos)" });
+  assert.equal(signedIn.status, 200);
+  const { token, expiresAt, user } = await signedIn.json() as { token: string; expiresAt: string; user: { id: string } };
+  assert.equal(user.id, "password:ada");
+  assert.ok(Date.parse(expiresAt) > Date.now() + 29 * 24 * 3600_000);
+  assert.equal((await f.request("/api/me", { Authorization: `Bearer ${token}` })).status, 200);
+  const devices = await (await f.request("/api/me/devices", { Authorization: `Bearer ${token}` })).json() as { devices: { name: string; current: boolean }[] };
+  assert.deepEqual(devices.devices.map(device => [device.name, device.current]), [["Pikibun NSH (macos)", true]]);
+  assert.deepEqual(f.sqlite.prepare("SELECT method, client FROM auth_sessions").all().map(row => [row.method, row.client]), [[null, "native"]]);
 });
 
-test("a server outside local mode has no claim link and says nothing of one", async t => {
+test("two first sign-ins at once make one owner, and both sign in as them", async t => {
+  const f = await localFixture(t);
+  const [first, second] = await Promise.all([f.native({ token: claimSecret }), f.native({ token: claimSecret })]);
+  assert.deepEqual([first.status, second.status], [200, 200]);
+  const ids = await Promise.all([first, second].map(async response => (await response.json() as { user: { id: string } }).user.id));
+  assert.deepEqual(ids, ["password:ada", "password:ada"]);
+  assert.deepEqual(f.sqlite.prepare("SELECT id FROM users").all().map(row => row.id), ["password:ada"]);
+});
+
+test("without a username of its own a local owner is 'owner', and one who signed in with GitHub before keeps their account, token and all", async t => {
+  const plain = await localFixture(t);
+  delete plain.env.LOCAL_OWNER_NAME;
+  assert.equal((await (await plain.native({ token: claimSecret })).json() as { user: { id: string } }).user.id, "password:owner");
+
+  const f = await localFixture(t);
+  f.sqlite.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES ('github:4242', '4242', 'octo', 'Octo', 'Octo', 'octo@example.test', '{}', 'github', '2000-01-01T00:00:00.000Z')`).run();
+  f.sqlite.prepare("INSERT INTO github_tokens (user_id, ciphertext, updated_at) VALUES ('github:4242', 'sealed', '2000-01-01T00:00:00.000Z')").run();
+  assert.deepEqual(await f.health(), { claimed: true });
+  const signedIn = await f.request(`/api/auth/local?token=${claimSecret}`);
+  const session = f.cookies(signedIn).find(cookie => cookie.startsWith("test-auth="))!;
+  const { user } = await (await f.request("/api/me", { Cookie: session })).json() as { user: { id: string; githubConnected: boolean; usernameRequired?: true } };
+  assert.deepEqual([user.id, user.githubConnected, user.usernameRequired], ["github:4242", true, undefined]);
+  assert.deepEqual(f.sqlite.prepare("SELECT id FROM users").all().map(row => row.id), ["github:4242"]);
+  const post = (path: string) => app.request(path, { method: "POST", headers: { Cookie: session, "Content-Type": "application/json" }, body: "{}" }, f.env);
+  for (const path of ["/api/me/app-codes", "/api/auth/native/code"]) assert.equal((await post(path)).status, 404, `${path}: a link sign-in isn't a recent GitHub sign-in, and codes aren't offered`);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM app_sign_in_codes").get()!.n, 0);
+});
+
+test("a local server whose pinned owner is a password account signs only them in, and a suspended owner not at all", async t => {
+  const f = await localFixture(t);
+  f.sqlite.prepare(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES ('password:alice', 'alice', NULL, NULL, 'Alice', 'Alice', 'alice@example.test', '{}', 'password', '2000-01-01T00:00:00.000Z')`).run();
+  f.sqlite.prepare(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES ('password:bob', 'bob', NULL, NULL, 'Bob', 'Bob', 'bob@example.test', '{}', 'password', '2001-01-01T00:00:00.000Z')`).run();
+  f.env.LOCAL_OWNER_ID = "password:bob";
+  assert.equal((await (await f.native({ token: claimSecret })).json() as { user: { id: string } }).user.id, "password:bob");
+  f.env.LOCAL_OWNER_ID = "password:carol";
+  const missing = await f.native({ token: claimSecret });
+  assert.equal(missing.status, 409);
+  assert.match((await missing.json() as { error: string }).error, /belongs to password:carol, whose account is gone/);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM users").get()!.n, 2);
+  f.env.LOCAL_OWNER_ID = "password:bob";
+  f.sqlite.prepare("UPDATE users SET suspended_at = '2002-01-01T00:00:00.000Z' WHERE id = 'password:bob'").run();
+  const suspended = await f.native({ token: claimSecret });
+  assert.equal(suspended.status, 403);
+  assert.equal(await errorCode(suspended), "account_suspended");
+});
+
+test("a local owner whose username another account took is 'owner', and says why where that is taken too", async t => {
+  const f = await localFixture(t);
+  const other = (id: string, username: string) => f.sqlite.prepare(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, NULL, NULL, 'T', 'T', 't@example.test', '{}', 'test', '2000-01-01T00:00:00.000Z')`).run(id, username);
+  other("test:a", "ada");
+  assert.equal((await (await f.native({ token: claimSecret })).json() as { user: { id: string } }).user.id, "password:owner");
+
+  const g = await localFixture(t);
+  for (const [id, username] of [["test:a", "ada"], ["test:o", "owner"]]) g.sqlite.prepare(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, NULL, NULL, 'T', 'T', 't@example.test', '{}', 'test', '2000-01-01T00:00:00.000Z')`).run(id, username);
+  const refused = await g.native({ token: claimSecret });
+  assert.equal(refused.status, 409);
+  assert.equal(await errorCode(refused), "local_owner_unavailable");
+});
+
+test("a server outside local mode has no local sign-in and says nothing of one", async t => {
   const f = await localFixture(t, false);
   assert.equal(await f.health(), undefined);
-  assert.equal((await f.request(`/api/auth/local/claim?token=${claimSecret}`)).status, 404);
-  const native = await f.request(`/api/auth/native/start?challenge=${"c".repeat(43)}&state=app-state-0123456789&callback=page&claim=${claimSecret}`);
-  assert.equal(native.status, 400);
+  assert.equal((await f.request(`/api/auth/local?token=${claimSecret}`)).status, 404);
+  assert.equal((await f.native({ token: claimSecret })).status, 404);
 });
 
 async function freePort(): Promise<number> {
@@ -242,7 +273,7 @@ test("a relative state directory still names its database and backups correctly"
   assert.ok((await stat(join(parent, "server", "backups"))).isDirectory());
 });
 
-test("pikibun serve's server pairs this computer as its owner's host once claimed, and reuses that pairing", async t => {
+test("pikibun serve's server pairs this computer as its owner's host once they have signed in, and reuses that pairing", async t => {
   const stateDir = join(await directory(t), "server");
   const state = await loadLocalState(stateDir, { port: await freePort() });
   const web = await directory(t);
@@ -258,7 +289,9 @@ test("pikibun serve's server pairs this computer as its owner's host once claime
   t.after(() => server.close());
   assert.equal(server.origin, `http://127.0.0.1:${state.port}`);
   assert.match(await (await fetch(server.origin)).text(), /<title>Pikibun<\/title>/);
-  assert.equal(await server.claimUrl(), `${server.origin}/api/auth/local/claim?token=${state.claimSecret}`);
+  assert.equal(server.signInUrl(), `${server.origin}/api/auth/local?token=${state.claimSecret}`);
+  assert.equal(server.env.LOCAL_OWNER_NAME, localUsername());
+  assert.equal(server.env.GITHUB_CLIENT_ID, undefined);
 
   let waiting = false;
   const host = startLocalHost(server, stateDir, { ...hostOptions, onWaiting: () => { waiting = true; } });
@@ -268,12 +301,14 @@ test("pikibun serve's server pairs this computer as its owner's host once claime
   const connectors = () => server.env.DB.query<{ id: string; owner_id: string }>("SELECT id, owner_id FROM connectors WHERE revoked_at IS NULL").all();
   assert.deepEqual(await connectors(), []);
 
-  await server.env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
-    VALUES ('github:4242', '4242', 'octo', 'Octo', 'Octo', 'octo@example.test', '{}', 'github', ?)`).bind(new Date().toISOString()).run();
+  const signedIn = await fetch(`${server.origin}/api/auth/native/local`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: new URL(server.signInUrl()!).searchParams.get("token") }) });
+  assert.equal(signedIn.status, 200);
+  const owner = (await signedIn.json() as { user: { id: string } }).user.id;
+  assert.equal(owner, `password:${localUsername() ?? "owner"}`);
   await host.started;
   const [paired] = await connectors();
-  assert.equal(paired?.owner_id, "github:4242");
-  assert.equal(await server.claimUrl(), null);
+  assert.equal(paired?.owner_id, owner);
   await host.stop();
 
   const again = startLocalHost(server, stateDir, hostOptions);
@@ -324,7 +359,7 @@ test("shared, the same state serves others at its public origin: no claim link, 
   assert.equal(server.mode, "shared");
   assert.equal(server.origin, "https://pikibun.example.test");
   assert.equal(server.address, `http://127.0.0.1:${port}`);
-  assert.equal(await server.claimUrl(), null);
+  assert.equal(server.signInUrl(), null);
   const health = await (await fetch(`${server.address}/api/health`)).json() as Record<string, unknown>;
   assert.deepEqual([health.passwordAuth, health.githubSignup, health.passwordSignup, health.localServer], [true, "invite", "invite", undefined]);
 
@@ -406,7 +441,7 @@ test("running for its owner alone after sharing pins its owner: the one recorded
   server = await startLocalServer({ stateDir, state, release, staticDir: web });
   t.after(() => server.close());
   assert.equal(server.env.LOCAL_OWNER_ID, "github:4242");
-  assert.deepEqual(await server.owner(), { id: "github:4242", github_id: "4242" });
+  assert.deepEqual(await server.owner(), { id: "github:4242" });
   assert.equal((await peekLocalState(stateDir))?.owner, "github:4242");
 });
 
@@ -466,5 +501,48 @@ test("sharing a Pikibun its owner had claimed pins them before anyone else can s
   server = await startLocalServer({ stateDir, state, release, staticDir: web });
   t.after(() => server.close());
   assert.equal(server.env.LOCAL_OWNER_ID, "github:7777");
-  assert.deepEqual(await server.owner(), { id: "github:7777", github_id: "7777" });
+  assert.deepEqual(await server.owner(), { id: "github:7777" });
+});
+
+test("the local owner's username comes from this computer's user name, cleaned up, or none", () => {
+  assert.equal(localUsername("ada"), "ada");
+  assert.equal(localUsername("Ada Lovelace"), "ada-lovelace");
+  assert.equal(localUsername("ADA.Lovelace_2"), "ada-lovelace_2");
+  assert.equal(localUsername("José"), "jose");
+  assert.equal(localUsername("Renée Smith"), "renee-smith");
+  assert.equal(localUsername("_x_"), undefined);
+  assert.equal(localUsername("用户"), undefined);
+  assert.equal(localUsername("a".repeat(60)), "a".repeat(39));
+  assert.equal(localUsername(""), undefined);
+});
+
+test("an owner who signed in without a password is pinned when Pikibun is shared, gets one from --create-admin, and owns it alone again", async t => {
+  const stateDir = join(await directory(t), "server");
+  const web = await directory(t);
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
+  await loadLocalState(stateDir, { port: await freePort() });
+  let { state, release } = await openLocalState(stateDir);
+  let server = await startLocalServer({ stateDir, state, release, staticDir: web, extraEnv: { LOCAL_OWNER_NAME: "ada" } });
+  const signedIn = await fetch(`${server.origin}/api/auth/native/local`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: state.claimSecret }) });
+  assert.equal((await signedIn.json() as { user: { id: string } }).user.id, "password:ada");
+  await server.close();
+
+  ({ state, release } = await openLocalState(stateDir, { shared: { ...sharedBase, admins: ["password:ada"] } }));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
+  assert.equal((await peekLocalState(stateDir))?.owner, "password:ada");
+  assert.deepEqual(await server.owner(), { id: "password:ada" });
+  assert.match(await server.createAdmin("ada", "a long enough password"), /^Gave the administrator password:ada its first password: sign in at https:\/\/pikibun.example.test with the username ada\.$/);
+  const login = await fetch(`${server.address}/api/auth/native/password`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "ada", password: "a long enough password" }) });
+  assert.equal(login.status, 200);
+  await assert.rejects(server.createAdmin("ada", "another long password"), /exists already/);
+  await server.close();
+
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web });
+  t.after(() => server.close());
+  assert.equal(server.env.LOCAL_OWNER_ID, "password:ada");
+  assert.deepEqual(await server.owner(), { id: "password:ada" });
 });

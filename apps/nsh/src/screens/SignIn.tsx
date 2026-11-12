@@ -3,9 +3,8 @@ import { Dialog, Input } from "nsh/base";
 import { authorizeInPage, openServerPage, pageQuery } from "../lib/page";
 import { errorMessage } from "../shared";
 import {
-  auth, checkBrowserSession, isCodeLink, isSignInLink, parseSignInCode, restore, signInMethods, signInWithCode, signInWithPassword, signInWithToken, signOut, signUpWithPassword,
-  startGitHubInviteSignIn, startGitHubSignIn,
-  type GitHubSignIn, type SignInMethods,
+  auth, checkBrowserSession, isCodeLink, isSignInLink, localSignInToken, parseSignInCode, restore, signInMethods, signInToLocalServer, signInWithCode, signInWithPassword,
+  signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, startGitHubSignIn, type GitHubSignIn, type SignInMethods,
 } from "../lib/auth";
 import { createAction } from "../lib/resource";
 import { displayOrigin, parseOrigin, usesBrowserSession } from "../lib/server";
@@ -83,6 +82,7 @@ function SignInForm(props: { inviteToken?: string }) {
   const editingServer = signal(false);
   const developerOpen = signal(false);
   const token = signal("");
+  const localLink = signal("");
   const username = signal("");
   const password = signal("");
   const confirmPassword = signal("");
@@ -121,12 +121,16 @@ function SignInForm(props: { inviteToken?: string }) {
   const passwords = () => methods()?.passwordAuth === true;
   const unconfigured = () => githubUnconfigured() && !passwords();
   const local = () => methods()?.localServer;
-  const ownClaim = () => {
+  const ownToken = () => {
     const target = origin();
-    return selfHosting && target && local()?.claimed === false ? thisServer().claimFor(target) : undefined;
+    return selfHosting && target ? thisServer().signInTokenFor(target) : undefined;
   };
   const ownServer = () => (selfHosting ? thisServer().running() : undefined);
   const useServer = (address: string) => { server.set(address); editingServer.set(false); selfHostOpen.set(false); };
+  const signInToOwnServer = (address: string) => {
+    useServer(address);
+    void action.run(() => signInToLocalServer(address, thisServer().requireSignInToken(address)));
+  };
   const signInCode = () => parseSignInCode(codeText());
   const codeTarget = () => signInCode()?.origin ?? origin();
   const codeHint = () => {
@@ -169,7 +173,7 @@ function SignInForm(props: { inviteToken?: string }) {
         if (!openServerPage("/api/auth/github")) await openUrl(`${target}/api/auth/github`);
         return;
       }
-      const attempt = await startGitHubSignIn(target, ownClaim());
+      const attempt = await startGitHubSignIn(target);
       github.set(attempt);
       await openUrl(attempt.url);
     });
@@ -178,7 +182,18 @@ function SignInForm(props: { inviteToken?: string }) {
   function signInInApp() {
     const target = origin();
     if (target === null) return;
-    void action.run(async () => { github.set(await startGitHubSignIn(target, ownClaim(), { inApp: true })); });
+    void action.run(async () => { github.set(await startGitHubSignIn(target, { inApp: true })); });
+  }
+
+  function signInLocally() {
+    const target = origin();
+    if (target === null || action.busy()) return;
+    const signInToken = ownToken() ?? localSignInToken(target, localLink());
+    void action.run(async () => {
+      if (!signInToken) throw new Error("That isn't this Pikibun's sign-in link. Paste the whole link pikibun serve printed when it started.");
+      await signInToLocalServer(target, signInToken);
+      localLink.set("");
+    });
   }
 
   if (!usesBrowserSession) {
@@ -245,20 +260,11 @@ function SignInForm(props: { inviteToken?: string }) {
       <If when={action.error() || (callbackError() ? `GitHub sign-in did not complete: ${callbackError()}` : "")}>
         {text => <Banner testID="sign-in-problem" tone="danger" title="Sign-in problem">{text()}</Banner>}
       </If>
-      <If when={usesBrowserSession && unconfigured()}>
-        <If when={local()}
-          else={<Banner tone="warning" title="GitHub sign-in is not configured">The operator needs to configure the GitHub OAuth app, its callback URL and the server's GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and VAULT_KEY settings.</Banner>}>
-          <Banner tone="warning" title="GitHub sign-in is not set up">This Pikibun runs on this computer and needs a GitHub OAuth app of yours to sign you in. Add one where you started it: run `pikibun serve` again in a terminal, which shows how, or use the Pikibun app's Settings.</Banner>
-        </If>
+      <If when={usesBrowserSession && unconfigured() && !local()}>
+        <Banner tone="warning" title="GitHub sign-in is not configured">The operator needs to configure the GitHub OAuth app, its callback URL and the server's GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and VAULT_KEY settings.</Banner>
       </If>
-      <If when={usesBrowserSession && !unconfigured() && local() && !local()!.claimed}>
-        <Banner tone="info" title="Set up this Pikibun">This Pikibun runs on this computer and has no owner yet. Sign in with the link `pikibun serve` printed when it started, or from the Pikibun app, which opens it for you: your GitHub account becomes its owner, and the only one that can sign in.</Banner>
-      </If>
-      <If when={!usesBrowserSession && local() && !local()!.claimed}>
-        <If when={ownClaim()}
-          else={<Banner tone="info" title="This Pikibun has no owner yet">It runs on this computer. Open the sign-in link `pikibun serve` printed in a browser first: your GitHub account becomes its owner, and the only one that can sign in. Then sign in here.</Banner>}>
-          <Banner testID="sign-in-self-host-claim" tone="info" title={`Set up Pikibun on ${computerName}`}>Nobody has signed in to it yet. Continue with GitHub: your account becomes its owner, and the only one that can sign in.</Banner>
-        </If>
+      <If when={usesBrowserSession && local()}>
+        <Banner testID="sign-in-local-link" tone="info" title="This Pikibun runs on its owner's computer">Sign in with the link `pikibun serve` printed when it started, or from the Pikibun app that runs it. No GitHub or other account is needed.</Banner>
       </If>
       <If when={!usesBrowserSession}>
         <View style={{ gap: 6 }}>
@@ -280,7 +286,7 @@ function SignInForm(props: { inviteToken?: string }) {
           <If when={selfHosting}>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               <If when={ownServer() && ownServer() !== origin() ? ownServer() : null}>
-                {running => <Button testID="sign-in-self-host-use" small variant="outline" icon="database" label={`Use Pikibun on ${computerName}`} onPress={() => useServer(running())} />}
+                {running => <Button testID="sign-in-self-host-use" small variant="outline" icon="database" label={`Use Pikibun on ${computerName}`} onPress={() => signInToOwnServer(running())} />}
               </If>
               <Button testID="sign-in-self-host" small variant="ghost" icon="database" label={ownServer() ? `Pikibun on ${computerName}` : `Run Pikibun on ${computerName}`}
                 onPress={() => selfHostOpen.set(true)} />
@@ -320,7 +326,22 @@ function SignInForm(props: { inviteToken?: string }) {
           </View>
         </If>
       </If>
-      <If when={!(githubUnconfigured() && (usesBrowserSession || passwords()))}>
+      <If when={!usesBrowserSession && local()}>
+        <If when={ownToken()}
+          else={
+            <View testID="local-sign-in" style={{ gap: 8 }}>
+              <Small>{`This Pikibun runs on ${computerName}. Paste the sign-in link pikibun serve printed when it started.`}</Small>
+              <Input testID="local-link" value={localLink()} onChange={event => localLink.set(event.value)} autoCapitalize="none" autoCorrect={false} masked autoComplete="off"
+                placeholder="http://127.0.0.1:7878/api/auth/local?token=…" accessibilityLabel="Sign-in link" style={inputStyle()} onSubmit={signInLocally} />
+              <Button testID="local-link-sign-in" variant="primary" large block label={action.busy() ? "Signing in" : "Sign in"} busy={action.busy() && !developerOpen()}
+                disabled={origin() === null || action.busy() || !localLink().trim()} onPress={signInLocally} />
+            </View>
+          }>
+          <Button testID="sign-in-self-host-sign-in" variant="primary" large block icon="database" label={`Sign in to Pikibun on ${computerName}`} busy={action.busy() && !developerOpen()}
+            disabled={origin() === null || action.busy()} onPress={signInLocally} />
+        </If>
+      </If>
+      <If when={!local() && !(githubUnconfigured() && (usesBrowserSession || passwords()))}>
         <Button testID="github-sign-in" variant="primary" large block icon="github" label="Continue with GitHub" busy={action.busy() && !developerOpen()}
           disabled={origin() === null || action.busy() || githubUnconfigured()} onPress={continueWithGitHub} />
       </If>
@@ -396,7 +417,7 @@ function SignInForm(props: { inviteToken?: string }) {
           ? "On the web this app uses the server's own browser sign-in."
           : "Your sign-in is kept in this app's storage on this device (NSH has no Keychain or Keystore storage yet)."}
       </Small>
-      <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={useServer} />
+      <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={signInToOwnServer} />
       <Dialog open={github()?.inApp === true} onOpenChange={event => { if (!event.open) github.set(null); }}
         style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
         <View style={{ flex: 1 }}>

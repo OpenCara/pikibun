@@ -8,10 +8,7 @@ const SERVE_ARGS = ["serve", "--stdio"];
 const SAVED_KEY = "pikibun.thisServer";
 const LOG_LIMIT = 200;
 const STOPPED: ServerStatus = { state: "stopped", host: "off" };
-
-export const GITHUB_APP_PAGE = "https://github.com/settings/applications/new";
-export const LOCAL_HOMEPAGE = "http://127.0.0.1";
-export const LOCAL_CALLBACK = "http://127.0.0.1/api/auth/github/callback";
+const OLD_COMMAND = /^Add your GitHub OAuth app first/;
 
 export function serverCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[] } {
   return pikibunCommand(os, shell, cli, SERVE_ARGS);
@@ -28,7 +25,6 @@ export function serverLaunchProblem(lines: readonly string[], code: number | nul
 }
 
 export interface Outcome { ok: boolean; error?: string }
-export interface GitHubApp { clientId: string; clientSecret: string }
 interface Saved { resume?: { unsandboxedConsent: boolean } }
 
 export class ThisServer {
@@ -63,9 +59,15 @@ export class ThisServer {
     return status.state === "running" ? status.origin : undefined;
   }
 
-  claimFor(origin: string): string | undefined {
+  signInTokenFor(origin: string): string | undefined {
     const status = this.status();
-    return status.state === "running" && status.origin === origin ? status.claim : undefined;
+    return status.state === "running" && status.origin === origin ? status.signInToken : undefined;
+  }
+
+  requireSignInToken(origin: string): string {
+    const token = untracked(() => this.signInTokenFor(origin));
+    if (!token) throw new Error(`Pikibun on ${computerName} didn't give this app its sign-in token. Stop it and start it again here, updating pikibun if this page offers to.`);
+    return token;
   }
 
   load(): Promise<void> {
@@ -110,11 +112,10 @@ export class ThisServer {
     }
   }
 
-  async start(github?: GitHubApp, resume?: { unsandboxedConsent: boolean }): Promise<Outcome> {
+  async start(resume?: { unsandboxedConsent: boolean }): Promise<Outcome> {
     if (untracked(this.status).state !== "stopped") return { ok: false, error: "Pikibun is already running on this computer." };
     const inspection = await this.refresh();
     if (!inspection) return this.refuse(untracked(this.problem) ? "" : untracked(this.error) || `${computerTitle} could not be inspected.`);
-    if (!github && !inspection.githubClientId) return this.refuse("Add your GitHub OAuth app's client ID and secret first: Pikibun signs you in with it.");
     let unsandboxedConsent = false;
     if (inspection.hostMode === "unsandboxed" && !inspection.hostProblem) {
       unsandboxedConsent = resume ? resume.unsandboxedConsent : await this.confirmUnsandboxed(inspection.unsandboxedWarning ?? "");
@@ -124,8 +125,11 @@ export class ThisServer {
       }
     }
     this.error.set("");
-    const result = await this.channel.request({ type: "start", ...(github ? { github: { clientId: github.clientId, clientSecret: github.clientSecret } } : {}),
-      ...(unsandboxedConsent ? { unsandboxedConsent: true } : {}) });
+    const result = await this.channel.request({ type: "start", ...(unsandboxedConsent ? { unsandboxedConsent: true } : {}) });
+    if (!result.ok && OLD_COMMAND.test(result.error.message)) {
+      this.problem.set({ kind: "outdated" });
+      return this.refuse("");
+    }
     if (!result.ok) return this.refuse(result.error.message);
     this.setResume({ unsandboxedConsent });
     void this.refresh();
@@ -143,7 +147,7 @@ export class ThisServer {
     await this.load();
     const resume = this.resume;
     if (!resume) return undefined;
-    const outcome = await this.start(undefined, resume);
+    const outcome = await this.start(resume);
     if (!outcome.ok) this.fail(outcome.error ?? `Pikibun on ${computerName} could not start again: see Recent activity.`);
     return outcome;
   }

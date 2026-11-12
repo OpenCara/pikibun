@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { Hono, MiddlewareHandler } from 'hono';
 import { sha256 } from '../../../../packages/shared/src/crypto.js';
 import type { AppSignInCode, AppSignInCodeState, NativeSignIn } from '../../../../packages/shared/src/types.js';
 import { getUser } from '../db.js';
@@ -92,9 +92,14 @@ async function signInWithCode(c: AppContext) {
   return c.json({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), user: ownProfile(c.env, user) } satisfies NativeSignIn);
 }
 
+const notLocal: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (localMode(c.env)) fail(404, 'not_found', 'A Pikibun on its owner\'s computer signs apps in with its sign-in link, not with codes.');
+  await next();
+};
+
 export function registerAppCodes(app: Hono<AppEnv>): void {
-  app.post('/api/auth/native/code', privateResponse, signInWithCode);
-  app.post('/api/me/app-codes', privateResponse, authenticate, csrfGuard, makeCode);
-  app.get('/api/me/app-codes/:id', privateResponse, authenticate, codeState);
-  app.delete('/api/me/app-codes/:id', privateResponse, authenticate, csrfGuard, cancelCode);
+  app.post('/api/auth/native/code', privateResponse, notLocal, signInWithCode);
+  app.post('/api/me/app-codes', privateResponse, notLocal, authenticate, csrfGuard, makeCode);
+  app.get('/api/me/app-codes/:id', privateResponse, notLocal, authenticate, codeState);
+  app.delete('/api/me/app-codes/:id', privateResponse, notLocal, authenticate, csrfGuard, cancelCode);
 }

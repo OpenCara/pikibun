@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import { auditStatement, hashPassword, instanceAdmins, newPassword, operatorPasswordResetStatements, passwordAccountStatements, passwordUsername, USERNAME_MATCH, usernameMatch } from './authority/index.js';
+import { auditStatement, hashPassword, instanceAdmins, newPassword, operatorFirstPasswordStatement, operatorPasswordResetStatements, passwordAccountStatements, passwordUsername, USERNAME_MATCH, usernameMatch } from './authority/index.js';
 import { ConstraintError, type Database } from './db/types.js';
 import { now } from './http.js';
 import type { Env } from './types.js';
@@ -35,7 +35,13 @@ async function plain<T>(work: () => T | Promise<T>): Promise<T> {
   }
 }
 
+export interface PasswordCommandOutcome { done: 'created' | 'first-password' | 'reset'; userId: string; message: string }
+
 export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessEnv, command: PasswordCommand, readPassword: () => Promise<string>): Promise<string> {
+  return (await passwordCommandOutcome(db, settings, command, readPassword)).message;
+}
+
+export async function passwordCommandOutcome(db: Database, settings: NodeJS.ProcessEnv, command: PasswordCommand, readPassword: () => Promise<string>): Promise<PasswordCommandOutcome> {
   const name = await plain(() => passwordUsername(command.username));
   const userId = `password:${name}`;
   if (command.kind === 'create-admin') {
@@ -47,6 +53,14 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
     }
     const password = await plain(async () => newPassword(await readPassword(), name));
     const hash = await hashPassword(password);
+    if (await db.query(`SELECT 1 FROM users WHERE id = ? AND auth_kind = 'password' AND NOT EXISTS (SELECT 1 FROM password_credentials WHERE user_id = ?)`).bind(userId, userId).first()) {
+      const at = now();
+      await db.batch([
+        operatorFirstPasswordStatement(db, userId, hash, at),
+        auditStatement({ DB: db } as Env, null, 'account.password.created_by_operator', null, null, { userId }),
+      ]);
+      return { done: 'first-password', userId, message: `pikibun: gave ${userId}, which signed in without a password on this computer, its first password; sign in with the username ${name}` };
+    }
     try {
       await db.batch([...passwordAccountStatements(db, name, name, hash), auditStatement({ DB: db } as Env, null, 'account.password.created_by_operator', null, null, { userId })]);
     } catch (error) {
@@ -57,7 +71,7 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
       }
       throw error;
     }
-    return `pikibun: created ${userId}, an administrator while ADMIN_USER_IDS lists it; sign in with the username ${name}`;
+    return { done: 'created', userId, message: `pikibun: created ${userId}, an administrator while ADMIN_USER_IDS lists it; sign in with the username ${name}` };
   }
   const account = await db.query<{ id: string; auth_kind: string }>(`SELECT u.id, u.auth_kind FROM users u JOIN password_credentials p ON p.user_id = u.id ${USERNAME_MATCH}`)
     .bind(...usernameMatch(name)).first();
@@ -70,7 +84,7 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
     ...operatorPasswordResetStatements(db, account.id, hash, now()),
     auditStatement({ DB: db } as Env, null, 'account.password.reset_by_operator', null, null, { userId: account.id }),
   ]);
-  return `pikibun: set a new password for ${account.id} and signed it out everywhere`;
+  return { done: 'reset', userId: account.id, message: `pikibun: set a new password for ${account.id} and signed it out everywhere` };
 }
 
 function hiddenLine(label: string): Promise<string> {

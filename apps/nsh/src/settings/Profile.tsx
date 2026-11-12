@@ -11,7 +11,7 @@ import { Button, CardBody, confirm, CopyButton, Feedback, IconButton, ResourceSt
 import { ConnectedAccountsSection } from "./accounts";
 import { OwnJoinRequests } from "./join-requests";
 import { SectionPage, SettingsActions, type SectionProps } from "./parts";
-import { serverVersion } from "./index";
+import { codeSignInOffered, serverVersion } from "./index";
 import { AppUpdateRows } from "../components/AppUpdate";
 import { SignInApp } from "./sign-in-app";
 
@@ -39,7 +39,7 @@ function SignedInAppsSection() {
   return (
     <Section title="Signed-in apps" testID="signed-in-apps"
       info="The Pikibun apps on your phone, tablet or computer that signed in as you. Each stays signed in for 30 days unless you sign it out here or in the app."
-      action={adding() ? undefined : <Button testID="sign-in-app-start" small variant="outline" icon="key" label="Sign in an app"
+      action={adding() || !codeSignInOffered() ? undefined : <Button testID="sign-in-app-start" small variant="outline" icon="key" label="Sign in an app"
         onPress={() => { signedInNotice.set(""); adding.set(true); }} />}>
       <If when={adding()}><SignInApp onClose={() => adding.set(false)} onSignedIn={signedIn} /></If>
       <If when={signedInNotice()}>{text => <CardBody><Feedback notice={text()} /></CardBody>}</If>
