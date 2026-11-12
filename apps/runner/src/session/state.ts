@@ -28,3 +28,11 @@ export type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Recor
   conversationOnlyRestore?: true;
   forkedFrom?: { sessionId: string; entryId: string } };
 export const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", version: 1, scope: "session", initial: () => ({ json: "" }), checkpointWhen: () => true });
+
+export function tellsActivity(run: Run): boolean {
+  return !run.reverted && !run.withdrawn;
+}
+
+export function holdsQueue(run: Run): boolean {
+  return ["queued", "running", "admitting"].includes(run.status) || run.stopped?.pending === true;
+}

@@ -31,6 +31,7 @@ import { SessionDefinitions, type SessionDefinitionsOptions } from "../apps/runn
 import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/src/tool-definitions.js";
 import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session/piki.js";
 import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
+import { contextView, extensionView, sessionView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -688,6 +689,60 @@ test("piki: a CLI runs in the sandbox only inside a call the session admitted, w
   const onHost = pikiFixture(state, { onHost: true }).host.piki!;
   assert.equal(onHost.sandbox, undefined);
   assert.equal(onHost.hostSignIn, true);
+});
+
+test("view: context usage counts the conversation's tokens against its model's window, and says where it compacts", () => {
+  const messages = [{ role: "user", content: "hello there", timestamp: 0 }] as never;
+  const models = { getModel: (provider: string, modelId: string) => provider === "p" && modelId === "m" ? { contextWindow: 1000 } : undefined } as never;
+  const usage = contextView(messages, { provider: "p", modelId: "m" }, { fallback: undefined, models, compaction: () => ({ enabled: true, reserveTokens: 100, keepRecentTokens: 10 }) as never })!;
+  assert.ok(usage.tokens > 0);
+  assert.equal(usage.window, 1000);
+  assert.equal(typeof usage.compactsAt, "number");
+  const fallback = contextView(messages, undefined, { fallback: { provider: "p", modelId: "m" }, models, compaction: () => undefined })!;
+  assert.equal(fallback.window, 1000, "without the conversation's model, the session's is used");
+  const broken = contextView(messages, { provider: "p", modelId: "m" }, { fallback: undefined, models: { getModel: () => { throw new Error("x"); } } as never, compaction: () => undefined })!;
+  assert.equal(broken.window, undefined);
+});
+
+test("view: the queue, who is busy, the access of the latest write, the preparation, and the tunnel come from what the session gives it", async () => {
+  const state = toolState({ status: "queued", sequence: 1, options: { access: "read" } });
+  state.runs.r0 = { ...state.runs.r1!, key: "r0", sequence: 0, status: "interrupted", stopped: { by: "github:1" } };
+  state.branches = [{ id: 1, mode: "write" }, { id: 2, mode: "ask", superseded: true }];
+  const asked: number[] = [];
+  const source: ViewSource = {
+    binding: { session: { id: "s1" }, owner: { id: "github:1", displayName: "Ada", gitName: "Ada", gitEmail: "ada@example.test", githubLogin: "ada", env: {} } } as unknown as RunnerBinding,
+    tunnel: () => ({ url: "https://x.trycloudflare.com" }) as never, metadata: async () => structuredClone(state),
+    conversation: async id => { asked.push(id); return { context: async () => ({ entries: [], messages: [] }) } as never; },
+    agent: async () => ({ model: { provider: "p", modelId: "m" }, thinkingLevel: "low" }) as never,
+    context: () => ({ tokens: 5 }), repositories: () => undefined, extensions: async () => ({ extensions: { running: [], missing: ["npm:x"] } }),
+  };
+  const view = await sessionView(source);
+  assert.deepEqual(asked, [1], "superseded branches aren't read");
+  assert.deepEqual(view.owner, { id: "github:1", displayName: "Ada", gitName: "Ada", gitEmail: "ada@example.test", githubLogin: "ada" });
+  assert.deepEqual(view.queue!.map(item => [item.submissionId, item.status]), [["r0", "stopped"], ["r1", "queued"]]);
+  assert.deepEqual([view.busy, view.access, view.context, view.agent], [true, "read", { tokens: 5 }, { provider: "p", modelId: "m", thinkingLevel: "low" }]);
+  assert.deepEqual(view.conversations, [{ id: "1", mode: "write" }]);
+  assert.deepEqual(view.extensions, { running: [], missing: ["npm:x"] });
+  assert.deepEqual(view.tunnel, { url: "https://x.trycloudflare.com" });
+  const preparing = await sessionView({ ...source, repositories: () => ({ status: "preparing", items: [] }) });
+  assert.deepEqual([preparing.activity, preparing.busy], ["working", true]);
+  assert.equal((await sessionView({ ...source, repositories: () => ({ status: "failed", items: [], error: "x" }) })).activity, "failed");
+});
+
+test("view: extensions show what runs, what is missing, the built-ins, and tools the host can't offer", async () => {
+  const base: ExtensionViewSource = {
+    binding: { session: { workspaceId: "w", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding,
+    config: undefined, builtins: () => undefined, hostConfig: async () => defaultHostConfig, requiredExtensions: async () => [], toolNames: () => ["read_file"],
+    definedToolsOff: off => off, browserUnavailable: () => "missing", tunnelUnavailable: () => undefined, missingPrograms: () => [{ tool: "node", source: "piki:node", programs: ["yarn"] }],
+  };
+  assert.deepEqual(await extensionView(base), {}, "a host without extensions or built-ins shows none");
+  const builtins = { select: (enabled: string[]) => enabled.map(name => ({ name })) } as never;
+  assert.deepEqual(await extensionView({ ...base, builtins: () => builtins, hostConfig: async () => ({ ...defaultHostConfig, builtinExtensions: ["pi:codemode"] }) }),
+    { extensions: { running: [], missing: [], builtin: ["pi:codemode"] } });
+  const config = { workspace: async () => ({ extensions: [{ source: "npm:absent@1.0.0", enabled: true, tools: "approval", settings: {} }], automaticTools: false }), installed: () => [] } as never;
+  assert.deepEqual(await extensionView({ ...base, config }), { extensions: { running: [], missing: ["npm:absent@1.0.0"], unavailable: [
+    { source: "piki:browser", tools: ["browser"], reason: "missing" }, { source: "piki:node", tools: ["node"], reason: "programs", programs: ["yarn"] }] } });
+  assert.deepEqual(await extensionView({ ...base, config: { workspace: async () => { throw new Error("offline"); }, installed: () => [] } }), {});
 });
 
 function instructions(input: Partial<InstructionsInput> = {}): string {

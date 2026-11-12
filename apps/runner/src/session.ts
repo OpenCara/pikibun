@@ -14,9 +14,9 @@ import type { ModelFailureCause } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
-import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
+import { missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { ExtensionPrompts, SessionExtensions, settleToolNames, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
+import { ExtensionPrompts, SessionExtensions, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
 import { SessionBuiltins } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
@@ -44,14 +44,15 @@ import { WindowsBackend } from "./windows-sandbox.js";
 import { BranchReports } from "./session/branch-reports.js";
 import { HostCommandPolicy } from "./session/host-commands.js";
 import { ApprovalWaits } from "./session/approval-waits.js";
-import { endView, entryImages, entryView, refusedView } from "./session/entries.js";
+import { entryImages } from "./session/entries.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
 import { MessageInputs, prepareMessageImages, type InputImage } from "./session/inputs.js";
 import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
-import { RunnerState, type Branch, type Metadata, type Run } from "./session/state.js";
+import { holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
+import { activityEntry, contextView, extensionView, sessionView } from "./session/view.js";
 import { SessionOperations, type OperationConsent } from "./session/operations.js";
 import { ToolCalls } from "./session/tools/calls.js";
 import type { ToolContext } from "./session/tools/context.js";
@@ -68,9 +69,9 @@ import type { RepositoryCache } from "./repo-cache.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
-import { compactionFailure, compactionThreshold, configuredCompaction, hostCompaction } from "./compaction.js";
+import { compactionFailure, configuredCompaction, hostCompaction } from "./compaction.js";
 import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "./model-failure.js";
-import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
+import { ActivityReporter, sessionActivity } from "./activity.js";
 import type { StoredApproval } from "./approval-view.js";
 import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
@@ -102,13 +103,6 @@ interface RunnerBackup {
 }
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
 const readOnlyTools = ["identity", "read_file", "list_files", "search"];
-function tellsActivity(run: Run): boolean {
-  return !run.reverted && !run.withdrawn;
-}
-
-function holdsQueue(run: Run): boolean {
-  return ["queued", "running", "admitting"].includes(run.status) || run.stopped?.pending === true;
-}
 export type RunnerConfig = {
   dataDir: string; controlPlaneUrl: string; sharedSecret: string; allowFaux: boolean; allowTestShell?: boolean; fetch?: typeof fetch;
   connectorId?: string;
@@ -164,14 +158,6 @@ const INPUT_EMPTY = "An extension on this host left this message empty or too lo
 const INPUT_IMAGES = "An extension on this host changed this message's images into ones that can't be sent.";
 
 export const WORK_MARKER = "working";
-
-function modelFailed(entry: EntryRecord): boolean {
-  return (entry.model ?? []).some(message => message.role === "assistant" && message.stopReason === "error");
-}
-
-function activityEntry(entry: EntryRecord | undefined): ActivityEntry | undefined {
-  return entry && { id: Number(entry.id), failed: modelFailed(entry) };
-}
 
 export class RunnerSession {
   readonly sandbox: SessionWorkspace;
@@ -1410,113 +1396,22 @@ export class RunnerSession {
     });
   }
 
-  async view(): Promise<SessionView> {
-    const tunnel = this.#tunnel?.view();
-    const initial = await this.metadata();
-    const snapshots: { branch: Branch; entries: readonly EntryRecord[]; messages: readonly Message[] }[] = [];
-    for (const branch of initial.branches.filter(item => !item.superseded)) {
-      const conversation = await this.harness.conversation(branch.id as ConversationId, context);
-      if (!conversation) continue;
-      const active = await conversation.context(context);
-      snapshots.push({ branch, entries: active.entries, messages: active.messages });
-    }
-    const state = await this.metadata();
-    const entries: SessionView["entries"] = [];
-    for (const snapshot of snapshots) {
-      let previous: Run | undefined;
-      const refused = Object.values(state.runs).filter(run => run.refused && run.conversationId === snapshot.branch.id)
-        .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-      const refusedAt = (after: (run: Run) => boolean) => {
-        for (const run of refused.filter(after)) entries.push(refusedView(run, snapshot.branch.id));
-      };
-      refusedAt(run => !snapshot.entries.some(entry => entry.id <= run.startEntry));
-      for (const entry of snapshot.entries) {
-        const run = Object.values(state.runs).filter(candidate => (candidate.started || candidate.submissionId !== undefined || candidate.status === "admitting") && candidate.conversationId === entry.conversationId && candidate.startEntry < entry.id).sort((a, b) => b.startEntry - a.startEntry)[0];
-        const ending = run !== previous && previous && endView(previous, snapshot.branch.id);
-        if (ending) entries.push(ending);
-        previous = run;
-        entries.push(entryView(entry, snapshot.branch.id, run?.initiatedBy));
-        const next = snapshot.entries[snapshot.entries.indexOf(entry) + 1];
-        refusedAt(run => run.startEntry >= entry.id && (!next || run.startEntry < next.id));
-      }
-      const ending = previous && endView(previous, snapshot.branch.id);
-      if (ending) entries.push(ending);
-    }
-    const agent = await this.#shared.agent(context);
-    const shared = snapshots.find(snapshot => snapshot.branch.mode === "write");
-    const usage = shared && this.contextView(shared.messages, agent.model);
-    const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
-    const access = latestWrite && (latestWrite.options?.access === "read" ? "read" : "auto");
-    const repositories = this.#repositories.view();
-    const { id, displayName, gitName, gitEmail, githubLogin } = this.binding.owner;
-    return { sessionId: this.binding.session.id, owner: { id, displayName, gitName, gitEmail, githubLogin }, entries,
-      approvals: [],
-      conversations: state.branches.filter(branch => !branch.superseded).map(({ id, mode, actorId }) => ({ id: String(id), mode, ...(actorId ? { actorId } : {}) })),
-      busy: Object.values(state.runs).some(holdsQueue)
-        || Object.values(state.approvals).some(approval => approval.status === "executing") || repositories?.status === "preparing",
-      queue: Object.values(state.runs).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
-        .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.refused ? "refused" : run.status })),
-      stoppable: true,
-      withdrawable: true,
-      rewindable: true,
-      memberForks: true,
-      ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
-      ...(usage ? { context: usage } : {}),
-      ...(access ? { access } : {}),
-      ...(repositories ? { repositories } : {}),
-      activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
-        : sessionActivity(Object.values(state.runs).filter(tellsActivity), Object.values(state.approvals),
-          activityEntry(shared?.entries.at(-1))),
-      ...await this.extensionView(),
-      ...(tunnel ? { tunnel } : {}),
-    };
+  view(): Promise<SessionView> {
+    return sessionView({
+      binding: this.binding, tunnel: () => this.#tunnel?.view(), metadata: () => this.metadata(),
+      conversation: id => this.harness.conversation(id as ConversationId, context), agent: () => this.#shared.agent(context),
+      context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
+      repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
+    });
   }
 
-  private contextView(messages: readonly Message[], model: { provider: string; modelId: string } | undefined): SessionView["context"] {
-    const tokens = contextTokens(messages);
-    if (!Number.isFinite(tokens) || tokens < 0) return undefined;
-    const current = model ?? this.modelRef;
-    let window: number | undefined;
-    try {
-      const found = current && this.models?.getModel(current.provider, current.modelId)?.contextWindow;
-      window = Number.isSafeInteger(found) && found! > 0 ? found : undefined;
-    }
-    catch { window = undefined; }
-    const compactsAt = current ? compactionThreshold(this.#compaction(), current, window) : undefined;
-    return { tokens, ...(window !== undefined ? { window } : {}), ...(compactsAt !== undefined ? { compactsAt } : {}) };
-  }
-
-  private async extensionView(): Promise<Pick<SessionView, "extensions">> {
-    const config = this.config.extensions;
-    const enabled = this.#builtins ? (await this.hostConfig().catch(() => undefined))?.builtinExtensions ?? [] : [];
-    if (!config) {
-      const builtin = this.#builtins?.select(enabled, new Set()).map(item => item.name) ?? [];
-      return builtin.length ? { extensions: { running: [], missing: [], builtin } } : {};
-    }
-    try {
-      const answer = await config.workspace(this.binding.session.workspaceId);
-      const installed = config.installed().map(item => item.summary);
-      const required = await this.requiredExtensions() ?? [];
-      const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required);
-      const missingRequired = missingRequiredExtensions(required, installed);
-      const settled = settleToolNames(chosen.map(item => ({ source: item.source,
-        tools: installed.find(candidate => candidate.source === item.source)?.modules.flatMap(module => module.tools.map(tool => tool.name)) ?? [] })),
-        this.tools.map(tool => tool.name));
-      const running = chosen.map((item, index) => ({ source: item.source, dev: item.dev, tools: settled[index]!.kept, ...(item.required ? { required: true as const } : {}) }));
-      const requiredPackages = new Set(required.map(item => extensionPackageKey(item.source)));
-      const missing = answer.extensions.filter(item => item.enabled && !requiredPackages.has(extensionPackageKey(item.source))
-        && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
-      const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
-      const off = this.definedToolsOff(sessionToolsOff(answer.extensions), answer.extensions);
-      const browserReason = off.has("browser") ? undefined : this.browserUnavailable();
-      const tunnelReason = off.has("tunnel") ? undefined : this.tunnelUnavailable();
-      const unavailable = [...(browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : []),
-        ...(tunnelReason ? [{ source: "piki:tunnel", tools: ["tunnel"], reason: tunnelReason }] : []),
-        ...this.missingPrograms(off).map(item => ({ source: item.source, tools: [item.tool], reason: "programs", programs: item.programs }))];
-      return running.length || missing.length || builtin.length || missingRequired.length || unavailable.length
-        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}),
-          ...(unavailable.length ? { unavailable } : {}) } } : {};
-    } catch { return {}; }
+  private extensionView(): Promise<Pick<SessionView, "extensions">> {
+    return extensionView({
+      binding: this.binding, config: this.config.extensions, builtins: () => this.#builtins, hostConfig: () => this.hostConfig(),
+      requiredExtensions: () => this.requiredExtensions(), toolNames: () => this.tools.map(tool => tool.name),
+      definedToolsOff: (off, extensions) => this.definedToolsOff(off, extensions), browserUnavailable: () => this.browserUnavailable(),
+      tunnelUnavailable: () => this.tunnelUnavailable(), missingPrograms: off => this.missingPrograms(off),
+    });
   }
 
   async restart(): Promise<void> {
