@@ -1,10 +1,10 @@
 import { platform } from "nsh";
 import { homedir } from "os";
 import nshProcess from "process";
+import { CMD, cmdArgs, cmdRun, cmdRunOwn, lastLines } from "./windows-cmd";
 
 const STDIO_FRAME = "\u001epikibun ";
 const SHELLS = ["zsh", "bash", "sh"];
-const CMD = "cmd";
 const CLI_FOLDER = "cli";
 export const INSTALL_COMMAND = "npm install -g pikibun@latest";
 
@@ -23,9 +23,8 @@ export function appCliFolder(os: string, dataDir: string | null | undefined): st
 
 export function pikibunCommand(os: string, shell: string | undefined, cli: string | null | undefined, args: readonly string[]): { command: string; args: string[] } {
   if (os === "windows") {
-    if (!cli) return { command: CMD, args: ["/d", "/c", "pikibun", ...args] };
-    const own = `${CLI_FOLDER}\\node_modules\\.bin\\pikibun.cmd`;
-    return { command: CMD, args: ["/d", "/c", "if", "exist", own, "(", own, ...args, ")", "else", "pikibun", ...args] };
+    if (!cli) return { command: CMD, args: cmdArgs(cmdRun("pikibun", args)) };
+    return { command: CMD, args: cmdArgs(cmdRunOwn(`${CLI_FOLDER}\\node_modules\\.bin\\pikibun.cmd`, "pikibun", args)) };
   }
   const path = cli ? `PATH=${shellWord(`${cli}/node_modules/.bin`)}:"$PATH"; export PATH; ` : "";
   return { command: loginShell(os, shell), args: ["-ilc", `${path}exec pikibun ${args.join(" ")}`] };
@@ -35,7 +34,7 @@ export function installCommand(os: string, shell: string | undefined, cli?: stri
   const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", "pikibun@latest"];
   if (os === "windows") {
     const words = cli ? own : INSTALL_COMMAND.split(" ");
-    return { command: CMD, args: ["/d", "/c", ...words], line: words.join(" ") };
+    return { command: CMD, args: cmdArgs(cmdRun(words[0], words.slice(1))), line: words.join(" ") };
   }
   const line = cli ? own.map((word, index) => (index === 3 ? shellWord(word) : word)).join(" ") : INSTALL_COMMAND;
   return { command: loginShell(os, shell), args: ["-ilc", line], line };
@@ -90,7 +89,7 @@ export function commandProblem(lines: readonly string[], code: number | null | u
   if (code === 127 || code === 9009 || /pikibun: (command )?not found|not found: pikibun|'pikibun' is not recognized/i.test(text)) return { kind: "missing" };
   const node = lines.find(line => line.startsWith("pikibun needs Node.js"));
   if (node) return { kind: "failed", message: `${node} Install Node.js 24 (from https://nodejs.org, or nvm install 24), then choose Refresh.` };
-  const last = lines.filter(line => line.trim()).slice(-3).join(" ");
+  const last = lastLines(lines);
   return { kind: "failed", message: last ? `${subject} could not start: ${last}` : `${subject} could not start (exit code ${code ?? "unknown"}).` };
 }
 

@@ -9,6 +9,7 @@ import {
   appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine,
 } from "./pikibun-command";
 import { isVersion } from "./version";
+import { lastLines } from "./windows-cmd";
 
 export { appCliFolder, INSTALL_COMMAND, installCommand } from "./pikibun-command";
 export type { LaunchProblem, LogLine } from "./pikibun-command";
@@ -103,12 +104,12 @@ export function installFailure(lines: readonly string[], result: InstallResult):
     return `npm couldn't write a folder it needs on ${computerName}: permission denied. Run the command below in a terminal${platform.os === "windows" ? " as administrator" : " with sudo in front"}, then choose Refresh.`;
   }
   if (result.error) return `The install didn't finish: ${result.error}`;
-  const last = lines.filter(line => line.trim()).slice(-3).join(" ");
+  const last = lastLines(lines);
   return last ? `npm couldn't install pikibun: ${last}` : `npm couldn't install pikibun (exit code ${result.code ?? "unknown"}).`;
 }
 
 export function updateFailure(lines: readonly string[], result: InstallResult): string {
-  const last = lines.filter(line => line.trim()).slice(-3).join(" ");
+  const last = lastLines(lines);
   const why = result.error || last || `exit code ${result.code ?? "unknown"}`;
   return `npm couldn't update Pikibun's command (${why}). ${computerTitle} keeps the one it has, and Pikibun tries again the next time it opens.`;
 }

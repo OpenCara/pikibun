@@ -18,9 +18,11 @@ async function openPanel(params: Record<string, unknown> = {}) {
 describe("starting Pikibun's server", () => {
   test("runs pikibun serve --stdio as the host's command runs, through the login shell or cmd.exe", () => {
     expect(serverCommand("macos", "/bin/zsh")).toEqual({ command: "zsh", args: ["-ilc", "exec pikibun serve --stdio"] });
-    expect(serverCommand("windows", undefined)).toEqual({ command: "cmd", args: ["/d", "/c", "pikibun", "serve", "--stdio"] });
+    expect(serverCommand("windows", undefined)).toEqual({ command: "cmd",
+      args: ["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "(", "where", "/q", "pikibun", "||", "exit", "9009", ")", "&&", "pikibun", "serve", "--stdio"] });
     expect(serverCommand("windows", undefined, "C:\\data\\cli").args)
-      .toEqual(["/d", "/c", "if", "exist", "cli\\node_modules\\.bin\\pikibun.cmd", "(", "cli\\node_modules\\.bin\\pikibun.cmd", "serve", "--stdio", ")", "else", "pikibun", "serve", "--stdio"]);
+      .toEqual(["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "if", "exist", "cli\\node_modules\\.bin\\pikibun.cmd", "(", "cli\\node_modules\\.bin\\pikibun.cmd", "serve", "--stdio", ")",
+        "else", "(", "(", "where", "/q", "pikibun", "||", "exit", "9009", ")", "&&", "pikibun", "serve", "--stdio", ")"]);
   });
 
   test("tells a command too old for serve --stdio from a missing one", () => {
