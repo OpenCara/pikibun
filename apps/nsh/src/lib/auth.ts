@@ -2,7 +2,7 @@ import { platform, signal, Storage, untracked, type Accessor } from "nsh";
 import { ApiError, createApi, errorMessage, type Api, type RequestOptions, type UserProfile } from "../shared";
 import { clearDrafts } from "./drafts";
 import { createPkce } from "./pkce";
-import { currentOrigin, DEFAULT_ORIGIN, usesBrowserSession } from "./server";
+import { currentOrigin, DEFAULT_ORIGIN, parseOrigin, usesBrowserSession } from "./server";
 
 const signInRefusals: Record<string, string> = {
   invite_required: "This server takes new accounts only through a workspace's invite link. Open the link in a browser to create your account, then sign in here.",
@@ -21,6 +21,7 @@ export type SignupMode = "open" | "invite" | "off";
 
 export interface SignInMethods {
   githubConfigured?: boolean;
+  codeSignIn?: boolean;
   githubSignup?: SignupMode;
   passwordAuth?: boolean;
   passwordSignup?: SignupMode;
@@ -208,6 +209,38 @@ function isCallbackPage(origin: string, url: string): boolean {
   } catch {
     return false;
   }
+}
+
+const SIGN_IN_CODE = /^[A-Za-z0-9_-]{43}$/;
+
+export interface SignInCode { origin: string | null; code: string }
+
+export function parseSignInCode(input: string): SignInCode | null {
+  const text = input.trim();
+  if (SIGN_IN_CODE.test(text)) return { origin: null, code: text };
+  if (!isCodeLink(text)) return null;
+  const params = new URL(text).searchParams;
+  const code = params.get("code") ?? "";
+  if (!SIGN_IN_CODE.test(code)) return null;
+  const server = params.get("server");
+  if (server === null) return { origin: null, code };
+  const parsed = parseOrigin(server);
+  return "origin" in parsed ? { origin: currentOrigin(parsed.origin), code } : null;
+}
+
+export function isCodeLink(url: string): boolean {
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.protocol === `${SIGN_IN_SCHEME}:` && parsed.host === "auth" && parsed.pathname === "/code";
+  } catch {
+    return false;
+  }
+}
+
+export async function signInWithCode(origin: string, code: string): Promise<void> {
+  const signIn = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
+    "/api/auth/native/code", { method: "POST", body: { code, deviceName: deviceName() } });
+  await establish(origin, signIn.token, signIn.expiresAt, signIn.user);
 }
 
 export async function signInWithToken(origin: string, token: string): Promise<void> {

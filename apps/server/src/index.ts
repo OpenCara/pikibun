@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { AppEnv } from './types.js';
 import {
-  assertVaultConfigured, authenticate, csrfGuard, localOwner, registerAdmin, registerAuth, registerGitAccounts, registerHostAccess,
+  assertVaultConfigured, authenticate, csrfGuard, localOwner, registerAdmin, registerAppCodes, registerAuth, registerGitAccounts, registerHostAccess,
   registerNetworkPolicies, registerOidc, registerPasswordAuth, registerPushIdentities, registerRepositories, registerAudienceSharing,
   registerSourceOAuth, registerSources, registerWorkspaceConnections,
 } from './authority/index.js';
@@ -67,6 +67,7 @@ app.get('/api/health', async c => {
     workspaceDatabasesConfigured: !!c.env.WORKSPACE_DATABASES,
     connectorsConfigured: !!c.env.CONNECTOR_HUB, testMode: testMode(c.env),
     passwordAuth: passwordAuthEnabled(c.env),
+    codeSignIn: true,
     githubSignup: signupMode(c.env, 'github'),
     ...(passwordAuthEnabled(c.env) ? { passwordSignup: signupMode(c.env, 'password') } : {}),
     ...(localMode(c.env) ? { localServer: { claimed: !!await localOwner(c.env) } } : {}),
@@ -74,6 +75,7 @@ app.get('/api/health', async c => {
 });
 registerAuth(app);
 registerPasswordAuth(app);
+registerAppCodes(app);
 registerLegacyRunner(app);
 registerConnectorCredentials(app);
 registerConnectorExtensions(app);

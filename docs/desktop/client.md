@@ -16,6 +16,7 @@ If you'd rather run sessions on this computer, set up the client first, then add
 3. Sign in:
    - **Continue with GitHub** opens GitHub's sign-in page in your browser. When it finishes, the browser asks to open Pikibun, and you're back in the app, signed in. If the browser can't hand you back (no browser, or it won't open Pikibun), choose **Sign in here instead** to sign in on GitHub's page inside the app.
    - Or, where the server offers passwords, enter your **Username** and **Password** and choose **Sign in**.
+   - Or, signed in already in a browser, choose **Settings → Profile → Signed-in apps → Sign in an app** there, then **Open in Pikibun**; or copy the link and paste it under **Sign in with a code** here. The app asks before it signs in, naming the server. See [Signing in an app with a code](../accounts.md#signing-in-an-app-with-a-code).
 
 New password accounts can't be created in the app. Create one on the server's web page first, from the invite link you were given, then sign in here.
 
