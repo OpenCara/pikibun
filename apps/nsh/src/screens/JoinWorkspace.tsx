@@ -6,7 +6,8 @@ import { session } from "../lib/auth";
 import type { PageRoute } from "../lib/page";
 import { createAction } from "../lib/resource";
 import { palette, text, weight } from "../theme";
-import { Banner, Button, Feedback, Loading, Logo } from "../ui";
+import { Logo } from "../logo";
+import { Banner, Button, Feedback, Loading } from "../ui";
 import { OwnJoinRequests } from "../settings/join-requests";
 
 export function JoinWorkspace(props: { token: string; onDone: () => void; go?: (route: PageRoute) => void }) {

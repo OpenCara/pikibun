@@ -5,7 +5,8 @@ import { createResource } from "../lib/resource";
 import { canSignInAgain, chooseUsername, needsRecentSignIn, signInWithGitHubAgain, suggestedUsername } from "../lib/sign-in-again";
 import { palette, text, weight } from "../theme";
 import { Field, TextField } from "../form";
-import { Banner, Button, Feedback, Loading, Logo } from "../ui";
+import { Logo } from "../logo";
+import { Banner, Button, Feedback, Loading } from "../ui";
 
 export function UsernameSetup() {
   const user = () => session().user;

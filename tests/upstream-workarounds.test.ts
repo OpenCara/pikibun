@@ -8,7 +8,7 @@ const list = readFileSync(new URL('docs/design/upstream-workarounds.md', root), 
 
 test('every patch the build applies to Native Shell\'s web runtime is on the list of upstream workarounds', () => {
   const patches = Object.entries(fixes).filter(([, value]) => typeof value === 'string').map(([name]) => name);
-  assert.ok(patches.length >= 6);
+  assert.ok(patches.length >= 3);
   for (const name of patches) assert.ok(list.includes(`\`${name}\``), `${name} is listed in docs/design/upstream-workarounds.md`);
 });
 

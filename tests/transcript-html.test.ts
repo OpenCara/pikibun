@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { DRAWN_WIDTH, EARLY_MAP, PATCHED_MEASURE_TEXT } from '../scripts/nsh-web-fixes.mjs';
+import { DRAWN_WIDTH, PATCHED_MEASURE_TEXT } from '../scripts/nsh-web-fixes.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const shipped = ['apps/nsh/App.tsx', 'apps/nsh/src', 'apps/nsh/web', 'packages/client/src', 'packages/shared/src'];
@@ -43,7 +43,7 @@ test('nothing the client ships writes text into the page as HTML or runs it as c
 });
 
 test('the code the build adds to Native Shell\'s web runtime writes only text and attributes into the page', () => {
-  for (const [name, code] of Object.entries({ EARLY_MAP, DRAWN_WIDTH, PATCHED_MEASURE_TEXT })) {
+  for (const [name, code] of Object.entries({ DRAWN_WIDTH, PATCHED_MEASURE_TEXT })) {
     for (const [pattern, sink] of sinks) assert.equal(pattern.test(code), false, `${name} uses ${sink}`);
   }
   assert.match(DRAWN_WIDTH, /\.textContent=s/, 'measured text goes in as text');

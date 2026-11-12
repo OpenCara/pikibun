@@ -7,13 +7,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fixWebSite } from "./nsh-web-fixes.mjs";
 
-export const NSH_VERSION = "v0.4.0";
-export const NSH_COMMIT = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3";
+export const NSH_VERSION = "v0.5.0";
+export const NSH_COMMIT = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1";
 export const NSH_ASSET_SHA256 = Object.freeze({
-  "nsh-linux-x86_64.tar.gz": "8806121aebf40bb51f8fb6aa703722fbb01253f9a435759c18d53beece1ec976",
-  "nsh-macos-arm64.tar.gz": "f63c3d57c31b28c9b34227aac81f099d1e0e61f1db552a6ec5127d114eaf59cb",
-  "nsh-windows-x86_64.zip": "e4cc3893700a1fcceb974c73ef8e08bc94a47a7a85c96d797d49c16dde95dff3",
+  "nsh-linux-x86_64.tar.gz": "a422bbe5dc2a7ae3ff308ee56e05d73d5becc81f57adf11447fc570dcee65e0f",
+  "nsh-macos-arm64.tar.gz": "e6722427b391b00cf7ec13137db9366e78d1e7a045f2933cf00b340365309d9d",
+  "nsh-windows-x86_64.zip": "63bacd122a5e41818513d232b2de82a5b3362b1199abcf0e9692fcb82ee74622",
+  "nsh-web.tar.gz": "17c4d8b690c1291ffeec59c6dcc6cb967bd03dbb4864ac9a61d3cd3d2192c477",
+  "nsh-android.tar.gz": "bd9f42c043c08f0c29c874d2a8247e389258f88778a5160d646f73fc2ccfbe73",
+  "nsh-ios-macos-arm64.tar.gz": "e0a5039702ad3c53fa938d8dfba488856e8be8632f5fac1538f241df6f6bb53d",
 });
+
+export const NSH_COMPONENTS = Object.freeze({
+  web: { asset: "nsh-web.tar.gz", paths: ["runtime/web"] },
+  android: {
+    asset: "nsh-android.tar.gz",
+    paths: ["runtime/android/release/classes.dex", "runtime/android/release/lib", "runtime/android/dev/classes.dex", "runtime/android/dev/lib"],
+  },
+  ios: { asset: "nsh-ios-macos-arm64.tar.gz", paths: ["runtime/ios"], host: "darwin-arm64" },
+});
+const TARGET_COMPONENTS = { web: "web", android: "android", ios: "ios", catalyst: "ios" };
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const app = path.join(repository, "apps", "nsh");
@@ -76,13 +89,11 @@ export function checkAsset(asset, bytes) {
   if (actual !== expected) throw new Error(`${asset} does not match the SHA-256 pinned for Native Shell ${NSH_VERSION} (${actual} != ${expected})`);
 }
 
-async function download(asset, directory) {
-  const base = `https://github.com/longbridge/nsh/releases/download/${NSH_VERSION}`;
+async function unpackPinned(asset, partial, what) {
   pinnedDigest(asset);
-  console.error(`Downloading Native Shell ${NSH_VERSION} (${asset}, several hundred MB, once)…`);
-  const bytes = await releaseAsset(`${base}/${asset}`);
+  console.error(`Downloading Native Shell ${NSH_VERSION} (${asset}, ${what}, once)…`);
+  const bytes = await releaseAsset(`https://github.com/longbridge/nsh/releases/download/${NSH_VERSION}/${asset}`);
   checkAsset(asset, bytes);
-  const partial = `${directory}.partial`;
   rmSync(partial, { recursive: true, force: true });
   mkdirSync(partial, { recursive: true });
   const archive = path.join(partial, asset);
@@ -90,17 +101,62 @@ async function download(asset, directory) {
   const untar = spawnSync("tar", [asset.endsWith(".zip") ? "-xf" : "-xzf", archive, "-C", partial], { stdio: "inherit" });
   if (untar.status !== 0) throw new Error(`extracting ${asset} failed`);
   rmSync(archive);
+}
+
+async function download(asset, directory) {
+  const partial = `${directory}.partial`;
+  await unpackPinned(asset, partial, "the CLI and this platform's runtime");
   rmSync(directory, { recursive: true, force: true });
   renameSync(partial, directory);
+}
+
+const distribution = () => path.join(repository, ".cache", "nsh", NSH_VERSION, "nsh");
+
+export async function nshComponent(name, { required = false } = {}) {
+  const component = NSH_COMPONENTS[name];
+  if (!component) throw new Error(`No Native Shell component ${name} is pinned (${Object.keys(NSH_COMPONENTS).join(", ")}).`);
+  const skipped = process.env.NSH_BIN ? "NSH_BIN names another nsh, which adds its own components"
+    : !release() ? `no Native Shell CLI is pinned for ${platform()}-${arch()}`
+    : component.host && component.host !== `${platform()}-${arch()}` ? `it is published for ${component.host} only`
+    : "";
+  if (skipped) {
+    if (required) throw new Error(`The pinned ${name} component can't be added here: ${skipped}.`);
+    return;
+  }
+  const root = distribution();
+  const record = path.join("components", `${name}.json`);
+  if ([record, ...component.paths].every(item => existsSync(path.join(root, item)))) return;
+  const partial = path.join(root, `.component-${name}.partial`);
+  try {
+    await unpackPinned(component.asset, partial, `its ${name} runtime`);
+    for (const item of [...component.paths, record]) {
+      const from = path.join(partial, "nsh", item);
+      if (!existsSync(from)) throw new Error(`${component.asset} holds no nsh/${item.split(path.sep).join("/")}`);
+      const to = path.join(root, item);
+      rmSync(to, { recursive: true, force: true });
+      mkdirSync(path.dirname(to), { recursive: true });
+      renameSync(from, to);
+    }
+  } finally {
+    rmSync(partial, { recursive: true, force: true });
+  }
+}
+
+export function targetComponent(args) {
+  const end = args.indexOf("--");
+  const own = end < 0 ? args : args.slice(0, end);
+  const at = own.findIndex(argument => argument === "--target" || argument.startsWith("--target="));
+  if (at < 0) return null;
+  const target = own[at].startsWith("--target=") ? own[at].slice("--target=".length) : own[at + 1];
+  return TARGET_COMPONENTS[target] ?? null;
 }
 
 export async function nshBinary() {
   if (process.env.NSH_BIN) return process.env.NSH_BIN;
   const asset = release();
   if (asset) {
-    const directory = path.join(repository, ".cache", "nsh", NSH_VERSION);
-    const bin = path.join(directory, "nsh", "bin", platform() === "win32" ? "nsh.exe" : "nsh");
-    if (!existsSync(bin)) await download(asset, directory);
+    const bin = path.join(distribution(), "bin", platform() === "win32" ? "nsh.exe" : "nsh");
+    if (!existsSync(bin)) await download(asset, path.dirname(distribution()));
     return bin;
   }
   const found = spawnSync("nsh", ["--version"], { encoding: "utf8" });
@@ -119,6 +175,7 @@ function run(bin, args) {
 
 export async function buildWeb(out = path.join(repository, "dist", "client")) {
   const bin = await nshBinary();
+  await nshComponent("web");
   const staging = path.join(repository, "dist", ".nsh-web");
   rmSync(staging, { recursive: true, force: true });
   const status = run(bin, ["package", "App.tsx", "--target", "web", "--out", staging]);
@@ -138,7 +195,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const [first, ...rest] = process.argv.slice(2);
   try {
     if (first === "--build-web") await buildWeb(rest[0] ? path.resolve(rest[0]) : undefined);
-    else process.exitCode = run(await nshBinary(), [first, ...rest].filter(argument => argument !== undefined));
+    else if (first === "--component") {
+      await nshBinary();
+      for (const name of rest) await nshComponent(name, { required: true });
+    } else {
+      const args = [first, ...rest].filter(argument => argument !== undefined);
+      const bin = await nshBinary();
+      const component = targetComponent(args);
+      if (component) await nshComponent(component);
+      process.exitCode = run(bin, args);
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

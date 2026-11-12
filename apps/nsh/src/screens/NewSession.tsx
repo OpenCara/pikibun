@@ -18,7 +18,8 @@ import { createAction, createResource } from "../lib/resource";
 import { thisComputerHostId } from "../lib/this-computer";
 import { OwnJoinRequests } from "../settings/join-requests";
 import { control, palette, radius, text } from "../theme";
-import { Banner, Button, Chip, EmptyState, Feedback, IconButton, Loading, Logo, Note, Picker, Small } from "../ui";
+import { Logo } from "../logo";
+import { Banner, Button, Chip, EmptyState, Feedback, IconButton, Loading, Note, Picker, Small } from "../ui";
 
 const TITLE_LIMIT = 80;
 

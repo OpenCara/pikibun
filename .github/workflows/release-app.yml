@@ -480,8 +480,8 @@ jobs:
 
   # Not a release asset: an App Store build installs only through TestFlight or the App Store.
   #
-  # App Store Connect takes only apps built with the current SDK (iOS 26), and NSH 0.4's prebuilt iPhone runner was
-  # linked with Xcode 16.4's iOS 18.5 SDK. So the runner is built here from NSH's source at the pinned commit
+  # App Store Connect takes only apps built with the current SDK (iOS 26), and NSH's prebuilt iPhone runner (0.4's, and
+  # 0.5's `ios` component) was linked with Xcode 16.4's iOS 18.5 SDK. So the runner is built here from NSH's source at the pinned commit
   # (scripts/nsh.mjs), with this runner's Xcode, and `nsh package` takes it through NSH_RUNTIME; the rest of NSH is
   # the prebuilt release. NSH also writes none of the build keys App Store Connect requires in Info.plist (DT*, and
   # arm64 in UIRequiredDeviceCapabilities), nor the export compliance answer: they are added here, and the app is
@@ -592,8 +592,9 @@ jobs:
             exit 1
           fi
           tail -n 3 "$RUNNER_TEMP/cargo.log"
-          # The prebuilt release for everything else (also downloaded by `nsh package` itself).
-          node scripts/nsh.mjs --version
+          # The prebuilt release for everything else, with its iOS runtimes (since 0.5 the `ios` component, apart from
+          # the macOS archive): pinned and checked by scripts/nsh.mjs.
+          node scripts/nsh.mjs --component ios
           runtime="$RUNNER_TEMP/nsh-runtime"
           rm -rf "$runtime"
           cp -R ".cache/nsh/$NSH_VERSION/nsh/runtime" "$runtime"

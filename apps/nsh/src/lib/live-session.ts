@@ -1,5 +1,4 @@
-import { cleanup, effect, signal, untracked, type Accessor } from "nsh";
-import { lifecycle } from "./lifecycle";
+import { cleanup, effect, lifecycle, signal, untracked, type Accessor } from "nsh";
 import { createViewCache, openFetchEventStream, startLiveSession, type SessionRecord, type SessionView, type StreamStatus } from "../shared";
 import { session as signedIn } from "./auth";
 import { onClearDrafts } from "./drafts";

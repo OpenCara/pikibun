@@ -5,7 +5,8 @@ import { timestamp } from "../lib/format";
 import { inBackground } from "../lib/resource";
 import { TranscriptEntry } from "../components/TranscriptEntry";
 import { layout, palette, text, weight } from "../theme";
-import { Badge, Banner, EmptyState, Loading, Logo } from "../ui";
+import { Logo } from "../logo";
+import { Badge, Banner, EmptyState, Loading } from "../ui";
 import { PageHeader } from "./PageHeader";
 
 export const sharedTiming = { busyMs: 3_000, idleMs: 15_000, firstBackoffMs: 5_000, maxBackoffMs: 60_000 } as const;

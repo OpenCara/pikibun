@@ -1,8 +1,8 @@
 import { host, mount, signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { mkdir, readdir, rmdir, unlink, writeFile } from "fs/promises";
-import { Composer } from "../../src/components/Composer";
-import { createAttachments, decodeBase64 } from "../../src/lib/attachments";
+import { Composer } from "../../../src/components/Composer";
+import { createAttachments, decodeBase64 } from "../../../src/lib/attachments";
 
 const folder = String((host.params as { folder?: unknown }).folder ?? "");
 const dot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";

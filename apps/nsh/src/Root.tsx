@@ -1,4 +1,4 @@
-import { computed, effect, safeArea, signal, untracked, View, windowSize } from "nsh";
+import { effect, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
 import { SidebarUpdate, UpdateIconButton } from "./components/AppUpdate";
 import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
@@ -24,7 +24,8 @@ import { UsernameSetup } from "./screens/UsernameSetup";
 import { applyStoredAppearance } from "./settings/Appearance";
 import { findSection, SectionList } from "./settings";
 import { layout, palette } from "./theme";
-import { IconButton, IdentityBadge, Loading, Logo, NavItem } from "./ui";
+import { Logo } from "./logo";
+import { IconButton, IdentityBadge, Loading, NavItem } from "./ui";
 
 type Route =
   | { name: "sessions" }
@@ -76,13 +77,7 @@ function Shell() {
   const data = createAppData();
   createNotificationDelivery(untracked(session).user.id);
   const nav = createNavStack<Route>([{ name: "sessions" }]);
-  let lastWidth = 0;
-  const width = computed(() => {
-    const current = windowSize().width;
-    if (current > 0) lastWidth = current;
-    return lastWidth;
-  });
-  const wide = () => width() >= WIDE;
+  const wide = () => windowSize().width >= WIDE;
   const selected = signal<string | null>(null);
   const homeWorkspace = signal<string | undefined>(undefined);
   const homeKey = signal(0);

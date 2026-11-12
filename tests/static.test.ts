@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStaticHandler, pageContentSecurityPolicy, webBuild } from "../apps/server/src/static.ts";
 
-const page = `<!doctype html>\n<html lang="en">\n<head>\n<script>const fetches = new Map();</script><script type="module">import { createPlayer } from "./nsh.89070fe10a.js";</script><script src="./x.js"></script>\n</head><body></body></html>`;
+const page = `<!doctype html>\n<html lang="en">\n<head>\n<script>const fetches = new Map();</script><script type="module">import { createPlayer } from "./nsh.89070fe10a.js";\n  // \`<base href>\`, nsh.json \`web.base\`, else the page's own URL\n</script><script src="./x.js"></script>\n</head><body></body></html>`;
 
 async function site(t: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), "web-"));
@@ -50,6 +50,14 @@ test("serves the client at the root: files as they are, everything else as its p
   assert.equal(await (await serve(get("/settings/hosts"))).text(), html);
   assert.equal(await (await serve(get("/..%2f..%2fetc%2fpasswd"))).text(), html);
   assert.equal(await (await serve(get("/index.html"))).text(), html, "index.html itself gets the page's treatment too");
+});
+
+test("a page with a base of its own keeps it", async t => {
+  const root = await site(t);
+  await writeFile(join(root, "index.html"), page.replace("<head>\n", '<head>\n<base href="/app/">\n'));
+  const html = await (await createStaticHandler(root)(get("/"))).text();
+  assert.equal(html.match(/<base href="/g)?.length, 1);
+  assert.match(html, /<base href="\/app\/">/);
 });
 
 test("answers HEAD without a body, and says so when the client isn't built", async t => {
