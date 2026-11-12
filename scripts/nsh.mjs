@@ -7,12 +7,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fixWebSite } from "./nsh-web-fixes.mjs";
 
-export const NSH_VERSION = "v0.4.0";
-export const NSH_COMMIT = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3";
+export const NSH_VERSION = "v0.5.0";
+export const NSH_COMMIT = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1";
 export const NSH_ASSET_SHA256 = Object.freeze({
-  "nsh-linux-x86_64.tar.gz": "8806121aebf40bb51f8fb6aa703722fbb01253f9a435759c18d53beece1ec976",
-  "nsh-macos-arm64.tar.gz": "f63c3d57c31b28c9b34227aac81f099d1e0e61f1db552a6ec5127d114eaf59cb",
-  "nsh-windows-x86_64.zip": "e4cc3893700a1fcceb974c73ef8e08bc94a47a7a85c96d797d49c16dde95dff3",
+  "nsh-linux-x86_64.tar.gz": "a422bbe5dc2a7ae3ff308ee56e05d73d5becc81f57adf11447fc570dcee65e0f",
+  "nsh-macos-arm64.tar.gz": "e6722427b391b00cf7ec13137db9366e78d1e7a045f2933cf00b340365309d9d",
+  "nsh-windows-x86_64.zip": "63bacd122a5e41818513d232b2de82a5b3362b1199abcf0e9692fcb82ee74622",
 });
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
