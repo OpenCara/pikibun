@@ -3,7 +3,7 @@ import type { BrowserUnavailableReason } from "../../../../../packages/shared/sr
 import type { SessionsToolRequest, SessionsToolResult } from "../../../../../packages/shared/src/cross-session.js";
 import type { HostConfig } from "../../../../../packages/shared/src/host-config.js";
 import type { EgressGrant } from "../../../../../packages/shared/src/network.js";
-import type { TunnelUnavailableReason } from "../../../../../packages/shared/src/tunnel.js";
+import type { HostTunnelStatus, TunnelUnavailableReason } from "../../../../../packages/shared/src/tunnel.js";
 import type { GitHubIssueView, GitHubReadRequest, RunnerBinding, ScheduleToolRequest, ScheduleToolResult } from "../../../../../packages/shared/src/types.js";
 import type { StoredApproval } from "../../approval-view.js";
 import type { SessionWorkspace } from "../../workspace.js";
@@ -20,7 +20,7 @@ export interface ToolsConfig {
   brokered?: (route: string, request: Record<string, unknown>) => Promise<unknown>;
   schedules?: (request: ScheduleToolRequest) => Promise<ScheduleToolResult>;
   crossSessions?: (request: SessionsToolRequest) => Promise<SessionsToolResult>;
-  tunnels?: unknown;
+  tunnels?: { status(): HostTunnelStatus | undefined };
 }
 
 export interface ToolContext {
