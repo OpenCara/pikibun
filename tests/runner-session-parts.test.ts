@@ -32,6 +32,7 @@ import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/s
 import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session/piki.js";
 import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
 import { contextView, extensionView, sessionView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
+import { INPUT_EMPTY, RunQueue, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -743,6 +744,98 @@ test("view: extensions show what runs, what is missing, the built-ins, and tools
   assert.deepEqual(await extensionView({ ...base, config }), { extensions: { running: [], missing: ["npm:absent@1.0.0"], unavailable: [
     { source: "piki:browser", tools: ["browser"], reason: "missing" }, { source: "piki:node", tools: ["node"], reason: "programs", programs: ["yarn"] }] } });
   assert.deepEqual(await extensionView({ ...base, config: { workspace: async () => { throw new Error("offline"); }, installed: () => [] } }), {});
+});
+
+async function queueFixture(t: TestContext, runs: Partial<Metadata["runs"][string]>[], options: Partial<RunQueueOptions> = {}) {
+  const events: string[] = [];
+  const state = toolState();
+  state.runs = Object.fromEntries(runs.map((run, index) => [`r${index}`, { ...state.runs.r1!, key: `r${index}`, status: "queued", sequence: index, ...run }]));
+  const inputs = new MessageInputs(join(await directory(t), "inputs"));
+  const flags = { generation: 0, closing: false, preparation: "ready" as const };
+  const settle: ((value: { status: string; reason?: string }) => void)[] = [];
+  const harness = {
+    conversation: async () => ({
+      context: async () => ({ entries: [{ id: 4 }], messages: [] }),
+      submit: async (input: { content: unknown; requestId: string }) => { events.push(`submit ${input.requestId} ${JSON.stringify(input.content)}`); return { id: 7 }; },
+      waitForIdle: async () => {}, agent: async () => ({}),
+    }),
+    submission: async () => ({ wait: () => new Promise(resolve => settle.push(resolve)) }),
+  };
+  let lock: Promise<unknown> = Promise.resolve();
+  let queue!: RunQueue;
+  queue = new RunQueue({
+    sessionId: "s1", connectorOwnerId: "github:1", inputs, config: {}, configuredCompaction: () => undefined,
+    generation: () => flags.generation, closing: () => flags.closing, preparation: () => flags.preparation, harness: () => harness as never,
+    hostExtensions: () => undefined, exclusive: operation => { const next = lock.then(operation, operation); lock = next.catch(() => undefined); return next; },
+    metadata: async () => structuredClone(state), mutate: async change => { change(state); },
+    authorize: async actorId => { if (actorId === "github:9") throw new RunnerError(403, "revoked"); },
+    requiredRefusal: async () => undefined, extensionChoice: async () => ({ chosen: [] }),
+    applyOptions: async (_conversation, run) => { events.push(`options ${run.key}`); }, drain: () => { events.push("drain"); queue.drain(); },
+    ...options,
+  });
+  const idle = async () => { for (let index = 0; index < 5; index++) { await lock; await new Promise(resolve => setImmediate(resolve)); } };
+  return { queue, state, inputs, flags, events, settle, idle };
+}
+
+test("run queue: the next queued message runs once nothing else does, as its sender may still, and a drain asked meanwhile runs again", async t => {
+  const { queue, state, events, settle, idle } = await queueFixture(t, [{ initiatedBy: "github:9" }, { content: "go" }, { content: "later" }]);
+  queue.drain();
+  queue.drain();
+  await idle();
+  assert.equal(state.runs.r0!.status, "interrupted", "a sender who may no longer write is skipped");
+  assert.deepEqual([state.runs.r1!.status, state.runs.r1!.submissionId, state.runs.r1!.started, state.runs.r1!.startEntry], ["running", 7, true, 4]);
+  assert.equal(state.runs.r2!.status, "queued", "one message runs at a time");
+  assert.deepEqual(events, ["options r1", "submit r1 \"go\"", "drain"], "the drain asked while draining runs once more, through the session");
+  settle[0]!({ status: "done" });
+  await idle();
+  assert.equal(state.runs.r1!.status, "settled");
+  assert.equal(state.runs.r2!.status, "running", "a settled run lets the next one start");
+});
+
+test("run queue: nothing starts while the session closes or its repositories prepare; a refusal or lost images end the message", async t => {
+  const closing = await queueFixture(t, [{}]);
+  closing.flags.closing = true;
+  closing.queue.drain();
+  await closing.idle();
+  assert.equal(closing.state.runs.r0!.status, "queued");
+  const preparing = await queueFixture(t, [{}]);
+  (preparing.flags as { preparation: string }).preparation = "preparing";
+  preparing.queue.drain();
+  await preparing.idle();
+  assert.equal(preparing.state.runs.r0!.status, "queued");
+  const refused = await queueFixture(t, [{}], { requiredRefusal: async () => "required extension missing" });
+  refused.queue.drain();
+  await refused.idle();
+  assert.deepEqual([refused.state.runs.r0!.status, refused.state.runs.r0!.refused], ["interrupted", { by: "", notice: "required extension missing" }]);
+  const lost = await queueFixture(t, [{ images: { count: 1, bytes: 4 } }]);
+  assert.equal(await lost.queue.runInput(lost.state.runs.r0!), undefined);
+  lost.queue.drain();
+  await lost.idle();
+  assert.deepEqual([lost.state.runs.r0!.status, lost.state.runs.r0!.inputsLost], ["interrupted", true]);
+});
+
+test("run queue: a run that settles after the session reopened is left alone; screening refuses an emptied message and lets the queue go on", async t => {
+  const { queue, state, flags, events, settle, idle } = await queueFixture(t, [{ content: "go" }]);
+  queue.drain();
+  await idle();
+  flags.generation++;
+  settle[0]!({ status: "done" });
+  await idle();
+  assert.equal(state.runs.r0!.status, "running", "another generation's settlement changes nothing");
+  const host = { input: async () => ({ action: "continue", text: " ", images: [] }) };
+  const screening = await queueFixture(t, [{ screening: true, content: "hi" }], { hostExtensions: () => host as never });
+  await screening.queue.screen("r0");
+  assert.deepEqual([screening.state.runs.r0!.status, screening.state.runs.r0!.refused?.notice, screening.state.runs.r0!.screening], ["interrupted", INPUT_EMPTY, undefined]);
+  assert.deepEqual(screening.events, ["drain"]);
+  const images = await queueFixture(t, [{ images: { count: 1, bytes: 4 } }]);
+  await images.inputs.write("r0", [{ mimeType: "image/png", data: "iVBORw0KGgo=" }]);
+  assert.deepEqual(await images.queue.runInput(images.state.runs.r0!), [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }], "no text part for an empty text");
+  images.state.runs.r0!.content = "look";
+  assert.deepEqual((await images.queue.runInput(images.state.runs.r0!))![0], { type: "text", text: "look" });
+  images.state.runs.r0!.status = "settled";
+  await images.queue.sweepInputs();
+  assert.equal(await images.inputs.read("r0"), undefined, "a run that no longer waits loses its images");
+  assert.deepEqual(events, ["options r0", "submit r0 \"go\""]);
 });
 
 function instructions(input: Partial<InstructionsInput> = {}): string {
