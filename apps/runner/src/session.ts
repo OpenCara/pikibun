@@ -8,12 +8,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, StringEnum, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
 import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
-import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
+import { createRegistry, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
+import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
 import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, scheduleRunIns, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
 import { crossSessionLimits, sessionsToolActions, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
-import type { CompactionFailure, ModelFailureCause } from "../../../packages/shared/src/types.js";
+import type { ModelFailureCause } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
@@ -27,7 +27,7 @@ import { inScriptCall, wholeForScripts } from "./script-output.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
-import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
+import { requestKey, RunnerError, stableJson } from "./protocol.js";
 import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { brokeredArguments, programCommand, programRequest, rememberToolDefinitions, type ProgramRequest } from "./defined-tools.js";
@@ -68,12 +68,12 @@ import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
+import { RunnerState, type Branch, type Metadata, type Run } from "./session/state.js";
+import { githubRepository, SessionOperations, type OperationConsent } from "./session/operations.js";
 import {
   Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
 } from "./sandbox.js";
 import { prepareImage, thumbnailImage } from "./images.js";
-import { performClonePush, PushError, pushSummary, type PushResult } from "./push.js";
-import { HostCredentialError } from "./git-credentials.js";
 import type { GitRemote } from "./git-remote.js";
 import type { RepositoryCache } from "./repo-cache.js";
 import type { ResourceConfig } from "./resources.js";
@@ -92,27 +92,7 @@ import type { DocumentKind, GrantSource } from "../../../packages/shared/src/sou
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
 import { CALL_TIMEOUT_MAX_SECONDS, callLimits, callTimeout, commandLimits, type CommandLimits } from "./host-config.js";
 
-export type Run = {
-  key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
-  conversationId: number; content: string; contentHash: string; submissionId?: number;
-  status: "queued" | "admitting" | "running" | "settled" | "interrupted"; startEntry: number;
-  sequence?: number;
-  started?: boolean;
-  admissionId?: string;
-  submittedAt?: number;
-  options?: ChatOptions;
-  images?: { count: number; bytes: number };
-  inputsLost?: true;
-  failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure;
-    cause?: ModelFailureCause; compacting?: true };
-  stopped?: { by: string; pending?: true };
-  crashed?: true;
-  screening?: true;
-  refused?: { by: string; notice: string };
-  reverted?: true;
-  withdrawn?: true;
-};
-type Branch = { id: number; mode: "write" | "ask"; actorId?: string; superseded?: true };
+export type { Run } from "./session/state.js";
 export type ForkedEntry = { kind: string; model: readonly Message[] };
 export type ForkedConversation = { entries: ForkedEntry[]; agent: { model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel } };
 const FORKED_KIND = "workspace.forked";
@@ -133,11 +113,6 @@ interface RunnerBackup {
   conversationOnly?: true;
   createdAt: string;
 }
-type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Record<string, Run>; approvals: Record<string, StoredApproval>; toolActors: Record<string, { initiatedBy: string; ownerId: string; runKey: string; callId?: string }>; usedTickets?: Record<string, number>; nextSequence?: number;
-  grants?: unknown;
-  conversationOnlyRestore?: true;
-  forkedFrom?: { sessionId: string; entryId: string } };
-const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", version: 1, scope: "session", initial: () => ({ json: "" }), checkpointWhen: () => true });
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
 const readOnlyTools = ["identity", "read_file", "list_files", "search"];
 const WAIT_POLL_MS = 3000;
@@ -253,7 +228,7 @@ export class RunnerSession {
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   #compaction: () => CompactionSettings | undefined = () => undefined;
-  private pushes = new Set<{ controller: AbortController; done: Promise<void> }>();
+  readonly #operations: SessionOperations;
   #failed = false;
   #recovery: Promise<void> | undefined;
   readonly #waits = new ApprovalWaits();
@@ -322,6 +297,12 @@ export class RunnerSession {
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
+    this.#operations = new SessionOperations({
+      binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, waits: this.#waits,
+      requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
+      metadata: () => this.metadata(), mutate: change => this.mutate(change), commandOptions: timeoutSeconds => this.commandOptions(timeoutSeconds),
+      testShell: () => this.testShell(), controlPlane: <T>(path: string, body: unknown) => this.controlPlane<T>(path, body),
+    });
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
       workspace: () => isolatedWorkspace(this.sandbox), authorize: async () => { await this.authorize(this.binding.owner.id, "write"); },
@@ -1750,7 +1731,7 @@ export class RunnerSession {
           timeout_seconds: opt(int({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("github_read");
         const attribution = await this.toolActor(api, false);
-        const repository = this.githubRepository(args.repository);
+        const repository = githubRepository(args.repository);
         await this.checkCall(api, "github_read");
         const state = await this.metadata();
         const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
@@ -1758,7 +1739,7 @@ export class RunnerSession {
         const request: GitHubReadRequest = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId), repository, issue: args.issue };
         const read = async () => {
           await this.authorize(run.initiatedBy, "write");
-          return this.config.githubRead ? await this.config.githubRead(request) : await this.internalGitHub("read", request) as GitHubIssueView;
+          return this.config.githubRead ? await this.config.githubRead(request) : await this.#operations.internalGitHub("read", request) as GitHubIssueView;
         };
         const first = await read();
         if (!args.wait) return text({ ...attribution, ...first });
@@ -1775,7 +1756,7 @@ export class RunnerSession {
       defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase. Use this where the gh tool can't write (gh pr merge --match-head-commit). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), pull: int({ minimum: 1 }), sha: str(), method: StringEnum(githubMergeMethods) }, { open: true }), execute: async (args, api, _call) => {
         await this.requireSessionTool("github_merge");
         const attribution = await this.toolActor(api, true);
-        const repository = this.githubRepository(args.repository);
+        const repository = githubRepository(args.repository);
         if (!/^[0-9a-f]{40}$/.test(args.sha)) throw new RunnerError(400, "sha must be the pull request's full 40-character head commit, as github_read reports it");
         await this.checkCall(api, "github_merge", { write: true });
         return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.merge", repository, pull: args.pull, sha: args.sha, method: args.method }, String(api.taskId)));
@@ -1783,7 +1764,7 @@ export class RunnerSession {
       defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker. Use this where the gh tool can't write (gh issue create): the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: obj({ repository: str(), title: str(), body: str() }, { open: true }), execute: async (args, api, _call) => {
         await this.requireSessionTool("github_issue");
         const attribution = await this.toolActor(api, true);
-        const repository = this.githubRepository(args.repository);
+        const repository = githubRepository(args.repository);
         if (!args.title.trim() || /[\r\n]/.test(args.title) || args.title.length > GITHUB_ISSUE_TITLE_LIMIT) throw new RunnerError(400, `title must be one non-empty line of at most ${GITHUB_ISSUE_TITLE_LIMIT} characters`);
         if (args.body.length > GITHUB_ISSUE_BODY_LIMIT) throw new RunnerError(400, `body must be at most ${GITHUB_ISSUE_BODY_LIMIT} characters`);
         if (args.title.includes("\0") || args.body.includes("\0")) throw new RunnerError(400, "title and body must not contain NUL characters");
@@ -1807,7 +1788,7 @@ export class RunnerSession {
         await this.authorize(run.initiatedBy, "write");
         const request: ScheduleToolRequest = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId),
           action: args.action, ...fields };
-        const result = this.config.schedules ? await this.config.schedules(request) : await this.internalBroker("schedules", request) as ScheduleToolResult;
+        const result = this.config.schedules ? await this.config.schedules(request) : await this.#operations.internalBroker("schedules", request) as ScheduleToolResult;
         return text({ ...attribution, ...result });
       } }),
       defineTool({ name: "sessions", description: SESSIONS_TOOL_DESCRIPTION,
@@ -1835,7 +1816,7 @@ export class RunnerSession {
         await this.authorize(run.initiatedBy, "write");
         const base = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId) };
         const broker = async (): Promise<SessionsToolResult> => {
-          const result = this.config.crossSessions ? await this.config.crossSessions({ ...base, ...request }) : await this.internalBroker("sessions", { ...base, ...request }) as SessionsToolResult;
+          const result = this.config.crossSessions ? await this.config.crossSessions({ ...base, ...request }) : await this.#operations.internalBroker("sessions", { ...base, ...request }) as SessionsToolResult;
           if (!("consent" in result)) return result;
           throw new RunnerError(403, `${result.reason} The session's owner can let content pass between sessions whose readers differ under the session's Details. Nothing was sent or read.`);
         };
@@ -1943,139 +1924,13 @@ export class RunnerSession {
         if (!run.admissionId) throw new RunnerError(403, `${definition.name} needs a write message`);
         const request = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId), ...args };
         await this.authorize(run.initiatedBy, "write");
-        const result = this.config.brokered ? await this.config.brokered(definition.route, request) : await this.internalBroker(definition.route, request);
+        const result = this.config.brokered ? await this.config.brokered(definition.route, request) : await this.#operations.internalBroker(definition.route, request);
         return text({ ...attribution, ...(result && typeof result === "object" && !Array.isArray(result) ? result : { result }) });
       } });
   }
 
-  private githubRepository(name: string): string {
-    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new RunnerError(400, "repository must be a github.com owner/name");
-    return name;
-  }
-
-  private async githubEffect(operation: Extract<Operation, { kind: "github.comment" | "github.merge" | "github.issue" }>,
-    authority: { sessionId: string; actorId: string; approvalId: string } & ({ capability: string } | { admissionId: string })): Promise<string> {
-    if (operation.kind === "github.comment") {
-      const { repository, issue, body } = operation;
-      const request: GitHubCommentRequest = { ...authority, repository, issue, body };
-      const comment = this.config.githubComment ? await this.config.githubComment(request) : await this.internalGitHub("comment", request) as { id: number; url: string };
-      return JSON.stringify({ id: comment.id, url: comment.url });
-    }
-    if (operation.kind === "github.merge") {
-      const { repository, pull, sha, method } = operation;
-      const request: GitHubMergeRequest = { ...authority, repository, pull, sha, method };
-      const merged = this.config.githubMerge ? await this.config.githubMerge(request) : await this.internalGitHub("merge", request) as GitHubMergeResult;
-      return JSON.stringify({ merged: true, sha: merged.sha, url: merged.url });
-    }
-    const { repository, title, body } = operation;
-    const request: GitHubIssueRequest = { ...authority, repository, title, body };
-    const opened = this.config.githubIssue ? await this.config.githubIssue(request) : await this.internalGitHub("issue", request) as GitHubIssueResult;
-    return JSON.stringify({ number: opened.number, url: opened.url });
-  }
-
-  private async internalGitHub(action: "comment" | "read" | "merge" | "issue", request: object): Promise<unknown> {
-    return this.internalBroker(`github/${action}`, request);
-  }
-
-  private async internalBroker(path: string, request: object): Promise<unknown> {
-    const response = await (this.config.fetch ?? fetch)(`${this.config.controlPlaneUrl}/api/internal/${path}`, {
-      method: "POST", headers: { authorization: `Bearer ${this.config.sharedSecret}`, "content-type": "application/json" },
-      body: JSON.stringify(request), signal: AbortSignal.timeout(30_000), redirect: "error",
-    });
-    const value: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) {
-      const error = value && typeof value === "object" && "error" in value && typeof value.error === "string" ? value.error : "Broker returned an error; external state must be reconciled";
-      throw new RunnerError(response.status, error);
-    }
-    return value;
-  }
-
-  async runOperation(actorId: string, input: Operation, toolTaskId: string, consent: { unbounded?: boolean; hostChecked?: boolean; timeoutSeconds?: number } = {},
-    signal?: AbortSignal): Promise<StoredApproval> {
-    this.requireUnfrozen();
-    const operation = validateOperation(input);
-    if (operation.kind === "permission") throw new RunnerError(400, "Permission requests were removed: a session runs its tools or refuses them");
-    if (operation.kind === "git.commit" || operation.kind === "git.repin" || (operation.kind === "git.push" && operation.directory === undefined)) {
-      throw new RunnerError(400, "Commit and switch branches with the git tool; a push names a clone's directory");
-    }
-    if (operation.kind === "host.bash") throw new RunnerError(400, "Commands on the host were removed with host_bash; run programs with the git, node and python tools");
-    this.hostCommands.requireShell(operation, consent.unbounded);
-    if (operation.kind === "extension.tool" && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
-      throw new RunnerError(403, "Host commands require a connected host with a known owner");
-    }
-    if (operation.kind === "git.push" && !this.#clone) throw new RunnerError(400, "Only clone sessions push a clone's directory");
-    if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with the git tool");
-    await this.authorize(actorId, "write");
-    const state = await this.metadata();
-    const attribution = state.toolActors[toolTaskId];
-    const run = attribution && state.runs[attribution.runKey];
-    if (!run || run.initiatedBy !== actorId || run.ownerId !== this.binding.owner.id || run.mode !== "write"
-      || !["admitting", "running"].includes(run.status)) throw new RunnerError(403, "The operation has no active originating write");
-    const admissionId = run.admissionId;
-    if (this.config.connectorId && !admissionId) throw new RunnerError(403, "The operation lacks Worker write admission");
-    const brokered = operation.kind === "git.push" || operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
-    if (brokered && admissionId === undefined) throw new RunnerError(403, "Pushes and GitHub effects need a write message");
-    if (!consent.hostChecked && this.hostCommands.runsOnHost(operation, consent.unbounded === true)) await this.hostCommands.require(actorId, this.hostCommands.onHostMachine());
-    const id = `tool-${toolTaskId}`;
-    const record: StoredApproval = { id, sessionId: this.binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)),
-      createdAt: new Date().toISOString(), status: "executing",
-      ...(consent.unbounded && (operation.kind === "bash" || operation.kind === "program") ? { unbounded: true } : {}),
-      ...(attribution.callId ? { callId: attribution.callId } : {}), ...(admissionId !== undefined ? { admissionId } : {}) };
-    let created = false;
-    await this.mutate(meta => { if (!meta.approvals[id]) { meta.approvals[id] = record; created = true; } });
-    if (!created) return this.#waits.whole((await this.metadata()).approvals[id]!);
-    if (operation.kind === "extension.tool") return record;
-    return this.#waits.whole(await this.execute(id, actorId, signal, consent.timeoutSeconds));
-  }
-
-  private async execute(id: string, actorId: string, signal?: AbortSignal, timeoutSeconds?: number): Promise<StoredApproval> {
-    const approval = (await this.metadata()).approvals[id]!;
-    const operation = approval.operation;
-    let status: ApprovalRecord["status"];
-    let result: string;
-    if (operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue") {
-      try {
-        await this.authorize(actorId, "write");
-        result = await this.githubEffect(operation, { sessionId: this.binding.session.id, actorId, approvalId: id, admissionId: approval.admissionId! });
-        status = "executed";
-      } catch (error) {
-        if (error instanceof RunnerError && error.status === 422 && operation.kind !== "github.comment") { status = "failed"; result = error.message; }
-        else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
-      }
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
-      return (await this.metadata()).approvals[id]!;
-    }
-    if (operation.kind === "git.push") {
-      const entry = { controller: new AbortController(), done: Promise.resolve() };
-      const settled = (async () => {
-        const outcome = await this.runPush(id, operation, { actorId, admissionId: approval.admissionId }, async () => { await this.authorize(actorId, "write"); }, entry.controller.signal);
-        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.#waits.kept(id, outcome.result) }); });
-      })();
-      entry.done = settled.then(() => undefined, () => undefined);
-      this.pushes.add(entry);
-      try { await settled; }
-      finally { this.pushes.delete(entry); }
-      return (await this.metadata()).approvals[id]!;
-    }
-    if (operation.kind !== "bash" && operation.kind !== "program") throw new RunnerError(400, "Unsupported operation");
-    const onHost = this.hostCommands.runsOnHost(operation, approval.unbounded === true);
-    try {
-      result = await this.sandbox.execute(operation, false, async () => {
-        this.hostCommands.requireShell(operation, approval.unbounded === true);
-        await this.hostCommands.requireHostEnvironment();
-        if (onHost) await this.hostCommands.require(actorId, this.hostCommands.onHostMachine());
-        await this.authorize(actorId, "write");
-      }, { allowTestShell: this.testShell(), unbounded: approval.unbounded === true,
-        ...await this.commandOptions(timeoutSeconds), signal });
-      status = "executed";
-    } catch (error) {
-      const refused = error instanceof RunnerError && error.status < 500;
-      status = error instanceof SandboxProcessError || refused ? "failed" : "interrupted";
-      result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
-        : refused ? (error as RunnerError).message : "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited.";
-    }
-    await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
-    return (await this.metadata()).approvals[id]!;
+  runOperation(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredApproval> {
+    return this.#operations.run(actorId, input, toolTaskId, consent, signal);
   }
 
   private async cutPoint(conversation: Conversation, entryId: string): Promise<{ at: EntryId | undefined; last: boolean }> {
@@ -2422,10 +2277,7 @@ export class RunnerSession {
     const tunnel = this.#tunnel;
     this.#tunnel = undefined;
     await tunnel?.close().catch(() => {});
-    if (abortPushes) {
-      for (const push of this.pushes) push.controller.abort();
-      await Promise.allSettled([...this.pushes].map(push => push.done));
-    }
+    if (abortPushes) await this.#operations.abortPushes();
     this.generation++;
     const extensions = this.#hostExtensions;
     this.#hostExtensions = undefined;
@@ -2438,58 +2290,6 @@ export class RunnerSession {
       await this.harness.close(context).catch((error: unknown) => { if (!failed) throw error; });
     } finally {
       await builtins?.close().catch(() => {});
-    }
-  }
-
-  private async runPush(id: string, operation: GitPushOperation, auth: { actorId: string; capability?: string; admissionId?: string }, recheck: SandboxAuthorize, signal?: AbortSignal): Promise<{ status: "executed" | "failed" | "interrupted"; result: string }> {
-    if (!this.#clone || operation.directory === undefined) return { status: "failed", result: "Push failed: a push names a clone's directory. Nothing was pushed." };
-    if (!this.#egress) return { status: "failed", result: "Push failed: on a host without the sandbox, push with the git tool. Nothing was pushed." };
-    const request: PushCredentialRequest = { sessionId: this.binding.session.id, approvalId: id, actorId: auth.actorId, operation,
-      ...(auth.capability !== undefined ? { capability: auth.capability } : {}), ...(auth.admissionId !== undefined ? { admissionId: auth.admissionId } : {}) };
-    let credential: PushCredential | HostPushCredential;
-    try {
-      await recheck();
-      credential = this.config.pushCredential ? await this.config.pushCredential(request) : await this.controlPlane<PushCredential | HostPushCredential>("/api/internal/git/push/credential", request);
-      if (!credential || typeof credential.credentialId !== "string" || typeof credential.remote !== "string"
-        || ("hostCredentials" in credential ? credential.hostCredentials !== true : typeof credential.authorization !== "string"))
-        throw new RunnerError(502, "Invalid push credential");
-    } catch (error) {
-      const reason = error instanceof RunnerError ? `: ${error.message}` : "";
-      return { status: "failed", result: `Push credential was refused${reason}. Nothing was pushed.` };
-    }
-    let pushed: PushResult | undefined;
-    let failure: { status: "failed" | "interrupted"; result: string } | undefined;
-    try {
-      const authorization = "hostCredentials" in credential ? await this.hostAuthorization(credential.remote, signal) : credential.authorization;
-      pushed = await performClonePush({ workspace: isolatedWorkspace(this.sandbox), operation, credential: { remote: credential.remote, authorization }, authorize: recheck, signal });
-    } catch (error) {
-      failure = error instanceof PushError && !signal?.aborted
-        ? { status: "failed", result: `Push failed: ${error.message}. Nothing was pushed.` }
-        : { status: "interrupted", result: "Push was interrupted; the remote branch may or may not have changed. Inspect it; automatic retry is prohibited." };
-    }
-    const outcome: PushOutcome = pushed?.outcome ?? (failure?.status === "failed" ? "failed" : "unknown");
-    const complete: PushCompleteRequest = { sessionId: this.binding.session.id, approvalId: id, credentialId: credential.credentialId, outcome, ...(pushed ? { tip: pushed.tip } : {}) };
-    let completion: PushCompletionResult | undefined;
-    let completionFailure = "";
-    try {
-      completion = this.config.pushComplete ? await this.config.pushComplete(complete) : await this.controlPlane<PushCompletionResult>("/api/internal/git/push/complete", complete);
-    } catch (error) {
-      completionFailure = error instanceof RunnerError ? `: ${error.message}` : "";
-    }
-    if (!pushed) return failure!;
-    const confirmation = completion ? "" : operation.pullRequest
-      ? `\nThe pull request was not opened${completionFailure || "; the control plane did not confirm completion"}.`
-      : "\nThe control plane did not confirm completion.";
-    return { status: "executed", result: pushSummary(pushed, completion?.pullRequest) + confirmation };
-  }
-
-  private async hostAuthorization(remote: string, signal?: AbortSignal): Promise<string> {
-    if (!this.config.hostGitCredential) throw new PushError("This host does not push with its Git credentials; its owner can turn them on in Pikibun (Settings → Hosts → the host → Configuration)");
-    if (this.binding.session.connectorOwnerId !== this.binding.owner.id) throw new PushError("Only the host's owner can push with its Git credentials");
-    try {
-      return await this.config.hostGitCredential(remote, signal);
-    } catch (error) {
-      throw new PushError(error instanceof HostCredentialError ? error.message : "The host's Git credentials could not be read");
     }
   }
 

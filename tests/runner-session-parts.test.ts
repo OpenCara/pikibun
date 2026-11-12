@@ -18,7 +18,11 @@ import { MAX_STAGED_UPLOADS, SessionUploads, STALE_UPLOAD_MS } from "../apps/run
 import { agentInstructions, lfsInstructions, type InstructionsInput } from "../apps/runner/src/session/instructions.js";
 import { bundledToolDefinitions } from "../packages/shared/src/tool-definitions.js";
 import { preparationFailure, SessionRepositories, type SessionRepositoriesOptions } from "../apps/runner/src/session/repositories.js";
-import type { IsolatedWorkspace } from "../apps/runner/src/workspace.js";
+import type { IsolatedWorkspace, SessionWorkspace } from "../apps/runner/src/workspace.js";
+import { githubRepository, SessionOperations, type SessionOperationsOptions } from "../apps/runner/src/session/operations.js";
+import type { Metadata } from "../apps/runner/src/session/state.js";
+import { SandboxProcessError } from "../apps/runner/src/sandbox.js";
+import type { RunnerBinding } from "../packages/shared/src/types.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -347,6 +351,108 @@ test("repositories: a resume that fails leaves the preparation failed, with a re
   assert.equal(preparationFailure("It broke."), "It broke. Restart the session to try again.");
   repositories.reset();
   assert.equal(repositories.status, "ready");
+});
+
+function operationsFixture(options: Partial<SessionOperationsOptions> = {}, run: Partial<Metadata["runs"][string]> = {}) {
+  const events: string[] = [];
+  const binding = { session: { id: "s1", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding;
+  const state: Metadata = { binding, branches: [], approvals: {}, toolActors: { task: { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1", callId: "call-1" } },
+    runs: { r1: { key: "r1", initiatedBy: "github:1", ownerId: "github:1", mode: "write", conversationId: 1, content: "", contentHash: "", status: "running", startEntry: 0,
+      admissionId: "admission", ...run } } };
+  const sandbox = { isolated: true, execute: async (operation: { command: string }, _readOnly: boolean, authorize: () => Promise<void>) => {
+    await authorize();
+    events.push(`execute ${operation.command}`);
+    if (operation.command.includes("fail")) throw new SandboxProcessError("exit 1", 1, null, "out", "");
+    return "ran";
+  } } as unknown as SessionWorkspace;
+  const operations = new SessionOperations({
+    binding, config: { connectorId: "connector", controlPlaneUrl: "https://control.invalid", sharedSecret: "secret" }, clone: true, sandboxed: true, sandbox,
+    hostCommands: hostPolicy({ ownerId: "github:1", connectorOwnerId: "github:1", testShell: true }).policy, waits: new ApprovalWaits(),
+    requireUnfrozen: () => { events.push("unfrozen"); }, authorize: async actorId => { events.push(`authorize ${actorId}`); },
+    metadata: async () => structuredClone(state), mutate: async change => { change(state); },
+    commandOptions: async () => ({ limits: { seconds: 60 } as never, gpu: false }), testShell: () => true,
+    controlPlane: async () => { throw new RunnerError(500, "no control plane"); },
+    ...options,
+  });
+  return { operations, events, state };
+}
+
+test("operations: removed and misplaced kinds are refused before anything is authorized or recorded", async () => {
+  const refusals: [Record<string, unknown>, RegExp, Partial<SessionOperationsOptions>?][] = [
+    [{ kind: "git.commit", message: "x" }, /Commit and switch branches with the git tool/],
+    [{ kind: "git.push", repository: "acme/app", branch: "b", commit: "a".repeat(40) }, /a push names a clone's directory/],
+    [{ kind: "git.push", repository: "acme/app", directory: "app", branch: "b", commit: "a".repeat(40) }, /Only clone sessions/, { clone: false }],
+    [{ kind: "git.push", repository: "acme/app", directory: "app", branch: "b", commit: "a".repeat(40) }, /push with the git tool/, { sandboxed: false }],
+  ];
+  for (const [operation, message, options] of refusals) {
+    const { operations, events, state } = operationsFixture(options);
+    await assert.rejects(operations.run("github:1", operation as Operation, "task"), message);
+    assert.deepEqual(events, ["unfrozen"]);
+    assert.deepEqual(state.approvals, {});
+  }
+  const frozen = operationsFixture({ requireUnfrozen: () => { throw new RunnerError(409, "read-only"); } });
+  await assert.rejects(frozen.operations.run("github:1", bash, "task"), /read-only/);
+  assert.deepEqual(frozen.events, []);
+  assert.throws(() => githubRepository("not a repository"), /owner\/name/);
+  assert.equal(githubRepository("acme/app"), "acme/app");
+});
+
+test("operations: a command runs once for its tool call, rechecking its actor, and its record says how it ended", async () => {
+  const { operations, events, state } = operationsFixture();
+  const ran = await operations.run("github:1", { kind: "bash", command: "echo hi" } as Operation, "task");
+  assert.equal(ran.status, "executed");
+  assert.equal(ran.result, "ran");
+  assert.equal(ran.callId, "call-1");
+  assert.equal(ran.admissionId, "admission");
+  assert.deepEqual(events, ["unfrozen", "authorize github:1", "authorize github:1", "execute echo hi"]);
+  const again = await operations.run("github:1", { kind: "bash", command: "echo other" } as Operation, "task");
+  assert.equal(again.result, "ran", "the same tool call gets its first record");
+  assert.equal(events.filter(event => event.startsWith("execute")).length, 1);
+  state.toolActors.second = { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1" };
+  const failed = await operations.run("github:1", { kind: "bash", command: "fail" } as Operation, "second");
+  assert.equal(failed.status, "failed");
+  assert.match(failed.result!, /out/);
+  await assert.rejects(operations.run("github:2", bash, "task"), /no active originating write/);
+  const unadmitted = operationsFixture({}, { admissionId: undefined });
+  await assert.rejects(unadmitted.operations.run("github:1", bash, "task"), /lacks Worker write admission/);
+});
+
+test("operations: GitHub effects go through the broker with the message's admission; a refused merge fails, anything else is ambiguous", async () => {
+  const requests: unknown[] = [];
+  const { operations, state } = operationsFixture({ config: { connectorId: "connector", controlPlaneUrl: "https://control.invalid", sharedSecret: "secret",
+    githubComment: async request => { requests.push(request); return { id: 7, url: "https://github.com/acme/app/issues/1#c7" }; },
+    githubMerge: async () => { throw new RunnerError(422, "Head moved"); },
+    githubIssue: async () => { throw new Error("network"); } } });
+  const comment = await operations.run("github:1", { kind: "github.comment", repository: "acme/app", issue: 1, body: "hi" } as Operation, "task");
+  assert.deepEqual(JSON.parse(comment.result!), { id: 7, url: "https://github.com/acme/app/issues/1#c7" });
+  assert.deepEqual(requests, [{ sessionId: "s1", actorId: "github:1", approvalId: "tool-task", admissionId: "admission", repository: "acme/app", issue: 1, body: "hi" }]);
+  state.toolActors.merge = { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1" };
+  const merge = await operations.run("github:1", { kind: "github.merge", repository: "acme/app", pull: 1, sha: "a".repeat(40), method: "squash" } as Operation, "merge");
+  assert.deepEqual([merge.status, merge.result], ["failed", "Head moved"]);
+  state.toolActors.issue = { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1" };
+  const issue = await operations.run("github:1", { kind: "github.issue", repository: "acme/app", title: "t", body: "b" } as Operation, "issue");
+  assert.equal(issue.status, "interrupted");
+  state.toolActors.extension = { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1" };
+  const extension = await operations.run("github:1", { kind: "extension.tool", source: "piki:x", tool: "x", arguments: "{}", digest: "0".repeat(64) } as Operation, "extension");
+  assert.equal(extension.status, "executing", "an extension's tool runs where the caller runs it");
+});
+
+test("operations: closing aborts a push in progress, waits for it, and reports an unknown outcome", async () => {
+  const completed: unknown[] = [];
+  let started!: () => void;
+  const reached = new Promise<void>(resolve => { started = resolve; });
+  const { operations } = operationsFixture({ config: { connectorId: "connector", controlPlaneUrl: "https://control.invalid", sharedSecret: "secret",
+    pushCredential: async () => ({ credentialId: "c1", remote: "https://github.com/acme/app.git", hostCredentials: true }) as never,
+    pushComplete: async request => { completed.push(request); return {} as never; },
+    hostGitCredential: (_remote, signal) => new Promise<string>((_resolve, reject) => { started(); signal!.addEventListener("abort", () => reject(new Error("aborted"))); }) } });
+  const push = operations.run("github:1", { kind: "git.push", repository: "acme/app", directory: "app", branch: "b", commit: "a".repeat(40) } as Operation, "task");
+  await reached;
+  await operations.abortPushes();
+  const record = await push;
+  assert.equal(record.status, "interrupted");
+  assert.match(record.result!, /Push was interrupted/);
+  assert.deepEqual(completed, [{ sessionId: "s1", approvalId: "tool-task", credentialId: "c1", outcome: "unknown" }]);
+  await operations.abortPushes();
 });
 
 function instructions(input: Partial<InstructionsInput> = {}): string {

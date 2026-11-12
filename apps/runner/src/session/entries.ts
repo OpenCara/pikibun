@@ -2,7 +2,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { entryImageLimits } from "../../../../packages/shared/src/entry-images.js";
 import type { SessionView } from "../../../../packages/shared/src/types.js";
 import { modelFailureCause } from "../model-failure.js";
-import type { Run } from "../session.js";
+import type { Run } from "./state.js";
 
 export const CRASHED_TEXT = "Stopped: the host crashed repeatedly while working on this message. Send it again to retry.";
 
