@@ -1,10 +1,14 @@
-import { exists, mkdir, readdir, readFile, stat, unlink, writeFile } from "fs/promises";
+import { exists, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "fs/promises";
 import { platform, signal, untracked } from "nsh";
 import { Application } from "nsh/desktop";
 import nshProcess from "process";
 import { APP_VERSION } from "../app-version";
+import { loginShell } from "./pikibun-command";
 import { thisComputer } from "./this-computer";
 import { thisServer } from "./this-server";
+import {
+  curlArguments, GNOME_PROXY_PROBE, gnomeProxy, PROXY_VARIABLES, SHELL_PROXY_PROBE, shellProxy, WINDOWS_INTERNET_SETTINGS, windowsProxy,
+} from "./update-proxy";
 import { LINUX_INSTALL, MAC_INSTALL, utf16le, windowsUpdateTask } from "./update-scripts";
 import { compareVersions, isPrerelease, isVersion } from "./version";
 
@@ -20,6 +24,10 @@ const PENDING = "pending.json";
 const INSTALL_LOG = "install.log";
 const WINDOWS_TASK = "Pikibun update";
 const PART_BYTES = 4 * 1024 * 1024;
+const READ_LIMIT = 64 * 1024 * 1024;
+const PROBE_MS = 15_000;
+const CURL_MS = 2 * 60 * 60 * 1000;
+const POLL_MS = 250;
 const PROGRESS_EVERY_MS = 100;
 const FIRST_CHECK_MS = 5_000;
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -117,8 +125,78 @@ async function joinParts(dir: string, parts: readonly string[], name: string): P
   for (const part of parts) { try { await unlink(inFolder(dir, part)); } catch { } }
 }
 
+async function probe(command: string, args: string[]): Promise<string> {
+  try { return (await nshProcess.run(command, args, { timeoutMs: PROBE_MS })).stdout; } catch { return ""; }
+}
+
+const ownProxyVariable = () => PROXY_VARIABLES.some(name => Boolean(nshProcess.env[name]?.trim()));
+
+export async function updateProxy(): Promise<string | null> {
+  const shell = () => probe(loginShell(platform.os, nshProcess.env.SHELL), ["-ilc", SHELL_PROXY_PROBE]);
+  switch (platform.os) {
+    case "windows": return ownProxyVariable() ? null : windowsProxy(await probe("cmd", ["/d", "/c", "reg", "query", WINDOWS_INTERNET_SETTINGS]));
+    case "macos": return shellProxy(await shell());
+    case "linux": return ownProxyVariable() ? null : shellProxy(await shell()) ?? gnomeProxy(await probe("sh", ["-c", GNOME_PROXY_PROBE]));
+    default: return null;
+  }
+}
+
 async function download(asset: ReleaseAsset, progress: (loaded: number, total: number) => void): Promise<string> {
-  return downloadInto(folder(), asset, progress);
+  const dir = folder();
+  const proxy = await updateProxy().catch(() => null);
+  if (proxy) {
+    const file = await downloadThrough(proxy, dir, asset, progress);
+    if (file) return file;
+  }
+  return downloadInto(dir, asset, progress);
+}
+
+const later = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+export async function downloadThrough(proxy: string, dir: string, asset: ReleaseAsset, progress: (loaded: number, total: number) => void): Promise<string | null> {
+  await mkdir(dir, { recursive: true });
+  await emptyFolder(dir);
+  const partial = `${asset.name}.part`;
+  const file = inFolder(dir, partial);
+  const args = curlArguments(asset.url, proxy, partial);
+  const [command, words] = platform.os === "windows"
+    ? ["cmd", ["/d", "/c", "curl.exe", ...args]]
+    : ["sh", ["-c", "exec curl \"$@\"", "pikibun-update", ...args]];
+  progress(0, asset.size);
+  let running = true;
+  const watching = (async () => {
+    while (running) {
+      await later(POLL_MS);
+      if (!running) break;
+      try { const { size } = await stat(file); progress(asset.size ? Math.min(size, asset.size) : size, asset.size); } catch { }
+    }
+  })();
+  let output: { code?: number | null; stdout: string; stderr: string };
+  try {
+    output = await nshProcess.run(command, words, { cwd: dir, timeoutMs: CURL_MS });
+  } catch (error) {
+    throw new Error(`The download through the proxy at ${proxy} didn't run: ${messageOf(error)}`);
+  } finally {
+    running = false;
+    await watching;
+  }
+  if (output.code === 127 || output.code === 9009) return null;
+  if (output.code !== 0) {
+    throw new Error(`The download through the proxy at ${proxy} failed: ${lastLines(`${output.stderr}\n${output.stdout}`) || `curl's exit code ${output.code ?? "unknown"}`}`);
+  }
+  const { size } = await stat(file);
+  progress(size, asset.size || size);
+  if (asset.size && size !== asset.size) throw new Error(`The download stopped early (${size} of ${asset.size} bytes). Try again.`);
+  if (!size) throw new Error("The download was empty.");
+  if (size > READ_LIMIT) throw new Error("The download is too large for Pikibun to check: install it from its release page.");
+  const bytes = await readFile(file);
+  if (crypto.createHash("sha256").update(bytes).digest("hex") !== asset.sha256) {
+    try { await unlink(file); } catch { }
+    throw new Error("The download doesn't match the checksum GitHub published for it. Try again.");
+  }
+  const saved = inFolder(dir, asset.name);
+  await rename(file, saved);
+  return saved;
 }
 
 export async function downloadInto(dir: string, asset: ReleaseAsset, progress: (loaded: number, total: number) => void): Promise<string> {

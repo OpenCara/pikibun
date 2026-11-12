@@ -1,5 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { assetSuffix, compareVersions, newerRelease, RELEASES_API, updatesFolder } from "../src/lib/app-update";
+import { curlArguments, gnomeProxy, proxyUrl, shellProxy, windowsProxy } from "../src/lib/update-proxy";
 import { utf16le, windowsInstallerArguments, windowsUpdateTask } from "../src/lib/update-scripts";
 import { server, signedIn } from "./fixtures";
 
@@ -90,6 +91,49 @@ describe("installing on Windows", () => {
   });
 });
 
+describe("finding the proxy the download goes through", () => {
+  const internetSettings = (values: string) => `\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\r\n    CertificateRevocation    REG_DWORD    0x1\r\n${values}\r\n`;
+
+  test("Windows' proxy settings, as Clash or Settings → Proxy write them", () => {
+    expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    127.0.0.1:7890\r\n    ProxyOverride    REG_SZ    localhost;127.*;<local>"))).toBe("http://127.0.0.1:7890");
+    expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    http=10.0.0.2:8080;https=10.0.0.2:8443;socks=10.0.0.2:1080"))).toBe("http://10.0.0.2:8443");
+    expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    socks=127.0.0.1:1080"))).toBe("socks4a://127.0.0.1:1080");
+    expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x0\r\n    ProxyServer    REG_SZ    127.0.0.1:7890"))).toBe(null);
+    expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x1"))).toBe(null);
+    expect(windowsProxy("")).toBe(null);
+  });
+
+  test("the login shell's variables, after whatever its startup files print", () => {
+    expect(shellProxy("Welcome back!\n\n\u001epikibun-proxy http://127.0.0.1:7890\n")).toBe("http://127.0.0.1:7890");
+    expect(shellProxy("\n\u001epikibun-proxy socks5://127.0.0.1:7891\n")).toBe("socks5://127.0.0.1:7891");
+    expect(shellProxy("\n\u001epikibun-proxy 127.0.0.1:7890/\n")).toBe("http://127.0.0.1:7890");
+    expect(shellProxy("\n\u001epikibun-proxy \n")).toBe(null);
+    expect(shellProxy("zsh: no such file")).toBe(null);
+  });
+
+  test("GNOME's manual proxy, HTTPS before HTTP before SOCKS", () => {
+    expect(gnomeProxy("\u001epikibun-proxy https '' 0\n\u001epikibun-proxy http '127.0.0.1' 7890\n\u001epikibun-proxy socks '127.0.0.1' 7891\n")).toBe("http://127.0.0.1:7890");
+    expect(gnomeProxy("\u001epikibun-proxy https '' 0\n\u001epikibun-proxy http '' 0\n\u001epikibun-proxy socks '::1' 7891\n")).toBe("socks5h://[::1]:7891");
+    expect(gnomeProxy("")).toBe(null);
+  });
+
+  test("only a proxy cmd and the shells pass on as it is", () => {
+    expect(proxyUrl("http://user:secret@proxy.lan:3128")).toBe("http://user:secret@proxy.lan:3128");
+    expect(proxyUrl("127.0.0.1:7890 & calc")).toBe(null);
+    expect(proxyUrl("http://%USERNAME%@proxy:1")).toBe(null);
+    expect(proxyUrl("ftp://proxy:21")).toBe(null);
+    expect(proxyUrl("")).toBe(null);
+  });
+
+  test("curl follows GitHub's redirect through the proxy into the updates folder", () => {
+    const args = curlArguments("https://github.com/OpenCara/pikibun/releases/download/app-v0.17.0/x.dmg", "http://127.0.0.1:7890", "x.dmg.part");
+    expect(args.slice(args.indexOf("--proxy"), args.indexOf("--proxy") + 2)).toEqual(["--proxy", "http://127.0.0.1:7890"]);
+    expect(args).toContain("--location");
+    expect(args).toContain("--fail");
+    expect(args.slice(-3)).toEqual(["--output", "x.dmg.part", "https://github.com/OpenCara/pikibun/releases/download/app-v0.17.0/x.dmg"]);
+  });
+});
+
 async function openUpdater(params: Record<string, unknown> = {}, list: unknown = releases) {
   const app = await open("./harness/app-update.tsx", {
     platform: "macos", width: 900, height: 1400, host: { params },
@@ -101,16 +145,15 @@ async function openUpdater(params: Record<string, unknown> = {}, list: unknown =
 }
 
 describe("updating the app", () => {
-  test("a newer release shows in the sidebar; its button downloads it with progress, installs it and restarts", async () => {
+  test("a newer release shows on the main page; its button downloads it with progress, installs it and restarts", async () => {
     const { app, sent, showsText } = await openUpdater({ outcome: "paused" });
-    await app.waitFor("id:sidebar-update-button");
-    expect(app.shows("text:Update to 0.17.0")).toBe(true);
+    await app.waitFor("id:home-update-button");
     expect(showsText("Pikibun 0.17.0 is available")).toBe(true);
-    await app.press("id:sidebar-update-button");
+    await app.press("id:home-update-button");
     await app.waitUntil(() => showsText("Downloading Pikibun 0.17.0… 50%"));
-    expect(app.shows("id:sidebar-update-progress-bar")).toBe(true);
+    expect(app.shows("id:home-update-progress-bar")).toBe(true);
     expect(showsText("10.9 MB of 21.9 MB")).toBe(true);
-    expect(app.shows("id:sidebar-update-button")).toBe(false);
+    expect(app.shows("id:home-update-button")).toBe(false);
     expect(sent().some(line => line.startsWith("install "))).toBe(false);
     await app.press("id:fake-download-continue");
     await app.waitUntil(() => sent().includes("restart"));
@@ -132,8 +175,8 @@ describe("updating the app", () => {
 
   test("an update started right after launch waits for the last one's leftovers to be cleared first", async () => {
     const { app, sent } = await openUpdater({ cleanUp: "slow" });
-    await app.waitFor("id:sidebar-update-button");
-    await app.press("id:sidebar-update-button");
+    await app.waitFor("id:home-update-button");
+    await app.press("id:home-update-button");
     await app.waitUntil(() => sent().includes("restart"));
     const order = sent();
     expect(order.indexOf("cleaned up")).toBeLessThan(order.findIndex(line => line.startsWith("download ")));
@@ -145,16 +188,27 @@ describe("updating the app", () => {
     await app.press("id:app-update-button");
     await app.waitFor("id:app-update-failed");
     expect(showsText("/Applications can't be written by ada")).toBe(true);
-    expect(app.shows("id:sidebar-update-error")).toBe(true);
+    expect(app.shows("id:home-update-failed")).toBe(true);
     expect(sent()).not.toContain("restart");
     await app.press("id:app-update-retry");
     await app.waitUntil(() => sent().filter(line => line.startsWith("install ")).length === 2);
+    await app.waitFor("id:home-update-retry");
+    await app.press("id:home-update-retry");
+    await app.waitUntil(() => sent().filter(line => line.startsWith("install ")).length === 3);
+  });
+
+  test("Later puts the offer off on the main page, and Settings still has it", async () => {
+    const { app } = await openUpdater();
+    await app.waitFor("id:home-update-later");
+    await app.press("id:home-update-later");
+    await app.waitUntil(() => !app.shows("id:home-update"));
+    expect(app.shows("id:app-update-button")).toBe(true);
   });
 
   test("a download that doesn't match GitHub's checksum installs nothing", async () => {
     const { app, sent, showsText } = await openUpdater({ outcome: "download-fails" });
-    await app.waitFor("id:sidebar-update-button");
-    await app.press("id:sidebar-update-button");
+    await app.waitFor("id:home-update-button");
+    await app.press("id:home-update-button");
     await app.waitFor("id:app-update-failed");
     expect(showsText("doesn't match the checksum")).toBe(true);
     expect(sent().some(line => line.startsWith("install "))).toBe(false);
@@ -163,7 +217,7 @@ describe("updating the app", () => {
   test("up to date, it says so, and checks again on demand", async () => {
     const { app, showsText } = await openUpdater({ current: "0.17.0" });
     await app.waitUntil(() => showsText("Pikibun is up to date"));
-    expect(app.shows("id:sidebar-update")).toBe(false);
+    expect(app.shows("id:home-update")).toBe(false);
     expect(showsText("Pikibun 0.17.0")).toBe(true);
     await app.press("id:app-update-check-button");
     await app.waitUntil(() => showsText("Pikibun is up to date"));
@@ -173,6 +227,8 @@ describe("updating the app", () => {
     const { app } = await openUpdater({ arch: "x86_64" });
     await app.waitFor("id:app-update-page");
     expect(app.shows("id:app-update-button")).toBe(false);
+    expect(app.shows("id:home-update-page")).toBe(true);
+    expect(app.shows("id:home-update-button")).toBe(false);
   });
 
   test("says when GitHub can't be asked", async () => {
@@ -209,6 +265,6 @@ describe("updating the app", () => {
     await mac.waitFor("id:session-row-s1");
     await mac.press("id:open-profile");
     await mac.waitFor("id:app-version");
-    expect(mac.shows("id:sidebar-update")).toBe(false);
+    expect(mac.shows("id:home-update")).toBe(false);
   });
 });
