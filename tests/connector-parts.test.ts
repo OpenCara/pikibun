@@ -61,13 +61,35 @@ test("connector calls: reports check what they send, and only a failure that may
   await assert.rejects(busy.calls.reportTunnel(busy.current, { sessionId: "s1" } as never), /Tunnel report unavailable/);
 });
 
-function frames(options: { connected?: boolean; restarting?: boolean } = {}) {
+test("connector calls: every call says the connector's version, and a report whose connection ended while it was sent fails", async () => {
+  const { calls, asked, current } = fixture(() => Response.json({}));
+  await calls.callback(current, "/api/connectors/self/config", {});
+  await calls.brokerCallback(current, "/api/connectors/self/network", {});
+  await calls.reportActivity(current, "s1", "working");
+  await calls.reportTunnel(current, { sessionId: "s1", event: "stopped", url: "https://a.trycloudflare.com", reason: "stop" });
+  await calls.reportBranches(current, "s1", [{ repository: "acme/app", branch: "feature" } as never]);
+  assert.deepEqual(asked.map(call => call.url.slice("https://pikibun.example/api/connectors/self/".length)), ["config", "network", "activity", "tunnel", "branches"]);
+  assert.deepEqual(asked.map(call => call.headers["x-pikibun-version"]), Array(5).fill("1.2.3"));
+  assert.deepEqual(asked.map(call => call.headers["x-connection-token"]), Array(5).fill("c".repeat(32)));
+  assert.deepEqual(asked[4]!.body, { sessionId: "s1", branches: [{ repository: "acme/app", branch: "feature" }] });
+  for (const send of [
+    (sent: ReturnType<typeof fixture>) => sent.calls.reportActivity(sent.current, "s1", "working"),
+    (sent: ReturnType<typeof fixture>) => sent.calls.reportTunnel(sent.current, { sessionId: "s1", event: "stopped", url: "https://a.trycloudflare.com", reason: "stop" }),
+    (sent: ReturnType<typeof fixture>) => sent.calls.reportBranches(sent.current, "s1", []),
+  ]) {
+    const ending: ReturnType<typeof fixture> = fixture(() => { ending.revoke(); return new Response(null, { status: 204 }); });
+    await assert.rejects(send(ending), /no longer authorized/);
+    assert.equal(ending.asked.length, 1);
+  }
+});
+
+function frames(options: { connected?: boolean; restarting?: boolean; callback?: () => Promise<unknown> } = {}) {
   const reasons: string[] = [];
   const current = generation();
   const relay = new RelayFrames({
     secret: "s".repeat(48), state: () => ({ connectorId: "connector-1", token: "t".repeat(32), controlPlaneUrl: "https://pikibun.example" }),
     restarting: () => options.restarting === true, runtime: () => undefined, welcomed: () => options.connected === false ? undefined : current,
-    calls: { callback: async () => { throw new Error("no control plane"); } },
+    calls: { callback: options.callback ?? (async () => { throw new Error("no control plane"); }) },
     disconnect: (_generation, reason) => { reasons.push(reason); }, requireGeneration: () => {},
   });
   return { relay, reasons, current };
@@ -98,6 +120,25 @@ test("connector frames: an upload sent straight to the host needs a connection a
   assert.equal(invalid.status, 400);
   const refused = await frames().relay.direct({ grant: "g", body: "{}" });
   assert.deepEqual([refused.status, JSON.parse(refused.body)], [403, { error: "The control plane refused the upload grant.", code: "connector_reply_error" }]);
+});
+
+test("connector frames: uploads sent straight to the host fill only their own share of the replay guard, so relay requests still run", async () => {
+  let sent = 0;
+  const granted = () => ({ ticket: { ...request(`upload-${sent}`).ticket, action: "upload" }, size: 1, path: "/v1/sessions/s1/upload" });
+  const { relay, reasons, current } = frames({ callback: async () => granted() });
+  const upload = async () => { sent++; return relay.direct({ grant: "g", body: "{\"size\":1}" }); };
+  for (let index = 0; index < 4097; index++) assert.equal((await upload()).status, 400);
+  const full = await upload();
+  assert.deepEqual([full.status, JSON.parse(full.body)], [503, { error: "The host is taking too many requests at once; try again shortly.", code: "connector_reply_error" }]);
+  sent = 1;
+  const again = await relay.direct({ grant: "g", body: "{\"size\":1}" });
+  assert.deepEqual([again.status, JSON.parse(again.body).error], [409, "That upload grant was already used."]);
+  relay.dispatch(current, request("relayed-1"), 10);
+  await Promise.all([...current.active]);
+  assert.deepEqual(reasons, ["Relay request failed: Relay path is not allowed"]);
+  relay.dispatch(current, request("upload-1"), 10);
+  assert.equal(reasons[1], "Replayed relay request");
+  await relay.settled();
 });
 
 test("connector wire: bodies are read within their limit, and only as UTF-8 JSON", async () => {

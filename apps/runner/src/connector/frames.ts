@@ -8,6 +8,7 @@ import { requestSchema, ticketSchema, validateRelayRequest } from "./relay-reque
 import { boundedBody, encoder } from "./wire.js";
 
 const DRAIN_TIMEOUT = 30_000;
+const REPLAY_KEYS_LIMIT = 8192;
 
 type Frame = { payload: string; payloadSize: number };
 
@@ -27,7 +28,8 @@ export interface RelayFramesOptions {
 }
 
 export class RelayFrames {
-  readonly #seen = new Map<string, number>();
+  readonly #relayed = new Map<string, number>();
+  readonly #uploaded = new Map<string, number>();
   readonly #executing = new Set<Promise<void>>();
 
   constructor(private readonly options: RelayFramesOptions) {}
@@ -36,18 +38,25 @@ export class RelayFrames {
     await Promise.allSettled([...this.#executing]);
   }
 
+  #claim(seen: Map<string, number>, rpc: ConnectorRpcRequest): "claimed" | "replayed" | "full" {
+    const now = Date.now();
+    const all = [this.#relayed, this.#uploaded];
+    for (const each of all) for (const [key, expiry] of each) if (expiry <= now) each.delete(key);
+    const keys = [`request:${rpc.id}`, `ticket:${rpc.ticket.jti}`];
+    if (keys.some(key => all.some(each => each.has(key)))) return "replayed";
+    if (seen.size > REPLAY_KEYS_LIMIT) return "full";
+    const expiry = Math.min((rpc.ticket.exp + 5) * 1000, now + 70_000);
+    for (const key of keys) seen.set(key, expiry);
+    return "claimed";
+  }
+
   dispatch(generation: Generation, value: unknown, frameSize: number): void {
     if (generation.active.size >= connectorLimits.pendingRequests) return this.options.disconnect(generation, "Relay exceeded the pending request limit");
     if (generation.incomingBytes + frameSize > connectorLimits.bufferedBytes) return this.options.disconnect(generation, "Relay exceeded the queued request byte limit");
     const parsed = requestSchema.safeParse(value);
     if (!parsed.success) return this.options.disconnect(generation, "Invalid relay request");
     const rpc = parsed.data;
-    const now = Date.now();
-    for (const [key, expiry] of this.#seen) if (expiry <= now) this.#seen.delete(key);
-    const keys = [`request:${rpc.id}`, `ticket:${rpc.ticket.jti}`];
-    if (keys.some(key => this.#seen.has(key)) || this.#seen.size > 8192) return this.options.disconnect(generation, "Replayed relay request");
-    const replayExpiry = Math.min((rpc.ticket.exp + 5) * 1000, now + 70_000);
-    for (const key of keys) this.#seen.set(key, replayExpiry);
+    if (this.#claim(this.#relayed, rpc) !== "claimed") return this.options.disconnect(generation, "Replayed relay request");
     generation.incomingBytes += frameSize;
     const previous = generation.tail;
     const task = this.#execute(generation, rpc, previous).catch((error: unknown) => {
@@ -161,11 +170,9 @@ export class RelayFrames {
     try { declared = (JSON.parse(input.body) as { size?: unknown } | null)?.size; } catch { declared = undefined; }
     if (declared !== verified.size) return refused(400, "The upload doesn't match its grant.");
     const rpc: ConnectorRpcRequest = { type: "request", id: verified.ticket.jti, method: "POST", path: verified.path, body: input.body, ticket: verified.ticket };
-    const now = Date.now();
-    for (const [key, expiry] of this.#seen) if (expiry <= now) this.#seen.delete(key);
-    const keys = [`request:${rpc.id}`, `ticket:${rpc.ticket.jti}`];
-    if (keys.some(key => this.#seen.has(key))) return refused(409, "That upload grant was already used.");
-    for (const key of keys) this.#seen.set(key, Math.min((rpc.ticket.exp + 5) * 1000, now + 70_000));
+    const claim = this.#claim(this.#uploaded, rpc);
+    if (claim === "replayed") return refused(409, "That upload grant was already used.");
+    if (claim === "full") return refused(503, "The host is taking too many requests at once; try again shortly.");
     let authorization: string;
     try { ({ authorization } = await validateRelayRequest(rpc, state.connectorId, this.options.secret)); }
     catch { return refused(400, "Invalid upload request."); }

@@ -28,15 +28,27 @@ export class ControlPlaneCalls {
 
   constructor(private readonly options: ControlPlaneCallsOptions) {}
 
-  async callbackResponse(generation: Generation, path: string, body: unknown, signal = AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(15_000)])): Promise<Response> {
-    this.options.requireGeneration(generation);
+  #post(generation: Generation, path: string, body: unknown, signal: AbortSignal): Promise<Response> {
     const version = this.options.settings.version ?? buildVersion ?? DEVELOPMENT_CONNECTOR_VERSION;
-    const response = await (this.options.settings.fetch ?? fetch)(`${this.options.credentials().controlPlaneUrl}${path}`, {
+    return (this.options.settings.fetch ?? fetch)(`${this.options.credentials().controlPlaneUrl}${path}`, {
       method: "POST", redirect: "error", credentials: "omit",
       headers: { authorization: `Bearer ${this.options.credentials().token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json",
         ...(version ? { [CONNECTOR_VERSION_HEADER]: version } : {}) },
       body: JSON.stringify(body), signal,
     });
+  }
+
+  async #report(generation: Generation, path: string, body: unknown, unavailable: string): Promise<void> {
+    this.options.requireGeneration(generation);
+    const response = await this.#post(generation, path, body, AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(15_000)]));
+    await response.body?.cancel();
+    this.options.requireGeneration(generation);
+    if (!response.ok && (response.status >= 500 || response.status === 408 || response.status === 429)) throw new Error(unavailable);
+  }
+
+  async callbackResponse(generation: Generation, path: string, body: unknown, signal = AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(15_000)])): Promise<Response> {
+    this.options.requireGeneration(generation);
+    const response = await this.#post(generation, path, body, signal);
     try {
       this.options.requireGeneration(generation);
       signal.throwIfAborted();
@@ -58,11 +70,7 @@ export class ControlPlaneCalls {
   async brokerCallback(generation: Generation, path: string, body: unknown, limit = CALLBACK_LIMIT): Promise<unknown> {
     this.options.requireGeneration(generation);
     const signal = AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(RPC_TIMEOUT)]);
-    const response = await (this.options.settings.fetch ?? fetch)(`${this.options.credentials().controlPlaneUrl}${path}`, {
-      method: "POST", redirect: "error", credentials: "omit",
-      headers: { authorization: `Bearer ${this.options.credentials().token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json" },
-      body: JSON.stringify(body), signal,
-    });
+    const response = await this.#post(generation, path, body, signal);
     const bytes = await boundedBody(response, limit, signal);
     this.options.requireGeneration(generation);
     const value = bytes.length ? decodeJson(bytes) : undefined;
@@ -87,43 +95,17 @@ export class ControlPlaneCalls {
 
   async reportActivity(generation: Generation, sessionId: string, activity: SessionActivity): Promise<void> {
     if (!IDENTIFIER.test(sessionId) || !sessionActivities.includes(activity)) throw new Error("Invalid activity report");
-    this.options.requireGeneration(generation);
-    const signal = AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(15_000)]);
-    const response = await (this.options.settings.fetch ?? fetch)(`${this.options.credentials().controlPlaneUrl}/api/connectors/self/activity`, {
-      method: "POST", redirect: "error", credentials: "omit",
-      headers: { authorization: `Bearer ${this.options.credentials().token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, activity }), signal,
-    });
-    await response.body?.cancel();
-    this.options.requireGeneration(generation);
-    if (!response.ok && (response.status >= 500 || response.status === 408 || response.status === 429)) throw new Error("Activity report unavailable");
+    await this.#report(generation, "/api/connectors/self/activity", { sessionId, activity }, "Activity report unavailable");
   }
 
   async reportTunnel(generation: Generation, report: SessionTunnelReport): Promise<void> {
     if (!IDENTIFIER.test(report.sessionId)) throw new Error("Invalid tunnel report");
-    this.options.requireGeneration(generation);
-    const signal = AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(15_000)]);
-    const response = await (this.options.settings.fetch ?? fetch)(`${this.options.credentials().controlPlaneUrl}/api/connectors/self/tunnel`, {
-      method: "POST", redirect: "error", credentials: "omit",
-      headers: { authorization: `Bearer ${this.options.credentials().token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json" },
-      body: JSON.stringify(report), signal,
-    });
-    await response.body?.cancel();
-    if (!response.ok && (response.status >= 500 || response.status === 408 || response.status === 429)) throw new Error("Tunnel report unavailable");
+    await this.#report(generation, "/api/connectors/self/tunnel", report, "Tunnel report unavailable");
   }
 
   async reportBranches(generation: Generation, sessionId: string, branches: SessionBranch[]): Promise<void> {
     if (!IDENTIFIER.test(sessionId) || branches.length > MAX_CLONE_BRANCHES) throw new Error("Invalid branch report");
-    this.options.requireGeneration(generation);
-    const signal = AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(15_000)]);
-    const response = await (this.options.settings.fetch ?? fetch)(`${this.options.credentials().controlPlaneUrl}/api/connectors/self/branches`, {
-      method: "POST", redirect: "error", credentials: "omit",
-      headers: { authorization: `Bearer ${this.options.credentials().token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, branches: branches.map(({ repository, branch }) => ({ repository, branch })) }), signal,
-    });
-    await response.body?.cancel();
-    this.options.requireGeneration(generation);
-    if (!response.ok && (response.status >= 500 || response.status === 408 || response.status === 429)) throw new Error("Branch report unavailable");
+    await this.#report(generation, "/api/connectors/self/branches", { sessionId, branches: branches.map(({ repository, branch }) => ({ repository, branch })) }, "Branch report unavailable");
   }
 
   async readBackup(generation: Generation, restore: RestoreDescriptor, targetSessionId: string): Promise<Uint8Array> {

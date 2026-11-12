@@ -54,3 +54,10 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
 - **The connector keeps its lifecycle.** Connecting, the connection's generation, restarting and the runtime stay in
   `LocalConnector`; `ControlPlaneCalls` and `RelayFrames` read them through callbacks and check the generation where the
   connector did.
+- **The replay guard counts relay requests and direct uploads apart.** A request or ticket seen on either path is
+  refused on both, but each path remembers its own, up to 8,192 keys. A relay request over that limit ends the
+  connection, as before; an upload over it is answered 503 and can be sent again. Were they counted together, a fast
+  upload from the desktop app to its own host could fill the guard and end the connection for every session on it.
+- **Every call to the control plane is posted one way.** `ControlPlaneCalls` builds the request in one place, so each
+  call carries the connector's version, and the activity, tunnel and branch reports share one body that checks the
+  connection's generation before and after.
