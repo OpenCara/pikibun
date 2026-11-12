@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import { auditStatement, hashPassword, instanceAdmins, newPassword, operatorPasswordResetStatements, passwordAccountStatements, passwordUsername, USERNAME_MATCH, usernameMatch } from './authority/index.js';
+import { auditStatement, hashPassword, instanceAdmins, newPassword, operatorFirstPasswordStatement, operatorPasswordResetStatements, passwordAccountStatements, passwordUsername, USERNAME_MATCH, usernameMatch } from './authority/index.js';
 import { ConstraintError, type Database } from './db/types.js';
 import { now } from './http.js';
 import type { Env } from './types.js';
@@ -50,7 +50,7 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
     if (await db.query(`SELECT 1 FROM users WHERE id = ? AND auth_kind = 'password' AND NOT EXISTS (SELECT 1 FROM password_credentials WHERE user_id = ?)`).bind(userId, userId).first()) {
       const at = now();
       await db.batch([
-        db.query('INSERT INTO password_credentials (user_id, password_hash, failed_attempts, locked_until, created_at, updated_at) VALUES (?, ?, 0, NULL, ?, ?)').bind(userId, hash, at, at),
+        operatorFirstPasswordStatement(db, userId, hash, at),
         auditStatement({ DB: db } as Env, null, 'account.password.created_by_operator', null, null, { userId }),
       ]);
       return `pikibun: gave ${userId}, which signed in without a password on this computer, its first password; sign in with the username ${name}`;

@@ -218,20 +218,20 @@ Mac** on the sign-in screen while signed out, run Pikibun itself on this compute
 terminal: the server and its web app on `http://127.0.0.1:7878`, for its owner alone, with this computer as the host
 that runs their sessions.
 
-- **Start and stop** it. The first start takes the owner's GitHub OAuth app (its client ID and secret, entered on the
-  page with the two addresses to register it with); later starts use the saved one. Where this computer has no
-  sandbox, it asks the same consent as This Mac before this computer runs sessions.
+- **Start and stop** it, with nothing to set up: there is no GitHub sign-in. Where this computer has no sandbox, it
+  asks the same consent as This Mac before this computer runs sessions.
 - **Sign in to it**: the app switches its server to the running Pikibun (from Settings, after signing out of the one it
-  is signed in to), and while nobody owns it yet, its GitHub sign-in carries the server's claim secret
-  (`/api/auth/native/start?…&claim=`), so the account that signs in becomes its owner without the link `pikibun serve`
-  prints for a browser.
+  is signed in to) and signs in as its owner with the server's sign-in token, which the command's status carries
+  while it runs (`POST /api/auth/native/local`). The first sign-in makes the owner's account. Signed out of it, the
+  sign-in screen's **Sign in to Pikibun on this Mac** does the same; for a local Pikibun the app doesn't run, it takes
+  the link `pikibun serve` printed (`/api/auth/local?token=…`) pasted instead.
 - It runs while the app is open, and starts again at the next launch if it was running when the app quit, after which
   the app tries its sign-in again.
 
 The app runs `pikibun serve --stdio` (`apps/server/src/local/app-server.ts`, protocol in `packages/shared/src/app-server-protocol.ts`)
 through the same login shell or `cmd` as `pikibun host --stdio` (`src/lib/pikibun-command.ts`), with JSON lines on
-its stdin and stdout, where the OAuth app's secret travels. When the command is missing or too old for `--stdio`, the
-page offers This Mac's **Install pikibun** or **Update pikibun**. It uses `pikibun serve`'s state directory, so a
+its stdin and stdout, where the sign-in token travels. When the command is missing or too old for `--stdio` (or so old
+that it still asks for a GitHub OAuth app), the page offers This Mac's **Install pikibun** or **Update pikibun**. It uses `pikibun serve`'s state directory, so a
 Pikibun set up in a terminal carries over, and only one of them runs at a time. Its host is the server's own (paired
 with the server's state, as `pikibun serve` pairs it), not This Mac's: This Mac stays a host of whichever server it is
 paired with.

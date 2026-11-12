@@ -490,6 +490,7 @@ test("the local owner's username comes from this computer's user name, cleaned u
   assert.equal(localUsername("Ada Lovelace"), "ada-lovelace");
   assert.equal(localUsername("ADA.Lovelace_2"), "ada-lovelace_2");
   assert.equal(localUsername("José"), "jose");
+  assert.equal(localUsername("Renée Smith"), "renee-smith");
   assert.equal(localUsername("_x_"), undefined);
   assert.equal(localUsername("用户"), undefined);
   assert.equal(localUsername("a".repeat(60)), "a".repeat(39));

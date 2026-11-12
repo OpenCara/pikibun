@@ -132,7 +132,7 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
 }
 
 export function localUsername(name = safeUsername()): string | undefined {
-  const cleaned = name?.normalize('NFKD').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '').slice(0, 39);
+  const cleaned = name?.normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '').slice(0, 39);
   return cleaned && PASSWORD_USERNAME.test(cleaned) ? cleaned : undefined;
 }
 

@@ -141,6 +141,11 @@ export function operatorPasswordResetStatements(db: Pick<Database, 'query'>, use
   ];
 }
 
+export function operatorFirstPasswordStatement(db: Pick<Database, 'query'>, userId: string, hash: string, at: string): Query<never> {
+  return db.query<never>(`INSERT INTO password_credentials (user_id, password_hash, failed_attempts, locked_until, created_at, updated_at)
+    SELECT ?, ?, 0, NULL, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind = 'password')`).bind(userId, hash, at, at, userId);
+}
+
 export function passwordAccountStatements(db: Pick<Database, 'query'>, name: string, displayName: string, hash: string) {
   const userId = `password:${name}`;
   const created = now();
