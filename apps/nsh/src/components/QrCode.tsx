@@ -1,10 +1,6 @@
 import { Canvas, computed, Path2D } from "nsh";
 import { encodeQr, qrPath } from "../lib/qr";
 
-/**
- * A QR code of `value`, black on white in every theme, with the quiet zone of 4 modules a camera needs around it.
- * The sign-in code's link (Settings → Profile → Signed-in apps), so a phone's camera opens it in the Pikibun app.
- */
 export function QrCode(props: { value: string; size?: number; label?: string; testID?: string }) {
   const shape = computed(() => {
     const matrix = encodeQr(props.value);

@@ -69,6 +69,17 @@ What it doesn't protect against: the conversation is shared. A sender can leave 
 - **What stands for the owner.** Setting, changing or removing a GitHub account's password takes the current password or a GitHub sign-in from the last 15 minutes. An older stolen browser session can't add a password to keep its way in, and a wrong current password counts as a failed sign-in.
 - **Races.** A sign-in or change completes only while the password it checked is still the account's (a reset that lands while it hashes wins), and replacing a password signs out every other browser and app.
 
+## Signing in an app with a code
+
+`apps/server/src/authority/app-codes.ts`: a signed-in browser or app makes a one-use code another app exchanges for a session of its own ([Signing in an app with a code](../accounts.md#signing-in-an-app-with-a-code)).
+
+- **What it takes to make one.** The current password, or a GitHub sign-in from the last 15 minutes, as setting a password does. A browser session lasts 7 days and an app's 30, so without it a stolen browser session could turn itself into a longer one that outlives the browser's sign-out.
+- **Never recent itself.** A session made from a code is marked `via = 'code'` and never counts as a recent GitHub sign-in, so one code can't make the next, nor set a password, without the owner.
+- **Bounded.** 256 random bits, kept only as their SHA-256 hash, used once (a conditional `UPDATE … RETURNING` claims it), for 10 minutes, at most 5 waiting per person. Guessing one is out of reach, so the exchange needs no lockout.
+- **Tied to its maker.** The code references the session that made it (`ON DELETE CASCADE`), and the exchange checks that session is still live: signing it out, a password change or reset, or a suspension ends it. The app session keeps the maker's method (`'password'` if made from a password sign-in or with the password typed), so turning `PASSWORD_AUTH` off ends it with the others.
+- **Asked, not followed.** A `pikibun://auth/code` link names its server, and anyone can send one. The app never signs in from a link it is handed: it fills in the code and asks, naming the server, so a link can't quietly sign it in to someone else's account or server.
+- **Audited.** `account.app_code.created` and `account.app_code.used` (with the app's name) go to the audit log.
+
 ## Single instance
 
 The server holds a database lock while it runs ([One server per database](../self-hosting.md#one-server-per-database)): live state (connected hosts, requests in flight, live updates, the password hashing queue) is in memory, and a second server would split it. On Postgres the lock lives on a connection of its own, which the server keeps watching (`apps/server/src/db/instance-lock.ts`): if that connection drops it takes the lock again, and if another server got it first, or the database stays unreachable for a minute, it stops rather than run beside it.

@@ -213,13 +213,8 @@ function isCallbackPage(origin: string, url: string): boolean {
 
 const SIGN_IN_CODE = /^[A-Za-z0-9_-]{43}$/;
 
-/** A code another signed-in browser or app made (Settings → Profile → Signed-in apps), and the server it names. */
 export interface SignInCode { origin: string | null; code: string }
 
-/**
- * Reads a sign-in code as it is pasted or opened: its link, `pikibun://auth/code?server=…&code=…`, which names the
- * server it is for, or the code alone, for the server the app is set to. Anything else is `null`.
- */
 export function parseSignInCode(input: string): SignInCode | null {
   const text = input.trim();
   if (SIGN_IN_CODE.test(text)) return { origin: null, code: text };

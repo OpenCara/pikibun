@@ -1,16 +1,9 @@
-// A QR Code encoder for the sign-in codes the app shows (Settings → Profile → Signed-in apps): byte mode, error
-// correction level M, the smallest version 1 to 40 that holds the text, and the mask with the lowest penalty, as
-// ISO/IEC 18004 describes and Project Nayuki's QR Code generator (MIT) implements. NSH has no QR drawing of its own,
-// and the app imports only its own files, so this is the app's; `tests/qr.test.ts` checks it against another encoder.
-
-// Level M's error correction codewords per block and number of blocks, by version (index 0 unused).
 const ECC_PER_BLOCK = [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28,
   28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28];
 const BLOCKS = [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33,
   35, 37, 38, 40, 43, 45, 47, 49];
 const FORMAT_BITS_M = 0;
 
-/** The modules of a QR code, `true` for dark, row by row (no quiet zone: leave 4 light modules around it). */
 export type QrMatrix = boolean[][];
 
 function rawDataModules(version: number): number {
@@ -266,7 +259,6 @@ class QrSymbol {
   }
 }
 
-/** Encodes `text` (as UTF-8 bytes); `mask` (0 to 7) is chosen by penalty unless given. */
 export function encodeQr(text: string, mask?: number): QrMatrix {
   const { version, data } = codewords(utf8(text));
   const all = interleave(version, data);
@@ -288,7 +280,6 @@ export function encodeQr(text: string, mask?: number): QrMatrix {
   return best!.modules;
 }
 
-/** SVG path data that fills the dark modules, one module per unit, `offset` units in (the quiet zone). */
 export function qrPath(matrix: QrMatrix, offset = 4): string {
   let path = "";
   matrix.forEach((row, y) => {

@@ -7,7 +7,6 @@ const digest = (matrix: boolean[][]) => createHash("sha256").update(matrix.map(r
 const link = "pikibun://auth/code?server=https%3A%2F%2Fpikibun.com&code=0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
 
 test("the app's QR codes are module for module those of another encoder (python-qrcode 8.2, byte mode, level M)", () => {
-  // Each digest is python-qrcode's matrix for the same text and mask, its rows of 0 and 1 joined by newlines.
   const cases: [string, number, number, string][] = [
     ["a", 0, 21, "ad65f877bf9411d14b0b2efbc0ca7dfffd44b86e4c5f662689ac17016c5d1b0e"],
     [link, 3, 41, "ab6a5629d3787dfa77d7c8946a34504b8dd801251ba67e5ead8ba0ad023a1792"],

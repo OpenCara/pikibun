@@ -16,11 +16,6 @@ function remaining(expiresAt: string, now: number): string {
   return seconds >= 60 ? `${Math.ceil(seconds / 60)} min` : `${seconds} s`;
 }
 
-/**
- * Signs the Pikibun app in on another device: makes a one-use code (`POST /api/me/app-codes`) and shows its
- * pikibun://auth/code link as a QR code to scan, a link to open here and a link to copy, until an app uses it, it
- * expires or it is cancelled. Making one needs the password, or a GitHub sign-in from the last 15 minutes.
- */
 export function SignInApp(props: { onClose: () => void; onSignedIn: (deviceName: string | null) => void }) {
   const user = () => session().user;
   const code = signal<AppSignInCode | null>(null);

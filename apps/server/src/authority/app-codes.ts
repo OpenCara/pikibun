@@ -8,18 +8,6 @@ import { auditAfterChange } from './audit.js';
 import { authenticate, csrfGuard, dbResult, localOwner, newSession, ownProfile, privateResponse, safeText, SUSPENDED } from './auth.js';
 import { requireRecentOwner } from './password-auth.js';
 
-// Sign in an app with a code. A signed-in browser or app makes a one-use code (Settings → Profile → Signed-in apps),
-// shown as a pikibun://auth/code link and its QR code; another app exchanges it for a session of its own, as it would
-// the code a GitHub sign-in hands back, without GitHub's round trip or a password.
-//
-// - Making one needs the current password or a GitHub sign-in from the last 15 minutes (requireRecentOwner), so a
-//   stolen browser session, which lasts 7 days, can't turn itself into a 30-day app session.
-// - It lasts 10 minutes, works once, is kept only as its hash, and a person has at most 5 waiting.
-// - It dies with the session that made it (the foreign key): signing that browser out, a password change or reset, a
-//   suspension. The app session it makes carries that session's method, so turning PASSWORD_AUTH off ends an app
-//   signed in from a password sign-in too, and is marked `via = 'code'`, so it never stands for a recent GitHub
-//   sign-in in turn.
-
 const CODE_TTL = 10 * 60 * 1000;
 const MAX_WAITING = 5;
 const CODE = /^[A-Za-z0-9_-]{43}$/;

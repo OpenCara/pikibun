@@ -275,11 +275,6 @@ async function recentGitHubSignIn(env: Env, user: UserRow, tokenHash: string): P
   return !!session && session.method === null && session.via === null && Number.isFinite(signedInAt) && Date.now() - signedInAt <= RECENT_SIGN_IN_MS;
 }
 
-/**
- * The signed-in person shows, now, that they hold the account, before something a stolen browser session shouldn't do
- * (making a code another app signs in with): its current password where the server takes passwords, or else a GitHub
- * sign-in from the last 15 minutes. Answers which one it was.
- */
 export async function requireRecentOwner(c: AppContext, current: unknown): Promise<'password' | 'github'> {
   const user = await signedInUser(c);
   const typed = current !== undefined && current !== null && current !== '';
