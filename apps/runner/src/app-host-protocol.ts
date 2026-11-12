@@ -1,4 +1,6 @@
 import type { LocalModelSummary } from "../../../packages/shared/src/connector.js";
+import type { EntryView, SessionView } from "../../../packages/shared/src/types.js";
+import type { SessionViewPatch } from "../../../packages/shared/src/view-patch.js";
 
 export type SetupAction =
   | { kind: "xcode-tools" }
@@ -65,7 +67,16 @@ export interface LoginAnswerRequest { type: "login-answer"; id: number; login: n
 
 export interface LoginCancelRequest { type: "login-cancel"; id: number; login: number }
 
-export type HostRequest = InspectRequest | StartRequest | StopRequest | UploadRequest | ProvidersRequest | LoginRequest | LoginAnswerRequest | LoginCancelRequest;
+export interface ViewRequest { type: "view"; id: number; sessionId: string; since?: string; brief?: boolean }
+
+export interface EntriesRequest { type: "entries"; id: number; sessionId: string; conversation: string; before: string; limit: number; brief?: boolean }
+
+export type HostRequest = InspectRequest | StartRequest | StopRequest | UploadRequest | ProvidersRequest | LoginRequest | LoginAnswerRequest | LoginCancelRequest
+  | ViewRequest | EntriesRequest;
+
+export type LocalView = { view: SessionView; revision: string } | { patch: SessionViewPatch };
+
+export interface LocalPage { entries: EntryView[]; older: number }
 
 export type LoginMethodType = "oauth" | "api_key";
 
@@ -116,7 +127,7 @@ export interface HostInspection {
 }
 
 export type HostErrorCode = "invalid-request" | "unsupported" | "consent-required" | "not-paired" | "already-paired"
-  | "server-mismatch" | "already-running" | "lease-busy" | "setup" | "failed" | "not-running" | "cancelled" | "busy";
+  | "server-mismatch" | "already-running" | "lease-busy" | "setup" | "failed" | "not-running" | "cancelled" | "busy" | "not-found";
 
 export interface HostError {
   code: HostErrorCode;
@@ -126,7 +137,8 @@ export interface HostError {
 
 export type HostEvent =
   | { type: "ready" }
-  | { type: "result"; id: number; ok: true; inspection?: HostInspection; reply?: { status: number; body: string }; providers?: LoginProvider[] }
+  | { type: "result"; id: number; ok: true; inspection?: HostInspection; reply?: { status: number; body: string }; providers?: LoginProvider[]; view?: LocalView;
+    page?: LocalPage | null }
   | { type: "login"; login: number; event: LoginEvent }
   | { type: "result"; id: number; ok: false; error: HostError }
   | { type: "status"; state: HostState; server?: string; unsandboxed?: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string }

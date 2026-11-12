@@ -213,6 +213,25 @@ describe("This Mac", () => {
     await app.waitUntil(() => showsText("this computer's host: none"));
   });
 
+  test("reads a session from its host only while the host runs, and never starts one to read it", async () => {
+    const { app, sent, showsText } = await openPanel();
+    await app.waitFor("id:this-computer-pair-button");
+    await app.press("id:fake-read-session");
+    await app.waitUntil(() => showsText("local view: none"));
+    expect(sent().some(line => line.startsWith("{\"type\":\"view\""))).toBe(false);
+    app.onDialog(() => "Run unsandboxed");
+    await app.press("id:this-computer-pair-button");
+    await app.waitUntil(() => showsText("this computer's host: c9"));
+    await app.press("id:fake-read-session");
+    await app.waitUntil(() => showsText("local view: s1"));
+    expect(sent()).toContain(JSON.stringify({ type: "view", sessionId: "s1" }));
+    await app.press("id:this-computer-stop");
+    await app.waitUntil(() => showsText("this computer's host: none"));
+    await app.press("id:fake-read-session");
+    await app.waitUntil(() => showsText("local view: none"));
+    expect(sent().filter(line => line.startsWith("{\"type\":\"view\"")).length).toBe(1);
+  });
+
   test("declining the consent starts nothing", async () => {
     const { app, sent, showsText } = await openPanel();
     await app.waitFor("id:this-computer-pair-button");

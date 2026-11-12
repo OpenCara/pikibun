@@ -2,6 +2,7 @@ import { cleanup, effect, lifecycle, signal, untracked, type Accessor } from "ns
 import { createViewCache, openFetchEventStream, startLiveSession, type SessionRecord, type SessionView, type StreamStatus } from "../shared";
 import { session as signedIn } from "./auth";
 import { onClearDrafts } from "./drafts";
+import { localSessions } from "./local-sessions";
 import { inBackground } from "./resource";
 
 const viewCache = createViewCache(8);
@@ -43,6 +44,7 @@ export function createLiveSession(id: string): LiveSessionState {
       }),
       hidden: inBackground,
       cache: viewCache,
+      ...(localSessions ? { local: localSessions } : {}),
       onVisibilityChange(listener) {
         visibility.add(listener);
         return () => visibility.delete(listener);

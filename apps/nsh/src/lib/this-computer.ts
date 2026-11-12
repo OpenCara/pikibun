@@ -3,7 +3,7 @@ import { platform, signal, Storage, untracked } from "nsh";
 import nshProcess from "process";
 import { APP_VERSION } from "../app-version";
 import type {
-  HostEvent, HostInspection, HostRequest, HostState, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
+  HostEvent, HostInspection, HostRequest, HostState, LocalPage, LocalView, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
 } from "../../../runner/src/app-host-protocol";
 import {
   appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine,
@@ -21,6 +21,7 @@ const HOST_ARGS = ["host", "--stdio"];
 const INSTALL_TIMEOUT_MS = 5 * 60_000;
 const LOG_LIMIT = 200;
 const NOTICES = 20;
+const LOCAL_READ_MS = 5_000;
 
 export function hostCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[] } {
   return pikibunCommand(os, shell, cli, HOST_ARGS);
@@ -487,6 +488,34 @@ export class ThisComputerHost {
     if (!current || current.login === undefined) return { ok: true };
     const result = await this.channel.request({ type: "login-cancel", login: current.login });
     return result.ok ? { ok: true } : { ok: false, error: result.error.message };
+  }
+
+  serving(): { server: string; connectorId: string } | undefined {
+    const running = untracked(this.running);
+    const state = untracked(this.state);
+    if (!this.channel.running || !running?.connectorId || state === "stopped" || state === "stopping") return undefined;
+    return { server: running.server, connectorId: running.connectorId };
+  }
+
+  async readView(sessionId: string, options: { since?: string; brief: boolean }): Promise<LocalView | null> {
+    if (!this.serving()) return null;
+    const result = await this.localRequest({ type: "view", sessionId, ...(options.since ? { since: options.since } : {}), ...(options.brief ? { brief: true } : {}) });
+    return result?.ok && result.view ? result.view : null;
+  }
+
+  async readEntries(sessionId: string, options: { conversation: string; before: string; limit: number; brief: boolean }): Promise<LocalPage | null> {
+    if (!this.serving()) return null;
+    const result = await this.localRequest({ type: "entries", sessionId, conversation: options.conversation, before: options.before, limit: options.limit,
+      ...(options.brief ? { brief: true } : {}) });
+    return result?.ok && result.page ? result.page : null;
+  }
+
+  private async localRequest(message: { type: "view"; sessionId: string; since?: string; brief?: boolean }
+    | { type: "entries"; sessionId: string; conversation: string; before: string; limit: number; brief?: boolean }): Promise<HostResult | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), LOCAL_READ_MS); });
+    try { return await Promise.race([this.channel.request(message), late]); }
+    finally { clearTimeout(timer); }
   }
 
   shutdown(): Promise<void> { return this.channel.shutdown(); }

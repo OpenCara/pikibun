@@ -2,7 +2,9 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { SessionRecord, SessionView } from "../packages/shared/src/types.js";
 import { ApiError } from "../packages/client/src/api.js";
-import { createViewCache, liveTiming, startLiveSession, type EventStream, type StreamStatus, type ViewCache } from "../packages/client/src/live-session.js";
+import {
+  createViewCache, liveTiming, startLiveSession, type EventStream, type LocalSessions, type LocalViewReply, type StreamStatus, type ViewCache,
+} from "../packages/client/src/live-session.js";
 
 const record = { id: "s1" } as SessionRecord;
 const viewable = { ...record, viewable: true } as SessionRecord;
@@ -20,7 +22,7 @@ class FakeStream implements EventStream {
 }
 
 interface Backend {
-  session: SessionRecord | ApiError;
+  session: SessionRecord | Error;
   view: SessionView | ApiError;
   stream: SessionView[] | "hold";
   entries?: (path: string) => unknown;
@@ -29,7 +31,7 @@ interface Backend {
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 
-async function liveSession(t: TestContext, backend: Backend, cache?: ViewCache) {
+async function liveSession(t: TestContext, backend: Backend, cache?: ViewCache, local?: LocalSessions) {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   let now = 0;
   let hidden = false;
@@ -52,7 +54,7 @@ async function liveSession(t: TestContext, backend: Backend, cache?: ViewCache) 
       }
       if (!path.endsWith("/view")) await backend.metadataGate;
       const answer = path.endsWith("/view") ? backend.view : backend.session;
-      if (answer instanceof ApiError) throw answer;
+      if (answer instanceof Error) throw answer;
       return (path.endsWith("/view") ? { view: answer } : { session: answer }) as T;
     },
     openEvents(url) {
@@ -69,6 +71,7 @@ async function liveSession(t: TestContext, backend: Backend, cache?: ViewCache) 
     hidden: () => hidden,
     onVisibilityChange(listener) { visibility.add(listener); return () => visibility.delete(listener); },
     cache,
+    ...(local ? { local } : {}),
   });
   t.after(() => live.stop());
   await flush();
@@ -346,4 +349,173 @@ test("the view cache keeps the sessions shown most recently", () => {
   assert.ok(cache.get("s1") && cache.get("s3"));
   cache.clear();
   assert.equal(cache.get("s1"), undefined);
+});
+
+const hosted = { ...record, connectorId: "this-mac" } as SessionRecord;
+
+class FakeHost implements LocalSessions {
+  hosting = true;
+  readonly records = new Map<string, SessionRecord>();
+  readonly reads: { since?: string; brief: boolean }[] = [];
+  readonly pages: { conversation: string; before: string; limit: number; brief: boolean }[] = [];
+  answer: (options: { since?: string; brief: boolean }) => LocalViewReply | null = () => ({ view: idleView, revision: "1".repeat(32) });
+  page: () => { entries: SessionView["entries"]; older: number } | null = () => null;
+  gate?: Promise<void>;
+  runs(session: SessionRecord) {
+    if (!this.hosting || session.connectorId !== "this-mac") { this.records.delete(session.id); return false; }
+    this.records.set(session.id, session);
+    return true;
+  }
+  ran(sessionId: string) { return this.hosting ? this.records.get(sessionId) : undefined; }
+  async view(_sessionId: string, options: { since?: string; brief: boolean }) { this.reads.push(options); await this.gate; return this.answer(options); }
+  async entries(_sessionId: string, options: { conversation: string; before: string; limit: number; brief: boolean }) { this.pages.push(options); return this.page(); }
+}
+
+test("a session this computer's host runs is read from it, and the server is asked only who may read it", async t => {
+  const host = new FakeHost();
+  const first = "1".repeat(32);
+  const second = "2".repeat(32);
+  host.answer = options => options.since === undefined ? { view: idleView, revision: first }
+    : { patch: { base: first, revision: second, view: { sessionId: "s1", busy: true }, lists: { entries: [], approvals: [], conversations: [], queue: [] } } } as unknown as LocalViewReply;
+  const live = await liveSession(t, { session: { ...hosted, toolOutput: "brief" }, view: idleView, stream: "hold" }, undefined, host);
+  assert.deepEqual(live.state.view, idleView);
+  assert.equal(live.state.status, "online");
+  assert.deepEqual(host.reads, [{ brief: true }]);
+  await live.advance(liveTiming.localIdleMs);
+  assert.deepEqual(host.reads.at(-1), { since: first, brief: true });
+  assert.equal(live.state.view?.busy, true);
+  live.streams[0]!.emit("view", JSON.stringify({ view: activeView }));
+  assert.equal(live.state.view?.busy, true, "The server's stream, opened before the metadata said where the session runs, is closed");
+  await live.advance(liveTiming.accessCheckMs);
+  const paths = live.requests.map(request => request.path);
+  assert.deepEqual(paths, ["/api/sessions/s1", "/api/sessions/s1/events?since=", "/api/sessions/s1"], "No view from the server, and no stream after the first");
+  assert.ok(host.reads.length > 10);
+});
+
+test("a session the host is known to run opens from it at once, and shows once the server says its account may read it", async t => {
+  const host = new FakeHost();
+  host.records.set("s1", hosted);
+  const gate = Promise.withResolvers<void>();
+  const live = await liveSession(t, { session: hosted, view: idleView, stream: "hold", metadataGate: gate.promise }, undefined, host);
+  assert.equal(host.reads.length, 1);
+  assert.equal(live.state.view, undefined, "Not before the server answered");
+  assert.deepEqual(live.opens(), []);
+  gate.resolve();
+  await flush();
+  assert.deepEqual(live.state.view, idleView);
+  assert.deepEqual(live.opens(), [], "The server's stream never opened");
+});
+
+test("while the server can't be reached, a session on this computer's host carries on from it, without an error", async t => {
+  const host = new FakeHost();
+  host.records.set("s1", hosted);
+  const backend: Backend = { session: new TypeError("fetch failed"), view: idleView, stream: [] };
+  const live = await liveSession(t, backend, undefined, host);
+  assert.deepEqual(live.state.view, idleView, "Opened while the server can't be reached");
+  assert.equal(live.state.error, "");
+  host.answer = () => ({ view: activeView, revision: "3".repeat(32) });
+  await live.advance(liveTiming.accessCheckMs);
+  assert.deepEqual(live.state.view, activeView);
+  assert.equal(live.state.error, "");
+  assert.equal(live.state.status, "online");
+  assert.deepEqual(live.opens(), []);
+});
+
+test("a host that can't read the session hands it to the server's stream, and is asked again only after a while", async t => {
+  const host = new FakeHost();
+  host.answer = () => null;
+  const backend: Backend = { session: hosted, view: idleView, stream: [idleView] };
+  const live = await liveSession(t, backend, undefined, host);
+  assert.equal(host.reads.length, 1);
+  assert.deepEqual(live.state.view, idleView);
+  assert.equal(live.opens().length, 2, "The stream opened before the metadata, then again once the host couldn't read it");
+  await live.advance(liveTiming.localRetryMs - 250);
+  assert.equal(host.reads.length, 1, "Not again while it is paused");
+  host.answer = () => ({ view: activeView, revision: "4".repeat(32) });
+  await live.advance(liveTiming.accessCheckMs + 250);
+  assert.ok(host.reads.length > 1, "Again from the next access check");
+  assert.deepEqual(live.state.view, activeView);
+});
+
+test("a session that leaves the host and comes back while a read is under way keeps being read", async t => {
+  const host = new FakeHost();
+  const live = await liveSession(t, { session: hosted, view: idleView, stream: "hold" }, undefined, host);
+  const gate = Promise.withResolvers<void>();
+  host.gate = gate.promise;
+  await live.advance(liveTiming.localIdleMs);
+  assert.equal(host.reads.length, 2, "A read under way");
+  host.hosting = false;
+  live.live.refresh();
+  await flush();
+  host.hosting = true;
+  live.live.refresh();
+  await flush();
+  host.gate = undefined;
+  gate.resolve();
+  await flush();
+  await live.advance(250);
+  assert.equal(host.reads.length, 3, "Read again once the one under way ended");
+  await live.advance(liveTiming.localIdleMs);
+  assert.equal(host.reads.length, 4, "And on");
+});
+
+test("a server that answers with an error doesn't vouch for a view read from the host; one that can't be reached does", async t => {
+  const host = new FakeHost();
+  host.records.set("s1", hosted);
+  const backend: Backend = { session: new ApiError(500, "internal", "Something broke."), view: idleView, stream: "hold" };
+  const live = await liveSession(t, backend, undefined, host);
+  assert.equal(host.reads.length, 1);
+  assert.equal(live.state.view, undefined, "Held: the server answered, but didn't say the account may read it");
+  assert.equal(live.state.error, "Something broke.");
+  backend.session = new ApiError(502, "BACKEND_UNAVAILABLE", "The proxy in front of Pikibun got no valid answer from the server (HTTP 502 Bad Gateway).");
+  await live.advance(liveTiming.accessCheckMs);
+  assert.deepEqual(live.state.view, idleView, "Pikibun's API couldn't be reached: the host's view shows");
+  assert.equal(live.state.error, "");
+  backend.session = new ApiError(500, "internal", "Something broke.");
+  host.answer = () => ({ view: activeView, revision: "6".repeat(32) });
+  await live.advance(liveTiming.accessCheckMs);
+  assert.deepEqual(live.state.view, activeView, "Once vouched for, a later error doesn't stop the reads");
+});
+
+test("a session read from the host goes back to the server's stream once it runs elsewhere", async t => {
+  const host = new FakeHost();
+  const backend: Backend = { session: hosted, view: idleView, stream: "hold" };
+  const live = await liveSession(t, backend, undefined, host);
+  host.hosting = false;
+  await live.advance(liveTiming.accessCheckMs);
+  assert.equal(live.opens().length, 2, "Moved off this computer: the server's stream again");
+  const reads = host.reads.length;
+  await live.advance(liveTiming.accessCheckMs);
+  assert.equal(host.reads.length, reads);
+});
+
+test("a session read from the host stops once its account's access is gone", async t => {
+  const host = new FakeHost();
+  const backend: Backend = { session: hosted, view: idleView, stream: "hold" };
+  const live = await liveSession(t, backend, undefined, host);
+  assert.deepEqual(live.state.view, idleView);
+  backend.session = new ApiError(403, "forbidden", "You no longer have access to this session.");
+  await live.advance(liveTiming.accessCheckMs);
+  assert.equal(live.state.view, null);
+  assert.equal(live.state.status, "offline");
+  const after = host.reads.length;
+  await live.advance(10 * liveTiming.localIdleMs);
+  assert.equal(host.reads.length, after);
+});
+
+test("earlier entries of a session read from the host come from the host, and from the server where it can't read them", async t => {
+  const entry = (n: number) => ({ id: `0:${n}`, kind: "message", role: "assistant", text: `entry ${n}`, conversationId: "0" });
+  const paged = { ...idleView, approvals: [], entries: [entry(5), entry(6)], conversations: [{ id: "0", mode: "write", olderEntries: 4, previousEntryId: "0:4" }] } as unknown as SessionView;
+  const host = new FakeHost();
+  host.answer = () => ({ view: paged, revision: "5".repeat(32) });
+  host.page = () => ({ entries: [entry(3), entry(4)] as unknown as SessionView["entries"], older: 2 });
+  const backend: Backend = { session: hosted, view: idleView, stream: "hold", entries: () => ({ entries: [entry(1), entry(2)], older: 0 }) };
+  const live = await liveSession(t, backend, undefined, host);
+  await live.live.loadOlder("0");
+  assert.deepEqual(host.pages, [{ conversation: "0", before: "0:5", limit: 50, brief: false }]);
+  assert.deepEqual(live.state.view!.entries.map(item => item.id), ["0:3", "0:4", "0:5", "0:6"]);
+  host.page = () => null;
+  await live.live.loadOlder("0");
+  assert.deepEqual(live.state.view!.entries.map(item => item.id), ["0:1", "0:2", "0:3", "0:4", "0:5", "0:6"]);
+  assert.equal(live.requests.filter(request => request.path.includes("/entries?")).length, 1);
 });

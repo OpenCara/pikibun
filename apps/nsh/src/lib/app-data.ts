@@ -1,8 +1,9 @@
-import { computed, context, signal, Storage, type Accessor } from "nsh";
+import { computed, context, effect, signal, Storage, type Accessor } from "nsh";
 import {
   chatPreference, parseChatPreference, type ChatPreference, type ChatSelection, type ConnectorInfo, type SessionActivity,
   type SessionRecord, type Workspace,
 } from "../shared";
+import { rememberLocalSessions } from "./local-sessions";
 import { createResource } from "./resource";
 
 const LAST_CHAT_KEY = "pikibun.lastChat";
@@ -56,6 +57,7 @@ export function createAppData(): AppData {
   let working: Accessor<boolean> = () => false;
   const sessions = createResource<{ sessions: SessionRecord[] }>(() => "/api/sessions", () => (working() ? 10_000 : 30_000));
   const workspaces = createResource<{ workspaces: Workspace[] }>(() => "/api/workspaces");
+  effect(() => rememberLocalSessions(sessions.data()?.sessions ?? []));
   const sorted = computed(() => [...(sessions.data()?.sessions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   working = computed(() => liveActivity()?.activity === "working"
     || sorted().some(session => session.status !== "archived" && session.activity === "working"));

@@ -6,13 +6,13 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import test from 'node:test';
 import type { TestContext } from 'node:test';
 import type { ConnectorCapabilities, ConnectorCredentials, ConnectorRpcRequest, ConnectorRpcResponse, LocalModelSummary } from '../packages/shared/src/connector.js';
-import type { AuthorizationRequest, ModelDefinition, RunnerAction, RunnerBinding } from '../packages/shared/src/types.js';
+import type { AuthorizationRequest, ModelDefinition, RunnerAction, RunnerBinding, SessionView } from '../packages/shared/src/types.js';
 import type { ConnectorRuntime, ConnectorSocket, LocalConnector } from '../apps/runner/src/connector.js';
 import type { LocalModels } from '../apps/runner/src/local-pi.js';
 import type { RunnerConfig } from '../apps/runner/src/session.js';
 import { connectorLimits } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
-import { claimConnectorPairing, connectorManifest, controlPlaneOrigin, createConnector, readConnectorState, validateRelayRequest, writeConnectorState } from '../apps/runner/src/connector.js';
+import { claimConnectorPairing, connectorManifest, controlPlaneOrigin, createConnector, LocalViewUnavailable, readConnectorState, validateRelayRequest, writeConnectorState } from '../apps/runner/src/connector.js';
 import { verifyRunnerTicket } from '../apps/runner/src/protocol.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { ExtensionStore } from '../apps/runner/src/extensions/store.js';
@@ -370,6 +370,8 @@ type FixtureOptions = {
   browser?: NonNullable<Parameters<typeof createConnector>[0]['browser']>;
   tunnel?: NonNullable<Parameters<typeof createConnector>[0]['tunnel']>;
   version?: string;
+  localView?: ConnectorRuntime['view'];
+  localEntries?: ConnectorRuntime['entries'];
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -413,6 +415,8 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
         },
         close: () => { record.closed = true; return Promise.resolve(); },
         resume: () => { record.resumes++; return Promise.resolve(); },
+        ...(options.localView ? { view: options.localView } : {}),
+        ...(options.localEntries ? { entries: options.localEntries } : {}),
       };
       return Promise.resolve(runtime);
     },
@@ -716,6 +720,30 @@ test('a chunk the desktop app hands the host runs once, as relayed, after the co
   verify = async () => Response.json({ error: 'The upload grant is invalid or has expired.', code: 'invalid_grant' }, { status: 403 });
   assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 403);
   assert.equal(fixture.runtimes[0]!.requests.length, runs);
+});
+
+test('the desktop app reads a session from the host itself once it has a runtime, and still while the relay is away', { timeout: 10000 }, async t => {
+  const reads: unknown[] = [];
+  const fixture = await connectorFixture(t, {
+    localView: async (sessionId, options) => { reads.push(['view', sessionId, options]); return { view: { sessionId } as unknown as SessionView, revision: 'a'.repeat(32) }; },
+    localEntries: async (sessionId, options) => { reads.push(['entries', sessionId, options]); return null; },
+  });
+  await assert.rejects(fixture.connector.localView('session', {}), LocalViewUnavailable, 'No runtime before the host first connects');
+  const socket = await startFixture(fixture);
+  const calls = fixture.allCalls.length;
+  assert.deepEqual(await fixture.connector.localView('session', { since: 'b'.repeat(32), brief: true }), { view: { sessionId: 'session' }, revision: 'a'.repeat(32) });
+  socket.close();
+  await fixture.sockets.next();
+  assert.deepEqual(await fixture.connector.localView('session', {}), { view: { sessionId: 'session' }, revision: 'a'.repeat(32) }, 'The runtime outlasts the relay');
+  assert.equal(await fixture.connector.localEntries('session', { conversation: '0', before: '0:1', limit: 5 }), null);
+  await assert.rejects(fixture.connector.localView('../session', {}));
+  assert.deepEqual(reads, [
+    ['view', 'session', { since: 'b'.repeat(32), brief: true }], ['view', 'session', {}], ['entries', 'session', { conversation: '0', before: '0:1', limit: 5 }],
+  ]);
+  assert.equal(fixture.allCalls.length, calls, 'Nothing asks the server');
+  assert.equal(fixture.runtimes[0]!.requests.length, 0, 'Nothing goes through the relayed runner API');
+  await fixture.connector.stop();
+  await assert.rejects(fixture.connector.localView('session', {}), LocalViewUnavailable);
 });
 
 test('malformed welcome never creates a runtime or advertises readiness', { timeout: 10000 }, async t => {
