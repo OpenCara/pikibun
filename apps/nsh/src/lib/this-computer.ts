@@ -68,10 +68,16 @@ export function ownCopyManifest(os: string, cli: string): string {
 async function ownCopyVersion(): Promise<string | null> {
   const cli = appCliFolder(platform.os, nshProcess.dataDir);
   if (!cli) return null;
+  let text: string;
+  try { text = await readFile(ownCopyManifest(platform.os, cli), "utf8"); }
+  catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return null;
+    throw error;
+  }
   try {
-    const manifest = JSON.parse(await readFile(ownCopyManifest(platform.os, cli), "utf8")) as { version?: unknown };
+    const manifest = JSON.parse(text) as { version?: unknown };
     return typeof manifest.version === "string" ? manifest.version : "";
-  } catch { return null; }
+  } catch { return ""; }
 }
 
 export interface CommandUpdate {
@@ -330,14 +336,19 @@ export class ThisComputerHost {
     const { appVersion, ownCopy } = commandUpdate;
     if (!hostsHere || !isVersion(appVersion)) return;
     if (await Storage.getItem(COMMAND_UPDATED_KEY).catch(() => null) === appVersion) return;
-    const had = await ownCopy();
-    if (had === null) return;
+    let had: string | null;
+    try { had = await ownCopy(); }
+    catch (error) {
+      this.log("warning", `Pikibun couldn't look for its own pikibun command (${error instanceof Error ? error.message : String(error)}), so it wasn't updated with the app. Pikibun tries again the next time it opens.`);
+      return;
+    }
+    if (had === null || untracked(this.installing)) return;
     this.updating.set(true);
     try {
       this.log("info", `Pikibun is now ${appVersion}: updating its own pikibun command${had ? ` (${had})` : ""} from npm.`);
       const { lines, result } = await this.runInstall();
       if (result.code !== 0) { this.log("warning", updateFailure(lines, result)); return; }
-      const has = await ownCopy();
+      const has = await ownCopy().catch(() => null);
       this.log("info", has && has === had ? `pikibun ${has} is the latest already.` : `npm updated pikibun${has ? ` to ${has}` : ""} in Pikibun's own folder.`);
       await Storage.setItem(COMMAND_UPDATED_KEY, appVersion).catch(() => undefined);
     } finally {

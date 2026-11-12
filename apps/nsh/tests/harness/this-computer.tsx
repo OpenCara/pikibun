@@ -13,7 +13,12 @@ const npm = String(params.npm ?? "ok");
 const npmMs = typeof params.npmMs === "number" ? params.npmMs : 5;
 const LATEST = "0.10.0";
 let ownCopy: string | null = typeof params.ownCopy === "string" ? params.ownCopy : null;
-if (typeof params.appVersion === "string") setCommandUpdate({ appVersion: params.appVersion, ownCopy: async () => ownCopy });
+if (typeof params.appVersion === "string") {
+  setCommandUpdate({ appVersion: params.appVersion, ownCopy: async () => {
+    if (ownCopy === "unreadable") throw new Error("filesystem read of `cli/node_modules/pikibun/package.json` is not granted by capabilities.fs.read");
+    return ownCopy;
+  } });
+}
 const sent = signal<string[]>([]);
 let paired: string | undefined = typeof params.paired === "string" ? params.paired : undefined;
 let signedIn = params.piSignedIn !== false;

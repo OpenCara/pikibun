@@ -1,4 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
+import type { HostEvent, HostRequest } from "../../runner/src/app-host-protocol";
+import { CommandChannel } from "../src/lib/pikibun-command";
 import { appCliFolder, COMMAND_UPDATED_KEY, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, updateFailure } from "../src/lib/this-computer";
 import { server, signedIn } from "./fixtures";
 
@@ -78,6 +80,46 @@ describe("starting Pikibun's command", () => {
   });
 });
 
+describe("a command that waits for its update", () => {
+  function waitingChannel(update: Promise<void>) {
+    const state = { launched: 0 };
+    const channel = new CommandChannel<HostEvent, HostRequest>({
+      launch: () => { state.launched++; throw new Error("launched"); }, before: () => update, eventTypes: new Set(["ready", "result"]), problem: launchProblem, subject: "The host",
+      failure: (id, message) => ({ type: "result", id, ok: false, error: { code: "failed", message } }),
+      onEvent: () => undefined, onOutput: () => undefined, onExit: () => undefined,
+    });
+    return { channel, state };
+  }
+  const soon = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+  test("shut down meanwhile, it waits for the update too and doesn't start until it is asked again", async () => {
+    let finish = () => {};
+    const { channel, state } = waitingChannel(new Promise<void>(resolve => { finish = resolve; }));
+    const asked = channel.request({ type: "inspect" });
+    let stopped = false;
+    const stopping = channel.shutdown().then(() => { stopped = true; });
+    await soon(30);
+    expect(stopped).toBe(false);
+    finish();
+    await stopping;
+    expect((await asked).ok).toBe(false);
+    expect(state.launched).toBe(0);
+    await channel.request({ type: "inspect" });
+    expect(state.launched).toBe(1);
+  });
+
+  test("shutting down gives up on an update that doesn't finish, and still starts nothing", async () => {
+    let finish = () => {};
+    const { channel, state } = waitingChannel(new Promise<void>(resolve => { finish = resolve; }));
+    const asked = channel.request({ type: "inspect" });
+    await channel.shutdown(30);
+    expect(state.launched).toBe(0);
+    finish();
+    expect((await asked).ok).toBe(false);
+    expect(state.launched).toBe(0);
+  });
+});
+
 describe("after the app is updated", () => {
   const before = { [COMMAND_UPDATED_KEY]: "0.35.0" };
   const installs = (sent: string[]) => sent.filter(line => line === "install").length;
@@ -131,6 +173,15 @@ describe("after the app is updated", () => {
     expect(app.shows("id:this-computer-command")).toBe(false);
     await app.press("text:Recent activity");
     await app.waitUntil(() => showsText("warning: npm couldn't update Pikibun's command (zsh:1: command not found: npm). This Mac keeps the one it has, and Pikibun tries again the next time it opens."));
+  });
+
+  test("a copy the app can't look for is left as it is, and the host's activity says why", async () => {
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, appVersion: "0.36.0", ownCopy: "unreadable" }, before);
+    await app.waitFor("id:this-computer-start");
+    expect(installs(sent())).toBe(0);
+    expect(app.storage()[COMMAND_UPDATED_KEY]).toBe("0.35.0");
+    await app.press("text:Recent activity");
+    await app.waitUntil(() => showsText("warning: Pikibun couldn't look for its own pikibun command (filesystem read of `cli/node_modules/pikibun/package.json` is not granted by capabilities.fs.read), so it wasn't updated with the app."));
   });
 
   test("installing the command from the page counts as this version's update", async () => {
