@@ -33,6 +33,8 @@ import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session
 import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
 import { contextView, extensionView, sessionView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
 import { INPUT_EMPTY, RunQueue, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
+import { ToolAvailability, type ToolAvailabilityOptions } from "../apps/runner/src/session/availability.js";
+import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -840,6 +842,53 @@ test("run queue: a run that settles after the session reopened is left alone; sc
   await images.queue.sweepInputs();
   assert.equal(await images.inputs.read("r0"), undefined, "a run that no longer waits loses its images");
   assert.deepEqual(events, ["options r0", "submit r0 \"go\""]);
+});
+
+function availability(options: Partial<ToolAvailabilityOptions> = {}, answer?: Partial<WorkspaceExtensionsAnswer>, last?: Partial<WorkspaceExtensionsAnswer>) {
+  const workspace: WorkspaceExtensionsAnswer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "approval", settings: {} }], automaticTools: false, ...answer } as WorkspaceExtensionsAnswer;
+  return new ToolAvailability({
+    binding: { session: { workspaceId: "w" }, owner: { id: "github:1" } } as unknown as RunnerBinding,
+    config: { extensions: { workspace: async () => workspace, ...(last ? { lastKnown: () => ({ ...workspace, ...last }) } : {}) } },
+    sandbox: { browser: undefined } as unknown as SessionWorkspace, onHost: false, definitions: () => [], toolNames: () => [],
+    ...options,
+  });
+}
+
+test("availability: why the browser or a tunnel isn't offered, from where the session runs and what the host has", () => {
+  assert.equal(availability({ sandbox: { browser: {} } as never }).browserUnavailable(), undefined);
+  assert.equal(availability({ onHost: true }).browserUnavailable(), "on-host");
+  assert.equal(availability({ config: { sandboxBackend: { kind: "seatbelt" } as never } }).browserUnavailable(), "sandbox");
+  assert.equal(availability().browserUnavailable(), undefined, "a host that doesn't say has no reason");
+  assert.equal(availability({ config: { browserStatus: () => ({ state: "missing" }) as never } }).browserUnavailable(), "missing");
+  assert.equal(availability().tunnelUnavailable(), undefined, "a host without tunnels has no reason to give");
+  const tunnels = { status: () => undefined };
+  assert.equal(availability({ config: { tunnels }, onHost: true }).tunnelUnavailable(), "on-host");
+  assert.equal(availability({ config: { tunnels } }).tunnelUnavailable(), "sandbox", "only the Linux sandbox runs tunnels");
+  assert.equal(availability({ config: { tunnels } }).tunnelOffered(), false);
+  assert.equal(availability().linuxSandbox(), undefined);
+  assert.deepEqual(availability().missingPrograms(new Set()), [], "outside the Linux sandbox nothing is missing");
+  assert.equal(availability().programMissing({ programs: ["node"], path: "/usr/local/bin" }, "node"), undefined);
+});
+
+test("availability: a message runs the tools both its sender and the session's owner have, while the workspace keeps them on", async () => {
+  const groups = { "github:1": { name: "Owners", off: ["github_merge"] }, "github:2": { name: "Guests", off: ["tunnel"] } };
+  const tools = availability({}, { toolGroups: groups });
+  assert.deepEqual([...await tools.sessionToolsOff()].sort(), ["github_merge"]);
+  assert.deepEqual([...await tools.sessionToolsOff("github:2")].sort(), ["github_merge", "tunnel"]);
+  assert.deepEqual([...await tools.sessionToolsOff("github:1")].sort(), ["github_merge"]);
+  await tools.requireSenderTool("tunnel", "github:1");
+  await tools.requireSenderTool("git", "github:2");
+  await assert.rejects(tools.requireSenderTool("tunnel", "github:2"), (error: unknown) => error instanceof RunnerError && error.status === 403
+    && /tunnel isn't among the tools of the person who sent this message \(Guests\)/.test(error.message));
+  await assert.rejects(tools.requireSessionTool("github_merge"), /github_merge isn't among the tools of this session's owner \(Owners\)/);
+  await tools.requireSessionTool("git");
+  const off = availability({}, { extensions: [{ source: "piki:tunnel", enabled: false, tools: "approval", settings: {} }] as never });
+  await assert.rejects(off.requireSessionTool("tunnel"), /tunnel is turned off in this workspace \(piki:tunnel\)/);
+  const unknown = availability({ config: { extensions: { workspace: async () => ({ extensions: [], automaticTools: false }), lastKnown: () => undefined } } });
+  assert.ok((await unknown.sessionToolsOff()).has("git"), "a connector that never heard its owner's group gives only the read tools");
+  const heard = availability({}, { toolGroups: groups }, { toolGroups: groups });
+  assert.deepEqual([...await heard.sessionToolsOff("github:2")].sort(), ["github_merge", "tunnel"], "once heard, the last answer's groups hold");
+  assert.deepEqual([...await availability({ config: {} }).documentKindsOff()], []);
 });
 
 function instructions(input: Partial<InstructionsInput> = {}): string {

@@ -643,7 +643,7 @@ kept by the session rather than the agent, so a long one survives the session cl
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
 | The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |
 | The Browser tab | `apps/nsh/src/session-panel/Browser.tsx` |
-| Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`, `pikiExtensionOn`, `extensionSwitchOn`, `documentKindsOff`); `session.ts` (`applyOptions`, `requireSessionTool`, `documentKindsOff`); tests in `tests/runner-schedule.test.ts` |
+| Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`, `pikiExtensionOn`, `extensionSwitchOn`, `documentKindsOff`); `session.ts` (`applyOptions`); `session/availability.ts` (`ToolAvailability`: `requireSessionTool`, `sessionToolsOff`, `documentKindsOff`); tests in `tests/runner-schedule.test.ts` |
 | Tools defined as data (node, rust, go, dotnet, make, source_read) | [tool-definitions.md](tool-definitions.md) |
 | gh, glab, az: refused and read-only arguments, token variables | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
 | A session's factories, where it runs the command, write leases | `apps/runner/src/extensions/piki/index.ts`, `adapter.ts`; `session/piki.ts` (`SessionPiki`: the extension host, its piki session, extension tool calls and sandbox commands) |

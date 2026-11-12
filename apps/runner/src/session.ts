@@ -21,18 +21,13 @@ import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson } from "./protocol.js";
-import type { ProgramToolDefinition, ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
-import { pythonPrograms } from "./python-command.js";
-import { sandboxMissingPrograms } from "./program-availability.js";
-import { programInstallStep } from "../../../packages/shared/src/program-install.js";
+import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
-import { browserUnavailableReason, type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
-import { tunnelUnavailableReason, type HostTunnelStatus, type SessionTunnelReport, type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
+import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
+import type { HostTunnelStatus, SessionTunnelReport, TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
 import { SessionTunnel } from "./session/tunnel.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
-import { documentKindsOff, extensionSwitchOn, sessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
-import { unknownToolGroup, type MemberToolGroup } from "../../../packages/shared/src/tool-groups.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
@@ -58,6 +53,7 @@ import type { ToolContext } from "./session/tools/context.js";
 import { buildTools } from "./session/tools/index.js";
 import { definedTool } from "./session/tools/defined.js";
 import { SessionDefinitions } from "./session/definitions.js";
+import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
 import { RunQueue } from "./session/run-queue.js";
 import {
@@ -162,6 +158,7 @@ export class RunnerSession {
   #shared!: Conversation;
   #extension!: Extension;
   readonly #defined: SessionDefinitions;
+  readonly #availability: ToolAvailability;
   #registry?: Registry;
   readonly #inputs: MessageInputs;
   readonly #uploads: SessionUploads;
@@ -250,9 +247,11 @@ export class RunnerSession {
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
+    this.#availability = new ToolAvailability({ binding, config, sandbox: this.sandbox, onHost: this.#onHost,
+      definitions: () => this.#defined.definitions, toolNames: () => this.tools.map(tool => tool.name) });
     this.#calls = new ToolCalls({ ownerId: binding.owner.id, sandbox: this.sandbox, hostCommands: this.hostCommands,
       authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig(),
-      requireSenderTool: (tool, senderId) => this.requireSenderTool(tool, senderId) });
+      requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
     this.#operations = new SessionOperations({
       binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, waits: this.#waits,
       requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
@@ -261,11 +260,11 @@ export class RunnerSession {
     });
     this.#toolContext = {
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, calls: this.#calls, hostCommands: this.hostCommands, waits: this.#waits, operations: this.#operations,
-      requireSessionTool: tool => this.requireSessionTool(tool), requireSenderTool: (tool, senderId) => this.requireSenderTool(tool, senderId),
+      requireSessionTool: tool => this.#availability.requireSessionTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId),
       metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
-      programMissing: (tool, program) => this.programMissing(tool, program), browserUnavailable: () => this.browserUnavailable(),
-      tunnelUnavailable: () => this.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
+      programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
+      tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
     };
     this.#defined = new SessionDefinitions({
       sessionId: binding.session.id, windows: process.platform === "win32" && this.sandbox.isolated, config,
@@ -438,8 +437,8 @@ export class RunnerSession {
     return agentInstructions({ base: this.binding.agent.instructions, agentTools: this.binding.agent.tools, mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
       extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
-      conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.missingPrograms(off) : [],
-      linuxSandbox: !!this.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser });
+      conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
+      linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser });
   }
 
   get packed(): boolean { return this.#packed; }
@@ -681,13 +680,13 @@ export class RunnerSession {
     const access = options.access ?? "approval";
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
-    const off = run.mode === "write" ? await this.sessionToolsOff(run.initiatedBy) : new Set<string>();
+    const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
     const own = new Set(this.tools.map(tool => tool.name));
-    const kindsOff = run.mode === "write" ? await this.documentKindsOff() : new Set<DocumentKind>();
-    const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.browserUnavailable() : undefined;
+    const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();
+    const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.#availability.browserUnavailable() : undefined;
     if (!this.sandbox.browser) off.add("browser");
-    const tunnelUnavailable = run.mode === "write" && !off.has("tunnel") ? this.tunnelUnavailable() : undefined;
-    if (!this.tunnelOffered()) off.add("tunnel");
+    const tunnelUnavailable = run.mode === "write" && !off.has("tunnel") ? this.#availability.tunnelUnavailable() : undefined;
+    if (!this.#availability.tunnelOffered()) off.add("tunnel");
     const builtins = run.mode === "write" && this.#builtins
       ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
       : [];
@@ -732,52 +731,6 @@ export class RunnerSession {
       automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
   }
 
-  private browserUnavailable(): BrowserUnavailableReason | undefined {
-    if (this.sandbox.browser) return undefined;
-    if (this.#onHost) return "on-host";
-    if (this.config.sandboxBackend) return "sandbox";
-    const status = this.config.browserStatus?.();
-    if (!status) return undefined;
-    return browserUnavailableReason(status.state) ?? "missing";
-  }
-
-  private tunnelUnavailable(): TunnelUnavailableReason | undefined {
-    if (!this.config.tunnels) return undefined;
-    if (this.#onHost) return "on-host";
-    if (this.config.sandboxBackend || !(this.sandbox instanceof Sandbox)) return "sandbox";
-    const status = this.config.tunnels.status();
-    return status ? tunnelUnavailableReason(status.state) : "missing";
-  }
-
-  private linuxSandbox(): Sandbox | undefined {
-    return !this.#onHost && !this.config.sandboxBackend && this.sandbox instanceof Sandbox ? this.sandbox : undefined;
-  }
-
-  private missingPrograms(off: ReadonlySet<string>): { tool: string; source: string; programs: string[] }[] {
-    const sandbox = this.linuxSandbox();
-    if (!sandbox) return [];
-    const node = sandbox.nodePrograms;
-    const tools = [
-      ...this.#defined.definitions.filter((definition): definition is ProgramToolDefinition => definition.kind === "program" && !off.has(definition.name))
-        .map(definition => ({ tool: definition.name, source: definition.extensions[0] ?? `piki:${definition.name}`, programs: sandboxMissingPrograms(definition, node) })),
-      ...(this.tools.some(tool => tool.name === "python") && !off.has("python")
-        ? [{ tool: "python", source: "piki:python", programs: sandboxMissingPrograms({ programs: pythonPrograms, path: "/usr/local/bin" }) }] : []),
-    ];
-    return tools.filter(item => item.programs.length);
-  }
-
-  private programMissing(tool: { programs: readonly string[]; path: string | readonly string[]; toolchain?: "node" }, program: string): string | undefined {
-    const sandbox = this.linuxSandbox();
-    if (!sandbox || !sandboxMissingPrograms({ ...tool, programs: [program] }, sandbox.nodePrograms).length) return undefined;
-    return `${program} isn't installed on this host where the session's sandbox sees it, so the call would fail with "command not found". `
-      + `The host's owner installs it for the whole system, as the sandbox sees only the host's /usr: ${programInstallStep(program) ?? "the distribution's package"}. `
-      + "Tell the user so, and use what this session has meanwhile where you can.";
-  }
-
-  private tunnelOffered(): boolean {
-    return !!this.config.tunnels && this.tunnelUnavailable() === undefined;
-  }
-
   private sessionTunnel(): SessionTunnel {
     if (this.#tunnel) return this.#tunnel;
     const sandbox = this.sandbox as Sandbox;
@@ -809,65 +762,6 @@ export class RunnerSession {
     await this.authorize(ticket.actorId, "write", ticket.policyVersion);
     if (!this.#tunnel) return { stopped: false };
     return this.#tunnel.stop((input as { reason?: string }).reason === "archived" ? "archived" : "stop", ticket.actorId);
-  }
-
-  private definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0]): Set<string> {
-    for (const definition of this.#defined.definitions) {
-      off.delete(definition.name);
-      if (!definition.extensions.some(extension => extensionSwitchOn(extension, extensions))) off.add(definition.name);
-    }
-    return off;
-  }
-
-  private async sessionToolsOff(senderId?: string): Promise<Set<string>> {
-    const config = this.config.extensions;
-    const workspaceId = this.binding.session.workspaceId;
-    const answer = config ? await config.workspace(workspaceId).catch(() => undefined) : undefined;
-    const extensions = answer?.extensions ?? [];
-    const off = this.definedToolsOff(sessionToolsOff(extensions), extensions);
-    for (const tool of (await this.memberToolGroup(this.binding.owner.id))?.off ?? []) off.add(tool);
-    if (senderId !== undefined && senderId !== this.binding.owner.id) {
-      for (const tool of (await this.memberToolGroup(senderId))?.off ?? []) off.add(tool);
-    }
-    if (!config) return off;
-    const last = config.lastKnown?.(workspaceId);
-    if (last) for (const tool of sessionToolsOff(last.extensions, { failClosedOnly: true })) off.add(tool);
-    return off;
-  }
-
-  private async memberToolGroup(userId: string): Promise<MemberToolGroup | undefined> {
-    const config = this.config.extensions;
-    if (!config) return undefined;
-    const workspaceId = this.binding.session.workspaceId;
-    const answer = await config.workspace(workspaceId).catch(() => undefined);
-    if (!config.lastKnown) return answer?.toolGroups?.[userId];
-    const last = config.lastKnown(workspaceId);
-    return last ? last.toolGroups?.[userId] : unknownToolGroup;
-  }
-
-  private async requireSenderTool(tool: string, senderId: string): Promise<void> {
-    if (senderId === this.binding.owner.id) return;
-    const group = await this.memberToolGroup(senderId);
-    if (!group?.off.includes(tool)) return;
-    throw new RunnerError(403, `${tool} isn't among the tools of the person who sent this message (${group.name}): a message runs only the tools both its sender and the session's owner have. Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
-  }
-
-  private async documentKindsOff(): Promise<Set<DocumentKind>> {
-    const config = this.config.extensions;
-    if (!config) return new Set();
-    const answer = await config.workspace(this.binding.session.workspaceId).catch(() => undefined);
-    return answer ? documentKindsOff(answer.extensions) : new Set();
-  }
-
-  private async requireSessionTool(tool: string): Promise<void> {
-    if (!(await this.sessionToolsOff()).has(tool)) return;
-    const group = await this.memberToolGroup(this.binding.owner.id);
-    if (group?.off.includes(tool)) {
-      throw new RunnerError(403, `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
-    }
-    const defined = this.#defined.definitions.find(item => item.name === tool);
-    const extensions = defined ? [...defined.extensions] : sessionToolExtensions(tool).map(item => item.source);
-    throw new RunnerError(403, `${tool} is turned off in this workspace${extensions.length ? ` (${extensions.join(", ")})` : ""}. Its owners and admins add it under Settings → Workspaces → Extensions.`);
   }
 
   private async chosenExtensions(): Promise<SessionExtension[]> {
@@ -1238,8 +1132,8 @@ export class RunnerSession {
     return extensionView({
       binding: this.binding, config: this.config.extensions, builtins: () => this.#builtins, hostConfig: () => this.hostConfig(),
       requiredExtensions: () => this.requiredExtensions(), toolNames: () => this.tools.map(tool => tool.name),
-      definedToolsOff: (off, extensions) => this.definedToolsOff(off, extensions), browserUnavailable: () => this.browserUnavailable(),
-      tunnelUnavailable: () => this.tunnelUnavailable(), missingPrograms: off => this.missingPrograms(off),
+      definedToolsOff: (off, extensions) => this.#availability.definedToolsOff(off, extensions), browserUnavailable: () => this.#availability.browserUnavailable(),
+      tunnelUnavailable: () => this.#availability.tunnelUnavailable(), missingPrograms: off => this.#availability.missingPrograms(off),
     });
   }
 
