@@ -155,6 +155,16 @@ export interface AutoChoice {
   reasons: string[];
 }
 
+export interface AutoChoiceRequest {
+  task: string;
+  connectorId?: string;
+  model?: { provider: string; modelId: string };
+}
+
+export interface AutoChoiceAnswer extends AutoChoice {
+  id?: string;
+}
+
 const BUSY_PENALTY = 1.5;
 const BUSY_CAP = 6;
 

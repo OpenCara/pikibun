@@ -6,6 +6,24 @@ import {
 import { createResource } from "./resource";
 
 const LAST_CHAT_KEY = "pikibun.lastChat";
+const LAST_AUTO_KEY = "pikibun.lastAuto";
+
+export interface AutoPreference {
+  host: boolean;
+  model: boolean;
+}
+
+const noAuto: AutoPreference = { host: false, model: false };
+
+function parseAutoPreference(raw: string | null | undefined): AutoPreference | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw) as Partial<AutoPreference> | null;
+    return value && typeof value === "object" ? { host: value.host === true, model: value.model === true } : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface LiveActivity {
   sessionId: string;
@@ -25,6 +43,8 @@ export interface AppData {
   setLastWorkspaceId: (id: string) => void;
   lastChat: Accessor<ChatPreference | undefined>;
   rememberChat: (host: ConnectorInfo | undefined, selection: ChatSelection, current?: Parameters<typeof chatPreference>[2]) => void;
+  lastAuto: Accessor<AutoPreference>;
+  rememberAuto: (value: AutoPreference) => void;
   liveActivity: Accessor<LiveActivity | null>;
   setLiveActivity: (value: LiveActivity | null) => void;
 }
@@ -42,6 +62,8 @@ export function createAppData(): AppData {
   const lastWorkspaceId = signal("");
   const lastChat = signal<ChatPreference | undefined>(undefined);
   Storage.getItem(LAST_CHAT_KEY).then(raw => { if (!lastChat()) lastChat.set(parseChatPreference(raw)); }, () => undefined);
+  const lastAuto = signal<AutoPreference | undefined>(undefined);
+  Storage.getItem(LAST_AUTO_KEY).then(raw => { if (!lastAuto()) lastAuto.set(parseAutoPreference(raw)); }, () => undefined);
   return {
     sessions: sorted,
     sessionsLoading: () => sessions.loading() && !sessions.data(),
@@ -59,6 +81,11 @@ export function createAppData(): AppData {
       if (!preference) return;
       lastChat.set(preference);
       Storage.setItem(LAST_CHAT_KEY, JSON.stringify(preference)).catch(() => undefined);
+    },
+    lastAuto: () => lastAuto() ?? noAuto,
+    rememberAuto(value) {
+      lastAuto.set(value);
+      Storage.setItem(LAST_AUTO_KEY, JSON.stringify(value)).catch(() => undefined);
     },
     liveActivity,
     setLiveActivity: value => liveActivity.set(value),

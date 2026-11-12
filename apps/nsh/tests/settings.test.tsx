@@ -153,6 +153,35 @@ describe("settings", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/tool-groups`)).toEqual({ name: "Releasers", tools: ["read_file", "git", "git_push", "github_merge"] });
   });
 
+  test("Extensions adds auto mode as one of Pikibun's features, which needs no host", async () => {
+    const autoMode = { source: "piki:auto-mode", enabled: true, tools: "automatic", settings: {} };
+    const app = await openSettings("workspaces", {
+      [`PUT ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [autoMode] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:workspace-extensions");
+    await app.press("text:Add extension");
+    await app.waitFor("text:Pikibun features");
+    await app.press("text:Auto mode");
+    await app.waitUntil(() => app.texts().some(item => item.startsWith("Adds Auto to the host and model dropdowns") && item.endsWith("It has no settings.")));
+    await app.press("text:Save");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`)).toMatchObject({ source: "piki:auto-mode", enabled: true });
+  });
+
+  test("Extensions lists auto mode without hosts to install it on", async () => {
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, extensions: [{ source: "piki:auto-mode", enabled: true, tools: "automatic", settings: {} }],
+        hosts: [{ id: "c1", name: "ada-mac", ownerId: "u1", ownerName: "ada" }] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("text:Auto mode · piki:auto-mode");
+    expect(app.texts().join(" ")).toContain("Runs in Pikibun itself: hosts install nothing");
+    expect(app.texts().join(" ")).not.toContain("0 of 1 host");
+  });
+
   test("a new workspace is created and its first session starts there", async () => {
     const app = await openSettings("workspaces");
     await app.waitFor("id:new-workspace");

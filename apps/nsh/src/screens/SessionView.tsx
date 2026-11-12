@@ -14,6 +14,8 @@ import { RepositoryPreparationCard } from "../components/RepositoryPreparation";
 import { TranscriptEntry, type MessageActions } from "../components/TranscriptEntry";
 import { createAttachments, createFileOptions, encodeImages, imageBlobs, imagesUnavailable, restoreImages, withFilesNote } from "../lib/attachments";
 import type { ChatImage } from "../../../../packages/shared/src/chat-images";
+import type { AutoChoiceAnswer } from "../../../../packages/shared/src/auto-mode";
+import { createAutoMode } from "../lib/auto-mode";
 import type { WithdrawResult } from "../../../../packages/shared/src/types";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
@@ -272,7 +274,11 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const content = createDraft(props.id);
   const conversationId = signal("");
   const queueOpen = signal(false);
-  let request: { key: string; id: string; images?: ChatImage[] } | null = null;
+  let request: { key: string; id: string; images?: ChatImage[]; choice?: AutoChoiceAnswer } | null = null;
+  const autoMode = createAutoMode(() => current().workspaceId);
+  const autoChat = signal(false);
+  const autoChosen = signal<string | undefined>(undefined);
+  const autoChatOn = () => autoMode.enabled() && autoChat();
   const submission = createAction();
   const stopping = createAction();
   const rewinding = createAction();
@@ -332,22 +338,31 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     if (!permitted() || (!text.trim() && !pasted.length && !attached.length) || submission.busy()) return;
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
+    const auto = autoChatOn() && host?.capabilities.chatOptions === true;
     const options = chatOptionsBody(host, selection(), kind);
-    const unavailable = accessUnavailable(host, selection(), kind) ?? modelUnavailable(host, selection());
+    const unavailable = accessUnavailable(host, selection(), kind) ?? (auto ? undefined : modelUnavailable(host, selection()));
     receipt.set(null);
     withdrawNotice.set("");
     const sent = text;
-    const key = `${kind}:${JSON.stringify(options ?? null)}:${[...pasted, ...attached].map(item => item.id).join(",")}:${sent}`;
+    const key = `${kind}:${auto ? `auto:${selection().access}` : JSON.stringify(options ?? null)}:${[...pasted, ...attached].map(item => item.id).join(",")}:${sent}`;
     if (request?.key !== key) request = { key, id: randomId() };
     const pending = request;
     void submission.run(async () => {
       if (unavailable) throw new Error(unavailable);
+      let chosen = selection();
+      let sending = options;
+      if (auto && host) {
+        const choice = pending.choice ??= await autoMode.choose({ task: sent, connectorId: host.id });
+        chosen = { ...chosen, model: { provider: choice.provider, modelId: choice.modelId }, thinkingLevel: choice.thinkingLevel };
+        sending = chatOptionsBody(host, chosen, kind);
+        autoChosen.set(host.models.find(item => item.provider === choice.provider && item.modelId === choice.modelId)?.name);
+      }
       const images = pending.images ??= await encodeImages(pasted);
       const note = await attachments.upload(props.id, attached);
       const result = await session().api<SubmitResult>(`/api/sessions/${segment(props.id)}/${kind}`, { method: "POST",
-        body: { content: withFilesNote(sent, note), requestId: pending.id, ...(options ? { options } : {}), ...(images.length ? { images } : {}) } });
+        body: { content: withFilesNote(sent, note), requestId: pending.id, ...(sending ? { options: sending } : {}), ...(images.length ? { images } : {}) } });
       receipt.set(result);
-      if (options) data.rememberChat(host, selection(), view().agent);
+      if (sending) data.rememberChat(host, chosen, view().agent);
       if (kind === "ask") conversationId.set(result.conversationId);
       forgetSentDraft(props.id, sent);
       attachments.sent(pasted, attached);
@@ -566,7 +581,10 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                     options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
                 </If>
                 <If when={permitted()}>
-                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} showAccess={actualMode() === "write"} />
+                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} showAccess={actualMode() === "write"}
+                    auto={autoMode.enabled() ? { selected: autoChat(), chosen: autoChosen(), perMessage: true,
+                      hint: "Chooses the model and reasoning for each message from how complex it looks, on this session's host",
+                      onSelect: () => autoChat.set(true), onLeave: () => autoChat.set(false) } : undefined} />
                 </If>
               </If>
             } />

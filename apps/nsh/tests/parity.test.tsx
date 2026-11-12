@@ -48,6 +48,28 @@ describe("a session's view", () => {
     expect(bodyOf(app, "POST", "/api/sessions/s1/withdraw")).toEqual({ submissionId: "q5" });
   });
 
+  test("with auto mode on, Auto in the model menu picks each message's model on the session's host", async () => {
+    const opus = { provider: "anthropic", modelId: "claude-opus", name: "Claude Opus", thinkingLevels: ["off", "low", "medium", "high"] };
+    const choice = { connectorId: "c1", provider: "anthropic", modelId: "claude-opus", thinkingLevel: "high", complexity: "complex", reasons: [] };
+    const app = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/auto-mode`]: { body: { enabled: true } },
+      [`POST ${ORIGIN}/api/workspaces/w1/auto-mode`]: { body: { choice } },
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [{ ...host, models: [...host.models, opus] }] } },
+    }) });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:chat-model");
+    await app.press("id:chat-model");
+    await app.waitFor("text:Chooses the model and reasoning for each message from how complex it looks, on this session's host");
+    await app.press("text:Auto");
+    await app.waitUntil(() => !app.shows("id:chat-reasoning"));
+    await app.type("id:composer-input", "Now redesign the queue across the whole codebase");
+    await app.press("id:composer-send");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions/s1/submit") !== undefined);
+    expect(bodyOf(app, "POST", "/api/workspaces/w1/auto-mode")).toEqual({ task: "Now redesign the queue across the whole codebase", connectorId: "c1" });
+    expect(bodyOf(app, "POST", "/api/sessions/s1/submit").options).toMatchObject({ model: { provider: "anthropic", modelId: "claude-opus" }, thinkingLevel: "high" });
+    await app.waitFor("text:Auto · Claude Opus");
+  });
+
   test("sends a picked image with a message", async () => {
     const app = await open("../App.tsx", { storage: signedIn, network: server({
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
@@ -141,6 +163,57 @@ describe("a new session", () => {
     await app.waitFor("id:session-row-s1");
     await app.press("id:new-session");
     await app.waitUntil(() => app.value("id:new-message") === "Half a thought");
+  });
+
+  test("offers no Auto where the workspace hasn't turned auto mode on", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, network: server() });
+    await app.press("id:new-session");
+    await app.waitFor("id:chat-model");
+    await app.press("id:chat-model");
+    await app.waitFor("text:Claude Sonnet");
+    expect(app.texts().join(" ")).not.toContain("Chooses the model and reasoning");
+    expect(app.requests().some(request => request.method === "POST" && request.url.endsWith("/auto-mode"))).toBe(false);
+  });
+
+  test("with auto mode on, Auto picks the host and model for the task, which the session starts with", async () => {
+    const opus = { provider: "anthropic", modelId: "claude-opus", name: "Claude Opus", thinkingLevels: ["off", "low", "medium", "high"] };
+    const own = { ...host, models: [...host.models, opus] };
+    const shared = { ...host, id: "c2", ownerId: "u2", ownerName: "grace", name: "grace-box" };
+    const choice = { connectorId: "c1", provider: "anthropic", modelId: "claude-opus", thinkingLevel: "high", complexity: "complex", id: "m2",
+      reasons: ["The task looks complex (a refactor).", "ada-mac: your host, idle.", "Claude Opus: a frontier model, with high reasoning."] };
+    const app = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/auto-mode`]: { body: { enabled: true } },
+      [`POST ${ORIGIN}/api/workspaces/w1/auto-mode`]: { body: { choice } },
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [own, shared] } },
+      [`GET ${ORIGIN}/api/workspaces/w1/models`]: { body: { models: [
+        { id: "m1", workspaceId: "w1", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" },
+        { id: "m2", workspaceId: "w1", name: "Claude Opus", connectorId: "c1", provider: "anthropic", modelId: "claude-opus" },
+        { id: "m3", workspaceId: "w1", name: "Claude Sonnet", connectorId: "c2", provider: "anthropic", modelId: "claude-sonnet" },
+      ] } },
+    }) });
+    await app.press("id:new-session");
+    await app.waitFor("id:new-host");
+    await app.press("id:new-host");
+    await app.waitFor("text:Chooses the host for the task: online, shared here, yours first, the least busy, with a GPU or the model the task needs");
+    await app.press("text:Auto");
+    await app.waitFor("text:Auto · ada-mac");
+    await app.press("id:chat-model");
+    await app.waitFor("text:Chooses the model and reasoning for the task: a light model for simple ones, a frontier model with more reasoning for complex ones");
+    await app.press("text:Auto");
+    await app.waitFor("text:Auto · Claude Opus");
+    await app.type("id:new-message", "Refactor the runner");
+    await app.waitUntil(() => app.requests().some(request => request.method === "POST" && request.url.endsWith("/auto-mode")
+      && JSON.parse(request.body ?? "{}").task === "Refactor the runner"));
+    await app.waitFor("id:new-auto-reasons");
+    expect(app.texts().join(" ")).toContain("ada-mac: your host, idle.");
+    expect(app.storage()["pikibun.lastAuto"]).toBe(JSON.stringify({ host: true, model: true }));
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.press("id:new-start");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions/s3/submit") !== undefined);
+    expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ workspaceId: "w1", modelId: "m2" });
+    expect(bodyOf(app, "POST", "/api/sessions/s3/submit").options).toMatchObject({ model: { provider: "anthropic", modelId: "claude-opus" }, thinkingLevel: "high" });
+    const asked = app.requests().filter(request => request.method === "POST" && request.url.endsWith("/auto-mode")).map(request => JSON.parse(request.body ?? "{}"));
+    expect(asked.at(-1)).toEqual({ task: "Refactor the runner" });
   });
 
   test("opens its host's details from the link under the chat box, and closes them again", async () => {
