@@ -36,11 +36,27 @@ export interface SignedInDevice {
   createdAt: string;
   expiresAt: string;
   current: boolean;
+  /** It signed in with a code made under Signed-in apps. */
+  viaCode?: true;
 }
 export interface NativeSignIn {
   token: string;
   expiresAt: string;
   user: UserProfile;
+}
+/** A one-use code another app signs in with (`POST /api/me/app-codes`): `code` and `link` are shown once, then only its state. */
+export interface AppSignInCode {
+  id: string;
+  code: string;
+  /** `pikibun://auth/code?server=…&code=…`, which the app opens itself, for the QR code and to copy. */
+  link: string;
+  expiresAt: string;
+}
+export interface AppSignInCodeState {
+  id: string;
+  status: 'pending' | 'used';
+  expiresAt: string;
+  deviceName: string | null;
 }
 export interface Workspace {
   id: string;

@@ -155,7 +155,8 @@ export function ownProfile(env: Env, user: UserRow) {
     ...(usernameRequired(env, user) ? { usernameRequired: true as const } : {}) };
 }
 
-export async function newSession(env: Env, userId: string, kind: 'github' | 'test' | 'password', native?: { deviceName: string | null }) {
+export async function newSession(env: Env, userId: string, kind: 'github' | 'test' | 'password', native?: { deviceName: string | null },
+  options: { via?: 'code'; method?: 'password' | null } = {}) {
   const issuedAt = Date.now();
   let expiresAt = issuedAt + (native ? NATIVE_SESSION_TTL : SESSION_TTL);
   if (kind === 'test') {
@@ -165,15 +166,16 @@ export async function newSession(env: Env, userId: string, kind: 'github' | 'tes
   const token = randomToken();
   const csrfToken = randomToken();
   const tokenHash = await sha256(token);
-  const columns = '(token_hash, user_id, csrf_token, expires_at, created_at, client, device_id, device_name, method)';
-  const sql = `INSERT INTO auth_sessions ${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const columns = '(token_hash, user_id, csrf_token, expires_at, created_at, client, device_id, device_name, method, via)';
+  const sql = `INSERT INTO auth_sessions ${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
   const values: SqlValue[] = [tokenHash, userId, csrfToken, expiresAt, new Date(issuedAt).toISOString(),
-    native ? 'native' : 'browser', native ? id() : null, native?.deviceName ?? null, kind === 'password' ? 'password' : null];
+    native ? 'native' : 'browser', native ? id() : null, native?.deviceName ?? null,
+    options.method !== undefined ? options.method : kind === 'password' ? 'password' : null, options.via ?? null];
   return {
     token, expiresAt,
     sql, values, statement: env.DB.query(sql).bind(...values),
     statementWhere: (condition: string, ...conditionValues: SqlValue[]) =>
-      env.DB.query(`INSERT INTO auth_sessions ${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${condition}`).bind(...values, ...conditionValues),
+      env.DB.query(`INSERT INTO auth_sessions ${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${condition}`).bind(...values, ...conditionValues),
   };
 }
 
@@ -642,12 +644,12 @@ export function registerAuth(app: Hono<AppEnv>): void {
   });
   app.get('/api/me/devices', privateResponse, authenticate, async (c) => {
     const auth = c.get('auth');
-    const rows = await dbResult(c.env.DB.query<{ device_id: string; device_name: string | null; created_at: string; expires_at: number; token_hash: string }>(
-      `SELECT device_id, device_name, created_at, expires_at, token_hash FROM auth_sessions
+    const rows = await dbResult(c.env.DB.query<{ device_id: string; device_name: string | null; created_at: string; expires_at: number; token_hash: string; via: string | null }>(
+      `SELECT device_id, device_name, created_at, expires_at, token_hash, via FROM auth_sessions
       WHERE user_id = ? AND client = 'native' AND device_id IS NOT NULL AND expires_at > ? ORDER BY created_at DESC`)
       .bind(auth.userId, Date.now()).all());
     const devices: SignedInDevice[] = rows.map(row => ({ id: row.device_id, name: row.device_name, createdAt: row.created_at,
-      expiresAt: new Date(Number(row.expires_at)).toISOString(), current: row.token_hash === auth.tokenHash }));
+      expiresAt: new Date(Number(row.expires_at)).toISOString(), current: row.token_hash === auth.tokenHash, ...(row.via === 'code' ? { viaCode: true as const } : {}) }));
     return c.json({ devices });
   });
   app.delete('/api/me/devices/:id', privateResponse, authenticate, csrfGuard, async (c) => {
