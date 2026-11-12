@@ -5,7 +5,7 @@
 Select a workspace in the sidebar (or open **New session** in it):
 
 - **Describe the task**: the first message. Its first line becomes the session's title.
-- **Host**: one of your hosts, or a host shared with the workspace. In your [private workspace](workspaces.md#your-private-workspace), the desktop app picks **This Computer** (**This Mac**) while it is your host and online.
+- **Host**: one of your hosts, or a host shared with the workspace. In your [private workspace](workspaces.md#your-private-workspace), the desktop app picks **This Computer** (**This Mac**) while it is your host and online. Where the workspace has [auto mode](extensions.md#auto-mode-pikiauto-mode) on, **Auto** chooses the host, and in the model menu the model, for the task you describe.
 - **Visibility**: **Workspace** (members can view; the default) or **Private** (explicit grants only, apart from the workspace's owner and admins, who [manage every session](workspaces.md#managing-every-session)). See [Collaborating on a session](collaboration.md).
 - **Where it runs** (on your own host, or on one whose owner granted you **Sessions on the host** once its [configuration](hosts.md#host-configuration) allows **Sessions on the host**): **Sandbox** or **On this host**, without the sandbox. It starts in the sandbox, except in your [private workspace](workspaces.md#your-private-workspace), where it starts on the host wherever it can. See [Sessions on the host](hosts.md#sessions-on-the-host).
 - The model, reasoning level and access for the first message (see [Chat options](#chat-options)). The info tips show the host, the model and the repositories the session will pin.
@@ -63,7 +63,7 @@ There are no such points inside one of the agent's turns, where a tool call woul
 
 Beside the composer you can pick, for each message:
 
-- **Model**: any model the session's host offers and hasn't [disabled](hosts.md#models).
+- **Model**: any model the session's host offers and hasn't [disabled](hosts.md#models), or, where the workspace has [auto mode](extensions.md#auto-mode-pikiauto-mode) on, **Auto**, which chooses the model and reasoning for each message from how complex it looks.
 - **Reasoning**: Off, Minimal, Low, Medium, High, Extra high or Max, as the model supports. A model starts at the level Pi on the host gives it: the level in its `enabledModels` pattern (such as `"anthropic/*:high"`), else its entry in `modelThinkingLevels`, else `defaultThinkingLevel`, else medium.
 - **Access** (shared messages only):
 
