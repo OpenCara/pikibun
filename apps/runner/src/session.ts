@@ -1,56 +1,33 @@
-import type { ExtensionToolOperation } from "../../../packages/shared/src/types.js";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readFile, rm } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { getSupportedThinkingLevels, StringEnum, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
-import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
-import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
+import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
+import { createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
-import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleRunIns, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
-import { crossSessionLimits, sessionsToolActions, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
-import type { CompactionFailure, ModelFailureCause } from "../../../packages/shared/src/types.js";
+import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
+import { accessModes, thinkingLevels } from "../../../packages/shared/src/types.js";
+import type { SessionsToolRequest, SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
-import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
+import { bindingRemote } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
-import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
+import { missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
-import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
-import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
-import { boundOutput, MODEL_OUTPUT, SAVED_OUTPUT_BYTES, SavedOutputs, scriptOutput, toolOutputPath } from "./tool-output.js";
-import { inScriptCall, wholeForScripts } from "./script-output.js";
+import { ExtensionPrompts, SessionExtensions, type SessionExtension } from "./extensions/adapter.js";
+import { SessionBuiltins } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
-import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
-import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
-import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
-import { brokeredArguments, programCommand, programRequest, programToolsInstructions, rememberToolDefinitions, type ProgramRequest } from "./defined-tools.js";
-import { bundledToolDefinitions, type ProgramToolDefinition, type ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
-import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
-import { sandboxMissingPrograms } from "./program-availability.js";
-import { programInstallStep, programsMissingText } from "../../../packages/shared/src/program-install.js";
-import { browserRequest, browserShellCommand, servePrograms } from "./browser-command.js";
+import { requestKey, RunnerError, stableJson } from "./protocol.js";
+import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
-import { browserActions, browserKeys, browserLimits, browserUnavailableReason, browserUnavailableText, parseBrowserReport, type BrowserRequest,
-  type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
-import { tunnelActions, tunnelUnavailableReason, tunnelUnavailableText, type HostTunnelStatus, type SessionTunnelReport,
-  type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
-import { tunnelAccesses, tunnelRequest, type TunnelRequest } from "./tunnel-command.js";
+import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
+import type { HostTunnelStatus, SessionTunnelReport, TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
 import { SessionTunnel } from "./session/tunnel.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
-import { programLimits } from "./program-command.js";
-import { githubInstructions, githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
-import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
-import { lineRange } from "./edits.js";
-import { documentKindsOff, extensionSwitchOn, sessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
-import { unknownToolGroup, type MemberToolGroup } from "../../../packages/shared/src/tool-groups.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
@@ -59,59 +36,46 @@ import { HelperWorkspace } from "./helper-workspace.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { BranchReports } from "./session/branch-reports.js";
-import { HOST_COMMANDS_RULE, HostCommandPolicy } from "./session/host-commands.js";
+import { HostCommandPolicy } from "./session/host-commands.js";
 import { ApprovalWaits } from "./session/approval-waits.js";
-import { endView, entryImages, entryView, refusedView } from "./session/entries.js";
+import { entryImages } from "./session/entries.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
-import { MessageInputs, prepareMessageImages, type InputImage } from "./session/inputs.js";
+import { MessageInputs, prepareMessageImages } from "./session/inputs.js";
 import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
+import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
+import { preparationFailure, SessionRepositories } from "./session/repositories.js";
+import { holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
+import { activityEntry, contextView, extensionView, sessionView } from "./session/view.js";
+import { SessionOperations, type OperationConsent } from "./session/operations.js";
+import { ToolCalls } from "./session/tools/calls.js";
+import type { ToolContext } from "./session/tools/context.js";
+import { buildTools } from "./session/tools/index.js";
+import { definedTool } from "./session/tools/defined.js";
+import { SessionDefinitions } from "./session/definitions.js";
+import { ToolAvailability } from "./session/availability.js";
+import { SessionPiki } from "./session/piki.js";
+import { RunQueue } from "./session/run-queue.js";
 import {
-  hostGitLfs, Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
+  Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
-import { prepareImage, thumbnailImage } from "./images.js";
-import { performClonePush, PushError, pushSummary, type PushResult } from "./push.js";
-import { HostCredentialError } from "./git-credentials.js";
+import { thumbnailImage } from "./images.js";
 import type { GitRemote } from "./git-remote.js";
 import type { RepositoryCache } from "./repo-cache.js";
-import type { RepositoryPreparationItem, RepositoryPreparationView } from "../../../packages/shared/src/types.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
-import { applyEdits } from "./edits.js";
-import { compactionFailure, compactionThreshold, configuredCompaction, hostCompaction } from "./compaction.js";
-import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "./model-failure.js";
-import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
+import { configuredCompaction, hostCompaction } from "./compaction.js";
+import { ActivityReporter, sessionActivity } from "./activity.js";
 import type { StoredApproval } from "./approval-view.js";
-import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
+import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
 import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
-import { documentKindNames, type DocumentKind, type GrantSource } from "../../../packages/shared/src/sources.js";
+import type { DocumentKind, GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
-import { CALL_TIMEOUT_MAX_SECONDS, callLimits, callTimeout, commandLimits, type CommandLimits } from "./host-config.js";
 
-export type Run = {
-  key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
-  conversationId: number; content: string; contentHash: string; submissionId?: number;
-  status: "queued" | "admitting" | "running" | "settled" | "interrupted"; startEntry: number;
-  sequence?: number;
-  started?: boolean;
-  admissionId?: string;
-  submittedAt?: number;
-  options?: ChatOptions;
-  images?: { count: number; bytes: number };
-  inputsLost?: true;
-  failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure;
-    cause?: ModelFailureCause; compacting?: true };
-  stopped?: { by: string; pending?: true };
-  crashed?: true;
-  screening?: true;
-  refused?: { by: string; notice: string };
-  reverted?: true;
-  withdrawn?: true;
-};
-type Branch = { id: number; mode: "write" | "ask"; actorId?: string; superseded?: true };
+export type { Run } from "./session/state.js";
 export type ForkedEntry = { kind: string; model: readonly Message[] };
 export type ForkedConversation = { entries: ForkedEntry[]; agent: { model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel } };
 const FORKED_KIND = "workspace.forked";
@@ -132,34 +96,8 @@ interface RunnerBackup {
   conversationOnly?: true;
   createdAt: string;
 }
-type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Record<string, Run>; approvals: Record<string, StoredApproval>; toolActors: Record<string, { initiatedBy: string; ownerId: string; runKey: string; callId?: string }>; usedTickets?: Record<string, number>; nextSequence?: number;
-  grants?: unknown;
-  conversationOnlyRestore?: true;
-  forkedFrom?: { sessionId: string; entryId: string } };
-const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", version: 1, scope: "session", initial: () => ({ json: "" }), checkpointWhen: () => true });
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
 const readOnlyTools = ["identity", "read_file", "list_files", "search"];
-const WAIT_POLL_MS = 3000;
-const callTimeoutParameter = () => opt(int({ minimum: 1, maximum: CALL_TIMEOUT_MAX_SECONDS,
-  description: "End it after this many seconds, sooner than the host's command time limit (never later)" }));
-const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
-  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
-  + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells); with message_id, also the outcome of a message this session sent it (status, done, reply). "
-  + "ask {session, message, notify?}: a read-only side question to that session's agent. "
-  + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access read: inspect only; left out, it acts as that session's tools allow); refused while it is busy. "
-  + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
-  + "create {message?, title?, model?, thinking?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
-  + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
-  + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
-  + "chains of messages stop after 3 hops and never loop back to a session they came from. "
-  + "Involve other sessions only when the user asked for it or clearly expects it.";
-function tellsActivity(run: Run): boolean {
-  return !run.reverted && !run.withdrawn;
-}
-
-function holdsQueue(run: Run): boolean {
-  return ["queued", "running", "admitting"].includes(run.status) || run.stopped?.pending === true;
-}
 export type RunnerConfig = {
   dataDir: string; controlPlaneUrl: string; sharedSecret: string; allowFaux: boolean; allowTestShell?: boolean; fetch?: typeof fetch;
   connectorId?: string;
@@ -207,31 +145,10 @@ export type RunnerConfig = {
   };
 };
 
-function preparationFailure(reason: string): string {
-  return `${reason.replace(/\.$/, "")}. Restart the session to try again.`;
-}
-
-type RepositoryPreparation = { status: "ready" }
-  | { status: "preparing"; done: Promise<void>; controller: AbortController; items: RepositoryPreparationItem[] }
-  | { status: "failed"; reason: string; items: RepositoryPreparationItem[] };
-type ProgressUpdate = (path: string, change: Partial<Omit<RepositoryPreparationItem, "path">>) => void;
-
 const REQUIRED_UNKNOWN = "This host can't learn from Pikibun which extensions its owner requires right now, so no message is sent. Try again shortly";
 const REQUIRED_MISSING = "This host's owner requires an extension its connector can't run now, so no message is sent. Ask them to look at the host's extensions";
-const REFUSED = "An extension on this host refused this message.";
-const INPUT_FAILED = "This host couldn't check this message with its extensions, so it was not sent. Try again shortly.";
-const INPUT_EMPTY = "An extension on this host left this message empty or too long, so it was not sent.";
-const INPUT_IMAGES = "An extension on this host changed this message's images into ones that can't be sent.";
 
 export const WORK_MARKER = "working";
-
-function modelFailed(entry: EntryRecord): boolean {
-  return (entry.model ?? []).some(message => message.role === "assistant" && message.stopReason === "error");
-}
-
-function activityEntry(entry: EntryRecord | undefined): ActivityEntry | undefined {
-  return entry && { id: Number(entry.id), failed: modelFailed(entry) };
-}
 
 export class RunnerSession {
   readonly sandbox: SessionWorkspace;
@@ -240,14 +157,15 @@ export class RunnerSession {
   private root!: Conversation;
   #shared!: Conversation;
   #extension!: Extension;
-  #definitions: ToolDefinition[] = [];
-  #definedExtensions: Extension[] = [];
+  readonly #defined: SessionDefinitions;
+  readonly #availability: ToolAvailability;
   #registry?: Registry;
   readonly #inputs: MessageInputs;
   readonly #uploads: SessionUploads;
   readonly #mirrors: SessionMirrors | undefined;
-  readonly #savedOutputs = new SavedOutputs();
-  readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" }; script: boolean }>();
+  readonly #calls: ToolCalls;
+  readonly #toolContext: ToolContext;
+  readonly #piki: SessionPiki;
   #hostExtensions?: SessionExtensions;
   #currentModel?: { provider: string; modelId: string; thinkingLevel?: string };
   #opening: Promise<void> = Promise.resolve();
@@ -256,17 +174,15 @@ export class RunnerSession {
   private lock: Promise<unknown> = Promise.resolve();
   private generation = 0;
   private closing = false;
-  private draining = false;
-  #drainAgain = false;
+  readonly #queue: RunQueue;
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   #compaction: () => CompactionSettings | undefined = () => undefined;
-  private pushes = new Set<{ controller: AbortController; done: Promise<void> }>();
+  readonly #operations: SessionOperations;
   #failed = false;
   #recovery: Promise<void> | undefined;
   readonly #waits = new ApprovalWaits();
-  #repositories: RepositoryPreparation = { status: "ready" };
-  #preparations = 0;
+  readonly #repositories: SessionRepositories;
   #opened = false;
   #resumed = false;
   readonly #activity: ActivityReporter | undefined;
@@ -282,7 +198,6 @@ export class RunnerSession {
   #sources: GrantSource[] = [];
   #lfsRepositories: string[] = [];
   #branchReports: BranchReports | undefined;
-  #cloneFailures: { path: string; reason: string }[] = [];
   #conversationOnlyRestore = false;
   #configuredCompaction: HostCompaction | undefined;
   #tunnel: SessionTunnel | undefined;
@@ -332,6 +247,51 @@ export class RunnerSession {
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
+    this.#availability = new ToolAvailability({ binding, config, sandbox: this.sandbox, onHost: this.#onHost,
+      definitions: () => this.#defined.definitions, toolNames: () => this.tools.map(tool => tool.name) });
+    this.#calls = new ToolCalls({ ownerId: binding.owner.id, sandbox: this.sandbox, hostCommands: this.hostCommands,
+      authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig(),
+      requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
+    this.#operations = new SessionOperations({
+      binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, waits: this.#waits,
+      requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
+      metadata: () => this.metadata(), mutate: change => this.mutate(change), commandOptions: timeoutSeconds => this.#calls.commandOptions(timeoutSeconds),
+      testShell: () => this.testShell(), controlPlane: <T>(path: string, body: unknown) => this.controlPlane<T>(path, body),
+    });
+    this.#toolContext = {
+      binding, config, sandbox: this.sandbox, onHost: this.#onHost, calls: this.#calls, hostCommands: this.hostCommands, waits: this.#waits, operations: this.#operations,
+      requireSessionTool: tool => this.#availability.requireSessionTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId),
+      metadata: () => this.metadata(), mutate: change => this.mutate(change),
+      authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
+      programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
+      tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
+    };
+    this.#defined = new SessionDefinitions({
+      sessionId: binding.session.id, windows: process.platform === "win32" && this.sandbox.isolated, config,
+      tool: definition => definedTool(this.#toolContext, definition), registry: () => this.#registry, toolNames: () => this.tools.map(tool => tool.name),
+      added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); },
+    });
+    this.#queue = new RunQueue({
+      sessionId: binding.session.id, connectorOwnerId: binding.session.connectorOwnerId, inputs: this.#inputs, config,
+      configuredCompaction: () => this.#configuredCompaction, generation: () => this.generation, closing: () => this.closing,
+      preparation: () => this.#repositories.status, harness: () => this.harness, hostExtensions: () => this.#hostExtensions,
+      exclusive: operation => this.exclusive(operation), metadata: () => this.metadata(), mutate: change => this.mutate(change),
+      authorize: (actorId, permission) => this.authorize(actorId, permission), requiredRefusal: open => this.requiredRefusal(open),
+      extensionChoice: () => this.extensionChoice(), applyOptions: (conversation, run, content) => this.applyOptions(conversation, run, content),
+      drain: () => this.drainQueue(),
+    });
+    this.#piki = new SessionPiki({
+      binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
+      waits: this.#waits, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), model: () => this.#currentModel ?? this.modelRef,
+      thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
+      mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(),
+    });
+    this.#repositories = new SessionRepositories({
+      grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
+      workspace: () => isolatedWorkspace(this.sandbox), authorize: async () => { await this.authorize(this.binding.owner.id, "write"); },
+      changed: () => this.#activity?.changed(), exclusive: operation => this.exclusive(operation),
+      opened: () => this.#opened, closing: () => this.closing, resumed: () => this.#resumed, resume: () => this.resumeWork(),
+    });
     const report = config.reportActivity;
     this.#activity = report && new ActivityReporter(() => this.activity(), async activity => {
       await this.markWork(activity).catch(() => {});
@@ -472,184 +432,13 @@ export class RunnerSession {
     await this.sandbox.initialize();
   }
 
-  private trackPreparation(epoch: number, preparing: Extract<RepositoryPreparation, { status: "preparing" }>): void {
-    const { done, items } = preparing;
-    this.#repositories = preparing;
-    done.then(() => {
-      if (this.#repositories !== preparing) return;
-      this.#repositories = { status: "ready" };
-      this.#activity?.changed();
-      void this.exclusive(async () => {
-        if (epoch !== this.#preparations || !this.#opened || this.closing || this.#resumed || this.#repositories.status !== "ready") return;
-        await this.resumeWork();
-      }).catch(() => {
-        if (epoch !== this.#preparations) return;
-        this.#repositories = { status: "failed", reason: "This session could not resume its work after preparing its repositories", items };
-        this.#activity?.changed();
-      });
-    }, (error: unknown) => {
-      if (this.#repositories !== preparing) return;
-      this.#repositories = { status: "failed", reason: error instanceof RunnerError ? error.message : "Repositories could not be prepared on this host", items };
-      this.#activity?.changed();
-    });
-  }
-
-  private prepareClones(pending: { path: string; origin: string | null }[]): void {
-    const epoch = ++this.#preparations;
-    const controller = new AbortController();
-    const authorize = async () => { controller.signal.throwIfAborted(); await this.authorize(this.binding.owner.id, "write"); };
-    const items: RepositoryPreparationItem[] = pending.map(({ path }) => ({ path, phase: "queued", percent: null, done: null, total: null, bytes: 0 }));
-    const update: ProgressUpdate = (path, change) => { const item = items.find(each => each.path === path); if (item) Object.assign(item, change); };
-    const done = (async () => {
-      const failures: { path: string; reason: string }[] = [];
-      for (const entry of pending) {
-        controller.signal.throwIfAborted();
-        update(entry.path, { phase: "connecting" });
-        try {
-          const repository = repositoryForRemote((await this.#egress!.grant()).repositories, entry.origin ?? "");
-          if (!repository) throw new RunnerError(409, "its origin is not one of this workspace's repositories");
-          let reference: string | null = null;
-          if (this.config.repositoryCache && repository.repositoryId !== undefined) {
-            const progress = ({ phase, percent, done, total, bytes }: MirrorProgress) => {
-              if (repositoryPreparationPhases.includes(phase as RepositoryPreparationItem["phase"])) update(entry.path, { phase: phase as RepositoryPreparationItem["phase"], percent, done, total, bytes });
-            };
-            try { reference = await this.mirror(repository, progress); } catch { }
-          }
-          update(entry.path, { phase: "receiving" });
-          await isolatedWorkspace(this.sandbox).cloneRestore(entry.path, bindingRemote(repository), reference, authorize);
-        } catch (error) {
-          if (controller.signal.aborted) throw error;
-          const reason = error instanceof RunnerError ? error.message
-            : error instanceof Error ? /sandbox: ([a-z0-9 ,.'()-]{1,160})$/i.exec(error.message.trim())?.[1] ?? "it could not be cloned again" : "it could not be cloned again";
-          failures.push({ path: entry.path, reason });
-        }
-        update(entry.path, { phase: "done" });
-      }
-      this.#cloneFailures = failures;
-    })();
-    this.trackPreparation(epoch, { status: "preparing", done, controller, items });
-  }
-
-  private requireRepositoriesReady(): void {
-    const preparation = this.#repositories;
-    if (preparation.status === "preparing") throw new RunnerError(409, "This session's repositories are still being prepared on its host. Try again once they are ready.");
-    if (preparation.status === "failed") throw new RunnerError(502, preparationFailure(preparation.reason));
-  }
-
-  private repositoryView(): RepositoryPreparationView | undefined {
-    const preparation = this.#repositories;
-    if (preparation.status === "ready") return undefined;
-    return { status: preparation.status, items: preparation.items.map(item => ({ ...item })), ...(preparation.status === "failed" ? { error: preparation.reason } : {}) };
-  }
-
-  private lfsInstructions(): string {
-    if (!this.#lfsRepositories.length) return "";
-    const lfs = hostGitLfs();
-    if (!lfs) return `\nGit LFS is on for ${this.#lfsRepositories.join(", ")}, but git-lfs is not installed on this host, so clones check out LFS pointer files.`;
-    return `\nGit LFS is on for ${this.#lfsRepositories.join(", ")}: clones of them check out LFS files' content. In a clone made otherwise, or restored from a backup, `
-      + `run ${lfs} install --local, then ${lfs} pull. Other repositories check out LFS pointer files. `
-      + "LFS objects are never uploaded from this session, so don't add or change LFS-tracked files in commits you push.";
-  }
-
-  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason,
+  private agentInstructions(mode: InstructionsMode, off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason,
     tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set()): string {
-    let instructions = this.binding.agent.instructions;
-    if (this.#clone && !this.#egress) {
-      instructions += "\n\nTrusted runtime repository context:\n"
-        + "The execution root is the session worktree, which starts empty; file-tool paths are relative to it. This host runs without a sandbox: "
-        + "clone the repositories you need into the worktree with plain Git (for example git clone https://github.com/<owner>/<name>), "
-        + "and fetch, switch, commit and push as usual. Git uses this host's own network and credentials."
-        + (this.#cloneRepositories.length ? `\nThis workspace's repositories: ${this.#cloneRepositories.join(", ")}.` : "");
-    } else if (this.#clone) {
-      const branch = sessionBranch(this.binding.session);
-      instructions += "\n\nTrusted runtime repository context:\n"
-        + "The execution root is the isolated session worktree, which starts empty; file-tool paths are relative to it. "
-        + "Clone the repositories you need into it with plain Git (for example git clone https://github.com/<owner>/<name>), "
-        + "and fetch, switch and create branches as usual. Git reaches this workspace's repositories through the session's egress proxy "
-        + "with the session owner's own access; no credentials are needed or available. Commit with Git. "
-        + `This session's own branch is ${branch} (also in $PIKIBUN_SESSION_BRANCH): push your work to it with plain git, for example `
-        + `git push origin HEAD:${branch}, in any of the workspace's repositories. Pushes of other branches are refused there.`
-        + (this.#cloneRepositories.length ? `\nThis workspace's repositories: ${this.#cloneRepositories.join(", ")}.` : "")
-        + this.lfsInstructions()
-        + (this.#cloneFailures.length ? "\nThis session was restored from a backup or moved, and these clones could not be cloned again: "
-          + this.#cloneFailures.map(failure => `${failure.path} (${failure.reason})`).join(", ")
-          + ". Their backed-up work (branches, and the working tree as a commit) is in Git bundles under .git/pikibun-clones, listed in its "
-          + "manifest.json; Pikibun tries again when the session next opens, as long as nothing else is at their paths." : "");
-      if (this.binding.agent.tools.includes("git_push") && !off.has("git_push"))
-        instructions += "\ngit_push publishes a clone's checked-out commit, as it is, to another branch of the workspace repository it was cloned from, "
-          + "git_push {directory, branch}, where directory is the clone's path in the worktree. Pushes are fast-forward only (never forced); "
-          + "if the branch moved, fetch and merge or rebase first. Optionally request a pull request with pull_request {title, body, base?, draft?}; "
-          + `to open one from the session branch once you pushed it, call git_push with branch ${branch}. `
-          + "With draft: true it opens as a draft; with draft: false it opens ready for review, or marks the branch's open draft ready for review, "
-          + "with that title and body. "
-          + "To tag a commit that is already on a branch (a release tag on main, say), check it out in the clone and call "
-          + "git_push {directory, branch, tag}: it creates that tag at the commit and moves no branch. Tags are never moved; "
-          + "plain git push of tags is refused.";
-    }
-    const defined = this.#definitions.filter(definition => !off.has(definition.name));
-    const sources = this.#sources.filter(source => !kindsOff.has(source.kind));
-    for (const definition of defined) {
-      if (definition.kind !== "brokered" || !definition.instructions || !this.binding.agent.tools.includes(definition.name)) continue;
-      if (definition.instructions.includes("{sources}") && !sources.length) continue;
-      instructions += `\n\n${definition.instructions.replaceAll("{sources}",
-        sources.map(source => `${JSON.stringify(source.title)} (${documentKindNames[source.kind]} ${source.type}, source ${source.id})`).join(", "))}`;
-    }
-    if (this.#conversationOnlyRestore) instructions += "\n\nThis session was restored from a backup that kept only its conversation: "
-      + "the files, clones and uncommitted work its messages from before that restore mention were not restored with it, so they may be "
-      + "missing unless they were made again since. Clone the repositories you need again, and check that a file exists before relying on it.";
-    if (this.tools.some(tool => tool.name === "search")) instructions += "\n\nTo find and read code, use search (a regular expression or text across the worktree's files, "
-      + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than reading whole files: "
-      + "their output is already bounded.";
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "move_file")) instructions += "\n\nTo move, copy or delete files and directories, "
-      + "use move_file, copy_file and delete_file (write_file makes the directories it needs).";
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "git") && !off.has("git")) instructions += "\n\nRun Git with the git tool: "
-      + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
-      + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "
-      + "It needs no quoting.";
-    const missing = mode !== "ask" ? this.missingPrograms(off) : [];
-    if (mode !== "ask") for (const definition of defined) {
-      if (definition.kind !== "program" || !definition.instructions) continue;
-      const absent = missing.find(item => item.tool === definition.name)?.programs ?? [];
-      const managers = this.linuxSandbox() ? definition.programs.filter(program => program !== "node" && !absent.includes(program)) : ["npm", "npx"];
-      instructions += `\n\n${definition.instructions}`
-        + (definition.toolchain === "node" && this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own)${managers.length
-          ? `, with ${managers.length > 1 ? `${managers.slice(0, -1).join(", ")} and ${managers.at(-1)}` : managers[0]}` : ""}, ahead of any other on PATH.` : "");
-    }
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "python") && !off.has("python")) instructions += "\n\nRun Python, pip, uv, poetry and pytest with the python tool "
-      + "(there is no shell). Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
-      + "python {program: \"pip\", args: [\"install\", \"-r\", \"requirements.txt\"], directory: \"<name>\", venv: \".venv\"}, python {program: \"pytest\", args: [\"-q\"], directory: \"<name>\", venv: \".venv\"}.";
-    const programs = mode !== "ask" ? programToolsInstructions(defined) : undefined;
-    if (programs) instructions += `\n\n${programs}`;
-    const missingText = programsMissingText(Object.fromEntries(missing.map(item => [item.tool, item.programs])));
-    if (missingText) instructions += `\n\n${missingText} Calls to them are refused before they run. When a task needs one, use what this session has `
-      + "where you can (npx -y pnpm@<version> for a project's pnpm, say, or pytest installed into a virtual environment), and tell the user what the host's owner installs.";
-    if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
-      + "write a codemode script that calls them: there is no shell to pipe commands through.";
-    const github = mode !== "ask" ? githubInstructions({
-      github: this.tools.some(tool => tool.name === "github_read") && !off.has("github_read"),
-      gh: extensionTools.has("gh"),
-    }) : "";
-    if (github) instructions += `\n\n${github}`;
-    if (mode !== "ask" && this.sandbox.browser && this.tools.some(tool => tool.name === "browser") && !off.has("browser")) instructions += "\n\nTo look at or test a web page, "
-      + "use the browser tool, a headless Chromium in the sandbox that answers with a screenshot, the page's text and its interactive elements: "
-      + "browser {url: \"https://example.com/\"}, or for the web app you work on, serve it in the same call, as each call is its own sandboxed command: "
-      + "browser {serve: {program: \"pnpm\", args: [\"dev\", \"--port\", \"5173\"], directory: \"<name>\", port: 5173}, url: \"http://localhost:5173/\", "
-      + "actions: [{action: \"click\", selector: \"text=Sign in\"}, {action: \"type\", selector: \"#email\", text: \"a@example.com\", submit: true}]}. "
-      + "Use the selectors its answer lists.";
-    else if (mode !== "ask" && browserUnavailable) instructions += `\n\nThis session has no browser tool: ${browserUnavailableText(browserUnavailable)} `
-      + "If you're asked to look at or test a web page, say so, and use what you have instead (fetching it, or running its tests).";
-    if (mode === "write" && this.tools.some(tool => tool.name === "tunnel") && !off.has("tunnel")) instructions += "\n\nTo put the web app you work on online "
-      + "at a public https:// address, so people can open it in a browser or on a phone, use the tunnel tool: "
-      + "tunnel {action: \"start\", serve: {program: \"pnpm\", args: [\"preview\", \"--port\", \"4173\"], directory: \"<name>\", port: 4173}} runs the server "
-      + "in the sandbox as a service that keeps running after the call, and answers with its address once Cloudflare gave it one. "
-      + "Have the server listen on that port on localhost and accept any Host header (Vite: --host and server.allowedHosts). "
-      + "It starts only for the host's owner or a member they granted host commands, and replaces the one online. tunnel {action: \"status\"} gives the address, "
-      + "whether it is connected and the server's last output; tunnel {action: \"stop\"} takes it offline. Stop it once it isn't needed.";
-    else if (mode === "write" && tunnelUnavailable) instructions += `\n\nThis session has no tunnel tool: ${tunnelUnavailableText(tunnelUnavailable)} `
-      + "If you're asked to put a web app online, say so.";
-    if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
-    if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
-    return instructions;
+    return agentInstructions({ base: this.binding.agent.instructions, agentTools: this.binding.agent.tools, mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
+      extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
+      lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
+      conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
+      linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser });
   }
 
   get packed(): boolean { return this.#packed; }
@@ -679,27 +468,25 @@ export class RunnerSession {
       this.#cloneRepositories = repositories.map(repository => bindingRemote(repository));
       this.#lfsRepositories = repositories.filter(repository => repository.lfs).map(repository => bindingRemote(repository));
       await this.#mirrors?.restore(repositories);
-      this.#cloneFailures = [];
+      this.#repositories.clearFailures();
       if (await lstat(join(this.directory, "sandbox", "git", "pikibun-clones", "manifest.json")).then(() => true, () => false)) {
         const pending = await isolatedWorkspace(this.sandbox).clonePending(async () => {});
-        if (pending.length) this.prepareClones(pending);
+        if (pending.length) this.#repositories.prepareClones(pending);
       }
     }
     const registry = createRegistry();
     const own = this.buildTools();
-    this.#definitions = this.usableDefinitions(await this.fetchDefinitions(), own.map(tool => tool.name));
-    this.#definedExtensions = [];
-    this.tools = [...own, ...this.#definitions.map(definition => wholeForScripts(this.definedTool(definition)))];
+    this.tools = [...own, ...await this.#defined.load(own.map(tool => tool.name))];
     const extension = defineExtension({ name: "workspace-tools", tools: this.tools });
     this.#extension = extension;
     registry.install(extension);
     this.#registry = registry;
     if (!this.#packed) {
-      this.#builtins = new SessionBuiltins({ outputs: api => this.outputFiles(api) });
+      this.#builtins = new SessionBuiltins({ outputs: api => this.#calls.outputFiles(api) });
       for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
     }
     if (this.config.extensions && !this.#packed) {
-      this.#hostExtensions = new SessionExtensions(this.extensionHost(), this.tools.map(tool => tool.name));
+      this.#hostExtensions = new SessionExtensions(this.#piki.host(), this.tools.map(tool => tool.name));
       await this.chosenExtensions().catch(() => []);
     }
     const resolved = this.config.resolveModels ? await this.config.resolveModels(this.binding.model)
@@ -762,10 +549,10 @@ export class RunnerSession {
           if (card.status === "pending") Object.assign(card, { status: "interrupted", result: "This session is read-only now; nothing in it runs." });
         }
       });
-      await this.sweepInputs();
+      await this.#queue.sweepInputs();
     }
     if (!this.#frozen && !this.#packed) {
-      for (const run of Object.values((await this.metadata()).runs)) if (run.screening && run.status === "queued") void this.screen(run.key);
+      for (const run of Object.values((await this.metadata()).runs)) if (run.screening && run.status === "queued") void this.#queue.screen(run.key);
     }
     this.#activity?.start();
   }
@@ -786,9 +573,9 @@ export class RunnerSession {
       if (!conversation) throw new Error("Persisted branch is missing");
       let submission;
       if (run.submissionId === undefined) {
-        const content = await this.runInput(run);
+        const content = await this.#queue.runInput(run);
         if (content === undefined) {
-          await this.endLostInputs(run.key);
+          await this.#queue.endLostInputs(run.key);
           continue;
         }
         await this.applyOptions(conversation, run, content);
@@ -796,11 +583,11 @@ export class RunnerSession {
       } else submission = await this.harness.submission(run.submissionId as SubmissionId, context);
       if (submission) {
         await this.mutate(meta => { const saved = meta.runs[run.key]!; saved.submissionId = submission.id; saved.status = "running"; });
-        this.observeRun(run.key, submission.id);
+        this.#queue.observe(run.key, submission.id);
       }
     }
     if (Object.values(state.runs).some(run => run.stopped?.pending)) await this.abortStopped();
-    await this.sweepInputs();
+    await this.#queue.sweepInputs();
     this.harness.resume();
     this.drainQueue();
   }
@@ -884,122 +671,22 @@ export class RunnerSession {
     return next;
   }
 
-  private observeRun(key: string, submissionId: SubmissionId): void {
-    const generation = this.generation;
-    const harness = this.harness;
-    void (async () => {
-      const submission = await harness.submission(submissionId, context);
-      if (!submission) throw new Error("Missing durable submission");
-      const settled = await submission.wait(context);
-      if (generation !== this.generation || this.closing) return;
-      void this.#hostExtensions?.agentEnd([], settled.status !== "done").catch(() => {});
-      const state = await this.metadata();
-      const conversation = await harness.conversation(state.runs[key]!.conversationId as ConversationId, context);
-      await conversation?.waitForIdle(context);
-      const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
-      const cause = settled.status === "unanswered" && settled.reason === "model_error" && !compaction ? modelFailureCause(settled.detail) : undefined;
-      const failed = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model");
-      const model = failed ? (await conversation?.agent(context))?.model : undefined;
-      const failure: Run["failure"] = failed
-        ? { reason: compaction ? "compaction_failed" : settled.reason, ...model, ...(compaction ? { compaction } : {}), ...(cause ? { cause } : {}) } : undefined;
-      const compacts = !!failure && !!conversation && await this.compactsAfterFailure(conversation, state.runs[key]!.mode, cause, model);
-      const crashed = settled.status === "unanswered" && (settled.reason === "restart_limit" || settled.reason === "interrupted");
-      await this.exclusive(async () => {
-        if (generation !== this.generation || this.closing) return;
-        if (compacts && !(await this.metadata()).runs[key]?.stopped) {
-          try { await conversation!.compact(undefined, context); failure!.compacting = true; }
-          catch { }
-        }
-        await this.mutate(meta => {
-          const run = meta.runs[key]!;
-          if (run.stopped) return;
-          if (crashed) Object.assign(run, { status: "interrupted", crashed: true });
-          else run.status = "settled";
-          if (failure) run.failure = failure;
-        });
-      });
-      if (generation === this.generation && !this.closing) this.drainQueue();
-    })().catch(() => { });
-  }
-
-  private async compactsAfterFailure(conversation: Conversation, mode: Run["mode"], cause: ModelFailureCause | undefined,
-    model: { provider: string; modelId: string } | undefined): Promise<boolean> {
-    if (cause !== "incomplete_stream" || mode !== "write") return false;
-    try {
-      const enabled = compactionEnabled(configuredCompaction(this.config.compaction, this.#configuredCompaction), model);
-      const tokens = contextTokens((await conversation.context(context)).messages);
-      return compactsAfterFailure({ cause, mode, tokens, enabled });
-    }
-    catch { return false; }
-  }
-
   private drainQueue(): void {
-    if (this.draining) { this.#drainAgain = true; return; }
-    if (this.closing || this.#repositories.status !== "ready") return;
-    this.draining = true;
-    this.#drainAgain = false;
-    void this.exclusive(async () => {
-      while (!this.closing) {
-        const state = await this.metadata();
-        if (Object.values(state.runs).some(run => run.status === "running" || run.status === "admitting" || run.stopped?.pending)
-          || Object.values(state.approvals).some(approval => approval.status === "executing")) return;
-        const run = Object.values(state.runs).filter(candidate => candidate.status === "queued")
-          .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))[0];
-        if (!run || run.screening) return;
-        try { await this.authorize(run.initiatedBy, run.mode === "ask" ? "ask" : "write"); }
-        catch {
-          if (run.images) await this.#inputs.discard([run.key]);
-          await this.mutate(meta => { meta.runs[run.key]!.status = "interrupted"; });
-          continue;
-        }
-        const refusal = await this.requiredRefusal(true).catch(() => INPUT_FAILED);
-        if (refusal) {
-          if (run.images) await this.#inputs.discard([run.key]);
-          await this.mutate(meta => { Object.assign(meta.runs[run.key]!, { status: "interrupted", refused: { by: "", notice: refusal } }); });
-          continue;
-        }
-        const content = await this.runInput(run);
-        if (content === undefined) {
-          await this.endLostInputs(run.key);
-          continue;
-        }
-        const conversation = await this.harness.conversation(run.conversationId as ConversationId, context);
-        if (!conversation) throw new Error("Persisted branch is missing");
-        const transcript = await conversation.context(context);
-        await this.mutate(meta => {
-          meta.runs[run.key]!.status = "admitting";
-          meta.runs[run.key]!.started = true;
-          meta.runs[run.key]!.startEntry = transcript.entries.at(-1)?.id ?? 0;
-        });
-        await this.applyOptions(conversation, run, content);
-        const submission = await conversation.submit({ type: "input", content, requestId: run.key }, context);
-        await this.mutate(meta => {
-          meta.runs[run.key]!.submissionId = submission.id;
-          meta.runs[run.key]!.status = "running";
-        });
-        if (run.images) await this.#inputs.discard([run.key]);
-        this.observeRun(run.key, submission.id);
-        return;
-      }
-    }).catch(() => { })
-      .finally(() => {
-        this.draining = false;
-        if (this.#drainAgain) { this.#drainAgain = false; this.drainQueue(); }
-      });
+    this.#queue.drain();
   }
 
   private async applyOptions(conversation: Conversation, run: Run, content?: string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]): Promise<void> {
     const options = run.options ?? {};
     const access = options.access ?? "approval";
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
-    if (run.mode === "write") await this.refreshDefinitions(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
-    const off = run.mode === "write" ? await this.sessionToolsOff(run.initiatedBy) : new Set<string>();
+    if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
+    const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
     const own = new Set(this.tools.map(tool => tool.name));
-    const kindsOff = run.mode === "write" ? await this.documentKindsOff() : new Set<DocumentKind>();
-    const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.browserUnavailable() : undefined;
+    const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();
+    const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.#availability.browserUnavailable() : undefined;
     if (!this.sandbox.browser) off.add("browser");
-    const tunnelUnavailable = run.mode === "write" && !off.has("tunnel") ? this.tunnelUnavailable() : undefined;
-    if (!this.tunnelOffered()) off.add("tunnel");
+    const tunnelUnavailable = run.mode === "write" && !off.has("tunnel") ? this.#availability.tunnelUnavailable() : undefined;
+    if (!this.#availability.tunnelOffered()) off.add("tunnel");
     const builtins = run.mode === "write" && this.#builtins
       ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
       : [];
@@ -1009,7 +696,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools).filter(tool => !own.has(tool.name)),
           ...builtins.flatMap(extension => extension.tools ?? [])],
-        extensions: [this.#extension, ...this.#definedExtensions, ...extensions.map(extension => extension.extension), ...builtins],
+        extensions: [this.#extension, ...this.#defined.extensions, ...extensions.map(extension => extension.extension), ...builtins],
         instructions: this.agentInstructions(access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
           new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name)))),
       } : {}),
@@ -1042,52 +729,6 @@ export class RunnerSession {
     const installed = config.installed().map(item => item.summary);
     return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
       automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
-  }
-
-  private browserUnavailable(): BrowserUnavailableReason | undefined {
-    if (this.sandbox.browser) return undefined;
-    if (this.#onHost) return "on-host";
-    if (this.config.sandboxBackend) return "sandbox";
-    const status = this.config.browserStatus?.();
-    if (!status) return undefined;
-    return browserUnavailableReason(status.state) ?? "missing";
-  }
-
-  private tunnelUnavailable(): TunnelUnavailableReason | undefined {
-    if (!this.config.tunnels) return undefined;
-    if (this.#onHost) return "on-host";
-    if (this.config.sandboxBackend || !(this.sandbox instanceof Sandbox)) return "sandbox";
-    const status = this.config.tunnels.status();
-    return status ? tunnelUnavailableReason(status.state) : "missing";
-  }
-
-  private linuxSandbox(): Sandbox | undefined {
-    return !this.#onHost && !this.config.sandboxBackend && this.sandbox instanceof Sandbox ? this.sandbox : undefined;
-  }
-
-  private missingPrograms(off: ReadonlySet<string>): { tool: string; source: string; programs: string[] }[] {
-    const sandbox = this.linuxSandbox();
-    if (!sandbox) return [];
-    const node = sandbox.nodePrograms;
-    const tools = [
-      ...this.#definitions.filter((definition): definition is ProgramToolDefinition => definition.kind === "program" && !off.has(definition.name))
-        .map(definition => ({ tool: definition.name, source: definition.extensions[0] ?? `piki:${definition.name}`, programs: sandboxMissingPrograms(definition, node) })),
-      ...(this.tools.some(tool => tool.name === "python") && !off.has("python")
-        ? [{ tool: "python", source: "piki:python", programs: sandboxMissingPrograms({ programs: pythonPrograms, path: "/usr/local/bin" }) }] : []),
-    ];
-    return tools.filter(item => item.programs.length);
-  }
-
-  private programMissing(tool: { programs: readonly string[]; path: string | readonly string[]; toolchain?: "node" }, program: string): string | undefined {
-    const sandbox = this.linuxSandbox();
-    if (!sandbox || !sandboxMissingPrograms({ ...tool, programs: [program] }, sandbox.nodePrograms).length) return undefined;
-    return `${program} isn't installed on this host where the session's sandbox sees it, so the call would fail with "command not found". `
-      + `The host's owner installs it for the whole system, as the sandbox sees only the host's /usr: ${programInstallStep(program) ?? "the distribution's package"}. `
-      + "Tell the user so, and use what this session has meanwhile where you can.";
-  }
-
-  private tunnelOffered(): boolean {
-    return !!this.config.tunnels && this.tunnelUnavailable() === undefined;
   }
 
   private sessionTunnel(): SessionTunnel {
@@ -1123,65 +764,6 @@ export class RunnerSession {
     return this.#tunnel.stop((input as { reason?: string }).reason === "archived" ? "archived" : "stop", ticket.actorId);
   }
 
-  private definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0]): Set<string> {
-    for (const definition of this.#definitions) {
-      off.delete(definition.name);
-      if (!definition.extensions.some(extension => extensionSwitchOn(extension, extensions))) off.add(definition.name);
-    }
-    return off;
-  }
-
-  private async sessionToolsOff(senderId?: string): Promise<Set<string>> {
-    const config = this.config.extensions;
-    const workspaceId = this.binding.session.workspaceId;
-    const answer = config ? await config.workspace(workspaceId).catch(() => undefined) : undefined;
-    const extensions = answer?.extensions ?? [];
-    const off = this.definedToolsOff(sessionToolsOff(extensions), extensions);
-    for (const tool of (await this.memberToolGroup(this.binding.owner.id))?.off ?? []) off.add(tool);
-    if (senderId !== undefined && senderId !== this.binding.owner.id) {
-      for (const tool of (await this.memberToolGroup(senderId))?.off ?? []) off.add(tool);
-    }
-    if (!config) return off;
-    const last = config.lastKnown?.(workspaceId);
-    if (last) for (const tool of sessionToolsOff(last.extensions, { failClosedOnly: true })) off.add(tool);
-    return off;
-  }
-
-  private async memberToolGroup(userId: string): Promise<MemberToolGroup | undefined> {
-    const config = this.config.extensions;
-    if (!config) return undefined;
-    const workspaceId = this.binding.session.workspaceId;
-    const answer = await config.workspace(workspaceId).catch(() => undefined);
-    if (!config.lastKnown) return answer?.toolGroups?.[userId];
-    const last = config.lastKnown(workspaceId);
-    return last ? last.toolGroups?.[userId] : unknownToolGroup;
-  }
-
-  private async requireSenderTool(tool: string, senderId: string): Promise<void> {
-    if (senderId === this.binding.owner.id) return;
-    const group = await this.memberToolGroup(senderId);
-    if (!group?.off.includes(tool)) return;
-    throw new RunnerError(403, `${tool} isn't among the tools of the person who sent this message (${group.name}): a message runs only the tools both its sender and the session's owner have. Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
-  }
-
-  private async documentKindsOff(): Promise<Set<DocumentKind>> {
-    const config = this.config.extensions;
-    if (!config) return new Set();
-    const answer = await config.workspace(this.binding.session.workspaceId).catch(() => undefined);
-    return answer ? documentKindsOff(answer.extensions) : new Set();
-  }
-
-  private async requireSessionTool(tool: string): Promise<void> {
-    if (!(await this.sessionToolsOff()).has(tool)) return;
-    const group = await this.memberToolGroup(this.binding.owner.id);
-    if (group?.off.includes(tool)) {
-      throw new RunnerError(403, `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
-    }
-    const defined = this.#definitions.find(item => item.name === tool);
-    const extensions = defined ? [...defined.extensions] : sessionToolExtensions(tool).map(item => item.source);
-    throw new RunnerError(403, `${tool} is turned off in this workspace${extensions.length ? ` (${extensions.join(", ")})` : ""}. Its owners and admins add it under Settings → Workspaces → Extensions.`);
-  }
-
   private async chosenExtensions(): Promise<SessionExtension[]> {
     const host = this.#hostExtensions;
     const config = this.config.extensions;
@@ -1191,134 +773,6 @@ export class RunnerSession {
     const { selected, created } = host.select(chosen.map(item => item.source));
     for (const extension of created) this.#registry?.install(extension);
     return selected;
-  }
-
-  private async outputFiles(api: ToolExecutionApi): Promise<OutputFiles | undefined> {
-    const attribution = await this.toolActor(api, true);
-    const state = await this.metadata();
-    const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-    if (run.options?.access === "read") return undefined;
-    return { writeFile: (path, content) => this.saveOutput(path, content, async () => { await this.recheckTool(attribution); }) };
-  }
-
-  private async saveOutput(path: string, content: string, authorize: SandboxAuthorize): Promise<void> {
-    await this.sandbox.writeFile(path, content, authorize);
-    await this.#savedOutputs.saved(path, {
-      list: directory => this.sandbox.listFiles(directory, authorize),
-      remove: async entry => { await this.sandbox.fileOperation({ kind: "delete", path: entry, recursive: true }, authorize); },
-    }).catch(() => {});
-  }
-
-  private extensionHost(): ExtensionHost {
-    return {
-      directory: this.sandbox.hostWorktree,
-      ...(this.config.extensions?.modelRegistry ? { modelRegistry: this.config.extensions.modelRegistry } : {}),
-      model: () => {
-        const current = this.#currentModel ?? this.modelRef;
-        return current && this.config.extensions?.modelRegistry?.find(current.provider, current.modelId) as never;
-      },
-      thinkingLevel: () => this.#currentModel?.thinkingLevel,
-      state: async source => {
-        const item = (await this.extensionChoice()).chosen.find(candidate => candidate.source === source);
-        return { active: !!item, settings: item?.required?.settings ?? item?.workspace?.settings ?? {} };
-      },
-      runTool: (call, execute) => this.runExtensionTool(call, execute),
-      piki: this.pikiSession(),
-      hookTimeoutMs: 30_000,
-      inputTimeoutMs: 60_000,
-      warn: (source, message) => { process.stderr.write(`Session ${this.binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
-    };
-  }
-
-  private pikiSession(): PikiSession {
-    const hostOwner = this.binding.session.connectorOwnerId;
-    const ownSession = !!hostOwner && hostOwner === this.binding.owner.id;
-    return {
-      hostSignIn: this.#onHost || (ownSession && this.config.pikiHostSignIn === true),
-      ...(this.#egress && !this.#onHost ? { sandbox: (run: PikiSandboxRun) => this.runPikiCommand(run) } : {}),
-      saveOutput: (callId, tool, output) => this.savePikiOutput(callId, tool, output),
-      fromScript: callId => this.#pikiCalls.get(callId)?.script === true,
-    };
-  }
-
-  private async savePikiOutput(callId: string, tool: string, output: string): Promise<string> {
-    const call = this.#pikiCalls.get(callId);
-    if (!call) throw new RunnerError(403, "its call no longer runs");
-    const path = toolOutputPath(tool, callId);
-    await this.saveOutput(path, output, async () => { await this.recheckTool(call.attribution); });
-    return path;
-  }
-
-  private async shownApproval(approval: StoredApproval, api: ToolExecutionApi, tool: string): Promise<Record<string, unknown>> {
-    const shown = { ...approval, admissionId: undefined, callId: undefined };
-    const result = approval.result;
-    if (typeof result !== "string") return shown;
-    if (inScriptCall()) {
-      return { ...shown, result: scriptOutput(result, candidate => Buffer.byteLength(JSON.stringify({ ...shown, result: candidate })) <= SAVED_OUTPUT_BYTES) };
-    }
-    const files = await this.outputFiles(api).catch(() => undefined);
-    return { ...shown, result: await boundOutput(result, {
-      ...(files
-        ? { save: async (whole: string) => { const path = toolOutputPath(tool, String(api.callId)); await files.writeFile(path, whole); return path; } }
-        : { unsaved: "a Read-only message doesn't write to the worktree" }),
-      fits: candidate => Buffer.byteLength(JSON.stringify({ ...shown, result: candidate })) <= MODEL_OUTPUT.bytes,
-    }) };
-  }
-
-  private async runPikiCommand(run: PikiSandboxRun): Promise<CliRun> {
-    const call = this.#pikiCalls.get(run.callId);
-    if (!call) throw new RunnerError(403, `${run.command} runs only in a call of its tool this session admitted. Nothing ran.`);
-    const lease = call.write && !run.readOnly ? this.#egress?.apiLease() : undefined;
-    try {
-      const env = { ...run.env };
-      if (lease) for (const name of run.tokenEnv) env[name] = lease.token;
-      const command = sandboxShellCommand(run.command, run.args, env, run.directory);
-      const output = await this.sandbox.execute({ kind: "bash", command }, run.readOnly, () => this.recheckTool(call.attribution), {
-        unbounded: true, ...await this.commandOptions(), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
-      return { exitCode: 0, signal: null, output };
-    } catch (error) {
-      if (!(error instanceof SandboxProcessError)) throw error;
-      const output = [error.stdout, error.stderr].filter(Boolean).join("\n");
-      return { exitCode: error.exitCode, signal: error.signal, output, ...(error.exitCode === null && !error.signal ? { failure: error.message } : {}) };
-    } finally {
-      lease?.release();
-    }
-  }
-
-  private async runExtensionTool(call: Parameters<ExtensionHost["runTool"]>[0], execute: Parameters<ExtensionHost["runTool"]>[1]): Promise<ToolExecutionResult> {
-    const attribution = await this.toolActor(call.api, true);
-    const state = await this.metadata();
-    const run = state.runs[state.toolActors[String(call.api.taskId)]!.runKey]!;
-    if (run.options?.access === "read") {
-      throw new RunnerError(403, `${call.tool} comes from an extension, which runs outside the sandbox: a Read-only message doesn't run it. Nothing ran.`);
-    }
-    const { chosen, automaticTools } = await this.extensionChoice();
-    const item = chosen.find(candidate => candidate.source === call.source);
-    if (!item) throw new RunnerError(403, `This extension (${call.source}) no longer applies to this session; ${call.tool} didn't run.`);
-    const json = JSON.stringify(call.arguments);
-    const operation: ExtensionToolOperation = { kind: "extension.tool", source: call.source, tool: call.tool,
-      arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
-      digest: createHash("sha256").update(json).digest("hex") };
-    const trusted = await this.hostCommands.allowed(attribution.initiatedBy);
-    if (!trusted && !automaticTools) throw new RunnerError(403, `${call.tool} comes from an extension, which ${HOST_COMMANDS_RULE}`);
-    const approval = await this.runOperation(attribution.initiatedBy, operation, String(call.api.taskId), { hostChecked: true });
-    if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
-    const id = approval.id;
-    await this.recheckTool(attribution);
-    const limits = commandLimits((await this.hostConfig()).commandTimeoutSeconds);
-    const callId = String(call.api.callId);
-    this.#pikiCalls.set(callId, { write: trusted, attribution, script: inScriptCall() });
-    try {
-      const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
-      const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: this.#waits.kept(id, shown || "(no output)") }); });
-      return result;
-    } catch (error) {
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.#waits.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
-      throw error;
-    } finally {
-      this.#pikiCalls.delete(callId);
-    }
   }
 
   private async chatOptions(input: unknown, mode: "write" | "ask", _actorId: string): Promise<ChatOptions | undefined> {
@@ -1394,68 +848,6 @@ export class RunnerSession {
     return { screen: chosen.some(item => installed.some(candidate => candidate.summary.source === item.source && candidate.summary.modules.some(module => module.events.includes("input")))) };
   }
 
-  private async screen(key: string): Promise<void> {
-    const generation = this.generation;
-    let outcome: InputOutcome | { action: "skip" };
-    try { outcome = await this.screenInput(key); }
-    catch (error) {
-      process.stderr.write(`Session ${this.binding.session.id}: couldn't screen a message, so it was refused: ${String(error instanceof Error ? error.message : error).slice(0, 300)}\n`);
-      outcome = { action: "refused", by: "", notice: INPUT_FAILED };
-    }
-    if (generation !== this.generation || this.closing) return;
-    let images: InputImage[] | undefined;
-    if (outcome.action === "continue") {
-      const run = (await this.metadata()).runs[key];
-      const before = run?.images ? await this.#inputs.read(key) ?? [] : [];
-      const changed = outcome.images.length !== before.length || outcome.images.some((image, index) => image.data !== before[index]!.data);
-      if (outcome.text.length > 100_000 || (!outcome.text.trim() && !outcome.images.length)) outcome = { action: "refused", by: "", notice: INPUT_EMPTY };
-      else if (changed) {
-        const parsed = parseChatImages(outcome.images.map(image => ({ mimeType: image.mimeType, data: image.data })));
-        images = "error" in parsed ? undefined : parsed.images.length ? await prepareMessageImages(parsed.images).catch(() => undefined) : [];
-        if (!images) outcome = { action: "refused", by: "", notice: INPUT_IMAGES };
-        else if (images.length) await this.#inputs.write(key, images);
-        else await this.#inputs.discard([key]);
-      }
-    }
-    const result = outcome;
-    let refused = false;
-    await this.mutate(meta => {
-      const run = meta.runs[key];
-      if (!run?.screening || run.status !== "queued" || run.stopped || run.withdrawn) return;
-      delete run.screening;
-      if (result.action === "refused") {
-        Object.assign(run, { status: "interrupted", refused: { by: result.by, notice: result.notice ?? REFUSED } });
-        refused = true;
-      } else if (result.action === "continue") {
-        run.content = result.text;
-        if (images) {
-          if (images.length) run.images = { count: images.length, bytes: images.reduce((total, image) => total + image.data.length, 0) };
-          else delete run.images;
-        }
-      }
-    });
-    if (refused) await this.#inputs.discard([key]);
-    this.drainQueue();
-  }
-
-  private async screenInput(key: string): Promise<InputOutcome | { action: "skip" }> {
-    const host = this.#hostExtensions;
-    const run = (await this.metadata()).runs[key];
-    if (!host || !run?.screening || run.status !== "queued") return { action: "skip" };
-    const refusal = await this.requiredRefusal(true);
-    if (refusal) return { action: "refused", by: "", notice: refusal };
-    const images = run.images ? await this.#inputs.read(key) : [];
-    if (!images) return { action: "skip" };
-    const { chosen } = await this.extensionChoice();
-    const hostOwner = this.binding.session.connectorOwnerId;
-    const outcome = await host.input(chosen.map(item => item.source), run.content, images.map(image => ({ type: "image" as const, ...image })),
-      hostOwner && run.initiatedBy === hostOwner ? "interactive" : "rpc");
-    if (outcome.action !== "refused") return outcome;
-    const notice = outcome.notice?.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 300);
-    process.stderr.write(`Session ${this.binding.session.id}: ${outcome.by} refused a message${notice ? `: ${notice}` : ""}\n`);
-    return { action: "refused", by: outcome.by, notice: notice || `An extension on this host (${outcome.by}) refused this message.` };
-  }
-
   private openExtensions(sources: readonly string[]): Promise<void> {
     const host = this.#hostExtensions;
     const config = this.config.extensions;
@@ -1470,29 +862,6 @@ export class RunnerSession {
     const target = options?.model ?? (await this.#shared.agent(context)).model ?? this.modelRef;
     const model = this.models.getModel(target.provider, target.modelId);
     if (model && Array.isArray(model.input) && !model.input.includes("image")) throw new RunnerError(422, "The model doesn't accept images");
-  }
-
-  private async sweepInputs(): Promise<void> {
-    const runs = (await this.metadata()).runs;
-    await this.#inputs.sweep(key => {
-      const run = runs[key];
-      return run !== undefined && run.submissionId === undefined && ["queued", "admitting", "running"].includes(run.status);
-    });
-  }
-
-  private async endLostInputs(key: string): Promise<void> {
-    await this.#inputs.discard([key]);
-    await this.mutate(meta => { Object.assign(meta.runs[key]!, { status: "interrupted", inputsLost: true }); });
-  }
-
-  private async runInput(run: Run) {
-    if (!run.images) return run.content;
-    const images = await this.#inputs.read(run.key);
-    if (!images) return undefined;
-    return [
-      ...(run.content.trim() ? [{ type: "text" as const, text: run.content }] : []),
-      ...images.map(image => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
-    ];
   }
 
   private requireUnfrozen(): void {
@@ -1515,7 +884,7 @@ export class RunnerSession {
     const { screen } = await this.extensionGate();
     return this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
-      const preparation = this.#repositories;
+      const preparation = this.#repositories.preparation;
       if (preparation.status === "failed") throw new RunnerError(502, preparationFailure(preparation.reason));
       await this.authorize(ticket.actorId, mode === "ask" ? "ask" : "write", ticket.policyVersion);
       await this.hostConfig();
@@ -1565,7 +934,7 @@ export class RunnerSession {
         meta.nextSequence = (meta.nextSequence ?? 0) + 1;
         if (!meta.branches.some(branch => branch.id === conversation.id)) meta.branches.push({ id: conversation.id, mode, actorId: ticket.actorId });
       });
-      if (screen) void this.screen(key);
+      if (screen) void this.#queue.screen(key);
       this.drainQueue();
       return { submissionId: key, conversationId: String(conversation.id), status: "queued", queuePosition: Object.values(state.runs).filter(run => ["queued", "running", "admitting"].includes(run.status)).length + 1 };
     });
@@ -1617,40 +986,6 @@ export class RunnerSession {
     this.drainQueue();
   }
 
-  private async toolActor(api: ToolExecutionApi, write: boolean) {
-    const doc = await api.snapshot(RunnerState, context);
-    const state: Metadata = JSON.parse(doc!.json);
-    const saved = state.toolActors[String(api.taskId)];
-    const run = saved ? state.runs[saved.runKey] : Object.values(state.runs).find(candidate => candidate.conversationId === api.conversationId && (candidate.status === "running" || candidate.status === "admitting"));
-    if (!run || !["admitting", "running"].includes(run.status) || run.ownerId !== this.binding.owner.id || (write && run.mode !== "write")) throw new RunnerError(403, "Tool has no authorized writable submission");
-    await this.authorize(run.initiatedBy, run.mode === "ask" ? "ask" : "write");
-    await api.commit(async tx => {
-      const current = await tx.doc(RunnerState);
-      const meta: Metadata = JSON.parse(current.json);
-      meta.toolActors[String(api.taskId)] ??= { initiatedBy: run.initiatedBy, ownerId: run.ownerId, runKey: run.key, callId: api.callId };
-      current.json = JSON.stringify(meta);
-    }, context);
-    return { initiatedBy: run.initiatedBy, actingAs: run.ownerId, mode: run.mode };
-  }
-
-  private async recheckTool(attribution: { initiatedBy: string; mode: "write" | "ask" }): Promise<void> {
-    await this.authorize(attribution.initiatedBy, attribution.mode === "ask" ? "ask" : "write");
-  }
-
-  private async browserOutcome(approval: ApprovalRecord, recheck: () => Promise<void>, approvalText: (approval: StoredApproval) => ToolExecutionResult): Promise<ToolExecutionResult> {
-    const report = approval.status === "executed" && approval.result ? parseBrowserReport(approval.result.trim()) : undefined;
-    if (!report) return approvalText(approval as StoredApproval);
-    const output: ToolExecutionResult["output"] = [{ type: "text", text: JSON.stringify({ ...approval, result: undefined, admissionId: undefined, callId: undefined, report }) }];
-    if (report.screenshot) {
-      try {
-        const file = await this.sandbox.readContent(report.screenshot, recheck);
-        const prepared = "image" in file ? await prepareImage(file.image, file.mimeType) : undefined;
-        if (prepared && "image" in prepared) output.push({ type: "image", data: prepared.image.data, mimeType: prepared.image.mimeType });
-      } catch { }
-    }
-    return { output };
-  }
-
   private testShell(): boolean {
     return this.binding.model.provider === "faux" && this.config.allowFaux === true && this.config.allowTestShell === true;
   }
@@ -1661,607 +996,12 @@ export class RunnerSession {
     return config;
   }
 
-  private async commandOptions(timeoutSeconds?: number): Promise<{ limits: CommandLimits; gpu: boolean }> {
-    const config = await this.hostConfig();
-    return { limits: callLimits(commandLimits(config.commandTimeoutSeconds), timeoutSeconds), gpu: config.gpu };
-  }
-
-  private async checkCall(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean } = {}): Promise<{ unbounded: boolean }> {
-    const state = await this.metadata();
-    const actor = state.toolActors[String(api.taskId)];
-    const run = actor && state.runs[actor.runKey];
-    if (!run) throw new RunnerError(403, "Tool has no authorized writable submission");
-    if (run.mode === "write") await this.requireSenderTool(tool, run.initiatedBy);
-    if (effect.write && run.options?.access === "read") {
-      throw new RunnerError(403, `${tool} changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.`);
-    }
-    return { unbounded: effect.shell === true && !this.hostCommands.shellAllowed() };
-  }
-
   private buildTools(): ToolRegistration[] {
-    const tools = this.sessionTools();
-    return (this.#clone && this.#egress ? [...tools, this.clonePushTool()] : tools).map(wholeForScripts);
+    return buildTools(this.#toolContext, this.#clone && !!this.#egress);
   }
 
-  private clonePushTool(): ToolRegistration {
-    const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. pull_request.draft true opens it as a draft; false opens it ready for review, or marks the branch's open draft ready for review with this title and body. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first.", parameters: obj({
-      directory: str(), branch: str(), tag: opt(str()),
-      pull_request: opt(obj({ title: str(), body: str(), base: opt(str()), draft: opt(bool()) }, { open: true })),
-    }, { open: true }), execute: async (args, api, _call) => {
-      await this.requireSessionTool("git_push");
-      const attribution = await this.toolActor(api, true);
-      await this.checkCall(api, "git_push", { write: true });
-      if (!validCloneDirectory(args.directory)) throw new RunnerError(400, "directory must be a clone's path in the worktree, such as app or src/app");
-      if (args.tag !== undefined && !validPushTag(args.tag)) throw new RunnerError(400, "tag must be a plain tag name, such as v1.2.3, not refs/tags/v1.2.3");
-      if (args.tag !== undefined && args.pull_request) throw new RunnerError(400, "a tag push opens no pull request");
-      const head = await isolatedWorkspace(this.sandbox).cloneHead(args.directory, () => this.recheckTool(attribution));
-      if (!head.origin) throw new RunnerError(400, `${args.directory} has no origin remote; push only clones of this workspace's repositories`);
-      const repository = repositoryForRemote((await this.#egress!.grant()).repositories, head.origin);
-      if (!repository) throw new RunnerError(403, `${args.directory} was cloned from ${head.origin.slice(0, 200)}, which is not one of this workspace's repositories`);
-      const request = args.pull_request;
-      const operation: GitPushOperation = { kind: "git.push", repository: repositoryPath(repository), directory: args.directory, branch: args.branch,
-        ...(args.tag !== undefined ? { tag: args.tag } : {}), commit: head.commit,
-        ...(request ? { pullRequest: { title: request.title, body: request.body, ...(request.base !== undefined ? { base: request.base } : {}),
-          ...(request.draft !== undefined ? { draft: request.draft } : {}) } } : {}) };
-      const approval = await this.runOperation(attribution.initiatedBy, operation, String(api.taskId));
-      return text({ ...approval, admissionId: undefined });
-    } });
-  }
-
-  private sessionTools(): ToolRegistration[] {
-    const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    const approvalText = (approval: StoredApproval) => text({ ...approval, admissionId: undefined, callId: undefined });
-    const commandText = async (approval: StoredApproval, api: ToolExecutionApi, tool: string) => text(await this.shownApproval(approval, api, tool));
-    return [
-      defineTool({ name: "identity", description: "Return immutable session owner identity and sanitized session environment, not collaborator credentials.", parameters: obj({}, { open: true }), execute: async (_args, api, _call) => {
-        const attribution = await this.toolActor(api, false);
-        await this.checkCall(api, "identity");
-        const config = await this.hostConfig();
-        const commands = { timeoutSeconds: commandLimits(config.commandTimeoutSeconds).seconds, gpu: config.gpu && !this.#onHost,
-          ...(this.#onHost ? { onHost: true } : {}) };
-        return text({ ...await this.sandbox.identity(() => this.recheckTool(attribution)), commands, ...attribution });
-      } }),
-      defineTool({ name: "read_file", description: "Read a confined worktree file. PNG, JPEG, GIF and WebP images are returned as images, scaled to fit. For a text file, offset (the first line, from 1) and limit (how many lines) read only part of it, and the result says which lines of how many it holds: use search to find where to look, then read around it.",
-        parameters: obj({ path: str(), offset: opt(int({ minimum: 1 })), limit: opt(int({ minimum: 1 })) }, { open: true }), execute: async (args, api, _call) => {
-        const attribution = await this.toolActor(api, false);
-        await this.checkCall(api, "read_file");
-        const file = await this.sandbox.readContent(args.path, () => this.recheckTool(attribution));
-        if ("text" in file && (args.offset !== undefined || args.limit !== undefined)) return text({ ...attribution, ...lineRange(file.text, args.offset, args.limit) });
-        if ("text" in file) return text({ ...attribution, content: file.text });
-        const prepared = await prepareImage(file.image, file.mimeType);
-        if ("error" in prepared) return { output: [], isError: true, diagnostics: [{ severity: "error" as const, code: "image", message: prepared.error }] };
-        const { image } = prepared;
-        return { output: [
-          { type: "text" as const, text: JSON.stringify({ ...attribution, path: args.path, mimeType: image.mimeType, width: image.width, height: image.height }) },
-          { type: "image" as const, data: image.data, mimeType: image.mimeType },
-        ] };
-      } }),
-      defineTool({ name: "list_files", description: "List confined worktree files.", parameters: obj({ path: opt(str()) }, { open: true }), execute: async (args, api, _call) => {
-        const attribution = await this.toolActor(api, false);
-        await this.checkCall(api, "list_files");
-        return text({ ...attribution, files: await this.sandbox.listFiles(args.path, () => this.recheckTool(attribution)) });
-      } }),
-      defineTool({ name: "search", description: "Search the worktree's text files for a regular expression (or, with literal, exact text), line by line, as grep -rn does, without a shell or approval. path narrows it to a directory or one file; glob to file names (*.ts) or paths (apps/**/*.ts); context adds up to 5 lines around each match; ignore_case; max_results (100 by default, at most 500). It skips .git directories as it walks, and node_modules unless all is true; links, binary and non-UTF-8 files and files over 1 MB are skipped. Results give each match's path, line number and text; truncated says it stopped early. Then read_file with offset and limit reads around a match.",
-        parameters: obj({ pattern: str(), path: opt(str()), glob: opt(str()), literal: opt(bool()),
-          ignore_case: opt(bool()), context: opt(int({ minimum: 0, maximum: searchLimits.context })),
-          max_results: opt(int({ minimum: 1, maximum: searchLimits.maxResults })), all: opt(bool()) }, { open: true }),
-        execute: async (args, api, _call) => {
-          let request: SearchRequest;
-          try { request = searchRequest(args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid search"); }
-          const attribution = await this.toolActor(api, false);
-          await this.checkCall(api, "search");
-          return text({ ...attribution, ...await this.sandbox.search(request, () => this.recheckTool(attribution)) });
-        } }),
-      defineTool({ name: "write_file", description: "Write a confined worktree file. In a read-only request it waits for the session owner to allow it.", executionMode: "sequential", parameters: obj({ path: str(), content: str() }, { open: true }), execute: async (args, api, _call) => {
-        const attribution = await this.toolActor(api, true);
-        await this.checkCall(api, "write_file", { write: true });
-        await this.sandbox.writeFile(args.path, args.content, () => this.recheckTool(attribution));
-        return text({ ...attribution, written: args.path });
-      } }),
-      defineTool({ name: "edit_file", executionMode: "sequential",
-        description: "Edit a confined worktree text file by exact replacement, without rewriting it. Each edits[].oldText must occur exactly once in the file, including whitespace and line breaks; edits are matched against the file as it was, must not overlap, and apply together. In a read-only request it waits for the session owner to allow it.",
-        parameters: obj({ path: str(), edits: arr(obj({ oldText: str(), newText: str() }, { open: true }), { minItems: 1 }) }, { open: true }),
-        execute: async (args, api, _call) => {
-          const attribution = await this.toolActor(api, true);
-          await this.checkCall(api, "edit_file", { write: true });
-          const recheck = () => this.recheckTool(attribution);
-          await this.sandbox.writeFile(args.path, applyEdits(await this.sandbox.readFile(args.path, recheck), args.edits, args.path), recheck);
-          return text({ ...attribution, edited: args.path, edits: args.edits.length });
-        } }),
-      ...(["move_file", "copy_file"] as const).map(name => defineTool({ name, executionMode: "sequential",
-        description: name === "move_file"
-          ? "Move or rename a file, directory or link in the worktree, without a shell or approval (like write_file): from and to are worktree paths. A link is moved itself, never what it points to. The destination must not exist, its directories are made, and a directory can't go inside itself; nothing in .git is moved. In a read-only request it waits for the session owner to allow it."
-          : `Copy a file, or a directory with everything in it, in the worktree, without a shell or approval (like write_file): from and to are worktree paths. Links are copied as links. The destination must not exist and its directories are made; at most ${fileOperationLimits.entries} entries and ${fileOperationLimits.bytes / 1024 / 1024} MB of files, never a repository's .git (clone it again instead). In a read-only request it waits for the session owner to allow it.`,
-        parameters: obj({ from: str(), to: str() }, { open: true }),
-        execute: async (args, api, _call) => {
-          let request: FileOperationRequest;
-          try { request = fileOperationRequest(name === "move_file" ? "move" : "copy", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
-          const attribution = await this.toolActor(api, true);
-          await this.checkCall(api, name, { write: true });
-          const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
-          return text({ ...attribution, ...(name === "move_file" ? { moved: args.from, to: args.to } : { copied: args.from, to: args.to, ...result }) });
-        } })),
-      defineTool({ name: "delete_file", executionMode: "sequential",
-        description: "Delete a file, link or directory in the worktree, without a shell or approval (like write_file). A link is deleted itself, never what it points to. A directory with anything in it is deleted only with recursive: true, everything in it included. Never .git or the worktree itself. In a read-only request it waits for the session owner to allow it.",
-        parameters: obj({ path: str(), recursive: opt(bool()) }, { open: true }),
-        execute: async (args, api, _call) => {
-          let request: FileOperationRequest;
-          try { request = fileOperationRequest("delete", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
-          const attribution = await this.toolActor(api, true);
-          await this.checkCall(api, "delete_file", { write: true });
-          const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
-          return text({ ...attribution, deleted: args.path, entries: result.entries });
-        } }),
-      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It stops at the host's command time limit, or sooner at timeout_seconds.`,
-        executionMode: "sequential",
-        parameters: obj({ args: arr(str(), { minItems: 1, maxItems: gitLimits.arguments }), directory: opt(str()), timeout_seconds: callTimeoutParameter() }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool("git");
-          let request: GitRequest;
-          let command: string;
-          let timeoutSeconds: number | undefined;
-          try { request = gitRequest(args); command = gitShellCommand(request); timeoutSeconds = callTimeout(args.timeout_seconds); }
-          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid git call"}. Nothing ran.`); }
-          const attribution = await this.toolActor(api, true);
-          await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.checkCall(api, "git", { write: true, shell: true });
-          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "git");
-        } }),
-      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It stops at the host's command time limit, or sooner at timeout_seconds: give one to a run that could wait forever, such as a test suite or a server it starts. Make Unix sockets in /tmp (TMPDIR): the worktree's path leaves too little of a socket path's 107 bytes.`,
-        executionMode: "sequential",
-        parameters: obj({ program: StringEnum(pythonPrograms), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
-          venv: opt(str()), timeout_seconds: callTimeoutParameter() }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool("python");
-          let request: PythonRequest;
-          let command: string;
-          let timeoutSeconds: number | undefined;
-          try { request = pythonRequest(args); command = pythonShellCommand(request); timeoutSeconds = callTimeout(args.timeout_seconds); }
-          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid python call"}. Nothing ran.`); }
-          const missing = request.venv ? undefined : this.programMissing({ programs: pythonPrograms, path: "/usr/local/bin" }, request.program);
-          if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
-          const attribution = await this.toolActor(api, true);
-          await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.checkCall(api, "python", { write: true, shell: true });
-          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "python");
-        } })]),
-      defineTool({ name: "browser", description: "Drive a headless Chromium in the session's sandbox. It opens url (http, https, file, or about:blank; "
-        + "without one, the page the last call left), runs actions in order, and answers with the page as it ends: a screenshot, its URL, title, "
-        + "HTTP status, visible text, interactive elements each with a CSS selector, console messages, page errors and failed requests. Actions: "
-        + "goto {url}; click or hover {selector, or x and y}; type {text, selector?, submit?, clear?}; press {key}; select {selector, value}; "
-        + "scroll {selector, or x and y}; wait {selector, text or ms}; evaluate {expression} (JavaScript in the page; its value comes back); "
-        + "screenshot {full_page?}; back; forward; reload. A selector is CSS, or text=<visible text>. A failed action stops the rest. "
-        + "Each call starts the browser afresh with the session's own profile: cookies and storage persist, open pages and their state don't, "
-        + "so do a whole flow in one call. Its network is the sandbox's: other hosts through the session's proxy, as the workspace allows, and "
-        + "localhost only within the call, so start the web app under test with serve {program, args, directory?, venv?, port}: one of the node and "
-        + `python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, which runs from before `
-        + "the page opens until the call ends. Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
-        + "It stops at the host's command time limit.",
-        executionMode: "sequential",
-        parameters: obj({
-          url: opt(str()),
-          actions: opt(arr(obj({
-            action: StringEnum(browserActions),
-            selector: opt(str()), url: opt(str()), text: opt(str()),
-            key: opt(str({ description: `${browserKeys.join(", ")}, or a single character` })), value: opt(str()), expression: opt(str()),
-            x: opt(int()), y: opt(int()), ms: opt(int({ minimum: 0, maximum: browserLimits.waitMs })),
-            full_page: opt(bool()), submit: opt(bool()), clear: opt(bool()),
-          }, { open: true }), { maxItems: browserLimits.actions })),
-          viewport: opt(obj({ width: int(), height: int() }, { open: true })),
-          full_page: opt(bool()),
-          timeout_seconds: opt(int({ minimum: browserLimits.timeoutSeconds.min, maximum: browserLimits.timeoutSeconds.max })),
-          serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
-            directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
-            timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
-        }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool("browser");
-          const browser = this.sandbox.browser;
-          if (!browser) throw new RunnerError(400, `This session has no browser: ${browserUnavailableText(this.browserUnavailable() ?? "missing")} Nothing ran.`);
-          let request: BrowserRequest;
-          let command: string;
-          try {
-            request = browserRequest(args as Record<string, unknown>);
-            command = browserShellCommand(request, browser, { seconds: (await this.commandOptions()).limits.seconds, nodeBin: this.sandbox.nodeBin });
-          } catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid browser call"}. Nothing ran.`); }
-          const attribution = await this.toolActor(api, true);
-          await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.checkCall(api, "browser", { write: true, shell: true });
-          const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { unbounded }, call.abortSignal);
-          return this.browserOutcome(approval, () => this.recheckTool(attribution), approvalText);
-        } }),
-      defineTool({ name: "tunnel", description: "Put the web server you work on online at a public https:// address, through a Cloudflare quick tunnel (https://<name>.trycloudflare.com). "
-        + "start {serve: {program, args, directory?, venv?, port, timeout_seconds?}} runs the server in the session's sandbox as a service that keeps running after the call: "
-        + `one of the node and python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, `
-        + "listening on port on localhost; once the port answers (within timeout_seconds, 60 by default) cloudflared, on the host, puts it online, and the call answers with the address. "
-        + "A start replaces the one online. status gives the address, whether cloudflared is connected, the uptime and the server's last lines of output; stop takes it offline. "
-        + "It stays online until stopped, until someone stops the session's work, until the session closes or is archived, or for the host's service lifetime at most. "
-        + "It starts only for the host's owner or a member they granted host commands, and isn't taken in a read-only request. "
-        + "Only the declared port is reachable through it. By default (access: link) only its link opens it: the address the call answers with carries a secret, which a browser that opens it keeps as a cookie for a day, and the bare address answers 401; anyone the link is given to, and everyone who can read this session, can open it. "
-        + "access: public makes it open to anyone with the address, for clients that can't follow a link, such as webhooks.",
-        executionMode: "sequential",
-        parameters: obj({
-          action: StringEnum(tunnelActions),
-          access: opt(StringEnum(tunnelAccesses)),
-          serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
-            directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
-            timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
-        }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool("tunnel");
-          let request: TunnelRequest;
-          try { request = tunnelRequest(args); }
-          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid tunnel call"}. Nothing ran.`); }
-          if (request.action === "status") {
-            const attribution = await this.toolActor(api, false);
-            return text({ ...attribution, ...(this.#tunnel?.status() ?? { online: false }) });
-          }
-          const attribution = await this.toolActor(api, true);
-          if (request.action === "stop") {
-            const stopped = this.#tunnel ? await this.#tunnel.stop("stop", attribution.initiatedBy) : { stopped: false };
-            return text({ ...attribution, ...stopped, ...(stopped.stopped ? {} : { note: "Nothing was online." }) });
-          }
-          await this.requireSenderTool("tunnel", attribution.initiatedBy);
-          const unavailable = this.tunnelUnavailable() ?? (this.config.tunnels ? undefined : "missing");
-          if (unavailable) throw new RunnerError(400, `This session can't put a server online: ${tunnelUnavailableText(unavailable)} Nothing ran.`);
-          const state = await this.metadata();
-          const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-          if (run.options?.access === "read") {
-            throw new RunnerError(403, "Putting a server online is an effect a Read-only message doesn't take: ask in a message that may act. Nothing ran.");
-          }
-          const json = JSON.stringify({ action: "start", serve: request.serve, access: request.access });
-          const operation: ExtensionToolOperation = { kind: "extension.tool", source: "piki:tunnel", tool: "tunnel",
-            arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
-            digest: createHash("sha256").update(json).digest("hex") };
-          await this.hostCommands.require(attribution.initiatedBy, "Putting a server online with cloudflared");
-          const approval = await this.runOperation(attribution.initiatedBy, operation, String(api.taskId), { hostChecked: true }, call.abortSignal);
-          if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? "The tunnel didn't start.");
-          const id = approval.id;
-          try {
-            await this.recheckTool(attribution);
-            const started = await this.sessionTunnel().start(request.serve!, attribution.initiatedBy, call.abortSignal, request.access);
-            await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.#waits.kept(id, `Online at ${started.url}`) }); });
-            return text({ ...attribution, ...started });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.#waits.kept(id, message) }); }).catch(() => {});
-            throw new RunnerError(error instanceof RunnerError ? error.status : 409, message);
-          }
-        } }),
-      defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of curl. Each read spends the session owner's own GitHub rate limit: "
-        + "where the session has the gh tool, read and wait for checks with gh instead, and use this to wait for any other change. Read-only; no credentials enter tools. "
-        + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
-        parameters: obj({ repository: str(), issue: int({ minimum: 1 }), wait: opt(StringEnum(githubWaits)),
-          timeout_seconds: opt(int({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }, { open: true }), execute: async (args, api, call) => {
-        await this.requireSessionTool("github_read");
-        const attribution = await this.toolActor(api, false);
-        const repository = this.githubRepository(args.repository);
-        await this.checkCall(api, "github_read");
-        const state = await this.metadata();
-        const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-        if (!run.admissionId) throw new RunnerError(403, "GitHub reads need a write message");
-        const request: GitHubReadRequest = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId), repository, issue: args.issue };
-        const read = async () => {
-          await this.authorize(run.initiatedBy, "write");
-          return this.config.githubRead ? await this.config.githubRead(request) : await this.internalGitHub("read", request) as GitHubIssueView;
-        };
-        const first = await read();
-        if (!args.wait) return text({ ...attribution, ...first });
-        const { view, waited } = await waitForGitHub({ wait: args.wait, first, read, timeoutMs: (args.timeout_seconds ?? githubWaitLimits.defaultSeconds) * 1000,
-          pollMs: this.config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000, now: Date.now, sleep: ms => sleep(ms, undefined, { signal: call.abortSignal }) });
-        return text({ ...attribution, ...view, waited });
-      } }),
-      defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker. Use this where the gh tool can't write (gh pr comment, gh issue comment). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, _call) => {
-        await this.requireSessionTool("github_comment");
-        const attribution = await this.toolActor(api, true);
-        await this.checkCall(api, "github_comment", { write: true });
-        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.comment", ...args }, String(api.taskId)));
-      } }),
-      defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase. Use this where the gh tool can't write (gh pr merge --match-head-commit). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), pull: int({ minimum: 1 }), sha: str(), method: StringEnum(githubMergeMethods) }, { open: true }), execute: async (args, api, _call) => {
-        await this.requireSessionTool("github_merge");
-        const attribution = await this.toolActor(api, true);
-        const repository = this.githubRepository(args.repository);
-        if (!/^[0-9a-f]{40}$/.test(args.sha)) throw new RunnerError(400, "sha must be the pull request's full 40-character head commit, as github_read reports it");
-        await this.checkCall(api, "github_merge", { write: true });
-        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.merge", repository, pull: args.pull, sha: args.sha, method: args.method }, String(api.taskId)));
-      } }),
-      defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker. Use this where the gh tool can't write (gh issue create): the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: obj({ repository: str(), title: str(), body: str() }, { open: true }), execute: async (args, api, _call) => {
-        await this.requireSessionTool("github_issue");
-        const attribution = await this.toolActor(api, true);
-        const repository = this.githubRepository(args.repository);
-        if (!args.title.trim() || /[\r\n]/.test(args.title) || args.title.length > GITHUB_ISSUE_TITLE_LIMIT) throw new RunnerError(400, `title must be one non-empty line of at most ${GITHUB_ISSUE_TITLE_LIMIT} characters`);
-        if (args.body.length > GITHUB_ISSUE_BODY_LIMIT) throw new RunnerError(400, `body must be at most ${GITHUB_ISSUE_BODY_LIMIT} characters`);
-        if (args.title.includes("\0") || args.body.includes("\0")) throw new RunnerError(400, "title and body must not contain NUL characters");
-        await this.checkCall(api, "github_issue", { write: true });
-        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.issue", repository, title: args.title, body: args.body }, String(api.taskId)));
-      } }),
-      defineTool({ name: "schedule", description: "Manage this session's scheduled prompts: messages Pikibun sends this session's agent on a cron schedule, as the session owner, so the session wakes up and works on its own (a nightly check, a weekly report). Use it when the user asks to do something every hour, day or week, or at a later time. action list takes nothing; create takes message (what the agent is told each time) and cron (five fields: minute hour day-of-month month day-of-week, such as '0 9 * * 1-5'; runs at least 5 minutes apart), and optionally name, time_zone (IANA, such as Europe/Berlin; UTC otherwise, so ask the user for theirs when the time of day matters), access (auto, the default: each run acts with the session's tools; read: each run only inspects), run_in (session, the default: each run prompts this session's agent, and is skipped while it is busy; child: each run starts a new session under this one, on its model and host, with the message as its opening message, so this session is never prompted and its own work goes on), one_shot (for child runs: true, the default, archives each child once its run is done, unless someone sent it a message of their own; false keeps it open) and enabled; update takes id and only the fields to change; delete takes id. Only the session owner's messages can use it. A run due while the agent is busy is skipped, unless it runs in a child session. The owner sees and edits them in the session panel's Schedules tab.", parameters: obj({
-        action: StringEnum(scheduleToolActions), id: opt(str()), message: opt(str()), cron: opt(str()),
-        time_zone: opt(str()), name: opt(str()), access: opt(StringEnum(accessModes)), run_in: opt(StringEnum(scheduleRunIns)), one_shot: opt(bool()), enabled: opt(bool()),
-      }, { open: true }), execute: async (args, api, _call) => {
-        await this.requireSessionTool("schedule");
-        const attribution = await this.toolActor(api, true);
-        const fields = Object.fromEntries(Object.entries({ scheduleId: args.id, name: args.name, cron: args.cron, timeZone: args.time_zone, content: args.message,
-          access: args.access, runIn: args.run_in, oneShot: args.one_shot, enabled: args.enabled }).filter(([, value]) => value !== undefined)) as Omit<ScheduleToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
-        if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Schedule fields must not contain NUL characters");
-        const state = await this.metadata();
-        const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-        if (run.initiatedBy !== this.binding.owner.id) throw new RunnerError(403, "Only the session owner's messages schedule prompts. Ask the owner to send this request, or to add it in the Schedules tab.");
-        if (!run.admissionId) throw new RunnerError(403, "Scheduling needs a write message");
-        await this.checkCall(api, "schedule", { write: args.action !== "list" });
-        await this.authorize(run.initiatedBy, "write");
-        const request: ScheduleToolRequest = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId),
-          action: args.action, ...fields };
-        const result = this.config.schedules ? await this.config.schedules(request) : await this.internalBroker("schedules", request) as ScheduleToolResult;
-        return text({ ...attribution, ...result });
-      } }),
-      defineTool({ name: "sessions", description: SESSIONS_TOOL_DESCRIPTION,
-        executionMode: "sequential", parameters: obj({
-        action: StringEnum(sessionsToolActions), session: opt(str()), message: opt(str()),
-        access: opt(StringEnum(accessModes)), notify: opt(bool()), title: opt(str()), model: opt(str()),
-        thinking: opt(StringEnum(thinkingLevels)), visibility: opt(StringEnum(["private", "workspace"] as const)), message_id: opt(str()),
-        limit: opt(int({ minimum: 1, maximum: crossSessionLimits.readEntries })),
-        timeout_seconds: opt(int({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
-      }, { open: true }), execute: async (args, api, call) => {
-        await this.requireSessionTool("sessions");
-        const attribution = await this.toolActor(api, true);
-        const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-          modelId: args.model, thinkingLevel: args.thinking, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
-          Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
-        if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");
-        const wait = args.action === "wait";
-        if (wait && (fields.targetSessionId === undefined || fields.messageId === undefined)) throw new RunnerError(400, "wait takes session and message_id, as ask, send or create returned them");
-        if (!wait && args.timeout_seconds !== undefined) throw new RunnerError(400, "Only wait takes timeout_seconds");
-        const state = await this.metadata();
-        const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-        if (!run.admissionId) throw new RunnerError(403, "The sessions tool needs a write message");
-        const request = { action: wait ? "read" as const : args.action as Exclude<typeof args.action, "wait">, ...(wait ? { targetSessionId: fields.targetSessionId, messageId: fields.messageId, limit: 1 } : fields) };
-        await this.checkCall(api, "sessions", { write: sessionsWriteActions.includes(args.action) });
-        await this.authorize(run.initiatedBy, "write");
-        const base = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId) };
-        const broker = async (): Promise<SessionsToolResult> => {
-          const result = this.config.crossSessions ? await this.config.crossSessions({ ...base, ...request }) : await this.internalBroker("sessions", { ...base, ...request }) as SessionsToolResult;
-          if (!("consent" in result)) return result;
-          throw new RunnerError(403, `${result.reason} The session's owner can let content pass between sessions whose readers differ under the session's Details. Nothing was sent or read.`);
-        };
-        if (!wait) return text({ ...attribution, ...await broker() });
-        const deadline = Date.now() + (args.timeout_seconds ?? crossSessionLimits.defaultWaitSeconds) * 1000;
-        for (;;) {
-          const result = await broker();
-          const done = "outcome" in result && result.outcome?.done === true;
-          if (done || Date.now() + WAIT_POLL_MS > deadline) {
-            const { entries: _entries, ...shown } = result as Extract<SessionsToolResult, { entries: unknown }>;
-            return text({ ...attribution, ...shown, ...(done ? {} : { timedOut: true }) });
-          }
-          await sleep(WAIT_POLL_MS, undefined, { signal: call.abortSignal });
-        }
-      } }),
-    ];
-  }
-
-  readonly #definitionNotes = new Set<string>();
-
-  private noteDefinition(name: string, what: string): void {
-    const note = `${name} ${what}`;
-    if (this.#definitionNotes.has(note)) return;
-    this.#definitionNotes.add(note);
-    process.stderr.write(`Session ${this.binding.session.id}: the tool definition ${note}.\n`);
-  }
-
-  private async fetchDefinitions(): Promise<readonly ToolDefinition[]> {
-    const fetched = this.config.toolDefinitions ? await this.config.toolDefinitions().catch(() => undefined) : undefined;
-    if (fetched) rememberToolDefinitions(fetched);
-    return fetched ?? bundledToolDefinitions;
-  }
-
-  private usableDefinitions(definitions: readonly ToolDefinition[], own: readonly string[]): ToolDefinition[] {
-    const windows = process.platform === "win32" && this.sandbox.isolated;
-    const taken = new Set(own);
-    return definitions.filter(definition => {
-      if (taken.has(definition.name) || (definition.kind === "program" && windows && !definition.windowsSandbox)) return false;
-      taken.add(definition.name);
-      return true;
-    });
-  }
-
-  private async refreshDefinitions(extensionTools: readonly string[] = []): Promise<void> {
-    if (!this.config.toolDefinitions || !this.#registry) return;
-    const fetched = await this.fetchDefinitions();
-    for (const definition of fetched) {
-      const had = this.#definitions.find(item => item.name === definition.name);
-      if (had && JSON.stringify(had) !== JSON.stringify(definition)) this.noteDefinition(definition.name, "changed; the session uses it as it was until it next opens");
-      else if (!had && extensionTools.includes(definition.name)) this.noteDefinition(definition.name, "is offered by one of the workspace's extensions, which keeps it");
-    }
-    const added = this.usableDefinitions(fetched, [...this.tools.map(tool => tool.name), ...extensionTools]);
-    if (!added.length) return;
-    const tools = added.map(definition => wholeForScripts(this.definedTool(definition)));
-    const extension = defineExtension({ name: `defined-tools-${this.#definedExtensions.length + 1}`, tools });
-    this.#registry.install(extension);
-    this.#definedExtensions.push(extension);
-    this.#definitions.push(...added);
-    this.tools.push(...tools);
-    this.#hostExtensions?.reserve(added.map(definition => definition.name));
-  }
-
-  private definedTool(definition: ToolDefinition): ToolRegistration {
-    const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    if (definition.kind === "program") {
-      return defineTool({ name: definition.name, description: definition.description, executionMode: "sequential",
-        parameters: obj({ program: StringEnum([...definition.programs]), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
-          timeout_seconds: callTimeoutParameter() }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool(definition.name);
-          let request: ProgramRequest;
-          let command: string;
-          let timeoutSeconds: number | undefined;
-          try {
-            request = programRequest(definition, args); command = programCommand(definition, request, this.sandbox.nodeBin ? { nodeBin: this.sandbox.nodeBin } : {});
-            timeoutSeconds = callTimeout(args.timeout_seconds);
-          }
-          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${definition.name} call`}. Nothing ran.`); }
-          const missing = this.programMissing(definition, request.program);
-          if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
-          const attribution = await this.toolActor(api, true);
-          await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.checkCall(api, definition.name, { write: true, shell: true });
-          const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal);
-          return text(await this.shownApproval(approval, api, definition.name));
-        } });
-    }
-    const parameters = Object.fromEntries(Object.entries(definition.parameters).map(([name, parameter]) => {
-      const options = parameter.description ? { description: parameter.description } : {};
-      const schema = parameter.type === "boolean" ? bool(options)
-        : parameter.type === "integer" ? int({ ...options, ...(parameter.minimum !== undefined ? { minimum: parameter.minimum } : {}), ...(parameter.maximum !== undefined ? { maximum: parameter.maximum } : {}) })
-        : parameter.enum ? StringEnum([...parameter.enum], options) : str(options);
-      return [name, parameter.required ? schema : opt(schema)];
-    }));
-    return defineTool({ name: definition.name, description: definition.description, parameters: obj(parameters, { open: true }),
-      execute: async (input, api, _call) => {
-        await this.requireSessionTool(definition.name);
-        const attribution = await this.toolActor(api, definition.write);
-        let args: Record<string, unknown>;
-        try { args = brokeredArguments(definition, input as Record<string, unknown>); }
-        catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : `Invalid ${definition.name} call`); }
-        await this.checkCall(api, definition.name, definition.write ? { write: true } : {});
-        const state = await this.metadata();
-        const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-        if (!run.admissionId) throw new RunnerError(403, `${definition.name} needs a write message`);
-        const request = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId), ...args };
-        await this.authorize(run.initiatedBy, "write");
-        const result = this.config.brokered ? await this.config.brokered(definition.route, request) : await this.internalBroker(definition.route, request);
-        return text({ ...attribution, ...(result && typeof result === "object" && !Array.isArray(result) ? result : { result }) });
-      } });
-  }
-
-  private githubRepository(name: string): string {
-    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new RunnerError(400, "repository must be a github.com owner/name");
-    return name;
-  }
-
-  private async githubEffect(operation: Extract<Operation, { kind: "github.comment" | "github.merge" | "github.issue" }>,
-    authority: { sessionId: string; actorId: string; approvalId: string } & ({ capability: string } | { admissionId: string })): Promise<string> {
-    if (operation.kind === "github.comment") {
-      const { repository, issue, body } = operation;
-      const request: GitHubCommentRequest = { ...authority, repository, issue, body };
-      const comment = this.config.githubComment ? await this.config.githubComment(request) : await this.internalGitHub("comment", request) as { id: number; url: string };
-      return JSON.stringify({ id: comment.id, url: comment.url });
-    }
-    if (operation.kind === "github.merge") {
-      const { repository, pull, sha, method } = operation;
-      const request: GitHubMergeRequest = { ...authority, repository, pull, sha, method };
-      const merged = this.config.githubMerge ? await this.config.githubMerge(request) : await this.internalGitHub("merge", request) as GitHubMergeResult;
-      return JSON.stringify({ merged: true, sha: merged.sha, url: merged.url });
-    }
-    const { repository, title, body } = operation;
-    const request: GitHubIssueRequest = { ...authority, repository, title, body };
-    const opened = this.config.githubIssue ? await this.config.githubIssue(request) : await this.internalGitHub("issue", request) as GitHubIssueResult;
-    return JSON.stringify({ number: opened.number, url: opened.url });
-  }
-
-  private async internalGitHub(action: "comment" | "read" | "merge" | "issue", request: object): Promise<unknown> {
-    return this.internalBroker(`github/${action}`, request);
-  }
-
-  private async internalBroker(path: string, request: object): Promise<unknown> {
-    const response = await (this.config.fetch ?? fetch)(`${this.config.controlPlaneUrl}/api/internal/${path}`, {
-      method: "POST", headers: { authorization: `Bearer ${this.config.sharedSecret}`, "content-type": "application/json" },
-      body: JSON.stringify(request), signal: AbortSignal.timeout(30_000), redirect: "error",
-    });
-    const value: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) {
-      const error = value && typeof value === "object" && "error" in value && typeof value.error === "string" ? value.error : "Broker returned an error; external state must be reconciled";
-      throw new RunnerError(response.status, error);
-    }
-    return value;
-  }
-
-  async runOperation(actorId: string, input: Operation, toolTaskId: string, consent: { unbounded?: boolean; hostChecked?: boolean; timeoutSeconds?: number } = {},
-    signal?: AbortSignal): Promise<StoredApproval> {
-    this.requireUnfrozen();
-    const operation = validateOperation(input);
-    if (operation.kind === "permission") throw new RunnerError(400, "Permission requests were removed: a session runs its tools or refuses them");
-    if (operation.kind === "git.commit" || operation.kind === "git.repin" || (operation.kind === "git.push" && operation.directory === undefined)) {
-      throw new RunnerError(400, "Commit and switch branches with the git tool; a push names a clone's directory");
-    }
-    if (operation.kind === "host.bash") throw new RunnerError(400, "Commands on the host were removed with host_bash; run programs with the git, node and python tools");
-    this.hostCommands.requireShell(operation, consent.unbounded);
-    if (operation.kind === "extension.tool" && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
-      throw new RunnerError(403, "Host commands require a connected host with a known owner");
-    }
-    if (operation.kind === "git.push" && !this.#clone) throw new RunnerError(400, "Only clone sessions push a clone's directory");
-    if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with the git tool");
-    await this.authorize(actorId, "write");
-    const state = await this.metadata();
-    const attribution = state.toolActors[toolTaskId];
-    const run = attribution && state.runs[attribution.runKey];
-    if (!run || run.initiatedBy !== actorId || run.ownerId !== this.binding.owner.id || run.mode !== "write"
-      || !["admitting", "running"].includes(run.status)) throw new RunnerError(403, "The operation has no active originating write");
-    const admissionId = run.admissionId;
-    if (this.config.connectorId && !admissionId) throw new RunnerError(403, "The operation lacks Worker write admission");
-    const brokered = operation.kind === "git.push" || operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
-    if (brokered && admissionId === undefined) throw new RunnerError(403, "Pushes and GitHub effects need a write message");
-    if (!consent.hostChecked && this.hostCommands.runsOnHost(operation, consent.unbounded === true)) await this.hostCommands.require(actorId, this.hostCommands.onHostMachine());
-    const id = `tool-${toolTaskId}`;
-    const record: StoredApproval = { id, sessionId: this.binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)),
-      createdAt: new Date().toISOString(), status: "executing",
-      ...(consent.unbounded && (operation.kind === "bash" || operation.kind === "program") ? { unbounded: true } : {}),
-      ...(attribution.callId ? { callId: attribution.callId } : {}), ...(admissionId !== undefined ? { admissionId } : {}) };
-    let created = false;
-    await this.mutate(meta => { if (!meta.approvals[id]) { meta.approvals[id] = record; created = true; } });
-    if (!created) return this.#waits.whole((await this.metadata()).approvals[id]!);
-    if (operation.kind === "extension.tool") return record;
-    return this.#waits.whole(await this.execute(id, actorId, signal, consent.timeoutSeconds));
-  }
-
-  private async execute(id: string, actorId: string, signal?: AbortSignal, timeoutSeconds?: number): Promise<StoredApproval> {
-    const approval = (await this.metadata()).approvals[id]!;
-    const operation = approval.operation;
-    let status: ApprovalRecord["status"];
-    let result: string;
-    if (operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue") {
-      try {
-        await this.authorize(actorId, "write");
-        result = await this.githubEffect(operation, { sessionId: this.binding.session.id, actorId, approvalId: id, admissionId: approval.admissionId! });
-        status = "executed";
-      } catch (error) {
-        if (error instanceof RunnerError && error.status === 422 && operation.kind !== "github.comment") { status = "failed"; result = error.message; }
-        else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
-      }
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
-      return (await this.metadata()).approvals[id]!;
-    }
-    if (operation.kind === "git.push") {
-      const entry = { controller: new AbortController(), done: Promise.resolve() };
-      const settled = (async () => {
-        const outcome = await this.runPush(id, operation, { actorId, admissionId: approval.admissionId }, async () => { await this.authorize(actorId, "write"); }, entry.controller.signal);
-        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.#waits.kept(id, outcome.result) }); });
-      })();
-      entry.done = settled.then(() => undefined, () => undefined);
-      this.pushes.add(entry);
-      try { await settled; }
-      finally { this.pushes.delete(entry); }
-      return (await this.metadata()).approvals[id]!;
-    }
-    if (operation.kind !== "bash" && operation.kind !== "program") throw new RunnerError(400, "Unsupported operation");
-    const onHost = this.hostCommands.runsOnHost(operation, approval.unbounded === true);
-    try {
-      result = await this.sandbox.execute(operation, false, async () => {
-        this.hostCommands.requireShell(operation, approval.unbounded === true);
-        await this.hostCommands.requireHostEnvironment();
-        if (onHost) await this.hostCommands.require(actorId, this.hostCommands.onHostMachine());
-        await this.authorize(actorId, "write");
-      }, { allowTestShell: this.testShell(), unbounded: approval.unbounded === true,
-        ...await this.commandOptions(timeoutSeconds), signal });
-      status = "executed";
-    } catch (error) {
-      const refused = error instanceof RunnerError && error.status < 500;
-      status = error instanceof SandboxProcessError || refused ? "failed" : "interrupted";
-      result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
-        : refused ? (error as RunnerError).message : "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited.";
-    }
-    await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
-    return (await this.metadata()).approvals[id]!;
+  runOperation(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredApproval> {
+    return this.#operations.run(actorId, input, toolTaskId, consent, signal);
   }
 
   private async cutPoint(conversation: Conversation, entryId: string): Promise<{ at: EntryId | undefined; last: boolean }> {
@@ -2302,7 +1042,7 @@ export class RunnerSession {
       else {
         const agent = await shared.agent(context);
         next = await this.harness.createConversation({ ownership: { kind: "ownerless" }, agent: {
-          model: agent.model ?? this.modelRef, thinkingLevel: agent.thinkingLevel, extensions: [this.#extension, ...this.#definedExtensions],
+          model: agent.model ?? this.modelRef, thinkingLevel: agent.thinkingLevel, extensions: [this.#extension, ...this.#defined.extensions],
           tools: this.tools, instructions: this.agentInstructions("write"),
         } }, context);
       }
@@ -2379,113 +1119,22 @@ export class RunnerSession {
     });
   }
 
-  async view(): Promise<SessionView> {
-    const tunnel = this.#tunnel?.view();
-    const initial = await this.metadata();
-    const snapshots: { branch: Branch; entries: readonly EntryRecord[]; messages: readonly Message[] }[] = [];
-    for (const branch of initial.branches.filter(item => !item.superseded)) {
-      const conversation = await this.harness.conversation(branch.id as ConversationId, context);
-      if (!conversation) continue;
-      const active = await conversation.context(context);
-      snapshots.push({ branch, entries: active.entries, messages: active.messages });
-    }
-    const state = await this.metadata();
-    const entries: SessionView["entries"] = [];
-    for (const snapshot of snapshots) {
-      let previous: Run | undefined;
-      const refused = Object.values(state.runs).filter(run => run.refused && run.conversationId === snapshot.branch.id)
-        .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-      const refusedAt = (after: (run: Run) => boolean) => {
-        for (const run of refused.filter(after)) entries.push(refusedView(run, snapshot.branch.id));
-      };
-      refusedAt(run => !snapshot.entries.some(entry => entry.id <= run.startEntry));
-      for (const entry of snapshot.entries) {
-        const run = Object.values(state.runs).filter(candidate => (candidate.started || candidate.submissionId !== undefined || candidate.status === "admitting") && candidate.conversationId === entry.conversationId && candidate.startEntry < entry.id).sort((a, b) => b.startEntry - a.startEntry)[0];
-        const ending = run !== previous && previous && endView(previous, snapshot.branch.id);
-        if (ending) entries.push(ending);
-        previous = run;
-        entries.push(entryView(entry, snapshot.branch.id, run?.initiatedBy));
-        const next = snapshot.entries[snapshot.entries.indexOf(entry) + 1];
-        refusedAt(run => run.startEntry >= entry.id && (!next || run.startEntry < next.id));
-      }
-      const ending = previous && endView(previous, snapshot.branch.id);
-      if (ending) entries.push(ending);
-    }
-    const agent = await this.#shared.agent(context);
-    const shared = snapshots.find(snapshot => snapshot.branch.mode === "write");
-    const usage = shared && this.contextView(shared.messages, agent.model);
-    const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
-    const access = latestWrite && (latestWrite.options?.access === "read" ? "read" : "auto");
-    const repositories = this.repositoryView();
-    const { id, displayName, gitName, gitEmail, githubLogin } = this.binding.owner;
-    return { sessionId: this.binding.session.id, owner: { id, displayName, gitName, gitEmail, githubLogin }, entries,
-      approvals: [],
-      conversations: state.branches.filter(branch => !branch.superseded).map(({ id, mode, actorId }) => ({ id: String(id), mode, ...(actorId ? { actorId } : {}) })),
-      busy: Object.values(state.runs).some(holdsQueue)
-        || Object.values(state.approvals).some(approval => approval.status === "executing") || repositories?.status === "preparing",
-      queue: Object.values(state.runs).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
-        .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.refused ? "refused" : run.status })),
-      stoppable: true,
-      withdrawable: true,
-      rewindable: true,
-      memberForks: true,
-      ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
-      ...(usage ? { context: usage } : {}),
-      ...(access ? { access } : {}),
-      ...(repositories ? { repositories } : {}),
-      activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
-        : sessionActivity(Object.values(state.runs).filter(tellsActivity), Object.values(state.approvals),
-          activityEntry(shared?.entries.at(-1))),
-      ...await this.extensionView(),
-      ...(tunnel ? { tunnel } : {}),
-    };
+  view(): Promise<SessionView> {
+    return sessionView({
+      binding: this.binding, tunnel: () => this.#tunnel?.view(), metadata: () => this.metadata(),
+      conversation: id => this.harness.conversation(id as ConversationId, context), agent: () => this.#shared.agent(context),
+      context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
+      repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
+    });
   }
 
-  private contextView(messages: readonly Message[], model: { provider: string; modelId: string } | undefined): SessionView["context"] {
-    const tokens = contextTokens(messages);
-    if (!Number.isFinite(tokens) || tokens < 0) return undefined;
-    const current = model ?? this.modelRef;
-    let window: number | undefined;
-    try {
-      const found = current && this.models?.getModel(current.provider, current.modelId)?.contextWindow;
-      window = Number.isSafeInteger(found) && found! > 0 ? found : undefined;
-    }
-    catch { window = undefined; }
-    const compactsAt = current ? compactionThreshold(this.#compaction(), current, window) : undefined;
-    return { tokens, ...(window !== undefined ? { window } : {}), ...(compactsAt !== undefined ? { compactsAt } : {}) };
-  }
-
-  private async extensionView(): Promise<Pick<SessionView, "extensions">> {
-    const config = this.config.extensions;
-    const enabled = this.#builtins ? (await this.hostConfig().catch(() => undefined))?.builtinExtensions ?? [] : [];
-    if (!config) {
-      const builtin = this.#builtins?.select(enabled, new Set()).map(item => item.name) ?? [];
-      return builtin.length ? { extensions: { running: [], missing: [], builtin } } : {};
-    }
-    try {
-      const answer = await config.workspace(this.binding.session.workspaceId);
-      const installed = config.installed().map(item => item.summary);
-      const required = await this.requiredExtensions() ?? [];
-      const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required);
-      const missingRequired = missingRequiredExtensions(required, installed);
-      const settled = settleToolNames(chosen.map(item => ({ source: item.source,
-        tools: installed.find(candidate => candidate.source === item.source)?.modules.flatMap(module => module.tools.map(tool => tool.name)) ?? [] })),
-        this.tools.map(tool => tool.name));
-      const running = chosen.map((item, index) => ({ source: item.source, dev: item.dev, tools: settled[index]!.kept, ...(item.required ? { required: true as const } : {}) }));
-      const requiredPackages = new Set(required.map(item => extensionPackageKey(item.source)));
-      const missing = answer.extensions.filter(item => item.enabled && !requiredPackages.has(extensionPackageKey(item.source))
-        && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
-      const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
-      const off = this.definedToolsOff(sessionToolsOff(answer.extensions), answer.extensions);
-      const browserReason = off.has("browser") ? undefined : this.browserUnavailable();
-      const tunnelReason = off.has("tunnel") ? undefined : this.tunnelUnavailable();
-      const unavailable = [...(browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : []),
-        ...(tunnelReason ? [{ source: "piki:tunnel", tools: ["tunnel"], reason: tunnelReason }] : []),
-        ...this.missingPrograms(off).map(item => ({ source: item.source, tools: [item.tool], reason: "programs", programs: item.programs }))];
-      return running.length || missing.length || builtin.length || missingRequired.length || unavailable.length
-        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}),
-          ...(unavailable.length ? { unavailable } : {}) } } : {};
-    } catch { return {}; }
+  private extensionView(): Promise<Pick<SessionView, "extensions">> {
+    return extensionView({
+      binding: this.binding, config: this.config.extensions, builtins: () => this.#builtins, hostConfig: () => this.hostConfig(),
+      requiredExtensions: () => this.requiredExtensions(), toolNames: () => this.tools.map(tool => tool.name),
+      definedToolsOff: (off, extensions) => this.#availability.definedToolsOff(off, extensions), browserUnavailable: () => this.#availability.browserUnavailable(),
+      tunnelUnavailable: () => this.#availability.tunnelUnavailable(), missingPrograms: off => this.#availability.missingPrograms(off),
+    });
   }
 
   async restart(): Promise<void> {
@@ -2499,7 +1148,7 @@ export class RunnerSession {
       const state = await this.metadata();
       if (Object.values(state.runs).some(holdsQueue)
         || Object.values(state.approvals).some(approval => approval.status === "executing")) throw new RunnerError(409, "Backup requires an idle session including queued work");
-      this.requireRepositoriesReady();
+      this.#repositories.requireReady();
       this.requireUnfrozen();
       await this.close();
       try {
@@ -2528,7 +1177,7 @@ export class RunnerSession {
     const state = await this.metadata();
     if (Object.values(state.runs).some(holdsQueue)
       || Object.values(state.approvals).some(approval => approval.status === "executing")) throw new RunnerError(409, "Packing requires an idle session including queued work");
-    this.requireRepositoriesReady();
+    this.#repositories.requireReady();
   }
 
   async packContent(ticket: RunnerTicket): Promise<{ bytes: Buffer; files: number; clones: number }> {
@@ -2601,20 +1250,14 @@ export class RunnerSession {
   async close({ abortPushes = true }: { abortPushes?: boolean } = {}): Promise<void> {
     this.closing = true;
     this.#waits.dropResults();
-    const preparation = this.#repositories;
-    if (preparation.status === "preparing") preparation.controller.abort();
-    this.#repositories = { status: "ready" };
-    this.#preparations++;
+    this.#repositories.reset();
     this.#opened = false;
     this.#resumed = false;
     this.#activity?.stop();
     const tunnel = this.#tunnel;
     this.#tunnel = undefined;
     await tunnel?.close().catch(() => {});
-    if (abortPushes) {
-      for (const push of this.pushes) push.controller.abort();
-      await Promise.allSettled([...this.pushes].map(push => push.done));
-    }
+    if (abortPushes) await this.#operations.abortPushes();
     this.generation++;
     const extensions = this.#hostExtensions;
     this.#hostExtensions = undefined;
@@ -2627,58 +1270,6 @@ export class RunnerSession {
       await this.harness.close(context).catch((error: unknown) => { if (!failed) throw error; });
     } finally {
       await builtins?.close().catch(() => {});
-    }
-  }
-
-  private async runPush(id: string, operation: GitPushOperation, auth: { actorId: string; capability?: string; admissionId?: string }, recheck: SandboxAuthorize, signal?: AbortSignal): Promise<{ status: "executed" | "failed" | "interrupted"; result: string }> {
-    if (!this.#clone || operation.directory === undefined) return { status: "failed", result: "Push failed: a push names a clone's directory. Nothing was pushed." };
-    if (!this.#egress) return { status: "failed", result: "Push failed: on a host without the sandbox, push with the git tool. Nothing was pushed." };
-    const request: PushCredentialRequest = { sessionId: this.binding.session.id, approvalId: id, actorId: auth.actorId, operation,
-      ...(auth.capability !== undefined ? { capability: auth.capability } : {}), ...(auth.admissionId !== undefined ? { admissionId: auth.admissionId } : {}) };
-    let credential: PushCredential | HostPushCredential;
-    try {
-      await recheck();
-      credential = this.config.pushCredential ? await this.config.pushCredential(request) : await this.controlPlane<PushCredential | HostPushCredential>("/api/internal/git/push/credential", request);
-      if (!credential || typeof credential.credentialId !== "string" || typeof credential.remote !== "string"
-        || ("hostCredentials" in credential ? credential.hostCredentials !== true : typeof credential.authorization !== "string"))
-        throw new RunnerError(502, "Invalid push credential");
-    } catch (error) {
-      const reason = error instanceof RunnerError ? `: ${error.message}` : "";
-      return { status: "failed", result: `Push credential was refused${reason}. Nothing was pushed.` };
-    }
-    let pushed: PushResult | undefined;
-    let failure: { status: "failed" | "interrupted"; result: string } | undefined;
-    try {
-      const authorization = "hostCredentials" in credential ? await this.hostAuthorization(credential.remote, signal) : credential.authorization;
-      pushed = await performClonePush({ workspace: isolatedWorkspace(this.sandbox), operation, credential: { remote: credential.remote, authorization }, authorize: recheck, signal });
-    } catch (error) {
-      failure = error instanceof PushError && !signal?.aborted
-        ? { status: "failed", result: `Push failed: ${error.message}. Nothing was pushed.` }
-        : { status: "interrupted", result: "Push was interrupted; the remote branch may or may not have changed. Inspect it; automatic retry is prohibited." };
-    }
-    const outcome: PushOutcome = pushed?.outcome ?? (failure?.status === "failed" ? "failed" : "unknown");
-    const complete: PushCompleteRequest = { sessionId: this.binding.session.id, approvalId: id, credentialId: credential.credentialId, outcome, ...(pushed ? { tip: pushed.tip } : {}) };
-    let completion: PushCompletionResult | undefined;
-    let completionFailure = "";
-    try {
-      completion = this.config.pushComplete ? await this.config.pushComplete(complete) : await this.controlPlane<PushCompletionResult>("/api/internal/git/push/complete", complete);
-    } catch (error) {
-      completionFailure = error instanceof RunnerError ? `: ${error.message}` : "";
-    }
-    if (!pushed) return failure!;
-    const confirmation = completion ? "" : operation.pullRequest
-      ? `\nThe pull request was not opened${completionFailure || "; the control plane did not confirm completion"}.`
-      : "\nThe control plane did not confirm completion.";
-    return { status: "executed", result: pushSummary(pushed, completion?.pullRequest) + confirmation };
-  }
-
-  private async hostAuthorization(remote: string, signal?: AbortSignal): Promise<string> {
-    if (!this.config.hostGitCredential) throw new PushError("This host does not push with its Git credentials; its owner can turn them on in Pikibun (Settings → Hosts → the host → Configuration)");
-    if (this.binding.session.connectorOwnerId !== this.binding.owner.id) throw new PushError("Only the host's owner can push with its Git credentials");
-    try {
-      return await this.config.hostGitCredential(remote, signal);
-    } catch (error) {
-      throw new PushError(error instanceof HostCredentialError ? error.message : "The host's Git credentials could not be read");
     }
   }
 

@@ -119,7 +119,7 @@ So the connector is now an engine for both kinds, and the control plane describe
 | Types, parser, bundled definitions | `packages/shared/src/tool-definitions.ts` |
 | The engine: grammar, requests, commands, brokered arguments | `apps/runner/src/defined-tools.ts` |
 | Reading them on a connector | `apps/runner/src/tool-definitions-source.ts`; `connector.ts` (`toolDefinitions`, `brokered`) |
-| Registering, switching and running them in a session | `apps/runner/src/session.ts` (`fetchDefinitions`, `refreshDefinitions`, `definedTool`, `sessionToolsOff`) |
+| Registering, switching and running them in a session | `apps/runner/src/session/definitions.ts` (`SessionDefinitions`: `fetch`, `load`, `refresh`); `session/tools/defined.ts` (`definedTool`); `session/availability.ts` (`definedToolsOff`, `sessionToolsOff`) |
 | Serving them; names in operations and agents | `apps/server/src/connectors.ts`, `authority/operations.ts`, `catalog.ts`, `extensions.ts` |
 | Tests | `tests/defined-tools.test.ts`, and in `node-command`, `ecosystem-command`, `runner-program-tools`, `connectors` |
 

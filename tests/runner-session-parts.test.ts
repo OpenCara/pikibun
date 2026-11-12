@@ -15,6 +15,26 @@ import { defaultHostConfig } from "../packages/shared/src/host-config.js";
 import { MessageInputs } from "../apps/runner/src/session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "../apps/runner/src/session/mirrors.js";
 import { MAX_STAGED_UPLOADS, SessionUploads, STALE_UPLOAD_MS } from "../apps/runner/src/session/uploads.js";
+import { agentInstructions, lfsInstructions, type InstructionsInput } from "../apps/runner/src/session/instructions.js";
+import { bundledToolDefinitions } from "../packages/shared/src/tool-definitions.js";
+import { preparationFailure, SessionRepositories, type SessionRepositoriesOptions } from "../apps/runner/src/session/repositories.js";
+import type { IsolatedWorkspace, SessionWorkspace } from "../apps/runner/src/workspace.js";
+import { githubRepository, SessionOperations, type SessionOperationsOptions } from "../apps/runner/src/session/operations.js";
+import type { Metadata } from "../apps/runner/src/session/state.js";
+import { SandboxProcessError } from "../apps/runner/src/sandbox.js";
+import type { RunnerBinding } from "../packages/shared/src/types.js";
+import { ToolCalls } from "../apps/runner/src/session/tools/calls.js";
+import type { ToolContext } from "../apps/runner/src/session/tools/context.js";
+import { buildTools } from "../apps/runner/src/session/tools/index.js";
+import type { Registry, ToolExecutionApi, ToolRegistration } from "@earendil-works/pi-durable";
+import { SessionDefinitions, type SessionDefinitionsOptions } from "../apps/runner/src/session/definitions.js";
+import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/src/tool-definitions.js";
+import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session/piki.js";
+import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
+import { contextView, extensionView, sessionView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
+import { INPUT_EMPTY, RunQueue, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
+import { ToolAvailability, type ToolAvailabilityOptions } from "../apps/runner/src/session/availability.js";
+import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -259,4 +279,676 @@ test("a member's host session runs while the host allows host sessions and their
   await assert.rejects(hostPolicy({ hostSession: true }).policy.requireHostEnvironment(), /grant that let them has ended/);
   await assert.rejects(hostPolicy({ hostSession: true, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: false }) }).policy.requireHostEnvironment(),
     /owner turned that off/);
+});
+
+function repositoriesFixture(options: Partial<SessionRepositoriesOptions> & { restore?: (path: string, url: string, reference: string | null) => Promise<void> } = {}) {
+  const events: string[] = [];
+  let exclusive: Promise<void> = Promise.resolve();
+  const state = { opened: true, closing: false, resumed: false };
+  const grant = { policy: { mode: "off" as const, domains: [], packageRegistries: true },
+    repositories: [{ bindingId: "repo-1", provider: "github" as const, host: "github.com", repositoryId: "1", fullName: "acme/app" }] } as EgressGrant;
+  const workspace = { cloneRestore: async (path: string, url: string, reference: string | null, authorize: () => Promise<void>) => {
+    await authorize();
+    events.push(`restore ${path} ${url} ${reference}`);
+    await options.restore?.(path, url, reference);
+  } } as unknown as IsolatedWorkspace;
+  const repositories = new SessionRepositories({
+    grant: async () => grant, cached: true,
+    mirror: async (repository, onProgress) => { onProgress({ phase: "receiving", percent: 50, done: 1, total: 2, bytes: 10 } as never); return `/mirrors/${repository.fullName}`; },
+    workspace: () => workspace, authorize: async () => { events.push("authorize"); }, changed: () => { events.push("changed"); },
+    exclusive: operation => { exclusive = exclusive.then(operation); return exclusive; },
+    opened: () => state.opened, closing: () => state.closing, resumed: () => state.resumed, resume: async () => { events.push("resume"); },
+    ...options,
+  });
+  const settled = async () => {
+    const preparation = repositories.preparation;
+    if (preparation.status === "preparing") await preparation.done.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+    await exclusive.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  return { repositories, events, state, settled };
+}
+
+test("repositories: clones come back from the cache in order, failures are kept for the instructions, and work resumes once", async () => {
+  const { repositories, events, settled } = repositoriesFixture({
+    restore: async path => { if (path === "broken") throw new Error("sandbox: the clone failed"); },
+  });
+  assert.equal(repositories.view(), undefined);
+  repositories.prepareClones([{ path: "app", origin: "https://github.com/acme/app.git" }, { path: "other", origin: "https://github.com/acme/other.git" },
+    { path: "broken", origin: "https://github.com/acme/app.git" }]);
+  assert.equal(repositories.status, "preparing");
+  assert.throws(() => repositories.requireReady(), (error: unknown) => error instanceof RunnerError && error.status === 409);
+  assert.deepEqual(repositories.view()!.items.map(item => item.path), ["app", "other", "broken"]);
+  await settled();
+  assert.equal(repositories.status, "ready");
+  assert.equal(repositories.view(), undefined);
+  repositories.requireReady();
+  assert.deepEqual(repositories.cloneFailures, [{ path: "other", reason: "its origin is not one of this workspace's repositories" }, { path: "broken", reason: "the clone failed" }]);
+  assert.deepEqual(events, ["authorize", "restore app https://github.com/acme/app.git /mirrors/acme/app", "authorize",
+    "restore broken https://github.com/acme/app.git /mirrors/acme/app", "changed", "resume"]);
+  repositories.clearFailures();
+  assert.deepEqual(repositories.cloneFailures, []);
+});
+
+test("repositories: work doesn't resume in a session that closed, already resumed, or reset meanwhile", async () => {
+  for (const change of ["opened", "closing", "resumed"] as const) {
+    const { repositories, events, state, settled } = repositoriesFixture();
+    repositories.prepareClones([{ path: "app", origin: "https://github.com/acme/app.git" }]);
+    if (change === "opened") state.opened = false; else state[change] = true;
+    await settled();
+    assert.ok(!events.includes("resume"), change);
+  }
+  let release!: () => void;
+  const { repositories, events, settled } = repositoriesFixture({ restore: () => new Promise<void>(resolve => { release = resolve; }) });
+  repositories.prepareClones([{ path: "app", origin: "https://github.com/acme/app.git" }]);
+  const preparation = repositories.preparation;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  repositories.reset();
+  assert.equal(preparation.status === "preparing" && preparation.controller.signal.aborted, true);
+  assert.equal(repositories.status, "ready");
+  release();
+  await settled();
+  assert.ok(!events.includes("resume") && !events.includes("changed"));
+});
+
+test("repositories: a resume that fails leaves the preparation failed, with a reason that says to restart", async () => {
+  const { repositories, settled } = repositoriesFixture({ resume: async () => { throw new Error("no"); } });
+  repositories.prepareClones([{ path: "app", origin: "https://github.com/acme/app.git" }]);
+  await settled();
+  assert.equal(repositories.status, "failed");
+  assert.equal(repositories.view()!.error, "This session could not resume its work after preparing its repositories");
+  assert.throws(() => repositories.requireReady(), (error: unknown) => error instanceof RunnerError && error.status === 502
+    && error.message === preparationFailure("This session could not resume its work after preparing its repositories"));
+  assert.equal(preparationFailure("It broke."), "It broke. Restart the session to try again.");
+  repositories.reset();
+  assert.equal(repositories.status, "ready");
+});
+
+function operationsFixture(options: Partial<SessionOperationsOptions> = {}, run: Partial<Metadata["runs"][string]> = {}) {
+  const events: string[] = [];
+  const binding = { session: { id: "s1", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding;
+  const state: Metadata = { binding, branches: [], approvals: {}, toolActors: { task: { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1", callId: "call-1" } },
+    runs: { r1: { key: "r1", initiatedBy: "github:1", ownerId: "github:1", mode: "write", conversationId: 1, content: "", contentHash: "", status: "running", startEntry: 0,
+      admissionId: "admission", ...run } } };
+  const sandbox = { isolated: true, execute: async (operation: { command: string }, _readOnly: boolean, authorize: () => Promise<void>) => {
+    await authorize();
+    events.push(`execute ${operation.command}`);
+    if (operation.command.includes("fail")) throw new SandboxProcessError("exit 1", 1, null, "out", "");
+    return "ran";
+  } } as unknown as SessionWorkspace;
+  const operations = new SessionOperations({
+    binding, config: { connectorId: "connector", controlPlaneUrl: "https://control.invalid", sharedSecret: "secret" }, clone: true, sandboxed: true, sandbox,
+    hostCommands: hostPolicy({ ownerId: "github:1", connectorOwnerId: "github:1", testShell: true }).policy, waits: new ApprovalWaits(),
+    requireUnfrozen: () => { events.push("unfrozen"); }, authorize: async actorId => { events.push(`authorize ${actorId}`); },
+    metadata: async () => structuredClone(state), mutate: async change => { change(state); },
+    commandOptions: async () => ({ limits: { seconds: 60 } as never, gpu: false }), testShell: () => true,
+    controlPlane: async () => { throw new RunnerError(500, "no control plane"); },
+    ...options,
+  });
+  return { operations, events, state };
+}
+
+test("operations: removed and misplaced kinds are refused before anything is authorized or recorded", async () => {
+  const refusals: [Record<string, unknown>, RegExp, Partial<SessionOperationsOptions>?][] = [
+    [{ kind: "git.commit", message: "x" }, /Commit and switch branches with the git tool/],
+    [{ kind: "git.push", repository: "acme/app", branch: "b", commit: "a".repeat(40) }, /a push names a clone's directory/],
+    [{ kind: "git.push", repository: "acme/app", directory: "app", branch: "b", commit: "a".repeat(40) }, /Only clone sessions/, { clone: false }],
+    [{ kind: "git.push", repository: "acme/app", directory: "app", branch: "b", commit: "a".repeat(40) }, /push with the git tool/, { sandboxed: false }],
+  ];
+  for (const [operation, message, options] of refusals) {
+    const { operations, events, state } = operationsFixture(options);
+    await assert.rejects(operations.run("github:1", operation as Operation, "task"), message);
+    assert.deepEqual(events, ["unfrozen"]);
+    assert.deepEqual(state.approvals, {});
+  }
+  const frozen = operationsFixture({ requireUnfrozen: () => { throw new RunnerError(409, "read-only"); } });
+  await assert.rejects(frozen.operations.run("github:1", bash, "task"), /read-only/);
+  assert.deepEqual(frozen.events, []);
+  assert.throws(() => githubRepository("not a repository"), /owner\/name/);
+  assert.equal(githubRepository("acme/app"), "acme/app");
+});
+
+test("operations: a command runs once for its tool call, rechecking its actor, and its record says how it ended", async () => {
+  const { operations, events, state } = operationsFixture();
+  const ran = await operations.run("github:1", { kind: "bash", command: "echo hi" } as Operation, "task");
+  assert.equal(ran.status, "executed");
+  assert.equal(ran.result, "ran");
+  assert.equal(ran.callId, "call-1");
+  assert.equal(ran.admissionId, "admission");
+  assert.deepEqual(events, ["unfrozen", "authorize github:1", "authorize github:1", "execute echo hi"]);
+  const again = await operations.run("github:1", { kind: "bash", command: "echo other" } as Operation, "task");
+  assert.equal(again.result, "ran", "the same tool call gets its first record");
+  assert.equal(events.filter(event => event.startsWith("execute")).length, 1);
+  state.toolActors.second = { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1" };
+  const failed = await operations.run("github:1", { kind: "bash", command: "fail" } as Operation, "second");
+  assert.equal(failed.status, "failed");
+  assert.match(failed.result!, /out/);
+  await assert.rejects(operations.run("github:2", bash, "task"), /no active originating write/);
+  const unadmitted = operationsFixture({}, { admissionId: undefined });
+  await assert.rejects(unadmitted.operations.run("github:1", bash, "task"), /lacks Worker write admission/);
+});
+
+test("operations: GitHub effects go through the broker with the message's admission; a refused merge fails, anything else is ambiguous", async () => {
+  const requests: unknown[] = [];
+  const { operations, state } = operationsFixture({ config: { connectorId: "connector", controlPlaneUrl: "https://control.invalid", sharedSecret: "secret",
+    githubComment: async request => { requests.push(request); return { id: 7, url: "https://github.com/acme/app/issues/1#c7" }; },
+    githubMerge: async () => { throw new RunnerError(422, "Head moved"); },
+    githubIssue: async () => { throw new Error("network"); } } });
+  const comment = await operations.run("github:1", { kind: "github.comment", repository: "acme/app", issue: 1, body: "hi" } as Operation, "task");
+  assert.deepEqual(JSON.parse(comment.result!), { id: 7, url: "https://github.com/acme/app/issues/1#c7" });
+  assert.deepEqual(requests, [{ sessionId: "s1", actorId: "github:1", approvalId: "tool-task", admissionId: "admission", repository: "acme/app", issue: 1, body: "hi" }]);
+  state.toolActors.merge = { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1" };
+  const merge = await operations.run("github:1", { kind: "github.merge", repository: "acme/app", pull: 1, sha: "a".repeat(40), method: "squash" } as Operation, "merge");
+  assert.deepEqual([merge.status, merge.result], ["failed", "Head moved"]);
+  state.toolActors.issue = { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1" };
+  const issue = await operations.run("github:1", { kind: "github.issue", repository: "acme/app", title: "t", body: "b" } as Operation, "issue");
+  assert.equal(issue.status, "interrupted");
+  state.toolActors.extension = { initiatedBy: "github:1", ownerId: "github:1", runKey: "r1" };
+  const extension = await operations.run("github:1", { kind: "extension.tool", source: "piki:x", tool: "x", arguments: "{}", digest: "0".repeat(64) } as Operation, "extension");
+  assert.equal(extension.status, "executing", "an extension's tool runs where the caller runs it");
+});
+
+test("operations: closing aborts a push in progress, waits for it, and reports an unknown outcome", async () => {
+  const completed: unknown[] = [];
+  let started!: () => void;
+  const reached = new Promise<void>(resolve => { started = resolve; });
+  const { operations } = operationsFixture({ config: { connectorId: "connector", controlPlaneUrl: "https://control.invalid", sharedSecret: "secret",
+    pushCredential: async () => ({ credentialId: "c1", remote: "https://github.com/acme/app.git", hostCredentials: true }) as never,
+    pushComplete: async request => { completed.push(request); return {} as never; },
+    hostGitCredential: (_remote, signal) => new Promise<string>((_resolve, reject) => { started(); signal!.addEventListener("abort", () => reject(new Error("aborted"))); }) } });
+  const push = operations.run("github:1", { kind: "git.push", repository: "acme/app", directory: "app", branch: "b", commit: "a".repeat(40) } as Operation, "task");
+  await reached;
+  await operations.abortPushes();
+  const record = await push;
+  assert.equal(record.status, "interrupted");
+  assert.match(record.result!, /Push was interrupted/);
+  assert.deepEqual(completed, [{ sessionId: "s1", approvalId: "tool-task", credentialId: "c1", outcome: "unknown" }]);
+  await operations.abortPushes();
+});
+
+function toolState(run: Partial<Metadata["runs"][string]> = {}): Metadata {
+  return { binding: {} as RunnerBinding, branches: [], approvals: {}, toolActors: {},
+    runs: { r1: { key: "r1", initiatedBy: "github:2", ownerId: "github:1", mode: "write", conversationId: 1, content: "", contentHash: "", status: "running", startEntry: 0,
+      admissionId: "admission", ...run } } };
+}
+
+function toolApi(state: Metadata, taskId = 1): ToolExecutionApi {
+  return { taskId, callId: `call-${taskId}`, conversationId: 1,
+    snapshot: async () => ({ json: JSON.stringify(state) }),
+    commit: async (change: (tx: { doc(): Promise<{ json: string }> }) => Promise<void>) => {
+      const doc = { json: JSON.stringify(state) };
+      await change({ doc: async () => doc });
+      Object.assign(state, JSON.parse(doc.json));
+    } } as unknown as ToolExecutionApi;
+}
+
+function toolsFixture(state: Metadata, sandbox: Partial<SessionWorkspace> = {}, overrides: Partial<ToolContext> = {}) {
+  const events: string[] = [];
+  const hostCommands = hostPolicy({ ownerId: "github:1", connectorOwnerId: "github:1", testShell: true }).policy;
+  const workspace = { isolated: true, writeFile: async (path: string, _content: string, authorize: () => Promise<void>) => { await authorize(); events.push(`write ${path}`); },
+    ...sandbox } as unknown as SessionWorkspace;
+  const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
+  const calls = new ToolCalls({ ownerId: "github:1", sandbox: workspace, hostCommands, authorize, metadata: async () => structuredClone(state),
+    hostConfig: async () => ({ ...defaultHostConfig, commandTimeoutSeconds: 600 }), requireSenderTool: async (tool, senderId) => { events.push(`sender ${senderId} ${tool}`); } });
+  const context: ToolContext = {
+    binding: { session: { id: "s1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox: workspace, onHost: false, calls, hostCommands,
+    waits: new ApprovalWaits(), operations: { run: async () => { events.push("run"); return {} as never; }, internalGitHub: async () => ({}), internalBroker: async () => ({}) },
+    requireSessionTool: async tool => { events.push(`tool ${tool}`); }, requireSenderTool: async () => {}, metadata: async () => structuredClone(state), mutate: async change => { change(state); },
+    authorize, hostConfig: async () => defaultHostConfig, programMissing: () => undefined, browserUnavailable: () => undefined, tunnelUnavailable: () => undefined,
+    tunnel: () => undefined, startTunnel: () => { throw new Error("no tunnel"); }, grant: async () => ({ repositories: [] }) as never,
+    ...overrides,
+  };
+  const tool = (name: string) => buildTools(context, true).find(item => item.name === name) as unknown as { execute(args: unknown, api: ToolExecutionApi, call: unknown): Promise<{ output: { text: string }[] }> };
+  return { calls, context, events, tool };
+}
+
+test("tool calls: a call acts for the sender of the running message, rechecked and kept for the call; others are refused", async () => {
+  const state = toolState();
+  const { calls, events } = toolsFixture(state);
+  const api = toolApi(state);
+  assert.deepEqual(await calls.actor(api, true), { initiatedBy: "github:2", actingAs: "github:1", mode: "write" });
+  assert.deepEqual(state.toolActors["1"], { initiatedBy: "github:2", ownerId: "github:1", runKey: "r1", callId: "call-1" });
+  await calls.recheck({ initiatedBy: "github:2", mode: "ask" });
+  assert.deepEqual(events, ["authorize github:2 write", "authorize github:2 ask"]);
+  const asked = toolState({ mode: "ask" });
+  await assert.rejects(toolsFixture(asked).calls.actor(toolApi(asked), true), /no authorized writable submission/);
+  assert.equal((await toolsFixture(asked).calls.actor(toolApi(asked), false)).mode, "ask");
+  const foreign = toolState({ ownerId: "github:9" });
+  await assert.rejects(toolsFixture(foreign).calls.actor(toolApi(foreign), false), /no authorized writable submission/);
+  const settled = toolState({ status: "settled" });
+  await assert.rejects(toolsFixture(settled).calls.actor(toolApi(settled), false), /no authorized writable submission/);
+});
+
+test("tool calls: a Read-only message's change is refused, and a shell call is unbounded only where the host's shell isn't allowed", async () => {
+  const state = toolState({ options: { access: "read" } });
+  state.toolActors["1"] = { initiatedBy: "github:2", ownerId: "github:1", runKey: "r1" };
+  const { calls } = toolsFixture(state);
+  await assert.rejects(calls.check(toolApi(state), "write_file", { write: true }), (error: unknown) => error instanceof RunnerError && error.status === 403
+    && error.message === "write_file changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.");
+  assert.deepEqual(await calls.check(toolApi(state), "read_file"), { unbounded: false });
+  assert.deepEqual(await calls.check(toolApi(state), "git", { shell: true }), { unbounded: false });
+  await assert.rejects(calls.check(toolApi(state, 2), "read_file"), /no authorized writable submission/);
+  assert.equal((await calls.outputFiles(toolApi(state))), undefined, "a Read-only message writes no output files");
+  assert.equal((await calls.commandOptions(30)).limits.seconds, 30);
+  assert.equal((await calls.commandOptions()).limits.seconds, 600);
+});
+
+test("tools: the families keep their order, git_push comes last and only for a clone in the sandbox", () => {
+  const { context } = toolsFixture(toolState());
+  const names = buildTools(context, false).map(tool => tool.name);
+  const python = process.platform === "win32" ? [] : ["python"];
+  assert.deepEqual(names, ["identity", "read_file", "list_files", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file", "git", ...python, "browser",
+    "tunnel", "github_read", "github_comment", "github_merge", "github_issue", "schedule", "sessions"]);
+  assert.deepEqual(buildTools(context, true).map(tool => tool.name), [...names, "git_push"]);
+});
+
+test("tools: a tool checks that it is on first, then who acts, then the call, and only then touches the worktree", async () => {
+  const state = toolState();
+  const { events, tool } = toolsFixture(state);
+  const written = await tool("write_file").execute({ path: "a.txt", content: "x" }, toolApi(state), {});
+  assert.deepEqual(JSON.parse(written.output[0]!.text), { initiatedBy: "github:2", actingAs: "github:1", mode: "write", written: "a.txt" });
+  assert.deepEqual(events, ["authorize github:2 write", "sender github:2 write_file", "authorize github:2 write", "write a.txt"]);
+  events.length = 0;
+  await assert.rejects(tool("github_merge").execute({ repository: "acme/app", pull: 1, sha: "short", method: "squash" }, toolApi(state), {}), /40-character head commit/);
+  assert.deepEqual(events, ["tool github_merge", "authorize github:2 write"]);
+  const off = toolsFixture(state, {}, { requireSessionTool: async tool => { throw new RunnerError(403, `${tool} is turned off`); } });
+  await assert.rejects(off.tool("git").execute({ args: ["status"] }, toolApi(state), {}), /git is turned off/);
+  assert.deepEqual(off.events, [], "a tool that is off checks nothing else and runs nothing");
+  const sender = toolState();
+  const senderOff = toolsFixture(sender, {}, { requireSenderTool: async tool => { throw new RunnerError(403, `${tool} isn't among the sender's tools`); } });
+  await assert.rejects(senderOff.tool("tunnel").execute({ action: "start", serve: { program: "node", port: 8080 } }, toolApi(sender), {}), /tunnel isn't among the sender's tools/);
+  assert.ok(!senderOff.events.includes("run"), "a tunnel the sender may not start never reaches its operation");
+  const notOwner = toolState();
+  await assert.rejects(toolsFixture(notOwner).tool("schedule").execute({ action: "list" }, toolApi(notOwner), {}), /Only the session owner's messages schedule prompts/);
+  const readOnly = toolState({ options: { access: "read" } });
+  const refused = toolsFixture(readOnly);
+  await assert.rejects(refused.tool("git").execute({ args: ["status"] }, toolApi(readOnly), {}), /Read-only message/);
+  assert.ok(!refused.events.includes("run"));
+});
+
+function definitionsFixture(options: Partial<SessionDefinitionsOptions> = {}) {
+  const tools: string[] = ["read_file"];
+  const installed: string[] = [];
+  const reserved: string[][] = [];
+  const definitions = new SessionDefinitions({
+    sessionId: "s1", windows: false, config: {},
+    tool: definition => ({ name: definition.name, description: definition.description, parameters: {}, execute: async () => ({ output: [] }) }) as unknown as ToolRegistration,
+    registry: () => ({ install: (extension: { name: string }) => { installed.push(extension.name); } }) as unknown as Registry,
+    toolNames: () => tools, added: (added, names) => { tools.push(...added.map(tool => tool.name)); reserved.push(names); },
+    ...options,
+  });
+  return { definitions, tools, installed, reserved };
+}
+
+test("defined tools: a session loads the bundled definitions not taken by its own tools, and the Windows sandbox only those that run there", async () => {
+  const { definitions } = definitionsFixture();
+  const node = bundledToolDefinitions.find((item): item is ProgramToolDefinition => item.name === "node" && item.kind === "program")!;
+  const loaded = await definitions.load(["node"]);
+  assert.ok(!loaded.some(tool => tool.name === "node"), "a session's own tool of that name wins");
+  assert.deepEqual(loaded.map(tool => tool.name), definitions.definitions.map(item => item.name));
+  assert.ok(definitions.definitions.length > 1);
+  assert.deepEqual(definitions.extensions, []);
+  const windows = definitionsFixture({ windows: true }).definitions;
+  assert.deepEqual(windows.usable([node, { ...node, name: "other", windowsSandbox: true } as ToolDefinition], []).map(item => item.name), node.windowsSandbox ? ["node", "other"] : ["other"]);
+  assert.deepEqual(definitions.usable([node, node], []).map(item => item.name), ["node"], "the first of a name wins");
+});
+
+test("defined tools: a refresh adds what Pikibun defines now as one more extension, keeps what changed as it was, and tells each change once", async t => {
+  const node = bundledToolDefinitions.find(item => item.name === "node")!;
+  const make = bundledToolDefinitions.find(item => item.name === "make")!;
+  let served: ToolDefinition[] = [node];
+  const { definitions, tools, installed, reserved } = definitionsFixture({ config: { toolDefinitions: async () => served } });
+  tools.push(...(await definitions.load(["read_file"])).map(tool => tool.name));
+  assert.deepEqual(definitions.definitions.map(item => item.name), ["node"]);
+  const notes: string[] = [];
+  t.mock.method(process.stderr, "write", (chunk: string) => { notes.push(chunk); return true; });
+  served = [{ ...node, description: "changed" }, make];
+  await definitions.refresh(["make"]);
+  assert.deepEqual(installed, [], "an extension's own tool of that name keeps it");
+  await definitions.refresh([]);
+  await definitions.refresh([]);
+  assert.deepEqual(installed, ["defined-tools-1"]);
+  assert.deepEqual(reserved, [["make"]]);
+  assert.deepEqual(tools, ["read_file", "node", "make"]);
+  assert.deepEqual(definitions.definitions.map(item => item.name), ["node", "make"]);
+  assert.equal(definitions.definitions[0]!.description, node.description, "a changed definition is used as it was until the session opens again");
+  assert.deepEqual(notes, ["Session s1: the tool definition node changed; the session uses it as it was until it next opens.\n",
+    "Session s1: the tool definition make is offered by one of the workspace's extensions, which keeps it.\n"]);
+  const without = definitionsFixture();
+  await without.definitions.refresh([]);
+  const unopened = definitionsFixture({ config: { toolDefinitions: async () => served }, registry: () => undefined });
+  await unopened.definitions.refresh([]);
+  assert.deepEqual([without.installed, unopened.installed], [[], []]);
+});
+
+function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {}, grants: Record<string, Partial<AuthorizationResult>> = { "github:2": { hostCommands: "auto" } }) {
+  const events: string[] = [];
+  const sandbox = { hostWorktree: "/worktree", execute: async (operation: { command: string }, readOnly: boolean, authorize: () => Promise<void>) => {
+    await authorize();
+    events.push(`execute ${readOnly ? "read-only " : ""}${operation.command}`);
+    return "done";
+  }, writeFile: async (path: string) => { events.push(`write ${path}`); }, listFiles: async () => [] } as unknown as SessionWorkspace;
+  const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
+  const calls = new ToolCalls({ ownerId: "github:1", sandbox, hostCommands: hostPolicy().policy, authorize, metadata: async () => structuredClone(state),
+    hostConfig: async () => defaultHostConfig, requireSenderTool: async () => {} });
+  const piki = new SessionPiki({
+    binding: { session: { id: "s1", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox, onHost: false,
+    sandboxed: true, calls, hostCommands: hostPolicy({ ownerId: "github:1" }, grants).policy, waits: new ApprovalWaits(),
+    operations: { run: async (_actorId, operation) => { events.push(`run ${(operation as { tool: string }).tool}`); return { id: "tool-1", status: "executing" } as never; } },
+    apiLease: () => { events.push("lease"); return { token: "lease-token", release: () => { events.push("release"); } }; },
+    model: () => undefined, thinkingLevel: () => undefined,
+    extensionChoice: async () => ({ chosen: [{ source: "npm:ext", dev: false }], automaticTools: false }),
+    metadata: async () => structuredClone(state), mutate: async change => { change(state); }, hostConfig: async () => defaultHostConfig,
+    ...options,
+  });
+  return { piki, host: piki.host(), events };
+}
+
+const pikiRun = (callId: string, readOnly = false): PikiSandboxRun => ({ callId, command: "gh", args: ["pr", "view"], env: {}, tokenEnv: ["GH_TOKEN"], readOnly,
+  signal: new AbortController().signal, timeoutSeconds: 30 });
+
+test("piki: an extension's tool runs for a message that may act, while its extension applies, for someone with host commands, and its record says how it ended", async () => {
+  const state = toolState();
+  state.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;
+  const { host, events } = pikiFixture(state);
+  const call = (source = "npm:ext") => ({ source, tool: "ext_tool", arguments: { a: 1 }, api: toolApi(state), signal: new AbortController().signal, context: {} as never });
+  const result = await host.runTool(call(), async () => {
+    events.push("tool ran");
+    return { output: [{ type: "text", text: "hello" }] };
+  });
+  assert.deepEqual(result.output, [{ type: "text", text: "hello" }]);
+  assert.deepEqual(events, ["authorize github:2 write", "run ext_tool", "authorize github:2 write", "tool ran"]);
+  assert.deepEqual([state.approvals["tool-1"]!.status, state.approvals["tool-1"]!.result], ["executed", "hello"]);
+  await assert.rejects(host.runTool(call(), async () => { throw new Error("broke"); }), /broke/);
+  assert.deepEqual([state.approvals["tool-1"]!.status, state.approvals["tool-1"]!.result], ["failed", "broke"]);
+  await assert.rejects(host.runTool(call("npm:other"), async () => ({ output: [] })), /no longer applies to this session/);
+  const readOnly = toolState({ options: { access: "read" } });
+  await assert.rejects(pikiFixture(readOnly).host.runTool({ ...call(), api: toolApi(readOnly) }, async () => ({ output: [] })), /a Read-only message doesn't run it/);
+  const ungranted = toolState();
+  const refused = pikiFixture(ungranted, {}, { "github:2": {} });
+  await assert.rejects(refused.host.runTool({ ...call(), api: toolApi(ungranted) }, async () => ({ output: [] })), (error: unknown) =>
+    error instanceof RunnerError && error.message === `ext_tool comes from an extension, which ${HOST_COMMANDS_RULE}`);
+  assert.ok(!refused.events.some(event => event.startsWith("run")));
+});
+
+test("piki: a CLI runs in the sandbox only inside a call the session admitted, with the API lease only for a call that may write", async () => {
+  const state = toolState();
+  state.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;
+  const { host, events } = pikiFixture(state);
+  const piki = host.piki!;
+  assert.equal(piki.hostSignIn, false);
+  await assert.rejects(piki.sandbox!(pikiRun("call-1")), /runs only in a call of its tool this session admitted/);
+  await assert.rejects(piki.saveOutput!("call-1", "gh", "x"), /its call no longer runs/);
+  assert.equal(piki.fromScript!("call-1"), false);
+  events.length = 0;
+  await host.runTool({ source: "npm:ext", tool: "gh", arguments: {}, api: toolApi(state), signal: new AbortController().signal, context: {} as never }, async () => {
+    const written = await piki.sandbox!(pikiRun("call-1"));
+    const read = await piki.sandbox!(pikiRun("call-1", true));
+    assert.deepEqual([written.output, read.output], ["done", "done"]);
+    assert.match(await piki.saveOutput!("call-1", "gh", "long"), /gh/);
+    return { output: [] };
+  });
+  assert.deepEqual(events.slice(3), ["lease", "authorize github:2 write",
+    `execute PATH="$PATH:/usr/local/bin" && export PATH && exec env 'GH_TOKEN=lease-token' 'gh' 'pr' 'view' </dev/null 2>&1`, "release",
+    "authorize github:2 write", `execute read-only PATH="$PATH:/usr/local/bin" && export PATH && exec env 'gh' 'pr' 'view' </dev/null 2>&1`,
+    "write tool-output/gh-call-1-d39038e4.txt"], "a read-only command gets no lease");
+  const onHost = pikiFixture(state, { onHost: true }).host.piki!;
+  assert.equal(onHost.sandbox, undefined);
+  assert.equal(onHost.hostSignIn, true);
+});
+
+test("view: context usage counts the conversation's tokens against its model's window, and says where it compacts", () => {
+  const messages = [{ role: "user", content: "hello there", timestamp: 0 }] as never;
+  const models = { getModel: (provider: string, modelId: string) => provider === "p" && modelId === "m" ? { contextWindow: 1000 } : undefined } as never;
+  const usage = contextView(messages, { provider: "p", modelId: "m" }, { fallback: undefined, models, compaction: () => ({ enabled: true, reserveTokens: 100, keepRecentTokens: 10 }) as never })!;
+  assert.ok(usage.tokens > 0);
+  assert.equal(usage.window, 1000);
+  assert.equal(typeof usage.compactsAt, "number");
+  const fallback = contextView(messages, undefined, { fallback: { provider: "p", modelId: "m" }, models, compaction: () => undefined })!;
+  assert.equal(fallback.window, 1000, "without the conversation's model, the session's is used");
+  const broken = contextView(messages, { provider: "p", modelId: "m" }, { fallback: undefined, models: { getModel: () => { throw new Error("x"); } } as never, compaction: () => undefined })!;
+  assert.equal(broken.window, undefined);
+});
+
+test("view: the queue, who is busy, the access of the latest write, the preparation, and the tunnel come from what the session gives it", async () => {
+  const state = toolState({ status: "queued", sequence: 1, options: { access: "read" } });
+  state.runs.r0 = { ...state.runs.r1!, key: "r0", sequence: 0, status: "interrupted", stopped: { by: "github:1" } };
+  state.branches = [{ id: 1, mode: "write" }, { id: 2, mode: "ask", superseded: true }];
+  const asked: number[] = [];
+  const source: ViewSource = {
+    binding: { session: { id: "s1" }, owner: { id: "github:1", displayName: "Ada", gitName: "Ada", gitEmail: "ada@example.test", githubLogin: "ada", env: {} } } as unknown as RunnerBinding,
+    tunnel: () => ({ url: "https://x.trycloudflare.com" }) as never, metadata: async () => structuredClone(state),
+    conversation: async id => { asked.push(id); return { context: async () => ({ entries: [], messages: [] }) } as never; },
+    agent: async () => ({ model: { provider: "p", modelId: "m" }, thinkingLevel: "low" }) as never,
+    context: () => ({ tokens: 5 }), repositories: () => undefined, extensions: async () => ({ extensions: { running: [], missing: ["npm:x"] } }),
+  };
+  const view = await sessionView(source);
+  assert.deepEqual(asked, [1], "superseded branches aren't read");
+  assert.deepEqual(view.owner, { id: "github:1", displayName: "Ada", gitName: "Ada", gitEmail: "ada@example.test", githubLogin: "ada" });
+  assert.deepEqual(view.queue!.map(item => [item.submissionId, item.status]), [["r0", "stopped"], ["r1", "queued"]]);
+  assert.deepEqual([view.busy, view.access, view.context, view.agent], [true, "read", { tokens: 5 }, { provider: "p", modelId: "m", thinkingLevel: "low" }]);
+  assert.deepEqual(view.conversations, [{ id: "1", mode: "write" }]);
+  assert.deepEqual(view.extensions, { running: [], missing: ["npm:x"] });
+  assert.deepEqual(view.tunnel, { url: "https://x.trycloudflare.com" });
+  const preparing = await sessionView({ ...source, repositories: () => ({ status: "preparing", items: [] }) });
+  assert.deepEqual([preparing.activity, preparing.busy], ["working", true]);
+  assert.equal((await sessionView({ ...source, repositories: () => ({ status: "failed", items: [], error: "x" }) })).activity, "failed");
+});
+
+test("view: extensions show what runs, what is missing, the built-ins, and tools the host can't offer", async () => {
+  const base: ExtensionViewSource = {
+    binding: { session: { workspaceId: "w", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding,
+    config: undefined, builtins: () => undefined, hostConfig: async () => defaultHostConfig, requiredExtensions: async () => [], toolNames: () => ["read_file"],
+    definedToolsOff: off => off, browserUnavailable: () => "missing", tunnelUnavailable: () => undefined, missingPrograms: () => [{ tool: "node", source: "piki:node", programs: ["yarn"] }],
+  };
+  assert.deepEqual(await extensionView(base), {}, "a host without extensions or built-ins shows none");
+  const builtins = { select: (enabled: string[]) => enabled.map(name => ({ name })) } as never;
+  assert.deepEqual(await extensionView({ ...base, builtins: () => builtins, hostConfig: async () => ({ ...defaultHostConfig, builtinExtensions: ["pi:codemode"] }) }),
+    { extensions: { running: [], missing: [], builtin: ["pi:codemode"] } });
+  const config = { workspace: async () => ({ extensions: [{ source: "npm:absent@1.0.0", enabled: true, tools: "approval", settings: {} }], automaticTools: false }), installed: () => [] } as never;
+  assert.deepEqual(await extensionView({ ...base, config }), { extensions: { running: [], missing: ["npm:absent@1.0.0"], unavailable: [
+    { source: "piki:browser", tools: ["browser"], reason: "missing" }, { source: "piki:node", tools: ["node"], reason: "programs", programs: ["yarn"] }] } });
+  assert.deepEqual(await extensionView({ ...base, config: { workspace: async () => { throw new Error("offline"); }, installed: () => [] } }), {});
+});
+
+async function queueFixture(t: TestContext, runs: Partial<Metadata["runs"][string]>[], options: Partial<RunQueueOptions> = {}) {
+  const events: string[] = [];
+  const state = toolState();
+  state.runs = Object.fromEntries(runs.map((run, index) => [`r${index}`, { ...state.runs.r1!, key: `r${index}`, status: "queued", sequence: index, ...run }]));
+  const inputs = new MessageInputs(join(await directory(t), "inputs"));
+  const flags = { generation: 0, closing: false, preparation: "ready" as const };
+  const settle: ((value: { status: string; reason?: string }) => void)[] = [];
+  const harness = {
+    conversation: async () => ({
+      context: async () => ({ entries: [{ id: 4 }], messages: [] }),
+      submit: async (input: { content: unknown; requestId: string }) => { events.push(`submit ${input.requestId} ${JSON.stringify(input.content)}`); return { id: 7 }; },
+      waitForIdle: async () => {}, agent: async () => ({}),
+    }),
+    submission: async () => ({ wait: () => new Promise(resolve => settle.push(resolve)) }),
+  };
+  let lock: Promise<unknown> = Promise.resolve();
+  let queue!: RunQueue;
+  queue = new RunQueue({
+    sessionId: "s1", connectorOwnerId: "github:1", inputs, config: {}, configuredCompaction: () => undefined,
+    generation: () => flags.generation, closing: () => flags.closing, preparation: () => flags.preparation, harness: () => harness as never,
+    hostExtensions: () => undefined, exclusive: operation => { const next = lock.then(operation, operation); lock = next.catch(() => undefined); return next; },
+    metadata: async () => structuredClone(state), mutate: async change => { change(state); },
+    authorize: async actorId => { if (actorId === "github:9") throw new RunnerError(403, "revoked"); },
+    requiredRefusal: async () => undefined, extensionChoice: async () => ({ chosen: [] }),
+    applyOptions: async (_conversation, run) => { events.push(`options ${run.key}`); }, drain: () => { events.push("drain"); queue.drain(); },
+    ...options,
+  });
+  const idle = async () => { for (let index = 0; index < 5; index++) { await lock; await new Promise(resolve => setImmediate(resolve)); } };
+  return { queue, state, inputs, flags, events, settle, idle };
+}
+
+test("run queue: the next queued message runs once nothing else does, as its sender may still, and a drain asked meanwhile runs again", async t => {
+  const { queue, state, events, settle, idle } = await queueFixture(t, [{ initiatedBy: "github:9" }, { content: "go" }, { content: "later" }]);
+  queue.drain();
+  queue.drain();
+  await idle();
+  assert.equal(state.runs.r0!.status, "interrupted", "a sender who may no longer write is skipped");
+  assert.deepEqual([state.runs.r1!.status, state.runs.r1!.submissionId, state.runs.r1!.started, state.runs.r1!.startEntry], ["running", 7, true, 4]);
+  assert.equal(state.runs.r2!.status, "queued", "one message runs at a time");
+  assert.deepEqual(events, ["options r1", "submit r1 \"go\"", "drain"], "the drain asked while draining runs once more, through the session");
+  settle[0]!({ status: "done" });
+  await idle();
+  assert.equal(state.runs.r1!.status, "settled");
+  assert.equal(state.runs.r2!.status, "running", "a settled run lets the next one start");
+});
+
+test("run queue: nothing starts while the session closes or its repositories prepare; a refusal or lost images end the message", async t => {
+  const closing = await queueFixture(t, [{}]);
+  closing.flags.closing = true;
+  closing.queue.drain();
+  await closing.idle();
+  assert.equal(closing.state.runs.r0!.status, "queued");
+  const preparing = await queueFixture(t, [{}]);
+  (preparing.flags as { preparation: string }).preparation = "preparing";
+  preparing.queue.drain();
+  await preparing.idle();
+  assert.equal(preparing.state.runs.r0!.status, "queued");
+  const refused = await queueFixture(t, [{}], { requiredRefusal: async () => "required extension missing" });
+  refused.queue.drain();
+  await refused.idle();
+  assert.deepEqual([refused.state.runs.r0!.status, refused.state.runs.r0!.refused], ["interrupted", { by: "", notice: "required extension missing" }]);
+  const lost = await queueFixture(t, [{ images: { count: 1, bytes: 4 } }]);
+  assert.equal(await lost.queue.runInput(lost.state.runs.r0!), undefined);
+  lost.queue.drain();
+  await lost.idle();
+  assert.deepEqual([lost.state.runs.r0!.status, lost.state.runs.r0!.inputsLost], ["interrupted", true]);
+});
+
+test("run queue: a run that settles after the session reopened is left alone; screening refuses an emptied message and lets the queue go on", async t => {
+  const { queue, state, flags, events, settle, idle } = await queueFixture(t, [{ content: "go" }]);
+  queue.drain();
+  await idle();
+  flags.generation++;
+  settle[0]!({ status: "done" });
+  await idle();
+  assert.equal(state.runs.r0!.status, "running", "another generation's settlement changes nothing");
+  const host = { input: async () => ({ action: "continue", text: " ", images: [] }) };
+  const screening = await queueFixture(t, [{ screening: true, content: "hi" }], { hostExtensions: () => host as never });
+  await screening.queue.screen("r0");
+  assert.deepEqual([screening.state.runs.r0!.status, screening.state.runs.r0!.refused?.notice, screening.state.runs.r0!.screening], ["interrupted", INPUT_EMPTY, undefined]);
+  assert.deepEqual(screening.events, ["drain"]);
+  const images = await queueFixture(t, [{ images: { count: 1, bytes: 4 } }]);
+  await images.inputs.write("r0", [{ mimeType: "image/png", data: "iVBORw0KGgo=" }]);
+  assert.deepEqual(await images.queue.runInput(images.state.runs.r0!), [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }], "no text part for an empty text");
+  images.state.runs.r0!.content = "look";
+  assert.deepEqual((await images.queue.runInput(images.state.runs.r0!))![0], { type: "text", text: "look" });
+  images.state.runs.r0!.status = "settled";
+  await images.queue.sweepInputs();
+  assert.equal(await images.inputs.read("r0"), undefined, "a run that no longer waits loses its images");
+  assert.deepEqual(events, ["options r0", "submit r0 \"go\""]);
+});
+
+function availability(options: Partial<ToolAvailabilityOptions> = {}, answer?: Partial<WorkspaceExtensionsAnswer>, last?: Partial<WorkspaceExtensionsAnswer>) {
+  const workspace: WorkspaceExtensionsAnswer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "approval", settings: {} }], automaticTools: false, ...answer } as WorkspaceExtensionsAnswer;
+  return new ToolAvailability({
+    binding: { session: { workspaceId: "w" }, owner: { id: "github:1" } } as unknown as RunnerBinding,
+    config: { extensions: { workspace: async () => workspace, ...(last ? { lastKnown: () => ({ ...workspace, ...last }) } : {}) } },
+    sandbox: { browser: undefined } as unknown as SessionWorkspace, onHost: false, definitions: () => [], toolNames: () => [],
+    ...options,
+  });
+}
+
+test("availability: why the browser or a tunnel isn't offered, from where the session runs and what the host has", () => {
+  assert.equal(availability({ sandbox: { browser: {} } as never }).browserUnavailable(), undefined);
+  assert.equal(availability({ onHost: true }).browserUnavailable(), "on-host");
+  assert.equal(availability({ config: { sandboxBackend: { kind: "seatbelt" } as never } }).browserUnavailable(), "sandbox");
+  assert.equal(availability().browserUnavailable(), undefined, "a host that doesn't say has no reason");
+  assert.equal(availability({ config: { browserStatus: () => ({ state: "missing" }) as never } }).browserUnavailable(), "missing");
+  assert.equal(availability().tunnelUnavailable(), undefined, "a host without tunnels has no reason to give");
+  const tunnels = { status: () => undefined };
+  assert.equal(availability({ config: { tunnels }, onHost: true }).tunnelUnavailable(), "on-host");
+  assert.equal(availability({ config: { tunnels } }).tunnelUnavailable(), "sandbox", "only the Linux sandbox runs tunnels");
+  assert.equal(availability({ config: { tunnels } }).tunnelOffered(), false);
+  assert.equal(availability().linuxSandbox(), undefined);
+  assert.deepEqual(availability().missingPrograms(new Set()), [], "outside the Linux sandbox nothing is missing");
+  assert.equal(availability().programMissing({ programs: ["node"], path: "/usr/local/bin" }, "node"), undefined);
+});
+
+test("availability: a message runs the tools both its sender and the session's owner have, while the workspace keeps them on", async () => {
+  const groups = { "github:1": { name: "Owners", off: ["github_merge"] }, "github:2": { name: "Guests", off: ["tunnel"] } };
+  const tools = availability({}, { toolGroups: groups });
+  assert.deepEqual([...await tools.sessionToolsOff()].sort(), ["github_merge"]);
+  assert.deepEqual([...await tools.sessionToolsOff("github:2")].sort(), ["github_merge", "tunnel"]);
+  assert.deepEqual([...await tools.sessionToolsOff("github:1")].sort(), ["github_merge"]);
+  await tools.requireSenderTool("tunnel", "github:1");
+  await tools.requireSenderTool("git", "github:2");
+  await assert.rejects(tools.requireSenderTool("tunnel", "github:2"), (error: unknown) => error instanceof RunnerError && error.status === 403
+    && /tunnel isn't among the tools of the person who sent this message \(Guests\)/.test(error.message));
+  await assert.rejects(tools.requireSessionTool("github_merge"), /github_merge isn't among the tools of this session's owner \(Owners\)/);
+  await tools.requireSessionTool("git");
+  const off = availability({}, { extensions: [{ source: "piki:tunnel", enabled: false, tools: "approval", settings: {} }] as never });
+  await assert.rejects(off.requireSessionTool("tunnel"), /tunnel is turned off in this workspace \(piki:tunnel\)/);
+  const unknown = availability({ config: { extensions: { workspace: async () => ({ extensions: [], automaticTools: false }), lastKnown: () => undefined } } });
+  assert.ok((await unknown.sessionToolsOff()).has("git"), "a connector that never heard its owner's group gives only the read tools");
+  const heard = availability({}, { toolGroups: groups }, { toolGroups: groups });
+  assert.deepEqual([...await heard.sessionToolsOff("github:2")].sort(), ["github_merge", "tunnel"], "once heard, the last answer's groups hold");
+  assert.deepEqual([...await availability({ config: {} }).documentKindsOff()], []);
+});
+
+function instructions(input: Partial<InstructionsInput> = {}): string {
+  return agentInstructions({ base: "Base.", agentTools: [], mode: "write", off: new Set(), browserUnavailable: undefined, tunnelUnavailable: undefined,
+    kindsOff: new Set(), extensionTools: new Set(), clone: false, sandboxed: true, branch: "pikibun/work-1", cloneRepositories: [], lfsRepositories: [],
+    cloneFailures: [], definitions: [], sources: [], conversationOnlyRestore: false, tools: [], missing: [], linuxSandbox: false, nodeBin: false, codemode: false,
+    browser: false, ...input });
+}
+
+test("instructions: a plain session gets its agent's own and the mode's last words", () => {
+  assert.equal(instructions(), "Base.");
+  assert.match(instructions({ mode: "ask" }), /^Base\.\n\nThis is a read-only ask\./);
+  assert.match(instructions({ mode: "read" }), /^Base\.\n\nThis request is read-only\./);
+  assert.match(instructions({ conversationOnlyRestore: true }), /kept only its conversation/);
+});
+
+test("instructions: a clone session names its branch, repositories, LFS and the clones that couldn't come back", () => {
+  const sandboxed = instructions({ clone: true, agentTools: ["git_push"], cloneRepositories: ["https://github.com/acme/app.git"],
+    cloneFailures: [{ path: "app", reason: "gone" }], lfsRepositories: ["https://github.com/acme/app.git"] });
+  assert.match(sandboxed, /isolated session worktree/);
+  assert.match(sandboxed, /git push origin HEAD:pikibun\/work-1/);
+  assert.match(sandboxed, /This workspace's repositories: https:\/\/github\.com\/acme\/app\.git\./);
+  assert.ok(sandboxed.includes(lfsInstructions(["https://github.com/acme/app.git"])));
+  assert.match(sandboxed, /could not be cloned again: app \(gone\)/);
+  assert.match(sandboxed, /git_push \{directory, branch\}/);
+  assert.doesNotMatch(instructions({ clone: true, agentTools: ["git_push"], off: new Set(["git_push"]) }), /git_push \{directory/);
+  assert.doesNotMatch(instructions({ clone: true }), /git_push \{directory/);
+  const host = instructions({ clone: true, sandboxed: false, agentTools: ["git_push"], cloneRepositories: ["https://github.com/acme/app.git"] });
+  assert.match(host, /This host runs without a sandbox/);
+  assert.doesNotMatch(host, /git_push|PIKIBUN_SESSION_BRANCH/);
+  assert.equal(lfsInstructions([]), "");
+});
+
+test("instructions: tools add their lines only while on, and only outside an ask", () => {
+  const tools = ["search", "move_file", "git", "python", "browser", "tunnel", "github_read"];
+  const all = instructions({ tools, browser: true, codemode: true });
+  for (const line of [/use search/, /use move_file/, /Run Git with the git tool/, /Run Python, pip/, /use the browser tool/, /use the tunnel tool/, /codemode script/]) {
+    assert.match(all, line);
+  }
+  const ask = instructions({ tools, browser: true, codemode: true, mode: "ask" });
+  assert.match(ask, /use search/);
+  for (const line of [/use move_file/, /git tool/, /python tool/, /browser tool/, /tunnel tool/, /codemode/]) assert.doesNotMatch(ask, line);
+  assert.doesNotMatch(instructions({ tools, mode: "read" }), /tunnel tool/, "a read-only message isn't offered the tunnel");
+  const off = instructions({ tools, browser: true, off: new Set(["git", "python", "browser", "tunnel"]), browserUnavailable: "missing", tunnelUnavailable: "missing" });
+  for (const line of [/git tool/, /Run Python/, /use the browser tool/, /use the tunnel tool/]) assert.doesNotMatch(off, line);
+  assert.match(off, /This session has no browser tool/);
+  assert.match(off, /This session has no tunnel tool/);
+});
+
+test("instructions: defined tools add theirs, sources fill a brokered tool's, and missing programs are told", () => {
+  const node = bundledToolDefinitions.find(item => item.name === "node")!;
+  const source = bundledToolDefinitions.find(item => item.name === "source_read")!;
+  const sources = [{ id: "s1", title: "Docs", kind: "notion" as const, type: "page" }];
+  const withSources = instructions({ definitions: [node, source], agentTools: ["source_read"], sources: sources as never, nodeBin: true, linuxSandbox: true,
+    missing: [{ tool: "node", programs: ["yarn"] }] });
+  assert.match(withSources, /"Docs" \(Notion page, source s1\)/);
+  assert.match(withSources, new RegExp(`It runs Node\\.js ${process.versions.node.replaceAll(".", "\\.")}`));
+  assert.doesNotMatch(withSources, /yarn and corepack, ahead/);
+  assert.match(withSources, /Calls to them are refused before they run/);
+  const withoutSources = instructions({ definitions: [source], agentTools: ["source_read"], sources: sources as never, kindsOff: new Set(["notion"]) });
+  assert.doesNotMatch(withoutSources, /source s1/);
+  assert.doesNotMatch(instructions({ definitions: [node], nodeBin: true, mode: "ask" }), /It runs Node/);
 });
