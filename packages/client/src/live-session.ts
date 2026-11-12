@@ -8,6 +8,8 @@ export type StreamStatus = "connecting" | "online" | "reconnecting" | "offline";
 
 export const activeStatuses = ["queued", "admitting", "running"];
 
+const unansweredCodes = ["BACKEND_UNAVAILABLE", "UPSTREAM_TIMEOUT"];
+
 export const liveTiming = {
   activeReopenMs: 1_000,
   idleReopenMs: 10_000,
@@ -182,7 +184,8 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     try { reply = await local.view(id, { ...(revision ? { since: revision } : {}), brief: brief(record) }); }
     catch { reply = null; }
     finally { readingHere = false; }
-    if (!running() || epoch !== hereEpoch) return;
+    if (!running()) return;
+    if (epoch !== hereEpoch) { if (here) scheduleHere(0); return; }
     if (!reply) { leaveHere(true); return; }
     if (!confirmed) { held = reply; return; }
     applyHere(reply);
@@ -275,8 +278,10 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     } catch (reason) {
       if (!running()) return;
       const denied = reason instanceof ApiError && [401, 403, 404].includes(reason.status);
-      const known = denied ? undefined : local?.ran(id);
-      if ((here && !denied) || (known && readFromHere(known))) { confirmHere(); return; }
+      const unreachable = !(reason instanceof ApiError) || unansweredCodes.includes(reason.code);
+      const trusted = !denied && (unreachable || confirmed);
+      const known = trusted ? local?.ran(id) : undefined;
+      if (trusted && (here || (known && readFromHere(known)))) { confirmHere(); return; }
       handlers.error(errorMessage(reason));
       if (denied) {
         if (checkingAccess) revoke();

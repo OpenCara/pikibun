@@ -15,9 +15,11 @@ So the desktop app reads a session that its own host runs **from that host first
   every 1.5 seconds while it is idle. Only what changed crosses the channel after the first read, as with the server.
 - It still asks the server, every 30 seconds as before, whether the signed-in account may read the session. A refusal
   (401, 403, 404) stops the reads at once, and so does the server's record saying the session runs on another host.
-- While the server can't be reached, reads of a session the server said runs here carry on from the host, and the page
-  shows no error. The session is then **read-only**: sending, stopping, approvals and everything else that changes a
-  session go through the server, as always.
+- While the server can't be reached (no answer from Pikibun's API: the network fails, or a proxy in front of it gives up
+  with a gateway error), reads of a session the server said runs here carry on from the host, and the page shows no
+  error. A server that answers with an error of its own isn't unreachable, and vouches for nothing. The session is then
+  **read-only**: sending, stopping, approvals and everything else that changes a session go through the server, as
+  always.
 - Where the host can't answer (it stopped, it hasn't connected since it started, the session isn't on it), the app goes
   back to the server's stream at once, and asks the host again at the next access check, 30 seconds later.
 
@@ -36,8 +38,9 @@ The app holds itself to more than that, so that it shows each signed-in account 
   (`connectorId`), on the server that host is paired with (`apps/nsh/src/lib/local-sessions.ts`). It learns them from
   the session list and from each session's record, and forgets them when the account changes.
 - A view read from the host shows only once the server has said, in that live session, that the account may read it
-  (`confirmHere` in `packages/client/src/live-session.ts`), or couldn't be reached to say otherwise. A session opened
-  from memory while the server is up waits for its answer.
+  (`confirmHere` in `packages/client/src/live-session.ts`), or couldn't be reached at all to say otherwise. A session
+  opened from memory while the server is up waits for its answer, and keeps waiting while the server answers with
+  errors. Once vouched for, a later error doesn't stop the reads, as it doesn't stop the server's stream.
 - The host shapes the view as the server does (`apps/runner/src/local-view.ts`): secrets redacted, approvals left out,
   tool output brief where the session keeps it brief (`toolOutput` in the server's record).
 

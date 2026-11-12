@@ -47,6 +47,9 @@ export const localSessions: LocalSessions | undefined = hostsHere ? {
 } : undefined;
 
 export function rememberLocalSessions(sessions: readonly SessionRecord[]): void {
-  if (!localSessions || !hostHere()) return;
+  if (!localSessions) return;
+  thisComputer().running();
+  auth();
+  if (!hostHere()) return;
   for (const session of sessions) localSessions.runs(session);
 }

@@ -360,13 +360,14 @@ class FakeHost implements LocalSessions {
   readonly pages: { conversation: string; before: string; limit: number; brief: boolean }[] = [];
   answer: (options: { since?: string; brief: boolean }) => LocalViewReply | null = () => ({ view: idleView, revision: "1".repeat(32) });
   page: () => { entries: SessionView["entries"]; older: number } | null = () => null;
+  gate?: Promise<void>;
   runs(session: SessionRecord) {
     if (!this.hosting || session.connectorId !== "this-mac") { this.records.delete(session.id); return false; }
     this.records.set(session.id, session);
     return true;
   }
   ran(sessionId: string) { return this.hosting ? this.records.get(sessionId) : undefined; }
-  async view(_sessionId: string, options: { since?: string; brief: boolean }) { this.reads.push(options); return this.answer(options); }
+  async view(_sessionId: string, options: { since?: string; brief: boolean }) { this.reads.push(options); await this.gate; return this.answer(options); }
   async entries(_sessionId: string, options: { conversation: string; before: string; limit: number; brief: boolean }) { this.pages.push(options); return this.page(); }
 }
 
@@ -434,6 +435,46 @@ test("a host that can't read the session hands it to the server's stream, and is
   await live.advance(liveTiming.accessCheckMs + 250);
   assert.ok(host.reads.length > 1, "Again from the next access check");
   assert.deepEqual(live.state.view, activeView);
+});
+
+test("a session that leaves the host and comes back while a read is under way keeps being read", async t => {
+  const host = new FakeHost();
+  const live = await liveSession(t, { session: hosted, view: idleView, stream: "hold" }, undefined, host);
+  const gate = Promise.withResolvers<void>();
+  host.gate = gate.promise;
+  await live.advance(liveTiming.localIdleMs);
+  assert.equal(host.reads.length, 2, "A read under way");
+  host.hosting = false;
+  live.live.refresh();
+  await flush();
+  host.hosting = true;
+  live.live.refresh();
+  await flush();
+  host.gate = undefined;
+  gate.resolve();
+  await flush();
+  await live.advance(250);
+  assert.equal(host.reads.length, 3, "Read again once the one under way ended");
+  await live.advance(liveTiming.localIdleMs);
+  assert.equal(host.reads.length, 4, "And on");
+});
+
+test("a server that answers with an error doesn't vouch for a view read from the host; one that can't be reached does", async t => {
+  const host = new FakeHost();
+  host.records.set("s1", hosted);
+  const backend: Backend = { session: new ApiError(500, "internal", "Something broke."), view: idleView, stream: "hold" };
+  const live = await liveSession(t, backend, undefined, host);
+  assert.equal(host.reads.length, 1);
+  assert.equal(live.state.view, undefined, "Held: the server answered, but didn't say the account may read it");
+  assert.equal(live.state.error, "Something broke.");
+  backend.session = new ApiError(502, "BACKEND_UNAVAILABLE", "The proxy in front of Pikibun got no valid answer from the server (HTTP 502 Bad Gateway).");
+  await live.advance(liveTiming.accessCheckMs);
+  assert.deepEqual(live.state.view, idleView, "Pikibun's API couldn't be reached: the host's view shows");
+  assert.equal(live.state.error, "");
+  backend.session = new ApiError(500, "internal", "Something broke.");
+  host.answer = () => ({ view: activeView, revision: "6".repeat(32) });
+  await live.advance(liveTiming.accessCheckMs);
+  assert.deepEqual(live.state.view, activeView, "Once vouched for, a later error doesn't stop the reads");
 });
 
 test("a session read from the host goes back to the server's stream once it runs elsewhere", async t => {
