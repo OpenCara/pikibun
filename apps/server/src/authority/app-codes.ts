@@ -68,24 +68,27 @@ async function signInWithCode(c: AppContext) {
   only(body, ['code', 'deviceName']);
   if (typeof body.code !== 'string' || !CODE.test(body.code)) fail(400, 'invalid_grant', EXPIRED);
   const deviceName = body.deviceName === undefined || body.deviceName === null ? null : safeText(body.deviceName, 'deviceName', 100);
-  const claimed = await dbResult(c.env.DB.query<{ id: string; user_id: string; session_hash: string; method: string | null }>(
-    `UPDATE app_sign_in_codes SET used_at = ?, device_name = ? WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?
-    RETURNING id, user_id, session_hash, method`).bind(now(), deviceName, await sha256(body.code), Date.now()).first());
-  if (!claimed) fail(400, 'invalid_grant', EXPIRED);
-  const user = await dbResult(getUser(c.env, claimed.user_id));
+  const found = await dbResult(c.env.DB.query<{ id: string; user_id: string; session_hash: string; method: string | null }>(
+    'SELECT id, user_id, session_hash, method FROM app_sign_in_codes WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?')
+    .bind(await sha256(body.code), Date.now()).first());
+  if (!found) fail(400, 'invalid_grant', EXPIRED);
+  const user = await dbResult(getUser(c.env, found.user_id));
   if (!user || !['github', 'password', 'test'].includes(user.auth_kind)) fail(400, 'invalid_grant', EXPIRED);
   if (user.suspended_at) fail(403, 'account_suspended', SUSPENDED);
-  const method = claimed.method === 'password' || user.auth_kind === 'password' ? 'password' : null;
+  const method = found.method === 'password' || user.auth_kind === 'password' ? 'password' : null;
   if (method === 'password' && !passwordAuthEnabled(c.env)) fail(400, 'invalid_grant', EXPIRED);
   if (localMode(c.env) && user.auth_kind !== 'test' && (await localOwner(c.env))?.id !== user.id) fail(400, 'invalid_grant', EXPIRED);
   const kind = user.auth_kind === 'test' ? 'test' : method === 'password' ? 'password' : 'github';
   const session = await newSession(c.env, user.id, kind, { deviceName }, { via: 'code', method });
-  const [created] = await dbResult(c.env.DB.batch([
-    session.statementWhere('EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ? AND user_id = ? AND expires_at > ?)',
-      claimed.session_hash, user.id, Date.now()),
-    auditAfterChange(c.env, user.id, 'account.app_code.used', null, { codeId: claimed.id, deviceName }),
+  const at = Date.now();
+  const [claimed, created] = await dbResult(c.env.DB.batch([
+    c.env.DB.query(`UPDATE app_sign_in_codes SET used_at = ?, device_name = ? WHERE id = ? AND user_id = ? AND used_at IS NULL AND expires_at > ?
+      AND EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ? AND user_id = ? AND expires_at > ?)`)
+      .bind(now(), deviceName, found.id, user.id, at, found.session_hash, user.id, at),
+    session.statementWhere('changes() = 1'),
+    auditAfterChange(c.env, user.id, 'account.app_code.used', null, { codeId: found.id, deviceName }),
   ]));
-  if (created!.changes !== 1) fail(400, 'invalid_grant', EXPIRED);
+  if (claimed!.changes !== 1 || created!.changes !== 1) fail(400, 'invalid_grant', EXPIRED);
   return c.json({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), user: ownProfile(c.env, user) } satisfies NativeSignIn);
 }
 

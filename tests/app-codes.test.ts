@@ -63,6 +63,11 @@ test("a signed-in browser makes a one-use code, and an app exchanges it for a 30
   assert.equal((await (await f.request("GET", "/api/me", { headers: bearer })).json() as { user: UserProfile }).user.id, "test:alice");
   assert.equal((await f.request("POST", "/api/workspaces", { headers: bearer, body: { name: "From the Mac" } })).status, 201);
 
+  const racing = await (await f.makeCode(await f.browser(cookie))).json() as AppSignInCode;
+  const raced = await Promise.all([f.redeem({ code: racing.code }), f.redeem({ code: racing.code })]);
+  assert.deepEqual(raced.map(response => response.status).sort(), [200, 400], "a code used twice at once signs in one app");
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM auth_sessions WHERE client = 'native'").get()!.n, 2);
+
   const used = await (await state(code.id)).json() as AppSignInCodeState;
   assert.deepEqual([used.status, used.deviceName], ["used", "Alice's MacBook"]);
   const again = await f.redeem({ code: code.code });
@@ -70,9 +75,9 @@ test("a signed-in browser makes a one-use code, and an app exchanges it for a 30
   assert.equal(await errorCode(again), "invalid_grant");
 
   const devices = await (await f.request("GET", "/api/me/devices", { headers: { Cookie: cookie } })).json() as { devices: SignedInDevice[] };
-  assert.deepEqual(devices.devices.map(device => [device.name, device.viaCode]), [["Alice's MacBook", true]]);
-  const audit = f.sqlite.prepare("SELECT action FROM audit WHERE actor_id = 'test:alice' AND action LIKE 'account.app_code.%' ORDER BY created_at").all().map(row => row.action);
-  assert.deepEqual(audit, ["account.app_code.created", "account.app_code.used"]);
+  assert.deepEqual(devices.devices.map(device => [device.name, device.viaCode]).sort(), [[null, true], ["Alice's MacBook", true]]);
+  const audit = f.sqlite.prepare("SELECT action FROM audit WHERE actor_id = 'test:alice' AND action LIKE 'account.app_code.%'").all().map(row => row.action);
+  assert.deepEqual(audit.sort(), ["account.app_code.created", "account.app_code.created", "account.app_code.used", "account.app_code.used"]);
 
   const other = await f.testUser("bob");
   assert.equal((await f.request("GET", `/api/me/app-codes/${code.id}`, { headers: { Cookie: other } })).status, 404);
@@ -155,7 +160,13 @@ test("a password account makes a code with its password, and the app it signs in
 
   const made = await f.makeCode(await f.browser(cookie), { currentPassword: password });
   assert.equal(made.status, 201);
-  const { code } = await made.json() as AppSignInCode;
+  const { code, id } = await made.json() as AppSignInCode;
+  f.env.PASSWORD_AUTH = "false";
+  assert.equal(await errorCode(await f.redeem({ code, deviceName: "Grace's Android" })), "invalid_grant");
+  assert.deepEqual({ ...f.sqlite.prepare("SELECT used_at, device_name FROM app_sign_in_codes WHERE id = ?").get(id) }, { used_at: null, device_name: null },
+    "a refused exchange neither uses the code nor names an app");
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM auth_sessions WHERE client = 'native'").get()!.n, 0);
+  f.env.PASSWORD_AUTH = "true";
   const answer = await (await f.redeem({ code, deviceName: "Grace's Android" })).json() as NativeSignIn;
   assert.equal(answer.user.id, "password:grace");
   assert.equal(answer.user.passwordSignIn, true);
