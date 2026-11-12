@@ -56,8 +56,10 @@ describe("a session's view", () => {
     await app.press("id:session-row-s1");
     await app.waitFor("id:composer-attach");
     await app.press("id:composer-attach");
+    await app.waitFor("id:composer-attach-photos");
+    await app.press("id:composer-attach-photos");
     await app.waitFor("id:attachment-image-0");
-    expect(app.picks()[0]).toMatchObject({ multiple: true, maxDimension: 1568 });
+    expect(app.picks()[0]).toMatchObject({ kind: "images", multiple: true, maxDimension: 1568 });
     await app.type("id:composer-input", "What's wrong on this page?");
     await app.press("id:composer-send");
     await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions/s1/submit") !== undefined);
@@ -224,6 +226,40 @@ describe("a file attached to a message", () => {
     expect(bodyOf(app, "POST", "/api/sessions/s1/uploads")).toMatchObject({ name: "notes.txt", size: 6, offset: 0, data: base64(new TextEncoder().encode("hello\n")) });
     expect(bodyOf(app, "POST", "/api/sessions/s1/submit").content).toBe("Attached file, uploaded into the session worktree:\n- attachments/notes.txt (6 bytes)");
   });
+
+  test("picked in the system's picker on a desktop: an image goes with the message, any other file into the worktree", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
+    }) });
+    app.onPick(() => [
+      { name: "report.pdf", type: "application/pdf", data: new TextEncoder().encode("%PDF-1.7") },
+      { name: "screenshot.png", data: PNG },
+      { name: "huge.log", data: new Uint8Array(10 * 1024 * 1024 + 1) },
+    ]);
+    await app.press("id:session-row-s1");
+    await app.waitFor("label:Attach files");
+    await app.press("id:composer-attach");
+    await app.waitFor("id:attachment-file");
+    expect(app.picks()[0]).toMatchObject({ kind: "files", multiple: true });
+    expect(app.shows("text:report.pdf")).toBe(true);
+    expect(app.shows("id:attachment-image-0")).toBe(true);
+    expect(app.texts().join(" ")).toContain("can't be attached in this workspace");
+  });
+
+  test("on a phone, Files opens the document picker", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
+    }) });
+    app.onPick(() => [{ name: "notes.txt", type: "text/plain", data: new TextEncoder().encode("hello\n") }]);
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:composer-attach");
+    await app.press("id:composer-attach");
+    await app.waitFor("id:composer-attach-files");
+    await app.press("id:composer-attach-files");
+    await app.waitFor("id:attachment-file");
+    expect(app.picks()[0]).toMatchObject({ kind: "files" });
+    expect(app.shows("text:notes.txt")).toBe(true);
+  });
 });
 
 describe("local files a desktop hands over", () => {
@@ -236,7 +272,7 @@ describe("local files a desktop hands over", () => {
 
   test("dropped on the chat box, an image goes with the message and any other file into the worktree", async () => {
     const { app, url } = await staged();
-    expect(app.shows("label:Attach images (drop or paste other files)")).toBe(true);
+    expect(app.shows("label:Attach files")).toBe(true);
     await app.dropFiles("id:composer", [url("notes.txt"), url("dot.png")]);
     await app.waitFor("id:attachment-file");
     expect(app.shows("id:attachment-image-0")).toBe(true);

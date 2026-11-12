@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "build": 1,
   "icon": "icon.png",
+  "schemes": ["pikibun"],
   "capabilities": {
     "network": { "hosts": ["*"] },
     "webview": { "hosts": ["*"] },
@@ -11,6 +12,7 @@
     "picker": true,
     "openUrl": true,
     "statusBar": true,
+    "notifications": true,
     "fs": { "read": ["${homeDir}", "${dataDir}/updates", "${dataDir}/cli"], "write": ["${dataDir}/updates"] },
     "process": {
       "execute": ["zsh", "bash", "sh", "cmd", "schtasks"],

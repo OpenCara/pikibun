@@ -14,7 +14,7 @@ If you'd rather run sessions on this computer, set up the client first, then add
 1. Open Pikibun. The sign-in screen shows the **Server** it will use, `pikibun.com` at first.
 2. To use another server (your team's, for example), choose **Change** and enter its address, such as `https://pikibun.example.com`. Addresses must use `https://`. Plain `http://` works only for `localhost` and `127.0.0.1`, which is what [Self host](self-host.md) uses.
 3. Sign in:
-   - **Continue with GitHub** opens GitHub's sign-in page inside the app. When it finishes, you're back in Pikibun.
+   - **Continue with GitHub** opens GitHub's sign-in page in your browser. When it finishes, the browser asks to open Pikibun, and you're back in the app, signed in. If the browser can't hand you back (no browser, or it won't open Pikibun), choose **Sign in here instead** to sign in on GitHub's page inside the app.
    - Or, where the server offers passwords, enter your **Username** and **Password** and choose **Sign in**.
 
 New password accounts can't be created in the app. Create one on the server's web page first, from the invite link you were given, then sign in here.
@@ -37,7 +37,7 @@ Sessions need a host that's online. Under **Settings → Hosts**:
 - **Follow and collaborate:** a session's panel holds its details, files, browser, schedules and activity. Share it, and grant teammates `read`, `ask`, `write` or `manage` (see [Collaborating on a session](../collaboration.md)).
 - **Attach files:** drop a file on the chat box, or paste one copied in your file manager.
 
-A few things work only in a browser, at the server's web address: downloading backups and exports, signing in to document sources (Notion, Google Drive and the like), and turning on notifications. The app can manage your notification preferences, but it doesn't show notifications yet.
+A few things work only in a browser, at the server's web address: downloading backups and exports, and signing in to document sources (Notion, Google Drive and the like). The app shows notifications while it's open, once you turn them on under **Settings → Notifications**; to be told while it's closed, turn them on in a browser too.
 
 ## Signing out, or changing servers
 

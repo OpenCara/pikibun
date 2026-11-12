@@ -18,6 +18,12 @@ const events: { key: keyof NotificationPreferences; title: string; hint: string 
 const supportHints = {
   push: "This browser shows notifications even when no Pikibun tab is open.",
   page: "This browser shows notifications while a Pikibun tab is open.",
+  app: "This app shows notifications while it's open, also behind other windows. Pressing one opens its session.",
+};
+
+const blockedHints = {
+  app: "Notifications from Pikibun are off in this device's settings. Turn them on there.",
+  browser: "This browser blocks notifications from Pikibun. Allow them in the site's settings (the icon beside the address).",
 };
 
 export function Notifications(_props: SectionProps) {
@@ -69,15 +75,15 @@ export function Notifications(_props: SectionProps) {
     <SectionPage testID="settings-notifications">
       <Section title="This device" info={<View style={{ gap: 8 }}>
         <Note>Pikibun tells you when one of your sessions finishes or fails: sessions you own, and those you sent the latest message to.</Note>
-        <Note>Turn notifications on in each browser where you want them. They come through its push service (Google's, Mozilla's, Apple's or Microsoft's), encrypted so that only your browser can read them.</Note>
+        <Note>Turn notifications on in each browser or app where you want them. Browsers get them through their push service (Google's, Mozilla's, Apple's or Microsoft's), encrypted so that only your browser can read them. The apps ask Pikibun for them while they're open.</Note>
       </View>}>
         <ResourceState inline loading={config.loading() && !config.data()} error={config.error()} retry={config.refresh}>
           <If when={support()}>
             {current => (
               <Row title="Notifications on this device" testID="notifications-device"
                 hint={current().kind === "unsupported" ? (current() as { reason: string }).reason
-                  : blocked() ? "This browser blocks notifications from Pikibun. Allow them in the site's settings (the icon beside the address)."
-                  : supportHints[current().kind as "push" | "page"]}
+                  : blocked() ? blockedHints[current().kind === "app" ? "app" : "browser"]
+                  : supportHints[current().kind as "push" | "page" | "app"]}
                 trailing={current().kind === "unsupported" ? <Badge>Unavailable</Badge>
                   : <CheckControl testID="notifications-device-toggle" label="Notifications on this device" checked={notificationsOn()}
                     disabled={device.busy() || (blocked() && !notificationsOn())} onChange={toggleDevice} />} />

@@ -1,4 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
+import { notificationRoute } from "../src/lib/notifications";
 import { ORIGIN, server, signedIn, user } from "./fixtures";
 
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
@@ -54,6 +55,48 @@ describe("settings", () => {
     await app.press("id:notify-finished");
     await app.waitUntil(() => Boolean(bodyOf(app, "PUT", `${ORIGIN}/api/notifications/preferences`)));
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/notifications/preferences`)).toEqual({ finished: true });
+  });
+
+  test("in the desktop app, notifications turned on show the account's new ones as the system's, each opening its session, but not one about the session in front", async () => {
+    let permission = "default";
+    const shown: { id: string; title: string; body?: string }[] = [];
+    let fed = 0;
+    const app = await open("../App.tsx", {
+      storage: signedIn, platform: "macos", width: 1280, height: 820, clock: {},
+      network: server({
+        [`GET ${ORIGIN}/api/notifications/feed*`]: () => (fed++ === 0
+          ? { body: { notifications: [], cursor: "c1" } }
+          : { body: { notifications: [{ id: "n1", kind: "finished", title: "Finished: Fix the flaky login test", body: "The agent finished.", sessionId: "s1", createdAt: "2026-11-12T00:00:00.000Z" }], cursor: "c2" } }),
+      }),
+      modules: { nsh: {
+        "Notifications.permission": () => permission,
+        "Notifications.requestPermission": () => (permission = "granted"),
+        "Notifications.show": (notification: { id: string; title: string; body?: string }) => { shown.push(notification); return true; },
+      } },
+    });
+    await app.waitFor("id:session-row-s1");
+    await app.press("id:open-settings");
+    await app.press("id:settings-section-notifications");
+    await app.waitFor("id:notifications-device-toggle");
+    expect(app.texts().join(" ")).toContain("This app shows notifications while it's open");
+    await app.press("id:notifications-device-toggle");
+    await app.waitFor("text:Notifications are on for this device.");
+    expect(app.storage()[`pikibun.notifications.${user.id}`]).toBe("on");
+    await app.clock!.runFor(25_000);
+    await app.waitUntil(() => shown.length > 0);
+    expect(shown).toEqual([{ id: "n1 #/s/s1", title: "Finished: Fix the flaky login test", body: "The agent finished." }]);
+    expect(notificationRoute(shown[0]!.id)).toEqual({ name: "session", sessionId: "s1" });
+    expect(notificationRoute("n2 #/settings/notifications")).toEqual({ name: "settings", section: "notifications" });
+    expect(notificationRoute("n3")).toBe(null);
+
+    await app.press("id:header-back");
+    await app.waitUntil(() => !app.shows("id:settings-sections"));
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:composer-input");
+    fed = 1;
+    await app.clock!.runFor(25_000);
+    expect(fed).toBeGreaterThan(1);
+    expect(shown.length).toBe(1);
   });
 
   test("Hosts lists the hosts, opens one's page, pairs a new one and goes back", async () => {

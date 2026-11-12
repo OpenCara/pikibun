@@ -1,9 +1,9 @@
-import { effect, openUrl, safeArea, Scroll, signal, Text, untracked, View, WebView } from "nsh";
+import { cleanup, effect, openUrl, safeArea, Scroll, signal, Text, untracked, UrlScheme, View, WebView } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { authorizeInPage, openServerPage, pageQuery } from "../lib/page";
 import { errorMessage } from "../shared";
 import {
-  auth, checkBrowserSession, restore, signInMethods, signInWithPassword, signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, startGitHubSignIn,
+  auth, checkBrowserSession, isSignInLink, restore, signInMethods, signInWithPassword, signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, startGitHubSignIn,
   type GitHubSignIn, type SignInMethods,
 } from "../lib/auth";
 import { createAction } from "../lib/resource";
@@ -147,8 +147,37 @@ function SignInForm(props: { inviteToken?: string }) {
         if (!openServerPage("/api/auth/github")) await openUrl(`${target}/api/auth/github`);
         return;
       }
-      github.set(await startGitHubSignIn(target, ownClaim()));
+      const attempt = await startGitHubSignIn(target, ownClaim());
+      github.set(attempt);
+      await openUrl(attempt.url);
     });
+  }
+
+  function signInInApp() {
+    const target = origin();
+    if (target === null) return;
+    void action.run(async () => { github.set(await startGitHubSignIn(target, ownClaim(), { inApp: true })); });
+  }
+
+  if (!usesBrowserSession) {
+    cleanup(UrlScheme.on("open", ({ url }) => {
+      if (!isSignInLink(url)) return;
+      const attempt = untracked(github);
+      if (attempt?.inApp) {
+        void action.run(async () => { throw new Error("That sign-in link is from the browser you left. Finish signing in on GitHub's page here, or cancel it and continue with GitHub again."); });
+        return;
+      }
+      if (!attempt) {
+        void action.run(async () => { throw new Error("That sign-in link isn't from a sign-in this app started. Continue with GitHub again."); });
+        return;
+      }
+      if (!attempt.owns(url)) {
+        void action.run(async () => { throw new Error("That sign-in link did not match this attempt. Finish signing in in the browser this app opened."); });
+        return;
+      }
+      github.set(null);
+      void action.run(() => attempt.finish(url));
+    }));
   }
 
   function submitPassword() {
@@ -262,6 +291,18 @@ function SignInForm(props: { inviteToken?: string }) {
         <Button testID="github-sign-in" variant="primary" large block icon="github" label="Continue with GitHub" busy={action.busy() && !developerOpen()}
           disabled={origin() === null || action.busy() || githubUnconfigured()} onPress={continueWithGitHub} />
       </If>
+      <If when={github() && !github()!.inApp ? github() : null}>
+        {attempt => (
+          <Banner testID="github-browser-wait" tone="info" title="Finish signing in in your browser"
+            actions={<>
+              <Button small variant="ghost" label="Open it again" onPress={() => void openUrl(attempt().url)} />
+              <Button testID="github-in-app" small variant="ghost" label="Sign in here instead" disabled={action.busy()} onPress={signInInApp} />
+              <Button small variant="ghost" label="Cancel" onPress={() => github.set(null)} />
+            </>}>
+            GitHub's page opened in your browser. Pikibun comes back here once you've signed in there.
+          </Banner>
+        )}
+      </If>
       <If when={usesBrowserSession && !githubUnconfigured()}>
         <Button testID="browser-session-check" block label="I've signed in" disabled={action.busy()}
           onPress={() => void action.run(async () => { if (!await checkBrowserSession()) throw new Error("This browser isn't signed in to Pikibun yet."); })} />
@@ -300,14 +341,14 @@ function SignInForm(props: { inviteToken?: string }) {
           : "Your sign-in is kept in this app's storage on this device (NSH has no Keychain or Keystore storage yet)."}
       </Small>
       <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={useServer} />
-      <Dialog open={github() !== null} onOpenChange={event => { if (!event.open) github.set(null); }}
+      <Dialog open={github()?.inApp === true} onOpenChange={event => { if (!event.open) github.set(null); }}
         style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
             <Text style={{ flex: 1, fontSize: 14, fontWeight: "500", color: palette().text }}>Sign in with GitHub</Text>
             <Button small variant="ghost" label="Cancel" onPress={() => github.set(null)} />
           </View>
-          <If when={github()}>
+          <If when={github()?.inApp ? github() : null}>
             {attempt => <WebView src={attempt().url} style={{ flex: 1 }} onNavigationStateChange={event => navigated(event.url)} />}
           </If>
         </View>

@@ -6,9 +6,8 @@ only one the Docker image and `pikibun serve` ship. It replaced the React web cl
 are removed, on the same backend, `@pikibun/client` and `packages/shared`. See [the web client](../../docs/self-hosting.md#the-web-client).
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
-(longbridge/nsh#1061), a system sign-in session (longbridge/nsh#1065, not planned), a chooser of any file on phones
-(the web build picks any file through its page's host, the desktops take files dropped or pasted from a file manager,
-and phones pick photos), and bundling the `pikibun` connector inside the app (the
+(longbridge/nsh#1061), a system sign-in session (longbridge/nsh#1065, not planned: native sign-in goes through the
+system browser and comes back as a `pikibun://` link instead), and bundling the `pikibun` connector inside the app (the
 desktop builds run the installed command instead: see [This Computer](#this-computer)).
 
 ## Run it
@@ -31,7 +30,8 @@ workspace and is remembered across GitHub's redirect, as the web app does. The p
 can't: the browser's own file chooser for any file, an image too large for a message drawn again smaller, the query
 GitHub's sign-in comes back with, and GitHub's authorization page for an invite's sign-in.
 
-Native builds sign in to a server you enter: GitHub in the app's own web view, a username and password where the
+Native builds sign in to a server you enter: GitHub in the system browser, handed back as a `pikibun://auth` link
+([GitHub sign-in](#known-gaps-from-nsh-itself)), a username and password where the
 server allows them (`POST /api/auth/native/password`, for a bearer token listed under Signed-in apps, as GitHub's), or
 a test-mode server's token. New password accounts are made on the web, whose sign-up starts a browser session.
 
@@ -139,14 +139,12 @@ Administration). What is left out, and why:
   out: hosts for several servers at once, WSL2 on Windows, sharing the Pikibun it runs with others (`pikibun serve
   --share`, in a terminal), installing prerequisites itself, and hosting while the app is closed (its tray). In a
   browser there are no such sections.
-- **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058); NSH 0.5's
-  system notifications are only the app's own, while it runs, and aren't used yet; the web build turns them on in the browser as the web app does (Web Push through
-  the `sw.js` the build ships, or while a tab is open), and every build manages the account's preferences and devices.
-- **Files other than photos** on phones: the web build picks any file in the browser's chooser, as the web app does;
-  the desktop builds attach any file dropped on the chat box or copied in a file manager and pasted (read under the
-  home folder, `capabilities.fs.read`), and take a dump to import dropped on its sheet; iPhone and Android pick
-  photos only, and paste: NSH 0.5's `Picker.pickFiles` takes any file on the desktops only (longbridge/nsh#162), and
-  isn't used yet.
+- **Notifications while the app is closed**: the native apps show the account's notifications with NSH's
+  `Notifications` only while they run (`src/lib/notifications.ts` asks the server's feed every 20 seconds, as a browser
+  tab without Web Push does; pressing one opens its session, and one about the session in front isn't shown). Pushed
+  ones wait for NSH's push notifications (longbridge/nsh#1058). The web build turns them on in the browser as the web
+  app does (Web Push through the `sw.js` the build ships, or while a tab is open), and every build manages the
+  account's preferences and devices.
 - **Up** in an empty chat box takes back a queued message on the desktops and in desktop browsers; on phones the
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
@@ -238,11 +236,12 @@ Each workaround below is on the [list of upstream workarounds](../../docs/design
 - **Secure storage**: native sign-ins are kept in NSH's `Storage`, a plain file in the app's data, not the Keychain or
   Keystore ([nsh#1061](https://github.com/longbridge/nsh/issues/1061)).
 - **GitHub sign-in**: NSH has no system authentication session
-  ([nsh#1065](https://github.com/longbridge/nsh/issues/1065), closed as not planned), so native sign-in runs GitHub's page in the app's own web
-  view, which can see what is typed into it. That web view navigates only to http and https, so the server hands the
-  sign-in back on a page of its own (`/api/auth/native/done`, asked for with `callback=page`) rather than
-  `pikibun://auth` (NSH 0.5's `UrlScheme` could take it back so; the page would still be the app's web view); the code
-  there is worth nothing without the PKCE verifier, which never leaves the app.
+  ([nsh#1065](https://github.com/longbridge/nsh/issues/1065), closed as not planned). The app claims `pikibun://`
+  (`nsh.json` `schemes`), so it opens GitHub's page in the system browser, where the app sees nothing typed, and the
+  server hands the sign-in back as `pikibun://auth?code=…&state=…` (`src/screens/SignIn.tsx`). Anyone can open such a
+  link: the app takes only one whose state is the attempt's, and its code is worth nothing without the PKCE verifier,
+  which never leaves the app. **Sign in here instead** runs the page in the app's own web view, handed back on a page of
+  the server's (`/api/auth/native/done`, asked for with `callback=page`), where the browser can't open the app.
 - **Types**: NSH (0.4 and 0.5) declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared
   code names.
 - **Tests**: screenshots need `--target`. Since NSH 0.5 an app imports only files inside its directory, the nearest one

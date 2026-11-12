@@ -14,6 +14,7 @@ const TOKEN_KEY = "pikibun.token";
 const EXPIRES_KEY = "pikibun.tokenExpires";
 const ORIGIN_KEY = "pikibun.origin";
 const CALLBACK_PATH = "/api/auth/native/done";
+export const SIGN_IN_SCHEME = "pikibun";
 const deviceName = () => `Pikibun NSH (${platform.os})`;
 
 export type SignupMode = "open" | "invite" | "off";
@@ -158,21 +159,26 @@ export async function signInMethods(origin: string): Promise<SignInMethods> {
 
 export interface GitHubSignIn {
   url: string;
+  inApp: boolean;
   isCallback(url: string): boolean;
+  owns(url: string): boolean;
   finish(callbackUrl: string): Promise<void>;
 }
 
-export async function startGitHubSignIn(origin: string, claim?: string): Promise<GitHubSignIn> {
+export async function startGitHubSignIn(origin: string, claim?: string, options: { inApp?: boolean } = {}): Promise<GitHubSignIn> {
+  const inApp = options.inApp === true;
   const health = await signInMethods(origin);
   if (health.githubConfigured === false) {
     throw new Error("GitHub sign-in is not configured on this server. The operator needs to configure the GitHub OAuth app and the server's GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and VAULT_KEY settings.");
   }
   const { verifier, challenge, state } = await createPkce();
   return {
-    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}&callback=page${claim ? `&claim=${encodeURIComponent(claim)}` : ""}`,
-    isCallback: url => isCallbackPage(origin, url),
+    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}${inApp ? "&callback=page" : ""}${claim ? `&claim=${encodeURIComponent(claim)}` : ""}`,
+    inApp,
+    isCallback: url => (inApp ? isCallbackPage(origin, url) : isSignInLink(url)),
+    owns: url => (inApp ? isCallbackPage(origin, url) : isSignInLink(url)) && new URL(url).searchParams.get("state") === state,
     async finish(callbackUrl: string) {
-      if (!isCallbackPage(origin, callbackUrl)) throw new Error("The sign-in ended somewhere unexpected. Try again.");
+      if (!(inApp ? isCallbackPage(origin, callbackUrl) : isSignInLink(callbackUrl))) throw new Error("The sign-in ended somewhere unexpected. Try again.");
       const params = new URL(callbackUrl).searchParams;
       if (params.get("state") !== state) throw new Error("The sign-in response did not match this attempt. Try again.");
       const error = params.get("error");
@@ -184,6 +190,15 @@ export async function startGitHubSignIn(origin: string, claim?: string): Promise
       await establish(origin, exchange.token, exchange.expiresAt, exchange.user);
     },
   };
+}
+
+export function isSignInLink(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === `${SIGN_IN_SCHEME}:` && parsed.host === "auth" && (parsed.pathname === "" || parsed.pathname === "/");
+  } catch {
+    return false;
+  }
 }
 
 function isCallbackPage(origin: string, url: string): boolean {

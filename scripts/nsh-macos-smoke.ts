@@ -87,8 +87,10 @@ test('manual GitHub OAuth returns to the authenticated native app', async () => 
   });
   await app.waitFor('id:github-sign-in', { timeout: 20000 });
   await app.press('id:github-sign-in');
+  await app.waitFor('id:github-in-app', { timeout: 20000 });
+  await app.press('id:github-in-app');
   await app.waitFor('text:Sign in with GitHub', { timeout: 20000 });
-  console.log('Complete GitHub sign-in in the native window. Waiting for the authenticated session list.');
+  console.log('Complete GitHub sign-in in the native window, not the browser tab it opened first. Waiting for the authenticated session list.');
   await app.waitFor('id:open-settings', { timeout: ${timeout} });
   console.log('GitHub sign-in returned successfully to the authenticated native app.');
 }, ${timeout + 60000});
