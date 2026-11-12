@@ -6,7 +6,6 @@ import { join } from "node:path";
 import test from "node:test";
 import { cmdArgs, cmdRun, cmdRunOwn, lastLines } from "../apps/nsh/src/lib/windows-cmd.js";
 
-// The app's command lines for cmd.exe (apps/nsh/src/lib/windows-cmd.ts), run through a real cmd.exe on Windows.
 const windows = process.platform === "win32";
 const OWN = "cli\\node_modules\\.bin\\pikibun.cmd";
 

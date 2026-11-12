@@ -79,7 +79,6 @@ describe("starting Pikibun's command", () => {
     expect(launchProblem(["zsh:1: command not found: pikibun"], 127)).toEqual({ kind: "missing" });
     expect(launchProblem(["bash: line 1: exec: pikibun: not found"], 127)).toEqual({ kind: "missing" });
     expect(launchProblem(["'pikibun' is not recognized as an internal or external command,"], 9009)).toEqual({ kind: "missing" });
-    // cmd.exe on a Chinese Windows, in GBK, as nsh's UTF-8 reads it; the command line's where.exe exits 9009.
     expect(launchProblem(["'pikibun' \uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD"], 9009)).toEqual({ kind: "missing" });
     expect(launchProblem(["'pikibun' \uFFFD\uFFFD\uFFFD\uFFFD\uFFFD"], 1)).toEqual({ kind: "failed", message: "The host could not start (exit code 1)." });
     expect(launchProblem(["Unknown command: host", "", "Usage: pikibun <command> [options]"], 2)).toEqual({ kind: "outdated" });
