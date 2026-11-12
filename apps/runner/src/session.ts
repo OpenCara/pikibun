@@ -677,7 +677,6 @@ export class RunnerSession {
 
   private async applyOptions(conversation: Conversation, run: Run, content?: string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]): Promise<void> {
     const options = run.options ?? {};
-    const access = options.access ?? "approval";
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
@@ -697,7 +696,7 @@ export class RunnerSession {
         tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools).filter(tool => !own.has(tool.name)),
           ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [this.#extension, ...this.#defined.extensions, ...extensions.map(extension => extension.extension), ...builtins],
-        instructions: this.agentInstructions(access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
+        instructions: this.agentInstructions(options.access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
           new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name)))),
       } : {}),
     };
@@ -775,7 +774,7 @@ export class RunnerSession {
     return selected;
   }
 
-  private async chatOptions(input: unknown, mode: "write" | "ask", _actorId: string): Promise<ChatOptions | undefined> {
+  private async chatOptions(input: unknown, mode: "write" | "ask"): Promise<ChatOptions | undefined> {
     if (input === undefined) return undefined;
     const invalid = (message = "Invalid chat options") => new RunnerError(422, message);
     if (!input || typeof input !== "object" || Array.isArray(input)) throw invalid();
@@ -888,7 +887,7 @@ export class RunnerSession {
       if (preparation.status === "failed") throw new RunnerError(502, preparationFailure(preparation.reason));
       await this.authorize(ticket.actorId, mode === "ask" ? "ask" : "write", ticket.policyVersion);
       await this.hostConfig();
-      const options = await this.chatOptions(input.options, mode, ticket.actorId);
+      const options = await this.chatOptions(input.options, mode);
       if (prepared.length) await this.requireImageModel(options);
       const key = await requestKey(ticket.actorId, mode, input.requestId);
       const hash = await messageHash(input.content, images);
