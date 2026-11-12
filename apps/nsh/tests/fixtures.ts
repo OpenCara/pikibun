@@ -86,6 +86,7 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/workspaces/w1/push-identities`]: { body: { identities: [], oidc: null, redirectUri: null, githubApp: null } },
     [`GET ${ORIGIN}/api/workspaces/w1/network-policy`]: { body: { policy: { mode: "off", domains: [], packageRegistries: true }, packageRegistryDomains: ["registry.npmjs.org"] } },
     [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [], hosts: [], admin: true } },
+    [`GET ${ORIGIN}/api/workspaces/w1/auto-mode`]: { body: { enabled: false } },
     [`GET ${ORIGIN}/api/workspaces/w1/transcripts`]: { body: { settings: { paging: true, toolOutput: "full" } } },
     [`GET ${ORIGIN}/api/workspaces/w1/approvals`]: { body: { settings: { requesterAutoApprove: false } } },
     [`GET ${ORIGIN}/api/workspaces/w1/child-sessions`]: { body: { settings: { childModels: true } } },

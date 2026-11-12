@@ -59,7 +59,9 @@ export function agentInstructions(input: InstructionsInput): string {
       + "The execution root is the isolated session worktree, which starts empty; file-tool paths are relative to it. "
       + "Clone the repositories you need into it with plain Git (for example git clone https://github.com/<owner>/<name>), "
       + "and fetch, switch and create branches as usual. Git reaches this workspace's repositories through the session's egress proxy "
-      + "with the session owner's own access; no credentials are needed or available. Commit with Git. "
+      + "with the session owner's own access; no credentials are needed or available. "
+      + "Public repositories outside the workspace on GitHub, GitLab, Bitbucket and Codeberg can be cloned the same way, to read their code, "
+      + "where the workspace's network access allows their host. Commit with Git. "
       + `This session's own branch is ${branch} (also in $PIKIBUN_SESSION_BRANCH): push your work to it with plain git, for example `
       + `git push origin HEAD:${branch}, in any of the workspace's repositories. Pushes of other branches are refused there.`
       + (input.cloneRepositories.length ? `\nThis workspace's repositories: ${input.cloneRepositories.join(", ")}.` : "")

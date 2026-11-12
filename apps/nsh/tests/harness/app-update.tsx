@@ -1,5 +1,5 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
-import { AppUpdateRows, SidebarUpdate } from "../../src/components/AppUpdate";
+import { AppUpdateRows, HomeUpdate } from "../../src/components/AppUpdate";
 import { configureAppUpdate, type CleanUp, type UpdateRunner } from "../../src/lib/app-update";
 import { Button, Section } from "../../src/ui";
 
@@ -46,7 +46,7 @@ updater.start(1);
 
 mount(() => (
   <View style={{ flex: 1, gap: 16, padding: 16 }}>
-    <View style={{ width: 260 }}><SidebarUpdate onDetails={() => say("details")} /></View>
+    <HomeUpdate />
     <Button testID="fake-download-continue" label="Continue the download" onPress={() => resume?.()} />
     <Section title="This app"><AppUpdateRows /></Section>
     <View testID="fake-sent">

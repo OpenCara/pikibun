@@ -24,6 +24,7 @@ import { registerConnectorCredentials, registerConnectors } from './connectors.j
 import { registerHostConfig } from './host-config.js';
 import { registerHostModels } from './host-models.js';
 import { registerConnectorExtensions, registerExtensions } from './extensions.js';
+import { registerAutoMode } from './auto-mode.js';
 import { registerRestoreRoutes } from './restore-routes.js';
 import { registerHostMigrations } from './host-migrations.js';
 import { registerWorkspaceDatabases } from './workspace-databases/routes.js';
@@ -92,6 +93,7 @@ registerHostAccess(app);
 registerHostConfig(app);
 registerHostModels(app);
 registerExtensions(app);
+registerAutoMode(app);
 registerSessions(app);
 registerSessionLinks(app);
 registerBackups(app);

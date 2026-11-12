@@ -225,6 +225,64 @@ test("write and ask share FIFO, and placement does not let the next job overtake
   }
 });
 
+test("the sender's next shared message steers the run at work: the agent reads it after the tool call, before it answers, and one run ends", options, async t => {
+  const f = await fixture(t);
+  const gate = f.gateTool(OWNER, "write");
+  const first = await submit(f.session, OWNER, "write", { content: "TEST_IDENTITY", requestId: "first" });
+  await gate.entered();
+  const steerInput = { content: "TEST_WRITE steered.txt\nsteered", requestId: "steer" };
+  const steer = await submit(f.session, OWNER, "write", steerInput);
+  const other = await submit(f.session, WRITER, "write", { content: "TEST_WRITE other.txt\nlater", requestId: "other" });
+  for (let count = 0; count < 250 && queue(await f.session.view())[1]?.status !== "running"; count++) await delay(20);
+  assert.deepEqual(queue(await f.session.view()).map(run => run.status), ["running", "running", "queued"], "someone else's message still waits");
+  gate.release();
+  const view = await idle(f.session);
+  assert.deepEqual(queue(view).map(run => run.status), ["settled", "settled", "settled"]);
+  assert.equal(await file(f.session, "steered.txt"), "steered");
+  assert.equal(await file(f.session, "other.txt"), "later");
+  const shared = view.entries.filter(entry => entry.conversationId === first.conversationId);
+  const steered = shared.findIndex(entry => entry.role === "user" && entry.text === steerInput.content);
+  const identity = shared.findIndex(entry => entry.role === "toolResult" && entry.toolResult?.tool === "identity");
+  const answer = shared.findIndex(entry => entry.role === "assistant" && entry.text.startsWith("Deterministic test provider result"));
+  assert.ok(identity >= 0 && steered === identity + 1, "the steer is placed right after the running tool call's result");
+  assert.ok(answer > steered, "and before the run's answer");
+  assert.equal(userEntries(view, steer, steerInput.content).length, 1);
+  assert.equal(userEntries(view, other, "TEST_WRITE other.txt\nlater").length, 1);
+  assert.equal(view.activity, "done");
+});
+
+test("a steer the runner stopped before pi had it, whose run ended meanwhile, runs on its own after a restart", options, async t => {
+  const f = await fixture(t);
+  const first = await submit(f.session, OWNER, "write", { content: "TEST_WRITE first.txt\nfirst", requestId: "first" });
+  await idle(f.session);
+  await pauseQueue(f.session);
+  const steerInput = { content: "TEST_WRITE late.txt\nlate", requestId: "late" };
+  const steer = await submit(f.session, OWNER, "write", steerInput);
+  await f.stop();
+  await stored(f.session, async harness => {
+    const conversation = await harness.conversation((await metadata(harness)).runs[steer.submissionId].conversationId as ConversationId, context);
+    assert.ok(conversation);
+    await conversation.commit(async tx => {
+      const doc = await tx.doc(RunnerState);
+      const current = JSON.parse(doc.json) as Metadata;
+      Object.assign(current.runs[steer.submissionId], { status: "admitting", started: true, steered: first.submissionId });
+      doc.json = JSON.stringify(current);
+    }, context);
+  });
+  const recovered = await f.reopen();
+  const view = await idle(recovered);
+  assert.deepEqual(queue(view).map(run => run.status), ["settled", "settled"]);
+  assert.equal(await file(recovered, "late.txt"), "late");
+  assert.equal(userEntries(view, steer, steerInput.content).length, 1);
+  await f.stop();
+  await stored(recovered, async harness => {
+    const run = (await metadata(harness)).runs[steer.submissionId];
+    assert.equal(run.steered, undefined, "it ran as a message of its own, not as part of the run that had ended");
+    const conversation = await harness.conversation(run.conversationId as ConversationId, context);
+    assert.equal(await conversation!.commit(tx => tx.submissionByRequest(conversation!.id, `${run.key}:steer`), context), undefined, "the steer was never admitted");
+  });
+});
+
 test("queued write/ask FIFO and receipt identity survive a fresh service over the same SQLite", options, async t => {
   const f = await fixture(t);
   await pauseQueue(f.session);

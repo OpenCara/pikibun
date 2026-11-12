@@ -13,6 +13,7 @@ import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, credentialedApiProviders, 
   type EgressApi, type EgressGitService, type EgressGrant, type EgressRepository, type LfsBatchResult, type NetworkPolicy } from "../../../packages/shared/src/network.js";
 import { boundedStream, drainStream, PUSH_REQUEST_BYTES, pushRejection, PushRequestError, readPushCommands, sessionBranchRefusal, type PushCommand } from "../../../packages/shared/src/git-push.js";
 import { NON_PUBLIC_IPV4, NON_PUBLIC_IPV6 } from "../../../packages/shared/src/non-public-addresses.js";
+import { fetchGit, GIT_TRANSFER_TIMEOUT_MS, gitUpstreamHeaders, GitTransferError } from "../../../packages/shared/src/git-transfer.js";
 import { RunnerError } from "./protocol.js";
 import { CA_BUNDLE, CA_BUNDLE_VARIABLES } from "./trust-store.js";
 import { ApiAccess, type ApiUpstream } from "./api-access.js";
@@ -22,6 +23,7 @@ export const EGRESS_PORT = 41080;
 export const EGRESS_SOCKET = "/run/pikibun/egress.sock";
 export const EGRESS_GIT_BASE = `http://127.0.0.1:${EGRESS_PORT}/git/`;
 const SSH_HOSTS = ["github.com", "gitlab.com", "bitbucket.org"];
+export const PUBLIC_GIT_HOSTS: readonly string[] = Object.freeze(["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"]);
 
 const GRANT_TTL_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -55,6 +57,7 @@ export interface EgressOptions {
   apiAuthority?: InterceptionAuthority;
   apiUpstream?: ApiUpstream;
   fakeIpTunnels?: () => Promise<boolean>;
+  publicFetch?: typeof fetch;
 }
 
 export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpoint, caBundle = CA_BUNDLE): Record<string, string> {
@@ -199,6 +202,37 @@ function refuseLfs(response: ServerResponse, status: number, message: string): v
   if (response.headersSent) { response.destroy(); return; }
   response.writeHead(status, { "Content-Type": LFS_TYPE, "Cache-Control": "no-store", Connection: "close" });
   response.end(`${JSON.stringify({ message })}\n`);
+}
+
+export function publicGitRemote(target: string): string | undefined {
+  const slash = target.indexOf("/");
+  if (slash < 0 || target.length > 512) return undefined;
+  const host = target.slice(0, slash).toLowerCase();
+  const segments = target.slice(slash + 1).split("/");
+  if (!PUBLIC_GIT_HOSTS.includes(host) || segments.length < 2 || segments.length > 20) return undefined;
+  if (segments.some(segment => !/^[A-Za-z0-9_.-]{1,100}$/.test(segment) || segment === "." || segment === "..")) return undefined;
+  return `https://${host}/${segments.join("/")}`;
+}
+
+const PUBLIC_GIT_REDIRECTS = 3;
+const FOLLOWED_REDIRECTS = new Set([301, 302, 307, 308]);
+
+export function publicGitFetch(base: typeof fetch): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    let url = new URL(String(input));
+    for (let hop = 0; ; hop++) {
+      const answer = await base(url.toString(), init);
+      const location = answer.headers.get("location");
+      if (!FOLLOWED_REDIRECTS.has(answer.status) || !location || hop >= PUBLIC_GIT_REDIRECTS) return answer;
+      const endpoint = url.pathname.endsWith("/info/refs") ? "/info/refs" : "/git-upload-pack";
+      let next: URL;
+      try { next = new URL(location, url); } catch { return answer; }
+      if (next.protocol !== "https:" || next.username || next.password || next.hash || next.search !== url.search || !next.pathname.endsWith(endpoint)
+        || !publicGitRemote(`${next.host}${next.pathname.slice(0, -endpoint.length)}`)) return answer;
+      await answer.body?.cancel().catch(() => {});
+      url = next;
+    }
+  }) as typeof fetch;
 }
 
 function gitRequest(path: string, search: string): { target: string; service: EgressGitService } | undefined {
@@ -495,7 +529,9 @@ export class EgressProxy {
       lfs: grant?.repositories.filter(repository => repository.lfs).map(repository => bindingRemote(repository)) ?? [],
       gitRemotes: `https:// remotes go through ${this.#port === undefined ? EGRESS_GIT_BASE : `http://127.0.0.1:${this.#port}/git/`}<host>/<path>; the workspace's repositories are read with the session owner's access`
         + (this.#options.sessionBranch ? `, and this session's branch ${this.#options.sessionBranch} is pushed with the workspace's push identity` : "")
-        + ". The host fetches them from the forge itself when Pikibun grants it a credential (\"direct\" in recent), else Pikibun relays them",
+        + ". The host fetches them from the forge itself when Pikibun grants it a credential (\"direct\" in recent), else Pikibun relays them. "
+        + `Other repositories are only read, without credentials, where the network policy allows their host: the proxy reads public ones on ${PUBLIC_GIT_HOSTS.join(", ")} itself, `
+        + "and Git fetches those elsewhere through a tunnel",
       sessionBranch: this.#options.sessionBranch ?? null,
       recent: this.#log.slice(-50),
     }, null, 2)}\n`);
@@ -559,6 +595,8 @@ export class EgressProxy {
       return refuse(response, 403, `${target.slice(0, 300)} is not one of this workspace's repositories; pushes go only to them`);
     }
     const host = key.split("/")[0]!;
+    const remote = hostAllowed(grant.policy, host) ? publicGitRemote(target) : undefined;
+    if (remote && (parsed.service === "info-refs" || parsed.service === "upload-pack")) return this.#relayPublic(request, response, parsed.service, remote, label);
     if (parsed.service === "info-refs" && hostAllowed(grant.policy, host)) {
       this.#record({ kind: "git", target: label, outcome: "allowed", reason: "not a workspace repository: fetched directly, without credentials" });
       response.writeHead(302, { Location: `https://${target}/info/refs${url.search}`, "Cache-Control": "no-store" });
@@ -568,6 +606,31 @@ export class EgressProxy {
     return refuse(response, 403, hostAllowed(grant.policy, host)
       ? `${target.slice(0, 300)} is not one of this workspace's repositories; fetch it from https://${target.slice(0, 300)} directly`
       : `${target.slice(0, 300)} is not one of this workspace's repositories, and its network policy doesn't allow ${host.slice(0, 253)}`);
+  }
+
+  async #relayPublic(request: IncomingMessage, response: ServerResponse, service: "info-refs" | "upload-pack", remote: string, label: string): Promise<void> {
+    const header = (name: string) => { const value = request.headers[name]; return typeof value === "string" ? value : undefined; };
+    const { host, pathname } = new URL(remote);
+    if (service === "upload-pack" && request.method !== "POST") return refuse(response, 405, "Git fetches use POST");
+    if (service === "info-refs" && request.method !== "GET") return refuse(response, 405, "Git reference listings use GET");
+    let upstream: Awaited<ReturnType<typeof fetchGit>>;
+    const gone = new AbortController();
+    response.once("close", () => gone.abort());
+    try {
+      const headers = gitUpstreamHeaders(service, { userAgent: header("user-agent"), gitProtocol: header("git-protocol"),
+        contentType: header("content-type"), contentEncoding: header("content-encoding") });
+      const body = service === "upload-pack" ? await boundedBody(request, UPLOAD_REQUEST_BYTES) : undefined;
+      upstream = await fetchGit({ remote, service, authorization: null, headers, ...(body ? { body } : {}),
+        provider: host, fullName: pathname.slice(1).replace(/\.git$/, ""), identity: "owner", fetch: publicGitFetch(this.#options.publicFetch ?? fetch),
+        signal: AbortSignal.any([gone.signal, AbortSignal.timeout(GIT_TRANSFER_TIMEOUT_MS)]) });
+    } catch (error) {
+      const known = error instanceof GitTransferError || error instanceof RunnerError;
+      const reason = known ? error.message : `${host} could not be reached`;
+      this.#record({ kind: "git", target: label, outcome: "refused", reason: `not a workspace repository: ${reason}` });
+      return refuse(response, known ? error.status : 502, reason);
+    }
+    this.#record({ kind: "git", target: label, outcome: "allowed", reason: `not a workspace repository: ${service}, read from ${host} without credentials` });
+    return this.#stream(response, new Response(upstream.body), upstream.contentType);
   }
 
   async #push(request: IncomingMessage, response: ServerResponse, repository: EgressRepository, service: EgressGitService, label: string): Promise<void> {

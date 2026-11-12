@@ -169,6 +169,22 @@ async function connectorInfo(env: Env, row: ConnectorInfoRow, viewer?: InfoViewe
     ...(hostSessions ? { hostSessions: true as const } : {}) };
 }
 
+export async function workspaceConnectorInfos(env: Env, workspaceId: string, userId: string): Promise<ConnectorInfo[]> {
+  const rows = await env.DB.query<ConnectorInfoRow>(`SELECT c.*, u.display_name AS owner_name,
+    CASE WHEN EXISTS (SELECT 1 FROM connector_shares sh WHERE sh.connector_id = c.id AND sh.workspace_id = cw.workspace_id)
+      THEN json_array(cw.workspace_id) ELSE json_array() END AS workspace_ids,
+    json_array(cw.workspace_id) AS connected_workspace_ids
+    FROM connectors c JOIN connector_workspaces cw ON cw.connector_id = c.id
+    JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = c.owner_id
+    JOIN workspace_members actor ON actor.workspace_id = cw.workspace_id AND actor.user_id = ?
+    JOIN users u ON u.id = c.owner_id WHERE cw.workspace_id = ? AND c.revoked_at IS NULL
+    AND (c.owner_id = actor.user_id OR EXISTS (SELECT 1 FROM connector_shares sh
+      WHERE sh.connector_id = c.id AND sh.workspace_id = cw.workspace_id))
+    AND (? = 1 OR u.auth_kind <> 'test') ORDER BY c.created_at DESC LIMIT 30`)
+    .bind(userId, workspaceId, testMode(env) ? 1 : 0).all();
+  return connectorInfos(env, rows, () => ({ userId, workspaceId }));
+}
+
 async function connectorInfos(env: Env, rows: ConnectorInfoRow[], viewer?: (row: ConnectorInfoRow) => InfoViewer): Promise<ConnectorInfo[]> {
   const result: ConnectorInfo[] = [];
   for (let offset = 0; offset < rows.length; offset += 4) {
@@ -351,20 +367,7 @@ export function registerConnectors(app: Hono<AppEnv>): void {
   app.get('/api/workspaces/:id/connectors', async c => {
     const workspaceId = identifier(c.req.param('id'));
     await requireMember(c.env, workspaceId, c.get('auth').userId);
-    const rows = await c.env.DB.query<ConnectorInfoRow>(`SELECT c.*, u.display_name AS owner_name,
-      CASE WHEN EXISTS (SELECT 1 FROM connector_shares sh WHERE sh.connector_id = c.id AND sh.workspace_id = cw.workspace_id)
-        THEN json_array(cw.workspace_id) ELSE json_array() END AS workspace_ids,
-      json_array(cw.workspace_id) AS connected_workspace_ids
-      FROM connectors c JOIN connector_workspaces cw ON cw.connector_id = c.id
-      JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = c.owner_id
-      JOIN workspace_members actor ON actor.workspace_id = cw.workspace_id AND actor.user_id = ?
-      JOIN users u ON u.id = c.owner_id WHERE cw.workspace_id = ? AND c.revoked_at IS NULL
-      AND (c.owner_id = actor.user_id OR EXISTS (SELECT 1 FROM connector_shares sh
-        WHERE sh.connector_id = c.id AND sh.workspace_id = cw.workspace_id))
-      AND (? = 1 OR u.auth_kind <> 'test') ORDER BY c.created_at DESC LIMIT 30`)
-      .bind(c.get('auth').userId, workspaceId, testMode(c.env) ? 1 : 0).all();
-    const userId = c.get('auth').userId;
-    return c.json({ connectors: await connectorInfos(c.env, rows, () => ({ userId, workspaceId })) });
+    return c.json({ connectors: await workspaceConnectorInfos(c.env, workspaceId, c.get('auth').userId) });
   });
   app.put('/api/connectors/:id/shares/:workspaceId', async c => {
     const row = await managedConnector(c);

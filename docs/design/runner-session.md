@@ -33,7 +33,7 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
 | `session/availability.ts` | Which tools a session offers and refuses: the workspace's switches, tool groups, the host's programs |
 | `session/piki.ts` | The host extensions' view of the session, their tool calls, and the CLIs they run in the sandbox |
 | `session/view.ts` | What a session's view shows (functions over the state the session gives them) |
-| `session/run-queue.ts` | Running queued messages one at a time, screening them with extensions, and settling their runs |
+| `session/run-queue.ts` | Running queued messages one at a time (a sender's next shared message, with the same options, steers their run at work instead), screening them with extensions, and settling their runs |
 | `session/uploads.ts`, `inputs.ts`, `mirrors.ts`, `approval-waits.ts`, `branch-reports.ts`, `host-commands.ts`, `tunnel.ts`, `entries.ts` | As before: uploads, queued images, cache mirrors, whole results, branch reports, the host-command policy, tunnels, transcript entries |
 | `connector/control-plane.ts` | The connector's calls to the control plane, each tied to the connection it was made on |
 | `connector/runner-config.ts` | The callbacks the connector gives the runner (`RunnerConfig`) |

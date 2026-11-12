@@ -8,7 +8,7 @@ const CMD = "cmd";
 const CLI_FOLDER = "cli";
 export const INSTALL_COMMAND = "npm install -g pikibun@latest";
 
-function loginShell(os: string, shell: string | undefined): string {
+export function loginShell(os: string, shell: string | undefined): string {
   const name = shell?.split("/").pop();
   return name && SHELLS.includes(name) ? name : os === "macos" ? "zsh" : "bash";
 }
