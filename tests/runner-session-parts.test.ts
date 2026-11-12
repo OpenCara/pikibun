@@ -15,6 +15,8 @@ import { defaultHostConfig } from "../packages/shared/src/host-config.js";
 import { MessageInputs } from "../apps/runner/src/session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "../apps/runner/src/session/mirrors.js";
 import { MAX_STAGED_UPLOADS, SessionUploads, STALE_UPLOAD_MS } from "../apps/runner/src/session/uploads.js";
+import { agentInstructions, lfsInstructions, type InstructionsInput } from "../apps/runner/src/session/instructions.js";
+import { bundledToolDefinitions } from "../packages/shared/src/tool-definitions.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -259,4 +261,66 @@ test("a member's host session runs while the host allows host sessions and their
   await assert.rejects(hostPolicy({ hostSession: true }).policy.requireHostEnvironment(), /grant that let them has ended/);
   await assert.rejects(hostPolicy({ hostSession: true, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: false }) }).policy.requireHostEnvironment(),
     /owner turned that off/);
+});
+
+function instructions(input: Partial<InstructionsInput> = {}): string {
+  return agentInstructions({ base: "Base.", agentTools: [], mode: "write", off: new Set(), browserUnavailable: undefined, tunnelUnavailable: undefined,
+    kindsOff: new Set(), extensionTools: new Set(), clone: false, sandboxed: true, branch: "pikibun/work-1", cloneRepositories: [], lfsRepositories: [],
+    cloneFailures: [], definitions: [], sources: [], conversationOnlyRestore: false, tools: [], missing: [], linuxSandbox: false, nodeBin: false, codemode: false,
+    browser: false, ...input });
+}
+
+test("instructions: a plain session gets its agent's own and the mode's last words", () => {
+  assert.equal(instructions(), "Base.");
+  assert.match(instructions({ mode: "ask" }), /^Base\.\n\nThis is a read-only ask\./);
+  assert.match(instructions({ mode: "read" }), /^Base\.\n\nThis request is read-only\./);
+  assert.match(instructions({ conversationOnlyRestore: true }), /kept only its conversation/);
+});
+
+test("instructions: a clone session names its branch, repositories, LFS and the clones that couldn't come back", () => {
+  const sandboxed = instructions({ clone: true, agentTools: ["git_push"], cloneRepositories: ["https://github.com/acme/app.git"],
+    cloneFailures: [{ path: "app", reason: "gone" }], lfsRepositories: ["https://github.com/acme/app.git"] });
+  assert.match(sandboxed, /isolated session worktree/);
+  assert.match(sandboxed, /git push origin HEAD:pikibun\/work-1/);
+  assert.match(sandboxed, /This workspace's repositories: https:\/\/github\.com\/acme\/app\.git\./);
+  assert.ok(sandboxed.includes(lfsInstructions(["https://github.com/acme/app.git"])));
+  assert.match(sandboxed, /could not be cloned again: app \(gone\)/);
+  assert.match(sandboxed, /git_push \{directory, branch\}/);
+  assert.doesNotMatch(instructions({ clone: true, agentTools: ["git_push"], off: new Set(["git_push"]) }), /git_push \{directory/);
+  assert.doesNotMatch(instructions({ clone: true }), /git_push \{directory/);
+  const host = instructions({ clone: true, sandboxed: false, agentTools: ["git_push"], cloneRepositories: ["https://github.com/acme/app.git"] });
+  assert.match(host, /This host runs without a sandbox/);
+  assert.doesNotMatch(host, /git_push|PIKIBUN_SESSION_BRANCH/);
+  assert.equal(lfsInstructions([]), "");
+});
+
+test("instructions: tools add their lines only while on, and only outside an ask", () => {
+  const tools = ["search", "move_file", "git", "python", "browser", "tunnel", "github_read"];
+  const all = instructions({ tools, browser: true, codemode: true });
+  for (const line of [/use search/, /use move_file/, /Run Git with the git tool/, /Run Python, pip/, /use the browser tool/, /use the tunnel tool/, /codemode script/]) {
+    assert.match(all, line);
+  }
+  const ask = instructions({ tools, browser: true, codemode: true, mode: "ask" });
+  assert.match(ask, /use search/);
+  for (const line of [/use move_file/, /git tool/, /python tool/, /browser tool/, /tunnel tool/, /codemode/]) assert.doesNotMatch(ask, line);
+  assert.doesNotMatch(instructions({ tools, mode: "read" }), /tunnel tool/, "a read-only message isn't offered the tunnel");
+  const off = instructions({ tools, browser: true, off: new Set(["git", "python", "browser", "tunnel"]), browserUnavailable: "missing", tunnelUnavailable: "missing" });
+  for (const line of [/git tool/, /Run Python/, /use the browser tool/, /use the tunnel tool/]) assert.doesNotMatch(off, line);
+  assert.match(off, /This session has no browser tool/);
+  assert.match(off, /This session has no tunnel tool/);
+});
+
+test("instructions: defined tools add theirs, sources fill a brokered tool's, and missing programs are told", () => {
+  const node = bundledToolDefinitions.find(item => item.name === "node")!;
+  const source = bundledToolDefinitions.find(item => item.name === "source_read")!;
+  const sources = [{ id: "s1", title: "Docs", kind: "notion" as const, type: "page" }];
+  const withSources = instructions({ definitions: [node, source], agentTools: ["source_read"], sources: sources as never, nodeBin: true, linuxSandbox: true,
+    missing: [{ tool: "node", programs: ["yarn"] }] });
+  assert.match(withSources, /"Docs" \(Notion page, source s1\)/);
+  assert.match(withSources, new RegExp(`It runs Node\\.js ${process.versions.node.replaceAll(".", "\\.")}`));
+  assert.doesNotMatch(withSources, /yarn and corepack, ahead/);
+  assert.match(withSources, /Calls to them are refused before they run/);
+  const withoutSources = instructions({ definitions: [source], agentTools: ["source_read"], sources: sources as never, kindsOff: new Set(["notion"]) });
+  assert.doesNotMatch(withoutSources, /source s1/);
+  assert.doesNotMatch(instructions({ definitions: [node], nodeBin: true, mode: "ask" }), /It runs Node/);
 });
