@@ -5,16 +5,14 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket as CompressingSocket } from "ws";
 import { z } from "zod";
-import type { ConnectorCapabilities, ConnectorCredentials, ConnectorRpcRequest, ConnectorRpcResponse, LocalModelSummary } from "../../../packages/shared/src/connector.js";
-import { connectorLimits, connectorRequestTimeoutMs } from "../../../packages/shared/src/connector.js";
-import { signToken } from "../../../packages/shared/src/crypto.js";
-import type { RunnerAction, RunnerBinding } from "../../../packages/shared/src/types.js";
+import type { ConnectorCapabilities, ConnectorCredentials, LocalModelSummary } from "../../../packages/shared/src/connector.js";
+import { connectorLimits } from "../../../packages/shared/src/connector.js";
 import { acquireRunnerLease } from "./lease.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { CREATE_FILE, exactMode, OPEN_DIRECTORY, OPEN_FILE, windows } from "./platform.js";
 import type { LocalModels } from "./local-pi.js";
 import { modelSummary } from "./local-pi.js";
-import { assertId, ConnectorSetupError, verifyRunnerTicket } from "./protocol.js";
+import { assertId, ConnectorSetupError } from "./protocol.js";
 import { withHostToolCapabilities } from "./host-capabilities.js";
 import { detectGpu, HostConfigSource } from "./host-config.js";
 import type { GpuKind, RepositoryCacheMode } from "../../../packages/shared/src/host-config.js";
@@ -24,7 +22,9 @@ import { RunnerService, createRunnerApp } from "./server.js";
 import { ControlPlaneCalls } from "./connector/control-plane.js";
 import type { ConnectorSocket, Generation } from "./connector/generation.js";
 import { connectorRunnerConfig } from "./connector/runner-config.js";
-import { actorSchema, boundedBody, CALLBACK_LIMIT, decodeJson, encoder, IDENTIFIER, refusedReport, TOKEN } from "./connector/wire.js";
+import { RelayFrames } from "./connector/frames.js";
+import { validateRelayRequest } from "./connector/relay-request.js";
+import { boundedBody, CALLBACK_LIMIT, decodeJson, encoder, IDENTIFIER, refusedReport, TOKEN } from "./connector/wire.js";
 import type { RunnerConfig } from "./session.js";
 import { HostExtensions } from "./extensions/host.js";
 import { ExtensionStore } from "./extensions/store.js";
@@ -35,23 +35,12 @@ import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOpt
 const STATE_FILE = "connector.json";
 const EXTENSION_SYNC_MS = 30_000;
 const HOST_CONFIG_LIMIT = 128 * 1024;
-const DRAIN_TIMEOUT = 30_000;
 const RECONNECT_WAIT = 15_000;
 const credentialsSchema = z.object({
   connectorId: z.string().regex(IDENTIFIER), token: z.string().regex(TOKEN), controlPlaneUrl: z.string(),
 }).strict();
 const welcomeSchema = z.object({
   type: z.literal("welcome"), connectorId: z.string().regex(IDENTIFIER), connectionToken: z.string().regex(TOKEN),
-}).strict();
-const ticketSchema = z.object({
-  aud: z.literal("runner"), sessionId: z.string().regex(IDENTIFIER), actorId: actorSchema, ownerId: actorSchema,
-  action: z.enum(["create", "view", "events", "submit", "ask", "backup", "restart", "restore", "stop", "files", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image"]),
-  policyVersion: z.number().int().positive(), iat: z.number().int(), exp: z.number().int(),
-  jti: z.string().regex(IDENTIFIER), bodyHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/), connectorId: z.string().regex(IDENTIFIER),
-}).strict();
-const requestSchema = z.object({
-  type: z.literal("request"), id: z.string().regex(IDENTIFIER), method: z.enum(["GET", "POST"]),
-  path: z.string().max(512), body: z.string().max(connectorLimits.requestBytes), ticket: ticketSchema,
 }).strict();
 
 export function controlPlaneOrigin(value: string, allowInsecureLoopback = false): string {
@@ -164,39 +153,7 @@ export async function claimConnectorPairing(options: {
   return credentials(value.credentials, origin, options.allowInsecureLoopback);
 }
 
-export async function validateRelayRequest(value: unknown, connectorId: string, verifierSecret: string): Promise<{ rpc: ConnectorRpcRequest; authorization: string }> {
-  const rpc = requestSchema.parse(value);
-  if (encoder.encode(rpc.body).length > connectorLimits.requestBytes) throw new Error("Invalid relay request");
-  let action: RunnerAction;
-  let sessionId: string;
-  if (rpc.path === "/v1/sessions" && rpc.method === "POST") {
-    action = "create";
-    let binding: RunnerBinding;
-    try { binding = JSON.parse(rpc.body); } catch { throw new Error("Invalid create binding"); }
-    sessionId = assertId(binding?.session?.id ?? "");
-    if (binding.session.connectorId !== connectorId || binding.model?.connectorId !== connectorId
-      || binding.owner?.id !== rpc.ticket?.ownerId || binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign connector binding");
-  } else {
-    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|restart|backup|restore|stop|files|revert|fork|pack|unpack|withdraw|upload|tunnel|image)$/.exec(rpc.path);
-    if (!match) throw new Error("Relay path is not allowed");
-    sessionId = match[1]!;
-    action = match[2]!.startsWith("view/") ? "view" : match[2] as RunnerAction;
-    if (rpc.method !== (action === "view" ? "GET" : "POST")) throw new Error("Relay method is not allowed");
-    if (action === "restore") {
-      const input = decodeJson(encoder.encode(rpc.body)) as { binding?: RunnerBinding };
-      if (input.binding?.session?.id !== sessionId || input.binding.session.connectorId !== connectorId
-        || input.binding.model?.connectorId !== connectorId || input.binding.owner?.id !== rpc.ticket?.ownerId
-        || input.binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign restore binding");
-    }
-  }
-  const ticket = rpc.ticket;
-  if (ticket.connectorId !== connectorId
-    || (rpc.method === "GET" && rpc.body !== "")
-    || (["create", "restore", "restart", "fork", "pack", "unpack"].includes(action) && ticket.actorId !== ticket.ownerId)) throw new Error("Invalid relay ticket");
-  const authorization = await signToken(ticket, verifierSecret);
-  await verifyRunnerTicket(authorization, verifierSecret, action, sessionId, rpc.body);
-  return { rpc, authorization };
-}
+export { validateRelayRequest };
 
 export type { ConnectorSocket };
 
@@ -242,13 +199,12 @@ export class LocalConnector {
   private readonly readiness = Promise.withResolvers<void>();
   private readonly lifetime = new AbortController();
   private readonly secret = Buffer.from(randomBytes(48)).toString("base64url");
-  private readonly seen = new Map<string, number>();
   private generation?: Generation;
   private welcomed?: Generation;
   private online = Promise.withResolvers<Generation>();
   private runtime?: Runtime;
   private restarting = false;
-  private readonly executing = new Set<Promise<void>>();
+  private readonly frames: RelayFrames;
   private readonly calls: ControlPlaneCalls;
   private readonly hostConfig = new HostConfigSource(async () => (await this.calls.callback(await this.connection(), "/api/connectors/self/config", {}, HOST_CONFIG_LIMIT) as { config?: unknown } | undefined)?.config);
   private lastReason?: string;
@@ -269,6 +225,9 @@ export class LocalConnector {
     this.ready = this.readiness.promise;
     this.calls = new ControlPlaneCalls({ credentials: () => this.state!, settings: options, lifetime: this.lifetime.signal,
       requireGeneration: generation => this.requireGeneration(generation), connection: () => this.connection() });
+    this.frames = new RelayFrames({ secret: this.secret, state: () => this.state, restarting: () => this.restarting, runtime: () => this.runtime?.value,
+      welcomed: () => this.welcomed, calls: this.calls, disconnect: (generation, reason) => this.disconnect(generation, reason),
+      requireGeneration: generation => this.requireGeneration(generation) });
     const gpu = options.unsandboxed ? undefined : options.gpu === undefined ? detectGpu() : options.gpu;
     if (gpu) this.gpu = gpu;
     void this.ready.catch(() => {});
@@ -399,7 +358,7 @@ export class LocalConnector {
         generation.welcome.resolve(welcome.data.connectionToken);
         return;
       }
-      this.dispatch(generation, value, encoder.encode(data).length);
+      this.frames.dispatch(generation, value, encoder.encode(data).length);
     });
     try {
       await generation.welcome.promise;
@@ -501,7 +460,7 @@ export class LocalConnector {
     const runtime = this.runtime;
     if (!runtime) return;
     this.runtime = undefined;
-    await Promise.allSettled([...this.executing]);
+    await this.frames.settled();
     try { await runtime.value.close(); }
     catch {
       this.lifetime.abort();
@@ -543,145 +502,8 @@ export class LocalConnector {
     if (this.lifetime.signal.aborted || generation.abort.signal.aborted || this.generation !== generation || !generation.connectionToken) throw new Error("Connector generation is no longer authorized");
   }
 
-  private dispatch(generation: Generation, value: unknown, frameSize: number): void {
-    if (generation.active.size >= connectorLimits.pendingRequests) return this.disconnect(generation, "Relay exceeded the pending request limit");
-    if (generation.incomingBytes + frameSize > connectorLimits.bufferedBytes) return this.disconnect(generation, "Relay exceeded the queued request byte limit");
-    const parsed = requestSchema.safeParse(value);
-    if (!parsed.success) return this.disconnect(generation, "Invalid relay request");
-    const rpc = parsed.data;
-    const now = Date.now();
-    for (const [key, expiry] of this.seen) if (expiry <= now) this.seen.delete(key);
-    const keys = [`request:${rpc.id}`, `ticket:${rpc.ticket.jti}`];
-    if (keys.some(key => this.seen.has(key)) || this.seen.size > 8192) return this.disconnect(generation, "Replayed relay request");
-    const replayExpiry = Math.min((rpc.ticket.exp + 5) * 1000, now + 70_000);
-    for (const key of keys) this.seen.set(key, replayExpiry);
-    generation.incomingBytes += frameSize;
-    const previous = generation.tail;
-    const task = this.execute(generation, rpc, previous).catch((error: unknown) => {
-      const message = error instanceof Error && /^[A-Za-z][A-Za-z ]{0,119}$/.test(error.message) ? error.message : "";
-      this.disconnect(generation, message ? `Relay request failed: ${message}` : "Relay request failed");
-    }).finally(() => {
-      generation.active.delete(task);
-      generation.incomingBytes -= frameSize;
-    });
-    generation.tail = Promise.all([previous, task]).then(() => {});
-    generation.active.add(task);
-  }
-
-  private async execute(generation: Generation, value: ConnectorRpcRequest, previous: Promise<void>): Promise<void> {
-    const { rpc, authorization } = await validateRelayRequest(value, this.state!.connectorId, this.secret);
-    this.requireGeneration(generation);
-    if (this.restarting) return this.send(generation, this.restartingFrame(rpc));
-    const interrupt = Promise.withResolvers<"restarting">();
-    generation.waiting.add(interrupt);
-    let woke: "ready" | "restarting";
-    try {
-      woke = await Promise.race([Promise.all([previous, generation.runtimeReady.promise]).then(() => "ready" as const), interrupt.promise]);
-    } finally {
-      generation.waiting.delete(interrupt);
-    }
-    this.requireGeneration(generation);
-    if (woke === "restarting") return this.send(generation, this.restartingFrame(rpc));
-    await this.send(generation, await this.answer(generation, rpc, authorization));
-  }
-
-  private async send(generation: Generation, { payload, payloadSize }: { payload: string; payloadSize: number }): Promise<void> {
-    const drained = Date.now() + DRAIN_TIMEOUT;
-    while (generation.socket.bufferedAmount + payloadSize > connectorLimits.bufferedBytes) {
-      if (Date.now() >= drained) return this.disconnect(generation, "Socket output did not drain within 30s");
-      await delay(10, undefined, { signal: generation.abort.signal });
-      this.requireGeneration(generation);
-    }
-    generation.socket.send(payload);
-  }
-
-  private async answer(generation: Generation, rpc: ConnectorRpcRequest, authorization: string): Promise<{ payload: string; payloadSize: number }> {
-    if (rpc.ticket.exp * 1000 <= Date.now()) return this.errorFrame(rpc, 504, "The request waited too long on the host; inspect the session before retrying.");
-    const work = this.reply(generation, rpc, authorization);
-    const executing = work.then(() => {}, () => {});
-    this.executing.add(executing);
-    void executing.finally(() => this.executing.delete(executing));
-    let timer: NodeJS.Timeout | undefined;
-    const expired = new Promise<{ payload: string; payloadSize: number }>(resolve => {
-      timer = setTimeout(() => resolve(this.errorFrame(rpc, 504, "The host did not answer in time; inspect the session before retrying.")), connectorRequestTimeoutMs(rpc.ticket.action));
-    });
-    try { return await Promise.race([work, expired]); }
-    finally { clearTimeout(timer); }
-  }
-
-  private restartingFrame(rpc: ConnectorRpcRequest): { payload: string; payloadSize: number } {
-    return this.errorFrame(rpc, 503, "The host's runner is restarting; try again shortly.");
-  }
-
-  private errorFrame(rpc: ConnectorRpcRequest, status: number, error: string): { payload: string; payloadSize: number } {
-    const payload = JSON.stringify({
-      type: "response", id: rpc.id, status, body: JSON.stringify({ error, code: "connector_reply_error" }),
-    } satisfies ConnectorRpcResponse);
-    return { payload, payloadSize: Buffer.byteLength(payload, "utf8") };
-  }
-
-  private async reply(generation: Generation, rpc: ConnectorRpcRequest, authorization: string): Promise<{ payload: string; payloadSize: number }> {
-    const frame = (payload: string) => ({ payload, payloadSize: Buffer.byteLength(payload, "utf8") });
-    const failed = (status: number, error: string) => this.errorFrame(rpc, status, error);
-    const runtime = this.runtime;
-    if (!runtime) return failed(503, "The host's runner is restarting; try again.");
-    let result: ConnectorRpcResponse;
-    try {
-      const response = await runtime.value.fetch(new Request(`http://local.invalid${rpc.path}`, {
-        method: rpc.method, headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
-        ...(rpc.method === "POST" ? { body: rpc.body } : {}), signal: generation.abort.signal,
-      }));
-      let bytes: Uint8Array;
-      try { bytes = await boundedBody(response, connectorLimits.responseBytes, generation.abort.signal); }
-      catch (error) {
-        this.requireGeneration(generation);
-        if (error instanceof Error && error.message === "Response exceeds connector limit") return failed(502, "The host's reply is too large to relay.");
-        throw error;
-      }
-      result = { type: "response", id: rpc.id, status: response.status, body: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
-    } catch {
-      this.requireGeneration(generation);
-      return failed(502, "The host could not complete the request.");
-    }
-    this.requireGeneration(generation);
-    const reply = frame(JSON.stringify(result));
-    if (reply.payloadSize > connectorLimits.frameBytes) return failed(502, "The host's reply is too large to relay.");
-    return reply;
-  }
-
-  async direct(input: { grant: string; body: string }): Promise<{ status: number; body: string }> {
-    const refused = (status: number, error: string) => ({ status, body: JSON.stringify({ error, code: "connector_reply_error" }) });
-    const generation = this.welcomed;
-    if (!this.state || !generation || generation.abort.signal.aborted || !generation.connectionToken) return refused(503, "The host is not connected.");
-    if (typeof input?.grant !== "string" || input.grant.length > 16_384 || typeof input.body !== "string"
-      || encoder.encode(input.body).length > connectorLimits.requestBytes) return refused(400, "Invalid upload request.");
-    let verified: { ticket: ConnectorRpcRequest["ticket"]; size: number; path: string };
-    try {
-      const value = await this.calls.callback(generation, "/api/connectors/self/uploads/verify", { grant: input.grant }) as Record<string, unknown> | undefined;
-      const ticket = ticketSchema.parse(value?.ticket);
-      if (ticket.action !== "upload" || ticket.connectorId !== this.state.connectorId || !Number.isSafeInteger(value?.size)
-        || value?.path !== `/v1/sessions/${ticket.sessionId}/upload`) throw new Error("Invalid upload grant");
-      verified = { ticket, size: value.size as number, path: value.path };
-    } catch { return refused(403, "The control plane refused the upload grant."); }
-    let declared: unknown;
-    try { declared = (JSON.parse(input.body) as { size?: unknown } | null)?.size; } catch { declared = undefined; }
-    if (declared !== verified.size) return refused(400, "The upload doesn't match its grant.");
-    const rpc: ConnectorRpcRequest = { type: "request", id: verified.ticket.jti, method: "POST", path: verified.path, body: input.body, ticket: verified.ticket };
-    const now = Date.now();
-    for (const [key, expiry] of this.seen) if (expiry <= now) this.seen.delete(key);
-    const keys = [`request:${rpc.id}`, `ticket:${rpc.ticket.jti}`];
-    if (keys.some(key => this.seen.has(key))) return refused(409, "That upload grant was already used.");
-    for (const key of keys) this.seen.set(key, Math.min((rpc.ticket.exp + 5) * 1000, now + 70_000));
-    let authorization: string;
-    try { ({ authorization } = await validateRelayRequest(rpc, this.state.connectorId, this.secret)); }
-    catch { return refused(400, "Invalid upload request."); }
-    if (this.restarting) return refused(503, "The host's runner is restarting; try again shortly.");
-    try {
-      await generation.runtimeReady.promise;
-      const { payload } = await this.answer(generation, rpc, authorization);
-      const reply = JSON.parse(payload) as ConnectorRpcResponse;
-      return { status: reply.status, body: reply.body };
-    } catch { return refused(503, "The host lost its connection; inspect the session before retrying."); }
+  direct(input: { grant: string; body: string }): Promise<{ status: number; body: string }> {
+    return this.frames.direct(input);
   }
 
   stop(): Promise<void> {
