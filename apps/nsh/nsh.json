@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "build": 1,
   "icon": "icon.png",
+  "schemes": ["pikibun"],
   "capabilities": {
     "network": { "hosts": ["*"] },
     "webview": { "hosts": ["*"] },
