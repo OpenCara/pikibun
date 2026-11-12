@@ -32,7 +32,7 @@ Owners and admins add people with **Members → Add member**, entering the perso
 
 ## Tool groups
 
-A session has the tools of its owner's **tool group**, whoever writes in it and whatever access their messages use. A tool outside the group isn't offered to the agent, and a call to it is refused, on the host and for the actions Pikibun brokers (pushes, GitHub comments, issues and merges, schedules, other sessions, document sources). Changes take effect on a session's next tool call, within half a minute.
+A message in a session runs only the tools both the session owner's **tool group** and its sender's have, whatever access it uses. The owner's group bounds what anyone runs in their sessions, and nobody borrows the owner's tools by writing in their session: a collaborator's message to an admin's workspace-visible session doesn't merge pull requests, and a member with a session role of Collaborator doesn't push to other branches there. The owner's own messages and scheduled prompts run with the owner's group alone. A tool outside it isn't offered to the agent for that message, and a call to it is refused, on the host and for the actions Pikibun brokers (pushes, GitHub comments, issues and merges, schedules, other sessions, document sources). Changes take effect on a session's next tool call, within half a minute.
 
 Each member's sessions get the tools of their role, unless an owner or admin puts them in a group of the workspace's own:
 
@@ -47,7 +47,7 @@ Owners and admins create groups under **Settings → Workspaces →** the worksp
 
 The API is `GET /api/workspaces/:id/tool-groups` (every member), `POST /api/workspaces/:id/tool-groups` with `{"name", "tools"}`, `PATCH` and `DELETE /api/workspaces/:id/tool-groups/:groupId`, and `PUT /api/workspaces/:id/members/:userId/tool-group` with `{"groupId": "…"}` or `{"groupId": null}`.
 
-Tool groups cover Pikibun's own tools. The tools of other extensions are switched for everyone under **Extensions**. A host learns each member's group with the workspace's extensions and keeps the last answer it read, so a failed fetch lifts nothing; until it has read one, its sessions only read their files. A connector from before tool groups doesn't hide the left-out tools from the agent or refuse them in the sandbox (files and commands); Pikibun still refuses the actions it brokers (pushes, GitHub, schedules, other sessions, document sources), so update connectors (`npx pikibun@latest connect`) before relying on groups for sandboxed tools.
+Tool groups cover Pikibun's own tools. The tools of other extensions are switched for everyone under **Extensions**. A host learns each member's group with the workspace's extensions and keeps the last answer it read, so a failed fetch lifts nothing; until it has read one, its sessions only read their files. A connector from before tool groups doesn't hide the left-out tools from the agent or refuse them in the sandbox (files and commands), and one from before senders' groups counted hides and refuses there only what the owner's group leaves out; Pikibun still refuses the actions it brokers (pushes, GitHub, schedules, other sessions, document sources) for both, so update connectors (`npx pikibun@latest connect`) before relying on groups for sandboxed tools.
 
 For collaborators, members and viewers, opening or managing someone else's private session takes an explicit grant from its owner.
 
@@ -71,7 +71,7 @@ The workspace's owner and admins manage every session in it, private ones includ
 - give workspace members session roles up to **Collaborator** and remove anyone's, under **Details → People → Session roles**;
 - **Turn off** its share link.
 
-Everything that acts as the session's owner, or takes their work out of the session, stays theirs. Its tools run as the owner, with their Git accounts, within their tool group, for whoever may send it messages. Only the owner lets content pass between it and sessions other people read, schedules prompts, restarts, backs up, restores, exports or moves the session, and creates or copies its share link. Every change a manager makes is recorded in the session's activity under their own name. Demoting an admin, or removing them, takes all of this away at once.
+Everything that acts as the session's owner, or takes their work out of the session, stays theirs. Its tools run as the owner, with their Git accounts, for whoever may send it messages, but only those both the owner's tool group and the sender's have. Only the owner lets content pass between it and sessions other people read, schedules prompts, restarts, backs up, restores, exports or moves the session, and creates or copies its share link. Every change a manager makes is recorded in the session's activity under their own name. Demoting an admin, or removing them, takes all of this away at once.
 
 ## Invite links and pending members
 

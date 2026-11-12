@@ -37,10 +37,19 @@ export async function memberToolGroups(env: Env, workspaceId: string): Promise<R
   return result;
 }
 
-export async function requireOwnerTool(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>, tool: string): Promise<void> {
-  const retired = retiredGroupTools.includes(tool);
-  if (!isGroupTool(tool) && !retired) return;
-  const group = await memberToolGroup(env, row.workspace_id, row.owner_id);
-  if (retired ? !toolsLeftOut(group.tools).length : group.tools.includes(tool as GroupTool)) return;
-  fail(403, 'tool_not_in_group', `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups.`);
+function groupHas(group: { tools: GroupTool[] }, tool: string): boolean {
+  return retiredGroupTools.includes(tool) ? !toolsLeftOut(group.tools).length : group.tools.includes(tool as GroupTool);
+}
+
+export async function requireSessionTool(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>, actorId: string, tool: string): Promise<void> {
+  if (!isGroupTool(tool) && !retiredGroupTools.includes(tool)) return;
+  const owner = await memberToolGroup(env, row.workspace_id, row.owner_id);
+  if (!groupHas(owner, tool)) {
+    fail(403, 'tool_not_in_group', `${tool} isn't among the tools of this session's owner (${owner.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups.`);
+  }
+  if (actorId === row.owner_id) return;
+  const actor = await memberToolGroup(env, row.workspace_id, actorId);
+  if (!groupHas(actor, tool)) {
+    fail(403, 'tool_not_in_group', `${tool} isn't among the tools of the person who sent this message (${actor.name}): a message runs only the tools both its sender and the session's owner have. Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups.`);
+  }
 }

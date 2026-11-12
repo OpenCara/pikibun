@@ -389,7 +389,7 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
     || admission.expires_at <= Math.floor(Date.now() / 1000)) {
     fail(403, 'schedule_not_admitted', 'Scheduling needs a write message from the session owner sent within the last hour.');
   }
-  await requireToolCall(c.env, row, 'schedule');
+  await requireToolCall(c.env, row, actorId, 'schedule');
   if (action === 'list') {
     const rows = await c.env.DB.query<ScheduleRow>('SELECT * FROM session_schedules WHERE session_id = ? ORDER BY created_at, id').bind(row.id).all();
     return c.json({ schedules: rows.map(scheduleRecord) } satisfies ScheduleToolResult);
