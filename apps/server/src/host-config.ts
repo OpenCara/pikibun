@@ -84,6 +84,8 @@ export function registerHostConfig(app: Hono<AppEnv>): void {
     if (unknown) return fail(400, 'invalid_host_config', `${unknown.source} is not one of Pikibun's extensions.`);
     const sessionTools = change.requiredExtensions?.find(item => pikiExtension(item.source)?.sessionTools !== undefined);
     if (sessionTools) return fail(400, 'invalid_host_config', `${sessionTools.source} offers tools every session has unless its workspace turns them off; a host can't require it.`);
+    const controlPlane = change.requiredExtensions?.find(item => pikiExtension(item.source)?.controlPlane === true);
+    if (controlPlane) return fail(400, 'invalid_host_config', `${controlPlane.source} runs in Pikibun itself, when a session starts, not on hosts; a host can't require it.`);
     const current = await connectorHostConfig(c.env, row.id);
     let settings = Object.keys(change) as (keyof HostConfig)[];
     if (row.role !== 'owner') {

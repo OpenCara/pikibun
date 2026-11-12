@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
+import { isControlPlaneExtension, pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
@@ -40,7 +40,8 @@ export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExten
   const has = new Set((installed ?? []).map(item => item.source));
   const knowsPiki = [...has].some(isPikiExtensionSource);
   if (options.toolDefinitions && knowsPiki) for (const definition of toolDefinitions) for (const extension of definition.extensions) has.add(extension);
-  const shown = extensions.filter(item => !isPikiExtensionSource(item.source) || (knowsPiki && (!sessionToolSources.includes(item.source) || has.has(item.source))));
+  const shown = extensions.filter(item => !isPikiExtensionSource(item.source)
+    || (knowsPiki && !isControlPlaneExtension(item.source) && (!sessionToolSources.includes(item.source) || has.has(item.source))));
   return knowsPiki ? withReplacedSwitches(shown, extensions, has) : shown;
 }
 
@@ -182,7 +183,8 @@ export function registerExtensions(app: Hono<AppEnv>): void {
       requests: requests.map(item => ({ id: item.id, action: item.action, source: item.source, status: item.status, ...(item.error ? { error: item.error } : {}),
         requestedAt: item.requested_at, ...(item.finished_at ? { finishedAt: item.finished_at } : {}) })),
       workspaces: await Promise.all(workspaces.map(async workspace => {
-        const extensions = (await workspaceExtensions(c.env, workspace.id)).filter(item => item.enabled && !sessionToolSources.includes(item.source));
+        const extensions = (await workspaceExtensions(c.env, workspace.id))
+          .filter(item => item.enabled && !sessionToolSources.includes(item.source) && !isControlPlaneExtension(item.source));
         return { id: workspace.id, name: workspace.name, shared: Number(workspace.shared) === 1,
           extensions: extensions.map(item => ({ source: item.source, availability: extensionAvailability(item.source, installed) })) };
       })),
