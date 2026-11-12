@@ -4,51 +4,41 @@ import { constants } from "node:fs";
 import { lstat, open, readFile, rm } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, StringEnum, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
 import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
-import { createRegistry, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
+import { createRegistry, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
-import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, scheduleRunIns, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
-import { crossSessionLimits, sessionsToolActions, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
+import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
+import { EXTENSION_ARGUMENTS_SHOWN, accessModes, thinkingLevels } from "../../../packages/shared/src/types.js";
+import type { SessionsToolRequest, SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import type { ModelFailureCause } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
-import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
+import { bindingRemote } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
-import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
-import { boundOutput, MODEL_OUTPUT, SAVED_OUTPUT_BYTES, SavedOutputs, scriptOutput, toolOutputPath } from "./tool-output.js";
+import { SessionBuiltins } from "./extensions/builtin.js";
+import { toolOutputPath } from "./tool-output.js";
 import { inScriptCall, wholeForScripts } from "./script-output.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson } from "./protocol.js";
-import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
-import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { brokeredArguments, programCommand, programRequest, rememberToolDefinitions, type ProgramRequest } from "./defined-tools.js";
 import { bundledToolDefinitions, type ProgramToolDefinition, type ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
-import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
+import { pythonPrograms } from "./python-command.js";
 import { sandboxMissingPrograms } from "./program-availability.js";
 import { programInstallStep } from "../../../packages/shared/src/program-install.js";
-import { browserRequest, browserShellCommand, servePrograms } from "./browser-command.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
-import { browserActions, browserKeys, browserLimits, browserUnavailableReason, browserUnavailableText, parseBrowserReport, type BrowserRequest,
-  type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
-import { tunnelActions, tunnelUnavailableReason, tunnelUnavailableText, type HostTunnelStatus, type SessionTunnelReport,
-  type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
-import { tunnelAccesses, tunnelRequest, type TunnelRequest } from "./tunnel-command.js";
+import { browserUnavailableReason, type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
+import { tunnelUnavailableReason, type HostTunnelStatus, type SessionTunnelReport, type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
 import { SessionTunnel } from "./session/tunnel.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { programLimits } from "./program-command.js";
-import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
-import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
-import { lineRange } from "./edits.js";
 import { documentKindsOff, extensionSwitchOn, sessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { unknownToolGroup, type MemberToolGroup } from "../../../packages/shared/src/tool-groups.js";
 import { runnerModels } from "./provider.js";
@@ -69,28 +59,31 @@ import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
 import { RunnerState, type Branch, type Metadata, type Run } from "./session/state.js";
-import { githubRepository, SessionOperations, type OperationConsent } from "./session/operations.js";
+import { SessionOperations, type OperationConsent } from "./session/operations.js";
+import { ToolCalls } from "./session/tools/calls.js";
+import type { ToolContext } from "./session/tools/context.js";
+import { buildTools } from "./session/tools/index.js";
+import { callTimeoutParameter } from "./session/tools/programs.js";
 import {
-  Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
+  Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
-import { prepareImage, thumbnailImage } from "./images.js";
+import { thumbnailImage } from "./images.js";
 import type { GitRemote } from "./git-remote.js";
 import type { RepositoryCache } from "./repo-cache.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
-import { applyEdits } from "./edits.js";
 import { compactionFailure, compactionThreshold, configuredCompaction, hostCompaction } from "./compaction.js";
 import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "./model-failure.js";
 import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
 import type { StoredApproval } from "./approval-view.js";
-import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
+import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
 import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import type { DocumentKind, GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
-import { CALL_TIMEOUT_MAX_SECONDS, callLimits, callTimeout, commandLimits, type CommandLimits } from "./host-config.js";
+import { callTimeout, commandLimits } from "./host-config.js";
 
 export type { Run } from "./session/state.js";
 export type ForkedEntry = { kind: string; model: readonly Message[] };
@@ -115,20 +108,6 @@ interface RunnerBackup {
 }
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
 const readOnlyTools = ["identity", "read_file", "list_files", "search"];
-const WAIT_POLL_MS = 3000;
-const callTimeoutParameter = () => opt(int({ minimum: 1, maximum: CALL_TIMEOUT_MAX_SECONDS,
-  description: "End it after this many seconds, sooner than the host's command time limit (never later)" }));
-const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
-  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
-  + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells); with message_id, also the outcome of a message this session sent it (status, done, reply). "
-  + "ask {session, message, notify?}: a read-only side question to that session's agent. "
-  + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access read: inspect only; left out, it acts as that session's tools allow); refused while it is busy. "
-  + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
-  + "create {message?, title?, model?, thinking?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
-  + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
-  + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
-  + "chains of messages stop after 3 hops and never loop back to a session they came from. "
-  + "Involve other sessions only when the user asked for it or clearly expects it.";
 function tellsActivity(run: Run): boolean {
   return !run.reverted && !run.withdrawn;
 }
@@ -213,7 +192,8 @@ export class RunnerSession {
   readonly #inputs: MessageInputs;
   readonly #uploads: SessionUploads;
   readonly #mirrors: SessionMirrors | undefined;
-  readonly #savedOutputs = new SavedOutputs();
+  readonly #calls: ToolCalls;
+  readonly #toolContext: ToolContext;
   readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" }; script: boolean }>();
   #hostExtensions?: SessionExtensions;
   #currentModel?: { provider: string; modelId: string; thinkingLevel?: string };
@@ -297,12 +277,21 @@ export class RunnerSession {
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
+    this.#calls = new ToolCalls({ ownerId: binding.owner.id, sandbox: this.sandbox, hostCommands: this.hostCommands,
+      authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig() });
     this.#operations = new SessionOperations({
       binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, waits: this.#waits,
       requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
-      metadata: () => this.metadata(), mutate: change => this.mutate(change), commandOptions: timeoutSeconds => this.commandOptions(timeoutSeconds),
+      metadata: () => this.metadata(), mutate: change => this.mutate(change), commandOptions: timeoutSeconds => this.#calls.commandOptions(timeoutSeconds),
       testShell: () => this.testShell(), controlPlane: <T>(path: string, body: unknown) => this.controlPlane<T>(path, body),
     });
+    this.#toolContext = {
+      binding, config, sandbox: this.sandbox, onHost: this.#onHost, calls: this.#calls, hostCommands: this.hostCommands, waits: this.#waits, operations: this.#operations,
+      requireSessionTool: tool => this.requireSessionTool(tool), metadata: () => this.metadata(), mutate: change => this.mutate(change),
+      authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
+      programMissing: (tool, program) => this.programMissing(tool, program), browserUnavailable: () => this.browserUnavailable(),
+      tunnelUnavailable: () => this.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
+    };
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
       workspace: () => isolatedWorkspace(this.sandbox), authorize: async () => { await this.authorize(this.binding.owner.id, "write"); },
@@ -501,7 +490,7 @@ export class RunnerSession {
     registry.install(extension);
     this.#registry = registry;
     if (!this.#packed) {
-      this.#builtins = new SessionBuiltins({ outputs: api => this.outputFiles(api) });
+      this.#builtins = new SessionBuiltins({ outputs: api => this.#calls.outputFiles(api) });
       for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
     }
     if (this.config.extensions && !this.#packed) {
@@ -990,22 +979,6 @@ export class RunnerSession {
     return selected;
   }
 
-  private async outputFiles(api: ToolExecutionApi): Promise<OutputFiles | undefined> {
-    const attribution = await this.toolActor(api, true);
-    const state = await this.metadata();
-    const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-    if (run.options?.access === "read") return undefined;
-    return { writeFile: (path, content) => this.saveOutput(path, content, async () => { await this.recheckTool(attribution); }) };
-  }
-
-  private async saveOutput(path: string, content: string, authorize: SandboxAuthorize): Promise<void> {
-    await this.sandbox.writeFile(path, content, authorize);
-    await this.#savedOutputs.saved(path, {
-      list: directory => this.sandbox.listFiles(directory, authorize),
-      remove: async entry => { await this.sandbox.fileOperation({ kind: "delete", path: entry, recursive: true }, authorize); },
-    }).catch(() => {});
-  }
-
   private extensionHost(): ExtensionHost {
     return {
       directory: this.sandbox.hostWorktree,
@@ -1042,24 +1015,8 @@ export class RunnerSession {
     const call = this.#pikiCalls.get(callId);
     if (!call) throw new RunnerError(403, "its call no longer runs");
     const path = toolOutputPath(tool, callId);
-    await this.saveOutput(path, output, async () => { await this.recheckTool(call.attribution); });
+    await this.#calls.saveOutput(path, output, async () => { await this.#calls.recheck(call.attribution); });
     return path;
-  }
-
-  private async shownApproval(approval: StoredApproval, api: ToolExecutionApi, tool: string): Promise<Record<string, unknown>> {
-    const shown = { ...approval, admissionId: undefined, callId: undefined };
-    const result = approval.result;
-    if (typeof result !== "string") return shown;
-    if (inScriptCall()) {
-      return { ...shown, result: scriptOutput(result, candidate => Buffer.byteLength(JSON.stringify({ ...shown, result: candidate })) <= SAVED_OUTPUT_BYTES) };
-    }
-    const files = await this.outputFiles(api).catch(() => undefined);
-    return { ...shown, result: await boundOutput(result, {
-      ...(files
-        ? { save: async (whole: string) => { const path = toolOutputPath(tool, String(api.callId)); await files.writeFile(path, whole); return path; } }
-        : { unsaved: "a Read-only message doesn't write to the worktree" }),
-      fits: candidate => Buffer.byteLength(JSON.stringify({ ...shown, result: candidate })) <= MODEL_OUTPUT.bytes,
-    }) };
   }
 
   private async runPikiCommand(run: PikiSandboxRun): Promise<CliRun> {
@@ -1070,8 +1027,8 @@ export class RunnerSession {
       const env = { ...run.env };
       if (lease) for (const name of run.tokenEnv) env[name] = lease.token;
       const command = sandboxShellCommand(run.command, run.args, env, run.directory);
-      const output = await this.sandbox.execute({ kind: "bash", command }, run.readOnly, () => this.recheckTool(call.attribution), {
-        unbounded: true, ...await this.commandOptions(), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
+      const output = await this.sandbox.execute({ kind: "bash", command }, run.readOnly, () => this.#calls.recheck(call.attribution), {
+        unbounded: true, ...await this.#calls.commandOptions(), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
       return { exitCode: 0, signal: null, output };
     } catch (error) {
       if (!(error instanceof SandboxProcessError)) throw error;
@@ -1083,7 +1040,7 @@ export class RunnerSession {
   }
 
   private async runExtensionTool(call: Parameters<ExtensionHost["runTool"]>[0], execute: Parameters<ExtensionHost["runTool"]>[1]): Promise<ToolExecutionResult> {
-    const attribution = await this.toolActor(call.api, true);
+    const attribution = await this.#calls.actor(call.api, true);
     const state = await this.metadata();
     const run = state.runs[state.toolActors[String(call.api.taskId)]!.runKey]!;
     if (run.options?.access === "read") {
@@ -1101,7 +1058,7 @@ export class RunnerSession {
     const approval = await this.runOperation(attribution.initiatedBy, operation, String(call.api.taskId), { hostChecked: true });
     if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
     const id = approval.id;
-    await this.recheckTool(attribution);
+    await this.#calls.recheck(attribution);
     const limits = commandLimits((await this.hostConfig()).commandTimeoutSeconds);
     const callId = String(call.api.callId);
     this.#pikiCalls.set(callId, { write: trusted, attribution, script: inScriptCall() });
@@ -1414,40 +1371,6 @@ export class RunnerSession {
     this.drainQueue();
   }
 
-  private async toolActor(api: ToolExecutionApi, write: boolean) {
-    const doc = await api.snapshot(RunnerState, context);
-    const state: Metadata = JSON.parse(doc!.json);
-    const saved = state.toolActors[String(api.taskId)];
-    const run = saved ? state.runs[saved.runKey] : Object.values(state.runs).find(candidate => candidate.conversationId === api.conversationId && (candidate.status === "running" || candidate.status === "admitting"));
-    if (!run || !["admitting", "running"].includes(run.status) || run.ownerId !== this.binding.owner.id || (write && run.mode !== "write")) throw new RunnerError(403, "Tool has no authorized writable submission");
-    await this.authorize(run.initiatedBy, run.mode === "ask" ? "ask" : "write");
-    await api.commit(async tx => {
-      const current = await tx.doc(RunnerState);
-      const meta: Metadata = JSON.parse(current.json);
-      meta.toolActors[String(api.taskId)] ??= { initiatedBy: run.initiatedBy, ownerId: run.ownerId, runKey: run.key, callId: api.callId };
-      current.json = JSON.stringify(meta);
-    }, context);
-    return { initiatedBy: run.initiatedBy, actingAs: run.ownerId, mode: run.mode };
-  }
-
-  private async recheckTool(attribution: { initiatedBy: string; mode: "write" | "ask" }): Promise<void> {
-    await this.authorize(attribution.initiatedBy, attribution.mode === "ask" ? "ask" : "write");
-  }
-
-  private async browserOutcome(approval: ApprovalRecord, recheck: () => Promise<void>, approvalText: (approval: StoredApproval) => ToolExecutionResult): Promise<ToolExecutionResult> {
-    const report = approval.status === "executed" && approval.result ? parseBrowserReport(approval.result.trim()) : undefined;
-    if (!report) return approvalText(approval as StoredApproval);
-    const output: ToolExecutionResult["output"] = [{ type: "text", text: JSON.stringify({ ...approval, result: undefined, admissionId: undefined, callId: undefined, report }) }];
-    if (report.screenshot) {
-      try {
-        const file = await this.sandbox.readContent(report.screenshot, recheck);
-        const prepared = "image" in file ? await prepareImage(file.image, file.mimeType) : undefined;
-        if (prepared && "image" in prepared) output.push({ type: "image", data: prepared.image.data, mimeType: prepared.image.mimeType });
-      } catch { }
-    }
-    return { output };
-  }
-
   private testShell(): boolean {
     return this.binding.model.provider === "faux" && this.config.allowFaux === true && this.config.allowTestShell === true;
   }
@@ -1458,381 +1381,8 @@ export class RunnerSession {
     return config;
   }
 
-  private async commandOptions(timeoutSeconds?: number): Promise<{ limits: CommandLimits; gpu: boolean }> {
-    const config = await this.hostConfig();
-    return { limits: callLimits(commandLimits(config.commandTimeoutSeconds), timeoutSeconds), gpu: config.gpu };
-  }
-
-  private async checkCall(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean } = {}): Promise<{ unbounded: boolean }> {
-    const state = await this.metadata();
-    const actor = state.toolActors[String(api.taskId)];
-    const run = actor && state.runs[actor.runKey];
-    if (!run) throw new RunnerError(403, "Tool has no authorized writable submission");
-    if (effect.write && run.options?.access === "read") {
-      throw new RunnerError(403, `${tool} changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.`);
-    }
-    return { unbounded: effect.shell === true && !this.hostCommands.shellAllowed() };
-  }
-
   private buildTools(): ToolRegistration[] {
-    const tools = this.sessionTools();
-    return (this.#clone && this.#egress ? [...tools, this.clonePushTool()] : tools).map(wholeForScripts);
-  }
-
-  private clonePushTool(): ToolRegistration {
-    const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. pull_request.draft true opens it as a draft; false opens it ready for review, or marks the branch's open draft ready for review with this title and body. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first.", parameters: obj({
-      directory: str(), branch: str(), tag: opt(str()),
-      pull_request: opt(obj({ title: str(), body: str(), base: opt(str()), draft: opt(bool()) }, { open: true })),
-    }, { open: true }), execute: async (args, api, _call) => {
-      await this.requireSessionTool("git_push");
-      const attribution = await this.toolActor(api, true);
-      await this.checkCall(api, "git_push", { write: true });
-      if (!validCloneDirectory(args.directory)) throw new RunnerError(400, "directory must be a clone's path in the worktree, such as app or src/app");
-      if (args.tag !== undefined && !validPushTag(args.tag)) throw new RunnerError(400, "tag must be a plain tag name, such as v1.2.3, not refs/tags/v1.2.3");
-      if (args.tag !== undefined && args.pull_request) throw new RunnerError(400, "a tag push opens no pull request");
-      const head = await isolatedWorkspace(this.sandbox).cloneHead(args.directory, () => this.recheckTool(attribution));
-      if (!head.origin) throw new RunnerError(400, `${args.directory} has no origin remote; push only clones of this workspace's repositories`);
-      const repository = repositoryForRemote((await this.#egress!.grant()).repositories, head.origin);
-      if (!repository) throw new RunnerError(403, `${args.directory} was cloned from ${head.origin.slice(0, 200)}, which is not one of this workspace's repositories`);
-      const request = args.pull_request;
-      const operation: GitPushOperation = { kind: "git.push", repository: repositoryPath(repository), directory: args.directory, branch: args.branch,
-        ...(args.tag !== undefined ? { tag: args.tag } : {}), commit: head.commit,
-        ...(request ? { pullRequest: { title: request.title, body: request.body, ...(request.base !== undefined ? { base: request.base } : {}),
-          ...(request.draft !== undefined ? { draft: request.draft } : {}) } } : {}) };
-      const approval = await this.runOperation(attribution.initiatedBy, operation, String(api.taskId));
-      return text({ ...approval, admissionId: undefined });
-    } });
-  }
-
-  private sessionTools(): ToolRegistration[] {
-    const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    const approvalText = (approval: StoredApproval) => text({ ...approval, admissionId: undefined, callId: undefined });
-    const commandText = async (approval: StoredApproval, api: ToolExecutionApi, tool: string) => text(await this.shownApproval(approval, api, tool));
-    return [
-      defineTool({ name: "identity", description: "Return immutable session owner identity and sanitized session environment, not collaborator credentials.", parameters: obj({}, { open: true }), execute: async (_args, api, _call) => {
-        const attribution = await this.toolActor(api, false);
-        await this.checkCall(api, "identity");
-        const config = await this.hostConfig();
-        const commands = { timeoutSeconds: commandLimits(config.commandTimeoutSeconds).seconds, gpu: config.gpu && !this.#onHost,
-          ...(this.#onHost ? { onHost: true } : {}) };
-        return text({ ...await this.sandbox.identity(() => this.recheckTool(attribution)), commands, ...attribution });
-      } }),
-      defineTool({ name: "read_file", description: "Read a confined worktree file. PNG, JPEG, GIF and WebP images are returned as images, scaled to fit. For a text file, offset (the first line, from 1) and limit (how many lines) read only part of it, and the result says which lines of how many it holds: use search to find where to look, then read around it.",
-        parameters: obj({ path: str(), offset: opt(int({ minimum: 1 })), limit: opt(int({ minimum: 1 })) }, { open: true }), execute: async (args, api, _call) => {
-        const attribution = await this.toolActor(api, false);
-        await this.checkCall(api, "read_file");
-        const file = await this.sandbox.readContent(args.path, () => this.recheckTool(attribution));
-        if ("text" in file && (args.offset !== undefined || args.limit !== undefined)) return text({ ...attribution, ...lineRange(file.text, args.offset, args.limit) });
-        if ("text" in file) return text({ ...attribution, content: file.text });
-        const prepared = await prepareImage(file.image, file.mimeType);
-        if ("error" in prepared) return { output: [], isError: true, diagnostics: [{ severity: "error" as const, code: "image", message: prepared.error }] };
-        const { image } = prepared;
-        return { output: [
-          { type: "text" as const, text: JSON.stringify({ ...attribution, path: args.path, mimeType: image.mimeType, width: image.width, height: image.height }) },
-          { type: "image" as const, data: image.data, mimeType: image.mimeType },
-        ] };
-      } }),
-      defineTool({ name: "list_files", description: "List confined worktree files.", parameters: obj({ path: opt(str()) }, { open: true }), execute: async (args, api, _call) => {
-        const attribution = await this.toolActor(api, false);
-        await this.checkCall(api, "list_files");
-        return text({ ...attribution, files: await this.sandbox.listFiles(args.path, () => this.recheckTool(attribution)) });
-      } }),
-      defineTool({ name: "search", description: "Search the worktree's text files for a regular expression (or, with literal, exact text), line by line, as grep -rn does, without a shell or approval. path narrows it to a directory or one file; glob to file names (*.ts) or paths (apps/**/*.ts); context adds up to 5 lines around each match; ignore_case; max_results (100 by default, at most 500). It skips .git directories as it walks, and node_modules unless all is true; links, binary and non-UTF-8 files and files over 1 MB are skipped. Results give each match's path, line number and text; truncated says it stopped early. Then read_file with offset and limit reads around a match.",
-        parameters: obj({ pattern: str(), path: opt(str()), glob: opt(str()), literal: opt(bool()),
-          ignore_case: opt(bool()), context: opt(int({ minimum: 0, maximum: searchLimits.context })),
-          max_results: opt(int({ minimum: 1, maximum: searchLimits.maxResults })), all: opt(bool()) }, { open: true }),
-        execute: async (args, api, _call) => {
-          let request: SearchRequest;
-          try { request = searchRequest(args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid search"); }
-          const attribution = await this.toolActor(api, false);
-          await this.checkCall(api, "search");
-          return text({ ...attribution, ...await this.sandbox.search(request, () => this.recheckTool(attribution)) });
-        } }),
-      defineTool({ name: "write_file", description: "Write a confined worktree file. In a read-only request it waits for the session owner to allow it.", executionMode: "sequential", parameters: obj({ path: str(), content: str() }, { open: true }), execute: async (args, api, _call) => {
-        const attribution = await this.toolActor(api, true);
-        await this.checkCall(api, "write_file", { write: true });
-        await this.sandbox.writeFile(args.path, args.content, () => this.recheckTool(attribution));
-        return text({ ...attribution, written: args.path });
-      } }),
-      defineTool({ name: "edit_file", executionMode: "sequential",
-        description: "Edit a confined worktree text file by exact replacement, without rewriting it. Each edits[].oldText must occur exactly once in the file, including whitespace and line breaks; edits are matched against the file as it was, must not overlap, and apply together. In a read-only request it waits for the session owner to allow it.",
-        parameters: obj({ path: str(), edits: arr(obj({ oldText: str(), newText: str() }, { open: true }), { minItems: 1 }) }, { open: true }),
-        execute: async (args, api, _call) => {
-          const attribution = await this.toolActor(api, true);
-          await this.checkCall(api, "edit_file", { write: true });
-          const recheck = () => this.recheckTool(attribution);
-          await this.sandbox.writeFile(args.path, applyEdits(await this.sandbox.readFile(args.path, recheck), args.edits, args.path), recheck);
-          return text({ ...attribution, edited: args.path, edits: args.edits.length });
-        } }),
-      ...(["move_file", "copy_file"] as const).map(name => defineTool({ name, executionMode: "sequential",
-        description: name === "move_file"
-          ? "Move or rename a file, directory or link in the worktree, without a shell or approval (like write_file): from and to are worktree paths. A link is moved itself, never what it points to. The destination must not exist, its directories are made, and a directory can't go inside itself; nothing in .git is moved. In a read-only request it waits for the session owner to allow it."
-          : `Copy a file, or a directory with everything in it, in the worktree, without a shell or approval (like write_file): from and to are worktree paths. Links are copied as links. The destination must not exist and its directories are made; at most ${fileOperationLimits.entries} entries and ${fileOperationLimits.bytes / 1024 / 1024} MB of files, never a repository's .git (clone it again instead). In a read-only request it waits for the session owner to allow it.`,
-        parameters: obj({ from: str(), to: str() }, { open: true }),
-        execute: async (args, api, _call) => {
-          let request: FileOperationRequest;
-          try { request = fileOperationRequest(name === "move_file" ? "move" : "copy", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
-          const attribution = await this.toolActor(api, true);
-          await this.checkCall(api, name, { write: true });
-          const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
-          return text({ ...attribution, ...(name === "move_file" ? { moved: args.from, to: args.to } : { copied: args.from, to: args.to, ...result }) });
-        } })),
-      defineTool({ name: "delete_file", executionMode: "sequential",
-        description: "Delete a file, link or directory in the worktree, without a shell or approval (like write_file). A link is deleted itself, never what it points to. A directory with anything in it is deleted only with recursive: true, everything in it included. Never .git or the worktree itself. In a read-only request it waits for the session owner to allow it.",
-        parameters: obj({ path: str(), recursive: opt(bool()) }, { open: true }),
-        execute: async (args, api, _call) => {
-          let request: FileOperationRequest;
-          try { request = fileOperationRequest("delete", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
-          const attribution = await this.toolActor(api, true);
-          await this.checkCall(api, "delete_file", { write: true });
-          const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
-          return text({ ...attribution, deleted: args.path, entries: result.entries });
-        } }),
-      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It stops at the host's command time limit, or sooner at timeout_seconds.`,
-        executionMode: "sequential",
-        parameters: obj({ args: arr(str(), { minItems: 1, maxItems: gitLimits.arguments }), directory: opt(str()), timeout_seconds: callTimeoutParameter() }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool("git");
-          let request: GitRequest;
-          let command: string;
-          let timeoutSeconds: number | undefined;
-          try { request = gitRequest(args); command = gitShellCommand(request); timeoutSeconds = callTimeout(args.timeout_seconds); }
-          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid git call"}. Nothing ran.`); }
-          const attribution = await this.toolActor(api, true);
-          await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.checkCall(api, "git", { write: true, shell: true });
-          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "git");
-        } }),
-      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It stops at the host's command time limit, or sooner at timeout_seconds: give one to a run that could wait forever, such as a test suite or a server it starts. Make Unix sockets in /tmp (TMPDIR): the worktree's path leaves too little of a socket path's 107 bytes.`,
-        executionMode: "sequential",
-        parameters: obj({ program: StringEnum(pythonPrograms), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
-          venv: opt(str()), timeout_seconds: callTimeoutParameter() }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool("python");
-          let request: PythonRequest;
-          let command: string;
-          let timeoutSeconds: number | undefined;
-          try { request = pythonRequest(args); command = pythonShellCommand(request); timeoutSeconds = callTimeout(args.timeout_seconds); }
-          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid python call"}. Nothing ran.`); }
-          const missing = request.venv ? undefined : this.programMissing({ programs: pythonPrograms, path: "/usr/local/bin" }, request.program);
-          if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
-          const attribution = await this.toolActor(api, true);
-          await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.checkCall(api, "python", { write: true, shell: true });
-          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "python");
-        } })]),
-      defineTool({ name: "browser", description: "Drive a headless Chromium in the session's sandbox. It opens url (http, https, file, or about:blank; "
-        + "without one, the page the last call left), runs actions in order, and answers with the page as it ends: a screenshot, its URL, title, "
-        + "HTTP status, visible text, interactive elements each with a CSS selector, console messages, page errors and failed requests. Actions: "
-        + "goto {url}; click or hover {selector, or x and y}; type {text, selector?, submit?, clear?}; press {key}; select {selector, value}; "
-        + "scroll {selector, or x and y}; wait {selector, text or ms}; evaluate {expression} (JavaScript in the page; its value comes back); "
-        + "screenshot {full_page?}; back; forward; reload. A selector is CSS, or text=<visible text>. A failed action stops the rest. "
-        + "Each call starts the browser afresh with the session's own profile: cookies and storage persist, open pages and their state don't, "
-        + "so do a whole flow in one call. Its network is the sandbox's: other hosts through the session's proxy, as the workspace allows, and "
-        + "localhost only within the call, so start the web app under test with serve {program, args, directory?, venv?, port}: one of the node and "
-        + `python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, which runs from before `
-        + "the page opens until the call ends. Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
-        + "It stops at the host's command time limit.",
-        executionMode: "sequential",
-        parameters: obj({
-          url: opt(str()),
-          actions: opt(arr(obj({
-            action: StringEnum(browserActions),
-            selector: opt(str()), url: opt(str()), text: opt(str()),
-            key: opt(str({ description: `${browserKeys.join(", ")}, or a single character` })), value: opt(str()), expression: opt(str()),
-            x: opt(int()), y: opt(int()), ms: opt(int({ minimum: 0, maximum: browserLimits.waitMs })),
-            full_page: opt(bool()), submit: opt(bool()), clear: opt(bool()),
-          }, { open: true }), { maxItems: browserLimits.actions })),
-          viewport: opt(obj({ width: int(), height: int() }, { open: true })),
-          full_page: opt(bool()),
-          timeout_seconds: opt(int({ minimum: browserLimits.timeoutSeconds.min, maximum: browserLimits.timeoutSeconds.max })),
-          serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
-            directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
-            timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
-        }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool("browser");
-          const browser = this.sandbox.browser;
-          if (!browser) throw new RunnerError(400, `This session has no browser: ${browserUnavailableText(this.browserUnavailable() ?? "missing")} Nothing ran.`);
-          let request: BrowserRequest;
-          let command: string;
-          try {
-            request = browserRequest(args as Record<string, unknown>);
-            command = browserShellCommand(request, browser, { seconds: (await this.commandOptions()).limits.seconds, nodeBin: this.sandbox.nodeBin });
-          } catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid browser call"}. Nothing ran.`); }
-          const attribution = await this.toolActor(api, true);
-          await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.checkCall(api, "browser", { write: true, shell: true });
-          const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { unbounded }, call.abortSignal);
-          return this.browserOutcome(approval, () => this.recheckTool(attribution), approvalText);
-        } }),
-      defineTool({ name: "tunnel", description: "Put the web server you work on online at a public https:// address, through a Cloudflare quick tunnel (https://<name>.trycloudflare.com). "
-        + "start {serve: {program, args, directory?, venv?, port, timeout_seconds?}} runs the server in the session's sandbox as a service that keeps running after the call: "
-        + `one of the node and python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, `
-        + "listening on port on localhost; once the port answers (within timeout_seconds, 60 by default) cloudflared, on the host, puts it online, and the call answers with the address. "
-        + "A start replaces the one online. status gives the address, whether cloudflared is connected, the uptime and the server's last lines of output; stop takes it offline. "
-        + "It stays online until stopped, until someone stops the session's work, until the session closes or is archived, or for the host's service lifetime at most. "
-        + "It starts only for the host's owner or a member they granted host commands, and isn't taken in a read-only request. "
-        + "Only the declared port is reachable through it. By default (access: link) only its link opens it: the address the call answers with carries a secret, which a browser that opens it keeps as a cookie for a day, and the bare address answers 401; anyone the link is given to, and everyone who can read this session, can open it. "
-        + "access: public makes it open to anyone with the address, for clients that can't follow a link, such as webhooks.",
-        executionMode: "sequential",
-        parameters: obj({
-          action: StringEnum(tunnelActions),
-          access: opt(StringEnum(tunnelAccesses)),
-          serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
-            directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
-            timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
-        }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool("tunnel");
-          let request: TunnelRequest;
-          try { request = tunnelRequest(args); }
-          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid tunnel call"}. Nothing ran.`); }
-          if (request.action === "status") {
-            const attribution = await this.toolActor(api, false);
-            return text({ ...attribution, ...(this.#tunnel?.status() ?? { online: false }) });
-          }
-          const attribution = await this.toolActor(api, true);
-          if (request.action === "stop") {
-            const stopped = this.#tunnel ? await this.#tunnel.stop("stop", attribution.initiatedBy) : { stopped: false };
-            return text({ ...attribution, ...stopped, ...(stopped.stopped ? {} : { note: "Nothing was online." }) });
-          }
-          const unavailable = this.tunnelUnavailable() ?? (this.config.tunnels ? undefined : "missing");
-          if (unavailable) throw new RunnerError(400, `This session can't put a server online: ${tunnelUnavailableText(unavailable)} Nothing ran.`);
-          const state = await this.metadata();
-          const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-          if (run.options?.access === "read") {
-            throw new RunnerError(403, "Putting a server online is an effect a Read-only message doesn't take: ask in a message that may act. Nothing ran.");
-          }
-          const json = JSON.stringify({ action: "start", serve: request.serve, access: request.access });
-          const operation: ExtensionToolOperation = { kind: "extension.tool", source: "piki:tunnel", tool: "tunnel",
-            arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
-            digest: createHash("sha256").update(json).digest("hex") };
-          await this.hostCommands.require(attribution.initiatedBy, "Putting a server online with cloudflared");
-          const approval = await this.runOperation(attribution.initiatedBy, operation, String(api.taskId), { hostChecked: true }, call.abortSignal);
-          if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? "The tunnel didn't start.");
-          const id = approval.id;
-          try {
-            await this.recheckTool(attribution);
-            const started = await this.sessionTunnel().start(request.serve!, attribution.initiatedBy, call.abortSignal, request.access);
-            await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.#waits.kept(id, `Online at ${started.url}`) }); });
-            return text({ ...attribution, ...started });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.#waits.kept(id, message) }); }).catch(() => {});
-            throw new RunnerError(error instanceof RunnerError ? error.status : 409, message);
-          }
-        } }),
-      defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of curl. Each read spends the session owner's own GitHub rate limit: "
-        + "where the session has the gh tool, read and wait for checks with gh instead, and use this to wait for any other change. Read-only; no credentials enter tools. "
-        + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
-        parameters: obj({ repository: str(), issue: int({ minimum: 1 }), wait: opt(StringEnum(githubWaits)),
-          timeout_seconds: opt(int({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }, { open: true }), execute: async (args, api, call) => {
-        await this.requireSessionTool("github_read");
-        const attribution = await this.toolActor(api, false);
-        const repository = githubRepository(args.repository);
-        await this.checkCall(api, "github_read");
-        const state = await this.metadata();
-        const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-        if (!run.admissionId) throw new RunnerError(403, "GitHub reads need a write message");
-        const request: GitHubReadRequest = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId), repository, issue: args.issue };
-        const read = async () => {
-          await this.authorize(run.initiatedBy, "write");
-          return this.config.githubRead ? await this.config.githubRead(request) : await this.#operations.internalGitHub("read", request) as GitHubIssueView;
-        };
-        const first = await read();
-        if (!args.wait) return text({ ...attribution, ...first });
-        const { view, waited } = await waitForGitHub({ wait: args.wait, first, read, timeoutMs: (args.timeout_seconds ?? githubWaitLimits.defaultSeconds) * 1000,
-          pollMs: this.config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000, now: Date.now, sleep: ms => sleep(ms, undefined, { signal: call.abortSignal }) });
-        return text({ ...attribution, ...view, waited });
-      } }),
-      defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker. Use this where the gh tool can't write (gh pr comment, gh issue comment). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, _call) => {
-        await this.requireSessionTool("github_comment");
-        const attribution = await this.toolActor(api, true);
-        await this.checkCall(api, "github_comment", { write: true });
-        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.comment", ...args }, String(api.taskId)));
-      } }),
-      defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase. Use this where the gh tool can't write (gh pr merge --match-head-commit). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), pull: int({ minimum: 1 }), sha: str(), method: StringEnum(githubMergeMethods) }, { open: true }), execute: async (args, api, _call) => {
-        await this.requireSessionTool("github_merge");
-        const attribution = await this.toolActor(api, true);
-        const repository = githubRepository(args.repository);
-        if (!/^[0-9a-f]{40}$/.test(args.sha)) throw new RunnerError(400, "sha must be the pull request's full 40-character head commit, as github_read reports it");
-        await this.checkCall(api, "github_merge", { write: true });
-        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.merge", repository, pull: args.pull, sha: args.sha, method: args.method }, String(api.taskId)));
-      } }),
-      defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker. Use this where the gh tool can't write (gh issue create): the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: obj({ repository: str(), title: str(), body: str() }, { open: true }), execute: async (args, api, _call) => {
-        await this.requireSessionTool("github_issue");
-        const attribution = await this.toolActor(api, true);
-        const repository = githubRepository(args.repository);
-        if (!args.title.trim() || /[\r\n]/.test(args.title) || args.title.length > GITHUB_ISSUE_TITLE_LIMIT) throw new RunnerError(400, `title must be one non-empty line of at most ${GITHUB_ISSUE_TITLE_LIMIT} characters`);
-        if (args.body.length > GITHUB_ISSUE_BODY_LIMIT) throw new RunnerError(400, `body must be at most ${GITHUB_ISSUE_BODY_LIMIT} characters`);
-        if (args.title.includes("\0") || args.body.includes("\0")) throw new RunnerError(400, "title and body must not contain NUL characters");
-        await this.checkCall(api, "github_issue", { write: true });
-        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.issue", repository, title: args.title, body: args.body }, String(api.taskId)));
-      } }),
-      defineTool({ name: "schedule", description: "Manage this session's scheduled prompts: messages Pikibun sends this session's agent on a cron schedule, as the session owner, so the session wakes up and works on its own (a nightly check, a weekly report). Use it when the user asks to do something every hour, day or week, or at a later time. action list takes nothing; create takes message (what the agent is told each time) and cron (five fields: minute hour day-of-month month day-of-week, such as '0 9 * * 1-5'; runs at least 5 minutes apart), and optionally name, time_zone (IANA, such as Europe/Berlin; UTC otherwise, so ask the user for theirs when the time of day matters), access (auto, the default: each run acts with the session's tools; read: each run only inspects), run_in (session, the default: each run prompts this session's agent, and is skipped while it is busy; child: each run starts a new session under this one, on its model and host, with the message as its opening message, so this session is never prompted and its own work goes on), one_shot (for child runs: true, the default, archives each child once its run is done, unless someone sent it a message of their own; false keeps it open) and enabled; update takes id and only the fields to change; delete takes id. Only the session owner's messages can use it. A run due while the agent is busy is skipped, unless it runs in a child session. The owner sees and edits them in the session panel's Schedules tab.", parameters: obj({
-        action: StringEnum(scheduleToolActions), id: opt(str()), message: opt(str()), cron: opt(str()),
-        time_zone: opt(str()), name: opt(str()), access: opt(StringEnum(accessModes)), run_in: opt(StringEnum(scheduleRunIns)), one_shot: opt(bool()), enabled: opt(bool()),
-      }, { open: true }), execute: async (args, api, _call) => {
-        await this.requireSessionTool("schedule");
-        const attribution = await this.toolActor(api, true);
-        const fields = Object.fromEntries(Object.entries({ scheduleId: args.id, name: args.name, cron: args.cron, timeZone: args.time_zone, content: args.message,
-          access: args.access, runIn: args.run_in, oneShot: args.one_shot, enabled: args.enabled }).filter(([, value]) => value !== undefined)) as Omit<ScheduleToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
-        if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Schedule fields must not contain NUL characters");
-        const state = await this.metadata();
-        const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-        if (run.initiatedBy !== this.binding.owner.id) throw new RunnerError(403, "Only the session owner's messages schedule prompts. Ask the owner to send this request, or to add it in the Schedules tab.");
-        if (!run.admissionId) throw new RunnerError(403, "Scheduling needs a write message");
-        await this.checkCall(api, "schedule", { write: args.action !== "list" });
-        await this.authorize(run.initiatedBy, "write");
-        const request: ScheduleToolRequest = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId),
-          action: args.action, ...fields };
-        const result = this.config.schedules ? await this.config.schedules(request) : await this.#operations.internalBroker("schedules", request) as ScheduleToolResult;
-        return text({ ...attribution, ...result });
-      } }),
-      defineTool({ name: "sessions", description: SESSIONS_TOOL_DESCRIPTION,
-        executionMode: "sequential", parameters: obj({
-        action: StringEnum(sessionsToolActions), session: opt(str()), message: opt(str()),
-        access: opt(StringEnum(accessModes)), notify: opt(bool()), title: opt(str()), model: opt(str()),
-        thinking: opt(StringEnum(thinkingLevels)), visibility: opt(StringEnum(["private", "workspace"] as const)), message_id: opt(str()),
-        limit: opt(int({ minimum: 1, maximum: crossSessionLimits.readEntries })),
-        timeout_seconds: opt(int({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
-      }, { open: true }), execute: async (args, api, call) => {
-        await this.requireSessionTool("sessions");
-        const attribution = await this.toolActor(api, true);
-        const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-          modelId: args.model, thinkingLevel: args.thinking, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
-          Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
-        if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");
-        const wait = args.action === "wait";
-        if (wait && (fields.targetSessionId === undefined || fields.messageId === undefined)) throw new RunnerError(400, "wait takes session and message_id, as ask, send or create returned them");
-        if (!wait && args.timeout_seconds !== undefined) throw new RunnerError(400, "Only wait takes timeout_seconds");
-        const state = await this.metadata();
-        const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-        if (!run.admissionId) throw new RunnerError(403, "The sessions tool needs a write message");
-        const request = { action: wait ? "read" as const : args.action as Exclude<typeof args.action, "wait">, ...(wait ? { targetSessionId: fields.targetSessionId, messageId: fields.messageId, limit: 1 } : fields) };
-        await this.checkCall(api, "sessions", { write: sessionsWriteActions.includes(args.action) });
-        await this.authorize(run.initiatedBy, "write");
-        const base = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId) };
-        const broker = async (): Promise<SessionsToolResult> => {
-          const result = this.config.crossSessions ? await this.config.crossSessions({ ...base, ...request }) : await this.#operations.internalBroker("sessions", { ...base, ...request }) as SessionsToolResult;
-          if (!("consent" in result)) return result;
-          throw new RunnerError(403, `${result.reason} The session's owner can let content pass between sessions whose readers differ under the session's Details. Nothing was sent or read.`);
-        };
-        if (!wait) return text({ ...attribution, ...await broker() });
-        const deadline = Date.now() + (args.timeout_seconds ?? crossSessionLimits.defaultWaitSeconds) * 1000;
-        for (;;) {
-          const result = await broker();
-          const done = "outcome" in result && result.outcome?.done === true;
-          if (done || Date.now() + WAIT_POLL_MS > deadline) {
-            const { entries: _entries, ...shown } = result as Extract<SessionsToolResult, { entries: unknown }>;
-            return text({ ...attribution, ...shown, ...(done ? {} : { timedOut: true }) });
-          }
-          await sleep(WAIT_POLL_MS, undefined, { signal: call.abortSignal });
-        }
-      } }),
-    ];
+    return buildTools(this.#toolContext, this.#clone && !!this.#egress);
   }
 
   readonly #definitionNotes = new Set<string>();
@@ -1897,11 +1447,11 @@ export class RunnerSession {
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${definition.name} call`}. Nothing ran.`); }
           const missing = this.programMissing(definition, request.program);
           if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
-          const attribution = await this.toolActor(api, true);
+          const attribution = await this.#calls.actor(api, true);
           await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.checkCall(api, definition.name, { write: true, shell: true });
+          const { unbounded } = await this.#calls.check(api, definition.name, { write: true, shell: true });
           const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal);
-          return text(await this.shownApproval(approval, api, definition.name));
+          return text(await this.#calls.shownApproval(approval, api, definition.name));
         } });
     }
     const parameters = Object.fromEntries(Object.entries(definition.parameters).map(([name, parameter]) => {
@@ -1914,11 +1464,11 @@ export class RunnerSession {
     return defineTool({ name: definition.name, description: definition.description, parameters: obj(parameters, { open: true }),
       execute: async (input, api, _call) => {
         await this.requireSessionTool(definition.name);
-        const attribution = await this.toolActor(api, definition.write);
+        const attribution = await this.#calls.actor(api, definition.write);
         let args: Record<string, unknown>;
         try { args = brokeredArguments(definition, input as Record<string, unknown>); }
         catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : `Invalid ${definition.name} call`); }
-        await this.checkCall(api, definition.name, definition.write ? { write: true } : {});
+        await this.#calls.check(api, definition.name, definition.write ? { write: true } : {});
         const state = await this.metadata();
         const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
         if (!run.admissionId) throw new RunnerError(403, `${definition.name} needs a write message`);

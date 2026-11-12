@@ -23,6 +23,10 @@ import { githubRepository, SessionOperations, type SessionOperationsOptions } fr
 import type { Metadata } from "../apps/runner/src/session/state.js";
 import { SandboxProcessError } from "../apps/runner/src/sandbox.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
+import { ToolCalls } from "../apps/runner/src/session/tools/calls.js";
+import type { ToolContext } from "../apps/runner/src/session/tools/context.js";
+import { buildTools } from "../apps/runner/src/session/tools/index.js";
+import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -453,6 +457,102 @@ test("operations: closing aborts a push in progress, waits for it, and reports a
   assert.match(record.result!, /Push was interrupted/);
   assert.deepEqual(completed, [{ sessionId: "s1", approvalId: "tool-task", credentialId: "c1", outcome: "unknown" }]);
   await operations.abortPushes();
+});
+
+function toolState(run: Partial<Metadata["runs"][string]> = {}): Metadata {
+  return { binding: {} as RunnerBinding, branches: [], approvals: {}, toolActors: {},
+    runs: { r1: { key: "r1", initiatedBy: "github:2", ownerId: "github:1", mode: "write", conversationId: 1, content: "", contentHash: "", status: "running", startEntry: 0,
+      admissionId: "admission", ...run } } };
+}
+
+function toolApi(state: Metadata, taskId = 1): ToolExecutionApi {
+  return { taskId, callId: `call-${taskId}`, conversationId: 1,
+    snapshot: async () => ({ json: JSON.stringify(state) }),
+    commit: async (change: (tx: { doc(): Promise<{ json: string }> }) => Promise<void>) => {
+      const doc = { json: JSON.stringify(state) };
+      await change({ doc: async () => doc });
+      Object.assign(state, JSON.parse(doc.json));
+    } } as unknown as ToolExecutionApi;
+}
+
+function toolsFixture(state: Metadata, sandbox: Partial<SessionWorkspace> = {}, overrides: Partial<ToolContext> = {}) {
+  const events: string[] = [];
+  const hostCommands = hostPolicy({ ownerId: "github:1", connectorOwnerId: "github:1", testShell: true }).policy;
+  const workspace = { isolated: true, writeFile: async (path: string, _content: string, authorize: () => Promise<void>) => { await authorize(); events.push(`write ${path}`); },
+    ...sandbox } as unknown as SessionWorkspace;
+  const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
+  const calls = new ToolCalls({ ownerId: "github:1", sandbox: workspace, hostCommands, authorize, metadata: async () => structuredClone(state),
+    hostConfig: async () => ({ ...defaultHostConfig, commandTimeoutSeconds: 600 }) });
+  const context: ToolContext = {
+    binding: { session: { id: "s1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox: workspace, onHost: false, calls, hostCommands,
+    waits: new ApprovalWaits(), operations: { run: async () => { events.push("run"); return {} as never; }, internalGitHub: async () => ({}), internalBroker: async () => ({}) },
+    requireSessionTool: async tool => { events.push(`tool ${tool}`); }, metadata: async () => structuredClone(state), mutate: async change => { change(state); },
+    authorize, hostConfig: async () => defaultHostConfig, programMissing: () => undefined, browserUnavailable: () => undefined, tunnelUnavailable: () => undefined,
+    tunnel: () => undefined, startTunnel: () => { throw new Error("no tunnel"); }, grant: async () => ({ repositories: [] }) as never,
+    ...overrides,
+  };
+  const tool = (name: string) => buildTools(context, true).find(item => item.name === name) as unknown as { execute(args: unknown, api: ToolExecutionApi, call: unknown): Promise<{ output: { text: string }[] }> };
+  return { calls, context, events, tool };
+}
+
+test("tool calls: a call acts for the sender of the running message, rechecked and kept for the call; others are refused", async () => {
+  const state = toolState();
+  const { calls, events } = toolsFixture(state);
+  const api = toolApi(state);
+  assert.deepEqual(await calls.actor(api, true), { initiatedBy: "github:2", actingAs: "github:1", mode: "write" });
+  assert.deepEqual(state.toolActors["1"], { initiatedBy: "github:2", ownerId: "github:1", runKey: "r1", callId: "call-1" });
+  await calls.recheck({ initiatedBy: "github:2", mode: "ask" });
+  assert.deepEqual(events, ["authorize github:2 write", "authorize github:2 ask"]);
+  const asked = toolState({ mode: "ask" });
+  await assert.rejects(toolsFixture(asked).calls.actor(toolApi(asked), true), /no authorized writable submission/);
+  assert.equal((await toolsFixture(asked).calls.actor(toolApi(asked), false)).mode, "ask");
+  const foreign = toolState({ ownerId: "github:9" });
+  await assert.rejects(toolsFixture(foreign).calls.actor(toolApi(foreign), false), /no authorized writable submission/);
+  const settled = toolState({ status: "settled" });
+  await assert.rejects(toolsFixture(settled).calls.actor(toolApi(settled), false), /no authorized writable submission/);
+});
+
+test("tool calls: a Read-only message's change is refused, and a shell call is unbounded only where the host's shell isn't allowed", async () => {
+  const state = toolState({ options: { access: "read" } });
+  state.toolActors["1"] = { initiatedBy: "github:2", ownerId: "github:1", runKey: "r1" };
+  const { calls } = toolsFixture(state);
+  await assert.rejects(calls.check(toolApi(state), "write_file", { write: true }), (error: unknown) => error instanceof RunnerError && error.status === 403
+    && error.message === "write_file changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.");
+  assert.deepEqual(await calls.check(toolApi(state), "read_file"), { unbounded: false });
+  assert.deepEqual(await calls.check(toolApi(state), "git", { shell: true }), { unbounded: false });
+  await assert.rejects(calls.check(toolApi(state, 2), "read_file"), /no authorized writable submission/);
+  assert.equal((await calls.outputFiles(toolApi(state))), undefined, "a Read-only message writes no output files");
+  assert.equal((await calls.commandOptions(30)).limits.seconds, 30);
+  assert.equal((await calls.commandOptions()).limits.seconds, 600);
+});
+
+test("tools: the families keep their order, git_push comes last and only for a clone in the sandbox", () => {
+  const { context } = toolsFixture(toolState());
+  const names = buildTools(context, false).map(tool => tool.name);
+  const python = process.platform === "win32" ? [] : ["python"];
+  assert.deepEqual(names, ["identity", "read_file", "list_files", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file", "git", ...python, "browser",
+    "tunnel", "github_read", "github_comment", "github_merge", "github_issue", "schedule", "sessions"]);
+  assert.deepEqual(buildTools(context, true).map(tool => tool.name), [...names, "git_push"]);
+});
+
+test("tools: a tool checks that it is on first, then who acts, then the call, and only then touches the worktree", async () => {
+  const state = toolState();
+  const { events, tool } = toolsFixture(state);
+  const written = await tool("write_file").execute({ path: "a.txt", content: "x" }, toolApi(state), {});
+  assert.deepEqual(JSON.parse(written.output[0]!.text), { initiatedBy: "github:2", actingAs: "github:1", mode: "write", written: "a.txt" });
+  assert.deepEqual(events, ["authorize github:2 write", "authorize github:2 write", "write a.txt"]);
+  events.length = 0;
+  await assert.rejects(tool("github_merge").execute({ repository: "acme/app", pull: 1, sha: "short", method: "squash" }, toolApi(state), {}), /40-character head commit/);
+  assert.deepEqual(events, ["tool github_merge", "authorize github:2 write"]);
+  const off = toolsFixture(state, {}, { requireSessionTool: async tool => { throw new RunnerError(403, `${tool} is turned off`); } });
+  await assert.rejects(off.tool("git").execute({ args: ["status"] }, toolApi(state), {}), /git is turned off/);
+  assert.deepEqual(off.events, [], "a tool that is off checks nothing else and runs nothing");
+  const notOwner = toolState();
+  await assert.rejects(toolsFixture(notOwner).tool("schedule").execute({ action: "list" }, toolApi(notOwner), {}), /Only the session owner's messages schedule prompts/);
+  const readOnly = toolState({ options: { access: "read" } });
+  const refused = toolsFixture(readOnly);
+  await assert.rejects(refused.tool("git").execute({ args: ["status"] }, toolApi(readOnly), {}), /Read-only message/);
+  assert.ok(!refused.events.includes("run"));
 });
 
 function instructions(input: Partial<InstructionsInput> = {}): string {
