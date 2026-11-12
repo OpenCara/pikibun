@@ -5,9 +5,8 @@ import { lstat, open, readFile, rm } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { getSupportedThinkingLevels, StringEnum, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
-import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
-import { createRegistry, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
+import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
+import { createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
 import { EXTENSION_ARGUMENTS_SHOWN, accessModes, thinkingLevels } from "../../../packages/shared/src/types.js";
@@ -22,13 +21,12 @@ import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHos
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
 import { SessionBuiltins } from "./extensions/builtin.js";
 import { toolOutputPath } from "./tool-output.js";
-import { inScriptCall, wholeForScripts } from "./script-output.js";
+import { inScriptCall } from "./script-output.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson } from "./protocol.js";
-import { brokeredArguments, programCommand, programRequest, rememberToolDefinitions, type ProgramRequest } from "./defined-tools.js";
-import { bundledToolDefinitions, type ProgramToolDefinition, type ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
+import type { ProgramToolDefinition, ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 import { pythonPrograms } from "./python-command.js";
 import { sandboxMissingPrograms } from "./program-availability.js";
 import { programInstallStep } from "../../../packages/shared/src/program-install.js";
@@ -38,7 +36,6 @@ import { tunnelUnavailableReason, type HostTunnelStatus, type SessionTunnelRepor
 import { SessionTunnel } from "./session/tunnel.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
-import { programLimits } from "./program-command.js";
 import { documentKindsOff, extensionSwitchOn, sessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { unknownToolGroup, type MemberToolGroup } from "../../../packages/shared/src/tool-groups.js";
 import { runnerModels } from "./provider.js";
@@ -63,7 +60,8 @@ import { SessionOperations, type OperationConsent } from "./session/operations.j
 import { ToolCalls } from "./session/tools/calls.js";
 import type { ToolContext } from "./session/tools/context.js";
 import { buildTools } from "./session/tools/index.js";
-import { callTimeoutParameter } from "./session/tools/programs.js";
+import { definedTool } from "./session/tools/defined.js";
+import { SessionDefinitions } from "./session/definitions.js";
 import {
   Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
@@ -83,7 +81,7 @@ import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRe
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import type { DocumentKind, GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
-import { callTimeout, commandLimits } from "./host-config.js";
+import { commandLimits } from "./host-config.js";
 
 export type { Run } from "./session/state.js";
 export type ForkedEntry = { kind: string; model: readonly Message[] };
@@ -186,8 +184,7 @@ export class RunnerSession {
   private root!: Conversation;
   #shared!: Conversation;
   #extension!: Extension;
-  #definitions: ToolDefinition[] = [];
-  #definedExtensions: Extension[] = [];
+  readonly #defined: SessionDefinitions;
   #registry?: Registry;
   readonly #inputs: MessageInputs;
   readonly #uploads: SessionUploads;
@@ -292,6 +289,11 @@ export class RunnerSession {
       programMissing: (tool, program) => this.programMissing(tool, program), browserUnavailable: () => this.browserUnavailable(),
       tunnelUnavailable: () => this.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
     };
+    this.#defined = new SessionDefinitions({
+      sessionId: binding.session.id, windows: process.platform === "win32" && this.sandbox.isolated, config,
+      tool: definition => definedTool(this.#toolContext, definition), registry: () => this.#registry, toolNames: () => this.tools.map(tool => tool.name),
+      added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); },
+    });
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
       workspace: () => isolatedWorkspace(this.sandbox), authorize: async () => { await this.authorize(this.binding.owner.id, "write"); },
@@ -442,7 +444,7 @@ export class RunnerSession {
     tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set()): string {
     return agentInstructions({ base: this.binding.agent.instructions, agentTools: this.binding.agent.tools, mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
       extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
-      lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#definitions, sources: this.#sources,
+      lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.missingPrograms(off) : [],
       linuxSandbox: !!this.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser });
   }
@@ -482,9 +484,7 @@ export class RunnerSession {
     }
     const registry = createRegistry();
     const own = this.buildTools();
-    this.#definitions = this.usableDefinitions(await this.fetchDefinitions(), own.map(tool => tool.name));
-    this.#definedExtensions = [];
-    this.tools = [...own, ...this.#definitions.map(definition => wholeForScripts(this.definedTool(definition)))];
+    this.tools = [...own, ...await this.#defined.load(own.map(tool => tool.name))];
     const extension = defineExtension({ name: "workspace-tools", tools: this.tools });
     this.#extension = extension;
     registry.install(extension);
@@ -787,7 +787,7 @@ export class RunnerSession {
     const options = run.options ?? {};
     const access = options.access ?? "approval";
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
-    if (run.mode === "write") await this.refreshDefinitions(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
+    if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.sessionToolsOff() : new Set<string>();
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.documentKindsOff() : new Set<DocumentKind>();
@@ -804,7 +804,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools).filter(tool => !own.has(tool.name)),
           ...builtins.flatMap(extension => extension.tools ?? [])],
-        extensions: [this.#extension, ...this.#definedExtensions, ...extensions.map(extension => extension.extension), ...builtins],
+        extensions: [this.#extension, ...this.#defined.extensions, ...extensions.map(extension => extension.extension), ...builtins],
         instructions: this.agentInstructions(access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
           new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name)))),
       } : {}),
@@ -865,7 +865,7 @@ export class RunnerSession {
     if (!sandbox) return [];
     const node = sandbox.nodePrograms;
     const tools = [
-      ...this.#definitions.filter((definition): definition is ProgramToolDefinition => definition.kind === "program" && !off.has(definition.name))
+      ...this.#defined.definitions.filter((definition): definition is ProgramToolDefinition => definition.kind === "program" && !off.has(definition.name))
         .map(definition => ({ tool: definition.name, source: definition.extensions[0] ?? `piki:${definition.name}`, programs: sandboxMissingPrograms(definition, node) })),
       ...(this.tools.some(tool => tool.name === "python") && !off.has("python")
         ? [{ tool: "python", source: "piki:python", programs: sandboxMissingPrograms({ programs: pythonPrograms, path: "/usr/local/bin" }) }] : []),
@@ -919,7 +919,7 @@ export class RunnerSession {
   }
 
   private definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0]): Set<string> {
-    for (const definition of this.#definitions) {
+    for (const definition of this.#defined.definitions) {
       off.delete(definition.name);
       if (!definition.extensions.some(extension => extensionSwitchOn(extension, extensions))) off.add(definition.name);
     }
@@ -963,7 +963,7 @@ export class RunnerSession {
     if (group?.off.includes(tool)) {
       throw new RunnerError(403, `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
     }
-    const defined = this.#definitions.find(item => item.name === tool);
+    const defined = this.#defined.definitions.find(item => item.name === tool);
     const extensions = defined ? [...defined.extensions] : sessionToolExtensions(tool).map(item => item.source);
     throw new RunnerError(403, `${tool} is turned off in this workspace${extensions.length ? ` (${extensions.join(", ")})` : ""}. Its owners and admins add it under Settings → Workspaces → Extensions.`);
   }
@@ -1385,100 +1385,6 @@ export class RunnerSession {
     return buildTools(this.#toolContext, this.#clone && !!this.#egress);
   }
 
-  readonly #definitionNotes = new Set<string>();
-
-  private noteDefinition(name: string, what: string): void {
-    const note = `${name} ${what}`;
-    if (this.#definitionNotes.has(note)) return;
-    this.#definitionNotes.add(note);
-    process.stderr.write(`Session ${this.binding.session.id}: the tool definition ${note}.\n`);
-  }
-
-  private async fetchDefinitions(): Promise<readonly ToolDefinition[]> {
-    const fetched = this.config.toolDefinitions ? await this.config.toolDefinitions().catch(() => undefined) : undefined;
-    if (fetched) rememberToolDefinitions(fetched);
-    return fetched ?? bundledToolDefinitions;
-  }
-
-  private usableDefinitions(definitions: readonly ToolDefinition[], own: readonly string[]): ToolDefinition[] {
-    const windows = process.platform === "win32" && this.sandbox.isolated;
-    const taken = new Set(own);
-    return definitions.filter(definition => {
-      if (taken.has(definition.name) || (definition.kind === "program" && windows && !definition.windowsSandbox)) return false;
-      taken.add(definition.name);
-      return true;
-    });
-  }
-
-  private async refreshDefinitions(extensionTools: readonly string[] = []): Promise<void> {
-    if (!this.config.toolDefinitions || !this.#registry) return;
-    const fetched = await this.fetchDefinitions();
-    for (const definition of fetched) {
-      const had = this.#definitions.find(item => item.name === definition.name);
-      if (had && JSON.stringify(had) !== JSON.stringify(definition)) this.noteDefinition(definition.name, "changed; the session uses it as it was until it next opens");
-      else if (!had && extensionTools.includes(definition.name)) this.noteDefinition(definition.name, "is offered by one of the workspace's extensions, which keeps it");
-    }
-    const added = this.usableDefinitions(fetched, [...this.tools.map(tool => tool.name), ...extensionTools]);
-    if (!added.length) return;
-    const tools = added.map(definition => wholeForScripts(this.definedTool(definition)));
-    const extension = defineExtension({ name: `defined-tools-${this.#definedExtensions.length + 1}`, tools });
-    this.#registry.install(extension);
-    this.#definedExtensions.push(extension);
-    this.#definitions.push(...added);
-    this.tools.push(...tools);
-    this.#hostExtensions?.reserve(added.map(definition => definition.name));
-  }
-
-  private definedTool(definition: ToolDefinition): ToolRegistration {
-    const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    if (definition.kind === "program") {
-      return defineTool({ name: definition.name, description: definition.description, executionMode: "sequential",
-        parameters: obj({ program: StringEnum([...definition.programs]), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
-          timeout_seconds: callTimeoutParameter() }, { open: true }),
-        execute: async (args, api, call) => {
-          await this.requireSessionTool(definition.name);
-          let request: ProgramRequest;
-          let command: string;
-          let timeoutSeconds: number | undefined;
-          try {
-            request = programRequest(definition, args); command = programCommand(definition, request, this.sandbox.nodeBin ? { nodeBin: this.sandbox.nodeBin } : {});
-            timeoutSeconds = callTimeout(args.timeout_seconds);
-          }
-          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${definition.name} call`}. Nothing ran.`); }
-          const missing = this.programMissing(definition, request.program);
-          if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
-          const attribution = await this.#calls.actor(api, true);
-          await this.hostCommands.requireHostEnvironment();
-          const { unbounded } = await this.#calls.check(api, definition.name, { write: true, shell: true });
-          const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal);
-          return text(await this.#calls.shownApproval(approval, api, definition.name));
-        } });
-    }
-    const parameters = Object.fromEntries(Object.entries(definition.parameters).map(([name, parameter]) => {
-      const options = parameter.description ? { description: parameter.description } : {};
-      const schema = parameter.type === "boolean" ? bool(options)
-        : parameter.type === "integer" ? int({ ...options, ...(parameter.minimum !== undefined ? { minimum: parameter.minimum } : {}), ...(parameter.maximum !== undefined ? { maximum: parameter.maximum } : {}) })
-        : parameter.enum ? StringEnum([...parameter.enum], options) : str(options);
-      return [name, parameter.required ? schema : opt(schema)];
-    }));
-    return defineTool({ name: definition.name, description: definition.description, parameters: obj(parameters, { open: true }),
-      execute: async (input, api, _call) => {
-        await this.requireSessionTool(definition.name);
-        const attribution = await this.#calls.actor(api, definition.write);
-        let args: Record<string, unknown>;
-        try { args = brokeredArguments(definition, input as Record<string, unknown>); }
-        catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : `Invalid ${definition.name} call`); }
-        await this.#calls.check(api, definition.name, definition.write ? { write: true } : {});
-        const state = await this.metadata();
-        const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
-        if (!run.admissionId) throw new RunnerError(403, `${definition.name} needs a write message`);
-        const request = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId), ...args };
-        await this.authorize(run.initiatedBy, "write");
-        const result = this.config.brokered ? await this.config.brokered(definition.route, request) : await this.#operations.internalBroker(definition.route, request);
-        return text({ ...attribution, ...(result && typeof result === "object" && !Array.isArray(result) ? result : { result }) });
-      } });
-  }
-
   runOperation(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredApproval> {
     return this.#operations.run(actorId, input, toolTaskId, consent, signal);
   }
@@ -1521,7 +1427,7 @@ export class RunnerSession {
       else {
         const agent = await shared.agent(context);
         next = await this.harness.createConversation({ ownership: { kind: "ownerless" }, agent: {
-          model: agent.model ?? this.modelRef, thinkingLevel: agent.thinkingLevel, extensions: [this.#extension, ...this.#definedExtensions],
+          model: agent.model ?? this.modelRef, thinkingLevel: agent.thinkingLevel, extensions: [this.#extension, ...this.#defined.extensions],
           tools: this.tools, instructions: this.agentInstructions("write"),
         } }, context);
       }

@@ -639,7 +639,7 @@ kept by the session rather than the agent, so a long one survives the session cl
 | The context files, a Pi package of its own | `extensions/context-files/` (`context-files.ts`, `index.ts`, `package.json`); tests in `tests/context-files.test.ts` |
 | The default workspace extensions | `defaultWorkspaceExtensions` (`packages/shared/src/host-extensions.ts`); migrations sqlite/0049 and 0064 (postgres/0042 and 0057); tests in `tests/extensions.test.ts` |
 | Draft pull requests and marking them ready | `apps/server/src/authority/push/targets.ts` (`openPullRequest`), `broker.ts`; `PullRequestRequest.draft` (types.ts); tests in `tests/pull-request-drafts.test.ts` |
-| The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session.ts` (the `browser` tool, `browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
+| The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session/tools/browser.ts` (the `browser` tool), `session/tools/calls.ts` (`browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
 | The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |
 | The Browser tab | `apps/nsh/src/session-panel/Browser.tsx` |

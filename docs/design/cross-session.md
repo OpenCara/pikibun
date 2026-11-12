@@ -6,7 +6,7 @@ A session's agent works with the workspace's other sessions through one tool, `s
 asks and messages their agents, starts new sessions for sub-tasks, waits for or is notified of outcomes, and stops or
 archives sessions. Everything goes through the control plane (`apps/server/src/cross-session.ts`), which decides each
 call as if the person behind it had made it themselves. Shared types, limits and the delivered-message format live in
-`packages/shared/src/cross-session.ts`; the tool is in `apps/runner/src/session.ts`.
+`packages/shared/src/cross-session.ts`; the tool is in `apps/runner/src/session/tools/sessions.ts`.
 
 ## Actions
 

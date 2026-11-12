@@ -26,7 +26,9 @@ import type { RunnerBinding } from "../packages/shared/src/types.js";
 import { ToolCalls } from "../apps/runner/src/session/tools/calls.js";
 import type { ToolContext } from "../apps/runner/src/session/tools/context.js";
 import { buildTools } from "../apps/runner/src/session/tools/index.js";
-import type { ToolExecutionApi } from "@earendil-works/pi-durable";
+import type { Registry, ToolExecutionApi, ToolRegistration } from "@earendil-works/pi-durable";
+import { SessionDefinitions, type SessionDefinitionsOptions } from "../apps/runner/src/session/definitions.js";
+import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/src/tool-definitions.js";
 import type { Run } from "../apps/runner/src/session.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -553,6 +555,61 @@ test("tools: a tool checks that it is on first, then who acts, then the call, an
   const refused = toolsFixture(readOnly);
   await assert.rejects(refused.tool("git").execute({ args: ["status"] }, toolApi(readOnly), {}), /Read-only message/);
   assert.ok(!refused.events.includes("run"));
+});
+
+function definitionsFixture(options: Partial<SessionDefinitionsOptions> = {}) {
+  const tools: string[] = ["read_file"];
+  const installed: string[] = [];
+  const reserved: string[][] = [];
+  const definitions = new SessionDefinitions({
+    sessionId: "s1", windows: false, config: {},
+    tool: definition => ({ name: definition.name, description: definition.description, parameters: {}, execute: async () => ({ output: [] }) }) as unknown as ToolRegistration,
+    registry: () => ({ install: (extension: { name: string }) => { installed.push(extension.name); } }) as unknown as Registry,
+    toolNames: () => tools, added: (added, names) => { tools.push(...added.map(tool => tool.name)); reserved.push(names); },
+    ...options,
+  });
+  return { definitions, tools, installed, reserved };
+}
+
+test("defined tools: a session loads the bundled definitions not taken by its own tools, and the Windows sandbox only those that run there", async () => {
+  const { definitions } = definitionsFixture();
+  const node = bundledToolDefinitions.find((item): item is ProgramToolDefinition => item.name === "node" && item.kind === "program")!;
+  const loaded = await definitions.load(["node"]);
+  assert.ok(!loaded.some(tool => tool.name === "node"), "a session's own tool of that name wins");
+  assert.deepEqual(loaded.map(tool => tool.name), definitions.definitions.map(item => item.name));
+  assert.ok(definitions.definitions.length > 1);
+  assert.deepEqual(definitions.extensions, []);
+  const windows = definitionsFixture({ windows: true }).definitions;
+  assert.deepEqual(windows.usable([node, { ...node, name: "other", windowsSandbox: true } as ToolDefinition], []).map(item => item.name), node.windowsSandbox ? ["node", "other"] : ["other"]);
+  assert.deepEqual(definitions.usable([node, node], []).map(item => item.name), ["node"], "the first of a name wins");
+});
+
+test("defined tools: a refresh adds what Pikibun defines now as one more extension, keeps what changed as it was, and tells each change once", async t => {
+  const node = bundledToolDefinitions.find(item => item.name === "node")!;
+  const make = bundledToolDefinitions.find(item => item.name === "make")!;
+  let served: ToolDefinition[] = [node];
+  const { definitions, tools, installed, reserved } = definitionsFixture({ config: { toolDefinitions: async () => served } });
+  tools.push(...(await definitions.load(["read_file"])).map(tool => tool.name));
+  assert.deepEqual(definitions.definitions.map(item => item.name), ["node"]);
+  const notes: string[] = [];
+  t.mock.method(process.stderr, "write", (chunk: string) => { notes.push(chunk); return true; });
+  served = [{ ...node, description: "changed" }, make];
+  await definitions.refresh(["make"]);
+  assert.deepEqual(installed, [], "an extension's own tool of that name keeps it");
+  await definitions.refresh([]);
+  await definitions.refresh([]);
+  assert.deepEqual(installed, ["defined-tools-1"]);
+  assert.deepEqual(reserved, [["make"]]);
+  assert.deepEqual(tools, ["read_file", "node", "make"]);
+  assert.deepEqual(definitions.definitions.map(item => item.name), ["node", "make"]);
+  assert.equal(definitions.definitions[0]!.description, node.description, "a changed definition is used as it was until the session opens again");
+  assert.deepEqual(notes, ["Session s1: the tool definition node changed; the session uses it as it was until it next opens.\n",
+    "Session s1: the tool definition make is offered by one of the workspace's extensions, which keeps it.\n"]);
+  const without = definitionsFixture();
+  await without.definitions.refresh([]);
+  const unopened = definitionsFixture({ config: { toolDefinitions: async () => served }, registry: () => undefined });
+  await unopened.definitions.refresh([]);
+  assert.deepEqual([without.installed, unopened.installed], [[], []]);
 });
 
 function instructions(input: Partial<InstructionsInput> = {}): string {
