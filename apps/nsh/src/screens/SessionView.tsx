@@ -362,7 +362,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
       const result = await session().api<SubmitResult>(`/api/sessions/${segment(props.id)}/${kind}`, { method: "POST",
         body: { content: withFilesNote(sent, note), requestId: pending.id, ...(sending ? { options: sending } : {}), ...(images.length ? { images } : {}) } });
       receipt.set(result);
-      if (sending) data.rememberChat(host, chosen, view().agent);
+      if (sending && !auto) data.rememberChat(host, chosen, view().agent);
       if (kind === "ask") conversationId.set(result.conversationId);
       forgetSentDraft(props.id, sent);
       attachments.sent(pasted, attached);

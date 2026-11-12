@@ -659,10 +659,12 @@ session's host and model menus, and to a session's model menu, and makes that de
     the new session shows under its menus; how busy a host is shows only as busy or idle.
 44. **What the member keeps.** Auto host and Auto model are separate: a host the member picked is sent as
     `connectorId` and only the model is chosen; a model picked while the host is Auto is sent as `model` and the host is
-    chosen among those offering it. The new session asks again as the task is typed (600 ms after the last change)
-    and once more on Start if the task changed, so it starts with the choice for what was sent; a shared host it picks
+    chosen among those offering it; changing only the access or reasoning keeps nothing. The new session asks at once
+    the first time, then 600 ms after the last change, a failed answer included, and once more on Start if the task
+    changed, so it starts with the choice for what was sent; a shared host it picks
     still needs the member's trust, as when picked by hand. The client remembers Auto per menu
-    (`pikibun.lastAuto`). In a session, Auto in the model menu is per message, on the session's host, and never
+    (`pikibun.lastAuto`), and never what Auto chose as the member's last host and model (`pikibun.lastChat`), which
+    manual choices start from. In a session, Auto in the model menu is per message, on the session's host, and never
     remembered: a short follow-up ("go ahead") would otherwise drop a complex task to a light model.
 
 ## Where things are

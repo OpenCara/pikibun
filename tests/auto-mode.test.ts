@@ -39,6 +39,10 @@ test('a task\'s complexity comes from its length, its structure and what it asks
   assert.ok(complex.signals.includes('a refactor') && complex.signals.includes('concurrency'), complex.signals.join());
   assert.equal(assessTask('Fine-tune the model on the GPU box').gpu, true);
   assert.equal(assessTask(simpleTask).gpu, false);
+  assert.ok(assessTask('Update src/a.ts, (src/b.ts) and lib/c.py.').signals.includes('3 files'));
+  const started = performance.now();
+  for (const long of ['a.'.repeat(16_000), 'a/'.repeat(16_000), `across ${'x '.repeat(15_990)}`]) assessTask(long);
+  assert.ok(performance.now() - started < 500, 'a long task with no file name in it is read in linear time');
 });
 
 test('models fall into light, standard and frontier tiers, and each complexity gets the closest without falling short', () => {

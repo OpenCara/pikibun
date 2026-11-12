@@ -154,8 +154,14 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   };
   const selection = (): ChatSelection => (autoModel() ? autoSelection() : autoHost() ? kept() ?? autoSelection() : manualSelection());
   const changeSelection = (value: ChatSelection) => {
-    if (autoModel()) { autoExtras.set({ ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel } : {}), access: value.access }); return; }
-    if (autoHost()) { kept.set(value); return; }
+    const extras = () => autoExtras.set({ ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel } : {}), access: value.access });
+    if (autoModel()) { extras(); return; }
+    if (autoHost()) {
+      const chosen = autoSelection().model;
+      if (!kept() && chosen && value.model && sameModel(chosen, value.model)) { extras(); return; }
+      kept.set(value);
+      return;
+    }
     const current = host();
     if (current) chat.set({ key: current.id, value });
   };
@@ -185,9 +191,10 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     if (environmentHost !== undefined && id !== environmentHost) onHost.set(null);
     environmentHost = id;
   });
+  let autoAsked = false;
   effect(() => {
     const request = autoRequest();
-    if (!request) { resolution.set(null); autoError.set(""); return; }
+    if (!request) { resolution.set(null); autoError.set(""); autoAsked = false; return; }
     const key = JSON.stringify(request);
     if (untracked(resolution)?.key === key) return;
     const controller = new AbortController();
@@ -197,7 +204,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         reason => { if (!controller.signal.aborted) autoError.set(errorMessage(reason)); },
       );
     };
-    if (!untracked(resolution)) { run(); return () => controller.abort(); }
+    if (!autoAsked) { autoAsked = true; run(); return () => controller.abort(); }
     const timer = setTimeout(run, 600);
     return () => { controller.abort(); clearTimeout(timer); };
   });
@@ -227,6 +234,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     const attached = untracked(attachments.files);
     const options = chatOptionsBody(current, selection(), "submit");
     const hostEnvironment = runOnHost();
+    const chosenByAuto = autoOn();
     void action.run(async () => {
       const { api } = session();
       const images = await encodeImages(pasted);
@@ -236,7 +244,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       } });
       const sessionId = result.session.id;
       data.setLastWorkspaceId(props.workspace.id);
-      data.rememberChat(current, selection());
+      if (!chosenByAuto) data.rememberChat(current, selection());
       if (message || images.length || attached.length) {
         try {
           const note = await attachments.upload(sessionId, attached);

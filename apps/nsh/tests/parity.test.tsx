@@ -68,6 +68,7 @@ describe("a session's view", () => {
     expect(bodyOf(app, "POST", "/api/workspaces/w1/auto-mode")).toEqual({ task: "Now redesign the queue across the whole codebase", connectorId: "c1" });
     expect(bodyOf(app, "POST", "/api/sessions/s1/submit").options).toMatchObject({ model: { provider: "anthropic", modelId: "claude-opus" }, thinkingLevel: "high" });
     await app.waitFor("text:Auto · Claude Opus");
+    expect(app.storage()["pikibun.lastChat"]).toBeUndefined();
   });
 
   test("sends a picked image with a message", async () => {
@@ -214,6 +215,32 @@ describe("a new session", () => {
     expect(bodyOf(app, "POST", "/api/sessions/s3/submit").options).toMatchObject({ model: { provider: "anthropic", modelId: "claude-opus" }, thinkingLevel: "high" });
     const asked = app.requests().filter(request => request.method === "POST" && request.url.endsWith("/auto-mode")).map(request => JSON.parse(request.body ?? "{}"));
     expect(asked.at(-1)).toEqual({ task: "Refactor the runner" });
+    expect(app.storage()["pikibun.lastChat"]).toBeUndefined();
+  });
+
+  test("with the host on Auto, changing only the access leaves the model to Auto too", async () => {
+    const choice = { connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet", thinkingLevel: "medium", complexity: "moderate", reasons: [] };
+    const app = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/auto-mode`]: { body: { enabled: true } },
+      [`POST ${ORIGIN}/api/workspaces/w1/auto-mode`]: { body: { choice } },
+    }) });
+    await app.press("id:new-session");
+    await app.waitFor("id:new-host");
+    await app.press("id:new-host");
+    await app.waitFor("text:Chooses the host for the task: online, shared here, yours first, the least busy, with a GPU or the model the task needs");
+    await app.press("text:Auto");
+    await app.waitFor("text:Auto · ada-mac");
+    await app.press("id:chat-access");
+    await app.press("text:Read only");
+    await app.type("id:new-message", "Refactor the runner");
+    await app.waitUntil(() => app.requests().some(request => request.method === "POST" && request.url.endsWith("/auto-mode")
+      && JSON.parse(request.body ?? "{}").task === "Refactor the runner"));
+    const asked = app.requests().filter(request => request.method === "POST" && request.url.endsWith("/auto-mode")).map(request => JSON.parse(request.body ?? "{}"));
+    expect(asked.at(-1)).toEqual({ task: "Refactor the runner" });
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.press("id:new-start");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions/s3/submit") !== undefined);
+    expect(bodyOf(app, "POST", "/api/sessions/s3/submit").options).toMatchObject({ access: "read", model: { modelId: "claude-sonnet" } });
   });
 
   test("opens its host's details from the link under the chat box, and closes them again", async () => {

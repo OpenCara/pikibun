@@ -35,7 +35,7 @@ const terms: readonly Term[] = [
   { pattern: /\b(distributed|scalab|scaling|cluster)/i, weight: 2, signal: "scale" },
   { pattern: /\b(algorithm|protocol|compiler|parser)/i, weight: 2, signal: "algorithms" },
   { pattern: /\b(end[- ]to[- ]end|integrat)/i, weight: 1, signal: "integration" },
-  { pattern: /\b(across|throughout|entire|whole)\b[^.\n]*\b(codebase|repo|repository|repositories|project|files|modules|services)\b/i, weight: 2, signal: "the whole codebase" },
+  { pattern: /\b(across|throughout|entire|whole)\b[^.\n]{0,200}\b(codebase|repo|repository|repositories|project|files|modules|services)\b/i, weight: 2, signal: "the whole codebase" },
   { pattern: /\b(multiple|several|many)\b/i, weight: 1, signal: "several parts" },
   { pattern: /\b(complex|hard|difficult|large|big|major|deep|thorough|comprehensive|carefully)\b/i, weight: 2, signal: "asks for depth" },
   { pattern: /\b(add|create|build|support|feature|endpoint|extension|plugin)\b/i, weight: 1, signal: "a feature" },
@@ -51,7 +51,18 @@ const terms: readonly Term[] = [
 
 const QUESTION = /^\s*(what|why|how|where|who|when|which|is|are|does|do|can|could|should)\b[^\n]*\?\s*$/i;
 const LIST_ITEM = /^\s*([-*•]|\d+[.)])\s+/;
-const FILE_NAME = /\b[\w./-]+\.(ts|tsx|js|jsx|mjs|py|rs|go|java|kt|swift|cs|cpp|cc|c|h|rb|php|sql|ya?ml|json|toml|md)\b/gi;
+const FILE_NAME = /^[\w./-]{0,200}\.(ts|tsx|js|jsx|mjs|py|rs|go|java|kt|swift|cs|cpp|cc|c|h|rb|php|sql|ya?ml|json|toml|md)$/i;
+const TOKEN_EDGES = /^[^\w./-]+|[^\w./-]+$/g;
+
+function fileNames(text: string): Set<string> {
+  const names = new Set<string>();
+  for (const word of text.split(/\s+/)) {
+    if (word.length > 256) continue;
+    const token = word.replace(TOKEN_EDGES, "").replace(/[.]+$/, "");
+    if (FILE_NAME.test(token)) names.add(token.toLowerCase());
+  }
+  return names;
+}
 const GPU = /\b(gpus?|cuda|nvidia|rocm|tpu|pytorch|tensorflow|jax|fine[- ]?tun\w*|train(ing)?\s+(a\s+|the\s+)?models?|inference)\b/i;
 
 export function assessTask(task: string): TaskAssessment {
@@ -67,7 +78,7 @@ export function assessTask(task: string): TaskAssessment {
   const ands = text.match(/\band\b/gi)?.length ?? 0;
   if (ands >= 3) { score += 1; signals.push("several requirements"); }
   if (text.includes("```")) { score += 1; signals.push("code"); }
-  const files = new Set((text.match(FILE_NAME) ?? []).map(name => name.toLowerCase()));
+  const files = fileNames(text);
   if (files.size >= 3) { score += 1; signals.push(`${files.size} files`); }
   if (QUESTION.test(text) && words <= 30) { score -= 1; signals.push("a short question"); }
   for (const term of terms) {
