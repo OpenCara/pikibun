@@ -6,9 +6,9 @@ only one the Docker image and `pikibun serve` ship. It replaced the React web cl
 are removed, on the same backend, `@pikibun/client` and `packages/shared`. See [the web client](../../docs/self-hosting.md#the-web-client).
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
-(longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), a chooser of any file outside
-a browser (longbridge/nsh#162; the web build picks any file through its page's host, the desktops take files dropped
-or pasted from a file manager, and phones pick photos), and bundling the `pikibun` connector inside the app (the
+(longbridge/nsh#1061), a system sign-in session (longbridge/nsh#1065, not planned), a chooser of any file on phones
+(the web build picks any file through its page's host, the desktops take files dropped or pasted from a file manager,
+and phones pick photos), and bundling the `pikibun` connector inside the app (the
 desktop builds run the installed command instead: see [This Computer](#this-computer)).
 
 ## Run it
@@ -136,13 +136,14 @@ Administration). What is left out, and why:
   out: hosts for several servers at once, WSL2 on Windows, sharing the Pikibun it runs with others (`pikibun serve
   --share`, in a terminal), installing prerequisites itself, and hosting while the app is closed (its tray). In a
   browser there are no such sections.
-- **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058), and NSH
-  has no local notifications either; the web build turns them on in the browser as the web app does (Web Push through
+- **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058); NSH 0.5's
+  system notifications are only the app's own, while it runs, and aren't used yet; the web build turns them on in the browser as the web app does (Web Push through
   the `sw.js` the build ships, or while a tab is open), and every build manages the account's preferences and devices.
 - **Files other than photos** on phones: the web build picks any file in the browser's chooser, as the web app does;
   the desktop builds attach any file dropped on the chat box or copied in a file manager and pasted (read under the
   home folder, `capabilities.fs.read`), and take a dump to import dropped on its sheet; iPhone and Android pick
-  photos only, and paste, until NSH picks other files (longbridge/nsh#162).
+  photos only, and paste: NSH 0.5's `Picker.pickFiles` takes any file on the desktops only (longbridge/nsh#162), and
+  isn't used yet.
 - **Up** in an empty chat box takes back a queued message on the desktops and in desktop browsers; on phones the
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
@@ -215,28 +216,30 @@ paired with.
 
 Each workaround below is on the [list of upstream workarounds](../../docs/design/upstream-workarounds.md), with what tracks it upstream and when to remove it.
 
-- **App Store builds**: NSH 0.4's prebuilt iPhone runner was linked with the iOS 18.5 SDK, which App Store Connect no
-  longer takes, and `nsh package` writes none of the build keys it requires in Info.plist (`DT*`, `arm64` in
+- **App Store builds**: NSH's prebuilt iPhone runner (0.4's, and 0.5's `ios` component) was linked with the iOS 18.5
+  SDK, which App Store Connect no longer takes, and `nsh package` writes none of the build keys it requires in Info.plist (`DT*`, `arm64` in
   `UIRequiredDeviceCapabilities`). `release-app.yml` builds the runner from NSH's source with its own Xcode
   (`NSH_RUNTIME`), adds the keys and signs the app again; drop both once an NSH release does them.
-- **The web runtime**: NSH 0.4's has no `lifecycle` (its import is undefined there), so `src/lib/lifecycle.ts` stands in
-  for it and counts a page as always active. Its loader inserts an import map and `blob:` modules no hash can allow, so
-  the page's policy allows inline scripts (`apps/server/src/static.ts`).
-- **Text widths on the web**: NSH 0.4 lays text out with widths the browser's canvas measures and draws it as page
+- **The web runtime**: its loader inserts an import map and `blob:` modules no hash can allow, so the page's policy
+  allows inline scripts (`apps/server/src/static.ts`).
+- **Text widths on the web**: NSH (0.4 and 0.5) lays text out with widths the browser's canvas measures and draws it as page
   text, so where a browser's canvas measures a font otherwise (another face for the system font, a minimum font size,
   text-only zoom) each run overlaps the next: inline code over the words before it. `scripts/nsh-web-fixes.mjs` patches
   the built runtime to measure such a font as the page draws it; drop the patch once NSH measures so itself.
 - **Secure storage**: native sign-ins are kept in NSH's `Storage`, a plain file in the app's data, not the Keychain or
   Keystore ([nsh#1061](https://github.com/longbridge/nsh/issues/1061)).
-- **GitHub sign-in**: NSH has neither a system authentication session nor deep links
-  ([nsh#1065](https://github.com/longbridge/nsh/issues/1065)), so native sign-in runs GitHub's page in the app's own web
+- **GitHub sign-in**: NSH has no system authentication session
+  ([nsh#1065](https://github.com/longbridge/nsh/issues/1065), closed as not planned), so native sign-in runs GitHub's page in the app's own web
   view, which can see what is typed into it. That web view navigates only to http and https, so the server hands the
   sign-in back on a page of its own (`/api/auth/native/done`, asked for with `callback=page`) rather than
-  `pikibun://auth`; the code there is worth nothing without the PKCE verifier, which never leaves the app.
-- **Types**: NSH 0.4 declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared code names.
-- **Tests**: headless `texts()` lists a scroll view's content in view-tree order, not screen order (fixed upstream in
-  [nsh#1105](https://github.com/longbridge/nsh/pull/1105)), and screenshots need `--target`. After `setColorScheme`,
-  the headless engine reports the window as 0×0, so the layout ignores zero sizes (`src/Root.tsx`).
+  `pikibun://auth` (NSH 0.5's `UrlScheme` could take it back so; the page would still be the app's web view); the code
+  there is worth nothing without the PKCE verifier, which never leaves the app.
+- **Types**: NSH (0.4 and 0.5) declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared
+  code names.
+- **Tests**: screenshots need `--target`. Since NSH 0.5 an app imports only files inside its directory, the nearest one
+  up with an `nsh.json`: the harnesses in `tests/harness` build with the app's, but the attach test's, which writes
+  files to the home folder, has its own in `tests/harness/home`, so `Logo`, the app's only imported file, is in
+  `src/logo.tsx`, apart from the kit it imports.
 
 ## Layout
 

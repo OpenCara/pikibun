@@ -18,10 +18,6 @@ export const NSH_ASSET_SHA256 = Object.freeze({
   "nsh-ios-macos-arm64.tar.gz": "e0a5039702ad3c53fa938d8dfba488856e8be8632f5fac1538f241df6f6bb53d",
 });
 
-// Since 0.5 a platform's archive holds the CLI and that platform's own runtime; the others are components, archives of
-// the same release that `nsh` adds on demand (`nsh component add`), checked only against the release's own `.sha256`.
-// So the pinned ones are added here first, checked against the digests above. Each archive holds `nsh/<paths>` and
-// its record, `nsh/components/<name>.json`, which `nsh` reads to tell it is installed.
 export const NSH_COMPONENTS = Object.freeze({
   web: { asset: "nsh-web.tar.gz", paths: ["runtime/web"] },
   android: {
@@ -116,7 +112,6 @@ async function download(asset, directory) {
 
 const distribution = () => path.join(repository, ".cache", "nsh", NSH_VERSION, "nsh");
 
-/** Adds the pinned component `name` to the downloaded distribution, unless it has it, or NSH comes from elsewhere. */
 export async function nshComponent(name) {
   const component = NSH_COMPONENTS[name];
   if (!component) throw new Error(`No Native Shell component ${name} is pinned (${Object.keys(NSH_COMPONENTS).join(", ")}).`);
@@ -128,7 +123,6 @@ export async function nshComponent(name) {
   const partial = path.join(root, `.component-${name}.partial`);
   try {
     await unpackPinned(component.asset, partial, `its ${name} runtime`);
-    // The runtime first and the record last, so a component cut short counts as missing.
     for (const item of [...component.paths, record]) {
       const from = path.join(partial, "nsh", item);
       if (!existsSync(from)) throw new Error(`${component.asset} holds no nsh/${item.split(path.sep).join("/")}`);
@@ -142,7 +136,6 @@ export async function nshComponent(name) {
   }
 }
 
-/** The component an `nsh` command's `--target` needs, if any. */
 export function targetComponent(args) {
   const at = args.findIndex(argument => argument === "--target" || argument.startsWith("--target="));
   if (at < 0) return null;

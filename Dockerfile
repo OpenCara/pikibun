@@ -17,7 +17,8 @@ RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+
 
 # The client as a web app: static files, the same for every platform the image is built for, so this stage runs once on
 # the builder's own platform. Native Shell publishes its Linux CLI for x86_64 only, built against glibc 2.39, hence
-# Debian 13 here (the runtime image doesn't need it). scripts/nsh.mjs downloads the pinned CLI and checks its SHA-256.
+# Debian 13 here (the runtime image doesn't need it). scripts/nsh.mjs downloads the pinned CLI and its web runtime (a
+# component of its own since NSH 0.5) and checks their SHA-256.
 FROM --platform=$BUILDPLATFORM ${WEB_BUILD_IMAGE} AS web
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -25,7 +26,7 @@ COPY packages/cli/package.json packages/cli/
 RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+")[0]')" && pnpm install --frozen-lockfile --ignore-scripts
 COPY scripts/nsh.mjs scripts/nsh-web-fixes.mjs scripts/
 # Cache the verified SDK independently of client sources; frontend edits should not redownload a large release.
-RUN node --input-type=module -e "import { nshBinary } from './scripts/nsh.mjs'; await nshBinary();"
+RUN node --input-type=module -e "import { nshBinary, nshComponent } from './scripts/nsh.mjs'; await nshBinary(); await nshComponent('web');"
 COPY apps/nsh apps/nsh
 COPY packages/shared packages/shared
 COPY packages/client packages/client

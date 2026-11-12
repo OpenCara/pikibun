@@ -76,7 +76,7 @@ for the native/developer-token path; their failure alone does not identify a web
 
 ## Reproduce the native smoke tests
 
-Install the repository dependencies (scripts/nsh.mjs fetches the pinned NSH 0.4), then run from the repository root:
+Install the repository dependencies (scripts/nsh.mjs fetches the pinned NSH), then run from the repository root:
 
 ```sh
 pnpm test:client-macos

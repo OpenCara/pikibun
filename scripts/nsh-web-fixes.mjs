@@ -27,8 +27,6 @@ function removeWithCompressed(file) {
   for (const name of [file, `${file}.br`, `${file}.gz`]) rmSync(name, { force: true });
 }
 
-// Patches the `nsh.<hash>.js` loader of a site `nsh package --target web` wrote so text is measured as the page draws
-// it, and renames the loader after its new content, so a cached copy of the unpatched one doesn't outlive the patch.
 export function fixWebSite(site) {
   const entries = readdirSync(site);
   const loader = only(entries, /^nsh\.[0-9a-f]{10}\.js$/, "nsh.<hash>.js");
