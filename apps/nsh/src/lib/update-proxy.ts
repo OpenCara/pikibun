@@ -58,10 +58,16 @@ export function windowsProxy(output: string): string | null {
     if (pair) named.set(pair[1]!.toLowerCase(), pair[2]!);
     else plain ??= entry;
   }
-  const web = named.get("https") ?? named.get("http") ?? plain;
-  if (web) return proxyUrl(web);
-  const socks = named.get("socks");
-  return socks ? proxyUrl(socks, "socks4a") : null;
+  const candidates: [string | undefined, string][] = [[named.get("https"), "http"], [named.get("http"), "http"], [plain, "http"], [named.get("socks"), "socks4a"]];
+  for (const [value, scheme] of candidates) {
+    const url = value ? proxyUrl(value, scheme) : null;
+    if (url) return url;
+  }
+  return null;
+}
+
+export function shownProxy(proxy: string): string {
+  return proxy.replace(/\/\/[^@/]*@/, "//…@");
 }
 
 export function curlArguments(url: string, proxy: string, output: string): string[] {

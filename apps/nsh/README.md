@@ -119,7 +119,8 @@ Settings → Proxy and local proxies such as Clash set), unless the app has its 
 `https_proxy`, `all_proxy` or `http_proxy` the login shell exports (`$SHELL -ilc`, as This Computer starts `pikibun`);
 on Linux, the same, then GNOME's manual proxy (`gsettings`). Where it finds one, curl (`curl.exe` on Windows 10 and
 later, through `cmd`, or through `sh`) downloads the package through it, the app reading the file's size for the
-progress bar and its bytes for the checksum; without curl, `fetch` downloads it. `nsh.json` grants the proxy variables
+progress bar and its bytes for the checksum. Without curl, or where the proxy doesn't carry it (one a proxy app left
+set when it quit), `fetch` downloads it directly, as before; a failure says both why, without the proxy's password. `nsh.json` grants the proxy variables
 (`capabilities.process.env`), so the app sees its own and its commands get them. A proxy auto-config (PAC) script
 isn't read.
 

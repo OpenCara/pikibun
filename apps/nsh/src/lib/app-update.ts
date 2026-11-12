@@ -7,7 +7,7 @@ import { loginShell } from "./pikibun-command";
 import { thisComputer } from "./this-computer";
 import { thisServer } from "./this-server";
 import {
-  curlArguments, GNOME_PROXY_PROBE, gnomeProxy, PROXY_VARIABLES, SHELL_PROXY_PROBE, shellProxy, WINDOWS_INTERNET_SETTINGS, windowsProxy,
+  curlArguments, GNOME_PROXY_PROBE, gnomeProxy, PROXY_VARIABLES, SHELL_PROXY_PROBE, shellProxy, shownProxy, WINDOWS_INTERNET_SETTINGS, windowsProxy,
 } from "./update-proxy";
 import { LINUX_INSTALL, MAC_INSTALL, utf16le, windowsUpdateTask } from "./update-scripts";
 import { compareVersions, isPrerelease, isVersion } from "./version";
@@ -141,14 +141,30 @@ export async function updateProxy(): Promise<string | null> {
   }
 }
 
+export class ProxyDownloadFailed extends Error {}
+
+export async function preferProxy(proxy: string | null, through: (proxy: string) => Promise<string | null>, direct: () => Promise<string>): Promise<string> {
+  if (!proxy) return direct();
+  let missed: ProxyDownloadFailed | undefined;
+  try {
+    const file = await through(proxy);
+    if (file) return file;
+  } catch (error) {
+    if (!(error instanceof ProxyDownloadFailed)) throw error;
+    missed = error;
+  }
+  try {
+    return await direct();
+  } catch (error) {
+    if (!missed) throw error;
+    throw new Error(`${missed.message} Downloading it directly failed too: ${messageOf(error)}`);
+  }
+}
+
 async function download(asset: ReleaseAsset, progress: (loaded: number, total: number) => void): Promise<string> {
   const dir = folder();
   const proxy = await updateProxy().catch(() => null);
-  if (proxy) {
-    const file = await downloadThrough(proxy, dir, asset, progress);
-    if (file) return file;
-  }
-  return downloadInto(dir, asset, progress);
+  return preferProxy(proxy, found => downloadThrough(found, dir, asset, progress), () => downloadInto(dir, asset, progress));
 }
 
 const later = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -175,14 +191,14 @@ export async function downloadThrough(proxy: string, dir: string, asset: Release
   try {
     output = await nshProcess.run(command, words, { cwd: dir, timeoutMs: CURL_MS });
   } catch (error) {
-    throw new Error(`The download through the proxy at ${proxy} didn't run: ${messageOf(error)}`);
+    throw new ProxyDownloadFailed(`The download through the proxy at ${shownProxy(proxy)} didn't run: ${messageOf(error)}.`);
   } finally {
     running = false;
     await watching;
   }
   if (output.code === 127 || output.code === 9009) return null;
   if (output.code !== 0) {
-    throw new Error(`The download through the proxy at ${proxy} failed: ${lastLines(`${output.stderr}\n${output.stdout}`) || `curl's exit code ${output.code ?? "unknown"}`}`);
+    throw new ProxyDownloadFailed(`The download through the proxy at ${shownProxy(proxy)} failed: ${lastLines(`${output.stderr}\n${output.stdout}`) || `curl's exit code ${output.code ?? "unknown"}`}.`);
   }
   const { size } = await stat(file);
   progress(size, asset.size || size);

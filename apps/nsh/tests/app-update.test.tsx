@@ -1,6 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
-import { assetSuffix, compareVersions, newerRelease, RELEASES_API, updatesFolder } from "../src/lib/app-update";
-import { curlArguments, gnomeProxy, proxyUrl, shellProxy, windowsProxy } from "../src/lib/update-proxy";
+import { assetSuffix, compareVersions, newerRelease, preferProxy, ProxyDownloadFailed, RELEASES_API, updatesFolder } from "../src/lib/app-update";
+import { curlArguments, gnomeProxy, proxyUrl, shellProxy, shownProxy, windowsProxy } from "../src/lib/update-proxy";
 import { utf16le, windowsInstallerArguments, windowsUpdateTask } from "../src/lib/update-scripts";
 import { server, signedIn } from "./fixtures";
 
@@ -101,6 +101,43 @@ describe("finding the proxy the download goes through", () => {
     expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x0\r\n    ProxyServer    REG_SZ    127.0.0.1:7890"))).toBe(null);
     expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x1"))).toBe(null);
     expect(windowsProxy("")).toBe(null);
+  });
+
+  test("Windows' next proxy entry where the first can't be passed on", () => {
+    expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    https=bad%host:1;http=127.0.0.1:8080"))).toBe("http://127.0.0.1:8080");
+    expect(windowsProxy(internetSettings("    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    https=bad%host:1;socks=127.0.0.1:1080"))).toBe("socks4a://127.0.0.1:1080");
+  });
+
+  test("a proxy's password is never shown", () => {
+    expect(shownProxy("http://ada:secret@proxy.lan:3128")).toBe("http://…@proxy.lan:3128");
+    expect(shownProxy("http://127.0.0.1:7890")).toBe("http://127.0.0.1:7890");
+  });
+
+  test("a proxy that doesn't carry the download leaves it to the direct one, as before", async () => {
+    const tried: string[] = [];
+    const direct = (outcome: "ok" | "fails") => async () => {
+      tried.push("direct");
+      if (outcome === "fails") throw new Error("The download failed: GitHub answered 403.");
+      return "/updates/direct";
+    };
+    const through = (outcome: "ok" | "no curl" | "unreachable" | "checksum") => async (proxy: string) => {
+      tried.push(`through ${proxy}`);
+      if (outcome === "unreachable") throw new ProxyDownloadFailed("The download through the proxy at http://127.0.0.1:7890 failed: curl: (7) Failed to connect.");
+      if (outcome === "checksum") throw new Error("The download doesn't match the checksum GitHub published for it. Try again.");
+      return outcome === "ok" ? "/updates/proxied" : null;
+    };
+    expect(await preferProxy("http://127.0.0.1:7890", through("ok"), direct("ok"))).toBe("/updates/proxied");
+    expect(await preferProxy(null, through("ok"), direct("ok"))).toBe("/updates/direct");
+    expect(await preferProxy("http://127.0.0.1:7890", through("no curl"), direct("ok"))).toBe("/updates/direct");
+    expect(await preferProxy("http://127.0.0.1:7890", through("unreachable"), direct("ok"))).toBe("/updates/direct");
+    tried.length = 0;
+    const both = await preferProxy("http://127.0.0.1:7890", through("unreachable"), direct("fails")).catch((error: Error) => error.message);
+    expect(both).toBe("The download through the proxy at http://127.0.0.1:7890 failed: curl: (7) Failed to connect. Downloading it directly failed too: The download failed: GitHub answered 403.");
+    expect(tried).toEqual(["through http://127.0.0.1:7890", "direct"]);
+    tried.length = 0;
+    const corrupt = await preferProxy("http://127.0.0.1:7890", through("checksum"), direct("ok")).catch((error: Error) => error.message);
+    expect(corrupt).toBe("The download doesn't match the checksum GitHub published for it. Try again.");
+    expect(tried).toEqual(["through http://127.0.0.1:7890"]);
   });
 
   test("the login shell's variables, after whatever its startup files print", () => {
