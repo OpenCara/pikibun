@@ -11,7 +11,6 @@ const testSecret = "native-auth-test-secret-not-for-deployment";
 const verifier = "v".repeat(43) + "-native_verifier";
 const appState = "app-state-0123456789";
 
-// The page the system browser ends on: an Open Pikibun link to pikibun://auth, which it also tries at once.
 function appLink(status: number, headers: Headers, html: string): string {
   assert.equal(status, 200);
   assert.match(headers.get("content-type") ?? "", /^text\/html/);

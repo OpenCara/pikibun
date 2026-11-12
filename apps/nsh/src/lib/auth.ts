@@ -193,9 +193,6 @@ export async function startGitHubSignIn(origin: string, claim?: string, options:
   };
 }
 
-// The states of the sign-ins this app finished. The server's page in the browser tries pikibun://auth on its own and
-// offers it as Open Pikibun too, so the same link can come twice: the second is dropped, rather than waiting, unheard,
-// for the next sign-in screen to call it a stranger's.
 const finishedStates = new Set<string>();
 
 export function isFinishedSignInLink(url: string): boolean {

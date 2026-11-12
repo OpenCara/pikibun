@@ -367,11 +367,6 @@ function nativeCallback(c: AppContext, native: NativeRequest, params: Record<str
   return native.callback === 'page' ? `${appOrigin(c.env)}${NATIVE_PAGE_PATH}?${query}` : `${NATIVE_CALLBACK}?${query}`;
 }
 
-// Hands a native sign-in's result back to the app. Its own web view watches for this server's page, so that one is a
-// redirect. The system browser gets a page with an Open Pikibun link instead of a redirect to pikibun://auth: browsers
-// launch another app only on a user's gesture, and drop a redirect to one without a word when nothing was pressed
-// since the app opened the browser, as when GitHub skips its authorize page for an app the account authorized
-// before. The page also tries the link at once, which browsers that allow it ask about or follow.
 function nativeReturn(c: AppContext, native: NativeRequest, params: Record<string, string>): Response {
   const link = nativeCallback(c, native, params);
   if (native.callback === 'page') return c.redirect(link);
