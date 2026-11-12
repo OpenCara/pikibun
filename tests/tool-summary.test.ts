@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { callHeadline, pairToolResults, resultOutcome, resultOutput, toolCallRows } from "../packages/client/src/tool-rows.js";
 import { briefEntry } from "../packages/shared/src/transcript-display.js";
-import { callArguments, callTarget, readable, resultBody, resultSummary } from "../packages/shared/src/tool-summary.js";
+import { callArguments, callTarget, readable, resultBody, resultNotes, resultSummary } from "../packages/shared/src/tool-summary.js";
 import type { EntryView } from "../packages/shared/src/types.js";
 
 const attribution = { initiatedBy: "github:1", actingAs: "github:1", mode: "write" };
@@ -75,6 +75,30 @@ test("an opened result reads as the tool printed it, without who asked", () => {
   assert.equal(resultBody("plain output\n"), "plain output\n");
   assert.equal(readable({ path: "a.ts", edits: [{ oldText: "a\nb", newText: "c" }], args: ["status", "-s"], empty: {} }),
     "path: a.ts\nedits:\n  - oldText:\n      a\n      b\n    newText: c\nargs: [\"status\",\"-s\"]\nempty: {}");
+});
+
+const harness = (...lines: string[]) => `<harness>\n${lines.join("\n")}\n</harness>`;
+
+test("a call that failed in the harness reads as the reason it failed, not as its <harness> tags", () => {
+  const thrown = harness("[error] Request failed: ECONNRESET");
+  assert.deepEqual(resultSummary(thrown, { error: true }), { text: "Request failed: ECONNRESET", failed: true });
+  assert.equal(resultBody(thrown), "Error: Request failed: ECONNRESET");
+  assert.deepEqual(resultNotes(thrown), { output: "", notes: [{ severity: "error", message: "Request failed: ECONNRESET" }] });
+
+  const multi = `partial output\n${harness("[warn] Output truncated", "[error] git exited 128:", "fatal: not a git repository")}`;
+  assert.deepEqual(resultSummary(multi), { text: "git exited 128:", failed: true }, "the first error, even after output and warnings");
+  assert.equal(resultBody(multi), "partial output\nWarning: Output truncated\nError: git exited 128:\nfatal: not a git repository");
+
+  const noted = `${answer({ content: "a\nb\n" })}\n${harness("[info] Output truncated to its beginning")}`;
+  assert.deepEqual(resultSummary(noted), { text: "2 lines", failed: false }, "a note alone leaves the output's own summary");
+  assert.equal(resultBody(noted), "a\nb\nNote: Output truncated to its beginning");
+  assert.deepEqual(resultSummary(harness("[warn] Nothing printed")), { text: "Nothing printed", failed: false });
+
+  for (const text of ["<harness>\nnot a note\n</harness>", "plain\n</harness>", "<harness>"]) {
+    assert.deepEqual(resultNotes(text), { output: text, notes: [] }, `left as it is: ${JSON.stringify(text)}`);
+  }
+  const brief = briefEntry(entry("0:7", "toolResult", thrown, { toolResult: { callId: "c1", tool: "gh", error: true } }));
+  assert.equal(brief.text, "Request failed: ECONNRESET", "brief tool output keeps the reason too");
 });
 
 const entry = (id: string, role: string, text: string, extra: Partial<EntryView> = {}): EntryView => ({ id, kind: "message", role, text, conversationId: "0", ...extra });

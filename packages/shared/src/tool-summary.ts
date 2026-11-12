@@ -115,6 +115,43 @@ export interface ResultSummary {
   failed: boolean;
 }
 
+export interface ResultNote {
+  severity: "info" | "warn" | "error";
+  message: string;
+}
+
+const HARNESS_OPEN = "<harness>\n";
+const HARNESS_CLOSE = /\n<\/harness>\s*$/;
+const NOTE_LINE = /^\[(info|warn|error)\] ?(.*)$/;
+
+export function resultNotes(text: string): { output: string; notes: ResultNote[] } {
+  const close = HARNESS_CLOSE.exec(text);
+  if (!close) return { output: text, notes: [] };
+  const head = text.slice(0, close.index);
+  const after = head.lastIndexOf(`\n${HARNESS_OPEN}`);
+  const open = after >= 0 ? after + 1 : head.startsWith(HARNESS_OPEN) ? 0 : -1;
+  if (open < 0) return { output: text, notes: [] };
+  const body = head.slice(open + HARNESS_OPEN.length).split("\n");
+  const notes: ResultNote[] = [];
+  for (const line of body) {
+    const note = NOTE_LINE.exec(line);
+    if (note) notes.push({ severity: note[1] as ResultNote["severity"], message: note[2]! });
+    else if (notes.length) notes[notes.length - 1]!.message += `\n${line}`;
+    else return { output: text, notes: [] };
+  }
+  return { output: text.slice(0, Math.max(0, open - 1)), notes };
+}
+
+const NOTE_LABELS: Record<ResultNote["severity"], string> = { error: "Error", warn: "Warning", info: "Note" };
+
+function noteLines(notes: readonly ResultNote[]): string {
+  return notes.map(note => `${NOTE_LABELS[note.severity]}: ${note.message}`).join("\n");
+}
+
+function noteSummary(note: ResultNote): string {
+  return oneLine(note.message.split("\n").find(line => line.trim()) ?? "") || NOTE_LABELS[note.severity];
+}
+
 function saying(text: string): string[] {
   return text.split("\n").filter(line => line.trim() && !IMAGE_LINE.test(line.trim()));
 }
@@ -201,10 +238,14 @@ function answerSummary(all: Fields, images: number): ResultSummary {
   return done(fieldsSummary(fields) || "Done");
 }
 
-export function resultSummary(text: string, options: { error?: boolean } = {}): ResultSummary {
+export function resultSummary(whole: string, options: { error?: boolean } = {}): ResultSummary {
+  const { output: text, notes } = resultNotes(whole);
+  const error = notes.find(note => note.severity === "error");
+  if (error) return { text: shorten(noteSummary(error), LINE_CHARS), failed: true };
   const parsed = answer(text);
+  const first = (text.split("\n").find(line => line.trim()) ?? "").trimEnd();
   const summary = parsed ? answerSummary(parsed.fields, parsed.images)
-    : { text: (text.split("\n").find(line => line.trim()) ?? "").trimEnd(), failed: false };
+    : { text: first || (notes[0] ? noteSummary(notes[0]) : ""), failed: false };
   return { text: shorten(summary.text, LINE_CHARS), failed: summary.failed || options.error === true };
 }
 
@@ -225,7 +266,13 @@ export function readable(value: unknown, indent = ""): string {
   return Object.entries(value).map(([key, child]) => `${indent}${key}:${block(child)}`).join("\n");
 }
 
-export function resultBody(text: string): string {
+export function resultBody(whole: string): string {
+  const { output, notes } = resultNotes(whole);
+  const body = outputBody(output);
+  return notes.length ? [body.replace(/\n+$/, ""), noteLines(notes)].filter(Boolean).join("\n") : body;
+}
+
+function outputBody(text: string): string {
   const parsed = answer(text);
   if (!parsed) return text;
   const fields = Object.fromEntries(Object.entries(parsed.fields).filter(([key]) => !ATTRIBUTION.has(key)));
