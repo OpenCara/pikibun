@@ -101,6 +101,7 @@ type Request<R> = R extends unknown ? Omit<R, "id"> : never;
 
 export interface ChannelOptions<Event extends { type: string }> {
   launch(): CommandLink;
+  before?(): Promise<void>;
   eventTypes: ReadonlySet<string>;
   problem(lines: readonly string[], code: number | null | undefined): LaunchProblem;
   failure(id: number, message: string, notReady: boolean): Result<Event>;
@@ -170,7 +171,7 @@ export class CommandChannel<Event extends { type: string }, Req extends { id: nu
   get launchFailure(): LaunchProblem | undefined { return this.problem; }
 
   async request(message: Request<Req>, sent?: (id: number) => void): Promise<Result<Event>> {
-    this.ready ??= this.spawn();
+    this.ready ??= (this.options.before?.() ?? Promise.resolve()).then(() => this.spawn());
     const starting = this.ready;
     try { await starting; }
     catch {
