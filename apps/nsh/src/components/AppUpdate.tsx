@@ -1,9 +1,9 @@
-import { Text, View } from "nsh";
-import { Button as BaseButton, Progress } from "nsh/base";
+import { signal, Text, View, type ViewStyle } from "nsh";
+import { Progress } from "nsh/base";
 import { appUpdate, formatBytes, isVersion, type AppUpdater, type UpdatePhase } from "../lib/app-update";
 import { openExternal } from "../lib/links";
 import { palette, radius, text } from "../theme";
-import { Button, CardBody, Feedback, IconButton, Row, Small } from "../ui";
+import { Banner, Button, CardBody, Feedback, Row, Small } from "../ui";
 
 const percent = (phase: UpdatePhase) => (phase.name === "downloading" && phase.total > 0 ? Math.min(100, Math.floor((phase.loaded / phase.total) * 100)) : 0);
 
@@ -38,43 +38,59 @@ const inProgress = (updater: AppUpdater) => {
   return name === "downloading" || name === "installing" || name === "restarting";
 };
 
-export function SidebarUpdate(props: { onDetails: () => void }) {
-  const updater = appUpdate();
-  if (!updater.offered) return <></>;
-  const update = () => updater.available();
-  const press = () => {
-    if (update()?.asset) void updater.install();
-    else if (update()) openExternal(update()!.page);
-  };
-  return (
-    <If when={update()}>
-      <View testID="sidebar-update" style={{ gap: 6, paddingHorizontal: 8, paddingVertical: 6 }}>
-        <If when={inProgress(updater)}
-          else={
-            <>
-              <Button testID="sidebar-update-button" small block variant="outline" icon={update()?.asset ? "download" : "external-link"}
-                label={`Update to ${update()?.version ?? ""}`} onPress={press} />
-              <If when={updater.phase().name === "failed"}>
-                <BaseButton testID="sidebar-update-error" accessibilityLabel="The update didn't finish: see why" onPress={props.onDetails}
-                  style={{ paddingHorizontal: 2 }} hoverStyle={{ opacity: 0.8 }} activeStyle={{ opacity: 0.6 }}>
-                  <Text style={{ fontSize: text.caption, lineHeight: 17, color: palette().tones.danger.text }}>The update didn't finish: see why</Text>
-                </BaseButton>
-              </If>
-            </>
-          }>
-          <UpdateProgress updater={updater} testID="sidebar-update-progress" />
-        </If>
-      </View>
-    </If>
-  );
-}
+const UPDATE_HINT = "It downloads here, installs, and Pikibun restarts. Sessions carry on on the server; this computer's host reconnects once Pikibun is back.";
+const NO_PACKAGE_HINT = "There is no package for this computer in the release: download it from the release page.";
 
-export function UpdateIconButton(props: { onOpen: () => void }) {
+const putOff = signal("");
+
+export function HomeUpdate(props: { style?: ViewStyle }) {
   const updater = appUpdate();
   if (!updater.offered) return <></>;
+  const failure = () => { const phase = updater.phase(); return phase.name === "failed" ? phase.error : ""; };
+  const shown = () => {
+    const update = updater.available();
+    return update && (update.version !== putOff() || inProgress(updater) || failure()) ? update : null;
+  };
+  const retry = () => { if (updater.available()?.asset) void updater.install(); else void updater.check(); };
   return (
-    <If when={updater.available()}>
-      {update => <IconButton testID="update-available" icon="download" tone="info" label={`Pikibun ${update().version} is available`} onPress={props.onOpen} />}
+    <If when={shown()}>
+      {available => (
+        <View style={props.style}>
+          <If when={!inProgress(updater)}
+            else={
+              <View testID="home-update-progress" style={{ gap: 8, borderRadius: radius.medium, borderWidth: 1, borderColor: palette().tones.info.border, paddingVertical: 12, paddingHorizontal: 16 }}>
+                <UpdateProgress updater={updater} testID="home-update-progress-bar" detail />
+              </View>
+            }>
+            <If when={failure()}
+              else={
+                <Banner testID="home-update" tone="info" icon="download" title={`Pikibun ${available().version} is available`}
+                  actions={
+                    <>
+                      <If when={available().asset}
+                        else={<Button testID="home-update-page" small variant="primary" icon="external-link" label="Release page" onPress={() => openExternal(available().page)} />}>
+                        <Button testID="home-update-button" small variant="primary" icon="download" label="Update and restart" onPress={() => void updater.install()} />
+                      </If>
+                      <Button small variant="ghost" label="What's new" onPress={() => openExternal(available().page)} />
+                      <Button testID="home-update-later" small variant="ghost" label="Later" onPress={() => putOff.set(available().version)} />
+                    </>
+                  }>
+                  {available().asset ? UPDATE_HINT : NO_PACKAGE_HINT}
+                </Banner>
+              }>
+              <Banner testID="home-update-failed" tone="danger" title={`The update to Pikibun ${available().version} didn't finish`}
+                actions={
+                  <>
+                    <Button testID="home-update-retry" small variant="outline" icon="refresh" label="Try again" disabled={updater.checking()} onPress={retry} />
+                    <Button small variant="ghost" icon="external-link" label="Release page" onPress={() => openExternal(available().page)} />
+                  </>
+                }>
+                {failure()}
+              </Banner>
+            </If>
+          </If>
+        </View>
+      )}
     </If>
   );
 }
@@ -102,8 +118,7 @@ export function AppUpdateRows() {
             <If when={!inProgress(updater)}
               else={<CardBody testID="app-update-progress"><UpdateProgress updater={updater} testID="app-update-progress-bar" detail /></CardBody>}>
               <Row testID="app-update" title={`Pikibun ${available().version} is available`}
-                hint={available().asset ? "It downloads here, installs, and Pikibun restarts. Sessions carry on on the server; this computer's host reconnects once Pikibun is back."
-                  : "There is no package for this computer in the release: download it from the release page."}
+                hint={available().asset ? UPDATE_HINT : NO_PACKAGE_HINT}
                 trailing={
                   <View style={{ flexDirection: "row", gap: 8 }}>
                     <Button small variant="ghost" label="What's new" onPress={() => openExternal(available().page)} />

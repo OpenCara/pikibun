@@ -1,6 +1,6 @@
 import { effect, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
-import { SidebarUpdate, UpdateIconButton } from "./components/AppUpdate";
+import { HomeUpdate } from "./components/AppUpdate";
 import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
 import { startUpdateChecks } from "./lib/app-update";
@@ -185,7 +185,6 @@ function Shell() {
   const workspaceSettings = (workspaceId: string) => openSettings("workspaces", workspaceId);
   const listActions = () => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-      <UpdateIconButton onOpen={() => openSettings("profile")} />
       <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
       <IconButton testID="new-session" icon="plus" label="New session" onPress={() => startNew()} />
     </View>
@@ -202,8 +201,11 @@ function Shell() {
                 <If when={wide()}
                   else={
                     <Page title="Sessions" leading={drawsHeaders ? <Logo size={22} /> : settingsButton()} actions={drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions()}>
-                      <SessionList onOpen={openSession} onNew={() => startNew()} onNewIn={startNew} onWorkspaceSettings={workspaceSettings}
-                        onNewWorkspace={() => creatingWorkspace.set(true)} />
+                      <View style={{ flex: 1 }}>
+                        <HomeUpdate style={{ paddingHorizontal: 16, paddingTop: 12 }} />
+                        <SessionList onOpen={openSession} onNew={() => startNew()} onNewIn={startNew} onWorkspaceSettings={workspaceSettings}
+                          onNewWorkspace={() => creatingWorkspace.set(true)} />
+                      </View>
                     </Page>
                   }>
                   <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
@@ -214,9 +216,12 @@ function Shell() {
                       <View style={{ flex: 1, paddingTop: headerInPage ? safeArea().top : 0, backgroundColor: palette().background }}>
                         <If when={selected()}
                           else={
-                            <Each of={[homeKey()]} key={value => String(value)}>
-                              {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} go={go} />}
-                            </Each>
+                            <>
+                              <HomeUpdate style={{ width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 20, paddingTop: 20 }} />
+                              <Each of={[homeKey()]} key={value => String(value)}>
+                                {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} go={go} />}
+                              </Each>
+                            </>
                           }>
                           <Each of={selected() ? [selected()!] : []} key={id => id}>
                             {id => <SessionView id={id()} page={false} openSession={openSession} go={go} />}
@@ -288,7 +293,6 @@ function Sidebar(props: {
         <NavItem testID="all-sessions" icon="history" label="Sessions" onPress={props.onAll} />
         <NavItem testID="open-by-id" icon="hash" label="Open by ID" onPress={props.onOpenById} />
       </View>
-      <SidebarUpdate onDetails={() => props.onSettings("profile")} />
       <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} onNewIn={props.onNewIn} onWorkspaceSettings={props.onWorkspaceSettings}
         onNewWorkspace={props.onNewWorkspace} />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>

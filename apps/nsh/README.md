@@ -103,11 +103,28 @@ The macOS, Windows and Linux builds offer a newer release themselves (`src/lib/a
 NSH can't read the version a package was built with, so each release stamps it into `src/app-version.ts`
 (`node scripts/app-version.mjs <version>`, run by `release-app.yml` before `nsh package`); a build from the repository
 is a development build, which offers none. The app asks GitHub for the repository's releases at launch and every six
-hours, takes the newest published `app-v` one (a prerelease only while it runs one), and shows it in the sidebar (an icon
-in a narrow window's header) and under **Settings → Profile → This app**. **Update** downloads the release's package for
+hours, takes the newest published `app-v` one (a prerelease only while it runs one), and shows it on the main page (the home
+beside the sidebar, above the chat box; above the session list in a narrow window; **Later** puts it off until the next
+launch) and under **Settings → Profile → This app**. **Update** downloads the release's package for
 this computer into the app's data folder (`updates/`, `capabilities.fs.write`) with a progress bar, in parts of at most
 4 MiB that the platform's own `copy /b` or `cat` joins (NSH writes at most 8 MiB at once), checks it against the SHA-256
-GitHub publishes for the asset, installs it and quits; the new version starts once the old one has gone:
+GitHub publishes for the asset, installs it and quits; the new version starts once the old one has gone.
+
+The download goes through the proxy the computer's own tools use (`src/lib/update-proxy.ts`). NSH's `fetch` is
+`NSURLSession` on macOS, which follows the system's proxy settings but not a shell's variables, and ureq on Windows and
+Linux, which follows the app process's own `HTTPS_PROXY`, `ALL_PROXY` and `HTTP_PROXY` but not the system's settings; an
+app opened from the Dock, the Start menu or a launcher has no shell variables. So before it downloads, the app looks for
+the proxy `fetch` would miss: on Windows, Internet Settings' `ProxyEnable` and `ProxyServer` (`reg query`, what
+Settings → Proxy and local proxies such as Clash set), unless the app has its own proxy variables; on macOS, the
+`https_proxy`, `all_proxy` or `http_proxy` the login shell exports (`$SHELL -ilc`, as This Computer starts `pikibun`);
+on Linux, the same, then GNOME's manual proxy (`gsettings`). Where it finds one, curl (`curl.exe` on Windows 10 and
+later, through `cmd`, or through `sh`) downloads the package through it, the app reading the file's size for the
+progress bar and its bytes for the checksum. Without curl, or where the proxy doesn't carry it (one a proxy app left
+set when it quit), `fetch` downloads it directly, as before; a failure says both why, without the proxy's password. `nsh.json` grants the proxy variables
+(`capabilities.process.env`), so the app sees its own and its commands get them. A proxy auto-config (PAC) script
+isn't read.
+
+Installing it:
 
 - **Windows**: every program the app starts runs in a job that ends with the app, so the app has Task Scheduler run the
   installer instead (`schtasks`, a hidden one-off task that runs on battery too), silently, with `/RELAUNCH`, which
