@@ -225,6 +225,32 @@ test("write and ask share FIFO, and placement does not let the next job overtake
   }
 });
 
+test("the sender's next shared message steers the run at work: the agent reads it after the tool call, before it answers, and one run ends", options, async t => {
+  const f = await fixture(t);
+  const gate = f.gateTool(OWNER, "write");
+  const first = await submit(f.session, OWNER, "write", { content: "TEST_IDENTITY", requestId: "first" });
+  await gate.entered();
+  const steerInput = { content: "TEST_WRITE steered.txt\nsteered", requestId: "steer" };
+  const steer = await submit(f.session, OWNER, "write", steerInput);
+  const other = await submit(f.session, WRITER, "write", { content: "TEST_WRITE other.txt\nlater", requestId: "other" });
+  for (let count = 0; count < 250 && queue(await f.session.view())[1]?.status !== "running"; count++) await delay(20);
+  assert.deepEqual(queue(await f.session.view()).map(run => run.status), ["running", "running", "queued"], "someone else's message still waits");
+  gate.release();
+  const view = await idle(f.session);
+  assert.deepEqual(queue(view).map(run => run.status), ["settled", "settled", "settled"]);
+  assert.equal(await file(f.session, "steered.txt"), "steered");
+  assert.equal(await file(f.session, "other.txt"), "later");
+  const shared = view.entries.filter(entry => entry.conversationId === first.conversationId);
+  const steered = shared.findIndex(entry => entry.role === "user" && entry.text === steerInput.content);
+  const identity = shared.findIndex(entry => entry.role === "toolResult" && entry.toolResult?.tool === "identity");
+  const answer = shared.findIndex(entry => entry.role === "assistant" && entry.text.startsWith("Deterministic test provider result"));
+  assert.ok(identity >= 0 && steered === identity + 1, "the steer is placed right after the running tool call's result");
+  assert.ok(answer > steered, "and before the run's answer");
+  assert.equal(userEntries(view, steer, steerInput.content).length, 1);
+  assert.equal(userEntries(view, other, "TEST_WRITE other.txt\nlater").length, 1);
+  assert.equal(view.activity, "done");
+});
+
 test("queued write/ask FIFO and receipt identity survive a fresh service over the same SQLite", options, async t => {
   const f = await fixture(t);
   await pauseQueue(f.session);

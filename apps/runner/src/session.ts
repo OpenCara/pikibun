@@ -55,7 +55,7 @@ import { definedTool } from "./session/tools/defined.js";
 import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
-import { RunQueue } from "./session/run-queue.js";
+import { RunQueue, submissionRequestId } from "./session/run-queue.js";
 import {
   Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
@@ -579,7 +579,8 @@ export class RunnerSession {
           continue;
         }
         await this.applyOptions(conversation, run, content);
-        submission = await conversation.submit({ type: "input", content, requestId: run.key }, context);
+        submission = await conversation.submit({ type: "input", content, requestId: submissionRequestId(run),
+          ...(run.steered !== undefined ? { whenBusy: "steer" as const } : {}) }, context);
       } else submission = await this.harness.submission(run.submissionId as SubmissionId, context);
       if (submission) {
         await this.mutate(meta => { const saved = meta.runs[run.key]!; saved.submissionId = submission.id; saved.status = "running"; });
