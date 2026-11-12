@@ -5,8 +5,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { instanceAdmins, localOwner } from '../authority/index.js';
 import { loadConfig } from '../config.js';
 import { InstanceLockedError } from '../db/index.js';
-import { PASSWORD_USERNAME } from '../http.js';
-import { PasswordCommandError, runPasswordCommand } from '../password-accounts-cli.js';
+import { LOCAL_OWNER_ACCOUNT, PASSWORD_USERNAME } from '../http.js';
+import { passwordCommandOutcome, PasswordCommandError } from '../password-accounts-cli.js';
 import { startServer } from '../serve.js';
 import { webBuild } from '../static.js';
 import type { Env } from '../types.js';
@@ -115,10 +115,10 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
     async createAdmin(username, password) {
       if (!shared) throw new LocalServerError('Administrator accounts are for a shared Pikibun: for yourself alone, you sign in with its sign-in link.');
       try {
-        const done = await runPasswordCommand(env.DB, settings, { kind: 'create-admin', username }, async () => password);
-        const name = username.trim().toLowerCase();
-        const gave = done.startsWith('pikibun: gave');
-        return `${gave ? 'Gave' : 'Created'} the administrator password:${name}${gave ? ' its first password' : ''}: sign in at ${origin} with the username ${name}.`;
+        const outcome = await passwordCommandOutcome(env.DB, settings, { kind: 'create-admin', username }, async () => password);
+        const name = outcome.userId.slice('password:'.length);
+        const gave = outcome.done === 'first-password';
+        return `${gave ? 'Gave' : 'Created'} the administrator ${outcome.userId}${gave ? ' its first password' : ''}: sign in at ${origin} with the username ${name}.`;
       }
       catch (error) {
         if (error instanceof PasswordCommandError) throw new LocalServerError(error.message.replace(/^./, first => first.toUpperCase()).replace(/ADMIN_USER_IDS/g, 'the administrators').replace(/--reset-password \S+/, 'reset its password'));
@@ -140,10 +140,8 @@ function safeUsername(): string | undefined {
   try { return userInfo().username; } catch { return undefined; }
 }
 
-const OWNER_ACCOUNT = `((auth_kind = 'github' AND github_id IS NOT NULL) OR (auth_kind = 'password' AND id LIKE 'password:%'))`;
-
 async function firstAccount(env: Env): Promise<string | undefined> {
-  return (await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE ${OWNER_ACCOUNT} ORDER BY created_at, id LIMIT 1`).first())?.id;
+  return (await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE ${LOCAL_OWNER_ACCOUNT} ORDER BY created_at, id LIMIT 1`).first())?.id;
 }
 
 async function pinnedOwner(state: LocalState, stateDir: string, staticDir: string): Promise<string | undefined> {
@@ -151,7 +149,7 @@ async function pinnedOwner(state: LocalState, stateDir: string, staticDir: strin
   if (!state.shared && !state.sharedOnce) return undefined;
   const admins = state.shared?.admins ?? [];
   const owner = await withData(state, stateDir, staticDir, async env => {
-    const rows = admins.length ? await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE ${OWNER_ACCOUNT} AND id IN (${admins.map(() => '?').join(',')})`).bind(...admins).all() : [];
+    const rows = admins.length ? await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE ${LOCAL_OWNER_ACCOUNT} AND id IN (${admins.map(() => '?').join(',')})`).bind(...admins).all() : [];
     const admin = admins.find(id => rows.some(row => row.id === id));
     if (admin) return admin;
     if (!await firstAccount(env)) return undefined;

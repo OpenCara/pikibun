@@ -8,7 +8,7 @@ import { ThisServerPanel } from "../../src/settings/SelfHost";
 
 const LOCAL = "http://127.0.0.1:7878";
 const SIGN_IN_TOKEN = "c".repeat(43);
-const params = embedder.params as { app?: unknown; command?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown };
+const params = embedder.params as { app?: unknown; command?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown; noToken?: unknown };
 let command = String(params.command ?? "ok");
 const sent = signal<string[]>([]);
 if (typeof params.appVersion === "string") {
@@ -52,7 +52,7 @@ setServerLauncher(() => link((request, emit) => {
   if (request.type === "inspect") reply({ inspection: inspection() });
   else if (request.type === "start") {
     if (command === "old") { emit({ type: "result", id: request.id, ok: false, error: { message: "Add your GitHub OAuth app first: Pikibun signs you in with it." } }); return; }
-    emit({ type: "status", state: "running", origin: LOCAL, signInToken: SIGN_IN_TOKEN, host: "waiting" });
+    emit({ type: "status", state: "running", origin: LOCAL, ...(params.noToken === true ? {} : { signInToken: SIGN_IN_TOKEN }), host: "waiting" });
     emit({ type: "log", level: "info", message: `Pikibun is running at ${LOCAL}, reachable from this computer only.` });
     reply();
   } else if (request.type === "stop") {

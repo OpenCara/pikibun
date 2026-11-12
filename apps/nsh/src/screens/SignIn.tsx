@@ -126,8 +126,7 @@ function SignInForm(props: { inviteToken?: string }) {
   const useServer = (address: string) => { server.set(address); editingServer.set(false); selfHostOpen.set(false); };
   const signInToOwnServer = (address: string) => {
     useServer(address);
-    const signInToken = thisServer().signInTokenFor(address);
-    if (signInToken) void action.run(() => signInToLocalServer(address, signInToken));
+    void action.run(() => signInToLocalServer(address, thisServer().requireSignInToken(address)));
   };
   const passwordSignup = () => methods()?.passwordSignup ?? "off";
   const canSignUp = () => usesBrowserSession && passwords() && (passwordSignup() === "open" || (passwordSignup() === "invite" && invited()));

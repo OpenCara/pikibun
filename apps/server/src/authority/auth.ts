@@ -458,20 +458,24 @@ export function localOwnerName(env: Env): string {
 
 async function localOwnerAccount(env: Env): Promise<UserRow> {
   let owner = await localOwner(env);
-  if (!owner && !env.LOCAL_OWNER_ID) {
-    const name = localOwnerName(env);
+  for (const name of new Set([localOwnerName(env), 'owner'])) {
+    if (owner || env.LOCAL_OWNER_ID) break;
     const userId = `password:${name}`;
-    const created = now();
     await dbResult(env.DB.batch([
       env.DB.query(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
         SELECT ?, ?, NULL, NULL, ?, ?, ?, '{}', 'password', ? WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = ? OR username = ?)`)
-        .bind(userId, name, name, name, `${name}@users.pikibun.invalid`, created, userId, name),
+        .bind(userId, name, name, name, `${name}@users.pikibun.invalid`, now(), userId, name),
       auditAfterChange(env, userId, 'account.local.created', null, {}),
     ]));
     owner = await localOwner(env);
   }
-  const user = owner && await dbResult(getUser(env, owner.id));
-  if (!user) fail(503, 'auth_unavailable', 'This Pikibun could not set up its owner\'s account. Check its state directory, then try again.');
+  if (!owner) {
+    fail(409, 'local_owner_unavailable', env.LOCAL_OWNER_ID
+      ? `This Pikibun belongs to ${env.LOCAL_OWNER_ID}, whose account is gone from its database.`
+      : 'Another account here took the username this Pikibun\'s owner signs in with. Start it with a fresh state directory.');
+  }
+  const user = await dbResult(getUser(env, owner.id));
+  if (!user) fail(503, 'auth_unavailable', 'Authentication storage is temporarily unavailable.');
   if (user.suspended_at) fail(403, 'account_suspended', SUSPENDED);
   return user;
 }

@@ -64,6 +64,12 @@ export class ThisServer {
     return status.state === "running" && status.origin === origin ? status.signInToken : undefined;
   }
 
+  requireSignInToken(origin: string): string {
+    const token = untracked(() => this.signInTokenFor(origin));
+    if (!token) throw new Error(`Pikibun on ${computerName} didn't give this app its sign-in token. Stop it and start it again here, updating pikibun if this page offers to.`);
+    return token;
+  }
+
   load(): Promise<void> {
     this.loaded ??= Storage.getItem(SAVED_KEY).then(raw => {
       if (!raw) return;

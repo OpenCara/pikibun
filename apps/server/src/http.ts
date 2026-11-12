@@ -78,7 +78,7 @@ export function localMode(env: Env): boolean {
   return env.LOCAL_MODE === 'true' && !!env.LOCAL_CLAIM_SECRET && /^[A-Za-z0-9_-]{43}$/.test(env.LOCAL_CLAIM_SECRET);
 }
 export const LOCAL_OWNER_ID = /^(?:github:[1-9][0-9]{0,19}|password:[a-z0-9][a-z0-9_-]{2,38})$/;
-const LOCAL_OWNER_ACCOUNT = `((auth_kind = 'github' AND github_id IS NOT NULL) OR (auth_kind = 'password' AND id LIKE 'password:%'))`;
+export const LOCAL_OWNER_ACCOUNT = `((auth_kind = 'github' AND github_id IS NOT NULL) OR (auth_kind = 'password' AND id LIKE 'password:%'))`;
 export function localOwnerQuery(env: Env): { sql: string; params: string[] } {
   return env.LOCAL_OWNER_ID && LOCAL_OWNER_ID.test(env.LOCAL_OWNER_ID)
     ? { sql: `SELECT id FROM users WHERE id = ? AND ${LOCAL_OWNER_ACCOUNT}`, params: [env.LOCAL_OWNER_ID] }

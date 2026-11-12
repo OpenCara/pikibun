@@ -213,6 +213,29 @@ describe("Self host in the app", () => {
     expect(app.requests().some(item => item.method === "POST" && item.url === `${ORIGIN}/api/auth/logout`)).toBe(true);
   });
 
+  test("Settings › Self host leaves the app signed in where it is, and says why, when it can't sign in to Pikibun on this Mac", async () => {
+    for (const params of [{ noToken: true }, {}]) {
+      const served = { ...remote(), ...servedLocally(true) };
+      const network = "noToken" in params ? served
+        : { ...served, [`POST ${LOCAL}/api/auth/native/local`]: { status: 503, body: { error: "Authentication storage is temporarily unavailable.", code: "auth_unavailable" } } };
+      const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true, ...params } },
+        network, storage: signedIn });
+      await app.waitFor("id:session-row-s1");
+      await app.press("id:open-settings");
+      await app.press("id:settings-section-self-host");
+      await app.waitFor("id:self-host-start");
+      await app.press("id:self-host-start");
+      await app.waitFor("id:self-host-use");
+      app.onDialog(() => "Switch");
+      await app.press("id:self-host-use");
+      await app.waitUntil(() => app.texts().some(text => text.includes("noToken" in params ? "didn't give this app its sign-in token" : "temporarily unavailable")));
+      expect(app.storage()["pikibun.origin"]).toBe(ORIGIN);
+      expect(app.storage()["pikibun.token"]).toBe(TOKEN);
+      expect(app.requests().some(item => item.url.endsWith("/api/auth/logout"))).toBe(false);
+      expect(app.shows("id:settings-section-self-host")).toBe(true);
+    }
+  });
+
   function notRunningAtFirst() {
     let asked = 0;
     return servedLocally(true, () => (++asked === 1 ? { status: 503, body: { error: { code: "unavailable", message: "Pikibun isn't running." } } } : { body: { user } }));

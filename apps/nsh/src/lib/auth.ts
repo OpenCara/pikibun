@@ -228,9 +228,10 @@ export function localSignInToken(origin: string, link: string): string | null {
   }
 }
 
-export async function signInToLocalServer(origin: string, token: string): Promise<void> {
+export async function signInToLocalServer(origin: string, token: string, options: { switching?: boolean } = {}): Promise<void> {
   const signIn = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
     "/api/auth/native/local", { method: "POST", body: { token, deviceName: deviceName() } });
+  if (options.switching) await signOut({ origin });
   await establish(origin, signIn.token, signIn.expiresAt, signIn.user);
 }
 

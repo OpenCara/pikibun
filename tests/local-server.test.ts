@@ -214,13 +214,29 @@ test("a local server whose pinned owner is a password account signs only them in
   assert.equal((await (await f.native({ token: claimSecret })).json() as { user: { id: string } }).user.id, "password:bob");
   f.env.LOCAL_OWNER_ID = "password:carol";
   const missing = await f.native({ token: claimSecret });
-  assert.equal(missing.status, 503);
+  assert.equal(missing.status, 409);
+  assert.match((await missing.json() as { error: string }).error, /belongs to password:carol, whose account is gone/);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM users").get()!.n, 2);
   f.env.LOCAL_OWNER_ID = "password:bob";
   f.sqlite.prepare("UPDATE users SET suspended_at = '2002-01-01T00:00:00.000Z' WHERE id = 'password:bob'").run();
   const suspended = await f.native({ token: claimSecret });
   assert.equal(suspended.status, 403);
   assert.equal(await errorCode(suspended), "account_suspended");
+});
+
+test("a local owner whose username another account took is 'owner', and says why where that is taken too", async t => {
+  const f = await localFixture(t);
+  const other = (id: string, username: string) => f.sqlite.prepare(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, NULL, NULL, 'T', 'T', 't@example.test', '{}', 'test', '2000-01-01T00:00:00.000Z')`).run(id, username);
+  other("test:a", "ada");
+  assert.equal((await (await f.native({ token: claimSecret })).json() as { user: { id: string } }).user.id, "password:owner");
+
+  const g = await localFixture(t);
+  for (const [id, username] of [["test:a", "ada"], ["test:o", "owner"]]) g.sqlite.prepare(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, NULL, NULL, 'T', 'T', 't@example.test', '{}', 'test', '2000-01-01T00:00:00.000Z')`).run(id, username);
+  const refused = await g.native({ token: claimSecret });
+  assert.equal(refused.status, 409);
+  assert.equal(await errorCode(refused), "local_owner_unavailable");
 });
 
 test("a server outside local mode has no local sign-in and says nothing of one", async t => {

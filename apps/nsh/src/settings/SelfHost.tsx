@@ -1,6 +1,6 @@
 import { untracked, View } from "nsh";
 import type { ServerHostState, ServerState } from "../../../../packages/shared/src/app-server-protocol";
-import { session, signInToLocalServer, signOut } from "../lib/auth";
+import { session, signInToLocalServer } from "../lib/auth";
 import { createAction } from "../lib/resource";
 import { displayOrigin } from "../lib/server";
 import { computerName, computerTitle, INSTALL_COMMAND, thisComputer } from "../lib/this-computer";
@@ -28,9 +28,8 @@ export function SelfHost(_props: SectionProps) {
     <ThisServerPanel server={thisServer()} signedInTo={origin} onUse={async local => {
       if (!await confirm({ title: `Sign in to Pikibun on ${computerName}?`, confirmLabel: "Switch",
         message: `This app signs out of ${displayOrigin(origin)} and signs in to Pikibun on ${computerName} instead. Nothing moves: your sessions and workspaces on ${displayOrigin(origin)} stay there, and you can switch back by signing in to it again.` })) return;
-      const token = thisServer().signInTokenFor(local);
-      await signOut({ origin: local });
-      if (token) await signInToLocalServer(local, token);
+      const token = thisServer().requireSignInToken(local);
+      await signInToLocalServer(local, token, { switching: true });
     }} />
   );
 }
