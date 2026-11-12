@@ -5,7 +5,7 @@ import type { Attachments } from "../lib/attachments";
 import { pageAvailable } from "../lib/page";
 import { Icon } from "../icons";
 import { palette, radius, text } from "../theme";
-import { IconButton } from "../ui";
+import { DropdownMenu, IconButton } from "../ui";
 
 function RemoveButton(props: { label: string; disabled?: boolean; onPress: () => void }) {
   return (
@@ -54,11 +54,17 @@ export function AttachmentStrip(props: { attachments: Attachments; disabled?: bo
 }
 
 export function AttachButton(props: { attachments: Attachments; disabled?: boolean }) {
-  const files = () => props.attachments.takesFiles() && pageAvailable();
-  const label = () => files() ? "Attach files"
-    : props.attachments.takesFiles() && platform.desktop ? "Attach images (drop or paste other files)" : "Attach images";
+  const files = () => props.attachments.takesFiles();
+  const choose = () => files() && !pageAvailable() && !platform.desktop;
   return (
-    <IconButton testID="composer-attach" icon={files() ? "paperclip" : "image"} label={label()} disabled={props.disabled}
-      onPress={() => void props.attachments.pick()} />
+    <If when={choose()} else={
+      <IconButton testID="composer-attach" icon={files() ? "paperclip" : "image"} label={files() ? "Attach files" : "Attach images"} disabled={props.disabled}
+        onPress={() => void props.attachments.pick()} />
+    }>
+      <DropdownMenu label="Attach" placement="top" items={[
+        { label: "Photos", icon: "image", testID: "composer-attach-photos", onSelect: () => void props.attachments.pick("images") },
+        { label: "Files", icon: "paperclip", testID: "composer-attach-files", onSelect: () => void props.attachments.pick("files") },
+      ]} trigger={<IconButton testID="composer-attach" icon="paperclip" label="Attach photos or files" disabled={props.disabled} onPress={() => undefined} />} />
+    </If>
   );
 }

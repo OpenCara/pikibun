@@ -1,4 +1,4 @@
-import { platform, signal, untracked, View } from "nsh";
+import { Picker, platform, signal, untracked, View } from "nsh";
 import type { Workspace, WorkspaceDatabase, WorkspaceDatabaseTls } from "../../../../packages/shared/src/types";
 import { segment } from "../shared";
 import { decodeBase64, encodeBase64 } from "../lib/attachments";
@@ -144,7 +144,12 @@ function ImportSheet(props: { path: string; database: WorkspaceDatabase; close: 
   }
   function choose() {
     void action.run(async () => {
-      const [picked] = await pickFilesInPage({ accept: "application/json,.json", maxBytes: maxUploadBytes });
+      const [picked] = pageAvailable()
+        ? await pickFilesInPage({ accept: "application/json,.json", maxBytes: maxUploadBytes })
+        : await Promise.all((await Picker.pickFiles({ filters: [{ name: "JSON dump", extensions: ["json"] }] })).map(async ({ file: chosen }) => ({
+          name: chosen.name, type: chosen.type, size: chosen.size,
+          ...(chosen.size <= maxUploadBytes ? { data: encodeBase64(new Uint8Array(await chosen.arrayBuffer())) } : {}),
+        })));
       if (!picked) return;
       imported.set(null);
       file.set(picked);
@@ -181,8 +186,9 @@ function ImportSheet(props: { path: string; database: WorkspaceDatabase; close: 
             <View testID="database-import-drop" onFileDragEnter={() => dragging.set(true)} onFileDragLeave={() => dragging.set(false)} onFileDrop={event => dropped(event.uris)}
               style={{ alignItems: "center", gap: 4, padding: 16, borderRadius: radius.medium, borderWidth: 1, borderStyle: "dashed",
                 borderColor: dragging() ? palette().accent : palette().borderStrong }}>
-              <Small>{file()?.name ?? "Drop the dump file here"}</Small>
-              <If when={file()}><Small>Drop another to replace it.</Small></If>
+              <Small>{file()?.name ?? "Drop the dump file here, or"}</Small>
+              <If when={file()}><Small>Drop another to replace it, or</Small></If>
+              <Button small variant="outline" icon="folder" testID="database-import-choose" label={file() ? "Choose another" : "Choose file"} disabled={action.busy()} onPress={choose} />
             </View>
           }>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>

@@ -4,7 +4,7 @@ import { attachedFilesNote, fileUploadLimits, formatBytes, uploadFileName, type 
 import { segment, type ConnectorInfo } from "../shared";
 import { session } from "./auth";
 import { onClearDrafts } from "./drafts";
-import { readLocalFiles } from "./local-files";
+import { readLocalFiles, typeOfName } from "./local-files";
 import { encodeImageInPage, pageAvailable, pickFilesInPage } from "./page";
 import { createResource } from "./resource";
 
@@ -100,7 +100,7 @@ export interface Attachments {
   attach: (chosen: readonly Blob[]) => void;
   addImages: (chosen: readonly Blob[]) => void;
   attachLocal: (uris: readonly string[]) => Promise<void>;
-  pick: () => Promise<void>;
+  pick: (kind?: "images" | "files") => Promise<void>;
   remove: (id: string) => void;
   sent: (images: readonly PendingImage[], files: readonly AttachedFile[]) => void;
   upload: (sessionId: string, files: readonly AttachedFile[]) => Promise<string>;
@@ -159,7 +159,20 @@ export function createAttachments(options: { imagesUnavailable: Accessor<string 
     }
   }
 
-  async function pick() {
+  function attachFound(found: readonly File[], maxBytes: number, anyFile: boolean, problem = "") {
+    const fitting = found.filter(file => file.size <= maxBytes);
+    const chosen = fitting.flatMap(file => {
+      if (!MODEL_IMAGE_TYPES.includes(file.type) || base64Length(file.size) <= chatImageLimits.imageBase64) return [file];
+      return anyFile ? [new File([file], file.name)] : [];
+    });
+    if (chosen.length) attach(chosen);
+    const message = problem
+      || (fitting.length < found.length ? (anyFile ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.` : "An image larger than 32 MiB can't be attached.") : "")
+      || (chosen.length < fitting.length ? "An image too large to send can't be attached here." : "");
+    if (message) notice.set(message);
+  }
+
+  async function pick(kind?: "images" | "files") {
     notice.set("");
     const anyFile = untracked(takesFiles);
     try {
@@ -170,6 +183,12 @@ export function createAttachments(options: { imagesUnavailable: Accessor<string 
         const read = picked.filter(item => item.data !== undefined).map(item => new File([decodeBase64(item.data!)], item.name, { type: item.type }));
         if (read.length) attach(read);
         if (tooLarge.length) notice.set(anyFile ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.` : "An image larger than 32 MiB can't be attached.");
+        return;
+      }
+      if (anyFile && (kind ?? "files") === "files") {
+        const picked = await Picker.pickFiles({ multiple: true, limit: fileUploadLimits.count + chatImageLimits.count });
+        const found = picked.map(({ file }) => (file.type ? file : new File([file], file.name, { type: typeOfName(file.name) })));
+        attachFound(found, untracked(options.fileOptions!).maxBytes, true);
         return;
       }
       const room = chatImageLimits.count - untracked(images).length;
@@ -187,15 +206,8 @@ export function createAttachments(options: { imagesUnavailable: Accessor<string 
     const anyFile = untracked(takesFiles);
     const maxBytes = anyFile ? untracked(options.fileOptions!).maxBytes : MAX_PASTE_BYTES;
     const read = await readLocalFiles(uris, maxBytes);
-    const chosen = read.files.flatMap(file => {
-      if (!MODEL_IMAGE_TYPES.includes(file.type) || base64Length(file.size) <= chatImageLimits.imageBase64) return [file];
-      return anyFile ? [new File([file], file.name)] : [];
-    });
-    if (chosen.length) attach(chosen);
-    const problem = read.problem
-      || (read.tooLarge ? (anyFile ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.` : "An image larger than 32 MiB can't be attached.") : "")
-      || (chosen.length < read.files.length ? "An image too large to send can't be attached here." : "");
-    if (problem) notice.set(problem);
+    attachFound(read.files, maxBytes, anyFile, read.problem
+      || (read.tooLarge ? (anyFile ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.` : "An image larger than 32 MiB can't be attached.") : ""));
   }
 
   function remove(id: string) {
