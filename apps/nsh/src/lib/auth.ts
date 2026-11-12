@@ -181,6 +181,7 @@ export async function startGitHubSignIn(origin: string, claim?: string, options:
       if (!(inApp ? isCallbackPage(origin, callbackUrl) : isSignInLink(callbackUrl))) throw new Error("The sign-in ended somewhere unexpected. Try again.");
       const params = new URL(callbackUrl).searchParams;
       if (params.get("state") !== state) throw new Error("The sign-in response did not match this attempt. Try again.");
+      finishedStates.add(state);
       const error = params.get("error");
       if (error) throw new Error(signInRefusals[error] ?? `GitHub sign-in did not complete: ${error.slice(0, 300)}`);
       const code = params.get("code");
@@ -190,6 +191,17 @@ export async function startGitHubSignIn(origin: string, claim?: string, options:
       await establish(origin, exchange.token, exchange.expiresAt, exchange.user);
     },
   };
+}
+
+// The states of the sign-ins this app finished. The server's page in the browser tries pikibun://auth on its own and
+// offers it as Open Pikibun too, so the same link can come twice: the second is dropped, rather than waiting, unheard,
+// for the next sign-in screen to call it a stranger's.
+const finishedStates = new Set<string>();
+
+export function isFinishedSignInLink(url: string): boolean {
+  if (!isSignInLink(url)) return false;
+  const state = new URL(url).searchParams.get("state");
+  return state !== null && finishedStates.has(state);
 }
 
 export function isSignInLink(url: string): boolean {

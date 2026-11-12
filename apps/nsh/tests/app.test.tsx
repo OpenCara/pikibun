@@ -49,6 +49,31 @@ describe("signing in", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/token`).verifier).toMatch(/^[A-Za-z0-9_-]{43,}$/);
   });
 
+  test("the same pikibun:// link again, after it signed the app in, is dropped, not called a stranger's at the next sign-in", async () => {
+    const app = await open("../App.tsx", {
+      network: server({
+        [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, testMode: true } },
+        [`POST ${ORIGIN}/api/auth/native/token`]: { body: { token: TOKEN, expiresAt: "2099-01-01T00:00:00.000Z", user } },
+      }),
+      storage: { "pikibun.origin": ORIGIN },
+    });
+    app.onDialog(() => "Sign out");
+    await app.waitFor("id:github-sign-in");
+    await app.press("id:github-sign-in");
+    await app.waitFor("id:github-browser-wait");
+    const state = new URL(app.openedUrls().at(-1)!).searchParams.get("state")!;
+    const link = `pikibun://auth?code=c1&state=${encodeURIComponent(state)}`;
+    await app.openWithUrl(link);
+    await app.waitFor("text:Fix the flaky login test");
+    await app.openWithUrl(link);
+    await app.press("id:open-settings");
+    await app.press("id:settings-section-profile");
+    await app.press("id:sign-out");
+    await app.waitFor("id:developer-toggle");
+    expect(app.shows("id:sign-in-problem")).toBe(false);
+    expect(app.requests().filter(item => item.url === `${ORIGIN}/api/auth/native/token`).length).toBe(1);
+  });
+
   test("a pikibun:// sign-in link the app didn't ask for signs nobody in", async () => {
     const app = await open("../App.tsx", { network: server({ [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true } } }), storage: { "pikibun.origin": ORIGIN } });
     await app.waitFor("id:github-sign-in");

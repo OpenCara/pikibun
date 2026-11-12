@@ -156,7 +156,10 @@ test("an app can't create a GitHub account where SIGNUP=invite, and is told to u
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
   const callback = await f.request("GET", `/api/auth/github/callback?code=github-code&state=${state}`,
     { headers: { Cookie: f.cookieOf(start, "test-oauth-state")! } });
-  const location = new URL(callback.headers.get("location")!);
+  assert.equal(callback.status, 200);
+  const html = await callback.text();
+  assert.match(html, /Sign-in did not complete/);
+  const location = new URL(/<a id="open-app" href="([^"]+)"/.exec(html)![1]!.replaceAll("&amp;", "&"));
   assert.equal(`${location.protocol}//${location.host}`, "pikibun://auth");
   assert.equal(location.searchParams.get("error"), "invite_required");
   assert.deepEqual(f.users(), []);

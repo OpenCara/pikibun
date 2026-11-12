@@ -258,8 +258,11 @@ Each workaround below is on the [list of upstream workarounds](../../docs/design
 - **GitHub sign-in**: NSH has no system authentication session
   ([nsh#1065](https://github.com/longbridge/nsh/issues/1065), closed as not planned). The app claims `pikibun://`
   (`nsh.json` `schemes`), so it opens GitHub's page in the system browser, where the app sees nothing typed, and the
-  server hands the sign-in back as `pikibun://auth?code=…&state=…` (`src/screens/SignIn.tsx`). Anyone can open such a
-  link: the app takes only one whose state is the attempt's, and its code is worth nothing without the PKCE verifier,
+  server hands the sign-in back as `pikibun://auth?code=…&state=…` (`src/screens/SignIn.tsx`), as a page's **Open
+  Pikibun** link rather than a redirect: browsers start another app only on a user's gesture, and silently drop a
+  redirect to one when nothing was pressed since the app opened the browser (as when GitHub skips its authorize page for
+  an account that authorized Pikibun before). The page also tries the link at once, so the app may hear it twice: it
+  drops a link of a sign-in it already finished. Anyone can open such a link: the app takes only one whose state is the attempt's, and its code is worth nothing without the PKCE verifier,
   which never leaves the app. **Sign in here instead** runs the page in the app's own web view, handed back on a page of
   the server's (`/api/auth/native/done`, asked for with `callback=page`), where the browser can't open the app.
 - **Types**: NSH (0.4 and 0.5) declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared

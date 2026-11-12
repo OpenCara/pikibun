@@ -3,7 +3,7 @@ import { Dialog, Input } from "nsh/base";
 import { authorizeInPage, openServerPage, pageQuery } from "../lib/page";
 import { errorMessage } from "../shared";
 import {
-  auth, checkBrowserSession, isSignInLink, restore, signInMethods, signInWithPassword, signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, startGitHubSignIn,
+  auth, checkBrowserSession, isFinishedSignInLink, isSignInLink, restore, signInMethods, signInWithPassword, signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, startGitHubSignIn,
   type GitHubSignIn, type SignInMethods,
 } from "../lib/auth";
 import { createAction } from "../lib/resource";
@@ -161,7 +161,7 @@ function SignInForm(props: { inviteToken?: string }) {
 
   if (!usesBrowserSession) {
     cleanup(UrlScheme.on("open", ({ url }) => {
-      if (!isSignInLink(url)) return;
+      if (!isSignInLink(url) || isFinishedSignInLink(url)) return;
       const attempt = untracked(github);
       if (attempt?.inApp) {
         void action.run(async () => { throw new Error("That sign-in link is from the browser you left. Finish signing in on GitHub's page here, or cancel it and continue with GitHub again."); });
@@ -299,7 +299,7 @@ function SignInForm(props: { inviteToken?: string }) {
               <Button testID="github-in-app" small variant="ghost" label="Sign in here instead" disabled={action.busy()} onPress={signInInApp} />
               <Button small variant="ghost" label="Cancel" onPress={() => github.set(null)} />
             </>}>
-            GitHub's page opened in your browser. Pikibun comes back here once you've signed in there.
+            GitHub's page opened in your browser. Sign in there, then choose Open Pikibun on the page it ends on, and Pikibun comes back here.
           </Banner>
         )}
       </If>

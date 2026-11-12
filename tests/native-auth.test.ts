@@ -11,6 +11,18 @@ const testSecret = "native-auth-test-secret-not-for-deployment";
 const verifier = "v".repeat(43) + "-native_verifier";
 const appState = "app-state-0123456789";
 
+// The page the system browser ends on: an Open Pikibun link to pikibun://auth, which it also tries at once.
+function appLink(status: number, headers: Headers, html: string): string {
+  assert.equal(status, 200);
+  assert.match(headers.get("content-type") ?? "", /^text\/html/);
+  assert.match(headers.get("cache-control") ?? "", /no-store/);
+  assert.equal(headers.get("location"), null);
+  const href = /<a id="open-app" href="([^"<>]+)"/.exec(html)?.[1];
+  assert.ok(href, "the page links to the app");
+  assert.ok(html.includes(`<meta http-equiv="refresh" content="0;url=${href}">`), "the page tries the link at once");
+  return href.replaceAll("&amp;", "&");
+}
+
 async function fixture(t: TestContext) {
   const { db, sqlite } = await testDatabase();
   t.after(() => db.close());
@@ -42,9 +54,12 @@ async function fixture(t: TestContext) {
     const state = authorize.searchParams.get("state")!;
     const cookie = start.headers.get("set-cookie")!.split(";")[0]!;
     const callback = await request("GET", `/api/auth/github/callback?${query}&state=${state}`, { headers: { Cookie: cookie } });
-    assert.equal(callback.status, 302);
     assert.ok(!(callback.headers.get("set-cookie") ?? "").includes("test-auth="));
-    return new URL(callback.headers.get("location")!);
+    if (startQuery.includes("callback=page")) {
+      assert.equal(callback.status, 302);
+      return new URL(callback.headers.get("location")!);
+    }
+    return new URL(appLink(callback.status, callback.headers, await callback.text()));
   }
   return { env, sqlite, github, request, signInThroughGitHub, deny: () => { denyExchange = true; } };
 }
@@ -55,6 +70,7 @@ test("a native app signs in through GitHub with PKCE and gets a bearer session t
   const callback = await f.signInThroughGitHub(challenge);
   assert.equal(`${callback.protocol}//${callback.host}`, "pikibun://auth");
   assert.equal(callback.searchParams.get("state"), appState);
+  assert.deepEqual([...callback.searchParams.keys()].sort(), ["code", "state"]);
   const code = callback.searchParams.get("code")!;
 
   const wrong = await f.request("POST", "/api/auth/native/token", { body: { code, verifier: "w".repeat(43) } });
