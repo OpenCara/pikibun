@@ -32,6 +32,6 @@ A workspace's page lists the tools its sessions can use, with what each does and
 
 There is no shell tool: `bash` and `host_bash` were removed (#163). Sessions run Git, Node.js and Python with their own tools, move, copy and delete with the file tools, and chain tools with code mode. Saved agents, and past records, that name them stay readable.
 
-Nothing waits for anyone's approval: a call runs, or is refused with its reason. Whatever a message's access, a session runs only the tools of its owner's [tool group](workspaces.md#tool-groups); see [What a session may do](approvals.md). Side asks offer only the read-only tools.
+Nothing waits for anyone's approval: a call runs, or is refused with its reason. Whatever a message's access, a session runs only the tools both its owner's [tool group](workspaces.md#tool-groups) and the message's sender's have; see [What a session may do](approvals.md). Side asks offer only the read-only tools.
 
 Sessions started from a saved agent, before agents were removed, keep that agent's instructions and tools; any other tool they call runs as the session's other tools do.

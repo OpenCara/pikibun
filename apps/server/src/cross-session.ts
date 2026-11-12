@@ -139,7 +139,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
     || admission.expires_at <= Math.floor(Date.now() / 1000)) {
     fail(403, 'sessions_not_admitted', 'The sessions tool needs a write message sent within the last hour.');
   }
-  await requireToolCall(c.env, origin, 'sessions');
+  await requireToolCall(c.env, origin, actorId, 'sessions');
   if (sessionsWriteActions.includes(action) && admission.access === 'read') {
     fail(403, 'write_not_allowed', 'A Read-only message changes no other session: ask in a message that may act.');
   }

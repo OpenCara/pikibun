@@ -488,11 +488,11 @@ function toolsFixture(state: Metadata, sandbox: Partial<SessionWorkspace> = {}, 
     ...sandbox } as unknown as SessionWorkspace;
   const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
   const calls = new ToolCalls({ ownerId: "github:1", sandbox: workspace, hostCommands, authorize, metadata: async () => structuredClone(state),
-    hostConfig: async () => ({ ...defaultHostConfig, commandTimeoutSeconds: 600 }) });
+    hostConfig: async () => ({ ...defaultHostConfig, commandTimeoutSeconds: 600 }), requireSenderTool: async (tool, senderId) => { events.push(`sender ${senderId} ${tool}`); } });
   const context: ToolContext = {
     binding: { session: { id: "s1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox: workspace, onHost: false, calls, hostCommands,
     waits: new ApprovalWaits(), operations: { run: async () => { events.push("run"); return {} as never; }, internalGitHub: async () => ({}), internalBroker: async () => ({}) },
-    requireSessionTool: async tool => { events.push(`tool ${tool}`); }, metadata: async () => structuredClone(state), mutate: async change => { change(state); },
+    requireSessionTool: async tool => { events.push(`tool ${tool}`); }, requireSenderTool: async () => {}, metadata: async () => structuredClone(state), mutate: async change => { change(state); },
     authorize, hostConfig: async () => defaultHostConfig, programMissing: () => undefined, browserUnavailable: () => undefined, tunnelUnavailable: () => undefined,
     tunnel: () => undefined, startTunnel: () => { throw new Error("no tunnel"); }, grant: async () => ({ repositories: [] }) as never,
     ...overrides,
@@ -546,13 +546,17 @@ test("tools: a tool checks that it is on first, then who acts, then the call, an
   const { events, tool } = toolsFixture(state);
   const written = await tool("write_file").execute({ path: "a.txt", content: "x" }, toolApi(state), {});
   assert.deepEqual(JSON.parse(written.output[0]!.text), { initiatedBy: "github:2", actingAs: "github:1", mode: "write", written: "a.txt" });
-  assert.deepEqual(events, ["authorize github:2 write", "authorize github:2 write", "write a.txt"]);
+  assert.deepEqual(events, ["authorize github:2 write", "sender github:2 write_file", "authorize github:2 write", "write a.txt"]);
   events.length = 0;
   await assert.rejects(tool("github_merge").execute({ repository: "acme/app", pull: 1, sha: "short", method: "squash" }, toolApi(state), {}), /40-character head commit/);
   assert.deepEqual(events, ["tool github_merge", "authorize github:2 write"]);
   const off = toolsFixture(state, {}, { requireSessionTool: async tool => { throw new RunnerError(403, `${tool} is turned off`); } });
   await assert.rejects(off.tool("git").execute({ args: ["status"] }, toolApi(state), {}), /git is turned off/);
   assert.deepEqual(off.events, [], "a tool that is off checks nothing else and runs nothing");
+  const sender = toolState();
+  const senderOff = toolsFixture(sender, {}, { requireSenderTool: async tool => { throw new RunnerError(403, `${tool} isn't among the sender's tools`); } });
+  await assert.rejects(senderOff.tool("tunnel").execute({ action: "start", serve: { program: "node", port: 8080 } }, toolApi(sender), {}), /tunnel isn't among the sender's tools/);
+  assert.ok(!senderOff.events.includes("run"), "a tunnel the sender may not start never reaches its operation");
   const notOwner = toolState();
   await assert.rejects(toolsFixture(notOwner).tool("schedule").execute({ action: "list" }, toolApi(notOwner), {}), /Only the session owner's messages schedule prompts/);
   const readOnly = toolState({ options: { access: "read" } });
@@ -625,7 +629,7 @@ function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {},
   }, writeFile: async (path: string) => { events.push(`write ${path}`); }, listFiles: async () => [] } as unknown as SessionWorkspace;
   const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
   const calls = new ToolCalls({ ownerId: "github:1", sandbox, hostCommands: hostPolicy().policy, authorize, metadata: async () => structuredClone(state),
-    hostConfig: async () => defaultHostConfig });
+    hostConfig: async () => defaultHostConfig, requireSenderTool: async () => {} });
   const piki = new SessionPiki({
     binding: { session: { id: "s1", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox, onHost: false,
     sandboxed: true, calls, hostCommands: hostPolicy({ ownerId: "github:1" }, grants).policy, waits: new ApprovalWaits(),

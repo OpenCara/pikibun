@@ -41,7 +41,7 @@ sequenceDiagram
 
 The API takes a tier (`POST /api/sessions/:id/grants` with `{ userId, role }`) or, as before, an explicit permission list (`{ userId, permissions }`). A grant that matches no tier, such as one made before tiers existed, shows as **Custom** until someone chooses a tier for it.
 
-Only the session's owner can restart it, create its share link, back it up, restore, move or export it, schedule prompts, and let content pass between it and sessions other people read. Nobody approves its tool calls: whoever may send it messages runs its tools, as its owner, within the owner's tool group (see [What a session may do](approvals.md)). Its owner and the workspace's owner and admins rename, archive and unarchive it, change its visibility and tool output, and turn off its share link (see [Managing every session](workspaces.md#managing-every-session)).
+Only the session's owner can restart it, create its share link, back it up, restore, move or export it, schedule prompts, and let content pass between it and sessions other people read. Nobody approves its tool calls: whoever may send it messages runs its tools, as its owner, but only those both the owner's tool group and their own have (see [What a session may do](approvals.md)), so a message can't borrow the owner's tools. Its owner and the workspace's owner and admins rename, archive and unarchive it, change its visibility and tool output, and turn off its share link (see [Managing every session](workspaces.md#managing-every-session)).
 
 ## Share links
 

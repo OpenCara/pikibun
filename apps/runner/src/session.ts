@@ -251,7 +251,8 @@ export class RunnerSession {
     }
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
     this.#calls = new ToolCalls({ ownerId: binding.owner.id, sandbox: this.sandbox, hostCommands: this.hostCommands,
-      authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig() });
+      authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig(),
+      requireSenderTool: (tool, senderId) => this.requireSenderTool(tool, senderId) });
     this.#operations = new SessionOperations({
       binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, waits: this.#waits,
       requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
@@ -260,7 +261,8 @@ export class RunnerSession {
     });
     this.#toolContext = {
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, calls: this.#calls, hostCommands: this.hostCommands, waits: this.#waits, operations: this.#operations,
-      requireSessionTool: tool => this.requireSessionTool(tool), metadata: () => this.metadata(), mutate: change => this.mutate(change),
+      requireSessionTool: tool => this.requireSessionTool(tool), requireSenderTool: (tool, senderId) => this.requireSenderTool(tool, senderId),
+      metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
       programMissing: (tool, program) => this.programMissing(tool, program), browserUnavailable: () => this.browserUnavailable(),
       tunnelUnavailable: () => this.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
@@ -679,7 +681,7 @@ export class RunnerSession {
     const access = options.access ?? "approval";
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
-    const off = run.mode === "write" ? await this.sessionToolsOff() : new Set<string>();
+    const off = run.mode === "write" ? await this.sessionToolsOff(run.initiatedBy) : new Set<string>();
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.documentKindsOff() : new Set<DocumentKind>();
     const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.browserUnavailable() : undefined;
@@ -817,28 +819,37 @@ export class RunnerSession {
     return off;
   }
 
-  private async sessionToolsOff(): Promise<Set<string>> {
+  private async sessionToolsOff(senderId?: string): Promise<Set<string>> {
     const config = this.config.extensions;
     const workspaceId = this.binding.session.workspaceId;
     const answer = config ? await config.workspace(workspaceId).catch(() => undefined) : undefined;
     const extensions = answer?.extensions ?? [];
     const off = this.definedToolsOff(sessionToolsOff(extensions), extensions);
-    for (const tool of (await this.ownerToolGroup())?.off ?? []) off.add(tool);
+    for (const tool of (await this.memberToolGroup(this.binding.owner.id))?.off ?? []) off.add(tool);
+    if (senderId !== undefined && senderId !== this.binding.owner.id) {
+      for (const tool of (await this.memberToolGroup(senderId))?.off ?? []) off.add(tool);
+    }
     if (!config) return off;
     const last = config.lastKnown?.(workspaceId);
     if (last) for (const tool of sessionToolsOff(last.extensions, { failClosedOnly: true })) off.add(tool);
     return off;
   }
 
-  private async ownerToolGroup(): Promise<MemberToolGroup | undefined> {
+  private async memberToolGroup(userId: string): Promise<MemberToolGroup | undefined> {
     const config = this.config.extensions;
     if (!config) return undefined;
     const workspaceId = this.binding.session.workspaceId;
     const answer = await config.workspace(workspaceId).catch(() => undefined);
-    const owner = this.binding.owner.id;
-    if (!config.lastKnown) return answer?.toolGroups?.[owner];
+    if (!config.lastKnown) return answer?.toolGroups?.[userId];
     const last = config.lastKnown(workspaceId);
-    return last ? last.toolGroups?.[owner] : unknownToolGroup;
+    return last ? last.toolGroups?.[userId] : unknownToolGroup;
+  }
+
+  private async requireSenderTool(tool: string, senderId: string): Promise<void> {
+    if (senderId === this.binding.owner.id) return;
+    const group = await this.memberToolGroup(senderId);
+    if (!group?.off.includes(tool)) return;
+    throw new RunnerError(403, `${tool} isn't among the tools of the person who sent this message (${group.name}): a message runs only the tools both its sender and the session's owner have. Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
   }
 
   private async documentKindsOff(): Promise<Set<DocumentKind>> {
@@ -850,7 +861,7 @@ export class RunnerSession {
 
   private async requireSessionTool(tool: string): Promise<void> {
     if (!(await this.sessionToolsOff()).has(tool)) return;
-    const group = await this.ownerToolGroup();
+    const group = await this.memberToolGroup(this.binding.owner.id);
     if (group?.off.includes(tool)) {
       throw new RunnerError(403, `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
     }

@@ -28,7 +28,7 @@ export { issueRunAdmission } from './run-admissions.js';
 export {
   automaticTools, defaultWorkspaceExtensionStatements, removeWorkspaceExtensionStatement, saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
 } from './extension-policy.js';
-export { memberToolGroup, memberToolGroups, requireOwnerTool } from './tool-groups.js';
+export { memberToolGroup, memberToolGroups, requireSessionTool } from './tool-groups.js';
 
 export { assertVaultConfigured, decryptToken, encryptToken } from './vault.js';
 export {

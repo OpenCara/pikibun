@@ -33,6 +33,7 @@ export interface ToolContext {
   waits: ApprovalWaits;
   operations: Pick<SessionOperations, "run" | "internalGitHub" | "internalBroker">;
   requireSessionTool(tool: string): Promise<void>;
+  requireSenderTool(tool: string, senderId: string): Promise<void>;
   metadata(): Promise<Metadata>;
   mutate(change: (state: Metadata) => void): Promise<void>;
   authorize(actorId: string, permission: "write"): Promise<unknown>;

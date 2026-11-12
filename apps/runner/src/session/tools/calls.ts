@@ -24,6 +24,7 @@ export interface ToolCallsOptions {
   authorize(actorId: string, permission: "write" | "ask"): Promise<unknown>;
   metadata(): Promise<Metadata>;
   hostConfig(): Promise<HostConfig>;
+  requireSenderTool(tool: string, senderId: string): Promise<void>;
 }
 
 export class ToolCalls {
@@ -108,6 +109,7 @@ export class ToolCalls {
     const actor = state.toolActors[String(api.taskId)];
     const run = actor && state.runs[actor.runKey];
     if (!run) throw new RunnerError(403, "Tool has no authorized writable submission");
+    if (run.mode === "write") await this.options.requireSenderTool(tool, run.initiatedBy);
     if (effect.write && run.options?.access === "read") {
       throw new RunnerError(403, `${tool} changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.`);
     }

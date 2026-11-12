@@ -679,6 +679,7 @@ for (const mutation of ['revoke', 'unshare', 'remove-host', 'remove-owner', 'rem
     const f = await fixture(t); const s = await sharedSession(f); const fetch = githubFetch(t);
     const collaborator = await f.client('collaborator');
     await addMember(s.admin, s.team.id, collaborator);
+    await inGroup(s.admin, s.team.id, collaborator, 'All tools');
     await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: collaborator.user.id, permissions: ['write', 'approve'] }));
     const actorId = s.creator.user.id;
     const requestedBy = mutation === 'remove-requester' ? collaborator.user.id : s.creator.user.id;
@@ -1040,6 +1041,16 @@ test('broker callbacks need github_comment among the tools of the session owner\
   await inGroup(s.admin, s.team.id, s.creator, 'Readers', ['identity', 'read_file']);
   const payload = await brokerPayload(f, s.session);
   await denied(await self(f, s.connector, 'github/comment', payload), 403, 'tool_not_in_group');
+  assert.equal(fetch.mock.callCount(), 0);
+});
+
+test('broker callbacks also need the tool among the tools of the message\'s sender: nobody borrows the owner\'s tools', async t => {
+  const f = await fixture(t); const s = await sharedSession(f); const fetch = githubFetch(t);
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
+  await inGroup(s.admin, s.team.id, s.host, 'Readers', ['identity', 'read_file']);
+  const refused = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/comment', await brokerPayload(f, s.session, s.host.user.id, s.host.user.id)), 403);
+  assert.equal(refused.code, 'tool_not_in_group');
+  assert.match(refused.error, /isn't among the tools of the person who sent this message \(Readers\)/);
   assert.equal(fetch.mock.callCount(), 0);
 });
 

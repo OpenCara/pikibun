@@ -80,7 +80,7 @@ async function approvedEffect<T>(c: AppContext, connectorId: string | null, appr
       fail(403, 'automatic_github_not_admitted', 'GitHub effects run only for an unexpired message that may act, from the person who sent it.');
     }
     await requireCallbackScope(c, owner.row, connectorId);
-    await requireOperationTool(c.env, owner.row, operation);
+    await requireOperationTool(c.env, owner.row, actorId, operation);
     return owner.row;
   };
   const row = await authorize();
@@ -468,7 +468,7 @@ export async function githubRead(c: AppContext, connectorId: string | null): Pro
       || admission.expires_at <= Math.floor(Date.now() / 1000)) {
       fail(403, 'github_read_not_admitted', 'GitHub reads need a write message from the requester sent within the last hour.');
     }
-    await requireToolCall(c.env, access.row, 'github_read');
+    await requireToolCall(c.env, access.row, actorId, 'github_read');
     return access.row;
   };
   const row = await authorize();

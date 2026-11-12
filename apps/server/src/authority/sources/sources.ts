@@ -110,7 +110,7 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
       || admission.expires_at <= Math.floor(Date.now() / 1000)) {
       fail(403, 'source_read_not_admitted', 'Source reads need a write message from the requester sent within the last hour.');
     }
-    await requireToolCall(c.env, access.row, 'source_read');
+    await requireToolCall(c.env, access.row, actorId, 'source_read');
     const source = await c.env.DB.query<DocumentSourceRow>(`${documentSourceSelect} WHERE d.source_id = ? AND d.workspace_id = ?`).bind(sourceId, access.row.workspace_id).first();
     if (!source) fail(404, 'source_not_found', 'This workspace has no such source, or it is a repository (clone those with Git).');
     if (documentKindsOff(await workspaceExtensions(c.env, access.row.workspace_id)).has(source.kind)) {

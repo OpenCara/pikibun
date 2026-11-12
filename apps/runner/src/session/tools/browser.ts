@@ -94,6 +94,7 @@ export function tunnelTool(context: ToolContext): ToolRegistration {
         const stopped = tunnel ? await tunnel.stop("stop", attribution.initiatedBy) : { stopped: false };
         return text({ ...attribution, ...stopped, ...(stopped.stopped ? {} : { note: "Nothing was online." }) });
       }
+      await context.requireSenderTool("tunnel", attribution.initiatedBy);
       const unavailable = context.tunnelUnavailable() ?? (context.config.tunnels ? undefined : "missing");
       if (unavailable) throw new RunnerError(400, `This session can't put a server online: ${tunnelUnavailableText(unavailable)} Nothing ran.`);
       const state = await context.metadata();
