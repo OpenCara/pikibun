@@ -68,7 +68,6 @@ export class RunnerService {
     try { return await opening; } catch (error) { if (this.sessions.get(id) === opening) this.sessions.delete(id); throw error; }
   }
 
-  /** A session's view for the app that started this host, which may read every session on it (docs/design/local-views.md). */
   async localView(id: string, options: { since?: string; brief?: boolean }): Promise<LocalView> {
     const session = await this.get(id);
     return this.localViews.view(session, await session.view(), options);

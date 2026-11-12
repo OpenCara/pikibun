@@ -67,10 +67,8 @@ export interface LoginAnswerRequest { type: "login-answer"; id: number; login: n
 
 export interface LoginCancelRequest { type: "login-cancel"; id: number; login: number }
 
-/** A session on this host, read for the app that started it, without the server (docs/design/local-views.md). */
 export interface ViewRequest { type: "view"; id: number; sessionId: string; since?: string; brief?: boolean }
 
-/** Entries of a conversation before one the app holds, as the server's /entries reads them. */
 export interface EntriesRequest { type: "entries"; id: number; sessionId: string; conversation: string; before: string; limit: number; brief?: boolean }
 
 export type HostRequest = InspectRequest | StartRequest | StopRequest | UploadRequest | ProvidersRequest | LoginRequest | LoginAnswerRequest | LoginCancelRequest

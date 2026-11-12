@@ -4,8 +4,6 @@ import { auth } from "./auth";
 import { onClearDrafts } from "./drafts";
 import { hostsHere, thisComputer } from "./this-computer";
 
-// Sessions the server said this computer's host runs, for the account signed in: their views are read from that host
-// first, and still while the server can't be reached (docs/design/local-views.md). Forgotten with the account.
 const records = new Map<string, SessionRecord>();
 const RECORDS = 500;
 onClearDrafts(() => records.clear());
@@ -48,7 +46,6 @@ export const localSessions: LocalSessions | undefined = hostsHere ? {
   entries: (sessionId, options) => thisComputer().readEntries(sessionId, options),
 } : undefined;
 
-/** Remembers, from the server's list, which sessions this computer's host runs, so that they open from it first. */
 export function rememberLocalSessions(sessions: readonly SessionRecord[]): void {
   if (!localSessions || !hostHere()) return;
   for (const session of sessions) if (session.viewable !== false) localSessions.runs(session);

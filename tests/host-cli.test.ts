@@ -88,6 +88,10 @@ test("the host refuses malformed requests and reports what this machine would ru
       { type: "start", id: 3 },
       { type: "start", id: 4, server: "https://pikibun.example", pairing: { id: "not-a-pairing-id", code: pairing.code } },
       { type: "start", id: 5, server: "https://pikibun.example", pairing: { ...pairing, code: "short" } },
+      { type: "view", id: 6, sessionId: "../session" },
+      { type: "view", id: 7, sessionId: "session", since: "not-a-revision" },
+      { type: "entries", id: 8, sessionId: "session", conversation: "0", before: "0:1", limit: 0 },
+      { type: "entries", id: 9, sessionId: "session", conversation: "0", before: "0:1" },
       { type: "stop", id: -1 },
     ]) {
       host.send(malformed);
@@ -100,6 +104,11 @@ test("the host refuses malformed requests and reports what this machine would ru
       const earlier = new Set(host.events);
       host.write(line);
       await host.next(event => isError(event) && !earlier.has(event));
+    }
+
+    for (const read of [{ type: "view", sessionId: "session" }, { type: "entries", sessionId: "session", conversation: "0", before: "0:1", limit: 5 }]) {
+      const unread = await host.request(read);
+      assert.equal(unread.type === "result" && !unread.ok ? unread.error.code : undefined, "not-running", "Nothing to read sessions from before the host runs");
     }
 
     const inspected = await host.request({ type: "inspect", allowFaux: true });

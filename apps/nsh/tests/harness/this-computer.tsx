@@ -61,6 +61,7 @@ function fakeHost(): HostLink {
       sent.update(list => [...list, JSON.stringify(shown)]);
       const reply = (extra: object = {}) => emit({ type: "result", id: request.id, ok: true, ...extra });
       if (request.type === "inspect") reply({ inspection: inspection(request.allowInsecureLoopback === true) });
+      else if (request.type === "view") reply({ view: { view: { sessionId: request.sessionId, entries: [], approvals: [], conversations: [] }, revision: "1".repeat(32) } });
       else if (request.type === "providers") reply({ providers: providers() });
       else if (request.type === "start") {
         if (request.pairing) paired = String(request.server);
@@ -123,6 +124,7 @@ function fakeInstall(): InstallRun {
 setHostLauncher(fakeHost);
 setInstaller(fakeInstall);
 const host = thisComputer();
+const localView = signal("unread");
 mount(() => (
   <View style={{ flex: 1 }}>
     <ThisComputerPanel host={host} server={SERVER} createPairing={async name => {
@@ -132,6 +134,10 @@ mount(() => (
     <Button testID="fake-terminal-install" label="Install in a terminal" onPress={() => { command = "ok"; }} />
     <Text>{`install error: ${host.installError()}`}</Text>
     <Text>{`this computer's host: ${thisComputerHostId() ?? "none"}`}</Text>
+    <Button testID="fake-read-session" label="Read a session" onPress={() => {
+      void host.readView("s1", { brief: false }).then(reply => localView.set(reply && "view" in reply ? reply.view.sessionId : "none"));
+    }} />
+    <Text>{`local view: ${localView()}`}</Text>
     <View testID="fake-host-sent">
       <Each of={sent()} key="index">{line => <Text>{`sent ${line()}`}</Text>}</Each>
     </View>

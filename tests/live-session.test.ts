@@ -375,7 +375,7 @@ test("a session this computer's host runs is read from it, and the server is ask
   const first = "1".repeat(32);
   const second = "2".repeat(32);
   host.answer = options => options.since === undefined ? { view: idleView, revision: first }
-    : { patch: { base: first, revision: second, view: { sessionId: "s1", busy: true }, lists: { entries: [], approvals: [], conversations: [], queue: [] } } };
+    : { patch: { base: first, revision: second, view: { sessionId: "s1", busy: true }, lists: { entries: [], approvals: [], conversations: [], queue: [] } } } as unknown as LocalViewReply;
   const live = await liveSession(t, { session: { ...hosted, toolOutput: "brief" }, view: idleView, stream: "hold" }, undefined, host);
   assert.deepEqual(live.state.view, idleView);
   assert.equal(live.state.status, "online");

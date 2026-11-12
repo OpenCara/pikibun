@@ -490,7 +490,6 @@ export class ThisComputerHost {
     return result.ok ? { ok: true } : { ok: false, error: result.error.message };
   }
 
-  /** The host's ID while it runs and may serve its sessions to this app, which never starts it to read one. */
   serving(): { server: string; connectorId: string } | undefined {
     const running = untracked(this.running);
     const state = untracked(this.state);
@@ -498,7 +497,6 @@ export class ThisComputerHost {
     return { server: running.server, connectorId: running.connectorId };
   }
 
-  /** A session's view read from this host, without the server (docs/design/local-views.md); null where it can't be. */
   async readView(sessionId: string, options: { since?: string; brief: boolean }): Promise<LocalView | null> {
     if (!this.serving()) return null;
     const result = await this.localRequest({ type: "view", sessionId, ...(options.since ? { since: options.since } : {}), ...(options.brief ? { brief: true } : {}) });

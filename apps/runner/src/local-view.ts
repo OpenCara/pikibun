@@ -4,12 +4,6 @@ import { briefEntry, entriesBefore, latestEntries } from "../../../packages/shar
 import { ViewRevisions } from "../../../packages/shared/src/view-patch.js";
 import type { LocalPage, LocalView } from "./app-host-protocol.js";
 
-/**
- * A session's view as the desktop app that started this host reads it, without the server (docs/design/local-views.md):
- * what the server would show, with secrets redacted and approvals left out, the tool output brief where the session
- * keeps it brief, and each conversation's latest page of entries, so that one read stays small; earlier pages are read
- * with entries().
- */
 export class LocalViews {
   readonly #revisions = new WeakMap<object, { brief: boolean; revisions: ViewRevisions }>();
   readonly #redacted = new WeakMap<object, EntryView>();

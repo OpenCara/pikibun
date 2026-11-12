@@ -161,6 +161,9 @@ React web client's address for it) makes this computer one of your hosts:
 - **Start and stop** the host, with the CLI's own `--unsafe-no-sandbox` warning in a native dialog where there is no
   sandbox; on macOS, choose **None** or **macOS sandbox** (Seatbelt, experimental). Linux uses bubblewrap where it is
   installed; Windows its own sandbox, experimental, or none after consent.
+- **Read its sessions from it**: a session the server says runs on this host opens from the host itself, over the same
+  channel (`view` and `entries`), and carries on, read-only, while the server can't be reached; the server still checks
+  who may read it ([the design](../../docs/design/local-views.md), `src/lib/local-sessions.ts`).
 - **Models offered** (Pi's choice, or the ones checked), **Sign Pi in to a provider** (Pi's own `/login`, run on this
   computer: its page opens in the browser, a device code or API key is asked here, and the credential stays in Pi's
   configuration), **Prerequisites** with what to run for each missing one, and the host's recent activity.

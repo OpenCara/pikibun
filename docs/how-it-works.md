@@ -6,7 +6,7 @@
 ```
 
 - The **server** keeps workspaces, members, session records and permissions. It decides every Git request of a session: the host then makes it at the Git host itself with a credential the server gives it for that repository, or the server relays it (see [Network access](hosts.md#network-access)). It issues short-lived push credentials and acts on GitHub for session owners. It never runs an agent itself.
-- A **host** runs the agents. Pi's configuration and model credentials, each session's files and its conversation stay there; the server relays every request to it. While a host is offline, its sessions' conversations can't load and no work runs on them.
+- A **host** runs the agents. Pi's configuration and model credentials, each session's files and its conversation stay there; the server relays every request to it. While a host is offline, its sessions' conversations can't load and no work runs on them. The one exception: the desktop app reads a session that its own host (**This Mac**) runs from that host first, and still, read-only, while the server can't be reached; the server still decides who may read it (see [the design](design/local-views.md)).
 - Everyone watching a session shares the server's reads of it, about one a second, and after the first read the host, the server and the apps send each other only what changed in the conversation.
 - One client, written on Native Shell, runs on the web and as the desktop and phone apps (see [iPhone, iPad, Mac and Windows apps](apps.md)). They all call the same API.
 

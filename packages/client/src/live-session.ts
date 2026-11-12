@@ -66,18 +66,10 @@ export function createViewCache(limit = 8): ViewCache {
 
 export type LocalViewReply = { view: SessionView; revision: string } | { patch: SessionViewPatch };
 
-/**
- * The host on this device, which the desktop app started: a session it runs is read from it first, rather than through
- * the server's relay, and still while the server can't be reached (docs/design/local-views.md).
- */
 export interface LocalSessions {
-  /** Whether it runs this session, by the server's record of it, which it then remembers. */
   runs(session: SessionRecord): boolean;
-  /** The record of a session the server said it runs, while it still does: for when the server can't be reached. */
   ran(sessionId: string): SessionRecord | undefined;
-  /** The session's view, or a patch on the one at since; null where the host can't read it. */
   view(sessionId: string, options: { since?: string; brief: boolean }): Promise<LocalViewReply | null>;
-  /** Entries before one in a conversation; null where the host can't read them. */
   entries(sessionId: string, options: { conversation: string; before: string; limit: number; brief: boolean }): Promise<{ entries: EntryView[]; older: number } | null>;
 }
 
@@ -196,8 +188,6 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     applyHere(reply);
   }
 
-  // A view read here shows once the server has said, in this live session, that its account may read it, or can't be
-  // reached to say otherwise; until then the first read waits.
   function confirmHere() {
     confirmed = true;
     const reply = held;

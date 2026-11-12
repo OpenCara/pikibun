@@ -166,7 +166,6 @@ export interface ConnectorRuntime {
   entries?(sessionId: string, options: { conversation: string; before: string; limit: number; brief?: boolean }): Promise<LocalPage | null>;
 }
 
-/** The host has no runtime to read sessions from: it hasn't connected since it started, or is replacing its runtime. */
 export class LocalViewUnavailable extends Error {
   constructor() { super("The host isn't serving sessions yet"); }
 }
@@ -514,17 +513,12 @@ export class LocalConnector {
     return this.frames.direct(input);
   }
 
-  /**
-   * A session's view for the desktop app that started this host, read here rather than relayed through the server, so
-   * that it carries on while the server can't be reached (docs/design/local-views.md). It needs the runtime, made once
-   * the host first connects, and kept while the connection comes and goes.
-   */
-  localView(sessionId: string, options: { since?: string; brief?: boolean }): Promise<LocalView> {
+  async localView(sessionId: string, options: { since?: string; brief?: boolean }): Promise<LocalView> {
     const runtime = this.localRuntime();
     return runtime.view!(assertId(sessionId), options);
   }
 
-  localEntries(sessionId: string, options: { conversation: string; before: string; limit: number; brief?: boolean }): Promise<LocalPage | null> {
+  async localEntries(sessionId: string, options: { conversation: string; before: string; limit: number; brief?: boolean }): Promise<LocalPage | null> {
     const runtime = this.localRuntime();
     return runtime.entries!(assertId(sessionId), options);
   }
