@@ -5,10 +5,8 @@
   "build": 1,
   "capabilities": {
     "network": { "hosts": ["*"] },
-    "webview": { "hosts": ["*"] },
     "clipboard": true,
     "picker": true,
-    "openUrl": true,
     "statusBar": true,
     "fs": { "read": ["${homeDir}"], "write": ["${homeDir}"] },
     "host": ["page.*"]

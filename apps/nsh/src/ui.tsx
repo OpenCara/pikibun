@@ -1,6 +1,5 @@
-import { cleanup, Clipboard, computed, createAnimatedValue, effect, Image, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
+import { cleanup, Clipboard, computed, createAnimatedValue, effect, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
 import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
-import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
 
@@ -408,11 +407,6 @@ export function IdentityBadge(props: { name: string; id: string; size?: number }
       <Text style={{ fontSize: Math.round(size() * 0.55), fontWeight: weight.medium, color: "#ffffff" }}>{(Array.from(props.name.trim())[0] ?? "?").toUpperCase()}</Text>
     </View>
   );
-}
-
-export function Logo(props: { size?: number }) {
-  const size = () => props.size ?? 20;
-  return <Image src={logo} accessibilityLabel="Pikibun" style={{ width: size(), height: size(), borderRadius: size() * 0.28 }} />;
 }
 
 export function Divider(props: { vertical?: boolean }) {

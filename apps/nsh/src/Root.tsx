@@ -24,7 +24,8 @@ import { UsernameSetup } from "./screens/UsernameSetup";
 import { applyStoredAppearance } from "./settings/Appearance";
 import { findSection, SectionList } from "./settings";
 import { layout, palette } from "./theme";
-import { IconButton, IdentityBadge, Loading, Logo, NavItem } from "./ui";
+import { Logo } from "./logo";
+import { IconButton, IdentityBadge, Loading, NavItem } from "./ui";
 
 type Route =
   | { name: "sessions" }

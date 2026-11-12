@@ -1,9 +1,12 @@
 import { host, mount, signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { mkdir, readdir, rmdir, unlink, writeFile } from "fs/promises";
-import { Composer } from "../../src/components/Composer";
-import { createAttachments, decodeBase64 } from "../../src/lib/attachments";
+import { Composer } from "../../../src/components/Composer";
+import { createAttachments, decodeBase64 } from "../../../src/lib/attachments";
 
+// Built with the nsh.json beside it, which also lets it write the home folder, to put there the files the test hands
+// over; the app's own reads them as it reads any. So it imports nothing that imports a file (`src/logo.tsx`): the
+// nsh.json beside it roots its files in this folder.
 const folder = String((host.params as { folder?: unknown }).folder ?? "");
 const dot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 

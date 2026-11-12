@@ -229,7 +229,7 @@ describe("a file attached to a message", () => {
 describe("local files a desktop hands over", () => {
   const staged = async () => {
     const folder = `${homedir()}/.cache/pikibun-nsh-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-    const app = await open("./harness/attach.tsx", { platform: "macos", width: 800, height: 600, host: { params: { folder } } });
+    const app = await open("./harness/home/attach.tsx", { platform: "macos", width: 800, height: 600, host: { params: { folder } } });
     await app.waitFor("id:clean-up");
     return { app, url: (name: string) => `file://${folder.split("/").map(encodeURIComponent).join("/")}/${name}` };
   };

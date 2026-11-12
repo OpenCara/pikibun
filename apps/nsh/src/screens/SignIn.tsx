@@ -13,7 +13,8 @@ import { computerName, hostsHere } from "../lib/this-computer";
 import { thisServer } from "../lib/this-server";
 import { ThisServerPanel } from "../settings/SelfHost";
 import { palette, radius, text } from "../theme";
-import { Banner, Button, Logo, Small } from "../ui";
+import { Logo } from "../logo";
+import { Banner, Button, Small } from "../ui";
 
 const inputStyle = () => ({
   borderWidth: 1, borderRadius: radius.medium, paddingHorizontal: 12, height: 40, fontSize: text.reading,

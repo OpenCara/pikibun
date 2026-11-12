@@ -1,6 +1,6 @@
 import { exists, mkdir, readdir, readFile, stat, unlink, writeFile } from "fs/promises";
 import { platform, signal, untracked } from "nsh";
-import { Window } from "nsh/desktop";
+import { Application } from "nsh/desktop";
 import nshProcess from "process";
 import { APP_VERSION } from "../app-version";
 import { thisComputer } from "./this-computer";
@@ -244,7 +244,7 @@ async function installUnix(file: string, update: AvailableUpdate): Promise<void>
 async function restart(): Promise<void> {
   await Promise.race([Promise.all([thisComputer().shutdown(), thisServer().shutdown()]), new Promise<void>(resolve => setTimeout(resolve, 12_000))]).catch(() => undefined);
   try { nshProcess.exit(0); return; } catch { }
-  Window.close();
+  Application.quit();
 }
 
 async function cleanUp(current: string): Promise<CleanUp> {
