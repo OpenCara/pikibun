@@ -30,7 +30,7 @@ function remember(session: SessionRecord): void {
 export const localSessions: LocalSessions | undefined = hostsHere ? {
   runs(session) {
     const host = hostHere();
-    if (!host || session.connectorId !== host) {
+    if (!host || session.connectorId !== host || session.viewable === false) {
       records.delete(session.id);
       return false;
     }
@@ -48,5 +48,5 @@ export const localSessions: LocalSessions | undefined = hostsHere ? {
 
 export function rememberLocalSessions(sessions: readonly SessionRecord[]): void {
   if (!localSessions || !hostHere()) return;
-  for (const session of sessions) if (session.viewable !== false) localSessions.runs(session);
+  for (const session of sessions) localSessions.runs(session);
 }

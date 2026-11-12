@@ -264,7 +264,7 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
       if (!running()) return;
       confirmed = true;
       handlers.session(metadata.session);
-      const onHost = metadata.session.viewable !== false && local?.runs(metadata.session) === true;
+      const onHost = local?.runs(metadata.session) === true && metadata.session.viewable !== false;
       if (!onHost) leaveHere(false);
       if (metadata.session.viewable === false) forgetView();
       else if (!shown && current && metadata.session.viewable === true) showView(current, revision);
