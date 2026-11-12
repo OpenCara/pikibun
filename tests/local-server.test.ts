@@ -119,8 +119,8 @@ const errorCode = async (response: Response) => (await response.json() as { code
 test("a local server signs its owner in with its sign-in link, without GitHub: the first sign-in makes their account", async t => {
   const f = await localFixture(t);
   assert.deepEqual(await f.health(), { claimed: false });
-  const health = await (await f.request("/api/health")).json() as { githubConfigured: boolean; passwordAuth: boolean };
-  assert.deepEqual([health.githubConfigured, health.passwordAuth], [false, false]);
+  const health = await (await f.request("/api/health")).json() as { githubConfigured: boolean; passwordAuth: boolean; codeSignIn: boolean };
+  assert.deepEqual([health.githubConfigured, health.passwordAuth, health.codeSignIn], [false, false, false]);
   for (const path of ["/api/auth/github", `/api/auth/native/start?challenge=${"c".repeat(43)}&state=app-state-0123456789`]) {
     const github = await f.request(path);
     assert.equal(github.status, 503, path);

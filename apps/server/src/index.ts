@@ -67,7 +67,7 @@ app.get('/api/health', async c => {
     workspaceDatabasesConfigured: !!c.env.WORKSPACE_DATABASES,
     connectorsConfigured: !!c.env.CONNECTOR_HUB, testMode: testMode(c.env),
     passwordAuth: passwordAuthEnabled(c.env),
-    codeSignIn: true,
+    codeSignIn: !localMode(c.env),
     githubSignup: signupMode(c.env, 'github'),
     ...(passwordAuthEnabled(c.env) ? { passwordSignup: signupMode(c.env, 'password') } : {}),
     ...(localMode(c.env) ? { localServer: { claimed: !!await localOwner(c.env) } } : {}),
