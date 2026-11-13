@@ -20,7 +20,7 @@ export const accessLabels: Record<AccessMode, { label: string; hint: string }> =
 
 export const chatAccessModes: readonly AccessMode[] = ["read", "auto"];
 
-export const CONNECTOR_UPDATE_HINT = "Update the host's connector (npx pikibun@latest connect) to choose model, reasoning and access";
+export const CONNECTOR_UPDATE_HINT = "Update the host's connector (npx pikibun@latest connect) to choose model and reasoning";
 
 export const modelKey = (model: { provider: string; modelId: string }) => `${model.provider}\n${model.modelId}`;
 

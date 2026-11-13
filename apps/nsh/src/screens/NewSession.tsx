@@ -364,7 +364,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
           hint=""
           tools={
             <If when={host() || !autoHost()} else={<Chip testID="chat-model" icon="sparkles" label={autoError() ? "Auto" : "Auto · choosing…"} disabled />}>
-              <ChatOptionsBar host={host()} value={selection()} onChange={changeSelection} showAccess auto={autoModelOption()} />
+              <ChatOptionsBar host={host()} value={selection()} onChange={changeSelection} auto={autoModelOption()} />
             </If>
           } />
         <View testID="new-context" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", rowGap: 4, columnGap: 2, paddingHorizontal: 4 }}>

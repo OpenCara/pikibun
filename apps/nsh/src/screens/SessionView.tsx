@@ -581,7 +581,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                     options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
                 </If>
                 <If when={permitted()}>
-                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} showAccess={actualMode() === "write"}
+                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)}
                     auto={autoMode.enabled() ? { selected: autoChat(), chosen: autoChosen(), perMessage: true,
                       hint: "Chooses the model and reasoning for each message from how complex it looks, on this session's host",
                       onSelect: () => autoChat.set(true), onLeave: () => autoChat.set(false) } : undefined} />
