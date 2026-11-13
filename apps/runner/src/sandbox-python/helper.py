@@ -1282,7 +1282,9 @@ def walk_tree(start, prefix, descend, state):
             relative = name if frame['prefix'] in ('', '.') else frame['prefix'] + '/' + name
             try:
                 info = os.stat(name, dir_fd=frame['fd'], follow_symlinks=False)
-            except OSError:
+            except OSError as error:
+                if error.errno in WALK_CUT:
+                    state['truncated'] = True
                 continue
             yield frame['fd'], name, relative, info
             if state['truncated'] or not stat.S_ISDIR(info.st_mode) or not descend(name):
