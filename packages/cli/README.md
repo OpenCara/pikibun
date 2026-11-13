@@ -140,6 +140,8 @@ npx pikibun@latest extensions remove cc-safety-net
 
 They live in the connector's state directory; npm runs none of their install scripts unless you add `--allow-scripts`. A running connector picks up changes made here within half a minute. `pikibun connect --no-remote-installs` refuses installs asked for in Pikibun.
 
+`pikibun connect --managed-extensions` runs Pikibun's own `piki:pr-flow` and `piki:context-files` at the version Pikibun pins, installed from npm (`@pikibun/pi-pr-flow`, ...) and checked against the digest Pikibun names, in place of the copies built into the connector where it is newer: a host always runs the newest of the pinned version, the newest it has run before and the built-in copy. `extensions list` shows them as managed; they can't be removed here. See [Extensions](https://github.com/OpenCara/pikibun/blob/main/docs/extensions.md#newer-versions-of-pikibuns-extensions-without-a-connector-update).
+
 Extensions run in the connector, as this machine's user, with your files, credentials and network, outside the sandbox. Install only code you trust. Their tool calls run like host commands: for you and members you grant host commands, or for every session where you let them. Pikibun's own `web_fetch` and `web_search` tools are retired: web search comes from extensions.
 
 Three extensions are built into the connector, so there is nothing to install: `piki:gh`, `piki:glab` and `piki:azure-cli` give sessions the GitHub, GitLab and Azure CLIs (`gh`, `glab`, `az`) where their workspace uses them. Install those commands on this machine and sign in to them (`gh auth login`, `glab auth login`, `az login` and `az extension add --name azure-devops`); their tool calls act as you. `pikibun extensions list` shows them.

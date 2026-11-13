@@ -31,7 +31,12 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    and the control plane all refuse to). They load through Pi's loader from their factory
    (`loadExtensionFromFactory`), not a file, so they are part of the connector's bundle. A session loads each with a
    factory of its own (`forSession`), which knows where that session runs the command (rules 8 and 9); the connector's
-   copy, which only reports what the extension offers, runs nothing.
+   copy, which only reports what the extension offers, runs nothing. The hook packages (`pr-flow`, `context-files`) can
+   also run from npm at the version the control plane pins, where the host's owner starts the connector with
+   `--managed-extensions` ([extension loading](extension-loading.md)): the source stays `piki:<name>` and the report
+   gives the package's version. The host runs the newest of the pinned package, the newest it has run before and the
+   bundled copy, whose version is the one committed in `extensions/<name>/package.json`. A pin can also name a `piki:`
+   source the connector doesn't know, which then comes only from npm. `prompt-audit` runs only as bundled for now.
 3. **One tool per command**, named for it (`gh`, `glab`, `az`), whose arguments are the command's, as a list: it runs
    without a shell (in the sandbox, every word quoted), in the session's worktree or a `directory` in it, with stdin
    closed and no prompts, colors, pagers or update checks, until it exits, its call stops or it reaches its

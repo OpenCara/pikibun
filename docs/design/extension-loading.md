@@ -1,6 +1,7 @@
 # Loading Pikibun's extensions without a connector release
 
-Status: a plan. Nothing here is implemented yet; the phases at the end say what lands in which order.
+Status: phase 1 is built (#310), with no pins yet; the rest is a plan. The phases at the end say what lands in which
+order, and [Phase 1 as built](#phase-1-as-built) where the code differs from this text.
 
 ## Why
 
@@ -131,11 +132,12 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
 
    Some sources run only from their bundled copy, whatever is pinned: a list in the connector, which holds
    `piki:prompt-audit` until phase 4 (it needs the host's model keys, which the extension process of phase 2 won't
-   have). The connector ignores a pin for one of them.
+   have). The connector ignores a pin for one of them, and so for a source whose connector copy isn't a hook package:
+   a command extension (`piki:gh`), a session-tool switch or one the control plane runs (`piki:auto-mode`).
 
-8. **A new version applies when a session next opens.** A session loads its extensions when it opens and keeps them
-   (`SessionExtensions.ensure` skips a source it has opened), so a session never changes version under a running
-   message. Versions sit side by side by path, as in the store, so no restart is needed. A managed package's tools,
+8. **A new version applies when a session next opens the extension.** A session opens each extension the first time
+   one of its messages runs it, and keeps it (`SessionExtensions.ensure` skips a source it has opened), so a session
+   never changes version under a running message; one that hasn't run the extension yet gets the newest when it does. Versions sit side by side by path, as in the store, so no restart is needed. A managed package's tools,
    should one register any, are an installed extension's tools in every respect (`extension.tool`); none does today,
    and a tool Pikibun wants every session to have belongs to decision 10 or 11.
 
@@ -233,6 +235,33 @@ extension process doesn't have. Until then it runs from its bundled copy, in the
 
 `apps/runner/src/extensions/adapter.ts` needs no change: it takes a `piki:` source with `factories` as bundled and anything with files
 as a package.
+
+## Phase 1 as built
+
+Where the code (#310) settles what the text above leaves open, or differs from it:
+
+- **"Loaded before" is "run before".** The index (`managed.json`, `loaded`) marks a version once the connector has
+  chosen it to run, after it passed decision 6 and loaded in the connector's own loader, rather than once a session
+  opened it. The connector can't tell which sessions opened which version (decision 5), and a version it checked and
+  loaded is one it can vouch for whether or not a message has used it yet.
+- **Before the first answer.** At its start the connector already chooses between the newest version it ran before and
+  the bundled copy (decision 7 needs no pin for that), so sessions opened before the first sync don't go back to an
+  older copy. Pruning (decision 5) and installs wait for the first answer.
+- **A version run before that no longer loads** is deleted like a failed pin, and the next newest one it ran is the
+  candidate. Its files are on the host already, so a failure to load them isn't the kind that passes.
+- **A damaged index** (`managed.json` that doesn't parse) stops pruning and installs rather than count as empty: nothing
+  is deleted or replaced, the host runs its bundled copies, and the log says why. A bundled copy whose committed version
+  doesn't parse counts as no candidate, and is logged.
+- **Which pins count.** Besides the bundled-only list, the connector ignores a pin for a `piki:` source whose own copy
+  isn't a hook package, or which the catalogue it was built with names as a command, session-tool or control-plane
+  extension (`managedSource`, `piki/index.ts`). A pin for a name it doesn't know, or for a hook package in its
+  catalogue it doesn't bundle, is used.
+- **Missing, with the reason.** A source with no candidate is reported as an `InstalledExtension` with no modules and
+  its `error` (why the pin wasn't used), which the control plane already parses, so nothing new is reported
+  (decision 4). A bundled copy's report has no `version`, as before.
+- **Reported at once.** When the set of managed packages a connector runs changes, it syncs again at once rather than in
+  half a minute, so the host's page shows the version a host runs.
+- **`--managed-extensions` with `--no-remote-installs`** says it is ignored, rather than refusing to start.
 
 ## Not chosen
 

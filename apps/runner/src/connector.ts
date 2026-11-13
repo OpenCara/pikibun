@@ -29,6 +29,7 @@ import type { RunnerConfig } from "./session.js";
 import { HostExtensions } from "./extensions/host.js";
 import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
+import { buildVersion } from "../../../packages/shared/src/version.js";
 import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
 import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
 import type { LocalPage, LocalView } from "./app-host-protocol.js";
@@ -195,6 +196,7 @@ export interface ConnectorOptions {
   reconnectDelayMs?: number;
   extensions?: HostExtensions;
   remoteExtensionInstalls?: boolean;
+  managedExtensions?: boolean;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
   onWarning?: (warning: "resources-unavailable") => void;
 }
@@ -270,7 +272,8 @@ export class LocalConnector {
     this.tunnels = new HostTunnels({ cloudflared: () => tunnel.current(), directory: join(this.directory, "tunnels"),
       log: line => { if (/\b(ERR|WRN)\b/.test(line)) process.stderr.write(`cloudflared: ${line.slice(0, 1000)}\n`); } });
     this.hostExtensions = this.options.extensions
-      ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false });
+      ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false,
+        managed: this.options.managedExtensions === true, connectorVersion: this.options.version ?? buildVersion });
     await this.hostExtensions.load();
     this.releaseLease = await (this.options.acquireLease ?? acquireRunnerLease)(this.directory, () => {
       this.lifetime.abort();
@@ -436,10 +439,12 @@ export class LocalConnector {
           }
         }
         results = [];
+        const changed = await extensions.applyManaged(answer.managed).catch(() => false);
         if (answer.requests.length) {
           results = await extensions.apply(answer.requests);
           continue;
         }
+        if (changed) continue;
       } catch { }
       await delay(EXTENSION_SYNC_MS, undefined, { signal }).catch(() => {});
     }

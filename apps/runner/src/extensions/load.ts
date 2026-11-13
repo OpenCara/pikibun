@@ -7,7 +7,7 @@ import { createEventBus, createExtensionRuntime, type Extension as PiExtension, 
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { extensionLimits, type ExtensionModuleSummary, type InstalledExtension } from "../../../../packages/shared/src/host-extensions.js";
 import { retiredToolNames, toolNames } from "../../../../packages/shared/src/types.js";
-import type { ExtensionStore, InstalledSource } from "./store.js";
+import type { ExtensionStore, InstalledSource, ManagedInstall } from "./store.js";
 import { pikiModulePath, connectorPikiExtensions, type PikiExtension } from "./piki/index.js";
 
 export const supportedEvents = new Set(["session_start", "session_shutdown", "before_agent_start", "agent_start", "agent_end", "agent_settled",
@@ -80,6 +80,7 @@ export interface LoadedSource {
   root: string;
   files: string[];
   factories?: { path: string; factory: ExtensionFactory }[];
+  managed?: ManagedInstall;
   summary: InstalledExtension;
 }
 
@@ -144,7 +145,30 @@ export function summarizeModules(root: string, files: string[], result: LoadExte
   return modules;
 }
 
-export async function loadInstalled(store: ExtensionStore, pikiExtensions: readonly PikiExtension[] = connectorPikiExtensions): Promise<LoadedSource[]> {
+export async function loadManaged(store: ExtensionStore, installed: ManagedInstall): Promise<LoadedSource> {
+  const summary: InstalledExtension = { source: installed.source, dev: false, version: installed.version, modules: [] };
+  let root = "";
+  let files: string[] = [];
+  const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
+  try {
+    root = store.managedLocation(installed);
+    const entries = await packageEntries(root, true);
+    files = entries.files;
+    Object.assign(summary, entries.name ? { name: entries.name } : {}, entries.description ? { description: entries.description } : {});
+    if (entries.name !== installed.package || entries.version !== installed.version) throw new Error(`Its package.json names ${entries.name ?? "no package"}@${entries.version ?? "no version"}, not ${installed.package}@${installed.version}`);
+    if (!files.length) throw new Error("It has no extension modules");
+    const { loadExtensions } = await piLoader();
+    summary.modules = summarizeModules(root, files, await loadExtensions(files, cwd, undefined, createExtensionRuntime()), new Set());
+  } catch (error) {
+    summary.error = message(error);
+  } finally {
+    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+  }
+  return { installed: { source: installed.source }, root, files, managed: installed, summary };
+}
+
+export async function loadInstalled(store: ExtensionStore, pikiExtensions: readonly PikiExtension[] = connectorPikiExtensions,
+  managed: readonly LoadedSource[] = []): Promise<LoadedSource[]> {
   const loaded: LoadedSource[] = [];
   let installed: InstalledSource[] = [];
   let failure: unknown;
@@ -154,7 +178,8 @@ export async function loadInstalled(store: ExtensionStore, pikiExtensions: reado
   const { loadExtensions } = await piLoader();
   const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
   try {
-    for (const extension of pikiExtensions) loaded.push(await loadPikiExtension(extension, cwd));
+    for (const extension of pikiExtensions) loaded.push(managed.find(item => item.summary.source === extension.info.source) ?? await loadPikiExtension(extension, cwd));
+    loaded.push(...managed.filter(item => !loaded.includes(item)));
     for (const source of installed) {
       const dev = source.source.startsWith("local:");
       const location = store.location(source);

@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { extensionLimits, extensionPackageKey, extensionSourceString, ExtensionSourceError, parseExtensionSourceSpec,
+import { EXACT_VERSION, extensionLimits, extensionPackageKey, extensionSourceString, ExtensionSourceError, parseExtensionSourceSpec,
   type ExtensionSourceSpec } from "../../../../packages/shared/src/host-extensions.js";
+import { compareVersions, inManagedScope, MANAGED_EXTENSION_SCOPE, managedPinKey, type ManagedExtensionPin } from "../../../../packages/shared/src/managed-extensions.js";
 
 const run = promisify(execFile);
 
@@ -18,7 +19,29 @@ export interface InstalledSource {
   path?: string;
 }
 
+export interface ManagedInstall {
+  source: string;
+  package: string;
+  version: string;
+  integrity: string;
+  directory: string;
+  loaded?: boolean;
+}
+
 export { ExtensionSourceError };
+
+const DIRECTORY = /^[0-9a-f]{16}$/;
+const NPM_INSTALL = ["install", "--save-exact", "--no-audit", "--no-fund", "--legacy-peer-deps"];
+
+export const managedDirectory = (pin: ManagedExtensionPin) => createHash("sha256").update(managedPinKey(pin)).digest("hex").slice(0, 16);
+
+export const sameManaged = (installed: ManagedInstall, pin: ManagedExtensionPin) => installed.source === pin.source && installed.package === pin.package
+  && installed.version === pin.version && installed.integrity === pin.integrity && installed.directory === managedDirectory(pin);
+
+export function newestLoaded(managed: readonly ManagedInstall[], source: string): ManagedInstall | undefined {
+  return managed.filter(item => item.source === source && item.loaded).reduce<ManagedInstall | undefined>((newest, item) =>
+    !newest || compareVersions(item.version, newest.version) > 0 ? item : newest, undefined);
+}
 
 export function parseExtensionSource(spec: string, cwd = process.cwd()): ExtensionSource {
   if (spec.startsWith("piki:")) throw new ExtensionSourceError(`${spec} is built into the connector: every host has it, and a workspace that uses it runs it. Update the connector for newer ones.`);
@@ -50,6 +73,83 @@ export class ExtensionStore {
       throw new ExtensionSourceError(`${join(this.directory, "sources.json")} is not a list of sources`);
     }
     return value as InstalledSource[];
+  }
+
+  async listManaged(): Promise<ManagedInstall[]> {
+    let text: string;
+    try { text = await readFile(join(this.directory, "managed.json"), "utf8"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+    const value: unknown = JSON.parse(text);
+    if (!Array.isArray(value) || value.some(item => !item || typeof item !== "object" || ["source", "package", "version", "integrity", "directory"]
+      .some(key => typeof item[key] !== "string") || !DIRECTORY.test(item.directory) || !EXACT_VERSION.test(item.version)
+      || !/^piki:[a-z][a-z0-9-]{0,63}$/.test(item.source) || !inManagedScope(item.package)
+      || (item.loaded !== undefined && item.loaded !== true))) {
+      throw new ExtensionSourceError(`${join(this.directory, "managed.json")} is not a list of managed packages`);
+    }
+    return value as ManagedInstall[];
+  }
+
+  managedLocation(installed: ManagedInstall): string {
+    if (!DIRECTORY.test(installed.directory) || !inManagedScope(installed.package)) throw new ExtensionSourceError(`Invalid managed package ${installed.source}`);
+    return join(this.directory, "managed", installed.directory, "node_modules", ...installed.package.split("/"));
+  }
+
+  addManaged(pin: ManagedExtensionPin): Promise<ManagedInstall> {
+    if (!inManagedScope(pin.package)) return Promise.reject(new ExtensionSourceError(`${pin.package} is not a ${MANAGED_EXTENSION_SCOPE} package`));
+    return this.exclusive(async () => {
+      const managed = await this.listManaged();
+      const existing = managed.find(item => sameManaged(item, pin));
+      if (existing) return existing;
+      const directory = managedDirectory(pin);
+      const project = join(this.directory, "managed", directory);
+      await rm(project, { recursive: true, force: true });
+      await mkdir(project, { recursive: true, mode: 0o700 });
+      await writeFile(join(project, "package.json"), `${JSON.stringify({ name: "pikibun-managed-extension", private: true, dependencies: {} }, null, 2)}\n`, { mode: 0o600 });
+      try {
+        await this.npm([...NPM_INSTALL, "--ignore-scripts", `${pin.package}@${pin.version}`], project);
+        await checkLock(project, pin);
+        const installed: ManagedInstall = { source: pin.source, package: pin.package, version: pin.version, integrity: pin.integrity, directory };
+        await this.saveManaged([...managed.filter(item => item.directory !== directory), installed]);
+        return installed;
+      } catch (error) {
+        await rm(project, { recursive: true, force: true }).catch(() => {});
+        throw error;
+      }
+    });
+  }
+
+  markManagedLoaded(installed: ManagedInstall): Promise<void> {
+    return this.exclusive(async () => {
+      const managed = await this.listManaged();
+      const entry = managed.find(item => item.directory === installed.directory);
+      if (!entry || entry.loaded) return;
+      entry.loaded = true;
+      await this.saveManaged(managed);
+    });
+  }
+
+  removeManaged(installed: ManagedInstall): Promise<void> {
+    return this.exclusive(async () => {
+      const managed = await this.listManaged();
+      const others = managed.filter(item => item.directory !== installed.directory);
+      if (others.length !== managed.length) await this.saveManaged(others);
+      if (DIRECTORY.test(installed.directory)) await rm(join(this.directory, "managed", installed.directory), { recursive: true, force: true });
+    });
+  }
+
+  pruneManaged(pins: readonly ManagedExtensionPin[]): Promise<ManagedInstall[]> {
+    return this.exclusive(async () => {
+      const managed = await this.listManaged();
+      const kept = managed.filter(item => pins.some(pin => sameManaged(item, pin)) || newestLoaded(managed, item.source) === item);
+      const removed = managed.filter(item => !kept.includes(item));
+      if (removed.length) await this.saveManaged(kept);
+      let entries: string[] = [];
+      try { entries = await readdir(join(this.directory, "managed")); } catch { }
+      for (const entry of entries) {
+        if (!kept.some(item => item.directory === entry)) await rm(join(this.directory, "managed", entry), { recursive: true, force: true });
+      }
+      return removed;
+    });
   }
 
   location(installed: InstalledSource): string {
@@ -104,7 +204,11 @@ export class ExtensionStore {
         const key = name.startsWith("npm:") || name.startsWith("git:") ? name : `npm:${name}`;
         matches = sources.filter(item => !item.path && extensionPackageKey(item.source) === key);
       }
-      if (!matches.length) throw new ExtensionSourceError(`${name} is not installed. Run "pikibun extensions list".`);
+      if (!matches.length) {
+        const managed = (await this.listManaged().catch(() => [])).find(item => item.package === name || item.source === name);
+        if (managed) throw new ExtensionSourceError(`${managed.package}@${managed.version} is ${managed.source}, which Pikibun manages: it can't be removed. A workspace that doesn't want it removes it from its extensions.`);
+        throw new ExtensionSourceError(`${name} is not installed. Run "pikibun extensions list".`);
+      }
       if (matches.length > 1) throw new ExtensionSourceError(`${name} is installed at several versions: name one, such as ${matches[0]!.source}.`);
       const installed = matches[0]!;
       await this.save(sources.filter(item => item !== installed));
@@ -119,12 +223,32 @@ export class ExtensionStore {
     return next;
   }
 
-  private async save(sources: InstalledSource[]): Promise<void> {
+  private save(sources: InstalledSource[]): Promise<void> { return this.saveIndex("sources.json", sources); }
+
+  private saveManaged(managed: ManagedInstall[]): Promise<void> { return this.saveIndex("managed.json", managed); }
+
+  private async saveIndex(name: string, value: unknown[]): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const file = join(this.directory, "sources.json");
-    await writeFile(`${file}.tmp`, `${JSON.stringify(sources, null, 2)}\n`, { mode: 0o600 });
+    const file = join(this.directory, name);
+    await writeFile(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
     await rename(`${file}.tmp`, file);
   }
+}
+
+async function checkLock(project: string, pin: ManagedExtensionPin): Promise<void> {
+  let lock: { packages?: Record<string, { version?: unknown; integrity?: unknown; link?: unknown }> };
+  try { lock = JSON.parse(await readFile(join(project, "package-lock.json"), "utf8")); }
+  catch { throw new ExtensionSourceError(`npm wrote no package-lock.json for ${pin.package}@${pin.version}, so its digest can't be checked.`); }
+  const packages = lock.packages && typeof lock.packages === "object" ? Object.entries(lock.packages).filter(([path]) => path !== "") : [];
+  const expected = `node_modules/${pin.package}`;
+  const others = packages.filter(([path]) => path !== expected).map(([path]) => path.replace(/^node_modules\//, ""));
+  if (others.length) throw new ExtensionSourceError(`npm installed ${others.slice(0, 5).join(", ")} with ${pin.package}@${pin.version}: a managed package installs nothing else.`);
+  const entry = packages.find(([path]) => path === expected)?.[1];
+  if (!entry || entry.link) throw new ExtensionSourceError(`npm's lock file doesn't name ${pin.package}.`);
+  if (entry.version !== pin.version) throw new ExtensionSourceError(`npm installed ${pin.package}@${String(entry.version)}, not ${pin.version}.`);
+  if (entry.integrity !== pin.integrity) throw new ExtensionSourceError(`${pin.package}@${pin.version}'s digest isn't the one Pikibun pinned.`);
+  const dependencies = (JSON.parse(await readFile(join(project, "package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
+  if (Object.keys(dependencies).join() !== pin.package) throw new ExtensionSourceError(`npm installed ${pin.package}@${pin.version}, but not as the one package of ${project}.`);
 }
 
 async function defaultNpm(args: string[], cwd: string, env?: Record<string, string>): Promise<void> {
