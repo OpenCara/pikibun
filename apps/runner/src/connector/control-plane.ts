@@ -10,7 +10,7 @@ import { MAX_CLONE_BRANCHES } from "../clone-branches.js";
 import { RunnerError } from "../protocol.js";
 import { ToolDefinitionsSource } from "../tool-definitions-source.js";
 import type { Generation } from "./generation.js";
-import { actorSchema, boundedBody, CALLBACK_LIMIT, CallbackRefused, decodeJson, IDENTIFIER, TOKEN } from "./wire.js";
+import { actorSchema, boundedBody, CALLBACK_LIMIT, CallbackRefused, decodeJson, IDENTIFIER, responseSummary, TOKEN } from "./wire.js";
 
 const RPC_TIMEOUT = 30_000;
 const TOOL_DEFINITIONS_LIMIT = 1024 * 1024;
@@ -32,7 +32,7 @@ export class ControlPlaneCalls {
     const version = this.options.settings.version ?? buildVersion ?? DEVELOPMENT_CONNECTOR_VERSION;
     return (this.options.settings.fetch ?? fetch)(`${this.options.credentials().controlPlaneUrl}${path}`, {
       method: "POST", redirect: "error", credentials: "omit",
-      headers: { authorization: `Bearer ${this.options.credentials().token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json",
+      headers: { authorization: `Bearer ${this.options.credentials().token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json", accept: "application/json",
         ...(version ? { [CONNECTOR_VERSION_HEADER]: version } : {}) },
       body: JSON.stringify(body), signal,
     });
@@ -64,7 +64,7 @@ export class ControlPlaneCalls {
     const response = await this.callbackResponse(generation, path, body);
     const bytes = await boundedBody(response, limit, AbortSignal.any([generation.abort.signal, AbortSignal.timeout(15_000)]));
     this.options.requireGeneration(generation);
-    return bytes.length ? decodeJson(bytes) : undefined;
+    return bytes.length ? decodeJson(bytes, response) : undefined;
   }
 
   async brokerCallback(generation: Generation, path: string, body: unknown, limit = CALLBACK_LIMIT): Promise<unknown> {
@@ -73,12 +73,15 @@ export class ControlPlaneCalls {
     const response = await this.#post(generation, path, body, signal);
     const bytes = await boundedBody(response, limit, signal);
     this.options.requireGeneration(generation);
-    const value = bytes.length ? decodeJson(bytes) : undefined;
     if (!response.ok) {
+      let value: unknown;
+      try { value = bytes.length ? decodeJson(bytes, response) : undefined; } catch { value = undefined; }
       const error = value && typeof value === "object" && "error" in value ? value.error : undefined;
-      throw new RunnerError(response.status, typeof error === "string" && /^[\x20-\x7e\u00a0-\uffff]{1,500}$/.test(error) ? error : "Scoped connector callback denied or unavailable");
+      throw new RunnerError(response.status, typeof error === "string" && /^[\x20-\x7e\u00a0-\uffff]{1,500}$/.test(error) ? error
+        : value === undefined && bytes.length ? `Scoped connector callback denied or unavailable: the Pikibun server, or a proxy in front of it, answered ${responseSummary(response)}`
+        : "Scoped connector callback denied or unavailable");
     }
-    return value;
+    return bytes.length ? decodeJson(bytes, response) : undefined;
   }
 
   async authorize(generation: Generation, request: AuthorizationRequest): Promise<AuthorizationResult> {

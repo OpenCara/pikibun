@@ -24,7 +24,7 @@ import { BROWSER_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER, SERVICE_DRIVER }
 import { SANDBOX_SERVICE_DRIVER, SANDBOX_SERVICE_SOCKETS, type ServiceExit, type ServiceProcess } from "./session-service.js";
 import { connectorNode, sandboxNodeMount, type NodeToolchain, type SandboxNodeMount } from "./node-toolchain.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
-import { connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBrowserMount, type BrowserToolchain } from "./browser-toolchain.js";
+import { browserEnvironment, connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBrowserMount, type BrowserToolchain } from "./browser-toolchain.js";
 import type { SessionBrowser } from "./browser-command.js";
 import type { SandboxNodePrograms } from "./program-availability.js";
 
@@ -731,6 +731,7 @@ export class Sandbox implements IsolatedWorkspace {
     if (egress) for (const [name, value] of Object.entries(egressEnvironment(this.#sessionBranch))) args.push("--setenv", name, value);
     if (egress && this.#shim) args.push("--setenv", "PATH", `${SHIM_DIRECTORY}:${this.#environment.PATH}`);
     for (const [name, value] of Object.entries(gpu?.env ?? {})) args.push("--setenv", name, value);
+    for (const [name, value] of Object.entries(browserEnvironment(browser?.executable))) args.push("--setenv", name, value);
     args.push("--", "/usr/bin/python3", "-I", "-c", HELPER);
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     const deadline = ["clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"].includes(request.kind)

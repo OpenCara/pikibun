@@ -8,6 +8,8 @@ import {
 } from "../shared";
 import { RenameSheet } from "../components/SessionMenu";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
+import { OfflineHostBanner } from "../components/OfflineHost";
+import { SudoPrompt } from "../components/SudoPrompt";
 import { Composer } from "../components/Composer";
 import { PullRequestLink } from "../components/PullRequest";
 import { RepositoryPreparationCard } from "../components/RepositoryPreparation";
@@ -65,6 +67,10 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   const manages = () => {
     const current = live.session();
     return Boolean(current && managesSession(user.id, current.ownerId, workspace()?.role));
+  };
+  const offlineHost = () => {
+    const current = host();
+    return !archived() && !live.session()?.frozen && workspace()?.personal === true && current && !current.online && current.ownerId === user.id ? current : undefined;
   };
   const backupBlocked = () => {
     const current = live.view();
@@ -189,6 +195,21 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     </View>
   );
 
+  const sudoDock = (
+    <If when={!readOnly() ? live.view()?.sudo : undefined}>
+      {prompt => (
+        <View style={{ paddingHorizontal: 16, paddingTop: 8, backgroundColor: palette().background }}>
+          <View style={{ width: "100%", maxWidth: 800, alignSelf: "center" }}>
+            <Each of={[prompt()]} key={item => item.id}>
+              {item => <SudoPrompt sessionId={props.id} prompt={item()} hostName={host()?.name}
+                canAnswer={live.session()?.ownerId === user.id && live.session()?.connectorOwnerId === user.id} privateWorkspace={workspace()?.personal === true} />}
+            </Each>
+          </View>
+        </View>
+      )}
+    </If>
+  );
+
   const content = (
     <PeopleContext.Provider value={people}>
       <View style={{ flex: 1, backgroundColor: palette().background }}>
@@ -201,8 +222,11 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{subtitle()}</Text>
           </View>
         </If>
-        <If when={archived() || live.session()?.frozen || live.session()?.cloneUnavailable || (live.error() && !startFailed()) || action.error() || action.notice()}>
+        <If when={archived() || live.session()?.frozen || live.session()?.cloneUnavailable || offlineHost() || (live.error() && !startFailed()) || action.error() || action.notice()}>
           <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
+            <If when={offlineHost()}>
+              {offline => <OfflineHostBanner host={offline()} server={untracked(session).origin} openSettings={() => props.go({ name: "settings", section: "desktop" })} />}
+            </If>
             <If when={live.session()?.frozen && !archived()}>
               <Banner testID="session-frozen" title="Read-only">
                 This session pinned its repositories when it started, which sessions no longer do. Its conversation and backups stay viewable, but it no longer runs. Start a new session to continue the work.
@@ -232,7 +256,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               </If>
             </If>
           }>
-          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={null}
+          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={sudoDock}
             openSession={target => { data.refreshSessions(); props.openSession(target); }} />
         </If>
         <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} sessionId={props.id} session={live.session} view={live.view}
@@ -455,7 +479,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     const queued = activeQueue().length > 0 ? ` · ${activeQueue().length} queued` : "";
     return preparingRepositories(view()) ? `Preparing repositories…${queued}`
       : stopPending() ? `Stopping…${queued}`
-      : view().busy ? `${view().activity === "waiting" ? "Waiting for a decision" : "Working"}…${queued}`
+      : view().busy ? `${view().sudo ? "Waiting for sudo's password" : view().activity === "waiting" ? "Waiting for a decision" : "Working"}…${queued}`
       : activeQueue().length ? `${activeQueue().length} queued` : "Idle";
   };
   const name = createUsername();
@@ -530,7 +554,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           </If>
           <If when={queueOpen()}>
             <View style={{ gap: 6, padding: 12, borderRadius: radius.large, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
-              <Small>Submissions and side asks share one queue; permissions are checked again before work runs. You can leave this screen: accepted work continues while the host is online and authorized.</Small>
+              <Small>Submissions run one at a time; side asks start at once, beside them. Permissions are checked again before work runs. You can leave this screen: accepted work continues while the host is online and authorized.</Small>
               <If when={props.live.error()}><Small>This is the last received queue view; live host status is not confirmed.</Small></If>
               <If when={receipt()}>
                 {last => <Small>{`Last receipt ${last().submissionId} · ${last().status}${last().queuePosition !== undefined ? ` · queue position ${last().queuePosition}` : ""}`}</Small>}

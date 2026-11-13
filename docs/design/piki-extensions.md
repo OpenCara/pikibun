@@ -622,6 +622,15 @@ fixes the review points it judges valid, then the merge.
     `merge-method` picks `github_merge`'s method. What it saw is kept in memory, per session: a restarted connector
     forgets the notes, never the flow, which every message's prompt restates.
 
+    **Merging is the workspace's choice.** `auto-merge` (a boolean flag, on by default, so workspaces that had the flow
+    before keep it as it was) decides who merges. Off, the prompt, the notes and the status lines keep every step up to
+    the merge (the draft, ready for review, the review window with its fixes and answers, the checks) but replace the
+    merge with a hand-over: tell the person, with the link, that it is ready for them to merge, and leave it open; step 5
+    forbids merging or queuing an automatic merge (`gh pr merge --auto`, ...) unless the person asks, and the
+    `github_merge` call is named nowhere. A window of 0 then hands over as soon as the pull request is ready. It is
+    guidance, like the rest of the flow: the workspace's tool groups, not the extension, decide whether a session can
+    merge at all. A merge it still sees (the person asked, say) ends the flow as before.
+
 ## The context files: piki:context-files
 
 `extensions/context-files/` ([host extensions](host-extensions.md#context-files-extensionscontext-files)) adds a

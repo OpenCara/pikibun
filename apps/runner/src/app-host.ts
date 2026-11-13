@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createConnector, controlPlaneOrigin, LocalViewUnavailable, type LocalConnector } from "./connector.js";
 import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, unsandboxedWarning, type HostIsolation } from "./connect-setup.js";
 import { stdioTransport, type Transport } from "./app-host-transport.js";
-import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "../../../packages/shared/src/app-host-protocol.js";
+import { pairingCodePattern, pairingIdPattern, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "../../../packages/shared/src/app-host-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
 import { ConnectorSetupError, RunnerError } from "./protocol.js";
 import { transcriptPage } from "../../../packages/shared/src/transcript-display.js";
@@ -32,7 +32,6 @@ const hostRequestSchema: z.ZodType<HostRequest> = z.discriminatedUnion("type", [
     ...isolationOptions, ...developmentOptions,
   }).strict(),
   z.object({ type: z.literal("stop"), id: requestId }).strict(),
-  z.object({ type: z.literal("upload"), id: requestId, grant: z.string().min(1).max(uploadRequestLimits.grant), body: z.string().max(uploadRequestLimits.body) }).strict(),
   z.object({ type: z.literal("providers"), id: requestId }).strict(),
   z.object({ type: z.literal("login"), id: requestId, provider: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), method: z.enum(["oauth", "api_key"]) }).strict(),
   z.object({ type: z.literal("login-answer"), id: requestId, login: requestId, prompt: requestId, value: z.string().max(8192) }).strict(),
@@ -120,7 +119,6 @@ async function start(request: StartRequest): Promise<void> {
     dataDir: stateDir, server, pairing, replacePairing: replace, localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}),
     allowInsecureLoopback: request.allowInsecureLoopback, allowFaux: request.allowFaux,
     capabilities: { platform: process.platform, sandbox: false, productionShell: false },
-    directUploads: true,
     onStatus: state => {
       if (running?.connector !== connector) return;
       if (state !== "stopped") {
@@ -194,9 +192,6 @@ async function handle(request: HostRequest): Promise<void> {
       if (request.type === "login-cancel") current.cancel();
       else if (!current.answer(request.prompt, request.value)) throw new HostFailure("not-running", "That question has been answered or has closed.");
       emit({ type: "result", id: request.id, ok: true });
-    } else if (request.type === "upload") {
-      if (!running) throw new HostFailure("not-running", "The host isn't running.");
-      emit({ type: "result", id: request.id, ok: true, reply: await running.connector.direct({ grant: request.grant, body: request.body }) });
     } else if (request.type === "view" || request.type === "entries") {
       if (!running) throw new HostFailure("not-running", "The host isn't running.");
       const { sessionId: id, brief } = request;
@@ -214,7 +209,7 @@ async function handle(request: HostRequest): Promise<void> {
       emit({ type: "result", id: request.id, ok: true });
     }
   } catch (error) {
-    emit({ type: "result", id: request.id, ok: false, error: hostError(error, request.type === "stop" ? "The host did not stop cleanly." : request.type === "upload" ? "The host could not take the file."
+    emit({ type: "result", id: request.id, ok: false, error: hostError(error, request.type === "stop" ? "The host did not stop cleanly."
       : request.type === "view" || request.type === "entries" ? "The host could not read the session." : request.type.startsWith("login") || request.type === "providers" ? "Sign-in failed." : "The host could not start. Check this computer's pairing, Pi configuration and prerequisites.") });
   }
 }

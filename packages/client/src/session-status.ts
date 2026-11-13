@@ -10,7 +10,7 @@ export interface SessionStatus {
 
 const activityStatus: Record<SessionActivity, Required<Omit<SessionStatus, "icon">>> = {
   working: { tone: "running", label: "In progress" },
-  waiting: { tone: "warning", label: "Needs approval" },
+  waiting: { tone: "warning", label: "Needs you" },
   failed: { tone: "danger", label: "Failed" },
   done: { tone: "success", label: "Done" },
   idle: { tone: "neutral", label: "Idle" },

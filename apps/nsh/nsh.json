@@ -21,7 +21,7 @@
         "SHELL", "USER", "LOGNAME", "TERM", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
         "PATHEXT", "ComSpec", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramData", "SystemDrive", "windir", "USERNAME", "USERDOMAIN", "COMPUTERNAME",
         "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
-        "PIKIBUN_MXC_RUNTIME",
+        "PIKIBUN_MXC_RUNTIME", "SSH_AUTH_SOCK", "SSH_AGENT_PID",
         "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"
       ]
     },

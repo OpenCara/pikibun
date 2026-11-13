@@ -27,21 +27,66 @@ const DIRECTORY_FLAGS = OPEN_DIRECTORY;
 const queues = new Map<string, Promise<void>>();
 
 type Captured = { code: number | null; stdout: string; stderr: string };
-type SpawnOptions = { env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal; hostCommand?: string };
+type SpawnOptions = { env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal; hostCommand?: string; isolated?: boolean };
+export interface HostSudo {
+  prepare(): Promise<void>;
+  readonly helper: string | undefined;
+  waiting(): boolean;
+  waitedSince(start: number): number;
+}
+export type HostWorkspaceOptions = { ownerEnvironment?: boolean; privateEnvironment?: readonly string[]; sudo?: HostSudo };
+const SUDO_RECHECK_MS = 1000;
+
+export const CONNECTOR_ENVIRONMENT = new RegExp("^(?:PIKIBUN_|RUNNER_)|^(?:CONTROL_PLANE_URL|DATA_DIR|ALLOW_FAUX_MODEL|ALLOW_TEST_SHELL)$"
+  + "|^GIT_(?:DIR|WORK_TREE|IMPLICIT_WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|COMMON_DIR|PREFIX|INTERNAL_SUPER_PREFIX"
+  + "|SHALLOW_FILE|GRAFT_FILE|NO_REPLACE_OBJECTS|REPLACE_REF_BASE|CONFIG|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\\d+|CONFIG_VALUE_\\d+)$", "i");
+
+export function hostOwnersSession(binding: RunnerBinding): boolean {
+  const hostOwner = binding.session.connectorOwnerId;
+  return !!hostOwner && hostOwner === binding.owner.id && binding.session.ownerId === hostOwner;
+}
+
+export function ownerHostEnvironment(identity: Readonly<SandboxIdentity>, base: NodeJS.ProcessEnv = process.env,
+  privateEnvironment: readonly string[] = []): Readonly<Record<string, string>> {
+  const excluded = new Set(privateEnvironment.map(name => name.toUpperCase()));
+  const inherited = Object.fromEntries(Object.entries(base)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && !CONNECTOR_ENVIRONMENT.test(entry[0]) && !excluded.has(entry[0].toUpperCase())));
+  return Object.freeze({
+    ...(base.LANG || base.LC_ALL ? {} : { LANG: "C.UTF-8" }),
+    ...(!windows && !base.HOME ? { HOME: homedir() } : {}),
+    ...inherited,
+    ...identity.env,
+    TERM: "dumb",
+    PWD: identity.worktree,
+    SANDBOX_WORKTREE: identity.worktree,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_PAGER: "cat",
+    GIT_EDITOR: "/usr/bin/false",
+    GIT_AUTHOR_NAME: identity.gitName,
+    GIT_AUTHOR_EMAIL: identity.gitEmail,
+    GIT_COMMITTER_NAME: identity.gitName,
+    GIT_COMMITTER_EMAIL: identity.gitEmail,
+  });
+}
 
 export class HostWorkspace implements SessionWorkspace {
   readonly isolated = false;
   readonly #root: string;
   readonly #identity: Readonly<SandboxIdentity>;
   readonly #environment: Readonly<Record<string, string>>;
+  readonly #isolated: Readonly<Record<string, string>>;
+  readonly #reported: Readonly<SandboxIdentity>;
+  readonly ownerEnvironment: boolean;
   readonly #testProvider: boolean;
   readonly #clone: boolean;
   #initialization: Promise<void> | undefined;
   #ready = false;
   #closed = false;
   #cancelActive: (() => void) | undefined;
+  readonly #sudo: HostSudo | undefined;
+  #activeCommand: string | undefined;
 
-  constructor(binding: RunnerBinding, root: string) {
+  constructor(binding: RunnerBinding, root: string, options: HostWorkspaceOptions = {}) {
     if (!["linux", "darwin", "win32"].includes(process.platform) || !isAbsolute(root) || resolve(root) === sep || resolve(root) === resolve(root, "..")) {
       throw new Error("Host workspace requires Linux, macOS or Windows and an absolute, non-root private storage path");
     }
@@ -59,18 +104,24 @@ export class HostWorkspace implements SessionWorkspace {
       ownerId, githubLogin, gitName, gitEmail, home: join(this.#root, "home"), worktree: join(this.#root, "worktree"),
       env: Object.freeze({ ...binding.owner.env }),
     });
-    this.#environment = Object.freeze({
+    this.ownerEnvironment = options.ownerEnvironment === true;
+    this.#sudo = windows ? undefined : options.sudo;
+    this.#isolated = Object.freeze({
       ...(windows ? windowsSystemEnvironment() : {}),
       ...sessionEnvironment(this.#identity, { path: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin", gitConfig: join(this.#root, "owner.gitconfig") }),
     });
+    this.#environment = this.ownerEnvironment ? ownerHostEnvironment(this.#identity, process.env, options.privateEnvironment) : this.#isolated;
+    const home = this.ownerEnvironment ? this.#environment.HOME ?? this.#environment.USERPROFILE ?? homedir() : undefined;
+    this.#reported = home ? Object.freeze({ ...this.#identity, home }) : this.#identity;
   }
 
   get home(): string { return this.#identity.home; }
   get worktree(): string { return this.#identity.worktree; }
   get hostWorktree(): string { return this.worktree; }
+  get activeCommand(): string | undefined { return this.#activeCommand; }
 
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
-    return this.#operation(authorize, async () => this.#identity);
+    return this.#operation(authorize, async () => this.#reported);
   }
 
   initialize(): Promise<void> {
@@ -312,6 +363,7 @@ export class HostWorkspace implements SessionWorkspace {
   async #operation<T>(authorize: SandboxAuthorize, operation: () => Promise<T>): Promise<T> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
     await this.initialize();
+    await this.#sudo?.prepare();
     return this.#exclusive(async () => {
       if (this.#closed || !this.#ready) throw new Error("Sandbox is closed");
       await authorize();
@@ -390,7 +442,7 @@ export class HostWorkspace implements SessionWorkspace {
   }
 
   #capture(args: string[], input?: string, options: SpawnOptions = {}): Promise<Captured> {
-    return this.#spawn("git", this.#gitArgs(args), input, options);
+    return this.#spawn("git", this.#gitArgs(args), input, { ...options, isolated: true });
   }
 
   async #git(args: string[], input?: string, options: SpawnOptions = {}): Promise<Captured> {
@@ -399,8 +451,13 @@ export class HostWorkspace implements SessionWorkspace {
 
   #spawn(command: string, args: string[], input?: string, options: SpawnOptions = {}): Promise<Captured> {
     const { promise, resolve: resolveResult, reject } = Promise.withResolvers<Captured>();
-    const child = spawn(command, args, { cwd: this.worktree, env: { ...this.#environment, ...options.env }, detached: !windows, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const askpass = options.isolated ? undefined : this.#sudo?.helper;
+    const child = spawn(command, args, { cwd: this.worktree, env: { ...(options.isolated ? this.#isolated : this.#environment), ...(askpass ? { SUDO_ASKPASS: askpass } : {}), ...options.env },
+      detached: !windows, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
+    const started = Date.now();
+    const sudo = options.isolated ? undefined : this.#sudo;
+    if (options.hostCommand !== undefined) this.#activeCommand = options.hostCommand;
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let bytes = 0;
@@ -414,7 +471,14 @@ export class HostWorkspace implements SessionWorkspace {
     const stop = () => { failure ??= "Command stopped"; kill(); };
     options.signal?.addEventListener("abort", stop, { once: true });
     if (options.signal?.aborted) stop();
-    const timer = setTimeout(() => { failure ??= `Command exceeded ${timeoutMs}ms time limit`; kill(); }, timeoutMs);
+    let timer: NodeJS.Timeout;
+    const expire = () => {
+      const left = started + timeoutMs + (sudo?.waitedSince(started) ?? 0) - Date.now();
+      if (sudo?.waiting()) timer = setTimeout(expire, SUDO_RECHECK_MS);
+      else if (left > 0) timer = setTimeout(expire, left);
+      else { failure ??= `Command exceeded ${timeoutMs}ms time limit`; kill(); }
+    };
+    timer = setTimeout(expire, timeoutMs);
     const capture = (target: Buffer[], chunk: Buffer) => {
       const remaining = Math.max(0, MAX_OUTPUT_BYTES - bytes);
       if (remaining) target.push(chunk.subarray(0, remaining));
@@ -426,6 +490,7 @@ export class HostWorkspace implements SessionWorkspace {
     child.stdin.on("error", () => { });
     child.once("error", (error) => {
       clearTimeout(timer);
+      if (options.hostCommand !== undefined && this.#activeCommand === options.hostCommand) this.#activeCommand = undefined;
       options.signal?.removeEventListener("abort", stop);
       reject(new SandboxProcessError(`Cannot start ${command}: ${errorCode(error) ?? "launch failed"}`, null, null, "", ""));
     });
@@ -433,6 +498,7 @@ export class HostWorkspace implements SessionWorkspace {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", stop);
       if (this.#cancelActive === cancel) this.#cancelActive = undefined;
+      if (options.hostCommand !== undefined && this.#activeCommand === options.hostCommand) this.#activeCommand = undefined;
       const out = Buffer.concat(stdout).toString("utf8");
       const err = Buffer.concat(stderr).toString("utf8");
       if (failure || signal) reject(new SandboxProcessError(`${failure ?? `Command killed by ${signal}`}${err ? `: ${err.slice(0, 4096).trim()}` : ""}`, code, signal, out, err));

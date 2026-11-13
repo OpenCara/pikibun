@@ -45,3 +45,7 @@ route answers clients and tests as before.
   schemas with the client would mean dropping that rule for one package; nothing needs it yet.
 - **The authority's routes move under its own review.** Its bodies (sign-in, credentials, the GitHub broker) are part of
   the security boundary (`authority.md`), so they move one at a time with their tests, not as part of a mechanical sweep.
+  `schemas.ts` imports only `http.ts` and zod, so the boundary test counts it with the authority's infrastructure
+  (`tests/authority-boundary.test.ts`). The first to move are the bodies taken before anyone is signed in:
+  `POST /api/auth/native/code` and `POST /api/me/app-codes` (`authority/app-codes.ts`) and `POST /api/auth/native/local`
+  (`authority/auth.ts`). A malformed sign-in code is still `400 invalid_grant`, through the custom issue's `code`.

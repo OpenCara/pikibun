@@ -52,6 +52,17 @@ test("connector calls: an authorization for another owner is refused, a refused 
   await assert.rejects(opaque.calls.brokerCallback(opaque.current, "/x", {}), /Scoped connector callback denied or unavailable/);
 });
 
+test("connector calls: an answer that isn't JSON, such as a proxy's error page, says its status and type, and asks for JSON", async () => {
+  const page = () => new Response("<html>Bad gateway</html>", { status: 502, headers: { "content-type": "text/html; charset=UTF-8" } });
+  const broker = fixture(page);
+  await assert.rejects(broker.calls.brokerCallback(broker.current, "/x", {}), (error: unknown) => error instanceof RunnerError && error.status === 502
+    && error.message === "Scoped connector callback denied or unavailable: the Pikibun server, or a proxy in front of it, answered 502 text/html");
+  assert.equal(broker.asked[0]!.headers.accept, "application/json");
+  const callback = fixture(() => new Response("<html>ok</html>", { headers: { "content-type": "text/html" } }));
+  await assert.rejects(callback.calls.callback(callback.current, "/x", {}), /^Error: Invalid control-plane response \(200 text\/html\)$/);
+  assert.throws(() => decodeJson(new TextEncoder().encode("<")), /^Error: Invalid control-plane response$/);
+});
+
 test("connector calls: reports check what they send, and only a failure that may pass is an error", async () => {
   const { calls, current } = fixture(() => new Response(null, { status: 404 }));
   await calls.reportActivity(current, "s1", "working");
@@ -83,13 +94,12 @@ test("connector calls: every call says the connector's version, and a report who
   }
 });
 
-function frames(options: { connected?: boolean; restarting?: boolean; callback?: () => Promise<unknown> } = {}) {
+function frames(options: { restarting?: boolean } = {}) {
   const reasons: string[] = [];
   const current = generation();
   const relay = new RelayFrames({
     secret: "s".repeat(48), state: () => ({ connectorId: "connector-1", token: "t".repeat(32), controlPlaneUrl: "https://pikibun.example" }),
-    restarting: () => options.restarting === true, runtime: () => undefined, welcomed: () => options.connected === false ? undefined : current,
-    calls: { callback: options.callback ?? (async () => { throw new Error("no control plane"); }) },
+    restarting: () => options.restarting === true, runtime: () => undefined,
     disconnect: (_generation, reason) => { reasons.push(reason); }, requireGeneration: () => {},
   });
   return { relay, reasons, current };
@@ -110,34 +120,6 @@ test("connector frames: a malformed frame, a request the host can't route and a 
   assert.equal(current.incomingBytes, 0);
   relay.dispatch(current, request("r1"), 10);
   assert.equal(reasons[2], "Replayed relay request");
-  await relay.settled();
-});
-
-test("connector frames: an upload sent straight to the host needs a connection and a grant the control plane confirms", async () => {
-  const offline = await frames({ connected: false }).relay.direct({ grant: "g", body: "{}" });
-  assert.equal(offline.status, 503);
-  const invalid = await frames().relay.direct({ grant: 1 as never, body: "{}" });
-  assert.equal(invalid.status, 400);
-  const refused = await frames().relay.direct({ grant: "g", body: "{}" });
-  assert.deepEqual([refused.status, JSON.parse(refused.body)], [403, { error: "The control plane refused the upload grant.", code: "connector_reply_error" }]);
-});
-
-test("connector frames: uploads sent straight to the host fill only their own share of the replay guard, so relay requests still run", async () => {
-  let sent = 0;
-  const granted = () => ({ ticket: { ...request(`upload-${sent}`).ticket, action: "upload" }, size: 1, path: "/v1/sessions/s1/upload" });
-  const { relay, reasons, current } = frames({ callback: async () => granted() });
-  const upload = async () => { sent++; return relay.direct({ grant: "g", body: "{\"size\":1}" }); };
-  for (let index = 0; index < 4097; index++) assert.equal((await upload()).status, 400);
-  const full = await upload();
-  assert.deepEqual([full.status, JSON.parse(full.body)], [503, { error: "The host is taking too many requests at once; try again shortly.", code: "connector_reply_error" }]);
-  sent = 1;
-  const again = await relay.direct({ grant: "g", body: "{\"size\":1}" });
-  assert.deepEqual([again.status, JSON.parse(again.body).error], [409, "That upload grant was already used."]);
-  relay.dispatch(current, request("relayed-1"), 10);
-  await Promise.all([...current.active]);
-  assert.deepEqual(reasons, ["Relay request failed: Relay path is not allowed"]);
-  relay.dispatch(current, request("upload-1"), 10);
-  assert.equal(reasons[1], "Replayed relay request");
   await relay.settled();
 });
 

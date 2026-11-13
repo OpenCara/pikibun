@@ -543,6 +543,49 @@ test("a session its host's owner started on the host runs there whatever the hos
   assert.match(still.result ?? "", /still-runs/);
 });
 
+test("in the private workspace, the host owner's session on the host asks them for sudo's password, and only there takes one", { skip: process.platform !== "linux" }, async t => {
+  const { service } = await fixture(t);
+  const connectorId = "sudo-connector";
+  let ownerPrivate = true;
+  const runner = new RunnerService({ ...service.config, connectorId, allowTestShell: false, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: true }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false, ...(ownerPrivate ? { ownerPrivate: true as const } : {}) }) } });
+  await runner.initialize();
+  t.after(() => runner.close());
+  const admissionId = await sha256("sudo write admission");
+  const value = binding("host-sudo");
+  value.session.connectorId = value.model.connectorId = connectorId;
+  value.session.connectorOwnerId = value.model.connectorOwnerId = "test:alice";
+  value.session.hostEnvironment = true;
+  const session = await runner.provision(value, { ...await ticket("host-sudo", "create"), connectorId });
+  const send = async (requestId: string, command: string) =>
+    session.submit({ ...await ticket("host-sudo", "submit"), connectorId }, { content: `TEST_BASH ${command}`, requestId, admissionId }, "write");
+  const answer = async (actorId: string, input: unknown) => session.sudoAction({ ...await ticket("host-sudo", "sudo", actorId), connectorId }, input);
+
+  await send("asks", "\"$SUDO_ASKPASS\" '[sudo] password for alice: '");
+  let view: SessionView | undefined;
+  for (let count = 0; count < 250 && !view?.sudo; count++) { view = await session.view(); await delay(20); }
+  assert.equal(view?.sudo?.prompt, "[sudo] password for alice:");
+  assert.match(view?.sudo?.command ?? "", /SUDO_ASKPASS/);
+  assert.equal(view?.activity, "waiting");
+  await assert.rejects(answer("test:bob", { id: view!.sudo!.id, password: "guess" }), /Only the host's owner answers sudo/);
+  await assert.rejects(answer("test:alice", { id: view!.sudo!.id, password: "a\nb" }), /line breaks/);
+  assert.deepEqual(await answer("test:alice", { id: view!.sudo!.id, password: "hunter2" }), { answered: true });
+  await idle(session);
+  const ran = (await ranCommands(session)).at(-1)!;
+  assert.equal(ran.status, "executed", ran.result);
+  assert.match(ran.result ?? "", /hunter2/, "the helper gave sudo the password");
+  assert.equal((await session.view()).sudo, undefined);
+  assert.match((session as unknown as { agentInstructions(mode: string): string }).agentInstructions("write"), /use sudo -A/);
+
+  ownerPrivate = false;
+  await send("elsewhere", "echo \"askpass=${SUDO_ASKPASS:-none}\"");
+  await idle(session);
+  assert.match((await ranCommands(session)).at(-1)!.result ?? "", /askpass=none/, "outside the private workspace commands get no helper");
+  await assert.rejects(answer("test:alice", { id: "anything", password: "hunter2" }), /private workspace/);
+  assert.deepEqual(await answer("test:alice", { id: "anything", decline: true }), { answered: false }, "a decline is taken, and finds no prompt");
+  assert.doesNotMatch((session as unknown as { agentInstructions(mode: string): string }).agentInstructions("write"), /sudo -A/);
+});
+
 test("a member the host's owner granted sessions on the host runs one there only while their grant includes it", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   const connectorId = "member-host-sessions-connector";

@@ -7,7 +7,7 @@ import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExte
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, AppEnv } from './types.js';
 import {
-  auditStatement, authenticateConnector, automaticTools, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
+  auditStatement, authenticateConnector, automaticTools, isPersonalWorkspace, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
   saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
@@ -102,7 +102,9 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     const shown = extensions.some(item => isPikiExtensionSource(item.source))
       ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed, options) : extensions;
     const toolGroups = await memberToolGroups(c.env, workspaceId);
-    return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id), ...(Object.keys(toolGroups).length ? { toolGroups } : {}) });
+    const ownerPrivate = await isPersonalWorkspace(c.env, workspaceId, row.owner_id);
+    return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id), ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
+      ...(ownerPrivate ? { ownerPrivate: true } : {}) });
   });
 }
 

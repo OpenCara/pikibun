@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { ORIGIN, server, signedIn, view } from "./fixtures";
+import { host, ORIGIN, server, sessionRecord, signedIn, view, workspace } from "./fixtures";
 
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
@@ -46,6 +46,55 @@ describe("a session's panel", () => {
     expect(due.shows("text:15%")).toBe(true);
   });
 
+  test("Details offers the host's owner a chat on the host, in their private workspace, that installs the programs it lacks", async () => {
+    const personal = { id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true };
+    const unavailable = [{ source: "piki:node", tools: ["node"], reason: "programs", programs: ["pnpm", "yarn"] }, { source: "piki:browser", tools: ["browser"], reason: "missing" },
+      { source: "piki:tunnel", tools: ["tunnel"], reason: "off" }];
+    const app = await openPanel({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, extensions: { running: [], missing: [], unavailable } }, revision: "r1" } },
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [personal, workspace] } },
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [{ ...host, hostSessions: true }] } },
+      [`GET ${ORIGIN}/api/workspaces/w0/models`]: { body: { models: [{ id: "m0", workspaceId: "w0", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" }] } },
+    });
+    await app.waitFor("text:Missing programs");
+    await app.waitFor("id:install-chat-browser");
+    expect(app.shows("id:install-chat-tunnel")).toBe(false);
+    await app.press("id:install-chat-node");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`)));
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install pnpm and yarn on ada-mac", visibility: "private", hostEnvironment: true });
+    const submitted = bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`);
+    expect(submitted.content).toContain("Install on this host (ada-mac) the programs Pikibun's sessions on it lack: the node tool's pnpm and yarn.");
+    expect(submitted.options.model).toEqual({ provider: "anthropic", modelId: "claude-sonnet" });
+    await app.waitFor("text:Add a dark mode");
+  });
+
+  test("an install chat whose opening message can't be sent still opens, with the message waiting in its chat box", async () => {
+    const app = await openPanel({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, extensions: { running: [], missing: [],
+        unavailable: [{ source: "piki:node", tools: ["node"], reason: "programs", programs: ["pnpm"] }] } }, revision: "r1" } },
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },
+      [`GET ${ORIGIN}/api/workspaces/w0/models`]: { body: { models: [{ id: "m0", workspaceId: "w0", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" }] } },
+      [`POST ${ORIGIN}/api/sessions/s3/submit`]: { status: 503, body: { error: "The host is busy" } },
+    });
+    await app.waitFor("id:install-chat-node");
+    await app.press("id:install-chat-node");
+    await app.waitFor("text:Add a dark mode");
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install pnpm on ada-mac", visibility: "private" });
+    await app.waitUntil(() => (app.value("id:composer-input") ?? "").startsWith("Install on this host (ada-mac)"));
+  });
+
+  test("Details offers no install chat on someone else's host", async () => {
+    const app = await openPanel({
+      [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, connectorOwnerId: "u2", viewable: true } } },
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, extensions: { running: [], missing: [],
+        unavailable: [{ source: "piki:node", tools: ["node"], reason: "programs", programs: ["pnpm"] }] } }, revision: "r1" } },
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [{ ...host, ownerId: "u2", ownerName: "grace" }] } },
+    });
+    await app.waitFor("text:Missing programs");
+    await app.waitFor("text:Hosted by grace");
+    expect(app.shows("id:install-chat-node")).toBe(false);
+  });
+
   test("Files lists the worktree and previews a file", async () => {
     const app = await openPanel();
     await app.press("text:Files");
@@ -83,6 +132,49 @@ describe("a session's panel", () => {
     const app = await openPanel();
     await app.press("text:Activity");
     await app.waitFor("text:session.create");
+  });
+});
+
+describe("sudo's password box", () => {
+  const prompt = { id: "prompt1", prompt: "[sudo] password for ada:", command: "python3 -c 'sudo -A apt-get install -y make'",
+    requestedAt: "2026-11-06T09:10:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" };
+  const open_ = (routes: Parameters<typeof server>[0]) => open("../App.tsx", { network: server({
+    [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, sudo: prompt }, revision: "r1" } },
+    [`POST ${ORIGIN}/api/sessions/s1/sudo`]: { body: { answered: true } },
+    ...routes,
+  }), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+
+  test("in the private workspace, takes the host owner's password apart from the chat box, sends it to that sudo alone and clears it", async () => {
+    const app = await open_({ [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, personal: true }] } } });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:sudo-prompt");
+    expect(app.shows("text:sudo asks for your password on ada-mac")).toBe(true);
+    expect(app.shows("text:sudo's prompt: “[sudo] password for ada:”, while this command ran:")).toBe(true);
+    expect(app.shows("text:python3 -c 'sudo -A apt-get install -y make'")).toBe(true);
+    await app.type("id:sudo-password", "hunter2");
+    expect(app.value("id:composer-input")).toBe("");
+    await app.press("id:sudo-send");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)));
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)).toEqual({ id: "prompt1", password: "hunter2" });
+    expect(app.value("id:sudo-password")).toBe("");
+    expect(app.requests().some(request => request.url.endsWith("/submit") && (request.body ?? "").includes("hunter2"))).toBe(false);
+  });
+
+  test("outside the private workspace, the host's owner can only decline, and anyone else only sees that sudo waits", async () => {
+    const app = await open_({});
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:sudo-prompt");
+    expect(app.shows("id:sudo-password")).toBe(false);
+    await app.press("id:sudo-decline");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)));
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)).toEqual({ id: "prompt1", decline: true });
+    app.dispose();
+    const viewer = await open_({ [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, ownerId: "u2", connectorOwnerId: "u2", viewable: true } } } });
+    await viewer.press("id:session-row-s1");
+    await viewer.waitFor("id:sudo-prompt");
+    expect(viewer.shows("text:sudo asks for the host owner's password on ada-mac")).toBe(true);
+    expect(viewer.shows("id:sudo-password")).toBe(false);
+    expect(viewer.shows("id:sudo-decline")).toBe(false);
   });
 });
 

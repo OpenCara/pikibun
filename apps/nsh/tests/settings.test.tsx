@@ -1,6 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { notificationRoute } from "../src/lib/notifications";
-import { ORIGIN, server, signedIn, user } from "./fixtures";
+import { host, ORIGIN, server, signedIn, user, workspace } from "./fixtures";
 
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
@@ -151,6 +151,28 @@ describe("settings", () => {
     await app.press("id:pair-create");
     await app.waitFor("text:pair-secret-code");
     expect(bodyOf(app, "POST", `${ORIGIN}/api/connectors/pairings`)).toEqual({ name: "Build box" });
+  });
+
+  test("a host without Chromium offers its owner a chat on it, in their private workspace, that installs one", async () => {
+    const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false };
+    const browser = { source: "piki:browser", dev: false, description: "A headless Chromium", modules: [] };
+    const app = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0", config, capabilities: { ...host.capabilities, extensions: true } }] } },
+      [`GET ${ORIGIN}/api/connectors/c1/extensions`]: { body: { role: "owner", automaticTools: false, requests: [], workspaces: [],
+        report: { installed: [browser], remoteInstalls: true, browser: { source: "auto", state: "missing" }, tunnel: { source: "auto", state: "ready" } } } },
+      [`GET ${ORIGIN}/api/workspaces/w0/models`]: { body: { models: [{ id: "m0", workspaceId: "w0", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" }] } },
+    });
+    await app.press("id:host-row-c1");
+    await app.waitFor("text:piki:browser");
+    await app.press("text:piki:browser");
+    await app.waitFor("id:install-chat-browser");
+    await app.press("id:install-chat-browser");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`)));
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install chromium on ada-mac", visibility: "private" });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`).content).toContain("the browser tool's chromium");
+    await app.waitFor("text:Add a dark mode");
   });
 
   test("a host's browser setup keeps what is being typed while its status refreshes", async () => {

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { createBackup } from './backups.js';
+import { failureDetail, serverLog } from './log.js';
 import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 
 export const automaticBackupIntervals = [15, 60, 360, 1440] as const;
@@ -78,6 +79,7 @@ export async function runAutomaticBackups(env: Env, at = Date.now()): Promise<Au
       outcomes.push({ sessionId: row.id, backupId: backup.id });
     } catch (error) {
       const code = await errorCode(error);
+      serverLog(env)(`automatic backup of session ${row.id} failed, retrying in ${Math.min(retryMinutes, row.automatic_minutes)} minutes: ${await failureDetail(error)}`);
       await env.DB.query(`UPDATE automatic_backups SET changed_at = COALESCE(changed_at, ?), due_at = ?, error = ? WHERE session_id = ?`)
         .bind(row.automatic_changed_at, minutesLater(at, Math.min(retryMinutes, row.automatic_minutes)), code, row.id).run();
       outcomes.push({ sessionId: row.id, error: code });

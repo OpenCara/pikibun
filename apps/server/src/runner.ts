@@ -3,7 +3,8 @@ import { sha256, signToken } from '../../../packages/shared/src/crypto.js';
 import { requireRunnerAccess } from './authority/index.js';
 import type { AppContext, SessionRow } from './types.js';
 import { fail, id, testMode } from './http.js';
-import { connectorRequest, type ConnectionPin } from './connector-transport.js';
+import { connectorRequest, runnerFailureStatus, type ConnectionPin } from './connector-transport.js';
+import { errorBody, serverLog } from './log.js';
 
 export async function runnerRequest(c: AppContext, row: SessionRow, action: RunnerAction, suffix = '', body?: unknown, pin?: ConnectionPin): Promise<Response> {
   return actorRequest(c, c.get('auth').userId, row, action, suffix, body, pin);
@@ -35,7 +36,7 @@ async function actorRequest(c: AppContext, actorId: string, row: SessionRow, act
     restore: `/v1/sessions/${row.id}/restore`, stop: `/v1/sessions/${row.id}/stop`, files: `/v1/sessions/${row.id}/files`,
     revert: `/v1/sessions/${row.id}/revert`, fork: `/v1/sessions/${row.id}/fork`, pack: `/v1/sessions/${row.id}/pack`, unpack: `/v1/sessions/${row.id}/unpack`,
     withdraw: `/v1/sessions/${row.id}/withdraw`, upload: `/v1/sessions/${row.id}/upload`, tunnel: `/v1/sessions/${row.id}/tunnel`,
-    image: `/v1/sessions/${row.id}/image`,
+    image: `/v1/sessions/${row.id}/image`, sudo: `/v1/sessions/${row.id}/sudo`,
   };
   const serialized = body === undefined ? '' : JSON.stringify(body);
   const issuedAt = Math.floor(Date.now() / 1000);
@@ -55,12 +56,16 @@ async function actorRequest(c: AppContext, actorId: string, row: SessionRow, act
     fail(503, 'runner_unavailable', 'The external runner is unavailable. An accepted operation may still be running; inspect the session before retrying.');
   }
   if (!response.ok) {
+    if (response.status >= 500) {
+      const answer = await errorBody(response);
+      serverLog(c.env)(`the external runner answered ${response.status} to ${action} for session ${row.id}${answer.error ? `: ${answer.error}` : ''}`);
+    }
     await response.body?.cancel();
-    const status = [400, 403, 404, 409, 413, 422, 429, 503, 504].includes(response.status) ? response.status : 502;
+    const status = runnerFailureStatus(response.status);
     const message = status === 409 ? 'The session is busy or the operation conflicts with its current state.'
       : status === 403 ? 'The runner rejected the operation because access changed.'
       : status === 503 || status === 504 ? 'The external runner is unavailable.' : 'The external runner could not complete the operation.';
-    fail(status as 400 | 403 | 404 | 409 | 413 | 422 | 429 | 502 | 503 | 504, 'runner_error', message);
+    fail(status, 'runner_error', message);
   }
   return response;
 }

@@ -183,7 +183,7 @@ export interface ConnectorOptions {
   capabilities?: ConnectorCapabilities;
   resources?: RunnerConfig["resources"];
   unsandboxed?: boolean;
-  directUploads?: boolean;
+  privateEnvironment?: readonly string[];
   sandboxBackend?: SandboxBackendConfig;
   gpu?: GpuKind | null;
   version?: string;
@@ -235,7 +235,7 @@ export class LocalConnector {
     this.calls = new ControlPlaneCalls({ credentials: () => this.state!, settings: options, lifetime: this.lifetime.signal,
       requireGeneration: generation => this.requireGeneration(generation), connection: () => this.connection() });
     this.frames = new RelayFrames({ secret: this.secret, state: () => this.state, restarting: () => this.restarting, runtime: () => this.runtime?.value,
-      welcomed: () => this.welcomed, calls: this.calls, disconnect: (generation, reason) => this.disconnect(generation, reason),
+      disconnect: (generation, reason) => this.disconnect(generation, reason),
       requireGeneration: generation => this.requireGeneration(generation) });
     const gpu = options.unsandboxed ? undefined : options.gpu === undefined ? detectGpu() : options.gpu;
     if (gpu) this.gpu = gpu;
@@ -381,7 +381,7 @@ export class LocalConnector {
       this.requireGeneration(generation);
       const advertised = capabilities(this.options.capabilities, { unsandboxed: this.options.unsandboxed, repositoryCache: runtime.repositoryCache !== "off", gpu: this.gpu });
       await this.calls.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
-        capabilities: { ...withHostToolCapabilities(advertised), ...(this.options.directUploads ? { directUploads: true } : {}) } });
+        capabilities: withHostToolCapabilities(advertised) });
       this.requireGeneration(generation);
       generation.runtimeReady.resolve();
       void this.syncExtensions(generation);
@@ -512,10 +512,6 @@ export class LocalConnector {
 
   private requireGeneration(generation: Generation): void {
     if (this.lifetime.signal.aborted || generation.abort.signal.aborted || this.generation !== generation || !generation.connectionToken) throw new Error("Connector generation is no longer authorized");
-  }
-
-  direct(input: { grant: string; body: string }): Promise<{ status: number; body: string }> {
-    return this.frames.direct(input);
   }
 
   async localView(sessionId: string, options: { since?: string; brief?: boolean }): Promise<LocalView> {

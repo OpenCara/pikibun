@@ -11,6 +11,7 @@ export interface Env {
   CONNECTOR_HUB?: ConnectorHub;
   BUCKET?: ObjectStorage;
   WORKSPACE_DATABASES?: WorkspaceDatabaseProvider;
+  LOG?: (line: string) => void;
   APP_ORIGIN: string;
   PIKIBUN_VERSION?: string;
   RUNNER_URL?: string;

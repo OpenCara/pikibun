@@ -894,12 +894,52 @@ test("run queue: only the running sender's next shared message, with the same op
   assert.equal(steersInto(stopping, stopping.q0!), undefined, "nothing steers a stopping run");
   const admitting = runs({}, { status: "admitting" });
   assert.equal(steersInto(admitting, admitting.q0!), undefined);
+  const asking = runs({});
+  asking.a = { ...asking.r1!, key: "a", mode: "ask", conversationId: 2, sequence: 0.5, submissionId: 9 };
+  assert.equal(steersInto(asking, asking.q0!), "r1", "a side ask running beside it changes nothing");
+  asking.a.status = "admitting";
+  assert.equal(steersInto(asking, asking.q0!), "r1");
   const chain = runs({});
   chain.s = { ...chain.r1!, key: "s", sequence: 0.5, steered: "r1" };
   chain.r1!.status = "settled";
   assert.equal(steersInto(chain, chain.q0!), "r1", "a message steers into the first message of the run, after it answered too");
   assert.equal(submissionRequestId({ key: "k" }), "k");
   assert.equal(submissionRequestId({ key: "k", steered: "r1" }), "k:steer");
+});
+
+test("run queue: a side ask starts at once beside the shared work, up to the limit, and shared messages keep their own order", async t => {
+  const steer = steerHarness();
+  const ends: boolean[] = [];
+  const host = { agentEnd: async (_messages: unknown, failed: boolean) => { ends.push(failed); } };
+  const ask = (content: string, run: Partial<Run> = {}) => ({ mode: "ask" as const, content, conversationId: 2, ...run });
+  const { queue, state, idle } = await queueFixture(t, [{ content: "go" }, { content: "later", initiatedBy: "github:3" }, ask("screened", { screening: true }),
+    ask("a1"), ask("a2"), ask("a3"), ask("a4"), ask("a5")], { ...steer.options, hostExtensions: () => host as never });
+  state.approvals.x = { status: "executing" } as never;
+  queue.drain();
+  await idle();
+  assert.deepEqual(Object.values(state.runs).map(run => run.status), ["queued", "queued", "queued", "running", "running", "running", "running", "queued"],
+    "while a tool's operation goes on, shared messages wait and side asks go, four at a time; one still screened waits for its screening");
+  delete state.approvals.x;
+  queue.drain();
+  await idle();
+  assert.deepEqual([state.runs.r0!.status, state.runs.r1!.status], ["running", "queued"], "the shared message starts beside the side asks, the next one waits for it");
+  const id = (key: string) => state.runs[key]!.submissionId as number;
+  steer.submissions.get(id("r3"))!.settle({ status: "done", answer: 1 });
+  await idle();
+  assert.deepEqual([state.runs.r3!.status, state.runs.r7!.status], ["settled", "running"], "a side ask that ends makes room for the next");
+  assert.deepEqual(ends, [], "a side ask doesn't end the agent's work for host extensions");
+  delete state.runs.r2!.screening;
+  queue.drain();
+  await idle();
+  assert.equal(state.runs.r2!.status, "queued", "still four at a time");
+  steer.submissions.get(id("r0"))!.settle({ status: "done", answer: 2 });
+  await idle();
+  assert.deepEqual([state.runs.r0!.status, state.runs.r1!.status], ["settled", "running"]);
+  assert.deepEqual(ends, [false], "the shared message's end does");
+  const stopping = await queueFixture(t, [{ content: "go", status: "interrupted", stopped: { by: "github:2", pending: true } }, ask("later")], steerHarness().options);
+  stopping.queue.drain();
+  await stopping.idle();
+  assert.equal(stopping.state.runs.r1!.status, "queued", "nothing starts while a stop is under way");
 });
 
 function steerHarness() {
@@ -1103,6 +1143,14 @@ test("instructions: tools add their lines only while on, and only outside an ask
   for (const line of [/git tool/, /Run Python/, /use the browser tool/, /use the tunnel tool/]) assert.doesNotMatch(off, line);
   assert.match(off, /This session has no browser tool/);
   assert.match(off, /This session has no tunnel tool/);
+});
+
+test("instructions: a session whose sandbox has the host's Chromium is told where it is, and not to download another", () => {
+  const said = /\$CHROME_BIN.*--no-sandbox.*Don't run playwright install/s;
+  assert.match(instructions({ browser: true }), said, "whether or not the browser tool is on");
+  assert.match(instructions({ browser: true, mode: "read" }), said);
+  assert.doesNotMatch(instructions({ browser: true, mode: "ask" }), /CHROME_BIN/, "an ask runs nothing");
+  assert.doesNotMatch(instructions({ browser: false, browserUnavailable: "missing" }), /CHROME_BIN/, "no browser, no word of one");
 });
 
 test("instructions: defined tools add theirs, sources fill a brokered tool's, and missing programs are told", () => {

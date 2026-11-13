@@ -727,11 +727,31 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Before the artifacts: checkout empties the workspace.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: app-*
           merge-multiple: true
           path: assets
+      # The desktop apps install an update only with a signature by this key (packages/shared/src/update-signature.ts):
+      # each file gets <file>.sig. The script checks each signature against the key the apps carry before anything is
+      # published, so a wrong or missing secret fails the release instead of shipping updates every app refuses.
+      - name: Sign the desktop updates
+        env:
+          APP_UPDATE_SIGNING_KEY: ${{ secrets.APP_UPDATE_SIGNING_KEY }}
+        run: |
+          shopt -s nullglob
+          files=()
+          for suffix in macos-arm64.dmg windows-x64-setup.exe linux-x86_64.tar.gz; do
+            found=(assets/*-"$suffix")
+            [ ${#found[@]} -eq 1 ] || { echo "::error::Expected one *-$suffix to sign, found ${#found[@]}."; exit 1; }
+            files+=("${found[0]}")
+          done
+          node scripts/sign-update.mjs "${files[@]}"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

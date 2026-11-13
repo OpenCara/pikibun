@@ -144,7 +144,7 @@ async function fetchSnapshot(c: AppContext, row: SessionRow, base: Snapshot | un
     try {
       reply = await runnerJSON(await runnerRequest(c, row, 'view', since ?? '', undefined, pin));
     } catch (error) {
-      if (since && (pin.replaced || (error instanceof HTTPException && [400, 404, 405, 502].includes(error.status)))) return null;
+      if (since && (pin.replaced || (error instanceof HTTPException && [400, 404, 405, 500, 502].includes(error.status)))) return null;
       throw error;
     }
     const generation = row.connector_id ? pin.hash ?? null : null;

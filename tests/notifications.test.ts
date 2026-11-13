@@ -57,7 +57,7 @@ test('only changes the agent made notify: waiting for an approval, and finishing
     ['working', 'idle', null], ['done', 'working', null], ['working', 'working', null],
   ];
   for (const [previous, next, kind] of cases) assert.equal(activityNotification(previous, next), kind, `${previous} → ${next}`);
-  assert.deepEqual(notificationText('approval', true, { title: '  Fix\nthe   build ', workspace: 'Team' }), { title: 'Fix the build', body: 'Waiting for an approval · Team' });
+  assert.deepEqual(notificationText('approval', true, { title: '  Fix\nthe   build ', workspace: 'Team' }), { title: 'Fix the build', body: 'Waiting for you · Team' });
   assert.deepEqual(notificationText('finished', false, { title: 'Secret plan', workspace: 'Team' }), { title: 'Pikibun', body: 'A session finished.' });
   assert.equal(notificationText('failed', true, { title: '', workspace: 'Team' }).title, 'Untitled session');
 });
@@ -178,7 +178,7 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   await f.reportAll('working', 'waiting');
 
   const aliceFeed = await f.feed(f.alice, aliceFrom);
-  assert.deepEqual(aliceFeed.notifications.map(n => [n.kind, n.title, n.body, n.sessionId]), [['approval', 'Fix the build', 'Waiting for an approval · Team', f.session.id]]);
+  assert.deepEqual(aliceFeed.notifications.map(n => [n.kind, n.title, n.body, n.sessionId]), [['approval', 'Fix the build', 'Waiting for you · Team', f.session.id]]);
   assert.equal(aliceFeed.cursor, aliceFeed.notifications[0]!.id);
   assert.deepEqual((await f.feed(f.alice, aliceFeed.cursor)).notifications, [], 'nothing twice');
   assert.deepEqual((await f.feed(f.carol, carolFrom)).notifications, []);
