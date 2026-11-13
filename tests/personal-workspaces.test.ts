@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { ensurePersonalWorkspace } from '../apps/server/src/catalog.js';
+import { ensurePersonalWorkspace, usableModels } from '../apps/server/src/catalog.js';
 import { cloneRepositories } from '../apps/server/src/authority/index.js';
 import { testDatabase } from './helpers/control-plane.js';
 import type { Workspace } from '../packages/shared/src/types.js';
@@ -100,6 +100,36 @@ test('a private workspace takes no members and no invite link', async t => {
 
   const team = (await json<{ workspace: Workspace }>(await alice.request('POST', '/api/workspaces', { name: 'Team' }), 201)).workspace;
   await json(await alice.request('POST', `/api/workspaces/${team.id}/members`, { userId: bob.user.id, role: 'member' }));
+});
+
+test('a private workspace offers only models on its owner\'s own hosts', async t => {
+  const f = await fixture(t);
+  const insertUser = f.sqlite.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, '{}', 'github', '2026-01-01')`);
+  insertUser.run('github:1', '1', 'carol', 'Carol', 'Carol', 'carol@example.test');
+  insertUser.run('github:2', '2', 'dave', 'Dave', 'Dave', 'dave@example.test');
+  await ensurePersonalWorkspace(f.env, 'github:1');
+  const own = (f.sqlite.prepare('SELECT workspace_id FROM personal_workspaces WHERE user_id = ?').get('github:1') as { workspace_id: string }).workspace_id;
+  f.sqlite.prepare("INSERT INTO workspaces (id, name, owner_id, created_at) VALUES ('team', 'Team', 'github:1', '2026-01-01')").run();
+  f.sqlite.prepare("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ('team', 'github:1', 'owner', '2026-01-01')").run();
+
+  const models = JSON.stringify([{ provider: 'p', modelId: 'm' }]);
+  const insertHost = f.sqlite.prepare("INSERT INTO connectors (id, owner_id, name, credential_hash, models_json, created_at) VALUES (?, ?, ?, ?, ?, '2026-01-01')");
+  insertHost.run('carols-host', 'github:1', 'Carol\'s Mac', 'credential-carol', models);
+  insertHost.run('daves-host', 'github:2', 'Dave\'s Mac', 'credential-dave', models);
+  const insertModel = f.sqlite.prepare("INSERT INTO models (id, workspace_id, name, provider, model_id, connector_id, connector_owner_id, created_at) VALUES (?, ?, ?, 'p', 'm', ?, ?, '2026-01-01')");
+  for (const workspace of [own, 'team']) {
+    f.sqlite.prepare("INSERT OR IGNORE INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, 'github:2', 'member', '2026-01-01')").run(workspace);
+    for (const host of ['carols-host', 'daves-host']) f.sqlite.prepare("INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?, ?, '2026-01-01')").run(host, workspace);
+    f.sqlite.prepare("INSERT INTO connector_shares (connector_id, workspace_id, created_at) VALUES ('daves-host', ?, '2026-01-01')").run(workspace);
+    insertModel.run(`${workspace}-carol`, workspace, 'Carol\'s model', 'carols-host', 'github:1');
+    insertModel.run(`${workspace}-dave`, workspace, 'Dave\'s model', 'daves-host', 'github:2');
+    insertModel.run(`${workspace}-hostless`, workspace, 'No host', null, null);
+  }
+
+  const usable = async (workspace: string) => (await usableModels(f.env, workspace, 'github:1')).map(model => model.id).sort();
+  assert.deepEqual(await usable(own), [`${own}-carol`]);
+  assert.deepEqual(await usable('team'), ['team-carol', 'team-dave', 'team-hostless']);
 });
 
 test('a session in a private workspace needs no source; elsewhere it still does', async t => {
