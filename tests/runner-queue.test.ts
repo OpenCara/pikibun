@@ -188,8 +188,10 @@ async function metadata(harness: Harness): Promise<Metadata> {
   return JSON.parse(doc.json) as Metadata;
 }
 
-test("write and ask share FIFO, and placement does not let the next job overtake an active tool", options, async t => {
+test("shared messages keep their order behind an active tool, and a side ask starts at once beside them", options, async t => {
   const f = await fixture(t);
+  await submit(f.session, OWNER, "write", { content: "TEST_WRITE order.txt\nbefore", requestId: "setup" });
+  await idle(f.session);
   const firstGate = f.gateTool(OWNER, "write");
   const firstInput = { content: "TEST_IDENTITY", requestId: "active" };
   const first = await submit(f.session, OWNER, "write", firstInput);
@@ -206,22 +208,21 @@ test("write and ask share FIFO, and placement does not let the next job overtake
   assert.equal(write.conversationId, first.conversationId);
   assert.equal(last.conversationId, first.conversationId);
   assert.notEqual(ask.conversationId, first.conversationId);
+  await askGate.entered();
   let view = await f.session.view();
   assert.equal(view.busy, true);
-  assert.deepEqual(queue(view).map(run => [run.submissionId, run.status]), receipts.map((receipt, index) => [receipt.submissionId, index === 0 ? "running" : "queued"]));
+  const statuses = () => queue(view).filter(run => run.submissionId !== queue(view)[0]!.submissionId).map(run => run.status);
+  assert.deepEqual(statuses(), ["running", "queued", "running", "queued"], "the side ask runs while the shared work's tool is at work");
   assert.equal(userEntries(view, write, writeInput.content).length, 0);
-  firstGate.release();
-  await askGate.entered();
-  view = await f.session.view();
-  assert.deepEqual(queue(view).map(run => run.status), ["settled", "settled", "running", "queued"]);
-  assert.equal(await file(f.session, "order.txt"), "first");
-  assert.equal(userEntries(view, last, lastInput.content).length, 0);
   askGate.release();
+  for (let count = 0; count < 250 && queue(view = await f.session.view()).at(3)?.status !== "settled"; count++) await delay(20);
+  assert.deepEqual(statuses(), ["running", "queued", "settled", "queued"], "and answers before the shared work goes on");
+  await toolResult(f.session, ask, result => result.text === "before" && result.initiatedBy === WRITER && result.actingAs === OWNER && result.mode === "ask");
+  firstGate.release();
   view = await idle(f.session);
-  assert.deepEqual(queue(view).map(run => run.status), receipts.map(() => "settled"));
-  assert.deepEqual(queue(view).map(run => [run.actorId, run.mode]), [[OWNER, "write"], [WRITER, "write"], [WRITER, "ask"], [WRITER, "write"]]);
+  assert.deepEqual(statuses(), receipts.map(() => "settled"));
+  assert.deepEqual(queue(view).slice(1).map(run => [run.actorId, run.mode]), [[OWNER, "write"], [WRITER, "write"], [WRITER, "ask"], [WRITER, "write"]]);
   assert.equal(await file(f.session, "order.txt"), "last");
-  await toolResult(f.session, ask, result => result.text === "first" && result.initiatedBy === WRITER && result.actingAs === OWNER && result.mode === "ask");
   for (const [receipt, content] of [[first, firstInput.content], [write, writeInput.content], [ask, askInput.content], [last, lastInput.content]] as const) {
     assert.equal(userEntries(view, receipt, content).length, 1);
   }
