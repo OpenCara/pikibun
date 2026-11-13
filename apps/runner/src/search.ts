@@ -85,7 +85,7 @@ function searchTree(fs, start, startPath, request) {
   let files = 0, bytes = 0, characters = 0, truncated = false;
   const shown = line => { const chars = Array.from(line); return chars.length > LIMITS.lineText ? chars.slice(0, LIMITS.lineText).join("") + "\u2026" : line; };
   const length = line => Array.from(line).length;
-  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   const done = () => { if (matches.length > request.maxResults) truncated = true; return truncated; };
   function searchFile(path, relative, size) {
     if (size > LIMITS.fileBytes) return;

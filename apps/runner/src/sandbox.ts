@@ -14,7 +14,7 @@ import { resourceLaunch, validateResourceConfig, type ResourceConfig } from "./r
 import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
 import { CA_BUNDLE, sandboxCertificates } from "./trust-store.js";
 import { runHostShell } from "./host-shell.js";
-import { checkedBrowse, type BrowseResult } from "./file-browser.js";
+import { checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser.js";
 import { checkedSearch, type SearchRequest, type SearchResult } from "./search.js";
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
@@ -137,6 +137,7 @@ export type SandboxRequest = Request;
 type Request =
   | { kind: "initialize" }
   | { kind: "read" | "read-content" | "list" | "browse"; path: string }
+  | { kind: "list"; path: string; marked: true }
   | SearchRequest
   | { kind: "write"; path: string; content: string }
   | FileOperationRequest
@@ -513,6 +514,10 @@ export class Sandbox implements IsolatedWorkspace {
   async listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]> {
     const output = await this.#operation({ kind: "list", path: text(path ?? ".", "path", 1024) }, true, authorize);
     return JSON.parse(output) as string[];
+  }
+
+  async listEntries(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]> {
+    return checkedEntries(JSON.parse(await this.#operation({ kind: "list", path: text(path ?? ".", "path", 1024), marked: true }, true, authorize)));
   }
 
   get browser(): SessionBrowser | undefined {

@@ -1232,7 +1232,7 @@ def search(root, request):
         if b'\0' in data:
             return
         try:
-            text = data.decode('utf-8')
+            text = data.decode('utf-8-sig')
         except UnicodeDecodeError:
             return
         state['files'] += 1
@@ -1422,7 +1422,16 @@ def main():
                 names = os.listdir(directory)
                 if len(names) > MAX_ENTRIES:
                     raise ValueError('directory has too many entries')
-                result = sorted(names)
+                if request.get('marked') is True:
+                    result = []
+                    for name in sorted(names):
+                        try:
+                            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                        except FileNotFoundError:
+                            continue
+                        result.append(name + '/' if stat.S_ISDIR(info.st_mode) else name)
+                else:
+                    result = sorted(names)
             finally:
                 os.close(directory)
         else:

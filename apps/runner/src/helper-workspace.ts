@@ -5,7 +5,7 @@ import type { Readable } from "node:stream";
 import { validateUserEnv } from "../../../packages/shared/src/policy.js";
 import { validCloneDirectory } from "../../../packages/shared/src/repositories.js";
 import type { HostCommandOperation, Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
-import { checkedBrowse, type BrowseResult } from "./file-browser.js";
+import { checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser.js";
 import { checkedSearch, type SearchRequest, type SearchResult } from "./search.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
 import { runHostShell } from "./host-shell.js";
@@ -195,6 +195,10 @@ export class HelperWorkspace implements IsolatedWorkspace {
 
   async listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]> {
     return JSON.parse(await this.#operation({ kind: "list", path: text(path ?? ".", "path", 1024) }, { readOnly: true }, authorize)) as string[];
+  }
+
+  async listEntries(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]> {
+    return checkedEntries(JSON.parse(await this.#operation({ kind: "list", path: text(path ?? ".", "path", 1024), marked: true }, { readOnly: true }, authorize)));
   }
 
   async browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult> {
