@@ -323,7 +323,7 @@ test("SIGKILL runner reopens pi SQLite, resumes pending generation, and preserve
     const writeInput = { requestId: randomUUID(), content: `TEST_WRITE crash-marker.txt\n${fileContent}` };
     const writeReceipt = await submit(writeInput);
     const baseline = await waitForView("Baseline write did not settle", value => !value.busy);
-    assert.ok(baseline.entries.some(entry => entry.role === "toolResult" && entry.text.includes('"written":"crash-marker.txt"')));
+    assert.ok(baseline.entries.some(entry => entry.role === "toolResult" && entry.text === "Successfully wrote to crash-marker.txt"));
 
     const holdInput = { requestId: randomUUID(), content: "TEST_HOLD 5000" };
     const holdReceipt = await submit(holdInput);

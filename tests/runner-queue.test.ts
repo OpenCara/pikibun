@@ -17,6 +17,7 @@ import { runnerModels } from "../apps/runner/src/provider.js";
 import { RunnerService } from "../apps/runner/src/server.js";
 import { RunnerSession, WORK_MARKER, type RunnerConfig } from "../apps/runner/src/session.js";
 import { defaultHostConfig, type HostCompaction } from "../packages/shared/src/host-config.js";
+import { storedToolResults } from "./helpers/tool-results.js";
 
 const options = { skip: process.platform !== "linux", timeout: 60_000 };
 const OWNER = "test:alice";
@@ -83,11 +84,12 @@ function userEntries(view: SessionView, receipt: SubmitResult, content: string) 
   return view.entries.filter(entry => entry.conversationId === receipt.conversationId && entry.role === "user" && entry.text === content);
 }
 
-function toolResult(view: SessionView, receipt: SubmitResult, predicate: (value: Record<string, unknown>) => boolean): void {
-  assert.ok(view.entries.some(entry => {
-    if (entry.conversationId !== receipt.conversationId || entry.role !== "toolResult") return false;
-    try { return predicate(JSON.parse(entry.text) as Record<string, unknown>); }
-    catch { return false; }
+async function toolResult(session: RunnerSession, receipt: SubmitResult, predicate: (value: Record<string, unknown>) => boolean): Promise<void> {
+  const results = await storedToolResults(session, receipt.conversationId);
+  assert.ok(results.some(result => {
+    let fields: Record<string, unknown> = {};
+    try { const parsed: unknown = JSON.parse(result.text); if (parsed && typeof parsed === "object") fields = parsed as Record<string, unknown>; } catch { }
+    return predicate({ ...fields, text: result.text, ...(result.details?.pikibun as Record<string, unknown> | undefined) });
   }), `missing actual tool result in conversation ${receipt.conversationId}`);
 }
 
@@ -219,7 +221,7 @@ test("write and ask share FIFO, and placement does not let the next job overtake
   assert.deepEqual(queue(view).map(run => run.status), receipts.map(() => "settled"));
   assert.deepEqual(queue(view).map(run => [run.actorId, run.mode]), [[OWNER, "write"], [WRITER, "write"], [WRITER, "ask"], [WRITER, "write"]]);
   assert.equal(await file(f.session, "order.txt"), "last");
-  toolResult(view, ask, result => result.content === "first" && result.initiatedBy === WRITER && result.actingAs === OWNER && result.mode === "ask");
+  await toolResult(f.session, ask, result => result.text === "first" && result.initiatedBy === WRITER && result.actingAs === OWNER && result.mode === "ask");
   for (const [receipt, content] of [[first, firstInput.content], [write, writeInput.content], [ask, askInput.content], [last, lastInput.content]] as const) {
     assert.equal(userEntries(view, receipt, content).length, 1);
   }
@@ -303,7 +305,7 @@ test("queued write/ask FIFO and receipt identity survive a fresh service over th
   const view = await idle(recovered);
   assert.deepEqual(queue(view).map(run => [run.submissionId, run.status]), receipts.map(receipt => [receipt.submissionId, "settled"]));
   assert.equal(await file(recovered, "durable.txt"), "after");
-  toolResult(view, receipts[1], result => result.content === "before" && result.initiatedBy === WRITER);
+  await toolResult(recovered, receipts[1], result => result.text === "before" && result.initiatedBy === WRITER);
   for (const [index, job] of jobs.entries()) {
     const retry = await submit(recovered, WRITER, job.mode, { content: job.content, requestId: job.requestId });
     sameReceipt(retry, receipts[index]);
@@ -334,7 +336,7 @@ test("concurrent retries deduplicate by actor and mode, preserve receipts across
   }
   resume();
   view = await idle(f.session);
-  toolResult(view, asks[0], result => result.mode === "ask" && result.initiatedBy === WRITER);
+  await toolResult(f.session, asks[0], result => result.mode === "ask" && result.initiatedBy === WRITER);
   assert.equal(userEntries(view, writes[0], input.content).length, 2, "one write per actor, not one per retry");
   assert.equal(userEntries(view, asks[0], input.content).length, 1);
   await f.stop();
@@ -462,7 +464,7 @@ test("revoking the original queued actor interrupts its job before pi activation
   assert.equal(userEntries(view, forbidden, forbiddenInput.content).length, 0, "revoked input must never reach pi");
   await assert.rejects(file(f.session, "forbidden.txt"), { code: "ENOENT" });
   assert.equal(await file(f.session, "allowed.txt"), "owner remains authorized");
-  toolResult(view, allowed, result => result.written === "allowed.txt" && result.initiatedBy === OWNER);
+  await toolResult(f.session, allowed, result => result.text === "Successfully wrote to allowed.txt" && result.initiatedBy === OWNER);
   await assert.rejects(submit(f.session, WRITER, "write", forbiddenInput), runnerError(403, /revoked/));
   f.grants[WRITER] = ["read", "write"];
   const retry = await submit(f.session, WRITER, "write", forbiddenInput);
@@ -546,7 +548,7 @@ test("stopping ends the running message and those queued behind it, holds new on
   assert.equal(userEntries(view, queued, queuedInput.content).length, 0, "a stopped queued message never reaches pi");
   await assert.rejects(file(f.session, "stopped.txt"), { code: "ENOENT" });
   assert.equal(await file(f.session, "after.txt"), "ran");
-  toolResult(view, next, result => result.written === "after.txt" && result.initiatedBy === WRITER);
+  await toolResult(f.session, next, result => result.text === "Successfully wrote to after.txt" && result.initiatedBy === WRITER);
   const marker = view.entries.findIndex(entry => entry.kind === "workspace.run-stopped");
   assert.deepEqual(view.entries[marker], { id: `${running.conversationId}:stopped:${running.submissionId}`, kind: "workspace.run-stopped", role: "system", text: "Stopped", actorId: WRITER, conversationId: running.conversationId });
   assert.ok(view.entries.slice(0, marker).some(entry => entry.role === "user" && entry.text === "TEST_IDENTITY"));
@@ -573,7 +575,7 @@ test("a stop the host had not finished before it closed is finished on reopen, a
   const view = await idle(recovered);
   assert.deepEqual(queue(view).map(run => run.status), ["stopped", "settled"]);
   assert.equal(await file(recovered, "reopened.txt"), "ran");
-  toolResult(view, next, result => result.written === "reopened.txt");
+  await toolResult(recovered, next, result => result.text === "Successfully wrote to reopened.txt");
 });
 
 test("a session whose last shared message was stopped is idle, not failed", options, async t => {
@@ -772,7 +774,7 @@ test("a message whose work host crashes cut off again and again ends, says why, 
   view = await idle(f.session);
   assert.deepEqual(queue(view).map(run => run.status), ["interrupted", "settled"]);
   assert.equal(await file(f.session, "after-crashes.txt"), "ran");
-  toolResult(view, next, result => result.written === "after-crashes.txt");
+  await toolResult(f.session, next, result => result.text === "Successfully wrote to after-crashes.txt");
   assert.equal(view.activity, "done");
 });
 
@@ -877,7 +879,7 @@ test("a sender takes back a message of theirs while it is queued, and it never r
   assert.equal(userEntries(view, taken, takenInput.content).length, 0, "a withdrawn message never reaches pi");
   await assert.rejects(file(f.session, "withdrawn.txt"), { code: "ENOENT" });
   assert.equal(await file(f.session, "kept.txt"), "ran");
-  toolResult(view, kept, result => result.written === "kept.txt");
+  await toolResult(f.session, kept, result => result.text === "Successfully wrote to kept.txt");
   assert.equal(view.activity, "done");
   const retry = await submit(f.session, WRITER, "write", takenInput);
   sameReceipt(retry, taken);

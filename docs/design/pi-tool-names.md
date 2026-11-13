@@ -1,6 +1,6 @@
 # Pi's names and contracts for the file tools
 
-Status: a plan; nothing is built. The phases at the end say what lands in which order.
+Status: phase 1 is built (see [Phase 1 as built](#phase-1-as-built)); phases 2 and 3 are planned. The phases at the end say what lands in which order.
 
 ## Why
 
@@ -234,6 +234,53 @@ One pull request each.
 - **Both names out.** A group that leaves out `write` sends `write` and `write_file` in `off`, and neither `read` nor
   `read_file`. A group that leaves out only `tunnel` sends none of the five.
 - **An older app.** The tool-groups answer holds only names the app before this change knows.
+
+## Phase 1 as built
+
+Phase 1 landed as decisions 1 to 5 describe, with these differences and details.
+
+- **The schemas and the text.** `apps/runner/src/pi-file-tools.ts` takes each tool's parameters from Pi's definition
+  (`piParameters`; `search` adds `all`) and builds its text with Pi's exported helpers. The tools in
+  `apps/runner/src/session/tools/files.ts` keep their execution over `SessionWorkspace`. pi-durable takes Pi's TypeBox
+  schemas for them as it does for an extension's tools, and a result's `details` is stored with it
+  (`tests/runner-files.test.ts` reads them back from the harness).
+- **`edit` and the made-up `cwd`.** It is `/pikibun-edit-<random>` (on Windows, at the root of the connector's current
+  drive), which doesn't exist. Before Pi runs, `editTarget` resolves the path as Pi will (Unicode spaces, a leading
+  `@`) and refuses any path that leaves that directory: absolute, `~` and `@~`, `file:`, a drive, or `..` above it.
+  Pi's operations then check that Pi asked for that same file, and read and write the model's own path through the
+  sandbox, so the file changed is the one `read_file` and `write_file` would name by that path (Pi alone would drop a
+  leading `@`). `access` checks nothing: the read after it fails for a missing file. The only host call left in Pi's
+  code is the mutation queue's `realpath` of a path under the made-up directory. The guard and Pi resolve with the
+  same platform's path rules, so this holds on Windows too; `tests/pi-file-tools.test.ts` runs in the `platforms` job
+  on macOS and Windows. Pi's `prepareArguments` repairs `edit`'s arguments, on a copy, since pi-durable requires it
+  not to change them.
+- **`ls`'s entry kinds.** The sandbox helpers' `list` takes `marked: true` (`SessionWorkspace.listEntries`) and answers
+  each name with `/` after a directory, in one call. It doesn't follow links, so a link to a directory has no `/` and a
+  dangling link is listed, where Pi's `stat` follows a link and skips a broken one. A directory of more than 10,000
+  entries is refused, as `list_files` refused it before.
+- **`grep`'s engine.** The walkers in `search.ts` and the Python helper changed where Pi's contract needed it: a glob
+  with `/` matches from the searched path, not the worktree's top (a leading `./` is dropped; ripgrep's `!` isn't
+  supported); a line is kept up to 500 characters and cut by Pi's `truncateLine`; a UTF-8 byte order mark is dropped
+  before matching, as ripgrep drops it; and a search goes on past its limit only to find one more match, so the limit's
+  notice appears only when it cut something off (before, `truncated` came whenever the limit was reached with files
+  left). Overlapping context is merged as ripgrep merges it, and paths are from the searched path (a file's base name
+  when `path` is a file). Matches come sorted by path, where ripgrep's order across files varies. When Pikibun's own
+  file, size or time limit stops a search, a notice of its own says so. At `limit` 500, the notice doesn't offer a
+  larger limit.
+- **`read`.** The notice for a first line over 50 KB says a code mode script's `read_file` gets whole lines. A
+  script gets the selection whole and an image as the content list, not Pi's image object. The unsandboxed host's
+  workspace now keeps a file's byte order mark, as the sandbox helpers do, so `edit` keeps it on every backend.
+- **Paths.** All five refuse `~` and `~/…`. `list_files` takes a trailing `/`.
+- **Output limits.** Pi's text can pass 50 KB or 2,000 lines by its notice, so `read_file`, `list_files` and `search`
+  bound their output at 54 KB, with no line limit, instead of the harness's 50 KB and 2,000 lines.
+- **`details.pikibun`** is on a successful result; a call that fails throws, as before, and carries none.
+- **The transcript.** `resultSummary` and `resultBody` take the tool's name: a file tool's result is read in Pi's
+  words (`Lines 60–89 of 975`, `3 matches in 2 files`, `Edited (2 edits)`), and a result from before, which starts
+  with `{"initiatedBy"`, keeps its old summary.
+- **The conformance suite** is `tests/pi-file-tools.test.ts`. It runs Pi's real `read`, `ls`, `grep`, `write` and
+  `edit` over one directory and ours over each backend of the sandbox conformance suite, and compares `content` and
+  `details`, sorting a directory search's lines. Pi's `grep` needs ripgrep: CI installs it, and elsewhere the suite
+  skips `grep` with a note. The hooks test of decision 6 lands with phase 2, with the names it matches.
 
 ## Not chosen
 

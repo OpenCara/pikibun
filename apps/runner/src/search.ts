@@ -42,8 +42,6 @@ export interface SearchResult {
 
 const fail = (message: string): never => { throw new Error(message); };
 const flag = (value: unknown, name: string): boolean => value === undefined ? false : typeof value === "boolean" ? value : fail(`${name} must be true or false`);
-const count = (value: unknown, name: string, min: number, max: number, fallback: number): number => value === undefined ? fallback
-  : Number.isInteger(value) && (value as number) >= min && (value as number) <= max ? value as number : fail(`${name} must be a whole number from ${min} to ${max}`);
 
 const whole = (value: unknown, name: string): number | undefined => value === undefined ? undefined
   : typeof value === "number" && Number.isFinite(value) ? value : fail(`${name} must be a number`);
