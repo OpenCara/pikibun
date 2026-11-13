@@ -13,6 +13,10 @@ import type { AppContext, AuthIdentity, Env, UserRow, AppEnv } from '../types.js
 import { assertVaultConfigured, encryptToken } from './vault.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 import { forgetDeadGitHubToken } from './github-sign-in.js';
+import { z } from 'zod';
+import { body as requestBody, fields } from '../schemas.js';
+
+const nativeLocalBody = fields({ token: z.unknown(), deviceName: z.unknown().optional() }, 'Only token and deviceName are accepted.');
 
 const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
 const NATIVE_SESSION_TTL = 30 * 24 * 60 * 60 * 1000;
@@ -494,10 +498,9 @@ async function localSignIn(c: AppContext) {
 }
 
 async function nativeLocalSignIn(c: AppContext) {
-  const body = await jsonObject(c, 4096);
-  if (Object.keys(body).some(key => key !== 'token' && key !== 'deviceName')) fail(400, 'invalid_input', 'Only token and deviceName are accepted.');
-  requireLocalToken(c.env, body.token);
-  const deviceName = body.deviceName === undefined || body.deviceName === null ? null : safeText(body.deviceName, 'deviceName', 100);
+  const input = await requestBody(c, nativeLocalBody, { maxBytes: 4096 });
+  requireLocalToken(c.env, input.token);
+  const deviceName = input.deviceName === undefined || input.deviceName === null ? null : safeText(input.deviceName, 'deviceName', 100);
   const user = await localOwnerAccount(c.env);
   const session = await newSession(c.env, user.id, 'local', { deviceName });
   await dbResult(session.statement.run());
