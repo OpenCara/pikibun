@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import {
-  groupTools, parseGroupTools, roleTools, toolGroupLimits, type GroupTool, type ToolGroup, type ToolGroupMember, type ToolGroupSettings,
+  groupTools, legacyGroupToolNames, parseGroupTools, roleTools, toolGroupLimits, type GroupTool, type ToolGroup, type ToolGroupMember, type ToolGroupSettings,
 } from '../../../packages/shared/src/tool-groups.js';
 import { workspaceRoles, type WorkspaceRole } from '../../../packages/shared/src/types.js';
 import { createToolGroup, deleteToolGroup, requireMember, setMemberToolGroup, updateToolGroup } from './authority/index.js';
@@ -11,10 +11,12 @@ import type { AppEnv, Env } from './types.js';
 
 type GroupRow = { id: string; name: string; tools_json: string; created_at: string; updated_at: string };
 
+function savedTools(row: GroupRow): GroupTool[] {
+  try { return parseGroupTools(JSON.parse(row.tools_json)); } catch { return []; }
+}
+
 function groupRecord(row: GroupRow): ToolGroup {
-  let tools: GroupTool[];
-  try { tools = parseGroupTools(JSON.parse(row.tools_json)); } catch { tools = []; }
-  return { id: row.id, name: row.name, tools, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, name: row.name, tools: legacyGroupToolNames(savedTools(row)), createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 export async function toolGroupSettings(env: Env, workspaceId: string, admin: boolean): Promise<ToolGroupSettings> {
@@ -28,8 +30,8 @@ export async function toolGroupSettings(env: Env, workspaceId: string, admin: bo
   return {
     groups: groups.map(groupRecord),
     members: members.map(member => ({ ...member, groupId: member.groupId ?? null })),
-    roles: Object.fromEntries(workspaceRoles.map(role => [role, [...roleTools[role]]])) as Record<WorkspaceRole, GroupTool[]>,
-    tools: [...groupTools],
+    roles: Object.fromEntries(workspaceRoles.map(role => [role, legacyGroupToolNames(roleTools[role])])) as Record<WorkspaceRole, string[]>,
+    tools: legacyGroupToolNames(groupTools),
     admin,
   };
 }
@@ -68,7 +70,7 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
       .bind(groupId, workspaceId).first();
     if (!current) fail(404, 'not_found', 'Tool group not found.');
     const name = input.name ?? current.name;
-    const tools: GroupTool[] = input.tools ?? groupRecord(current).tools;
+    const tools: GroupTool[] = input.tools ?? savedTools(current);
     await updateToolGroup(c.env, workspaceId, groupId, actor, name, tools);
     return c.json(await toolGroupSettings(c.env, workspaceId, true));
   });

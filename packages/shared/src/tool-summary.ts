@@ -63,8 +63,8 @@ export function callTarget(name: string, args: Fields | undefined): string {
   }
   const path = string(args, "path");
   switch (name) {
-    case "read_file": if (path) return `${path}${lineSpan(args)}`; break;
-    case "edit_file": if (path) return Array.isArray(args.edits) && args.edits.length > 1 ? `${path} (${args.edits.length} edits)` : path; break;
+    case "read": case "read_file": if (path) return `${path}${lineSpan(args)}`; break;
+    case "edit": case "edit_file": if (path) return Array.isArray(args.edits) && args.edits.length > 1 ? `${path} (${args.edits.length} edits)` : path; break;
     case "delete_file": if (path) return args.recursive === true ? `${path} (recursive)` : path; break;
     case "move_file": case "copy_file": {
       const from = string(args, "from");
@@ -72,7 +72,7 @@ export function callTarget(name: string, args: Fields | undefined): string {
       if (from && to) return `${from} → ${to}`;
       break;
     }
-    case "search": {
+    case "grep": case "search": {
       const pattern = string(args, "pattern");
       if (!pattern) break;
       const where = [path, string(args, "glob")].filter(Boolean).join(" ");
@@ -238,10 +238,74 @@ function answerSummary(all: Fields, images: number): ResultSummary {
   return done(fieldsSummary(fields) || "Done");
 }
 
-export function resultSummary(whole: string, options: { error?: boolean } = {}): ResultSummary {
+const PI_CONTRACT: Record<string, "read" | "write" | "edit" | "ls" | "grep"> = {
+  read: "read", write: "write", edit: "edit", ls: "ls", grep: "grep",
+  read_file: "read", write_file: "write", edit_file: "edit", list_files: "ls", search: "grep",
+};
+
+export function piContract(tool: string | undefined, text: string): "read" | "write" | "edit" | "ls" | "grep" | undefined {
+  const contract = tool === undefined ? undefined : PI_CONTRACT[tool];
+  return contract && !text.startsWith("{\"initiatedBy\"") ? contract : undefined;
+}
+
+function lineCount(text: string): number {
+  return text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+}
+
+const GREP_LINE = /^(.*?)(?::(\d+): |-(\d+)- )/;
+
+function piSummary(contract: "read" | "write" | "edit" | "ls" | "grep", text: string): string {
+  const notice = /\n\n\[([^\n]*)\]$/.exec(text);
+  const body = notice ? text.slice(0, notice.index) : text;
+  const said = notice?.[1] ?? "";
+  switch (contract) {
+    case "read": {
+      const image = /^Read image file \[([^\]\n]+)\]/.exec(text);
+      if (image) return image[1]!;
+      const long = /^\[Line (\d+) is ([^,\]]+), exceeds /.exec(text);
+      if (long) return `Line ${long[1]} is ${long[2]}, too long to show`;
+      const showing = /^Showing lines (\d+)-(\d+) of (\d+)/.exec(said);
+      if (showing) return `Lines ${showing[1]}–${showing[2]} of ${showing[3]}`;
+      const more = /^(\d+) more lines in file\. Use offset=(\d+) /.exec(said);
+      const count = lineCount(body);
+      if (more) {
+        const next = Number(more[2]);
+        return count ? `Lines ${next - count}–${next - 1} of ${next - 1 + Number(more[1])}` : "No lines";
+      }
+      return plural(count, "line");
+    }
+    case "write": return /^Successfully wrote to /.test(text) ? "Written" : oneLine(text);
+    case "edit": {
+      const edited = /^Successfully replaced (\d+) block\(s\) in /.exec(text);
+      return edited ? `Edited (${plural(Number(edited[1]), "edit")})` : oneLine(text);
+    }
+    case "ls": {
+      if (text === "(empty directory)") return "Empty directory";
+      const entries = plural(lineCount(body), "entry", "entries");
+      return /entries limit reached/.test(said) ? `${entries} (more not shown)` : entries;
+    }
+    case "grep": {
+      const stopped = /matches limit reached|stopped early/.test(said) ? " (stopped early)" : "";
+      if (body === "No matches found") return `No matches${stopped}`;
+      const files = new Set<string>();
+      let matches = 0;
+      for (const line of body.split("\n")) {
+        const found = GREP_LINE.exec(line);
+        if (!found || found[2] === undefined) continue;
+        matches++;
+        files.add(found[1]!);
+      }
+      return `${plural(matches, "match", "matches")} in ${plural(files.size, "file")}${stopped}`;
+    }
+  }
+}
+
+export function resultSummary(whole: string, options: { error?: boolean; tool?: string } = {}): ResultSummary {
   const { output: text, notes } = resultNotes(whole);
   const error = notes.find(note => note.severity === "error");
   if (error) return { text: shorten(noteSummary(error), LINE_CHARS), failed: true };
+  const contract = options.error === true ? undefined : piContract(options.tool, text);
+  if (contract) return { text: shorten(piSummary(contract, text), LINE_CHARS), failed: options.error === true };
   const parsed = answer(text);
   const first = (text.split("\n").find(line => line.trim()) ?? "").trimEnd();
   const summary = parsed ? answerSummary(parsed.fields, parsed.images)
@@ -266,9 +330,9 @@ export function readable(value: unknown, indent = ""): string {
   return Object.entries(value).map(([key, child]) => `${indent}${key}:${block(child)}`).join("\n");
 }
 
-export function resultBody(whole: string): string {
+export function resultBody(whole: string, options: { tool?: string } = {}): string {
   const { output, notes } = resultNotes(whole);
-  const body = outputBody(output);
+  const body = piContract(options.tool, output) ? output : outputBody(output);
   return notes.length ? [body.replace(/\n+$/, ""), noteLines(notes)].filter(Boolean).join("\n") : body;
 }
 

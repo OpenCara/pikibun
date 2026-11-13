@@ -21,6 +21,7 @@ export interface SessionWorkspace {
   writeFile(path: string, content: string, authorize: SandboxAuthorize): Promise<void>;
   importFile(directory: string, name: string, data: Buffer, authorize: SandboxAuthorize): Promise<string>;
   listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]>;
+  listEntries(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]>;
   search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult>;
   fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult>;
   browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult>;

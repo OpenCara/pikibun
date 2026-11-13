@@ -10,11 +10,25 @@ export const assignableWorkspaceRoles = ["admin", "collaborator", "member", "vie
 export type AssignableWorkspaceRole = (typeof assignableWorkspaceRoles)[number];
 export const sessionRoles = ["viewer", "member", "collaborator", "admin"] as const;
 export type SessionRole = (typeof sessionRoles)[number];
-export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "make", "browser"] as const;
+export const toolNames = ["identity", "ls", "read", "write", "edit", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "grep", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "make", "browser"] as const;
 export type ToolName = (typeof toolNames)[number];
 export type AnyToolName = ToolName | (string & {});
 export const definedToolNamePattern = /^[a-z][a-z0-9_]{0,63}$/;
 export const retiredToolNames: readonly ToolName[] = ["git_status", "git_commit", "git_repin", "web_fetch", "web_search", "bash", "host_bash"];
+export const renamedToolNames: Readonly<Record<string, ToolName>> = Object.freeze({ read_file: "read", write_file: "write", edit_file: "edit", list_files: "ls", search: "grep" });
+const renamedTools = new Map<string, string>(Object.entries(renamedToolNames));
+export function canonicalToolName(name: string): string {
+  return renamedTools.get(name) ?? name;
+}
+export function legacyToolNames(name: string): string[] {
+  return Object.keys(renamedToolNames).filter(legacy => renamedToolNames[legacy] === name);
+}
+export function canonicalToolNames(names: readonly string[]): string[] {
+  return [...new Set(names.map(canonicalToolName))];
+}
+export function withLegacyToolNames(names: readonly string[]): string[] {
+  return [...new Set(names.flatMap(name => [name, ...legacyToolNames(name)]))];
+}
 export interface UserProfile {
   id: string;
   username?: string | null;

@@ -4,15 +4,17 @@ import { settleToolNames } from "../apps/runner/src/extensions/adapter.js";
 import { builtinExtensions } from "../packages/shared/src/host-config.js";
 import type { InstalledExtension, WorkspaceExtension } from "../packages/shared/src/host-extensions.js";
 import { pikiSessionToolExtensions } from "../packages/shared/src/piki-extensions.js";
+import { renamedToolNames } from "../packages/shared/src/types.js";
 import { descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, pikibunToolDescriptions, workspaceTools } from "../packages/shared/src/workspace-tools.js";
 
 const own = pikiSessionToolExtensions().filter(item => !item.retired);
 const sessionTools = [...new Set([...own.filter(item => item.core), ...own.filter(item => !item.core)].flatMap(item => item.sessionTools ?? []))];
 const enabled = (source: string, tools: WorkspaceExtension["tools"] = "approval"): WorkspaceExtension => ({ source, enabled: true, tools, settings: {} });
 const disabled = (source: string): WorkspaceExtension => ({ source, enabled: false, tools: "approval", settings: {} });
+const pikibuns = (name: string) => sessionTools.includes(name) || name in renamedToolNames;
 const installed = (source: string, tools: string[], extra: Partial<InstalledExtension> = {}): InstalledExtension => ({
-  source, dev: false, modules: [{ path: "index.js", tools: tools.filter(name => !sessionTools.includes(name)).map(name => ({ name, description: `${name} does things.` })),
-    events: [], flags: [], noops: [], ignored: tools.filter(name => sessionTools.includes(name)).map(name => `tool ${name} (one of Pikibun's own)`) }], ...extra,
+  source, dev: false, modules: [{ path: "index.js", tools: tools.filter(name => !pikibuns(name)).map(name => ({ name, description: `${name} does things.` })),
+    events: [], flags: [], noops: [], ignored: tools.filter(pikibuns).map(name => `tool ${name} (one of Pikibun's own)`) }], ...extra,
 });
 
 test("Pikibun describes each of its own tools, the session's and code mode's, for the workspace page", () => {
@@ -24,7 +26,7 @@ test("Pikibun describes each of its own tools, the session's and code mode's, fo
 test("a workspace that chose nothing gives its sessions every tool of Pikibun's own and code mode, but the opt-in tunnel", () => {
   const usable = workspaceTools([], []);
   assert.deepEqual(usable.tools.map(tool => tool.name), [...sessionTools.filter(name => name !== "tunnel"), "codemode"]);
-  assert.deepEqual(usable.tools.slice(0, 3).map(tool => tool.name), ["identity", "list_files", "read_file"]);
+  assert.deepEqual(usable.tools.slice(0, 3).map(tool => tool.name), ["identity", "ls", "read"]);
   assert.ok(usable.tools.every(tool => tool.origin === (tool.name === "codemode" ? "builtin" : "session") && tool.description));
   assert.equal(usable.tools.find(tool => tool.name === "git_push")?.source, "piki:git");
   assert.equal(usable.tools.find(tool => tool.name === "codemode")?.source, "pi:codemode");
@@ -40,7 +42,7 @@ test("session tools a workspace turns off leave the list, except the core ones i
   const usable = workspaceTools([disabled("piki:git"), disabled("piki:files"), disabled("piki:shell")], []);
   assert.deepEqual(usable.off, [{ name: "git", source: "piki:git" }, { name: "git_push", source: "piki:git" }, { name: "tunnel", source: "piki:tunnel" }]);
   assert.ok(!usable.tools.some(tool => tool.name === "git" || tool.name === "git_push"));
-  assert.ok(usable.tools.some(tool => tool.name === "read_file"));
+  assert.ok(usable.tools.some(tool => tool.name === "read"));
 });
 
 test("source_read comes with one extension per kind of document source: on while any is, off once all are", () => {
@@ -81,7 +83,7 @@ test("names are settled as sessions settle them: Pikibun's own first, even turne
     enabled("npm:first@1.0.0"), enabled("npm:second@1.0.0"), enabled("npm:third@1.0.0"), enabled("npm:modes@1.0.0"),
   ];
   const reports = [
-    installed("npm:first@1.0.0", ["web_search", "read_file", "node"]),
+    installed("npm:first@1.0.0", ["web_search", "read_file", "read", "find", "node"]),
     installed("npm:second@1.0.0", ["web_search", "fetch"]),
     installed("npm:third@1.0.0", ["web_search"]),
     installed("npm:modes@1.0.0", ["codemode"]),
@@ -89,15 +91,17 @@ test("names are settled as sessions settle them: Pikibun's own first, even turne
   const usable = workspaceTools(extensions, reports);
   assert.deepEqual(usable.shadowed, [
     { name: "read_file", source: "npm:first@1.0.0", by: "piki:files", kind: "own" },
+    { name: "read", source: "npm:first@1.0.0", by: "piki:files", kind: "own" },
     { name: "node", source: "npm:first@1.0.0", by: "piki:node", kind: "own" },
     { name: "web_search", source: "npm:second@1.0.0", by: "npm:first@1.0.0", kind: "extension" },
     { name: "web_search", source: "npm:third@1.0.0", by: "npm:first@1.0.0", kind: "extension" },
     { name: "codemode", source: "pi:codemode", by: "npm:modes@1.0.0", kind: "builtin" },
   ]);
   assert.deepEqual(extensionOffer("npm:first@1.0.0", reports)?.tools, [
-    { name: "web_search", description: "web_search does things." }, { name: "read_file", description: "", own: true }, { name: "node", description: "", own: true }]);
+    { name: "web_search", description: "web_search does things." }, { name: "find", description: "find does things." },
+    { name: "read_file", description: "", own: true }, { name: "read", description: "", own: true }, { name: "node", description: "", own: true }]);
   assert.deepEqual(usable.tools.filter(tool => tool.origin !== "session").map(tool => `${tool.source} ${tool.name}`),
-    ["npm:first@1.0.0 web_search", "npm:second@1.0.0 fetch", "npm:modes@1.0.0 codemode"]);
+    ["npm:first@1.0.0 web_search", "npm:first@1.0.0 find", "npm:second@1.0.0 fetch", "npm:modes@1.0.0 codemode"], "an extension's find is offered until Pikibun has its own");
   assert.ok(!usable.tools.some(tool => tool.name === "node"));
   const settled = settleToolNames(reports.map(report => ({ source: report.source, tools: report.modules.flatMap(module => module.tools.map(tool => tool.name)) })), sessionTools);
   assert.deepEqual(settled.flatMap(item => item.kept.map(name => `${item.source} ${name}`)),

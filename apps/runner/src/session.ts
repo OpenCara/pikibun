@@ -8,7 +8,7 @@ import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Mod
 import { ConversationIdle, createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
-import { accessModes, thinkingLevels } from "../../../packages/shared/src/types.js";
+import { accessModes, canonicalToolNames, thinkingLevels } from "../../../packages/shared/src/types.js";
 import type { SessionsToolRequest, SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote } from "../../../packages/shared/src/repositories.js";
@@ -26,6 +26,7 @@ import type { BrowserToolchain } from "./browser-toolchain.js";
 import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import type { HostTunnelStatus, SessionTunnelReport, TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
 import { SessionTunnel } from "./session/tunnel.js";
+import { renamedToolsHook } from "./session/renamed-tools.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
@@ -97,7 +98,7 @@ interface RunnerBackup {
   createdAt: string;
 }
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
-const readOnlyTools = ["identity", "read_file", "list_files", "search"];
+const readOnlyTools = ["identity", "read", "ls", "grep"];
 export type RunnerConfig = {
   dataDir: string; controlPlaneUrl: string; sharedSecret: string; allowFaux: boolean; allowTestShell?: boolean; fetch?: typeof fetch;
   connectorId?: string;
@@ -434,7 +435,7 @@ export class RunnerSession {
 
   private agentInstructions(mode: InstructionsMode, off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason,
     tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set()): string {
-    return agentInstructions({ base: this.binding.agent.instructions, agentTools: this.binding.agent.tools, mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
+    return agentInstructions({ base: this.binding.agent.instructions, agentTools: canonicalToolNames(this.binding.agent.tools), mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
       extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
@@ -477,7 +478,7 @@ export class RunnerSession {
     const registry = createRegistry();
     const own = this.buildTools();
     this.tools = [...own, ...await this.#defined.load(own.map(tool => tool.name))];
-    const extension = defineExtension({ name: "workspace-tools", tools: this.tools });
+    const extension = defineExtension({ name: "workspace-tools", tools: this.tools, hooks: [renamedToolsHook()] });
     this.#extension = extension;
     registry.install(extension);
     this.#registry = registry;
@@ -927,7 +928,7 @@ export class RunnerSession {
         const head = transcript.entries.at(-1);
         const fork = { ownership: { kind: "ownerless" as const }, agent: {
           model: (await shared.agent(context)).model ?? this.modelRef, instructions: this.agentInstructions("ask"),
-          tools: this.tools.filter(tool => readOnlyTools.includes(tool.name) && this.binding.agent.tools.includes(tool.name as never)),
+          tools: this.tools.filter(tool => readOnlyTools.includes(tool.name) && canonicalToolNames(this.binding.agent.tools).includes(tool.name)),
         } };
         conversation = head ? await shared.fork(head.id, fork, context) : await this.harness.createConversation(fork, context);
       }

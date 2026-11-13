@@ -22,7 +22,7 @@ function binding(id: string): RunnerBinding {
   return {
     session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Images", policyVersion: 1, status: "ready", createdAt: "2026-01-01T00:00:00Z" },
     owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice", gitEmail: "alice@example.test", env: {}, githubConnected: false },
-    agent: { id: "version-1", agentId: "agent", authorId: "test:author", workspaceId: "workspace", version: 1, name: "Agent", description: "Test", instructions: "Use tools.", tools: ["read_file"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    agent: { id: "version-1", agentId: "agent", authorId: "test:author", workspaceId: "workspace", version: 1, name: "Agent", description: "Test", instructions: "Use tools.", tools: ["read"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
     model: { id: "model-1", workspaceId: "workspace", name: "Explicit faux test provider", provider: "faux", modelId: "faux-1" },
   };
 }
@@ -93,18 +93,19 @@ async function readsImagesAsTheModelSeesThem(t: TestContext, unsandboxed: boolea
 
   const pixels = await read(session, "pixels.dat");
   assert.equal(pixels.model.length, 2);
-  assert.deepEqual(JSON.parse(pixels.model[0]!), { initiatedBy: "test:alice", actingAs: "test:alice", mode: "write", path: "pixels.dat", mimeType: "image/png", width: 3, height: 2 });
+  assert.equal(pixels.model[0], "Read image file [image/png]", "as Pi's read says it");
   assert.equal(pixels.model[1], `image image/png sha256:${createHash("sha256").update(small).digest("hex")}`);
   assert.equal(pixels.transcript, `${pixels.model[0]}\n[image image/png]`);
   assert.equal(pixels.view.includes(small.toString("base64")), false, "image data must not reach the web view");
 
   const wide = await read(session, "wide.png");
   assert.equal(wide.model.length, 2);
-  assert.deepEqual(JSON.parse(wide.model[0]!), { initiatedBy: "test:alice", actingAs: "test:alice", mode: "write", path: "wide.png", mimeType: "image/png", width: 1568, height: 20 });
+  assert.equal(wide.model[0], "Read image file [image/png]");
   assert.match(wide.model[1]!, /^image image\/png sha256:[0-9a-f]{64}$/);
+  assert.notEqual(wide.model[1], `image image/png sha256:${createHash("sha256").update(png(2400, 30)).digest("hex")}`, "scaled to fit");
 
   const notes = await read(session, "notes.png");
-  assert.deepEqual(notes.model.map(line => JSON.parse(line)), [{ initiatedBy: "test:alice", actingAs: "test:alice", mode: "write", content: text }]);
+  assert.deepEqual(notes.model, ["plain text, named like an image", ""], "a text file named like an image is read as text");
   assert.equal(notes.transcript.includes("[image"), false);
 
   const broken = await read(session, "broken.png");
@@ -113,7 +114,7 @@ async function readsImagesAsTheModelSeesThem(t: TestContext, unsandboxed: boolea
   assert.equal(broken.transcript.includes("[image"), false);
 
   const moving = await read(session, "moving.gif");
-  assert.deepEqual(JSON.parse(moving.model[0]!), { initiatedBy: "test:alice", actingAs: "test:alice", mode: "write", path: "moving.gif", mimeType: "image/png", width: 1, height: 1 });
+  assert.equal(moving.model[0], "Read image file [image/png]", "an animated GIF goes to the model as its first frame, a PNG");
 }
 
 test("host read_file gives the model images by signature, prepared to fit, and keeps other files text", hostMode, t => readsImagesAsTheModelSeesThem(t, true));

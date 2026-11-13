@@ -141,7 +141,7 @@ function fixture(): RunnerBinding {
       id: "crash-agent-v1", agentId: "crash-agent", authorId: "different-agent-author",
       workspaceId: "crash-workspace", version: 1, name: "Crash recovery faux agent",
       description: "Deterministic test only", instructions: "Use deterministic test commands.",
-      tools: ["identity", "read_file", "write_file"], modelId: "crash-model", createdAt,
+      tools: ["identity", "read", "write"], modelId: "crash-model", createdAt,
     },
     model: { id: "crash-model", workspaceId: "crash-workspace", name: "Faux (not an LLM)", provider: "faux", modelId: "crash-faux" },
   };
@@ -323,7 +323,7 @@ test("SIGKILL runner reopens pi SQLite, resumes pending generation, and preserve
     const writeInput = { requestId: randomUUID(), content: `TEST_WRITE crash-marker.txt\n${fileContent}` };
     const writeReceipt = await submit(writeInput);
     const baseline = await waitForView("Baseline write did not settle", value => !value.busy);
-    assert.ok(baseline.entries.some(entry => entry.role === "toolResult" && entry.text.includes('"written":"crash-marker.txt"')));
+    assert.ok(baseline.entries.some(entry => entry.role === "toolResult" && entry.text === "Successfully wrote to crash-marker.txt"));
 
     const holdInput = { requestId: randomUUID(), content: "TEST_HOLD 5000" };
     const holdReceipt = await submit(holdInput);

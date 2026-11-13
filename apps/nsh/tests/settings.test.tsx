@@ -186,10 +186,10 @@ describe("settings", () => {
     await app.press("id:new-tool-group");
     await app.waitFor("id:tool-group-editor");
     await app.type("id:tool-group-name", "Releasers");
-    for (const tool of ["read_file", "git", "git_push", "github_merge"]) await app.press(`id:tool-${tool}`);
+    for (const tool of ["read", "git", "git_push", "github_merge"]) await app.press(`id:tool-${tool}`);
     await app.press("id:tool-group-save");
     await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/tool-groups`) !== undefined);
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/tool-groups`)).toEqual({ name: "Releasers", tools: ["read_file", "git", "git_push", "github_merge"] });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/tool-groups`)).toEqual({ name: "Releasers", tools: ["read", "git", "git_push", "github_merge"] });
   });
 
   test("Extensions adds auto mode as one of Pikibun's features, which needs no host", async () => {

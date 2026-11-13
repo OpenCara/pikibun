@@ -92,11 +92,11 @@ export function agentInstructions(input: InstructionsInput): string {
   if (input.conversationOnlyRestore) instructions += "\n\nThis session was restored from a backup that kept only its conversation: "
     + "the files, clones and uncommitted work its messages from before that restore mention were not restored with it, so they may be "
     + "missing unless they were made again since. Clone the repositories you need again, and check that a file exists before relying on it.";
-  if (input.tools.includes("search")) instructions += "\n\nTo find and read code, use search (a regular expression or text across the worktree's files, "
-    + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than reading whole files: "
+  if (input.tools.includes("grep")) instructions += "\n\nTo find and read code, use grep (a regular expression or text across the worktree's files, "
+    + "with path, glob and context) and read with offset and limit (just the lines around a match) rather than reading whole files: "
     + "their output is already bounded.";
   if (mode !== "ask" && input.tools.includes("move_file")) instructions += "\n\nTo move, copy or delete files and directories, "
-    + "use move_file, copy_file and delete_file (write_file makes the directories it needs).";
+    + "use move_file, copy_file and delete_file (write makes the directories it needs).";
   if (mode !== "ask" && input.tools.includes("git") && !off.has("git")) instructions += "\n\nRun Git with the git tool: "
     + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
     + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "

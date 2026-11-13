@@ -19,7 +19,7 @@ function binding(id: string): RunnerBinding {
   return {
     session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Schedules", policyVersion: 1, status: "ready", createdAt: "2026-01-01T00:00:00Z", repositories: [], repositoryMode: "clone" },
     owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice Owner", gitEmail: "alice@example.test", env: {}, githubConnected: false },
-    agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["read_file"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["read"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
     model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId: "faux-1" },
   };
 }
@@ -130,7 +130,7 @@ test("piki:schedule: the workspace turns the schedule tool off, and a call by na
   t.after(() => service.close());
   const id = "schedule-switch-session";
   const withTool = binding(id);
-  withTool.agent.tools = ["read_file", "schedule"];
+  withTool.agent.tools = ["read", "schedule"];
   const session = await service.provision(withTool, await ticket(id, "create"));
   const admissionId = await sha256("schedule switch admission");
   const transcript = async () => (await session.view()).entries.map(entry => entry.text).join("\n");
@@ -146,7 +146,7 @@ test("piki:schedule: the workspace turns the schedule tool off, and a call by na
   answer = { extensions: [{ source: "piki:schedule", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
   await send("off");
   assert.ok(!offered[1]!.includes("schedule"), "the model isn't offered it");
-  assert.ok(offered[1]!.includes("read_file"), "the session's other tools stay");
+  assert.ok(offered[1]!.includes("read"), "the session's other tools stay");
   assert.equal(requests.length, 1);
   assert.match(await transcript(), /Tool schedule is not available/);
 
@@ -215,7 +215,7 @@ test("bash and host_bash are retired: their switches turn nothing on or off, whi
   t.after(() => service.close());
   const id = "shell-session";
   const value = binding(id);
-  value.agent.tools = ["bash", "host_bash", "node", "python", "read_file", "write_file", "move_file"];
+  value.agent.tools = ["bash", "host_bash", "node", "python", "read", "write", "move_file"];
   const session = await service.provision(value, await ticket(id, "create"));
   const send = async (requestId: string) => {
     await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId, admissionId: await sha256(requestId) }, "write");
@@ -228,7 +228,7 @@ test("bash and host_bash are retired: their switches turn nothing on or off, whi
   await send("off");
   for (const tools of offered) {
     assert.ok(!tools.includes("bash") && !tools.includes("host_bash"), tools.join());
-    for (const tool of ["node", "python", "read_file", "write_file", "move_file", "codemode"]) assert.ok(tools.includes(tool), `${tool}: ${tools.join()}`);
+    for (const tool of ["node", "python", "read", "write", "move_file", "codemode"]) assert.ok(tools.includes(tool), `${tool}: ${tools.join()}`);
   }
   assert.equal(offered.length, 2);
 });
@@ -258,12 +258,12 @@ test("the brokered tools have their own switches; the file tools have none that 
   t.after(() => service.close());
   const id = "brokered-session";
   const every = binding(id);
-  every.agent.tools = ["node", "git", "git_push", "github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "read_file", "write_file", "move_file", "search"];
+  every.agent.tools = ["node", "git", "git_push", "github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "read", "write", "move_file", "grep"];
   const session = await service.provision(every, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId: "brokered", admissionId: await sha256("brokered") }, "write");
   await idle(session);
   for (const tool of ["github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "git", "git_push"]) assert.ok(!offered.includes(tool), tool);
-  for (const tool of ["node", "read_file", "write_file", "move_file", "search"]) assert.ok(offered.includes(tool), `${tool}: ${offered.join()}`);
+  for (const tool of ["node", "read", "write", "move_file", "grep"]) assert.ok(offered.includes(tool), `${tool}: ${offered.join()}`);
   assert.ok(instructions.includes("To find and read code"), "the instructions were read");
   assert.ok(!instructions.includes("github_read with wait"), "no github_read advice while piki:github is off");
   assert.ok(!instructions.includes("git_push publishes"), "no git_push advice while piki:git is off");

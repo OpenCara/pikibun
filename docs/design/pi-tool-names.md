@@ -1,6 +1,6 @@
 # Pi's names and contracts for the file tools
 
-Status: a plan; nothing is built. The phases at the end say what lands in which order.
+Status: phases 1 and 2 are built (see [Phase 1 as built](#phase-1-as-built) and [Phase 2 as built](#phase-2-as-built)); phase 3 is planned. The phases at the end say what lands in which order.
 
 ## Why
 
@@ -234,6 +234,88 @@ One pull request each.
 - **Both names out.** A group that leaves out `write` sends `write` and `write_file` in `off`, and neither `read` nor
   `read_file`. A group that leaves out only `tunnel` sends none of the five.
 - **An older app.** The tool-groups answer holds only names the app before this change knows.
+
+## Phase 1 as built
+
+Phase 1 landed as decisions 1 to 5 describe, with these differences and details.
+
+- **The schemas and the text.** `apps/runner/src/pi-file-tools.ts` takes each tool's parameters from Pi's definition
+  (`piParameters`; `search` adds `all`) and builds its text with Pi's exported helpers. The tools in
+  `apps/runner/src/session/tools/files.ts` keep their execution over `SessionWorkspace`. pi-durable takes Pi's TypeBox
+  schemas for them as it does for an extension's tools, and a result's `details` is stored with it
+  (`tests/runner-files.test.ts` reads them back from the harness).
+- **`edit` and the made-up `cwd`.** It is `/pikibun-edit-<random>` (on Windows, at the root of the connector's current
+  drive), which doesn't exist. Before Pi runs, `editTarget` resolves the path as Pi will (Unicode spaces, a leading
+  `@`) and refuses any path that leaves that directory: absolute, `~` and `@~`, `file:`, a drive, or `..` above it.
+  Pi's operations then check that Pi asked for that same file, and read and write the model's own path through the
+  sandbox, so the file changed is the one `read_file` and `write_file` would name by that path (Pi alone would drop a
+  leading `@`). `access` checks nothing: the read after it fails for a missing file. The only host call left in Pi's
+  code is the mutation queue's `realpath` of a path under the made-up directory. The guard and Pi resolve with the
+  same platform's path rules, so this holds on Windows too; `tests/pi-file-tools.test.ts` runs in the `platforms` job
+  on macOS and Windows. Pi's `prepareArguments` repairs `edit`'s arguments, on a copy, since pi-durable requires it
+  not to change them.
+- **`ls`'s entry kinds.** The sandbox helpers' `list` takes `marked: true` (`SessionWorkspace.listEntries`) and answers
+  each name with `/` after a directory, in one call. It doesn't follow links, so a link to a directory has no `/` and a
+  dangling link is listed, where Pi's `stat` follows a link and skips a broken one. A directory of more than 10,000
+  entries is refused, as `list_files` refused it before.
+- **`grep`'s engine.** The walkers in `search.ts` and the Python helper changed where Pi's contract needed it: a glob
+  with `/` matches from the searched path, not the worktree's top (a leading `./` is dropped; ripgrep's `!` isn't
+  supported); a line is kept up to 500 characters and cut by Pi's `truncateLine`; a UTF-8 byte order mark is dropped
+  before matching, as ripgrep drops it; and a search goes on past its limit only to find one more match, so the limit's
+  notice appears only when it cut something off (before, `truncated` came whenever the limit was reached with files
+  left). Overlapping context is merged as ripgrep merges it, and paths are from the searched path (a file's base name
+  when `path` is a file). Matches come sorted by path, where ripgrep's order across files varies. When Pikibun's own
+  file, size or time limit stops a search, a notice of its own says so. At `limit` 500, the notice doesn't offer a
+  larger limit.
+- **`read`.** The notice for a first line over 50 KB says a code mode script's `read_file` gets whole lines. A
+  script gets the selection whole and an image as the content list, not Pi's image object. The unsandboxed host's
+  workspace now keeps a file's byte order mark, as the sandbox helpers do, so `edit` keeps it on every backend.
+- **Paths.** All five refuse `~` and `~/…`. `list_files` takes a trailing `/`.
+- **Output limits.** Pi's text can pass 50 KB or 2,000 lines by its notice, so `read_file`, `list_files` and `search`
+  bound their output at 54 KB, with no line limit, instead of the harness's 50 KB and 2,000 lines.
+- **`details.pikibun`** is on a successful result; a call that fails throws, as before, and carries none.
+- **The transcript.** `resultSummary` and `resultBody` take the tool's name: a file tool's result is read in Pi's
+  words (`Lines 60–89 of 975`, `3 matches in 2 files`, `Edited (2 edits)`), a failed call reads as its error, and a
+  result from before, which starts with `{"initiatedBy"`, keeps its old summary.
+- **The conformance suite** is `tests/pi-file-tools.test.ts`. It runs Pi's real `read`, `ls`, `grep`, `write` and
+  `edit` over one directory and ours over each backend of the sandbox conformance suite, and compares `content` and
+  `details`, sorting a directory search's lines. Pi's `grep` needs ripgrep: CI installs it, and elsewhere the suite
+  skips `grep` with a note. The hooks test of decision 6 lands with phase 2, with the names it matches.
+
+## Phase 2 as built
+
+Phase 2 landed as decisions 6 to 13 describe, with these differences and details.
+
+- **A binding's `agent.tools` is mapped where it is read, not in `protocol.ts`.** The connector compares a session's
+  binding byte for byte with the one it stored (`session.ts`, "Persisted binding mismatch"; `server.ts` when a session
+  is provisioned again; restores), so rewriting it on the way in would refuse every session from before the rename. The
+  runner maps it where it uses it instead (`canonicalToolNames` for a side ask's read-only tools and for the
+  instructions), and backups and restores carry it as it was.
+- **Both spellings go out in the agent version, not at each send.** An agent version is immutable and its binding is
+  sent again when an errored session restarts, so the control plane writes `tools_json` with both spellings when it
+  makes the version (`chatAgentVersion`, `migratedAgentVersion`, `withLegacyToolNames`). For the same reason
+  `agentVersion` in `db.ts` passes the saved names through unchanged: a version from before holds only the old names,
+  which a newer connector maps and an older one knows. `migratedAgentVersion` maps the names it reads before it
+  chooses the tools a host carries.
+- **Tool groups.** `canonicalGroupTools` maps a saved group's tools before `isGroupTool` filters them, in `groupOf`,
+  `memberTools` and `parseGroupTools` (which takes either spelling). `toolsOff` adds each left-out tool's old name;
+  `retiredGroupTools` comes from `toolNames`, which no longer holds the old names, so they never join it.
+  `parseMemberToolGroups` maps an `off` list to the new names. `requireSessionTool` maps the name an older connector
+  asks about, and its refusal names the tool as the connector asked.
+- **The tool-groups API** answers `groups[].tools`, `roles` and `tools` in the old spellings
+  (`legacyGroupToolNames`) and takes either; a group is saved in the new names. On the wire these are now `string[]`,
+  and the app maps them with `canonicalGroupTools` before it ticks its boxes and summarizes a group.
+- **The old names refused at the harness.** Pikibun's own hook sees the harness's `tool_unavailable` result for a call
+  to a tool the request didn't offer, so `renamedToolsHook` (`apps/runner/src/session/renamed-tools.ts`, on the
+  `workspace-tools` extension) adds a note that names the tool to call instead.
+- **Extensions.** `pikibunOwn` in `apps/runner/src/extensions/load.ts` leaves out an extension's tool with a new or an
+  old name; `reservedToolNames` holds both. On the workspace's page, an extension's tool reported under an old name
+  shows as left out by `piki:files`. An extension's `find` is offered until phase 3. Pi's type guards
+  (`isToolCallEventType("write", event)`, `isReadToolResult`, `isEditToolResult`) match the tools in a real
+  extension's hooks, and a `tool_result` handler gets `details` as the tool returned them, `details.pikibun`
+  included (`tests/pi-tool-names.test.ts`).
+- **`piki:pr-flow`** matches both spellings and is version 0.2.0 in `extensions/pr-flow/package.json`; publishing
+  and pinning it is a release of its own. `piki:context-files` and `piki:prompt-audit` name none of the tools.
 
 ## Not chosen
 

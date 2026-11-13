@@ -157,7 +157,10 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     answers what it found as `truncated`. Python's and JavaScript's regular expressions agree on the common syntax
     (classes, groups, alternation, anchors, quantifiers); `\d` and `\w` match Unicode digits and letters in the Python
     helper only. The conformance suite holds every backend to the same answers. They are built-in tools like `read_file`;
-    they join `piki:files` when the file tools move there.
+    they join `piki:files` when the file tools move there. Since [Pi's names and contracts](pi-tool-names.md), phase 1,
+    `search` takes Pi's `grep` parameters (`ignoreCase`, `limit`) and answers in Pi's words; a search walks on past its
+    limit only to find one more match, which is what says the limit cut anything off. Since phase 2, `search` is `grep`
+    and `read_file` is `read`.
 
 22. **Git without a shell.** `piki:git` turns on the `git` tool (`apps/runner/src/git-command.ts`): Git's arguments as
     a list, starting with a subcommand of an allowlist of version-control ones (no `config`, `submodule`, `bisect`,

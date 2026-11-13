@@ -36,7 +36,7 @@ export function briefEntry(entry: EntryView): EntryView {
   const text = typeof entry.text === "string" ? entry.text : "";
   if (entry.role === "toolResult") {
     const lines = text.split("\n");
-    const summary = resultSummary(text, { error: entry.toolResult?.error === true });
+    const summary = resultSummary(text, { error: entry.toolResult?.error === true, tool: entry.toolResult?.tool });
     const shown = cut(summary.text, briefChars);
     const { images, ...rest } = entry;
     const failed = summary.failed && entry.toolResult?.error !== true;

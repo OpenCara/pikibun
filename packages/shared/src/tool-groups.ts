@@ -1,7 +1,7 @@
-import { toolNames, type WorkspaceRole } from "./types.js";
+import { canonicalToolName, canonicalToolNames, legacyToolNames, toolNames, type WorkspaceRole } from "./types.js";
 
 export const groupTools = [
-  "identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file",
+  "identity", "ls", "read", "grep", "write", "edit", "move_file", "copy_file", "delete_file",
   "git", "git_push", "node", "python", "rust", "go", "dotnet", "make", "browser", "tunnel",
   "github_read", "github_comment", "github_issue", "github_merge", "source_read", "schedule", "sessions",
 ] as const;
@@ -11,11 +11,11 @@ export const forgeWriteTools: readonly GroupTool[] = ["git_push", "github_commen
 
 export const groupToolInfo: Record<GroupTool, { label: string; kind: "files" | "commands" | "publish" | "workspace" }> = {
   identity: { label: "Session identity", kind: "files" },
-  list_files: { label: "List files", kind: "files" },
-  read_file: { label: "Read files", kind: "files" },
-  search: { label: "Search files", kind: "files" },
-  write_file: { label: "Write files", kind: "files" },
-  edit_file: { label: "Edit files", kind: "files" },
+  ls: { label: "List files", kind: "files" },
+  read: { label: "Read files", kind: "files" },
+  grep: { label: "Search files", kind: "files" },
+  write: { label: "Write files", kind: "files" },
+  edit: { label: "Edit files", kind: "files" },
   move_file: { label: "Move files", kind: "files" },
   copy_file: { label: "Copy files", kind: "files" },
   delete_file: { label: "Delete files", kind: "files" },
@@ -38,8 +38,8 @@ export const groupToolInfo: Record<GroupTool, { label: string; kind: "files" | "
   sessions: { label: "Work with other sessions", kind: "workspace" },
 };
 
-const readTools: readonly GroupTool[] = ["identity", "list_files", "read_file", "search"];
-const sandboxTools: readonly GroupTool[] = [...readTools, "write_file", "edit_file", "move_file", "copy_file", "delete_file",
+const readTools: readonly GroupTool[] = ["identity", "ls", "read", "grep"];
+const sandboxTools: readonly GroupTool[] = [...readTools, "write", "edit", "move_file", "copy_file", "delete_file",
   "git", "node", "python", "rust", "go", "dotnet", "make", "browser", "github_read", "source_read"];
 
 export const roleTools: Readonly<Record<WorkspaceRole, readonly GroupTool[]>> = {
@@ -59,7 +59,7 @@ export const toolGroupLimits = { groups: 50, name: 80 } as const;
 export interface ToolGroup {
   id: string;
   name: string;
-  tools: GroupTool[];
+  tools: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -76,8 +76,8 @@ export interface ToolGroupMember {
 export interface ToolGroupSettings {
   groups: ToolGroup[];
   members: ToolGroupMember[];
-  roles: Record<WorkspaceRole, GroupTool[]>;
-  tools: GroupTool[];
+  roles: Record<WorkspaceRole, string[]>;
+  tools: string[];
   admin: boolean;
 }
 
@@ -90,25 +90,35 @@ export function isGroupTool(value: unknown): value is GroupTool {
   return typeof value === "string" && (groupTools as readonly string[]).includes(value);
 }
 
+export function canonicalGroupTools(value: readonly unknown[]): GroupTool[] {
+  const canonical = value.map(item => typeof item === "string" ? canonicalToolName(item) : item);
+  return groupTools.filter(tool => canonical.includes(tool));
+}
+
 export function parseGroupTools(value: unknown): GroupTool[] {
   if (!Array.isArray(value) || value.length > groupTools.length * 2) throw new Error("Tools are a list of Pikibun's session tools.");
-  const unknown = value.find(item => !isGroupTool(item));
+  const unknown = value.find(item => !isGroupTool(typeof item === "string" ? canonicalToolName(item) : item));
   if (unknown !== undefined) throw new Error(`${typeof unknown === "string" ? unknown : "That"} isn't one of Pikibun's session tools.`);
-  return groupTools.filter(tool => value.includes(tool));
+  return canonicalGroupTools(value);
+}
+
+export function legacyGroupToolNames(tools: readonly string[]): string[] {
+  return tools.map(tool => legacyToolNames(tool)[0] ?? tool);
 }
 
 export function memberTools(role: WorkspaceRole, group?: { tools: readonly string[] } | null): GroupTool[] {
-  return group ? groupTools.filter(tool => group.tools.includes(tool)) : [...roleTools[role]];
+  return group ? canonicalGroupTools(group.tools) : [...roleTools[role]];
 }
 
 export function toolsLeftOut(tools: readonly string[]): GroupTool[] {
-  return groupTools.filter(tool => !tools.includes(tool));
+  const canonical = canonicalToolNames(tools);
+  return groupTools.filter(tool => !canonical.includes(tool));
 }
 
 export const retiredGroupTools: readonly string[] = toolNames.filter(tool => !isGroupTool(tool));
 
 export function toolsOff(tools: readonly string[]): string[] {
-  const out: string[] = toolsLeftOut(tools);
+  const out = toolsLeftOut(tools).flatMap(tool => [tool, ...legacyToolNames(tool)]);
   return out.length ? [...out, ...retiredGroupTools] : [];
 }
 
@@ -124,7 +134,7 @@ export function parseMemberToolGroups(value: unknown): Record<string, MemberTool
     if (typeof name !== "string" || name.length > toolGroupLimits.name || !Array.isArray(off) || off.some(tool => typeof tool !== "string" || tool.length > 64)) {
       throw new Error("Invalid tool groups");
     }
-    result[userId] = { name, off: off as string[] };
+    result[userId] = { name, off: canonicalToolNames(off as string[]) };
   }
   return result;
 }
