@@ -2,6 +2,7 @@ import { messageHash, type ChatImage } from '../../../../packages/shared/src/cha
 import { hasPermission, readOnlyRoles, sharedSessionWriterRoles, workspaceManagerRoles } from '../../../../packages/shared/src/policy.js';
 import { requireConnectorSession } from './hosts.js';
 import { sessionAccess } from './access.js';
+import { ownHostsOnlySQL } from './personal-workspaces.js';
 import { fail, now, randomToken, testMode, text } from '../http.js';
 import type { AppContext, SessionRow } from '../types.js';
 import type { AccessMode } from '../../../../packages/shared/src/types.js';
@@ -46,6 +47,7 @@ const ELIGIBLE_SESSION = `SELECT s.id FROM sessions s
       )))
     AND NOT EXISTS (SELECT 1 FROM restore_jobs r WHERE r.target_session_id = s.id AND r.status <> 'completed')
     AND NOT EXISTS (SELECT 1 FROM host_migrations hm WHERE hm.status = 'pending' AND (hm.source_session_id = s.id OR hm.target_session_id = s.id))
+    AND ${ownHostsOnlySQL('s.workspace_id', 's.connector_owner_id')}
     AND ((s.connector_id IS NULL AND s.connector_owner_id IS NULL) OR EXISTS (
       SELECT 1 FROM connectors connector
       JOIN connector_workspaces cw ON cw.connector_id = connector.id AND cw.workspace_id = s.workspace_id

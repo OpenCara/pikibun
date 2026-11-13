@@ -52,6 +52,8 @@ Under **This Mac and** *your server*, enter a **Host name** (such as *My Mac*) a
 
 From then on, **Stop host** and **Start host** turn hosting off and on. The pairing is kept, so you don't need to pair again.
 
+To host for another server as well, sign in to it and choose **Pair This Mac** there: the app adds a pairing for that server and keeps the ones it has. The servers it hosts for besides the one you're signed in to are listed under **Other servers**, each with **Start host**, **Stop host** and, for the ones added after the first, **Remove**.
+
 ## 6. Run sessions on it
 
 - **Your own sessions:** in your **Private** workspace, a new session picks this computer while it's online. There it runs [directly on the host](../hosts.md#sessions-on-the-host) by default, as you, with your files. To isolate a session, choose **Where it runs → Sandbox**. In other workspaces, pick it under **Host**.
@@ -62,5 +64,5 @@ From then on, **Stop host** and **Start host** turn hosting off and on. The pair
 - **Hosting lasts while the app is open.** Quitting the app stops the host. Sessions that were working on it wait, and carry on when it starts again. If it was running when you quit, it starts again at the next launch, with the consent you gave before. For a host that runs while you're signed out of your computer, use `pikibun connect` under a service manager instead (see [Hosts](../hosts.md#pairing)).
 - **Sessions on this computer open from it.** The app reads a session that runs on this computer straight from its host, rather than through the server, and keeps showing it, read-only, while the server can't be reached. The server still checks every 30 seconds that you may read it, and sending a message still needs the server. See [the design](../design/local-views.md).
 - **One pairing, shared with the command line.** The app uses the same pairing as `pikibun connect`, so a computer you paired from a terminal carries over. Only one of the two runs at a time.
-- **One server at a time.** The host keeps running for the server it's paired with, even after you sign in to another server. To host for a different server, stop the host, sign in to that server, and pair again. This replaces the old pairing, and the old host stays offline on the previous server until you remove it there.
+- **Several servers at once.** Each server This Mac hosts for has its own pairing and its own folder of sessions: the first one uses `pikibun connect`'s (`~/.local/share/pikibun/connector`), and each added one `~/.local/share/pikibun/servers/<server>`. They run side by side, one `pikibun` process each, and keep running when you sign in to another server. The sandbox, the models offered and Pi's sign-in are This Mac's, shared by all of them. **Remove** stops a server's host and forgets its pairing here; the host stays in that server's **Settings → Hosts**, offline, until you remove it there, and its sessions' files stay in its folder.
 - **When something goes wrong,** **Recent activity** under **Host** shows what the host did, and **Refresh** checks the computer again. The same section shows the host's **State directory** and the server it's **Paired with**.

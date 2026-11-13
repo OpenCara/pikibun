@@ -2,6 +2,7 @@ import { constantTimeEqual, sha256 } from '../../../../packages/shared/src/crypt
 import { parseCapabilities, type ConnectorCapabilities } from '../../../../packages/shared/src/connector.js';
 import type { AppContext, Env, SessionRow } from '../types.js';
 import { appOrigin, fail, localMode, localOwnerQuery, loopbackHttp, testMode } from '../http.js';
+import { ownHostsOnlySQL } from './personal-workspaces.js';
 
 export interface ConnectorRow {
   id: string; owner_id: string; name: string; credential_hash: string; revoked_at: string | null;
@@ -74,6 +75,7 @@ export async function requireConnectorSession(env: Env, connectorId: string, row
     WHERE c.id = ? AND c.owner_id = ? AND c.revoked_at IS NULL AND u.suspended_at IS NULL AND session_owner.suspended_at IS NULL
       AND (c.owner_id = owner.user_id OR EXISTS (SELECT 1 FROM connector_shares sh
         WHERE sh.connector_id = c.id AND sh.workspace_id = cw.workspace_id))
+      AND ${ownHostsOnlySQL('cw.workspace_id', 'c.owner_id')}
       AND m.connector_id = c.id AND m.connector_owner_id = c.owner_id AND m.workspace_id = cw.workspace_id
       AND EXISTS (SELECT 1 FROM json_each(c.models_json) local_model
         WHERE json_extract(local_model.value, '$.provider') = m.provider AND json_extract(local_model.value, '$.modelId') = m.model_id)
