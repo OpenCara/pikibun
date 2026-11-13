@@ -304,7 +304,7 @@ export function resultSummary(whole: string, options: { error?: boolean; tool?: 
   const { output: text, notes } = resultNotes(whole);
   const error = notes.find(note => note.severity === "error");
   if (error) return { text: shorten(noteSummary(error), LINE_CHARS), failed: true };
-  const contract = piContract(options.tool, text);
+  const contract = options.error === true ? undefined : piContract(options.tool, text);
   if (contract) return { text: shorten(piSummary(contract, text), LINE_CHARS), failed: options.error === true };
   const parsed = answer(text);
   const first = (text.split("\n").find(line => line.trim()) ?? "").trimEnd();
