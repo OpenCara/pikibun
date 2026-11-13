@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { ensurePersonalWorkspace, usableModels } from '../apps/server/src/catalog.js';
-import { cloneRepositories } from '../apps/server/src/authority/index.js';
+import { cloneRepositories, requireConnectorSession } from '../apps/server/src/authority/index.js';
 import { testDatabase } from './helpers/control-plane.js';
 import type { Workspace } from '../packages/shared/src/types.js';
 
@@ -127,9 +127,29 @@ test('a private workspace offers only models on its owner\'s own hosts', async t
     insertModel.run(`${workspace}-hostless`, workspace, 'No host', null, null);
   }
 
-  const usable = async (workspace: string) => (await usableModels(f.env, workspace, 'github:1')).map(model => model.id).sort();
+  const usable = async (workspace: string, actor = 'github:1') => (await usableModels(f.env, workspace, actor)).map(model => model.id).sort();
   assert.deepEqual(await usable(own), [`${own}-carol`]);
+  assert.deepEqual(await usable(own, 'github:2'), []);
   assert.deepEqual(await usable('team'), ['team-carol', 'team-dave', 'team-hostless']);
+
+  f.sqlite.prepare("INSERT INTO agents (id, author_id, created_at) VALUES ('agent', 'github:1', '2026-01-01')").run();
+  const insertVersion = f.sqlite.prepare(`INSERT INTO agent_versions (id, agent_id, author_id, workspace_id, version, name, description, instructions, tools_json, model_id, created_at)
+    VALUES (?, 'agent', 'github:1', NULL, ?, 'Agent', '', '', '[]', ?, '2026-01-01')`);
+  let version = 0;
+  const reaches = async (workspace: string, owner: string, host: 'carol' | 'dave') => {
+    const agentVersion = `version-${++version}`;
+    insertVersion.run(agentVersion, version, `${workspace}-${host}`);
+    const hostId = host === 'carol' ? 'carols-host' : 'daves-host';
+    const row = { id: `session-${version}`, workspace_id: workspace, owner_id: owner, agent_version_id: agentVersion, policy_version: 1,
+      connector_id: hostId, connector_owner_id: host === 'carol' ? 'github:1' : 'github:2' } as Parameters<typeof requireConnectorSession>[2];
+    try { await requireConnectorSession(f.env, hostId, row); return true; }
+    catch (error) { if ((error as { status?: number }).status === 403) return false; throw error; }
+  };
+  assert.equal(await reaches(own, 'github:1', 'carol'), true);
+  assert.equal(await reaches(own, 'github:1', 'dave'), false);
+  assert.equal(await reaches(own, 'github:2', 'dave'), false);
+  assert.equal(await reaches('team', 'github:1', 'dave'), true);
+  assert.equal(await reaches('team', 'github:2', 'dave'), true);
 });
 
 test('a session in a private workspace needs no source; elsewhere it still does', async t => {

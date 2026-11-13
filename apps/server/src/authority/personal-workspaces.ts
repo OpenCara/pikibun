@@ -7,8 +7,9 @@ export function personalWorkspaceSQL(workspaceId: string): string {
   return `EXISTS (SELECT 1 FROM personal_workspaces WHERE workspace_id = ${workspaceId})`;
 }
 
-export function ownHostsOnlySQL(workspaceId: string, hostOwnerId: string, userId: string): string {
-  return `(NOT ${personalWorkspaceSQL(workspaceId)} OR (${hostOwnerId} IS NOT NULL AND ${hostOwnerId} = ${userId}))`;
+export function ownHostsOnlySQL(workspaceId: string, hostOwnerId: string): string {
+  return `NOT EXISTS (SELECT 1 FROM personal_workspaces own_hosts_only WHERE own_hosts_only.workspace_id = ${workspaceId}
+    AND (${hostOwnerId} IS NULL OR own_hosts_only.user_id <> ${hostOwnerId}))`;
 }
 
 export async function isPersonalWorkspace(env: Env, workspaceId: string, userId?: string): Promise<boolean> {

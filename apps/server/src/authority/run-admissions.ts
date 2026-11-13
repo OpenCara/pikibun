@@ -47,7 +47,7 @@ const ELIGIBLE_SESSION = `SELECT s.id FROM sessions s
       )))
     AND NOT EXISTS (SELECT 1 FROM restore_jobs r WHERE r.target_session_id = s.id AND r.status <> 'completed')
     AND NOT EXISTS (SELECT 1 FROM host_migrations hm WHERE hm.status = 'pending' AND (hm.source_session_id = s.id OR hm.target_session_id = s.id))
-    AND ${ownHostsOnlySQL('s.workspace_id', 's.connector_owner_id', 's.owner_id')}
+    AND ${ownHostsOnlySQL('s.workspace_id', 's.connector_owner_id')}
     AND ((s.connector_id IS NULL AND s.connector_owner_id IS NULL) OR EXISTS (
       SELECT 1 FROM connectors connector
       JOIN connector_workspaces cw ON cw.connector_id = connector.id AND cw.workspace_id = s.workspace_id
