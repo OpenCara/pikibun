@@ -238,8 +238,6 @@ function globExpression(glob, ignoreCase) {
   catch { throw new SearchRefusal("invalid glob"); }
 }
 
-// A directory left out because the walk ran out of descriptors or memory, or because its path grew longer than the system
-// takes, cuts the walk short rather than going unsaid: one that vanished or can't be read is skipped as before.
 function walkCut(error) {
   return !!error && ["ENAMETOOLONG", "EMFILE", "ENFILE", "ENOMEM"].includes(error.code);
 }

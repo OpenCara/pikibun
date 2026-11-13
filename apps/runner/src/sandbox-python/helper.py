@@ -872,8 +872,6 @@ def pack_ignored_files(directory, path, nested):
         return iter(sorted(os.listdir(os.path.join(os.fsencode(directory), relative))))
 
     def walk(relative):
-        # Depth first and in name order, as recursion would, with a list rather than the call stack, so a deep tree of
-        # ignored directories can't end the helper with a RecursionError.
         pending = [(relative, listed(relative))]
         while pending:
             parent, names = pending[-1]
@@ -1235,12 +1233,6 @@ WALK_CUT = (errno.EMFILE, errno.ENFILE, errno.ENOMEM)
 
 
 def walk_tree(start, prefix, descend, state):
-    # Depth first and in name order, without recursion. The walk keeps at most WALK_HELD directories open while it is
-    # below them: a deeper one is closed as the walk goes into it and opened again, one name at a time from the deepest
-    # one still open, once the walk comes back to it, so a tree of any depth needs a bounded number of descriptors. Run
-    # out of them anyway, and the walk ends with state['truncated'] set rather than leave a directory out unsaid.
-    # Yields (directory, name, relative, info) for each entry, with its directory open, and goes into each directory
-    # descend(name) allows.
     def opened(directory, name):
         try:
             return os.open(name, DIR_FLAGS, dir_fd=directory)
