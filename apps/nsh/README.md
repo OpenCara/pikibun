@@ -156,9 +156,9 @@ session with its header menu and its panel (Details, Files, Browser, Schedules, 
 invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
 Administration). What is left out, and why:
 
-- **This Computer**: the desktop builds have it ([below](#this-computer)) for this computer as a host of the server
-  signed in to, and **Self host** ([below](#self-host)) runs Pikibun itself here. What the Electron app's had is left
-  out: hosts for several servers at once, WSL2 on Windows, sharing the Pikibun it runs with others (`pikibun serve
+- **This Computer**: the desktop builds have it ([below](#this-computer)) for this computer as a host of the servers
+  it is paired with, and **Self host** ([below](#self-host)) runs Pikibun itself here. What the Electron app's had is left
+  out: WSL2 on Windows, sharing the Pikibun it runs with others (`pikibun serve
   --share`, in a terminal), installing prerequisites itself, and hosting while the app is closed (its tray). In a
   browser there are no such sections.
 - **Notifications while the app is closed**: the native apps show the account's notifications with NSH's
@@ -179,13 +179,21 @@ React web client's address for it) makes this computer one of your hosts:
 
 - **Pair in one step** with the server signed in to: the app creates a pairing for you and hands its code straight to
   the host, once everything else is settled (prerequisites, the unsandboxed consent), so a refusal leaves no unused code.
-  A computer paired with another server is paired again only by replacing that pairing, after saying so.
+- **Host for several servers at once**: pairing with another server adds a pairing rather than replacing one. The
+  first server keeps `pikibun connect`'s state directory; each one added gets its own,
+  `~/.local/share/pikibun/servers/<server>` (`serverStateDir`), with its own `pikibun host --stdio --state-dir <dir>`
+  process, pairing, sessions and resume (`ComputerHosts` in `src/lib/this-computer.ts`; the list is
+  `pikibun.thisComputer.servers` in the app's storage). **Other servers** lists the rest, with **Start host**, **Stop
+  host** and, for the ones added, **Remove**, which stops that host and forgets its pairing here; the host stays on its
+  server, offline, and its sessions' files stay in its folder. The sandbox, the models offered, Pi's sign-in and the
+  command are the computer's, shared by every server.
+- **Read its sessions from it**: a session the server signed in to says runs on this computer's host for it opens from
+  that host, over the same channel (`view` and `entries`), and carries on, read-only, while the server can't be
+  reached; the server still checks who may read it ([the design](../../docs/design/local-views.md),
+  `src/lib/local-sessions.ts`).
 - **Start and stop** the host, with the CLI's own `--unsafe-no-sandbox` warning in a native dialog where there is no
   sandbox; on macOS, choose **None** or **macOS sandbox** (Seatbelt, experimental). Linux uses bubblewrap where it is
   installed; Windows its own sandbox, experimental, or none after consent.
-- **Read its sessions from it**: a session the server says runs on this host opens from the host itself, over the same
-  channel (`view` and `entries`), and carries on, read-only, while the server can't be reached; the server still checks
-  who may read it ([the design](../../docs/design/local-views.md), `src/lib/local-sessions.ts`).
 - **Models offered** (Pi's choice, or the ones checked), **Sign Pi in to a provider** (Pi's own `/login`, run on this
   computer: its page opens in the browser, a device code or API key is asked here, and the credential stays in Pi's
   configuration), **Prerequisites** with what to run for each missing one, and the host's recent activity.
@@ -209,9 +217,10 @@ as Terminal would; zsh, bash or sh, else the platform's), and on Windows cmd (`c
 cli\node_modules\.bin\pikibun.cmd (…) else pikibun host --stdio`, named from the data directory, its working
 directory). Either way the app's own copy wins, and a `pikibun` installed from a terminal runs where it has none. `nsh.json` grants exactly those programs (`capabilities.process`), by name, since it is every
 target's and an absolute path of one platform isn't one on another (NSH refuses to build or start with one), and the
-environment the connector needs. The host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
-one of them runs at a time. Hosting lasts while the app is open, and starts again at the next launch if it was running
-when the app quit, with the consent given then (`src/lib/this-computer.ts`).
+environment the connector needs. The first server's host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
+one of them runs at a time. Hosting lasts while the app is open, and each server's host starts again at the next launch if it was running
+when the app quit, with the consent given for it then (`src/lib/this-computer.ts`). A `pikibun` too old to take `--state-dir` there is offered
+as an update, as one without `host` is.
 
 `tests/this-computer.test.tsx` runs the page against a stand-in for the command that speaks its protocol
 (`tests/harness/this-computer.tsx`); `tests/host-cli.test.ts`, at the repository's root, runs the command itself.

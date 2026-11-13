@@ -36,7 +36,7 @@ There is nothing to type: your Pikibun keeps a private sign-in token with its st
 
 Once you're signed in, this computer pairs itself with your Pikibun as its host. **This Mac as its host** on the Self host page turns **Online**, and the computer appears under **Settings → Hosts**. Start a session in your **Private** workspace, as in [Client](client.md#3-work-in-sessions).
 
-Your Pikibun runs its own host for this computer. **Settings → This Mac** stays the host of whichever server it is paired with (your team's, say), so there's no need to pair This Mac with your Pikibun as well.
+Your Pikibun runs its own host for this computer. **Settings → This Mac** stays the host of the servers it is paired with (your team's, say), so there's no need to pair This Mac with your Pikibun as well.
 
 ### Repositories
 

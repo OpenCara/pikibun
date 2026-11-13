@@ -1,12 +1,12 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection, LoginProvider } from "../../../../packages/shared/src/app-host-protocol";
 import {
-  appCliFolder, installCommand, setCommandUpdate, setHostLauncher, setInstaller, thisComputer, thisComputerHostId, type HostLink, type InstallRun,
+  appCliFolder, computerHosts, installCommand, resumeThisComputer, setCommandUpdate, setHostLauncher, setInstaller, thisComputer, thisComputerHostId, type HostLink, type InstallRun,
 } from "../../src/lib/this-computer";
 import { Button } from "../../src/ui";
 import { ThisComputerPanel } from "../../src/settings/ThisComputer";
 
-const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; npm?: unknown; npmMs?: unknown; appVersion?: unknown; ownCopy?: unknown };
+const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; npm?: unknown; npmMs?: unknown; appVersion?: unknown; ownCopy?: unknown; pairedDirs?: unknown };
 const SERVER = typeof params.server === "string" ? params.server : "https://pikibun.test";
 let command = String(params.command ?? "ok");
 const npm = String(params.npm ?? "ok");
@@ -20,13 +20,19 @@ if (typeof params.appVersion === "string") {
   } });
 }
 const sent = signal<string[]>([]);
-let paired: string | undefined = typeof params.paired === "string" ? params.paired : undefined;
+const DEFAULT_DIR = "/Users/ada/.local/share/pikibun/connector";
+const pairings = new Map<string, string>();
+if (typeof params.paired === "string") pairings.set(DEFAULT_DIR, params.paired);
+if (params.pairedDirs && typeof params.pairedDirs === "object") for (const [dir, server] of Object.entries(params.pairedDirs as Record<string, string>)) pairings.set(dir, server);
+const connectorIds = new Map<string, string>([[DEFAULT_DIR, "c9"]]);
 let signedIn = params.piSignedIn !== false;
 const loopback = (origin: string) => origin.startsWith("http://");
 
 const model = { provider: "anthropic", modelId: "claude-sonnet", name: "Claude Sonnet" };
-const inspection = (allowLoopback: boolean): HostInspection => ({
-  platform: "darwin", stateDir: "/Users/ada/.local/share/pikibun/connector", mode: "unsandboxed",
+const inspection = (dir: string, allowLoopback: boolean): HostInspection => {
+  const paired = pairings.get(dir);
+  return {
+  platform: "darwin", stateDir: dir, mode: "unsandboxed",
   unsandboxedWarning: "WARNING: --unsafe-no-sandbox runs agent work directly on this machine.",
   prerequisites: [
     { name: "Git", ok: true },
@@ -36,10 +42,15 @@ const inspection = (allowLoopback: boolean): HostInspection => ({
   ...(signedIn ? {} : { modelsError: "Pi has no models with configured authentication." }),
   ...(paired && (!loopback(paired) || allowLoopback) ? { pairedServer: paired } : {}),
   ...(paired && loopback(paired) && !allowLoopback ? { pairingError: "This computer's saved pairing could not be read." } : {}),
-});
+  };
+};
 const providers = (): LoginProvider[] => [{ id: "anthropic", name: "Anthropic", signedIn, methods: [{ type: "api_key", name: "Anthropic API key" }] }];
 
-function fakeHost(): HostLink {
+function fakeHost(args: string[]): HostLink {
+  const at = args.indexOf("--state-dir");
+  const dir = at < 0 ? DEFAULT_DIR : args[at + 1]!;
+  if (at >= 0) sent.update(list => [...list, `launch ${dir}`]);
+  if (!connectorIds.has(dir)) connectorIds.set(dir, `c${connectorIds.size + 9}`);
   const messages: ((value: unknown) => void)[] = [];
   const output: ((line: string) => void)[] = [];
   const exits: ((result: { code?: number | null }) => void)[] = [];
@@ -60,14 +71,18 @@ function fakeHost(): HostLink {
       if (typeof shown.value === "string") shown.value = `<${shown.value.length} characters>`;
       sent.update(list => [...list, JSON.stringify(shown)]);
       const reply = (extra: object = {}) => emit({ type: "result", id: request.id, ok: true, ...extra });
-      if (request.type === "inspect") reply({ inspection: inspection(request.allowInsecureLoopback === true) });
+      if (request.type === "inspect") reply({ inspection: inspection(dir, request.allowInsecureLoopback === true) });
       else if (request.type === "view") reply({ view: { view: { sessionId: request.sessionId, entries: [], approvals: [], conversations: [] }, revision: "1".repeat(32) } });
       else if (request.type === "providers") reply({ providers: providers() });
       else if (request.type === "start") {
-        if (request.pairing) paired = String(request.server);
+        if (request.pairing) pairings.set(dir, String(request.server));
+        else if (pairings.get(dir) !== request.server) {
+          emit({ type: "result", id: request.id, ok: false, error: { code: "not-paired", message: `${dir} is not paired with ${String(request.server)}.` } });
+          return;
+        }
         emit({ type: "status", state: "starting", server: request.server, unsandboxed: true });
         reply();
-        emit({ type: "status", state: "connected", server: request.server, unsandboxed: true, connectorId: "c9" });
+        emit({ type: "status", state: "connected", server: request.server, unsandboxed: true, connectorId: connectorIds.get(dir) });
         emit({ type: "log", level: "info", message: `Connected to ${String(request.server)}.` });
       } else if (request.type === "stop") {
         emit({ type: "status", state: "stopping" });
@@ -133,7 +148,9 @@ mount(() => (
     }} />
     <Button testID="fake-terminal-install" label="Install in a terminal" onPress={() => { command = "ok"; }} />
     <Text>{`install error: ${host.installError()}`}</Text>
-    <Text>{`this computer's host: ${thisComputerHostId() ?? "none"}`}</Text>
+    <Text>{`this computer's host: ${thisComputerHostId(SERVER) ?? "none"}`}</Text>
+    <Text>{`hosts: ${computerHosts().all().map(item => `${item.pairedWith() ?? "unpaired"}=${item.state()}`).join(" ")}`}</Text>
+    <Button testID="fake-resume" label="Resume hosting" onPress={() => resumeThisComputer()} />
     <Button testID="fake-read-session" label="Read a session" onPress={() => {
       void host.readView("s1", { brief: false }).then(reply => localView.set(reply && "view" in reply ? reply.view.sessionId : "none"));
     }} />

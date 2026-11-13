@@ -44,5 +44,5 @@ Nothing has to be reinstalled. You switch with one setting, or by signing in to 
 Keep in mind:
 
 - **The app is signed in to one server at a time.** Signing out of one and in to another doesn't change any server: your sessions, workspaces and hosts stay on the server they belong to.
-- **This Mac hosts for one server at a time.** It keeps running for the server it's paired with even after you sign in to another one. The page then reads *This Mac is a host of …* with that server's name. To host for the server you're signed in to now, choose **Stop host**, then pair again. Pairing again replaces the old pairing. The old host stays on the previous server, offline, until you remove it there.
+- **This Mac can host for several servers at once.** It keeps running for the servers it's paired with when you sign in to another one, and lists them under **Settings → This Mac → Other servers**, where you start, stop or remove each. To host for the server you're signed in to now as well, choose **Pair This Mac**: that adds a pairing and leaves the others as they are. Each server's sessions run on This Mac while its host is online, whichever server you're signed in to.
 - **Hosting and self hosting last while the app is open.** Quitting the app stops them. Whatever was running when you quit starts again at the next launch.
