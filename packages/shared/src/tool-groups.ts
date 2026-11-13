@@ -118,7 +118,7 @@ export function toolsLeftOut(tools: readonly string[]): GroupTool[] {
 export const retiredGroupTools: readonly string[] = toolNames.filter(tool => !isGroupTool(tool) && !(tool in groupedToolNames));
 
 export function toolsOff(tools: readonly string[]): string[] {
-  const out = toolsLeftOut(tools).flatMap(tool => [tool, ...legacyToolNames(tool), ...toolsGroupedUnder(tool)]);
+  const out = toolsLeftOut(tools).flatMap(tool => [tool, ...toolsGroupedUnder(tool)]);
   return out.length ? [...out, ...retiredGroupTools] : [];
 }
 

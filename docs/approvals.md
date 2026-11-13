@@ -16,4 +16,4 @@ A refused call ran nothing; the agent is told why, and can say so. Every call th
 
 ## Older connectors
 
-A host's connector that still asks for approvals can't run new messages: Pikibun refuses them with `connector_update_required` until its owner updates it (`npx pikibun@latest connect`). Connectors that never ask advertise `approvalFree`.
+A connector older than 0.33.0 can't connect: Pikibun refuses it with `connector_update_required` until its owner updates it (`npx pikibun@latest connect`). Every connector from 0.33.0 on never asks for approvals.

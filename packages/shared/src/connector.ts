@@ -34,11 +34,7 @@ export interface ConnectorCapabilities {
   sessionPacking?: boolean;
   packIgnoredFiles?: boolean;
   approvalFree?: boolean;
-  automaticGitHub?: boolean;
-  requesterAutoApprove?: boolean;
-  memberAutoApprove?: boolean;
   hostGrants?: boolean;
-  hostOwnerDecides?: boolean;
   hostSessionGrants?: boolean;
   ownerHostSessions?: boolean;
   unboundedShellGrants?: boolean;

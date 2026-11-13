@@ -99,9 +99,6 @@ export async function submitMessage(c: AppContext, row: SessionRow, mode: 'submi
   if (images && connectorUtf8Bytes(JSON.stringify({ content, requestId, admissionId: 'x'.repeat(43), options, images })) > connectorLimits.requestBytes) {
     fail(413, 'message_too_large', 'This message and its images are too large to send together. Remove an image or shorten the message.');
   }
-  if (mode === 'submit' && row.connector_id && (await hostCapabilities(c.env, row.connector_id))?.approvalFree !== true) {
-    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect): Pikibun no longer asks anyone to approve a session\'s tools, and this connector still would.');
-  }
   const admissionId = mode === 'submit' ? await issueRunAdmission(c, row, content, requestId, options?.access, images) : undefined;
   const result = await runnerJSON<SubmitResult>(await runnerRequest(c, row, mode, '', { content, requestId, ...(admissionId ? { admissionId } : {}), ...(options ? { options } : {}),
     ...(images ? { images } : {}) }));

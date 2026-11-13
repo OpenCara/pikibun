@@ -297,9 +297,13 @@ Phase 2 landed as decisions 6 to 13 describe, with these differences and details
   `agentVersion` in `db.ts` passes the saved names through unchanged: a version from before holds only the old names,
   which a newer connector maps and an older one knows. `migratedAgentVersion` maps the names it reads before it
   chooses the tools a host carries.
+- **Once the minimum connector passed the rename (0.33.0),** new agent versions name the five tools by their new names
+  alone and `toolsOff` lists only the new names: every connector the server admits knows them. Versions and groups
+  saved before keep their names and are still mapped where they are read; the tool-groups API still answers in the old
+  spellings, for apps from before.
 - **Tool groups.** `canonicalGroupTools` maps a saved group's tools before `isGroupTool` filters them, in `groupOf`,
-  `memberTools` and `parseGroupTools` (which takes either spelling). `toolsOff` adds each left-out tool's old name;
-  `retiredGroupTools` comes from `toolNames`, which no longer holds the old names, so they never join it.
+  `memberTools` and `parseGroupTools` (which takes either spelling). `toolsOff` added each left-out tool's old name
+  until the minimum connector passed the rename; `retiredGroupTools` comes from `toolNames`, which no longer holds the old names, so they never join it.
   `parseMemberToolGroups` maps an `off` list to the new names. `requireSessionTool` maps the name an older connector
   asks about, and its refusal names the tool as the connector asked.
 - **The tool-groups API** answers `groups[].tools`, `roles` and `tools` in the old spellings

@@ -37,11 +37,11 @@ test('each role\'s sessions get their tools, and a group\'s own tools replace th
   assert.deepEqual(unknownToolGroup.off, toolsOff(roleTools.viewer), 'a host that has never heard of the workspace only reads files');
 });
 
-test('the renamed file tools: a group\'s off list names each tool it leaves out in both spellings, for hosts of either age, and the old names never count as retired', () => {
+test('the renamed file tools: a group\'s off list names each tool it leaves out by its name alone, and the old names never count as retired', () => {
   const old = ['read_file', 'write_file', 'edit_file', 'list_files', 'search'];
   assert.ok(old.every(name => !retiredGroupTools.includes(name)), 'the old names are renamed tools, not retired ones');
   const noWrite = toolsOff(groupTools.filter(tool => tool !== 'write'));
-  assert.ok(noWrite.includes('write') && noWrite.includes('write_file'), 'leaving out write turns off write and write_file');
+  assert.ok(noWrite.includes('write') && !noWrite.includes('write_file'), 'leaving out write turns off write, and every connector the server admits knows it by that name');
   assert.ok(!noWrite.includes('read') && !noWrite.includes('read_file'), 'and neither read nor read_file');
   const noTunnel = toolsOff(groupTools.filter(tool => tool !== 'tunnel'));
   assert.ok(noTunnel.includes('tunnel'));
@@ -195,7 +195,7 @@ test('workspace owners and admins create tool groups and put members in them; th
     'workspace.member.tool_group', 'workspace.tool_group.deleted', 'workspace.tool_group.created', 'workspace.member.tool_group']);
 });
 
-test('a tool group saved before the rename still lets its members read, and turns off both spellings of what it leaves out', async t => {
+test('a tool group saved before the rename still lets its members read, and turns off what it leaves out, in either spelling', async t => {
   const f = await fixture(t);
   const at = new Date().toISOString();
   f.sqlite.prepare('INSERT INTO workspace_tool_groups (id, workspace_id, name, tools_json, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?)')
@@ -207,8 +207,8 @@ test('a tool group saved before the rename still lets its members read, and turn
     await assert.rejects(requireSessionTool(f.env, row, f.member.user.id, tool), (error: { status?: number }) => error.status === 403, tool);
   }
   const off = (await memberToolGroups(f.env, f.workspace.id))[f.member.user.id]!.off;
-  assert.ok(['write', 'write_file', 'edit', 'edit_file'].every(tool => off.includes(tool)));
-  assert.ok(['read', 'read_file', 'ls', 'list_files', 'grep', 'search'].every(tool => !off.includes(tool)), 'the group\'s members keep their file tools on hosts of either age');
+  assert.ok(['write', 'edit'].every(tool => off.includes(tool)), 'hosts are told the new names, which every connector the server admits knows');
+  assert.ok(['read', 'read_file', 'ls', 'list_files', 'grep', 'search'].every(tool => !off.includes(tool)), 'the group\'s members keep their file tools');
   const settings = await body<ToolGroupSettings>(await f.owner.request('GET', `${f.path}/tool-groups`));
   assert.deepEqual(settings.groups[0]!.tools, ['identity', 'list_files', 'read_file', 'search']);
   const edited = await body<ToolGroupSettings>(await f.owner.request('PATCH', `${f.path}/tool-groups/old-readers`, { tools: [...settings.groups[0]!.tools, 'write'] }));
