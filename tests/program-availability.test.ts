@@ -57,7 +57,8 @@ test("a chat that installs a host's missing programs asks for each, with its ste
   assert.match(text, /\n- uv and uvx: uv for the whole system/);
   assert.match(text, /\n- frobnicate: the distribution's package/);
   assert.match(text, /runs on the host itself/);
-  assert.match(text, /sudo asks for one, stop and tell me the exact commands/);
+  assert.match(text, /run it with sudo -A: sudo then asks me for my password in Pikibun, in a box of its own/);
+  assert.match(text, /If I decline, or this session doesn't offer sudo -A, stop and tell me the exact commands/);
   assert.doesNotMatch(text, /can't install anything/);
   const browser = installChatMessage({ host: "ada-pi", missing: { browser: ["chromium"] }, onHost: false });
   assert.match(browser, /the browser tool's chromium/);

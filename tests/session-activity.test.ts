@@ -117,7 +117,7 @@ test("a failed report is retried with the activity as it is by then, never overl
 test("session lists show the lifecycle while a session starts, fails to start or is archived, then its activity", () => {
   const ready = (activity?: SessionActivity) => ({ status: "ready" as const, ...(activity ? { activity } : {}) });
   assert.deepEqual(sessionStatus(ready("working")), { tone: "running", label: "In progress" });
-  assert.deepEqual(sessionStatus(ready("waiting")), { tone: "warning", label: "Needs approval" });
+  assert.deepEqual(sessionStatus(ready("waiting")), { tone: "warning", label: "Needs you" });
   assert.deepEqual(sessionStatus(ready("failed")), { tone: "danger", label: "Failed" });
   assert.deepEqual(sessionStatus(ready("done")), { tone: "success", label: "Done" });
   assert.deepEqual(sessionStatus(ready("idle")), { tone: "neutral", label: "Idle" });

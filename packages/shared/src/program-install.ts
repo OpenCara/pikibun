@@ -52,7 +52,8 @@ export function installChatMessage(chat: InstallChat): string {
     [...steps, ...(unknown.length ? [`- ${list(unknown)}: the distribution's package`] : [])].join("\n"),
     chat.onHost
       ? "This session runs on the host itself, as its user, without the sandbox. First look at the host (its distribution and architecture, the Node.js the connector runs on) and what is already installed, then install each program and check that it runs from where sessions see it. "
-        + "Nothing here can type a password: if a step needs sudo and sudo asks for one, stop and tell me the exact commands to run in a terminal on the host."
+        + "Where a step needs root, run it with sudo -A: sudo then asks me for my password in Pikibun, in a box of its own, and never through the chat. "
+        + "If I decline, or this session doesn't offer sudo -A, stop and tell me the exact commands to run in a terminal on the host instead."
       : "This session runs in the host's sandbox, which can't install anything on the host: look at what you can of it, then tell me the exact commands to run in a terminal on the host, for its distribution and architecture.",
     "Sessions find a program installed in /usr from their next message (one installed into a Node.js outside /usr, from their next session). Tell me what you installed, how you checked it, and anything left for me to do.",
   ].join("\n\n");

@@ -9,6 +9,7 @@ import {
 import { RenameSheet } from "../components/SessionMenu";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
 import { OfflineHostBanner } from "../components/OfflineHost";
+import { SudoPrompt } from "../components/SudoPrompt";
 import { Composer } from "../components/Composer";
 import { PullRequestLink } from "../components/PullRequest";
 import { RepositoryPreparationCard } from "../components/RepositoryPreparation";
@@ -194,6 +195,21 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     </View>
   );
 
+  const sudoDock = (
+    <If when={!readOnly() ? live.view()?.sudo : undefined}>
+      {prompt => (
+        <View style={{ paddingHorizontal: 16, paddingTop: 8, backgroundColor: palette().background }}>
+          <View style={{ width: "100%", maxWidth: 800, alignSelf: "center" }}>
+            <Each of={[prompt()]} key={item => item.id}>
+              {item => <SudoPrompt sessionId={props.id} prompt={item()} hostName={host()?.name}
+                canAnswer={live.session()?.ownerId === user.id && live.session()?.connectorOwnerId === user.id} privateWorkspace={workspace()?.personal === true} />}
+            </Each>
+          </View>
+        </View>
+      )}
+    </If>
+  );
+
   const content = (
     <PeopleContext.Provider value={people}>
       <View style={{ flex: 1, backgroundColor: palette().background }}>
@@ -240,7 +256,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               </If>
             </If>
           }>
-          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={null}
+          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={sudoDock}
             openSession={target => { data.refreshSessions(); props.openSession(target); }} />
         </If>
         <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} sessionId={props.id} session={live.session} view={live.view}
@@ -463,7 +479,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     const queued = activeQueue().length > 0 ? ` · ${activeQueue().length} queued` : "";
     return preparingRepositories(view()) ? `Preparing repositories…${queued}`
       : stopPending() ? `Stopping…${queued}`
-      : view().busy ? `${view().activity === "waiting" ? "Waiting for a decision" : "Working"}…${queued}`
+      : view().busy ? `${view().sudo ? "Waiting for sudo's password" : view().activity === "waiting" ? "Waiting for a decision" : "Working"}…${queued}`
       : activeQueue().length ? `${activeQueue().length} queued` : "Idle";
   };
   const name = createUsername();
