@@ -3,23 +3,17 @@ import assert from "node:assert/strict";
 import type { ConnectorInfo } from "../packages/shared/src/connector.js";
 import type { SessionView } from "../packages/shared/src/types.js";
 import {
-  accessLabels, accessUnavailable, chatAccessModes, chatOptionsBody, chatPreference, initialSelection, modelUnavailable, parseChatPreference, preferredSelection, type ChatSelection,
+  chatOptionsBody, chatPreference, initialSelection, modelUnavailable, parseChatPreference, preferredSelection, type ChatSelection,
 } from "../packages/client/src/chat-options.js";
 
 const host = { capabilities: { chatOptions: true }, models: [] } as unknown as ConnectorInfo;
 const auto: ChatSelection = { access: "auto" };
 
-test("a message acts or, with Read only, only reads: Read only goes with it, or the message waits until it can", () => {
+test("a message acts or, with Read only, only reads: Read only goes with it", () => {
   assert.deepEqual(chatOptionsBody(host, auto, "submit"), {}, "a message that acts names no access");
   assert.deepEqual(chatOptionsBody(host, { access: "read" }, "submit"), { access: "read" });
   assert.deepEqual(chatOptionsBody(host, { access: "read" }, "ask"), {}, "a side ask is read-only anyway");
   assert.equal(chatOptionsBody(undefined, auto, "submit"), undefined);
-  assert.equal(accessUnavailable(host, auto, "submit"), undefined);
-  assert.equal(accessUnavailable(undefined, auto, "submit"), undefined, "a message that acts goes before its host loads");
-  assert.match(accessUnavailable(undefined, { access: "read" }, "submit") ?? "", /Read only/);
-  assert.equal(accessUnavailable(undefined, { access: "read" }, "ask"), undefined);
-  assert.deepEqual(chatAccessModes, ["read", "auto"], "nobody approves anything: there is no third choice");
-  assert.equal(accessLabels.approval.label, accessLabels.auto.label, "the access of before approvals were removed acts too");
 });
 
 test("a message waits for a model its host offers, once the conversation's own one is disabled there", () => {
