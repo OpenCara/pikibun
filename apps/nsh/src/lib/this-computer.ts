@@ -33,13 +33,22 @@ export function hostArgs(stateDir?: string): string[] {
   return stateDir ? [...HOST_ARGS, "--state-dir", stateDir] : [...HOST_ARGS];
 }
 
+const PLAIN_HOST = /^[a-z0-9][a-z0-9.-]{0,99}$/;
+
+function shortHash(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0;
+  return hash.toString(16).padStart(8, "0");
+}
+
 export function serverStateDir(server: string): string {
-  let name: string;
-  try {
-    const url = new URL(server);
-    name = `${url.protocol === "https:" ? "" : "http-"}${url.host}`;
-  } catch { name = server; }
-  return `~/.local/share/pikibun/servers/${name.toLowerCase().replace(/[^a-z0-9.-]+/g, "-").replace(/^[.-]+/, "").slice(0, 100) || "server"}`;
+  let url: URL | undefined;
+  try { url = new URL(server); } catch { url = undefined; }
+  const hostname = url?.hostname.toLowerCase() ?? "";
+  if (url && url.protocol === "https:" && !url.port && PLAIN_HOST.test(hostname)) return `~/.local/share/pikibun/servers/${hostname}`;
+  const readable = url ? `${url.protocol === "https:" ? "" : "http-"}${hostname}${url.port ? `-${url.port}` : ""}` : server.toLowerCase();
+  const name = readable.replace(/[^a-z0-9.-]+/g, "-").replace(/-{2,}/g, "-").replace(/^[^a-z0-9]+/, "").slice(0, 80) || "server";
+  return `~/.local/share/pikibun/servers/${name}-${shortHash(url?.origin ?? server)}`;
 }
 
 export type HostLink = CommandLink;
@@ -129,7 +138,7 @@ export function updateFailure(lines: readonly string[], result: InstallResult): 
 }
 
 export function launchProblem(lines: readonly string[], code: number | null | undefined): LaunchProblem {
-  return commandProblem(lines, code, /Unknown command: host|Unknown option '--state-dir'/, "The host");
+  return commandProblem(lines, code, /Unknown command: host|Unknown option\. Run "pikibun host --help"/, "The host");
 }
 
 type HostResult = Extract<HostEvent, { type: "result" }>;
@@ -647,7 +656,9 @@ export class ComputerHosts {
   }
 
   all(): ThisComputerHost[] {
-    return [this.computer, ...this.added().map(entry => entry.host)];
+    const added = this.added().map(entry => entry.host);
+    const starting = [...this.candidates.values()].filter(host => !added.includes(host) && host.state() !== "stopped");
+    return [this.computer, ...added, ...starting];
   }
 
   others(server: string): { server: string; host: ThisComputerHost; added: boolean }[] {
@@ -684,6 +695,7 @@ export class ComputerHosts {
     if (host === this.computer || !host.stateDir) return;
     const origin = originOf(server);
     if (!untracked(this.added).some(entry => entry.host === host)) this.added.update(list => [...list.filter(entry => originOf(entry.server) !== origin), { server: origin, host }]);
+    if (this.candidates.get(origin) === host) this.candidates.delete(origin);
     await this.persist();
   }
 
@@ -716,7 +728,7 @@ export class ComputerHosts {
   }
 
   shutdown(): Promise<unknown> {
-    return Promise.all([...this.all(), ...this.candidates.values()].map(host => host.shutdown()));
+    return Promise.all([...new Set([...untracked(() => this.all()), ...this.candidates.values()])].map(host => host.shutdown()));
   }
 
   private persist(): Promise<void> {

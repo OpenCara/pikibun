@@ -181,7 +181,8 @@ React web client's address for it) makes this computer one of your hosts:
   the host, once everything else is settled (prerequisites, the unsandboxed consent), so a refusal leaves no unused code.
 - **Host for several servers at once**: pairing with another server adds a pairing rather than replacing one. The
   first server keeps `pikibun connect`'s state directory; each one added gets its own,
-  `~/.local/share/pikibun/servers/<server>` (`serverStateDir`), with its own `pikibun host --stdio --state-dir <dir>`
+  `~/.local/share/pikibun/servers/<server>` (`serverStateDir`: the host name of an `https` server on its default port, else a
+  readable name with a short hash of the origin, so no two servers share one), with its own `pikibun host --stdio --state-dir <dir>`
   process, pairing, sessions and resume (`ComputerHosts` in `src/lib/this-computer.ts`; the list is
   `pikibun.thisComputer.servers` in the app's storage). **Other servers** lists the rest, with **Start host**, **Stop
   host** and, for the ones added, **Remove**, which stops that host and forgets its pairing here; the host stays on its

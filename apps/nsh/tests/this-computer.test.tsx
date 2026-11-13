@@ -322,11 +322,16 @@ describe("This Mac", () => {
 
   test("each server gets a folder of its own, named for it", () => {
     expect(serverStateDir("https://pikibun.example.com")).toBe("~/.local/share/pikibun/servers/pikibun.example.com");
-    expect(serverStateDir("https://Pikibun.Example.com:8443")).toBe("~/.local/share/pikibun/servers/pikibun.example.com-8443");
-    expect(serverStateDir("http://127.0.0.1:7878")).toBe("~/.local/share/pikibun/servers/http-127.0.0.1-7878");
+    expect(serverStateDir("https://Pikibun.Example.com")).toBe("~/.local/share/pikibun/servers/pikibun.example.com");
+    expect(serverStateDir("https://Pikibun.Example.com:8443")).toMatch(/^~\/\.local\/share\/pikibun\/servers\/pikibun\.example\.com-8443-[0-9a-f]{8}$/);
+    expect(serverStateDir("http://127.0.0.1:7878")).toMatch(/^~\/\.local\/share\/pikibun\/servers\/http-127\.0\.0\.1-7878-[0-9a-f]{8}$/);
+    expect(serverStateDir("http://[::1]:7878")).toMatch(/^~\/\.local\/share\/pikibun\/servers\/http-1-7878-[0-9a-f]{8}$/);
+    const names = ["https://foo_bar.example", "https://foo-bar.example", "https://http-a.example", "http://a.example", "https://a.example-8443", "https://a.example:8443",
+      "http://[::1]:7878", "http://[::2]:7878"].map(serverStateDir);
+    expect(new Set(names).size).toBe(names.length);
     expect(hostCommand("macos", "/bin/zsh", null)).toEqual({ command: "zsh", args: ["-ilc", "exec pikibun host --stdio"] });
     expect(hostArgs("~/.local/share/pikibun/servers/pikibun.example.com")).toEqual(["host", "--stdio", "--state-dir", "~/.local/share/pikibun/servers/pikibun.example.com"]);
-    expect(launchProblem(["Unknown option '--state-dir'"], 1)).toEqual({ kind: "outdated" });
+    expect(launchProblem(["Unknown option. Run \"pikibun host --help\"."], 1)).toEqual({ kind: "outdated" });
   });
 
   test("without Pikibun's command it offers to install it from npm, and then carries on to pairing", async () => {
