@@ -11,12 +11,12 @@ export function updateSignatureMessage(name: string, sha256: string): string {
   return `pikibun app update v1\n${name}\n${sha256}\n`;
 }
 
-function base64Bytes(text: string): Uint8Array | null {
+function base64Bytes(text: string): Uint8Array<ArrayBuffer> | null {
   const clean = text.trim();
   if (!clean || clean.length % 4 !== 0 || !BASE64.test(clean)) return null;
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
-  const bytes = new Uint8Array(clean.length / 4 * 3 - padding);
+  const bytes = new Uint8Array(new ArrayBuffer(clean.length / 4 * 3 - padding));
   let at = 0;
   for (let index = 0; index < clean.length; index += 4) {
     const value = [0, 1, 2, 3].map(offset => { const found = alphabet.indexOf(clean[index + offset]!); return found < 0 ? 0 : found; })
@@ -30,8 +30,12 @@ export async function verifyUpdateSignature(name: string, sha256: string, signat
   const signed = base64Bytes(signature);
   const key = base64Bytes(publicKey);
   if (!signed || signed.length !== 64 || !key) return false;
-  let message: Uint8Array;
-  try { message = new TextEncoder().encode(updateSignatureMessage(name, sha256)); } catch { return false; }
+  let message: Uint8Array<ArrayBuffer>;
+  try {
+    const encoded = new TextEncoder().encode(updateSignatureMessage(name, sha256));
+    message = new Uint8Array(new ArrayBuffer(encoded.length));
+    message.set(encoded);
+  } catch { return false; }
   try {
     const imported = await crypto.subtle.importKey("spki", key, { name: "Ed25519" }, false, ["verify"]);
     return await crypto.subtle.verify({ name: "Ed25519" }, imported, signed, message);
