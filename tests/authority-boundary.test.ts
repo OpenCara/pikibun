@@ -95,7 +95,7 @@ const authorityTables = [
   "github_tokens", "native_auth_codes", "oauth_states", "password_credentials", "push_credentials", "push_identities", "push_oauth_states",
   "repository_lfs_settings", "repository_push_policies", "run_admissions", "session_grants", "session_tool_grants", "source_accounts", "source_oauth_states",
   "source_read_settings", "users", "workspace_connections", "workspace_extensions", "workspace_members", "workspace_network_policies",
-  "workspace_repositories", "workspace_sources",
+  "workspace_member_tool_groups", "workspace_repositories", "workspace_sources", "workspace_tool_groups",
 ];
 
 test("only the authority writes the tables it decides from: the rest of the server goes through its statements", () => {

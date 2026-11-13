@@ -3,10 +3,9 @@ import {
   groupTools, parseGroupTools, roleTools, toolGroupLimits, type GroupTool, type ToolGroup, type ToolGroupMember, type ToolGroupSettings,
 } from '../../../packages/shared/src/tool-groups.js';
 import { workspaceRoles, type WorkspaceRole } from '../../../packages/shared/src/types.js';
-import { auditStatement, requireMember, workspaceAdminSQL } from './authority/index.js';
+import { createToolGroup, deleteToolGroup, requireMember, setMemberToolGroup, updateToolGroup } from './authority/index.js';
 import { requireMemberManagement } from './catalog.js';
-import { ConstraintError } from './db/types.js';
-import { fail, id, identifier, now, userIdentifier } from './http.js';
+import { fail, identifier, userIdentifier } from './http.js';
 import { body, fields, identifier as identifierField, parsed, text } from './schemas.js';
 import type { AppEnv, Env } from './types.js';
 
@@ -43,13 +42,6 @@ const groupChange = fields({ name: groupName.optional(), tools: groupToolsInput.
 const memberGroup = fields({ groupId: identifierField('groupId').nullable() }, 'Set groupId to a tool group of the workspace, or null for the member\'s role.',
   { required: ['groupId'] });
 
-function sameName(error: unknown): never {
-  if (error instanceof ConstraintError || (error instanceof Error && /UNIQUE|unique|duplicate/.test(error.message))) {
-    fail(409, 'name_taken', 'This workspace has a tool group with that name already.');
-  }
-  throw error;
-}
-
 export function registerToolGroups(app: Hono<AppEnv>): void {
   app.get('/api/workspaces/:id/tool-groups', async c => {
     const workspaceId = identifier(c.req.param('id'));
@@ -62,15 +54,7 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
     const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
     const { name, tools } = await body(c, newGroup, { maxBytes: 16 * 1024 });
-    const groupId = id();
-    const at = now();
-    const saved = await c.env.DB.query<GroupRow>(`INSERT INTO workspace_tool_groups (id, workspace_id, name, tools_json, created_by, created_at, updated_by, updated_at)
-      SELECT ?,?,?,?,?,?,?,? WHERE ${workspaceAdminSQL}
-        AND (SELECT COUNT(*) FROM workspace_tool_groups WHERE workspace_id = ?) < ?
-      RETURNING id`).bind(groupId, workspaceId, name, JSON.stringify(tools), actor, at, actor, at, workspaceId, actor, workspaceId, toolGroupLimits.groups)
-      .first().catch(sameName);
-    if (!saved) fail(409, 'tool_group_limit', `A workspace has at most ${toolGroupLimits.groups} tool groups.`);
-    await auditStatement(c.env, actor, 'workspace.tool_group.created', workspaceId, null, { groupId, name, tools }).run();
+    await createToolGroup(c.env, workspaceId, actor, name, tools);
     return c.json(await toolGroupSettings(c.env, workspaceId, true), 201);
   });
 
@@ -85,14 +69,7 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
     if (!current) fail(404, 'not_found', 'Tool group not found.');
     const name = input.name ?? current.name;
     const tools: GroupTool[] = input.tools ?? groupRecord(current).tools;
-    const saved = await c.env.DB.query(`UPDATE workspace_tool_groups SET name = ?, tools_json = ?, updated_by = ?, updated_at = ?
-      WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
-      .bind(name, JSON.stringify(tools), actor, now(), groupId, workspaceId, workspaceId, actor).first().catch(sameName);
-    if (!saved) {
-      const exists = await c.env.DB.query('SELECT 1 AS n FROM workspace_tool_groups WHERE id = ? AND workspace_id = ?').bind(groupId, workspaceId).first();
-      fail(exists ? 403 : 404, exists ? 'forbidden' : 'not_found', exists ? 'Workspace administrator access is required.' : 'Tool group not found.');
-    }
-    await auditStatement(c.env, actor, 'workspace.tool_group.updated', workspaceId, null, { groupId, name, tools }).run();
+    await updateToolGroup(c.env, workspaceId, groupId, actor, name, tools);
     return c.json(await toolGroupSettings(c.env, workspaceId, true));
   });
 
@@ -101,14 +78,7 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
     const groupId = identifier(c.req.param('groupId'));
     const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const [, removed] = await c.env.DB.batch<{ id: string }>([
-      c.env.DB.query<{ id: string }>(`DELETE FROM workspace_member_tool_groups WHERE group_id = ? AND workspace_id = ? AND ${workspaceAdminSQL}`)
-        .bind(groupId, workspaceId, workspaceId, actor),
-      c.env.DB.query<{ id: string }>(`DELETE FROM workspace_tool_groups WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
-        .bind(groupId, workspaceId, workspaceId, actor),
-    ]);
-    if (!removed?.results.length) fail(404, 'not_found', 'Tool group not found.');
-    await auditStatement(c.env, actor, 'workspace.tool_group.deleted', workspaceId, null, { groupId }).run();
+    await deleteToolGroup(c.env, workspaceId, groupId, actor);
     return c.json(await toolGroupSettings(c.env, workspaceId, true));
   });
 
@@ -119,18 +89,7 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
     const { groupId } = await body(c, memberGroup, { maxBytes: 1024 });
     const targetRole = await requireMemberManagement(c.env, workspaceId, actor, targetId);
     if (!targetRole) fail(404, 'not_found', 'Membership not found.');
-    if (groupId === null) {
-      await c.env.DB.query(`DELETE FROM workspace_member_tool_groups WHERE workspace_id = ? AND user_id = ? AND ${workspaceAdminSQL}`)
-        .bind(workspaceId, targetId, workspaceId, actor).run();
-    } else {
-      const saved = await c.env.DB.query(`INSERT INTO workspace_member_tool_groups (workspace_id, user_id, group_id, assigned_by, assigned_at)
-        SELECT ?,?,g.id,?,? FROM workspace_tool_groups g WHERE g.id = ? AND g.workspace_id = ? AND ${workspaceAdminSQL}
-          AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = ? AND m.user_id = ?)
-        ON CONFLICT (workspace_id, user_id) DO UPDATE SET group_id = excluded.group_id, assigned_by = excluded.assigned_by, assigned_at = excluded.assigned_at
-        RETURNING group_id`).bind(workspaceId, targetId, actor, now(), groupId, workspaceId, workspaceId, actor, workspaceId, targetId).first();
-      if (!saved) fail(404, 'not_found', 'Tool group not found.');
-    }
-    await auditStatement(c.env, actor, 'workspace.member.tool_group', workspaceId, null, { userId: targetId, groupId }).run();
+    await setMemberToolGroup(c.env, workspaceId, targetId, actor, groupId);
     return c.json(await toolGroupSettings(c.env, workspaceId, true));
   });
 }

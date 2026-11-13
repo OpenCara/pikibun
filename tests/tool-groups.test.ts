@@ -159,3 +159,31 @@ test('workspace owners and admins create tool groups and put members in them; th
   assert.deepEqual(actions, ['workspace.tool_group.created', 'workspace.member.tool_group', 'workspace.tool_group.updated', 'workspace.member.tool_group',
     'workspace.member.tool_group', 'workspace.tool_group.deleted', 'workspace.tool_group.created', 'workspace.member.tool_group']);
 });
+
+test('only the workspace owner changes or deletes a tool group that limits an admin', async t => {
+  const f = await fixture(t);
+  const leads = (await body<ToolGroupSettings>(await f.owner.request('POST', `${f.path}/tool-groups`, { name: 'Leads', tools: ['read_file', 'git'] }), 201)).groups[0]!;
+  await body(await f.owner.request('PUT', `${f.path}/members/${f.admin.user.id}/tool-group`, { groupId: leads.id }));
+  await body(await f.admin.request('PUT', `${f.path}/members/${f.member.user.id}/tool-group`, { groupId: leads.id }));
+  const refused = async (response: Response) => {
+    const value = await body<{ code: string; error: string }>(response, 403);
+    assert.equal(value.code, 'admins_group');
+    assert.match(value.error, /Only the workspace owner changes or deletes a tool group with administrators among its members/);
+  };
+  await refused(await f.admin.request('PATCH', `${f.path}/tool-groups/${leads.id}`, { tools: [...groupTools] }));
+  await refused(await f.admin.request('DELETE', `${f.path}/tool-groups/${leads.id}`));
+  const kept = await body<ToolGroupSettings>(await f.owner.request('GET', `${f.path}/tool-groups`));
+  assert.deepEqual(kept.groups[0]!.tools, ['read_file', 'git'], 'the admin\'s own limit stays as the owner set it');
+  assert.deepEqual(kept.members.filter(item => item.groupId === leads.id).map(item => item.userId).sort(), [f.admin.user.id, f.member.user.id].sort(),
+    'a refused deletion takes no one out of the group');
+  await body(await f.member.request('PATCH', `${f.path}/tool-groups/${leads.id}`, { name: 'Mine' }), 403);
+  await body(await f.admin.request('PATCH', `${f.path}/tool-groups/missing`, { name: 'Gone' }), 404);
+
+  const renamed = await body<ToolGroupSettings>(await f.owner.request('PATCH', `${f.path}/tool-groups/${leads.id}`, { name: 'Lead engineers' }));
+  assert.equal(renamed.groups[0]!.name, 'Lead engineers');
+  await body(await f.owner.request('PUT', `${f.path}/members/${f.admin.user.id}/tool-group`, { groupId: null }));
+  await body(await f.admin.request('PATCH', `${f.path}/tool-groups/${leads.id}`, { tools: ['read_file'] }));
+  await body(await f.owner.request('PUT', `${f.path}/members/${f.admin.user.id}/tool-group`, { groupId: leads.id }));
+  const deleted = await body<ToolGroupSettings>(await f.owner.request('DELETE', `${f.path}/tool-groups/${leads.id}`));
+  assert.deepEqual(deleted.groups, [], 'the owner deletes it, admins in it or not');
+});

@@ -46,7 +46,7 @@ export function changeMemberRoleStatement(db: Pick<Database, 'query'>, change: O
 }
 
 export function removeMemberStatements(db: Pick<Database, 'query'>, removal: { workspaceId: string; actorId: string; userId: string; auditId: string }): {
-  member: Query<never>; grants: Query<never>;
+  member: Query<never>; grants: Query<never>; toolGroup: Query<never>;
 } {
   return {
     member: db.query<never>(`DELETE FROM workspace_members
@@ -61,6 +61,9 @@ export function removeMemberStatements(db: Pick<Database, 'query'>, removal: { w
       AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ?)
       AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
       .bind(removal.userId, removal.workspaceId, removal.auditId),
+    toolGroup: db.query<never>(`DELETE FROM workspace_member_tool_groups WHERE workspace_id = ? AND user_id = ?
+      AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
+      .bind(removal.workspaceId, removal.userId, removal.auditId),
   };
 }
 
