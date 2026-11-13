@@ -177,7 +177,7 @@ const edits: { file: string; content: string; args: Record<string, unknown> }[] 
 ];
 
 for (const kind of workspaceKinds) {
-  test(`${kind.name}: the file tools answer as Pi's own read, ls, grep, write and edit do`, { skip: kind.missing }, async t => {
+  test(`${kind.name}: the file tools answer as Pi's own read, ls, grep, find, write and edit do`, { skip: kind.missing }, async t => {
     const { workspace, worktree } = await kind.open(t);
     const root = await scratch(t, "pi-tools-");
     await lay(root);
