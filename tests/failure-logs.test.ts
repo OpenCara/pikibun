@@ -9,7 +9,7 @@ import type { RunnerAction, RunnerTicket } from "../packages/shared/src/types.js
 import { describeFailure, FailureLog } from "../apps/runner/src/failure-log.js";
 import { createRunnerApp, RunnerService } from "../apps/runner/src/server.js";
 import { bubblewrapFix, bubblewrapPrerequisite, assertPrerequisites } from "../apps/runner/src/connect-setup.js";
-import { failedRequests } from "../apps/server/src/log.js";
+import { errorBody, failedRequests } from "../apps/server/src/log.js";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AppEnv, Env } from "../apps/server/src/types.js";
@@ -42,6 +42,25 @@ test("the failure log writes an error with its stack and cause, and the same lin
   log.report("Session s1 couldn't open", error);
   assert.equal(lines.length, 3);
   assert.equal(describeFailure("plain\u0000text"), "plain text");
+  assert.equal(describeFailure(Symbol("odd")), "Symbol(odd)");
+  assert.equal(describeFailure({ toString() { throw new Error("no"); } }), "object");
+  log.report("Session s1 couldn't open", new Error("disk\nfull", { cause: new Error("EACCES") }));
+  assert.equal(lines.length, 4, "another cause is another failure");
+  const forged = new Error("x");
+  forged.stack = "Error: x\n    at a (/tmp/a.js:1:1)\nSession s9 couldn't open: forged\n";
+  assert.equal(describeFailure(forged), "Error: x\n    at a (/tmp/a.js:1:1)\n    Session s9 couldn't open: forged", "every line after the first is indented");
+});
+
+test("the failure log keeps at most 1000 failures in mind, forgetting the oldest first", () => {
+  const lines: string[] = [];
+  const log = new FailureLog(line => { lines.push(line); }, 60_000, () => 0);
+  for (let index = 0; index <= 1000; index++) log.report(`Session s${index}`, "failed");
+  assert.equal(lines.length, 1001);
+  log.report("Session s1000", "failed");
+  log.report("Session s1", "failed");
+  assert.equal(lines.length, 1001, "the newest are still quiet");
+  log.report("Session s0", "failed");
+  assert.equal(lines.length, 1002, "only the oldest was forgotten");
 });
 
 test("the runner logs a session that fails to open on its host, once, and answers the server without the details", async t => {
@@ -82,6 +101,20 @@ test("the server logs each 5xx answer with its route, code, time and session, an
   assert.match(lines[2]!, /^GET \/api\/sessions\/:id\/files failed unexpectedly: TypeError: boom\n/);
   assert.equal((await app.request("/api/sessions/abc/busy", {}, env)).status, 409);
   assert.equal(lines.length, 3, "only 5xx answers");
+});
+
+test("the server reads at most 64 KiB of an error's body to log it, and never waits long for it", async () => {
+  const json = { "content-type": "application/json" };
+  assert.deepEqual(await errorBody(Response.json({ error: "Bad\nthing", code: "runner_error" }, { status: 500 })), { code: "runner_error", error: "Bad thing" });
+  const big = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(`{"error":"${"x".repeat(70_000)}"}`)); controller.close(); } });
+  const large = new Response(big, { status: 500, headers: json });
+  assert.deepEqual(await errorBody(large), {});
+  assert.equal((await large.text()).length, 70_012, "the client still gets the whole body");
+  const endless = new Response(new ReadableStream<Uint8Array>({ pull() { return new Promise(() => {}); } }), { status: 500, headers: json });
+  const started = Date.now();
+  assert.deepEqual(await errorBody(endless), {});
+  assert.ok(Date.now() - started < 3000);
+  assert.deepEqual(await errorBody(new Response("<html>", { status: 502, headers: { "content-type": "text/html" } })), {});
 });
 
 test("the connector refuses to start where bubblewrap is installed but can't make the sandbox, and says how to fix it", () => {

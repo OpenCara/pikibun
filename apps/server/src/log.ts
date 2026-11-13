@@ -23,12 +23,43 @@ export function errorStack(error: unknown): string {
   return error.stack.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, ' ').slice(0, 4000);
 }
 
+const ERROR_BODY_BYTES = 65536;
+const ERROR_BODY_MS = 1000;
+
+async function boundedText(response: Response): Promise<string | undefined> {
+  const declared = response.headers.get('content-length');
+  if (declared !== null && !(Number(declared) <= ERROR_BODY_BYTES)) return undefined;
+  const reader = response.clone().body?.getReader();
+  if (!reader) return undefined;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'late'>(resolve => { timer = setTimeout(() => resolve('late'), ERROR_BODY_MS); });
+  try {
+    while (true) {
+      const next = await Promise.race([reader.read(), late]);
+      if (next === 'late') return undefined;
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > ERROR_BODY_BYTES) return undefined;
+      chunks.push(next.value);
+    }
+  } finally {
+    clearTimeout(timer);
+    void reader.cancel().catch(() => {});
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(bytes);
+}
+
 export async function errorBody(response: Response): Promise<{ code?: string; error?: string }> {
   if (!response.headers.get('content-type')?.includes('application/json')) return {};
-  const declared = Number(response.headers.get('content-length') ?? '0');
-  if (declared > 65536 || !response.body) return {};
   try {
-    const body = JSON.parse((await response.clone().text()).slice(0, 65536)) as { code?: unknown; error?: unknown };
+    const text = await boundedText(response);
+    if (text === undefined) return {};
+    const body = JSON.parse(text) as { code?: unknown; error?: unknown };
     return {
       ...(typeof body.code === 'string' && /^[a-z0-9_]{1,64}$/.test(body.code) ? { code: body.code } : {}),
       ...(typeof body.error === 'string' && body.error ? { error: plainText(body.error) } : {}),

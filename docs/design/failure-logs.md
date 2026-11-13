@@ -6,8 +6,9 @@ Issues #171 to #174 came from one production case: after a host was rebuilt, eve
 
 - `RunnerService` has a `FailureLog` (`apps/runner/src/failure-log.ts`). The runner's `onError` reports every error that isn't a `RunnerError` below 500, with the session and the action (`Session <id>: view failed: <error and stack>`). The client still gets only `Runner operation failed`, as before: stacks and host paths stay on the host, which is its owner's own machine.
 - A session that fails to open or to reopen gets its own line (`Session <id> couldn't open: …`). That is where a broken host shows first: a missing namespace, files copied back without their permissions, a damaged binding. `onError` then skips the same error, so it isn't written twice.
-- The same first line is written at most once a minute. A session the app keeps open asks for its view every few seconds, and would otherwise fill the terminal with one failure.
-- `RelayFrames` logs a relayed request the runtime threw on, which used to become a bare 502 too.
+- The same failure (its whole text: context, message, stack and cause) is written at most once a minute. A session the app keeps open asks for its view every few seconds, and would otherwise fill the terminal with one failure. A failure with another cause or stack is another failure. The log remembers the last 1,000 failures and forgets the oldest first, and it measures time with `performance.now()`, so a clock step on the host can't keep a failure quiet.
+- Every line after a failure's first is indented, and newlines and other control characters in the context and the message become spaces, so nothing in an error's text can pose as a line of its own.
+- `RelayFrames` logs a relayed request the runtime threw on, which used to become a bare 502 too, through its own `FailureLog`.
 - A sandboxed connector checks that bubblewrap can make the sandbox before it starts (see [security-rationale.md](security-rationale.md#linux-sandbox)), and `assertPrerequisites` now prints each missing prerequisite's fix, such as the `sysctl` command.
 
 ## On the server
@@ -16,6 +17,7 @@ Issues #171 to #174 came from one production case: after a host was rebuilt, eve
 - `connectorRequest` and the test runner write what a host answered when it failed with a 5xx, before the answer becomes `runner_error`.
 - `ConnectorRelay` writes each connect, replacement, disconnect (with the WebSocket close code and reason, or the frame or protocol error) and expired request. These are rare, and they are the only record of a host that keeps dropping.
 - A failed automatic backup is written with its session and the error's code and message. `automatic_backups.error` still keeps only the code.
+- To log an error's `code` and message, the server reads at most 64 KiB of the body, from a clone, for at most a second. A larger or slower body is logged without them. The client always gets the body whole.
 - Lines go through `Env.LOG`, which is standard error in production and a list in tests.
 
 ## 500, not 502
