@@ -27,22 +27,23 @@ const DIRECTORY_FLAGS = OPEN_DIRECTORY;
 const queues = new Map<string, Promise<void>>();
 
 type Captured = { code: number | null; stdout: string; stderr: string };
-type SpawnOptions = { env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal; hostCommand?: string };
-export type HostWorkspaceOptions = { ownerEnvironment?: boolean };
+type SpawnOptions = { env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal; hostCommand?: string; isolated?: boolean };
+export type HostWorkspaceOptions = { ownerEnvironment?: boolean; privateEnvironment?: readonly string[] };
 
-export const CONNECTOR_ENVIRONMENT = new RegExp("^(?:PIKIBUN_|RUNNER_|TEST_AUTH_|LOCAL_|S3_|WORKSPACE_DATABASE)|_CLIENT_(?:ID|SECRET)$|^(?:"
-  + "APP_ORIGIN|SESSION_SECRET|VAULT_KEY|GITHUB_APP_ID|GITHUB_APP_SLUG|GITHUB_APP_PRIVATE_KEY|OIDC_SIGNING_KEY|ADMIN_USER_IDS|GIT_DIRECT|"
-  + "SANDBOX_GITHUB_API|PASSWORD_AUTH|SIGNUP|MICROSOFT_TENANT|WEB_PUSH_CONTACT|DATABASE_URL|STORAGE_URL|STATIC_DIR|STATIC_CLIENT|"
-  + "PREVIEW_ORIGIN|PREVIEW_STATIC_DIR|TRUST_PROXY|CONTROL_PLANE_URL|DATA_DIR|ALLOW_FAUX_MODEL|ALLOW_TEST_SHELL)$", "i");
+export const CONNECTOR_ENVIRONMENT = new RegExp("^(?:PIKIBUN_|RUNNER_)|^(?:CONTROL_PLANE_URL|DATA_DIR|ALLOW_FAUX_MODEL|ALLOW_TEST_SHELL)$"
+  + "|^GIT_(?:DIR|WORK_TREE|IMPLICIT_WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|COMMON_DIR|PREFIX|INTERNAL_SUPER_PREFIX"
+  + "|SHALLOW_FILE|GRAFT_FILE|NO_REPLACE_OBJECTS|REPLACE_REF_BASE|CONFIG|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\\d+|CONFIG_VALUE_\\d+)$", "i");
 
 export function hostOwnersSession(binding: RunnerBinding): boolean {
   const hostOwner = binding.session.connectorOwnerId;
   return !!hostOwner && hostOwner === binding.owner.id && binding.session.ownerId === hostOwner;
 }
 
-export function ownerHostEnvironment(identity: Readonly<SandboxIdentity>, base: NodeJS.ProcessEnv = process.env): Readonly<Record<string, string>> {
+export function ownerHostEnvironment(identity: Readonly<SandboxIdentity>, base: NodeJS.ProcessEnv = process.env,
+  privateEnvironment: readonly string[] = []): Readonly<Record<string, string>> {
+  const excluded = new Set(privateEnvironment.map(name => name.toUpperCase()));
   const inherited = Object.fromEntries(Object.entries(base)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && !CONNECTOR_ENVIRONMENT.test(entry[0])));
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && !CONNECTOR_ENVIRONMENT.test(entry[0]) && !excluded.has(entry[0].toUpperCase())));
   return Object.freeze({
     ...(base.LANG || base.LC_ALL ? {} : { LANG: "C.UTF-8" }),
     ...(!windows && !base.HOME ? { HOME: homedir() } : {}),
@@ -66,6 +67,7 @@ export class HostWorkspace implements SessionWorkspace {
   readonly #root: string;
   readonly #identity: Readonly<SandboxIdentity>;
   readonly #environment: Readonly<Record<string, string>>;
+  readonly #isolated: Readonly<Record<string, string>>;
   readonly #reported: Readonly<SandboxIdentity>;
   readonly ownerEnvironment: boolean;
   readonly #testProvider: boolean;
@@ -94,11 +96,12 @@ export class HostWorkspace implements SessionWorkspace {
       env: Object.freeze({ ...binding.owner.env }),
     });
     this.ownerEnvironment = options.ownerEnvironment === true;
-    this.#environment = this.ownerEnvironment ? ownerHostEnvironment(this.#identity) : Object.freeze({
+    this.#isolated = Object.freeze({
       ...(windows ? windowsSystemEnvironment() : {}),
       ...sessionEnvironment(this.#identity, { path: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin", gitConfig: join(this.#root, "owner.gitconfig") }),
     });
-    const home = this.ownerEnvironment ? this.#environment.HOME : undefined;
+    this.#environment = this.ownerEnvironment ? ownerHostEnvironment(this.#identity, process.env, options.privateEnvironment) : this.#isolated;
+    const home = this.ownerEnvironment ? this.#environment.HOME ?? this.#environment.USERPROFILE ?? homedir() : undefined;
     this.#reported = home ? Object.freeze({ ...this.#identity, home }) : this.#identity;
   }
 
@@ -417,7 +420,7 @@ export class HostWorkspace implements SessionWorkspace {
   }
 
   #capture(args: string[], input?: string, options: SpawnOptions = {}): Promise<Captured> {
-    return this.#spawn("git", this.#gitArgs(args), input, options);
+    return this.#spawn("git", this.#gitArgs(args), input, { ...options, isolated: true });
   }
 
   async #git(args: string[], input?: string, options: SpawnOptions = {}): Promise<Captured> {
@@ -426,7 +429,7 @@ export class HostWorkspace implements SessionWorkspace {
 
   #spawn(command: string, args: string[], input?: string, options: SpawnOptions = {}): Promise<Captured> {
     const { promise, resolve: resolveResult, reject } = Promise.withResolvers<Captured>();
-    const child = spawn(command, args, { cwd: this.worktree, env: { ...this.#environment, ...options.env }, detached: !windows, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { cwd: this.worktree, env: { ...(options.isolated ? this.#isolated : this.#environment), ...options.env }, detached: !windows, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

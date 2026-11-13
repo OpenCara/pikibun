@@ -102,6 +102,7 @@ const readOnlyTools = ["identity", "read", "ls", "grep"];
 export type RunnerConfig = {
   dataDir: string; controlPlaneUrl: string; sharedSecret: string; allowFaux: boolean; allowTestShell?: boolean; fetch?: typeof fetch;
   connectorId?: string;
+  privateEnvironment?: readonly string[];
   authorize?: (request: AuthorizationRequest) => Promise<AuthorizationResult>;
   githubComment?: (request: GitHubCommentRequest) => Promise<{ id: number; url: string }>;
   githubRead?: (request: GitHubReadRequest) => Promise<GitHubIssueView>;
@@ -230,7 +231,7 @@ export class RunnerSession {
       : (request: Omit<GitDirectRequest, "sessionId">) => this.controlPlane("/api/internal/git/direct", { sessionId: binding.session.id, ...request });
     this.#direct = directGrant && new DirectGit({ grant: directGrant, onFallback: (request, reason) => this.#egress?.noteFallback(request.bindingId, reason) });
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
-      { ownerEnvironment: hostOwnersSession(binding) });
+      { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment });
     else if (config.sandboxBackend) {
       const egress = this.egressProxy(egressSocketPath(binding.session.id, directory), randomBytes(24).toString("base64url"));
       this.#egress = egress;
