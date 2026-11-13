@@ -20,6 +20,11 @@ export const INPUT_IMAGES = "An extension on this host changed this message's im
 
 export type RunContent = string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
 
+/** Side asks run beside the shared work, each in its own conversation, up to this many at once. */
+export const MAX_RUNNING_ASKS = 4;
+
+const active = (run: Run) => run.status === "running" || run.status === "admitting";
+
 export function submissionRequestId(run: Pick<Run, "key" | "steered">): string {
   return run.steered === undefined ? run.key : `${run.key}:steer`;
 }
@@ -27,9 +32,9 @@ export function submissionRequestId(run: Pick<Run, "key" | "steered">): string {
 export function steersInto(runs: Record<string, Run>, run: Run): string | undefined {
   if (run.mode !== "write" || run.status !== "queued" || run.screening || run.images || run.stopped || run.withdrawn) return undefined;
   const all = Object.values(runs);
-  if (all.some(other => other.status === "admitting" || other.stopped?.pending)) return undefined;
-  const running = all.filter(other => other.status === "running").sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-  if (!running.length || running.some(other => other.mode !== "write" || other.submissionId === undefined || other.stopped
+  if (all.some(other => (other.mode === "write" && other.status === "admitting") || other.stopped?.pending)) return undefined;
+  const running = all.filter(other => other.mode === "write" && other.status === "running").sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+  if (!running.length || running.some(other => other.submissionId === undefined || other.stopped
     || other.conversationId !== run.conversationId || other.initiatedBy !== run.initiatedBy
     || stableJson(other.options ?? null) !== stableJson(run.options ?? null))) return undefined;
   return running[0]!.steered ?? running[0]!.key;
@@ -89,7 +94,7 @@ export class RunQueue {
       const observed = state.runs[key];
       if (!observed || Number(observed.submissionId) !== Number(submissionId)) return;
       const joined = await this.#joined(observed, settled, state);
-      if (!joined) void this.options.hostExtensions()?.agentEnd([], settled.status !== "done").catch(() => {});
+      if (!joined && observed.mode === "write") void this.options.hostExtensions()?.agentEnd([], settled.status !== "done").catch(() => {});
       const conversation = await harness.conversation(observed.conversationId as ConversationId, context);
       await conversation?.waitForIdle(context);
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
@@ -207,13 +212,24 @@ export class RunQueue {
     void this.options.exclusive(async () => {
       while (!this.options.closing()) {
         const state = await this.options.metadata();
-        if (Object.values(state.approvals).some(approval => approval.status === "executing")) return;
-        const busy = Object.values(state.runs).some(run => run.status === "running" || run.status === "admitting" || run.stopped?.pending);
-        const run = Object.values(state.runs).filter(candidate => candidate.status === "queued")
-          .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))[0];
-        if (!run || run.screening) return;
-        const root = busy ? steersInto(state.runs, run) : undefined;
-        if (busy && root === undefined) return;
+        const runs = Object.values(state.runs);
+        const stopping = runs.some(run => run.stopped?.pending);
+        const executing = Object.values(state.approvals).some(approval => approval.status === "executing");
+        const queued = runs.filter(candidate => candidate.status === "queued").sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+        // Shared messages run one at a time, in order, in the shared conversation (or steer the one at work).
+        let write = queued.find(candidate => candidate.mode === "write");
+        let root: string | undefined;
+        if (write && (write.screening || executing)) write = undefined;
+        else if (write && (stopping || runs.some(run => run.mode === "write" && active(run)))) {
+          root = steersInto(state.runs, write);
+          if (root === undefined) write = undefined;
+        }
+        // A side ask works in a conversation of its own, read-only, so it starts at once, beside whatever the shared work does.
+        const ask = stopping || runs.filter(run => run.mode === "ask" && active(run)).length >= MAX_RUNNING_ASKS ? undefined
+          : queued.find(candidate => candidate.mode === "ask" && !candidate.screening);
+        const run = write && (!ask || (write.sequence ?? 0) < (ask.sequence ?? 0)) ? write : ask;
+        if (!run) return;
+        if (run !== write) root = undefined;
         if (!(await this.#admissible(run))) continue;
         if (root !== undefined) {
           if (!(await this.#steer(run, root))) return;
@@ -240,7 +256,6 @@ export class RunQueue {
         });
         if (run.images) await this.options.inputs.discard([run.key]);
         this.observe(run.key, submission.id);
-        return;
       }
     }).catch(() => { })
       .finally(() => {
