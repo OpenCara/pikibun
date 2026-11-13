@@ -81,11 +81,11 @@ export function toolCallRows(entry: EntryView, results: readonly (EntryView | un
 export function resultOutcome(result: EntryView): ResultSummary {
   const error = result.toolResult?.error === true;
   if (result.trimmed) return { text: result.text, failed: error };
-  return resultSummary(result.text, { error });
+  return resultSummary(result.text, { error, tool: result.toolResult?.tool });
 }
 
 export function resultOutput(result: EntryView, text = result.text): string {
-  return result.trimmed ? text : resultBody(text);
+  return result.trimmed ? text : resultBody(text, { tool: result.toolResult?.tool });
 }
 
 export function callHeadline(name: string, target: string): string {

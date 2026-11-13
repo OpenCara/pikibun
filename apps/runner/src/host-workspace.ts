@@ -12,7 +12,7 @@ import {
   type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SnapshotFile,
 } from "./sandbox.js";
 import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
-import { browseDirectory, browseFile, checkedBrowse, type BrowseResult } from "./file-browser.js";
+import { browseDirectory, browseFile, checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser.js";
 import type { SessionWorkspace } from "./workspace.js";
 import { searchInWorker, type SearchRequest, type SearchResult } from "./search.js";
 import { bashPath, CREATE_FILE, hostBashArgs, killTree, OPEN_DIRECTORY, OPEN_FILE, privateEntry, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
@@ -101,7 +101,7 @@ export class HostWorkspace implements SessionWorkspace {
       if (!parts.length) throw hostError("a file path is required");
       const parent = await directoryAt(this.worktree, parts.slice(0, -1));
       const data = (await readAt(parent, parts.at(-1)!, MAX_FILE_BYTES)).data;
-      try { return new TextDecoder("utf-8", { fatal: true }).decode(data); } catch { throw hostError("the file is not UTF-8 text"); }
+      try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data); } catch { throw hostError("the file is not UTF-8 text"); }
     });
   }
 
@@ -115,7 +115,7 @@ export class HostWorkspace implements SessionWorkspace {
       const mimeType = imageType(data);
       if (mimeType) return { image: data, mimeType };
       if (data.length > MAX_FILE_BYTES) throw hostError("file exceeds size limit");
-      return { text: new TextDecoder().decode(data) };
+      return { text: new TextDecoder("utf-8", { ignoreBOM: true }).decode(data) };
     });
   }
 
@@ -161,6 +161,23 @@ export class HostWorkspace implements SessionWorkspace {
       const names = await readdir(await directoryAt(this.worktree, await this.#parts(value, false)));
       if (names.length > MAX_ENTRIES) throw hostError("directory has too many entries");
       return names.sort();
+    });
+  }
+
+  async listEntries(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]> {
+    const value = text(path ?? ".", "path", 1024);
+    return this.#operation(authorize, async () => {
+      const directory = await directoryAt(this.worktree, await this.#parts(value, false));
+      const names = await readdir(directory);
+      if (names.length > MAX_ENTRIES) throw hostError("directory has too many entries");
+      const entries: string[] = [];
+      for (const name of names.sort()) {
+        let info;
+        try { info = await lstat(join(directory, name)); }
+        catch (error) { if (errorCode(error) === "ENOENT") continue; throw error; }
+        entries.push(info.isDirectory() ? `${name}/` : name);
+      }
+      return checkedEntries(entries);
     });
   }
 

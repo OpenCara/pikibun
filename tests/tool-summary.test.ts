@@ -65,6 +65,32 @@ test("a result's summary says what came of the call, from what Pikibun's tools a
   assert.equal(summary("x".repeat(500)).text.length, 201, "cut to one line's worth, with an ellipsis");
 });
 
+test("a file tool's result in Pi's words: its summary reads Pi's text and notices, and opens as it is", () => {
+  const summary = (tool: string, text: string) => resultSummary(text, { tool }).text;
+  assert.equal(summary("read_file", "one\ntwo\nthree"), "3 lines");
+  assert.equal(summary("read_file", "{\"name\": \"app\"}\n"), "1 line", "a JSON file read is a file, not an answer");
+  assert.equal(summary("read_file", "a\nb\n\n[Showing lines 1-2000 of 2501. Use offset=2001 to continue.]"), "Lines 1–2000 of 2501");
+  assert.equal(summary("read_file", "a\n\n[Showing lines 7-9 of 90 (50.0KB limit). Use offset=10 to continue.]"), "Lines 7–9 of 90");
+  assert.equal(summary("read_file", "two\nthree\n\n[5 more lines in file. Use offset=4 to continue.]"), "Lines 2–3 of 8");
+  assert.equal(summary("read_file", "[Line 3 is 60.0KB, exceeds 50.0KB limit. A code mode script's read gets whole lines.]"), "Line 3 is 60.0KB, too long to show");
+  assert.equal(summary("read_file", "Read image file [image/png]\n[image image/png]"), "image/png");
+  assert.equal(summary("write_file", "Successfully wrote to a.ts"), "Written");
+  assert.equal(summary("edit_file", "Successfully replaced 2 block(s) in a.ts."), "Edited (2 edits)");
+  assert.equal(summary("list_files", "a/\nb\n.c"), "3 entries");
+  assert.equal(summary("list_files", "a\nb\n\n[2 entries limit reached. Use limit=4 for more]"), "2 entries (more not shown)");
+  assert.equal(summary("list_files", "(empty directory)"), "Empty directory");
+  assert.equal(summary("search", "src/a-1- before\nsrc/a:2: x\nb.ts:9: y: z\nb.ts-10- after"), "2 matches in 2 files");
+  assert.equal(summary("search", "a.ts:1: x\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]"), "1 match in 1 file (stopped early)");
+  assert.equal(summary("search", "No matches found"), "No matches");
+  assert.equal(summary("search", answer({ matches: [], files: 95, truncated: false })), "No matches", "a result from before Pi's contract still reads as it did");
+  assert.equal(summary("read_file", answer({ content: "a\nb\n" })), "2 lines");
+  for (const tool of ["read_file", "list_files", "search", "write_file", "edit_file"]) {
+    assert.deepEqual(resultSummary("invalid regular expression", { error: true, tool }), { text: "invalid regular expression", failed: true }, `a failed ${tool} reads as its error`);
+  }
+  assert.equal(resultBody("{\"name\": \"app\"}\n", { tool: "read_file" }), "{\"name\": \"app\"}\n", "a JSON file opens as it is");
+  assert.equal(resultBody(answer({ content: "const a = 1;\n" }), { tool: "read_file" }), "const a = 1;\n");
+});
+
 test("an opened result reads as the tool printed it, without who asked", () => {
   assert.equal(resultBody(card("executed", "line one\nline two\n")), "line one\nline two\n");
   assert.equal(resultBody(card("failed", "Sandbox process failed (exit 1)")), "(failed)\nSandbox process failed (exit 1)");

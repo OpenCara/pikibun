@@ -1,5 +1,5 @@
 import { lstat, open, readdir, type FileHandle } from "node:fs/promises";
-import { checkBrowseResult, type BrowseResult } from "../../../packages/shared/src/file-browser.js";
+import { checkBrowseResult, validEntryName, type BrowseResult } from "../../../packages/shared/src/file-browser.js";
 import { fileBrowserLimits, type FileEntry } from "../../../packages/shared/src/types.js";
 import { imageType } from "./images.js";
 import { OPEN_DIRECTORY, OPEN_FILE, windows } from "./platform.js";
@@ -20,6 +20,14 @@ export function checkedBrowse(value: unknown): BrowseResult {
     throw new Error("Invalid file browser response");
   }
   return result;
+}
+
+export const LISTED_ENTRIES = 10_000;
+
+export function checkedEntries(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > LISTED_ENTRIES
+    || !value.every(entry => typeof entry === "string" && validEntryName(entry.endsWith("/") ? entry.slice(0, -1) : entry))) throw new Error("Invalid sandbox listing response");
+  return value as string[];
 }
 
 async function readablePath(directory: string, handle: FileHandle): Promise<{ path: string; check(): Promise<void> }> {

@@ -485,9 +485,17 @@ async function main() {
     catch (error) { if (error instanceof SearchRefusal) refuse(error.message); throw error; }
   }
   if (kind === "list") {
-    const names = readdirSync(directoryAt(parts));
+    const directory = directoryAt(parts);
+    const names = readdirSync(directory);
     if (names.length > MAX_ENTRIES) refuse("directory has too many entries");
-    return print(names.sort());
+    if (request.marked !== true) return print(names.sort());
+    const entries = [];
+    for (const name of names.sort()) {
+      let info;
+      try { info = lstatSync(join(directory, name)); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      entries.push(info.isDirectory() && !info.isSymbolicLink() ? name + "/" : name);
+    }
+    return print(entries);
   }
   refuse("unsupported filesystem operation");
 }

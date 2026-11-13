@@ -23,6 +23,7 @@ const move = (from: string, to: string): Operation => workspace => workspace.fil
 const copy = (from: string, to: string): Operation => workspace => workspace.fileOperation(fileOperationRequest("copy", { from, to }), allow);
 const remove = (path: string, recursive = false): Operation => workspace => workspace.fileOperation(fileOperationRequest("delete", { path, recursive }), allow);
 const names = (path: string): Operation => async workspace => (await workspace.listFiles(path, allow)).filter(name => name !== "n");
+const entries = (path: string, only?: readonly string[]): Operation => async workspace => (await workspace.listEntries(path, allow)).filter(name => !only || only.includes(name.replace(/\/$/, "")));
 const found = (args: Parameters<typeof searchRequest>[0]): Operation => async workspace => (await workspace.search(searchRequest(args), allow)).matches;
 
 const TRAVERSAL = /path traversal is not allowed/;
@@ -35,6 +36,9 @@ const REFUSED = /./;
 const cases: Case[] = [
   ["writes a file, making its directories", write("new/deeper/file.txt"), { ok: undefined }],
   ["reads it back", read("new/deeper/file.txt"), { ok: "written" }],
+  ["writes a byte order mark", write("bom.txt", "\uFEFFmarked\r\n"), { ok: undefined }],
+  ["reads the byte order mark back, for an edit to keep", read("bom.txt"), { ok: "\uFEFFmarked\r\n" }],
+  ["reads the byte order mark back as the file's content", content("bom.txt"), { ok: { text: "\uFEFFmarked\r\n" } }],
   ["refuses ./ in a path", read("./inside/a.txt"), { refused: TRAVERSAL }],
   ["refuses an empty component", read("inside//a.txt"), { refused: TRAVERSAL }],
   ["refuses .. even where it would stay inside", read("inside/../inside/a.txt"), { refused: TRAVERSAL }],
@@ -57,6 +61,12 @@ const cases: Case[] = [
   ["reads through a link climbing back into the worktree", read("nested/in-file"), { ok: "A" }],
   ["reads through a link to a directory inside", read("in-dir/a.txt"), { ok: "A" }],
   ["lists through a link to a directory inside", list("in-dir"), { ok: ["a.txt"] }],
+  ["lists entries with / after a directory, and a link as it is", entries(".", ["inside", "nested", "in-dir", "in-file", "dangling", "loop"]),
+    { ok: ["dangling", "in-dir", "in-file", "inside/", "loop", "nested/"] }],
+  ["lists entries through a link to a directory inside", entries("in-dir"), { ok: ["a.txt"] }],
+  ["refuses listing entries through a link outside", entries("out-dir"), { refused: ESCAPES }],
+  ["refuses listing entries above the worktree", entries(".."), { refused: TRAVERSAL }],
+  ["refuses listing the entries of a file", entries("inside/a.txt"), { refused: REFUSED }],
   ["refuses reading through a link to a file outside", read("out-file"), { refused: ESCAPES }],
   ["refuses reading through a link to a directory outside", read("out-dir/secret.txt"), { refused: ESCAPES }],
   ["refuses reading through a link to the worktree's parent", read("up/outside/secret.txt"), { refused: ESCAPES }],
@@ -94,26 +104,31 @@ const cases: Case[] = [
     await workspace.writeFile("src/app.ts", "const a = 1;\nexport function hello() {\n  return \"hi\";\n}\n", allow);
     await workspace.writeFile("src/lib/util.ts", "export const HELLO = 2;\r\n", allow);
     await workspace.writeFile("node_modules/dep/index.js", "hello dep\n", allow);
-    await workspace.writeFile("long.txt", `${"x".repeat(400)}needle\n`, allow);
+    await workspace.writeFile("long.txt", `${"x".repeat(600)}needle\n`, allow);
     await workspace.writeFile("bin.dat", "needle\0", allow);
   }, { ok: undefined }],
   ["searches a directory", find({ pattern: "hello", path: "src" }), { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 2, truncated: false } }],
-  ["searches ignoring case, by file name, without the line's CR", found({ pattern: "hello", ignore_case: true, glob: "*.ts" }),
+  ["searches ignoring case, by file name, without the line's CR", found({ pattern: "hello", ignoreCase: true, glob: "*.ts" }),
     { ok: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }, { path: "src/lib/util.ts", line: 1, text: "export const HELLO = 2;" }] }],
   ["searches by path glob", found({ pattern: "HELLO", glob: "src/**/*.ts" }), { ok: [{ path: "src/lib/util.ts", line: 1, text: "export const HELLO = 2;" }] }],
+  ["matches a path glob from the path searched, not the worktree's top", found({ pattern: "HELLO", path: "src", glob: "lib/*.ts" }),
+    { ok: [{ path: "src/lib/util.ts", line: 1, text: "export const HELLO = 2;" }] }],
+  ["finds nothing for a glob written from the worktree's top under a path", found({ pattern: "HELLO", path: "src", glob: "src/**/*.ts" }), { ok: [] }],
   ["searches literal text", found({ pattern: "hello()", literal: true, path: "src" }), { ok: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }] }],
   ["searches one file, with context", find({ pattern: "return", path: "src/app.ts", context: 1 }),
     { ok: { matches: [{ path: "src/app.ts", line: 3, text: "  return \"hi\";", before: ["export function hello() {"], after: ["}"] }], files: 1, truncated: false } }],
-  ["stops at max_results, and says so", find({ pattern: "e", path: "src", max_results: 1 }),
-    { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 1, truncated: true } }],
-  ["says it stopped at max_results with files left, though no more matches were seen (review of #170)", find({ pattern: "hello", ignore_case: true, path: "src", max_results: 1 }),
-    { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 1, truncated: true } }],
+  ["finds one match past its limit, which says the limit cut something off, then stops", find({ pattern: "e", path: "src", limit: 1 }),
+    { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }, { path: "src/app.ts", line: 3, text: "  return \"hi\";" }], files: 1, truncated: true } }],
+  ["goes on past its limit, to the next file, for that one more match", find({ pattern: "hello", ignoreCase: true, path: "src", limit: 1 }),
+    { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }, { path: "src/lib/util.ts", line: 1, text: "export const HELLO = 2;" }], files: 2, truncated: false } }],
+  ["reaches its limit with nothing more to find, and isn't cut off", find({ pattern: "hello", path: "src", limit: 1 }),
+    { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 2, truncated: false } }],
   ["stops at its text budget, and says so", async workspace => {
     for (let index = 0; index < 10; index++) await workspace.writeFile(`wide/${index}.txt`, `${"\u{1F600}".repeat(300)}\n`.repeat(100), allow);
-    const result = await workspace.search(searchRequest({ pattern: ".", path: "wide", max_results: 500, context: 5 }), allow);
+    const result = await workspace.search(searchRequest({ pattern: ".", path: "wide", limit: 500, context: 5 }), allow);
     return { matches: result.matches.length, truncated: result.truncated };
   }, { ok: { matches: 80, truncated: true } }],
-  ["shortens a long line", found({ pattern: "needle", path: "long.txt" }), { ok: [{ path: "long.txt", line: 1, text: `${"x".repeat(300)}\u2026` }] }],
+  ["shortens a long line", found({ pattern: "needle", path: "long.txt" }), { ok: [{ path: "long.txt", line: 1, text: `${"x".repeat(500)}\u2026` }] }],
   ["skips node_modules", find({ pattern: "dep", glob: "*.js" }), { ok: { matches: [], files: 0, truncated: false } }],
   ["searches node_modules with all", found({ pattern: "dep", glob: "*.js", all: true }), { ok: [{ path: "node_modules/dep/index.js", line: 1, text: "hello dep" }] }],
   ["skips binary files", find({ pattern: "needle", glob: "bin.dat" }), { ok: { matches: [], files: 0, truncated: false } }],

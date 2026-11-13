@@ -1168,7 +1168,7 @@ def clone_restore(request):
 SEARCH_FILE_BYTES = 1024 * 1024
 SEARCH_FILES = 20000
 SEARCH_BYTES = 64 * 1024 * 1024
-SEARCH_LINE_TEXT = 300
+SEARCH_LINE_TEXT = 500
 SEARCH_SECONDS = 10
 SEARCH_TEXT = 256 * 1024
 
@@ -1215,7 +1215,7 @@ def search(root, request):
         return line[:SEARCH_LINE_TEXT] + '\u2026' if len(line) > SEARCH_LINE_TEXT else line
 
     def done():
-        if len(matches) >= max_results:
+        if len(matches) > max_results:
             state['truncated'] = True
         return state['truncated']
 
@@ -1232,7 +1232,7 @@ def search(root, request):
         if b'\0' in data:
             return
         try:
-            text = data.decode('utf-8')
+            text = data.decode('utf-8-sig')
         except UnicodeDecodeError:
             return
         state['files'] += 1
@@ -1243,7 +1243,7 @@ def search(root, request):
         for index, line in enumerate(lines):
             if not expression.search(line):
                 continue
-            if len(matches) >= max_results:
+            if len(matches) > max_results:
                 state['truncated'] = True
                 return
             match = {'path': relative, 'line': index + 1, 'text': shown(line)}
@@ -1256,6 +1256,9 @@ def search(root, request):
                 return
             state['characters'] += size
             matches.append(match)
+
+    def below(relative):
+        return relative if base == '.' else relative[len(base) + 1:]
 
     def visit(directory, prefix):
         try:
@@ -1286,11 +1289,12 @@ def search(root, request):
                     visit(child, relative)
                 finally:
                     os.close(child)
-            elif stat.S_ISREG(info.st_mode) and (glob_match is None or glob_match.match(relative if glob_path else name)):
+            elif stat.S_ISREG(info.st_mode) and (glob_match is None or glob_match.match(below(relative) if glob_path else name)):
                 search_file(directory, name, relative, info.st_size)
 
     path = request['path']
     parts = parts_for(path)
+    base = '/'.join(parts) or '.'
     if not parts:
         visit(root, '.')
     else:
@@ -1418,7 +1422,16 @@ def main():
                 names = os.listdir(directory)
                 if len(names) > MAX_ENTRIES:
                     raise ValueError('directory has too many entries')
-                result = sorted(names)
+                if request.get('marked') is True:
+                    result = []
+                    for name in sorted(names):
+                        try:
+                            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                        except FileNotFoundError:
+                            continue
+                        result.append(name + '/' if stat.S_ISDIR(info.st_mode) else name)
+                else:
+                    result = sorted(names)
             finally:
                 os.close(directory)
         else:

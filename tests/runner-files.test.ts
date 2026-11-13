@@ -12,6 +12,7 @@ import type { RunnerSession } from "../apps/runner/src/session.js";
 import type { AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 import { toolNames } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
+import { storedToolResults } from "./helpers/tool-results.js";
 
 function binding(id: string): RunnerBinding {
   return {
@@ -62,8 +63,13 @@ test("search and read_file's line ranges: the agent finds code and reads around 
   const view = await session.view();
   const transcript = view.entries.map(entry => entry.text).join("\n");
   assert.equal(view.approvals.length, 0, "no approval card");
-  assert.match(transcript, /"matches":\[\{"path":"src\/a\.ts","line":2,"text":"export const answer = 42;"\}\],"files":1,"truncated":false/);
-  assert.match(transcript, /"content":"export const answer = 42;\\nexport const other = 1;\\n","lines":\{"from":2,"to":3,"total":3\}/);
+  assert.ok(transcript.includes("src/a.ts:2: export const answer = 42;"), "a match in Pi's grep words, with its path from where it searched");
+  assert.ok(transcript.includes("export const answer = 42;\nexport const other = 1;\n\n[1 more lines in file. Use offset=4 to continue.]"), "the lines asked for, in Pi's read words");
+  const stored = await storedToolResults(session, view.entries.find(entry => entry.role === "toolResult")!.conversationId!);
+  const alice = { initiatedBy: "test:alice", actingAs: "test:alice", mode: "write" };
+  assert.deepEqual(stored.map(result => [result.tool, result.details?.pikibun]), [["write_file", alice], ["search", alice], ["read_file", alice], ["search", undefined]],
+    "who each call acted for is kept in its details; a refused call has none");
+  assert.deepEqual(stored.find(result => result.tool === "write_file")?.text, "Successfully wrote to src/a.ts");
   assert.match(transcript, /invalid regular expression/);
   assert.match(transcript, /Found it\./);
 });
@@ -101,6 +107,6 @@ test("move_file, copy_file and delete_file: the agent moves, copies and deletes 
   assert.match(transcript, /"moved":"src\/a\.ts","to":"lib\/a\.ts"/);
   assert.match(transcript, /the directory is not empty: delete it with recursive/);
   assert.match(transcript, /"deleted":"backup","entries":3/);
-  assert.match(transcript, /"files":\[".git","lib","src"\]/);
+  assert.ok(transcript.includes(".git/\nlib/\nsrc/"), "the worktree listed as Pi's ls lists it");
   assert.equal(await session.sandbox.readFile("lib/a.ts", async () => {}), "export const a = 1;\n");
 });

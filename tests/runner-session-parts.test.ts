@@ -550,7 +550,8 @@ test("tools: a tool checks that it is on first, then who acts, then the call, an
   const state = toolState();
   const { events, tool } = toolsFixture(state);
   const written = await tool("write_file").execute({ path: "a.txt", content: "x" }, toolApi(state), {});
-  assert.deepEqual(JSON.parse(written.output[0]!.text), { initiatedBy: "github:2", actingAs: "github:1", mode: "write", written: "a.txt" });
+  assert.equal(written.output[0]!.text, "Successfully wrote to a.txt");
+  assert.deepEqual((written as { details?: unknown }).details, { pikibun: { initiatedBy: "github:2", actingAs: "github:1", mode: "write" } }, "who the call acts for is in its details");
   assert.deepEqual(events, ["authorize github:2 write", "owner write_file", "sender github:2 write_file", "authorize github:2 write", "write a.txt"]);
   events.length = 0;
   await assert.rejects(tool("github_merge").execute({ repository: "acme/app", pull: 1, sha: "short", method: "squash" }, toolApi(state), {}), /40-character head commit/);

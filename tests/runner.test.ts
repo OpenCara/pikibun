@@ -854,7 +854,7 @@ test("a conversation starts at the host's level for its model, and a model switc
   assert.deepEqual((await session.view()).agent, { provider: "faux", modelId: "faux-1", thinkingLevel: "medium" });
 });
 
-test("edit_file replaces exact text in place, keeps a CRLF file CRLF, and refuses an ambiguous edit without writing", hostMode, async t => {
+test("edit_file runs Pi's edit: replaces text in place, keeps a CRLF file CRLF, and refuses an ambiguous edit without writing", hostMode, async t => {
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("edit_file", { path: "notes.txt", edits: [{ oldText: "beta", newText: "BETA" }, { oldText: "alpha\n", newText: "ALPHA\n" }] })], { stopReason: "toolUse" }),
@@ -875,7 +875,9 @@ test("edit_file replaces exact text in place, keeps a CRLF file CRLF, and refuse
   await session.submit(await ticket(id, "submit"), { content: "Edit again.", requestId: "ambiguous" }, "write");
   await idle(session);
   assert.equal(await session.sandbox.readFile("notes.txt", allowTestOperation), "ALPHA\r\nBETA\r\ngamma\r\n");
-  assert.ok(JSON.stringify((await session.view()).entries).includes("occurs 2 times in notes.txt"));
+  const entries = JSON.stringify((await session.view()).entries);
+  assert.ok(entries.includes("Successfully replaced 2 block(s) in notes.txt."), "Pi's edit answered");
+  assert.ok(entries.includes("Found 2 occurrences of the text in notes.txt. The text must be unique."), "and refused in Pi's words");
 });
 
 function faultyStorage(fault: { calls?: boolean; close?: boolean }) {
