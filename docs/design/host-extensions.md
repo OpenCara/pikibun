@@ -229,6 +229,9 @@ a private network address. See its [README](../../extensions/context-files/READM
 
 - Isolation in a per-session child process, in the session's sandbox and behind its egress proxy: planned in
   [extension-isolation.md](extension-isolation.md).
+- Pikibun's own hook packages (`piki:pr-flow`, `piki:context-files`, `piki:prompt-audit`) installed by the store at a
+  version the control plane pins, instead of compiled into the connector: planned in
+  [extension-loading.md](extension-loading.md).
 - `registerMcpServer` as tools, `registerProvider` feeding the host's models.
 - `ctx.ui.confirm`/`select` as cards; asking the session owner instead of refusing tools in Read-only messages.
 - `tool-search` as a built-in, once Pikibun defers tools (MCP servers' tools, say).
