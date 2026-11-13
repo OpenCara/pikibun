@@ -171,7 +171,7 @@ test('a clone session moves to another member\'s host without resource limits on
   assert.equal(refused.status, 409);
   assert.equal((await refused.json() as { code: string }).code, 'clone_host_required');
   f.sqlite.prepare(`INSERT INTO connector_host_grants (connector_id, workspace_id, user_id, level, host_sessions, expires_at, created_by, created_at)
-    VALUES ('new-host', 'workspace', 'test:owner', 'approve', 0, NULL, 'test:host', '2026-01-01')`).run();
+    VALUES ('new-host', 'workspace', 'test:owner', 'auto', 0, NULL, 'test:host', '2026-01-01')`).run();
   const moved = await move('granted');
   assert.equal(moved.status, 201);
   assert.equal((await moved.json() as { session: { connectorId: string } }).session.connectorId, 'new-host');

@@ -39,7 +39,7 @@ export async function hostAuthority(env: Env, row: Pick<SessionRow, 'connector_i
   userId: string): Promise<HostAuthority | undefined> {
   if (!row.connector_id || !row.connector_owner_id) return undefined;
   if (row.connector_owner_id === userId) return { level: 'owner', sessions: true };
-  const grants = await env.DB.query<{ level: HostCommandLevel; host_sessions: number | string }>(`SELECT g.level, g.host_sessions FROM connector_host_grants g
+  const grants = await env.DB.query<{ host_sessions: number | string }>(`SELECT g.host_sessions FROM connector_host_grants g
     JOIN connectors c ON c.id = g.connector_id
     JOIN workspace_members m ON m.workspace_id = g.workspace_id AND m.user_id = ?
     JOIN users u ON u.id = m.user_id
@@ -49,7 +49,7 @@ export async function hostAuthority(env: Env, row: Pick<SessionRow, 'connector_i
       AND EXISTS (SELECT 1 FROM connector_shares sh WHERE sh.connector_id = c.id AND sh.workspace_id = g.workspace_id)`)
     .bind(userId, row.connector_id, row.connector_owner_id, row.workspace_id, userId, Math.floor(Date.now() / 1000)).all();
   if (!grants.length) return undefined;
-  return { level: grants.some(grant => grant.level === 'auto') ? 'auto' : 'approve', sessions: grants.some(grant => Number(grant.host_sessions) === 1) };
+  return { level: 'auto', sessions: grants.some(grant => Number(grant.host_sessions) === 1) };
 }
 
 export async function hostCommandAuthority(env: Env, row: Pick<SessionRow, 'connector_id' | 'connector_owner_id' | 'workspace_id'>,
@@ -156,7 +156,7 @@ export function registerHostAccess(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('workspaceId'));
     const input = await jsonObject(c, 4096);
     if (Object.keys(input).some(key => !['userId', 'level', 'hostSessions', 'expiresAt'].includes(key))) fail(400, 'invalid_grant', 'Unexpected grant field.');
-    if (!hostCommandLevels.includes(input.level as HostCommandLevel)) fail(400, 'invalid_grant', 'A grant is approve or auto.');
+    if (!hostCommandLevels.includes(input.level as HostCommandLevel)) fail(400, 'invalid_grant', 'A grant\'s level is auto.');
     const level = input.level as HostCommandLevel;
     if (input.hostSessions !== undefined && typeof input.hostSessions !== 'boolean') fail(400, 'invalid_grant', 'hostSessions must be true or false.');
     if (input.hostSessions === true && row.role !== 'owner') fail(403, 'host_owner_required', 'Only the host\'s owner grants sessions on the host.');

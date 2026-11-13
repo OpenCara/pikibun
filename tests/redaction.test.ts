@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { containsRedaction, REDACTED, redactApproval, redactOperation, redactSecrets, redactView } from '../packages/shared/src/redaction.js';
-import type { ApprovalRecord, SessionView } from '../packages/shared/src/types.js';
+import type { OperationRecord, SessionView } from '../packages/shared/src/types.js';
 
 const github = `ghp_${'a1B2'.repeat(9)}`;
 const pem = (type: string, body: string, newline = '\n') => `-----BEGIN ${type}PRIVATE KEY-----${newline}${body}${newline}-----END ${type}PRIVATE KEY-----`;
@@ -149,7 +149,7 @@ test('hostile text is redacted in linear time', () => {
 });
 
 test('views and approvals keep their shape, review hash and structural fields; only text people read changes', () => {
-  const approval = (operation: ApprovalRecord['operation'], extra: Partial<ApprovalRecord> = {}): ApprovalRecord =>
+  const approval = (operation: OperationRecord['operation'], extra: Partial<OperationRecord> = {}): OperationRecord =>
     ({ id: 'approval', sessionId: 'session', requestedBy: 'github:1', operation, status: 'pending', createdAt: '2026-01-01T00:00:00.000Z', reviewHash: 'h'.repeat(43), ...extra });
   const push = approval({ kind: 'git.push', repository: 'owner/repo', branch: 'token-fix', commit: 'a'.repeat(40),
     pullRequest: { title: `Rotate ${github}`, body: 'password: hunter22', base: 'main' } });

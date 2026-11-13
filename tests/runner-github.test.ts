@@ -11,7 +11,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { RunnerService } from "../apps/runner/src/server.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
-import type { ApprovalRecord, AuthorizationRequest, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubReadRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
+import type { OperationRecord, AuthorizationRequest, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubReadRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 
 const hostMode = { skip: !["linux", "darwin"].includes(process.platform) || spawnSync("git", ["--version"]).status !== 0 };
@@ -39,8 +39,8 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
-  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+async function records(session: RunnerSession): Promise<OperationRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, OperationRecord> }> }).metadata()).approvals);
 }
 
 test("agents read GitHub pull requests through the broker and merge at once for their message, failing definitely only on GitHub's refusal", hostMode, async t => {

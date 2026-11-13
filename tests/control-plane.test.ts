@@ -127,6 +127,22 @@ test('removing approvals keeps every approval review in the audit log, whatever 
   }
 });
 
+test('host command grants given as approve become auto ones, keeping the rest of the grant', t => {
+  const sqlite = new DatabaseSync(':memory:'); t.after(() => sqlite.close());
+  const levels = migrationFiles.indexOf('0067_host_grant_levels.sql');
+  assert.ok(levels > 0);
+  migrate(sqlite, migrationFiles.slice(0, levels));
+  sqlite.exec('PRAGMA foreign_keys = OFF');
+  const grant = sqlite.prepare(`INSERT INTO connector_host_grants (connector_id, workspace_id, user_id, level, host_sessions, expires_at, created_by, created_at)
+    VALUES ('host', 'workspace', ?, ?, ?, ?, 'owner', '2026-01-01')`);
+  grant.run('approver', 'approve', 1, 1900000000);
+  grant.run('', 'auto', 0, null);
+  sqlite.exec('PRAGMA foreign_keys = ON');
+  migrate(sqlite, migrationFiles.slice(levels));
+  assert.deepEqual(sqlite.prepare('SELECT user_id, level, host_sessions, expires_at FROM connector_host_grants ORDER BY user_id').all().map(row => ({ ...row })),
+    [{ user_id: '', level: 'auto', host_sessions: 0, expires_at: null }, { user_id: 'approver', level: 'auto', host_sessions: 1, expires_at: 1900000000 }]);
+});
+
 test('connector schema enforces credentials, shares, catalog identity, and paired immutable session routing', async t => {
   const f = await fixture(t);
   const sqlite = f.sqlite;

@@ -16,7 +16,7 @@ import { hostGitAuthorization, HostCredentialError } from "../apps/runner/src/gi
 import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerConfig, RunnerSession } from "../apps/runner/src/session.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
-import type { ApprovalRecord, AuthorizationRequest, Permission, PushCompleteRequest, PushCredential, PushCredentialRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
+import type { OperationRecord, AuthorizationRequest, Permission, PushCompleteRequest, PushCredential, PushCredentialRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { startGitHttpServer } from "./helpers/git-http.js";
 
@@ -90,8 +90,8 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
-  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+async function records(session: RunnerSession): Promise<OperationRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, OperationRecord> }> }).metadata()).approvals);
 }
 
 test("sessions push a clone at once for a message that may act, with its admission, and always report completion", sandboxMode, async t => {

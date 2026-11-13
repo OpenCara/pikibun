@@ -40,7 +40,7 @@ import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { BranchReports } from "./session/branch-reports.js";
 import { HostCommandPolicy } from "./session/host-commands.js";
-import { ApprovalWaits } from "./session/approval-waits.js";
+import { WholeResults } from "./session/whole-results.js";
 import { entryImages } from "./session/entries.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
 import { MessageInputs, prepareMessageImages } from "./session/inputs.js";
@@ -70,7 +70,7 @@ import type { RestoreManifest } from "./restore.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { configuredCompaction, hostCompaction } from "./compaction.js";
 import { ActivityReporter, sessionActivity } from "./activity.js";
-import type { StoredApproval } from "./approval-view.js";
+import type { StoredOperation } from "./operation-record.js";
 import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
 import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
@@ -185,7 +185,7 @@ export class RunnerSession {
   readonly #operations: SessionOperations;
   #failed = false;
   #recovery: Promise<void> | undefined;
-  readonly #waits = new ApprovalWaits();
+  readonly #wholeResults = new WholeResults();
   readonly #repositories: SessionRepositories;
   #opened = false;
   #resumed = false;
@@ -265,13 +265,13 @@ export class RunnerSession {
       authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig(),
       requireOwnerTool: tool => this.#availability.requireOwnerTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
     this.#operations = new SessionOperations({
-      binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, waits: this.#waits,
+      binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, wholeResults: this.#wholeResults,
       requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
       metadata: () => this.metadata(), mutate: change => this.mutate(change), commandOptions: timeoutSeconds => this.#calls.commandOptions(timeoutSeconds),
       testShell: () => this.testShell(), controlPlane: <T>(path: string, body: unknown) => this.controlPlane<T>(path, body),
     });
     this.#toolContext = {
-      binding, config, sandbox: this.sandbox, onHost: this.#onHost, calls: this.#calls, hostCommands: this.hostCommands, waits: this.#waits, operations: this.#operations,
+      binding, config, sandbox: this.sandbox, onHost: this.#onHost, calls: this.#calls, hostCommands: this.hostCommands, wholeResults: this.#wholeResults, operations: this.#operations,
       requireSessionTool: tool => this.#availability.requireSessionTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId),
       metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
@@ -294,7 +294,7 @@ export class RunnerSession {
     });
     this.#piki = new SessionPiki({
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
-      waits: this.#waits, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
+      wholeResults: this.#wholeResults, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
       mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(),
     });
@@ -366,11 +366,9 @@ export class RunnerSession {
       throw new RunnerError(403, "Ticket session, owner, or connector mismatch");
   }
 
-  async authorize(actorId: string, permission: Permission, expectedPolicyVersion?: number, host = false, hostSessions = false, archived = false, autoApprove = false,
-    memberAutoApprove = false): Promise<AuthorizationResult> {
+  async authorize(actorId: string, permission: Permission, expectedPolicyVersion?: number, host = false, hostSessions = false, archived = false): Promise<AuthorizationResult> {
     const body: AuthorizationRequest = { sessionId: this.binding.session.id, ownerId: this.binding.owner.id, actorId, permission,
-      ...(host ? { host: true } : {}), ...(host && hostSessions ? { hostSessions: true } : {}), ...(archived ? { archived: true } : {}),
-      ...(autoApprove ? { autoApprove: true } : {}), ...(memberAutoApprove ? { memberAutoApprove: true } : {}) };
+      ...(host ? { host: true } : {}), ...(host && hostSessions ? { hostSessions: true } : {}), ...(archived ? { archived: true } : {}) };
     let result: AuthorizationResult;
     try {
       if (this.config.authorize) result = await this.config.authorize(body);
@@ -1043,7 +1041,7 @@ export class RunnerSession {
     return buildTools(this.#toolContext, this.#clone && !!this.#egress);
   }
 
-  runOperation(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredApproval> {
+  runOperation(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredOperation> {
     return this.#operations.run(actorId, input, toolTaskId, consent, signal);
   }
 
@@ -1292,7 +1290,7 @@ export class RunnerSession {
 
   async close({ abortPushes = true }: { abortPushes?: boolean } = {}): Promise<void> {
     this.closing = true;
-    this.#waits.dropResults();
+    this.#wholeResults.dropResults();
     this.#repositories.reset();
     this.#opened = false;
     this.#resumed = false;

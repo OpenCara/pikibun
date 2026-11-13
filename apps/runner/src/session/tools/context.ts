@@ -5,9 +5,9 @@ import type { HostConfig } from "../../../../../packages/shared/src/host-config.
 import type { EgressGrant } from "../../../../../packages/shared/src/network.js";
 import type { HostTunnelStatus, TunnelUnavailableReason } from "../../../../../packages/shared/src/tunnel.js";
 import type { GitHubIssueView, GitHubReadRequest, RunnerBinding, ScheduleToolRequest, ScheduleToolResult } from "../../../../../packages/shared/src/types.js";
-import type { StoredApproval } from "../../approval-view.js";
+import type { StoredOperation } from "../../operation-record.js";
 import type { SessionWorkspace } from "../../workspace.js";
-import type { ApprovalWaits } from "../approval-waits.js";
+import type { WholeResults } from "../whole-results.js";
 import type { HostCommandPolicy } from "../host-commands.js";
 import type { SessionOperations } from "../operations.js";
 import type { Metadata } from "../state.js";
@@ -30,7 +30,7 @@ export interface ToolContext {
   onHost: boolean;
   calls: ToolCalls;
   hostCommands: HostCommandPolicy;
-  waits: ApprovalWaits;
+  wholeResults: WholeResults;
   operations: Pick<SessionOperations, "run" | "internalGitHub" | "internalBroker">;
   requireSessionTool(tool: string): Promise<void>;
   requireSenderTool(tool: string, senderId: string): Promise<void>;
@@ -47,6 +47,6 @@ export interface ToolContext {
 }
 
 export const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-export const approvalText = (approval: StoredApproval) => text({ ...approval, admissionId: undefined, callId: undefined });
-export const commandText = async (context: ToolContext, approval: StoredApproval, api: ToolExecutionApi, tool: string) =>
+export const approvalText = (approval: StoredOperation) => text({ ...approval, admissionId: undefined, callId: undefined });
+export const commandText = async (context: ToolContext, approval: StoredOperation, api: ToolExecutionApi, tool: string) =>
   text(await context.calls.shownApproval(approval, api, tool));

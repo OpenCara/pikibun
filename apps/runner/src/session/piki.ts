@@ -12,7 +12,7 @@ import { SandboxProcessError } from "../sandbox.js";
 import { inScriptCall } from "../script-output.js";
 import { toolOutputPath } from "../tool-output.js";
 import type { SessionWorkspace } from "../workspace.js";
-import type { ApprovalWaits } from "./approval-waits.js";
+import type { WholeResults } from "./whole-results.js";
 import { HOST_COMMANDS_RULE, type HostCommandPolicy } from "./host-commands.js";
 import type { SessionOperations } from "./operations.js";
 import type { Metadata } from "./state.js";
@@ -28,7 +28,7 @@ export interface SessionPikiOptions {
   sandboxed: boolean;
   calls: ToolCalls;
   hostCommands: HostCommandPolicy;
-  waits: ApprovalWaits;
+  wholeResults: WholeResults;
   operations: Pick<SessionOperations, "run">;
   apiLease(): { token: string; release(): void } | undefined;
   forgeWrites(senderId: string): Promise<boolean>;
@@ -109,7 +109,7 @@ export class SessionPiki {
   }
 
   async #runTool(call: Parameters<ExtensionHost["runTool"]>[0], execute: Parameters<ExtensionHost["runTool"]>[1]): Promise<ToolExecutionResult> {
-    const { calls, waits } = this.options;
+    const { calls, wholeResults } = this.options;
     const attribution = await calls.actor(call.api, true);
     const state = await this.options.metadata();
     const run = state.runs[state.toolActors[String(call.api.taskId)]!.runKey]!;
@@ -136,10 +136,10 @@ export class SessionPiki {
     try {
       const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
       const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
-      await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: waits.kept(id, shown || "(no output)") }); });
+      await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: wholeResults.kept(id, shown || "(no output)") }); });
       return result;
     } catch (error) {
-      await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: waits.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
+      await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: wholeResults.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
       throw error;
     } finally {
       this.#pikiCalls.delete(callId);

@@ -43,7 +43,7 @@ export class HostCommandPolicy {
   async level(actorId: string, permission: Permission): Promise<HostCommandLevel | undefined> {
     if (this.options.connectorOwnerId && actorId === this.options.connectorOwnerId) return "auto";
     const result = await this.options.authorize(actorId, permission, true, false);
-    return result.hostCommands === "approve" || result.hostCommands === "auto" ? result.hostCommands : undefined;
+    return result.hostCommands ? "auto" : undefined;
   }
 
   async allowed(actorId: string): Promise<boolean> {

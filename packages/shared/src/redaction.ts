@@ -1,4 +1,4 @@
-import type { ApprovalRecord, EntryView, Operation, SessionView } from "./types.js";
+import type { OperationRecord, EntryView, Operation, SessionView } from "./types.js";
 
 export const REDACTED = "[redacted]";
 
@@ -218,7 +218,7 @@ export function redactOperation(operation: Operation): Operation {
   }
 }
 
-export function redactApproval(approval: ApprovalRecord): ApprovalRecord {
+export function redactApproval(approval: OperationRecord): OperationRecord {
   if (!approval || typeof approval !== "object" || !approval.operation || typeof approval.operation !== "object") return approval;
   return { ...approval, operation: redactOperation(approval.operation), ...(typeof approval.result === "string" ? { result: redactSecrets(approval.result) } : {}) };
 }

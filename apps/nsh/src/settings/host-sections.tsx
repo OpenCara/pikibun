@@ -269,7 +269,6 @@ export function HostCompactionSection(props: { connector: ConnectorInfo; refresh
 }
 
 const levelLabels: Record<HostCommandLevel, { label: string; hint: string }> = {
-  approve: { label: "Host commands", hint: "Their messages run host commands, such as extension tools, at once" },
   auto: { label: "Host commands", hint: "Their messages run host commands, such as extension tools, at once" },
 };
 const expiries = [

@@ -113,11 +113,11 @@ export function tunnelTool(context: ToolContext): ToolRegistration {
       try {
         await calls.recheck(attribution);
         const started = await context.startTunnel().start(request.serve!, attribution.initiatedBy, call.abortSignal, request.access);
-        await context.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: context.waits.kept(id, `Online at ${started.url}`) }); });
+        await context.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: context.wholeResults.kept(id, `Online at ${started.url}`) }); });
         return text({ ...attribution, ...started });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await context.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: context.waits.kept(id, message) }); }).catch(() => {});
+        await context.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: context.wholeResults.kept(id, message) }); }).catch(() => {});
         throw new RunnerError(error instanceof RunnerError ? error.status : 409, message);
       }
     } });

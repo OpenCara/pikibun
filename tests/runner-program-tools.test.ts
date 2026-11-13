@@ -9,7 +9,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
-import type { ApprovalRecord, AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
+import type { OperationRecord, AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 import { toolNames } from "../packages/shared/src/types.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
@@ -40,11 +40,11 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
-  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+async function records(session: RunnerSession): Promise<OperationRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, OperationRecord> }> }).metadata()).approvals);
 }
 
-async function ranLast(session: RunnerSession): Promise<ApprovalRecord> {
+async function ranLast(session: RunnerSession): Promise<OperationRecord> {
   await idle(session);
   const ran = (await records(session)).at(-1);
   assert.ok(ran, "a program call ran");

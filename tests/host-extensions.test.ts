@@ -14,7 +14,7 @@ import { addedPrompt, ExtensionPrompts, SessionExtensions, settleToolNames, type
 import { HostExtensions } from "../apps/runner/src/extensions/host.js";
 import { RunnerService } from "../apps/runner/src/server.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
-import type { ApprovalRecord, RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
+import type { OperationRecord, RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { extensionAvailability, extensionPackageKey, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
@@ -406,7 +406,7 @@ test("an extension's tool runs only where the host's owner lets it, never in a R
   };
   const results = async () => (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
 
-  const records = async () => Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+  const records = async () => Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, OperationRecord> }> }).metadata()).approvals);
   await send("hello", "auto");
   await idle();
   assert.match((await results()).at(-1)!, /shout comes from an extension, which runs on the host's own machine/, "the session's owner has no host command grant");
@@ -486,7 +486,7 @@ test("a Pikibun extension's command runs with the host's own sign-in only where 
   const session = await service.provision(target, await claims("create"));
   await session.submit(await claims("submit"), { content: "list them", requestId: "list", admissionId: await sha256("list"), options: { access: "approval" } }, "write");
   for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
-  const card = Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals).at(-1)!;
+  const card = Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, OperationRecord> }> }).metadata()).approvals).at(-1)!;
   assert.deepEqual([card.operation.kind, card.status, card.result], ["extension.tool", "executed", "gh ran: pr list"]);
 });
 

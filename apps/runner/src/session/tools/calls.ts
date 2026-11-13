@@ -2,8 +2,8 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { ToolExecutionApi, ToolExecutionResult } from "@earendil-works/pi-durable";
 import { parseBrowserReport } from "../../../../../packages/shared/src/browser.js";
 import type { HostConfig } from "../../../../../packages/shared/src/host-config.js";
-import type { AnyToolName, ApprovalRecord } from "../../../../../packages/shared/src/types.js";
-import type { StoredApproval } from "../../approval-view.js";
+import type { AnyToolName, OperationRecord } from "../../../../../packages/shared/src/types.js";
+import type { StoredOperation } from "../../operation-record.js";
 import type { OutputFiles } from "../../extensions/builtin.js";
 import { callLimits, commandLimits, type CommandLimits } from "../../host-config.js";
 import { prepareImage } from "../../images.js";
@@ -50,7 +50,7 @@ export class ToolCalls {
     }).catch(() => {});
   }
 
-  async shownApproval(approval: StoredApproval, api: ToolExecutionApi, tool: string): Promise<Record<string, unknown>> {
+  async shownApproval(approval: StoredOperation, api: ToolExecutionApi, tool: string): Promise<Record<string, unknown>> {
     const shown = { ...approval, admissionId: undefined, callId: undefined };
     const result = approval.result;
     if (typeof result !== "string") return shown;
@@ -86,9 +86,9 @@ export class ToolCalls {
     await this.options.authorize(attribution.initiatedBy, attribution.mode === "ask" ? "ask" : "write");
   }
 
-  async browserOutcome(approval: ApprovalRecord, recheck: () => Promise<void>, approvalText: (approval: StoredApproval) => ToolExecutionResult): Promise<ToolExecutionResult> {
+  async browserOutcome(approval: OperationRecord, recheck: () => Promise<void>, approvalText: (approval: StoredOperation) => ToolExecutionResult): Promise<ToolExecutionResult> {
     const report = approval.status === "executed" && approval.result ? parseBrowserReport(approval.result.trim()) : undefined;
-    if (!report) return approvalText(approval as StoredApproval);
+    if (!report) return approvalText(approval as StoredOperation);
     const output: ToolExecutionResult["output"] = [{ type: "text", text: JSON.stringify({ ...approval, result: undefined, admissionId: undefined, callId: undefined, report }) }];
     if (report.screenshot) {
       try {

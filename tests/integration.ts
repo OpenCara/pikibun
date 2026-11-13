@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256 } from "../packages/shared/src/crypto.js";
-import type { ApprovalRecord, ModelDefinition, SessionRecord, SessionView, SubmitResult, UserProfile, Workspace } from "../packages/shared/src/types.js";
+import type { OperationRecord, ModelDefinition, SessionRecord, SessionView, SubmitResult, UserProfile, Workspace } from "../packages/shared/src/types.js";
 import type { ConnectorInfo, ConnectorPairing } from "../packages/shared/src/connector.js";
 import { createConnector } from "../apps/runner/src/connector.js";
 import { createFauxLocalModels } from "../apps/runner/src/local-pi.js";
@@ -63,7 +63,7 @@ class Client {
     } while (Date.now() < deadline);
     throw new Error(`Session ${sessionId} did not settle${text ? ` with ${text}` : ""}`);
   }
-  async settledCard(sessionId: string, id: string): Promise<ApprovalRecord> {
+  async settledCard(sessionId: string, id: string): Promise<OperationRecord> {
     const deadline = Date.now() + 30_000;
     do {
       const card = (await this.view(sessionId)).approvals.find(approval => approval.id === id);

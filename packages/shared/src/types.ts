@@ -207,10 +207,8 @@ export interface AuthorizationRequest {
   host?: boolean;
   hostSessions?: boolean;
   archived?: boolean;
-  autoApprove?: boolean;
-  memberAutoApprove?: boolean;
 }
-export const hostCommandLevels = ["approve", "auto"] as const;
+export const hostCommandLevels = ["auto"] as const;
 export type HostCommandLevel = (typeof hostCommandLevels)[number];
 export interface AuthorizationResult {
   allowed: boolean;
@@ -218,8 +216,6 @@ export interface AuthorizationResult {
   ownerId: string;
   hostCommands?: HostCommandLevel;
   hostSessions?: true;
-  autoApprove?: true;
-  memberAutoApprove?: true;
 }
 export interface PullRequestRequest {
   title: string;
@@ -488,7 +484,7 @@ export interface WorkspaceDatabase {
   updatedAt: string;
 }
 export type BackupLocation = "server" | "workspace-database";
-export interface ApprovalRecord {
+export interface OperationRecord {
   id: string;
   sessionId: string;
   requestedBy: string;
@@ -504,10 +500,10 @@ export interface ApprovalRecord {
   unbounded?: boolean;
   permission?: { decidedBy: string; scope?: "call" | "session" };
 }
-export interface AutoApprovedCall {
+export interface CallOutcome {
   tool: string;
   callId?: string;
-  status: ApprovalRecord["status"];
+  status: OperationRecord["status"];
   unbounded?: true;
 }
 export interface ToolCallRef {
@@ -527,7 +523,7 @@ export interface EntryView {
   conversationId?: string;
   error?: { provider?: string; modelId?: string; status?: number; compaction?: CompactionFailure; cause?: ModelFailureCause; compacting?: true };
   durationMs?: number;
-  autoApproved?: AutoApprovedCall[];
+  autoApproved?: CallOutcome[];
   toolCalls?: ToolCallRef[];
   toolResult?: { callId?: string; tool?: string; error?: true };
   images?: { mimeType: string }[];
@@ -560,7 +556,7 @@ export interface SessionView {
   sessionId: string;
   owner: Pick<UserProfile, "id" | "displayName" | "gitName" | "gitEmail" | "githubLogin">;
   entries: EntryView[];
-  approvals: ApprovalRecord[];
+  approvals: OperationRecord[];
   olderApprovals?: number;
   conversations: ConversationView[];
   busy: boolean;

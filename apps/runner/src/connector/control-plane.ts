@@ -86,11 +86,10 @@ export class ControlPlaneCalls {
 
   async authorize(generation: Generation, request: AuthorizationRequest): Promise<AuthorizationResult> {
     const payload = { sessionId: request.sessionId, actorId: request.actorId, ownerId: request.ownerId, permission: request.permission, ...(request.host ? { host: true } : {}),
-      ...(request.host && request.hostSessions ? { hostSessions: true } : {}), ...(request.archived ? { archived: true } : {}),
-      ...(request.autoApprove ? { autoApprove: true } : {}), ...(request.memberAutoApprove ? { memberAutoApprove: true } : {}) };
+      ...(request.host && request.hostSessions ? { hostSessions: true } : {}), ...(request.archived ? { archived: true } : {}) };
     const result = z.object({
-      allowed: z.boolean(), ownerId: actorSchema, policyVersion: z.number().int().positive(), hostCommands: z.enum(["approve", "auto"]).optional(),
-      hostSessions: z.literal(true).optional(), autoApprove: z.literal(true).optional(), memberAutoApprove: z.literal(true).optional(),
+      allowed: z.boolean(), ownerId: actorSchema, policyVersion: z.number().int().positive(), hostCommands: z.enum(["approve", "auto"]).optional().transform(level => level && "auto" as const),
+      hostSessions: z.literal(true).optional(),
     }).strict().parse(await this.callback(generation, "/api/connectors/self/authorize", payload));
     if (result.ownerId !== request.ownerId) throw new Error("Invalid authorization response");
     return result;
