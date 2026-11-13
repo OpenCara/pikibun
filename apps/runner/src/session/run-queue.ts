@@ -20,7 +20,6 @@ export const INPUT_IMAGES = "An extension on this host changed this message's im
 
 export type RunContent = string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
 
-/** Side asks run beside the shared work, each in its own conversation, up to this many at once. */
 export const MAX_RUNNING_ASKS = 4;
 
 const active = (run: Run) => run.status === "running" || run.status === "admitting";
@@ -216,7 +215,6 @@ export class RunQueue {
         const stopping = runs.some(run => run.stopped?.pending);
         const executing = Object.values(state.approvals).some(approval => approval.status === "executing");
         const queued = runs.filter(candidate => candidate.status === "queued").sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-        // Shared messages run one at a time, in order, in the shared conversation (or steer the one at work).
         let write = queued.find(candidate => candidate.mode === "write");
         let root: string | undefined;
         if (write && (write.screening || executing)) write = undefined;
@@ -224,7 +222,6 @@ export class RunQueue {
           root = steersInto(state.runs, write);
           if (root === undefined) write = undefined;
         }
-        // A side ask works in a conversation of its own, read-only, so it starts at once, beside whatever the shared work does.
         const ask = stopping || runs.filter(run => run.mode === "ask" && active(run)).length >= MAX_RUNNING_ASKS ? undefined
           : queued.find(candidate => candidate.mode === "ask" && !candidate.screening);
         const run = write && (!ask || (write.sequence ?? 0) < (ask.sequence ?? 0)) ? write : ask;
