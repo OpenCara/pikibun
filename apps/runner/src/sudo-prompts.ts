@@ -67,24 +67,36 @@ export class SudoPrompts {
   }
 
   start(): Promise<string> {
-    this.#starting ??= (async () => {
+    if (this.#starting) return this.#starting;
+    const starting = (async () => {
       await this.#closing;
       const directory = await mkdtemp(join(tmpdir(), "pikibun-sudo-"));
       this.#directory = directory;
-      const socket = join(directory, "s");
-      const server = createServer(connection => this.#connection(connection));
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(socket, () => { server.off("error", reject); resolve(); });
-      });
-      this.#server = server;
-      await writeFile(join(directory, "askpass.cjs"), helperSource(socket, this.#token), { mode: 0o600 });
-      const helper = join(directory, "askpass");
-      await writeFile(helper, `#!/bin/sh\nexec ${quote(this.#options.node ?? process.execPath)} ${quote(join(directory, "askpass.cjs"))} "$@"\n`, { mode: 0o700 });
-      this.#helper = helper;
-      return helper;
+      try {
+        const socket = join(directory, "s");
+        const server = createServer(connection => this.#connection(connection));
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(socket, () => { server.off("error", reject); resolve(); });
+        });
+        this.#server = server;
+        await writeFile(join(directory, "askpass.cjs"), helperSource(socket, this.#token), { mode: 0o600 });
+        const helper = join(directory, "askpass");
+        await writeFile(helper, `#!/bin/sh\nexec ${quote(this.#options.node ?? process.execPath)} ${quote(join(directory, "askpass.cjs"))} "$@"\n`, { mode: 0o700 });
+        this.#helper = helper;
+        return helper;
+      } catch (error) {
+        const server = this.#server;
+        this.#server = undefined;
+        this.#directory = undefined;
+        if (server) await new Promise<void>(resolve => server.close(() => resolve()));
+        await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
     })();
-    return this.#starting;
+    this.#starting = starting;
+    starting.catch(() => { if (this.#starting === starting) this.#starting = undefined; });
+    return starting;
   }
 
   view(): SudoPromptView | undefined {
@@ -175,7 +187,7 @@ export class SudoPrompts {
       const index = this.#pending.indexOf(pending);
       if (index >= 0) this.#pending.splice(index, 1);
       if (!this.#pending.length && this.#waitingSince !== undefined) {
-        this.#waited = [...this.#waited.slice(-63), { from: this.#waitingSince, to: this.#now() }];
+        this.#waited = [...this.#waited.slice(-1023), { from: this.#waitingSince, to: this.#now() }];
         this.#waitingSince = undefined;
       }
       if (!connection.destroyed) connection.end(JSON.stringify(password === undefined ? { declined: true } : { password }));

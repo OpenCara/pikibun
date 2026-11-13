@@ -455,9 +455,11 @@ export class RunnerSession {
   }
 
   private async sudoAllowed(): Promise<boolean> {
-    const answer = this.#sudo && this.config.extensions ? await this.config.extensions.workspace(this.binding.session.workspaceId).catch(() => undefined) : undefined;
-    this.#sudoOffered = answer?.ownerPrivate === true;
-    return this.#sudoOffered;
+    if (!this.#sudo || !this.config.extensions || this.closing) return false;
+    const answer = await this.config.extensions.workspace(this.binding.session.workspaceId).catch(() => undefined);
+    if (!answer) return false;
+    this.#sudoOffered = answer.ownerPrivate === true;
+    return this.#sudoOffered && !this.closing;
   }
 
   get packed(): boolean { return this.#packed; }

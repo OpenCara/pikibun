@@ -30,6 +30,7 @@ export function SudoPrompt(props: { sessionId: string; prompt: SudoPromptView; h
           {`sudo asks for ${props.canAnswer ? "your" : "the host owner's"} password${props.hostName ? ` on ${props.hostName}` : ""}`}
         </Text>
       </View>
+      <Small>{`sudo's prompt: “${props.prompt.prompt}”${props.prompt.command ? ", while this command ran:" : ""}`}</Small>
       <If when={props.prompt.command}>
         {command => (
           <View selectable style={{ borderRadius: radius.medium, backgroundColor: palette().code, paddingHorizontal: 10, paddingVertical: 6 }}>
@@ -41,8 +42,8 @@ export function SudoPrompt(props: { sessionId: string; prompt: SudoPromptView; h
         else={<Small>{props.canAnswer ? "sudo takes a password only in sessions of your private workspace. Decline it here, and run the command in a terminal instead."
           : "Waiting for the host's owner to answer it. Only they can, and only in their own sessions."}</Small>}>
         <TextField testID="sudo-password" masked autoFocus value={password()} onChange={value => password.set(value)} onSubmit={() => answer(false)}
-          placeholder={props.prompt.prompt} accessibilityLabel={props.prompt.prompt} autoCapitalize="none" autoCorrect={false} maxLength={1024} disabled={action.busy()} />
-        <Small>It goes to this one sudo command on the host and nowhere else: not into the chat, the transcript or the agent's context, and nothing keeps it.</Small>
+          placeholder="Your password" accessibilityLabel="Your password for sudo" autoCapitalize="none" autoCorrect={false} maxLength={1024} disabled={action.busy()} />
+        <Small>It goes to this one sudo command on the host and nowhere else: not into the chat, the transcript or the agent's context, and nothing keeps it. The agent can ask through sudo too, so answer only for a command you expect.</Small>
       </If>
       <If when={props.canAnswer}>
         <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8 }}>

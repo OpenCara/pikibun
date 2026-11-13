@@ -50,9 +50,15 @@ and they see the command it is for.
   (`ownerPrivate`), not from the session's binding, which is immutable and compared on restores and moves. An older
   server sends no `ownerPrivate`, so its hosts offer no `sudo -A`; an older connector ignores it, and its sessions have no
   prompts, as before. A workspace that stops being the private one (it can't) or a host whose answer can't be read
-  offers none: the helper and its socket are removed before the next command.
+  offers none: the helper and its socket are removed before the next command. A session that is closing offers none
+  either, so a command still in flight as it closes doesn't start a helper nobody removes. A failed fetch keeps the last
+  answer for the agent's instructions but takes no password until a fetch succeeds.
+- **Started when needed.** The helper starts before a command runs (`prepare`), not once: a session restart closes it
+  with the session and the next command starts it again, and one that failed to start (a full temporary directory)
+  is tried again at the next command, leaving nothing behind.
 - **The box** (`apps/nsh/src/components/SudoPrompt.tsx`) sits above the chat box, apart from it, with a masked field.
-  It shows the prompt, the command and the host. It clears the field as the answer is sent, so the text isn't left
+  Its heading is Pikibun's own; sudo's prompt, which whoever runs the helper chooses, is shown quoted as "sudo's
+  prompt", never as the field's label, beside the command and the host. It clears the field as the answer is sent, so the text isn't left
   on screen or in a draft. People who aren't the host's owner see that sudo waits, but no field or button.
 
 ## What it doesn't protect against

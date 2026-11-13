@@ -149,6 +149,7 @@ describe("sudo's password box", () => {
     await app.press("id:session-row-s1");
     await app.waitFor("id:sudo-prompt");
     expect(app.shows("text:sudo asks for your password on ada-mac")).toBe(true);
+    expect(app.shows("text:sudo's prompt: “[sudo] password for ada:”, while this command ran:")).toBe(true);
     expect(app.shows("text:python3 -c 'sudo -A apt-get install -y make'")).toBe(true);
     await app.type("id:sudo-password", "hunter2");
     expect(app.value("id:composer-input")).toBe("");

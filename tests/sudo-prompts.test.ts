@@ -137,6 +137,18 @@ test("time waiting for the password is counted, and sudo goes away where it isn'
   assert.deepEqual(await pending.exited, { code: 1, stdout: "" }, "closing declines what waits");
 });
 
+test("a helper that couldn't start is tried again at the next command, leaving nothing behind", unix, async t => {
+  const sudo = prompts(t);
+  const saved = process.env.TMPDIR;
+  t.after(() => { if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved; });
+  process.env.TMPDIR = join(tmpdir(), `pikibun-missing-${process.pid}`, "nowhere");
+  await sudo.prepare();
+  assert.equal(sudo.helper, undefined);
+  if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved;
+  await sudo.prepare();
+  assert.ok(sudo.helper && existsSync(sudo.helper), "the next prepare starts it");
+});
+
 const hostMode = { skip: process.platform === "win32" || spawnSync("git", ["--version"]).status !== 0 };
 
 function binding(): RunnerBinding {
