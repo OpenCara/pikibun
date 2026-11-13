@@ -162,7 +162,8 @@ would then run on data it misreads, which is worse than not running.
     one, and an app from this change on maps what it reads. Elsewhere an app only shows a tool's name (a transcript, a
     card), and an older app shows the new one with the default icon.
 
-12. **The model's side.** The tool descriptions, the runtime instructions (`session/instructions.ts`), the note that
+12. **The model's side.** The tool descriptions, the runtime instructions
+    (`apps/runner/src/session/instructions.ts`), the note that
     points to a saved output (`apps/runner/src/tool-output.ts`) and code mode's names (`tools.read`) take the new
     names. A conversation from before the change keeps its old calls in its transcript, as it kept `bash`'s, and each
     message offers only the new names.
