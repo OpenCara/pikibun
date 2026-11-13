@@ -11,10 +11,13 @@ import { contextFilesExtension } from "../../../../../extensions/context-files/c
 const specs: Record<string, CliSpec> = { gh: ghSpec, glab: glabSpec, "azure-cli": azureCliSpec };
 const factories: Record<string, ExtensionFactory> = { "prompt-audit": promptAuditExtension, "pr-flow": prFlowExtension, "context-files": contextFilesExtension };
 
+const managedNames = new Set(["pr-flow", "context-files"]);
+
 export interface PikiExtension {
   info: PikiExtensionInfo;
   factory: ExtensionFactory;
   forSession(session: PikiSession): ExtensionFactory;
+  managed?: boolean;
 }
 
 const sessionToolsFactory: ExtensionFactory = () => {};
@@ -24,7 +27,7 @@ export const connectorPikiExtensions: readonly PikiExtension[] = pikiExtensions.
   const spec = specs[info.name];
   if (spec) return [{ info, factory: commandExtension(spec, noPikiSession), forSession: session => commandExtension(spec, session) }];
   const factory = factories[info.name];
-  return factory ? [{ info, factory, forSession: () => factory }] : [];
+  return factory ? [{ info, factory, forSession: () => factory, ...(managedNames.has(info.name) ? { managed: true } : {}) }] : [];
 });
 
 export const connectorPikiExtension = (source: string) => connectorPikiExtensions.find(item => item.info.source === source);

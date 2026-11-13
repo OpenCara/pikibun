@@ -30,6 +30,9 @@ Options:
 Pikibun's built-in extensions (piki:gh, piki:glab, piki:azure-cli) come with the connector: they run the GitHub, GitLab
 or Azure CLI installed and signed in on this host, where a workspace uses them. Nothing to install.
 
+With pikibun connect --managed-extensions, the connector installs the version of Pikibun's own extensions that Pikibun
+pins (such as piki:pr-flow) from npm; list shows them as managed. They can't be removed here.
+
 A running connector picks up changes made here when it next reconnects; restart it to use them at once.
 `;
 
@@ -52,6 +55,9 @@ export async function extensionsMain(args: string[]): Promise<void> {
       const loaded = await loadInstalled(store);
       if (!loaded.some(item => !item.factories)) process.stdout.write(`No extensions installed in ${store.directory}.\n`);
       print(loaded);
+      for (const managed of await store.listManaged().catch(() => [])) {
+        process.stdout.write(`${managed.source}  (managed by Pikibun: ${managed.package}@${managed.version}, run in place of the built-in copy where Pikibun pins it)\n`);
+      }
       return;
     }
     if (command === "remove" && rest.length === 1) {

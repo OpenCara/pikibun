@@ -50,7 +50,10 @@ export function inManagedScope(name: string): boolean {
   return name.startsWith(MANAGED_EXTENSION_SCOPE) && PACKAGE_NAME.test(name);
 }
 
+export function connectorRelease(version: string | undefined): version is string {
+  return typeof version === "string" && RELEASE.test(version);
+}
+
 export function connectorRunsPin(pin: ManagedExtensionPin, connectorVersion: string | undefined): boolean {
-  if (!connectorVersion || !RELEASE.test(connectorVersion)) return false;
-  return !connectorTooOld(connectorVersion, pin.minimumConnector);
+  return connectorRelease(connectorVersion) && !connectorTooOld(connectorVersion, pin.minimumConnector);
 }

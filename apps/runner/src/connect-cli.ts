@@ -51,6 +51,10 @@ This machine's own setup, when the defaults don't fit:
   --cpu-limit PERCENT      Windows sandbox: share of this machine's CPU per step (50)
   --no-remote-installs     Refuse extension installs and removals asked for in Pikibun;
                            install them here with "pikibun extensions" instead
+  --managed-extensions     Run Pikibun's own extensions (piki:pr-flow, ...) at the version
+                           Pikibun pins, installed from npm, in place of the copies built
+                           into this connector, which stay the fallback. Not with
+                           --no-remote-installs
 
 Development:
   --allow-insecure-loopback  Permit HTTP/WS only on localhost/127.0.0.1/[::1]
@@ -192,11 +196,12 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     "state-dir": { type: "string" }, "pi-agent-dir": { type: "string" }, model: { type: "string", multiple: true },
     resources: { type: "string" }, "allow-insecure-loopback": { type: "boolean" },
     "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" }, "no-remote-installs": { type: "boolean" },
-    "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
+    "managed-extensions": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
     "experimental-sandbox": { type: "boolean" }, "memory-limit": { type: "string" }, "process-limit": { type: "string" }, "cpu-limit": { type: "string" },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
   process.stderr.write(movedOptionsNotice(MOVED_OPTIONS.filter(name => values[name] !== undefined)));
+  if (values["managed-extensions"] && values["no-remote-installs"]) process.stderr.write("--managed-extensions is ignored with --no-remote-installs: Pikibun's own extensions run from the copies built into this connector.\n");
   const unsandboxed = values["unsafe-no-sandbox"] === true;
   const experimental = values["experimental-sandbox"] === true;
   if (unsandboxed && experimental) throw new ConnectorSetupError("Choose one: --experimental-sandbox runs sessions in this platform's sandbox, --unsafe-no-sandbox runs them without one.");
@@ -247,7 +252,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const connector = createConnector({
     dataDir,
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
-    remoteExtensionInstalls: values["no-remote-installs"] !== true,
+    remoteExtensionInstalls: values["no-remote-installs"] !== true, managedExtensions: values["managed-extensions"] === true,
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
     capabilities: { platform: process.platform, sandbox: false, productionShell: false },
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },

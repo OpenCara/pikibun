@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +17,7 @@ import { claimConnectorPairing, connectorManifest, controlPlaneOrigin, createCon
 import { verifyRunnerTicket } from '../apps/runner/src/protocol.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { ExtensionStore } from '../apps/runner/src/extensions/store.js';
+import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
 
 const hostMigration = process.platform === 'linux' ? { hostMigration: true } : {};
 
@@ -1478,4 +1480,27 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
   assert.deepEqual((await syncs.next()).report, { installed: [], remoteInstalls: true }, 'and again, without them');
   assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files'],
     'sessions still have them');
+});
+
+test('a connected host with --managed-extensions runs the package Pikibun pins in place of its bundled copy, and reports its version at once', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-managed-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const integrity = `sha512-${createHash('sha512').update('@pikibun/pi-pr-flow@0.2.0').digest('base64')}`;
+  const store = new ExtensionStore(join(root, 'extensions'), async (_args, cwd) => {
+    const directory = join(cwd, 'node_modules', '@pikibun', 'pi-pr-flow');
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'package.json'), JSON.stringify({ name: '@pikibun/pi-pr-flow', version: '0.2.0', type: 'module', pi: { extensions: ['./index.js'] } }));
+    await writeFile(join(directory, 'index.js'), 'export default function () {}');
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ dependencies: { '@pikibun/pi-pr-flow': '0.2.0' } }));
+    await writeFile(join(cwd, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: { '': {}, 'node_modules/@pikibun/pi-pr-flow': { version: '0.2.0', integrity } } }));
+  });
+  const managed = [{ source: 'piki:pr-flow', package: '@pikibun/pi-pr-flow', version: '0.2.0', integrity, minimumConnector: '0.30.0' }];
+  const syncs = mailbox<{ report: { installed: { source: string; version?: string }[] } }>();
+  const extensions = new HostExtensions(store, { remoteInstalls: true, managed: true, connectorVersion: '0.31.0', log: () => {},
+    pikiExtensions: connectorPikiExtensions.filter(item => item.info.source === 'piki:pr-flow') });
+  const fixture = await connectorFixture(t, { extensions, extensionsSync: body => { syncs.push(body as never); return Response.json({ requests: [], managed }); } });
+  await startFixture(fixture);
+  assert.deepEqual((await syncs.next()).report.installed.map(item => [item.source, item.version]), [['piki:pr-flow', undefined]], 'the bundled copy until Pikibun answers');
+  assert.deepEqual((await syncs.next()).report.installed.map(item => [item.source, item.version]), [['piki:pr-flow', '0.2.0']], 'reported again at once');
+  assert.equal(fixture.runtimes[0]!.config.extensions!.installed()[0]!.managed?.version, '0.2.0', 'sessions opened from now on run it');
 });
