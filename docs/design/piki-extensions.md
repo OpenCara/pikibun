@@ -702,6 +702,8 @@ session's host and model menus, and to a session's model menu, and makes that de
 
 ## Later
 
+- Loading these without a connector release: the hook packages from npm at a version the control plane pins, `gh`,
+  `glab` and `az` as tool definitions, the catalogue served. Planned in [extension-loading.md](extension-loading.md).
 - Decide a sandboxed call's card like a sandboxed command (by whoever may approve in the session), not like a host
   command: it no longer runs on the host. The card would then say where it runs.
 - On a host someone else shared, writes as the session owner through the control plane: the proxy forwards an approved
