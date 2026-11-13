@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import { isControlPlaneExtension, pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
+import { managedExtensions } from '../../../packages/shared/src/managed-extensions.js';
 import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
@@ -85,7 +86,7 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     await c.env.DB.batch(statements);
     const pending = await c.env.DB.query<ExtensionRequest>(`SELECT id, action, source FROM connector_extension_requests
       WHERE connector_id = ? AND status = 'pending' ORDER BY requested_at, id LIMIT ?`).bind(row.id, MAX_PENDING).all();
-    return c.json({ requests: pending.map(item => ({ id: item.id, action: item.action, source: item.source })) });
+    return c.json({ requests: pending.map(item => ({ id: item.id, action: item.action, source: item.source })), managed: managedExtensions });
   });
 
   app.post('/api/connectors/self/extensions/workspace', async c => {

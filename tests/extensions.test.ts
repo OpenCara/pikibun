@@ -122,7 +122,7 @@ test('a host reports its extensions, its owner asks for installs it carries out 
   await json(await s.alice.request('PUT', `/api/workspaces/${s.workspaceId}/extensions`, { source: 'npm:pi-memory@0.4.2' }));
   await json(await s.alice.request('PUT', `/api/workspaces/${s.workspaceId}/extensions`, { source: 'npm:cc-safety-net@2.7.2' }));
   await json(await s.alice.request('PUT', `/api/workspaces/${s.workspaceId}/extensions`, { source: 'npm:pi-web-search@1.7.0', enabled: false }));
-  assert.deepEqual(await json(await self(f, s.connector, 'extensions', { report: report([installed('npm:pi-memory@0.3.0'), installed('local:/home/alice/dev.ts', true)]), results: [] })), { requests: [] });
+  assert.deepEqual(await json(await self(f, s.connector, 'extensions', { report: report([installed('npm:pi-memory@0.3.0'), installed('local:/home/alice/dev.ts', true)]), results: [] })), { requests: [], managed: [] });
   await denied(await self(f, s.connector, 'extensions', { report: { installed: [{ source: 'npm:x@latest', dev: false, modules: [] }], remoteInstalls: true }, results: [] }), 400, 'invalid_extensions');
 
   type HostPage = { role: string; report: HostExtensionsReport; automaticTools: boolean; requests: { id: string; action: string; source: string; status: string; error?: string }[];
@@ -152,7 +152,7 @@ test('a host reports its extensions, its owner asks for installs it carries out 
   assert.deepEqual(await json(await self(f, s.connector, 'extensions', {
     report: report([installed('npm:pi-memory@0.3.0'), installed('npm:cc-safety-net@2.7.2')]),
     results: [{ id: install.id, ok: true }, { id: update.id, ok: false, error: 'npm install failed' }, { id: 'someone-elses', ok: true }],
-  })), { requests: [] });
+  })), { requests: [], managed: [] });
   const after = await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`));
   assert.deepEqual(after.requests.map(item => [item.source, item.status, item.error]).sort(),
     [['npm:cc-safety-net@2.7.2', 'done', undefined], ['npm:pi-memory@0.4.2', 'failed', 'npm install failed']]);
@@ -168,7 +168,7 @@ test('a host reports how its browser stands: its owner sees where it is on the h
   const f = await fixture(t); const s = await team(f);
   const id = s.connector.connectorId;
   const browser = { source: 'path', state: 'ready', executable: '/home/alice/chromium/chrome', downloadable: true } as const;
-  assert.deepEqual(await json(await self(f, s.connector, 'extensions', { report: { ...report([]), browser }, results: [] })), { requests: [] });
+  assert.deepEqual(await json(await self(f, s.connector, 'extensions', { report: { ...report([]), browser }, results: [] })), { requests: [], managed: [] });
   type HostPage = { report: HostExtensionsReport };
   assert.deepEqual((await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`))).report.browser, browser);
   type Listing = { hosts: { id: string; report?: HostExtensionsReport }[] };

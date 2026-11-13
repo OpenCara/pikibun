@@ -2,6 +2,7 @@ import { pikiExtension, pikiExtensions, pikiSessionToolExtensions } from "./piki
 import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
 import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 import { parseMemberToolGroups, type MemberToolGroup } from "./tool-groups.js";
+import { parseManagedExtensions, type ManagedExtensionPin } from "./managed-extensions.js";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -288,6 +289,7 @@ export interface ExtensionsSync {
 }
 export interface ExtensionsSyncAnswer {
   requests: ExtensionRequest[];
+  managed?: ManagedExtensionPin[];
 }
 
 export interface WorkspaceExtensionsAnswer {
@@ -304,7 +306,7 @@ export function parseExtensionsSyncAnswer(value: unknown): ExtensionsSyncAnswer 
     if (!isPlainObject(item) || Object.keys(item).sort().join() !== "action,id,source" || typeof item.id !== "string" || !REQUEST_ID.test(item.id)
       || (item.action !== "install" && item.action !== "remove") || typeof item.source !== "string") throw new Error("Invalid extension request");
     return { id: item.id, action: item.action, source: normalizeExtensionSource(item.source) };
-  }) };
+  }), ...(value.managed !== undefined ? { managed: parseManagedExtensions(value.managed) } : {}) };
 }
 
 export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensionsAnswer {
