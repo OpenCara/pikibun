@@ -57,6 +57,15 @@ describe("starting Pikibun's command", () => {
       .toEqual(["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "(", "where", "/q", "npm", "||", "exit", "9009", ")", "&&", "npm", "install", "-g", "pikibun@latest"]);
   });
 
+  test("a released app installs into its own folder the pikibun it was released with, never npm's latest", () => {
+    const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
+    expect(installCommand("macos", "/bin/zsh", mac, "0.32.0").line)
+      .toBe("npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@0.32.0");
+    expect(installCommand("windows", undefined, "C:\\data\\cli", "0.32.0").line).toBe("npm install --prefix cli --no-audit --no-fund pikibun@0.32.0");
+    expect(installCommand("linux", "/usr/bin/bash", null, "0.32.0").line).toBe("npm install -g pikibun@latest");
+    expect(installCommand("linux", "/usr/bin/bash", "/home/ada/.local/share/pikibun/cli", "dev").line).toMatch(/ pikibun@latest$/);
+  });
+
   test("says why an install failed in a way the owner can act on", () => {
     expect(installFailure(["zsh:1: command not found: npm"], { code: 127 })).toMatch(/^npm isn't installed on this (computer|Mac)\. Install Node\.js 24 or newer/);
     expect(installFailure(["'npm' is not recognized as an internal or external command,"], { code: 1 })).toMatch(/^npm isn't installed/);

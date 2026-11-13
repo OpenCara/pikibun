@@ -351,7 +351,7 @@ export class ThisComputerHost {
       const { lines, result } = await this.runInstall();
       if (result.code !== 0) { this.log("warning", updateFailure(lines, result)); return; }
       const has = await ownCopy().catch(() => null);
-      this.log("info", has && has === had ? `pikibun ${has} is the latest already.` : `npm updated pikibun${has ? ` to ${has}` : ""} in Pikibun's own folder.`);
+      this.log("info", has && has === had ? `pikibun ${has} is the one this version of Pikibun installs already.` : `npm updated pikibun${has ? ` to ${has}` : ""} in Pikibun's own folder.`);
       await Storage.setItem(COMMAND_UPDATED_KEY, appVersion).catch(() => undefined);
     } finally {
       this.updating.set(false);
