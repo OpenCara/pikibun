@@ -1,4 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
+import { agentSocketImport } from "../src/lib/agent-socket";
 import { serverCommand, serverLaunchProblem } from "../src/lib/this-server";
 import { ORIGIN, server as remote, signedIn, TOKEN, user } from "./fixtures";
 
@@ -29,7 +30,7 @@ async function openPanel(params: Record<string, unknown> = {}) {
 
 describe("starting Pikibun's server", () => {
   test("runs pikibun serve --stdio as the host's command runs, through the login shell or cmd.exe", () => {
-    expect(serverCommand("macos", "/bin/zsh")).toEqual({ command: "zsh", args: ["-ilc", "exec pikibun serve --stdio"] });
+    expect(serverCommand("macos", "/bin/zsh")).toEqual({ command: "zsh", args: ["-ilc", `${agentSocketImport("macos")}exec pikibun serve --stdio`] });
     expect(serverCommand("windows", undefined)).toEqual({ command: "cmd",
       args: ["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "(", "where", "/q", "pikibun", "||", "exit", "9009", ")", "&&", "pikibun", "serve", "--stdio"] });
     expect(serverCommand("windows", undefined, "C:\\data\\cli").args)
