@@ -346,14 +346,15 @@ describe("on a phone", () => {
     await app.waitUntil(() => app.value("id:composer-input") === "");
   });
 
-  test("a session's chat box starts on a message that acts, whatever its last message was, and its messages name no access", async () => {
+  test("a session's chat box offers no access choice, and its messages act whatever its last message was, naming no access", async () => {
     const app = await open("../App.tsx", {
       network: server({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, access: "approval" }, revision: "r1" } } }),
       storage: signedIn,
     });
     await app.press("id:session-row-s1");
-    await app.waitFor("id:chat-access");
-    expect(app.texts().join(" ")).toContain("Act");
+    await app.waitFor("id:chat-model");
+    expect(app.shows("id:chat-access")).toBe(false);
+    expect(app.texts().join(" ")).not.toContain("Read only");
     expect(app.texts().join(" ")).not.toContain("Auto-approve");
     expect(app.texts().join(" ")).not.toContain("Ask before acting");
     await app.type("id:composer-input", "Carry on");
