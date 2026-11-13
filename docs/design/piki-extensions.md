@@ -704,6 +704,8 @@ session's host and model menus, and to a session's model menu, and makes that de
 
 - Loading these without a connector release: the hook packages from npm at a version the control plane pins, `gh`,
   `glab` and `az` as tool definitions, the catalogue served. Planned in [extension-loading.md](extension-loading.md).
+- Pi's names and contracts for the file tools (`read`, `write`, `edit`, `ls`, `grep`, `find`), so Pi extensions'
+  hooks match them. Planned in [pi-tool-names.md](pi-tool-names.md).
 - Decide a sandboxed call's card like a sandboxed command (by whoever may approve in the session), not like a host
   command: it no longer runs on the host. The card would then say where it runs.
 - On a host someone else shared, writes as the session owner through the control plane: the proxy forwards an approved
