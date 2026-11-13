@@ -1145,6 +1145,14 @@ test("instructions: tools add their lines only while on, and only outside an ask
   assert.match(off, /This session has no tunnel tool/);
 });
 
+test("instructions: a session whose sandbox has the host's Chromium is told where it is, and not to download another", () => {
+  const said = /\$CHROME_BIN.*--no-sandbox.*Don't run playwright install/s;
+  assert.match(instructions({ browser: true }), said, "whether or not the browser tool is on");
+  assert.match(instructions({ browser: true, mode: "read" }), said);
+  assert.doesNotMatch(instructions({ browser: true, mode: "ask" }), /CHROME_BIN/, "an ask runs nothing");
+  assert.doesNotMatch(instructions({ browser: false, browserUnavailable: "missing" }), /CHROME_BIN/, "no browser, no word of one");
+});
+
 test("instructions: defined tools add theirs, sources fill a brokered tool's, and missing programs are told", () => {
   const node = bundledToolDefinitions.find(item => item.name === "node")!;
   const source = bundledToolDefinitions.find(item => item.name === "source_read")!;

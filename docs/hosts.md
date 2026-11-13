@@ -126,6 +126,8 @@ Only you see the executable's path and what went wrong; the host's admins and it
 
 The connector applies a change, an install or a finished download within a minute, without a restart, and open sessions get the tool at their next message. Only that browser's own installation directory is given to sandboxed commands, read-only (at `/opt/pikibun/chromium`), and only where they don't already see it under `/usr`. It runs with `python3` from `/usr`, as the sandbox's helper does, and the system's fonts. Sessions without the Linux sandbox are never offered the tool: the browser never runs on the host itself, as its user.
 
+The same Chromium serves scripts and test runners that start a browser themselves (Playwright, Puppeteer, Selenium, Karma): sandboxed commands find it in `CHROME_BIN` and `PUPPETEER_EXECUTABLE_PATH`, and the agent is told to launch it from there with `--no-sandbox` rather than download another, such as with `playwright install`. Chrome's own sandbox can't start inside the session's, which is the boundary.
+
 ### Tunnels for sessions
 
 The agent's [tunnel tool](extensions.md#the-tunnel-pikitunnel) puts a session's web server online through a Cloudflare quick tunnel. The server runs in the session's sandbox; `cloudflared` runs in the connector, on the host, as the connector's OS user, since it must reach Cloudflare's edge on port 7844 (UDP or TCP), which no session's proxy tunnels (see [the design](design/egress.md#tunnels-stay-out-of-the-sandbox)). Its owner chooses where it comes from on the host's page, under **Extensions** → `piki:tunnel`, which shows how it stands as the browser's does (**Ready**, **No cloudflared**, **Downloading**, **Download failed**, **Off**):

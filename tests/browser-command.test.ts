@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browserRequest, browserShellCommand, browserTarget } from "../apps/runner/src/browser-command.js";
-import { browserAt, downloadedBrowsers, hostBrowser, sandboxBrowserMount, SANDBOX_BROWSER_DIRECTORY, SANDBOX_BROWSER_DRIVER } from "../apps/runner/src/browser-toolchain.js";
+import { browserAt, browserEnvironment, downloadedBrowsers, hostBrowser, sandboxBrowserMount, SANDBOX_BROWSER_DIRECTORY, SANDBOX_BROWSER_DRIVER } from "../apps/runner/src/browser-toolchain.js";
 import { BROWSER_DRIVER } from "../apps/runner/src/sandbox-python.generated.js";
 import { validateOperation } from "../apps/runner/src/protocol.js";
 import { HostWorkspace } from "../apps/runner/src/host-workspace.js";
@@ -174,6 +174,8 @@ test("the Linux sandbox gives commands the Chromium installation alone, read-onl
   assert.deepEqual(sandboxBrowserMount({ executable: "/opt/google/chrome/chrome", directory: "/opt/google/chrome" }),
     { mount: { source: "/opt/google/chrome", target: SANDBOX_BROWSER_DIRECTORY }, executable: `${SANDBOX_BROWSER_DIRECTORY}/chrome` });
   assert.equal(sandboxBrowserMount(undefined), undefined);
+  assert.deepEqual(browserEnvironment("/opt/pikibun/chromium/chrome"), { CHROME_BIN: "/opt/pikibun/chromium/chrome", PUPPETEER_EXECUTABLE_PATH: "/opt/pikibun/chromium/chrome" });
+  assert.deepEqual(browserEnvironment(undefined), {}, "no browser, no variables pointing nowhere");
 });
 
 const chromium = process.env.PIKIBUN_TEST_BROWSER ? browserAt(process.env.PIKIBUN_TEST_BROWSER) : hostBrowser();
@@ -296,6 +298,8 @@ test("in the Linux sandbox, the driver runs the host's Chromium, given read-only
   const screenshot = await sandbox.readContent(report.screenshot!, authorize);
   assert.ok("image" in screenshot && screenshot.mimeType === "image/png");
   await assert.rejects(run(`touch ${SANDBOX_BROWSER_DRIVER}`));
+  assert.equal((await run("printf '%s|%s' \"$CHROME_BIN\" \"$PUPPETEER_EXECUTABLE_PATH\"")).trim(), `${sandbox.browser!.chromium}|${sandbox.browser!.chromium}`,
+    "scripts that start a browser themselves find the same one");
   if (sandbox.browser!.chromium.startsWith(`${SANDBOX_BROWSER_DIRECTORY}/`)) {
     await assert.rejects(run(`touch ${SANDBOX_BROWSER_DIRECTORY}/written`));
     assert.match(await run(`ls ${SANDBOX_BROWSER_DIRECTORY}`), /icudtl\.dat|\.pak/);
