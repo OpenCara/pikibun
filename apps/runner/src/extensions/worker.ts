@@ -102,12 +102,14 @@ export class ExtensionWorker {
       },
       messageEnd: async params => { await this.runner(params).emitMessageEnd({ type: "message_end", message: params.message } as never); return null; },
       turnEnd: async params => {
+        const context = boundary();
         await this.runner(params).emitBoundary({ type: "turn_end", turnIndex: params.turnIndex, message: undefined, toolResults: [], messageEntryId: "",
-          toolResultEntryIds: [], outcome: "completed" } as never, () => boundary() as never);
+          toolResultEntryIds: [], outcome: "completed" } as never, () => context as never);
         return null;
       },
       beforeSettle: async params => {
-        const result = await this.runner(params).emitBoundary({ type: "agent_before_settle", outcome: "completed" } as never, () => boundary() as never);
+        const context = boundary();
+        const result = await this.runner(params).emitBoundary({ type: "agent_before_settle", outcome: "completed" } as never, () => context as never);
         const text = result.entries.map(entry => "content" in entry ? textOf((entry as { content: unknown }).content) : "").filter(Boolean).join("\n\n");
         return { continue: result.continue === true, text };
       },
