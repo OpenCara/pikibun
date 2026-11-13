@@ -3,7 +3,7 @@ import { isAbsolute, join, relative } from "node:path";
 import type { ExtensionContext, ExtensionFactory, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 
 export const prFlowFlags = Object.freeze({
-  "review-minutes": "How long to wait for reviews once a pull request is ready for review, and again for a re-review after pushed fixes, in minutes. 0 merges it as soon as it is ready, without waiting for reviews",
+  "review-minutes": "How long to wait for reviews once a pull request is ready for review, and again for a re-review after pushed fixes, in minutes. 0 merges it (or, with auto-merge off, hands it over) as soon as it is ready, without waiting for reviews",
   "merge-method": "How to merge: squash (default), merge or rebase",
   "wait-for-checks": "Wait for the pull request's checks to finish, and fix failing ones, before merging",
   "auto-merge": "Merge the pull request once it is approved, or once its review window ends with nothing left to address. Off leaves the merge to people: the agent tells the person it is ready to merge instead",
@@ -29,7 +29,7 @@ export function mergeMethod(setting: unknown): MergeMethod {
 
 export function autoMerge(setting: unknown): boolean {
   if (typeof setting === "string") return !["false", "off", "no", "0"].includes(setting.trim().toLowerCase());
-  return setting !== false;
+  return setting !== false && setting !== 0;
 }
 
 export interface PullRequestFlow {

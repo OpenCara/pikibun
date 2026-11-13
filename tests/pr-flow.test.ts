@@ -42,7 +42,7 @@ test("its settings: whole minutes from 0 to a week, squash unless another method
   assert.equal(mergeMethod("fast-forward"), "squash");
   assert.equal(mergeMethod(undefined), "squash");
   for (const on of [true, undefined, "true", "on", ""]) assert.equal(autoMerge(on), true, String(on));
-  for (const off of [false, "false", " Off ", "no", "0"]) assert.equal(autoMerge(off), false, String(off));
+  for (const off of [false, 0, "false", " Off ", "no", "0"]) assert.equal(autoMerge(off), false, String(off));
 });
 
 test("a file tool's path is in the clone that holds it; the worktree's own files, paths outside it and .git are in none", () => {
