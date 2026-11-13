@@ -13,7 +13,8 @@ import { runAutomaticPacking } from '../apps/server/src/automatic-packing.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase, type FakeHub } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommandGrant, HostModelSettings } from '../packages/shared/src/connector.js';
 import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
-import { retiredToolNames, toolNames, withLegacyToolNames } from '../packages/shared/src/types.js';
+import { retiredToolNames, toolNames } from '../packages/shared/src/types.js';
+import { MINIMUM_CONNECTOR_VERSION } from '../packages/shared/src/version.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
@@ -31,6 +32,7 @@ const manifest = {
   capabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, plainGit: true },
 };
 const token = () => Buffer.from(randomBytes(32)).toString('base64url');
+const kept = ({ approvalFree: _approvalFree, ...capabilities }: Record<string, unknown>) => capabilities;
 const changedToken = (value: string) => `${value[0] === 'A' ? 'B' : 'A'}${value.slice(1)}`;
 
 type ApiRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Response | Promise<Response>;
@@ -116,7 +118,7 @@ async function connect(f: Fixture, owner: Client, workspaceId?: string): Promise
 }
 
 function self(f: Fixture, connector: Connected, path: string, body: unknown, connection: string | null = connector.connectionToken) {
-  return f.request('POST', `/api/connectors/self/${path}`, body, { Authorization: `Bearer ${connector.token}`,
+  return f.request('POST', `/api/connectors/self/${path}`, body, { Authorization: `Bearer ${connector.token}`, 'X-Pikibun-Version': MINIMUM_CONNECTOR_VERSION,
     ...(connection === null ? {} : { 'X-Connection-Token': connection }) });
 }
 
@@ -493,7 +495,8 @@ test('claim and manifest updates reject malformed metadata and secret-bearing fi
   assert.equal(JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(connector.connectorId)!.capabilities_json)).sessionBranches, true);
   const configured = { ...manifest.capabilities, hostConfig: true, gpu: 'dxg' };
   await json(await self(f, connector, 'manifest', { ...manifest, capabilities: configured }));
-  assert.deepEqual(JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(connector.connectorId)!.capabilities_json)), configured);
+  assert.deepEqual(JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(connector.connectorId)!.capabilities_json)), kept(configured),
+    'approvalFree, which every connector the server admits sends for older servers, is not kept');
   for (const table of ['connectors', 'connector_pairings', 'models', 'audit']) {
     assert.ok(!JSON.stringify(f.sqlite.prepare(`SELECT * FROM ${table}`).all()).includes(secret));
   }
@@ -542,7 +545,7 @@ test('sharing is connector-owner-only with live workspace membership and imports
   const shared = await json<{ connector: ConnectorInfo }>(await host.request('PUT', path));
   assert.deepEqual(Object.keys(shared.connector).sort(), ['id', 'ownerId', 'ownerName', 'name', 'createdAt', 'revokedAt', 'online', 'models', 'workspaceIds', 'connectedWorkspaceIds', 'capabilities'].sort());
   assert.deepEqual(shared.connector.models, manifest.models);
-  assert.deepEqual(shared.connector.capabilities, manifest.capabilities);
+  assert.deepEqual(shared.connector.capabilities, kept(manifest.capabilities));
   assert.deepEqual(shared.connector.workspaceIds, [team.id]);
   assert.deepEqual(shared.connector.connectedWorkspaceIds, [team.id]);
   await json(await host.request('PUT', path));
@@ -825,7 +828,7 @@ test('claim, socket, and self routes require TLS except for explicitly enabled l
   await socketDenied(f, socketHeaders, new URL(`${origin}/api/connectors/socket`), 400, 'secure_transport_required');
   const secureHeaders = { ...headers, Origin: f.env.APP_ORIGIN };
   await json(await f.request('POST', `${f.env.APP_ORIGIN}/api/connectors/pairings/${pending.id}/claim`, claimBody, secureHeaders), 201);
-  await json(await f.request('POST', `${f.env.APP_ORIGIN}/api/connectors/self/manifest`, manifest, secureHeaders));
+  await json(await f.request('POST', `${f.env.APP_ORIGIN}/api/connectors/self/manifest`, manifest, { ...secureHeaders, 'X-Pikibun-Version': MINIMUM_CONNECTOR_VERSION }));
   assert.deepEqual(await authenticateConnectorSocket(f.env, socketHeaders, new URL(`${f.env.APP_ORIGIN}/api/connectors/socket`)),
     { connectorId: connector.connectorId, credentialHash: await sha256(connector.token) });
 });
@@ -836,15 +839,17 @@ test('a connector names its version in its manifest, which its host lists, and t
     'X-Connection-Token': connector.connectionToken, ...(version === undefined ? {} : { 'X-Pikibun-Version': version }) });
   const listed = async () => (await json<{ connectors: ConnectorInfo[] }>(await owner.request('GET', '/api/connectors'))).connectors[0]!.version;
   assert.equal(await listed(), undefined);
-  await json(await report('0.24.0'));
-  assert.equal(await listed(), '0.24.0');
+  await json(await report('0.33.0'));
+  assert.equal(await listed(), '0.33.0');
   await json(await report('desktop 0.9.0'));
   assert.equal(await listed(), 'desktop 0.9.0');
-  await json(await report('<script>'));
-  assert.equal(await listed(), undefined);
-  await json(await report('0.24.0'));
-  await json(await report());
-  assert.equal(await listed(), undefined);
+  await json(await report('dev'));
+  assert.equal(await listed(), 'dev');
+  for (const [version, why] of [['0.32.0', 'a release before the minimum'], ['0.24.0', 'the first release that named its version'],
+    [undefined, 'none named: a connector from before 0.24.0'], ['<script>', 'none that can be read']] as const) {
+    await denied(await report(version), 409, 'connector_update_required');
+    assert.equal(await listed(), 'dev', `${why}: refused, and the host keeps what it last reported`);
+  }
 
   const health = async () => (await json<{ version: string | null }>(await f.request('GET', '/api/health'))).version;
   assert.equal(await health(), null);
@@ -1459,8 +1464,9 @@ test('a session starts from a model and gets its own chat agent with every tool 
   assert.equal(session.status, 'ready');
   const agent = startedAgent();
   assert.equal(agent.id, session.agentVersionId);
-  assert.deepEqual(agent.tools, withLegacyToolNames(offered.filter(tool => !['git_push', 'github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'source_read'].includes(tool))),
-    'each renamed file tool goes with its old name too, for hosts from before the rename');
+  assert.deepEqual(agent.tools, offered.filter(tool => !['git_push', 'github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'source_read'].includes(tool)),
+    'the file tools go by their names alone: every connector the server admits knows them');
+  assert.ok(!agent.tools.some(tool => ['read_file', 'write_file', 'edit_file', 'list_files', 'search'].includes(tool)));
   assert.deepEqual([agent.name, agent.instructions, agent.workspaceId, agent.authorId, agent.modelId], [s.model.name, '', null, s.owner.user.id, s.model.id]);
 
   await denied(await s.owner.request('GET', '/api/agents'), 404, 'not_found');
@@ -1470,17 +1476,17 @@ test('a session starts from a model and gets its own chat agent with every tool 
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true } }));
   const { session: second } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(second.agentVersionId, session.agentVersionId);
-  assert.deepEqual(startedAgent().tools, withLegacyToolNames(offered.filter(tool => !['github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'source_read'].includes(tool))));
+  assert.deepEqual(startedAgent().tools, offered.filter(tool => !['github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'source_read'].includes(tool)));
 
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true, github: true, hostCommands: true } }));
   const { session: third } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(third.agentVersionId, second.agentVersionId);
-  assert.deepEqual(startedAgent().tools, withLegacyToolNames(offered.filter(tool => !['github_issue', 'schedule', 'sessions', 'source_read'].includes(tool))));
+  assert.deepEqual(startedAgent().tools, offered.filter(tool => !['github_issue', 'schedule', 'sessions', 'source_read'].includes(tool)));
 
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true, github: true, githubIssues: true, schedules: true, crossSessions: true, sources: true, hostCommands: true, web: true } }));
   const { session: fourth } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(fourth.agentVersionId, third.agentVersionId);
-  assert.deepEqual(startedAgent().tools, withLegacyToolNames(offered));
+  assert.deepEqual(startedAgent().tools, offered);
   assert.ok(offered.includes('github_issue') && offered.includes('schedule') && offered.includes('sessions'));
   assert.ok(!offered.includes('web_fetch') && !offered.includes('web_search'));
 });
