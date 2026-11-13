@@ -153,7 +153,7 @@ const cases: Case[] = [
   ["never finds what lies outside, through links", located({ pattern: "secret*" }), { ok: { paths: [], truncated: false } }],
   ["anchors a leading / at the path searched, even for a single name", located({ pattern: "/app.ts", path: "src" }), { ok: { paths: ["app.ts"], truncated: false } }],
   ["never finds a name below the path searched for a pattern with a leading /", located({ pattern: "/util.ts", path: "src" }), { ok: { paths: [], truncated: false } }],
-  ["never matches / with a negated class", located({ pattern: "/lib[!x]util.ts", path: "src" }), { ok: { paths: [], truncated: false } }],
+  ["matches / with a negated class, as fd does", located({ pattern: "/lib[!x]util.ts", path: "src" }), { ok: { paths: ["lib/util.ts"], truncated: false } }],
   ["reads [ as itself where no class follows, rather than failing", located({ pattern: "[!]*", path: "src" }), { ok: { paths: [], truncated: false } }],
   ["refuses a class with a range backwards", located({ pattern: "[z-a]*", path: "src" }), { refused: /invalid glob/ }],
   ["refuses a search glob with a range backwards", find({ pattern: "x", glob: "[z-a]*" }), { refused: /invalid glob/ }],

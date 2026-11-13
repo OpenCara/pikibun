@@ -229,7 +229,7 @@ function globExpression(glob, ignoreCase) {
     else if (char === "[" && classEnd(glob, index) !== -1) {
       const negated = glob[index + 1] === "!" || glob[index + 1] === "^";
       const end = classEnd(glob, index);
-      source += "[" + (negated ? "^/" : "") + glob.slice(index + (negated ? 2 : 1), end).replace(/[\\[\]^]/g, "\\$&") + "]";
+      source += "[" + (negated ? "^" : "") + glob.slice(index + (negated ? 2 : 1), end).replace(/[\\[\]^]/g, "\\$&") + "]";
       index = end;
     }
     else source += char.replace(/[.+^$(){}|[\]\\]/g, "\\$&");

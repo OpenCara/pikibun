@@ -1201,7 +1201,7 @@ def glob_expression(glob, ignore_case=False):
             negated = glob[index + 1:index + 2] in ('!', '^')
             end = class_end(glob, index)
             members = re.sub(r'[\\\[\]^&~|]', lambda match: '\\' + match.group(), glob[index + (2 if negated else 1):end])
-            source += '[' + ('^/' if negated else '') + members + ']'
+            source += '[' + ('^' if negated else '') + members + ']'
             index = end
         else:
             source += re.escape(char)
