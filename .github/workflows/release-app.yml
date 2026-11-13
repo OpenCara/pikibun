@@ -745,8 +745,12 @@ jobs:
           APP_UPDATE_SIGNING_KEY: ${{ secrets.APP_UPDATE_SIGNING_KEY }}
         run: |
           shopt -s nullglob
-          files=(assets/*-macos-arm64.dmg assets/*-windows-x64-setup.exe assets/*-linux-x86_64.tar.gz)
-          [ ${#files[@]} -gt 0 ] || { echo "::error::No desktop app to sign."; exit 1; }
+          files=()
+          for suffix in macos-arm64.dmg windows-x64-setup.exe linux-x86_64.tar.gz; do
+            found=(assets/*-"$suffix")
+            [ ${#found[@]} -eq 1 ] || { echo "::error::Expected one *-$suffix to sign, found ${#found[@]}."; exit 1; }
+            files+=("${found[0]}")
+          done
           node scripts/sign-update.mjs "${files[@]}"
       - name: Publish the release
         env:

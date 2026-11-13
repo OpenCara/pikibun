@@ -166,9 +166,13 @@ async function download(asset: ReleaseAsset, progress: (loaded: number, total: n
   const dir = folder();
   const proxy = await updateProxy().catch(() => null);
   const file = await preferProxy(proxy, found => downloadThrough(found, dir, asset, progress), () => downloadInto(dir, asset, progress));
-  const signature = await preferProxy(proxy, found => signatureThrough(found, dir, asset), () => signatureDirect(asset));
-  try { await requireUpdateSignature(asset, signature); }
-  catch (error) { try { await unlink(file); } catch { } throw error; }
+  try {
+    const signature = await preferProxy(proxy, found => signatureThrough(found, dir, asset), () => signatureDirect(asset));
+    await requireUpdateSignature(asset, signature);
+  } catch (error) {
+    try { await unlink(file); } catch { }
+    throw error;
+  }
   return file;
 }
 
@@ -182,10 +186,26 @@ export async function requireUpdateSignature(asset: Pick<ReleaseAsset, "name" | 
 
 async function signatureDirect(asset: ReleaseAsset): Promise<string> {
   const response = await fetch(asset.signatureUrl, { headers: { Accept: "application/octet-stream", "User-Agent": USER_AGENT } });
-  if (!response.ok) throw new Error(`The update's signature couldn't be downloaded: GitHub answered ${response.status}.`);
-  const text = await response.text();
-  if (text.length > SIGNATURE_LIMIT) throw new Error(UNSIGNED);
-  return text;
+  if (!response.ok || !response.body) throw new Error(`The update's signature couldn't be downloaded: GitHub answered ${response.status}.`);
+  if (Number(response.headers.get("content-length") ?? 0) > SIGNATURE_LIMIT) throw new Error(UNSIGNED);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value?.length ?? 0;
+      if (size > SIGNATURE_LIMIT) throw new Error(UNSIGNED);
+      if (value) chunks.push(value);
+    }
+  } finally {
+    try { await reader.cancel(); } catch { }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return new TextDecoder().decode(bytes);
 }
 
 async function signatureThrough(proxy: string, dir: string, asset: ReleaseAsset): Promise<string | null> {
@@ -202,10 +222,12 @@ async function signatureThrough(proxy: string, dir: string, asset: ReleaseAsset)
     throw new ProxyDownloadFailed(`The update's signature didn't download through the proxy at ${shownProxy(proxy)}: ${lastLines(`${output.stderr}\n${output.stdout}`) || `curl's exit code ${output.code ?? "unknown"}`}.`);
   }
   const path = inFolder(dir, name);
-  if ((await stat(path)).size > SIGNATURE_LIMIT) throw new Error(UNSIGNED);
-  const text = await readFile(path, "utf8");
-  try { await unlink(path); } catch { }
-  return text;
+  try {
+    if ((await stat(path)).size > SIGNATURE_LIMIT) throw new Error(UNSIGNED);
+    return await readFile(path, "utf8");
+  } finally {
+    try { await unlink(path); } catch { }
+  }
 }
 
 const later = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
