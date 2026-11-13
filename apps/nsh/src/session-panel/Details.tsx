@@ -8,7 +8,7 @@ import {
 } from "../../../../packages/shared/src/policy";
 import { builtinExtensions } from "../../../../packages/shared/src/host-config";
 import { tunnelUnavailableText } from "../../../../packages/shared/src/tunnel";
-import { programsMissingText } from "../../../../packages/shared/src/program-install";
+import { hostToolPrograms, programsMissingText } from "../../../../packages/shared/src/program-install";
 import type { SessionLink } from "../../../../packages/shared/src/sharing";
 import type { CrossSessionMessage, SessionConnections } from "../../../../packages/shared/src/cross-session";
 import { browserUnavailableText, errorMessage, REDACTED, segment, userIdFromInput, usernameWithId, type ConnectorInfo } from "../shared";
@@ -18,6 +18,7 @@ import { formatTokens, relativeTime, timestamp } from "../lib/format";
 import { openExternal, openServerLink, opensServerPages } from "../lib/links";
 import { createUsername, createWorkspacePeople } from "../lib/people";
 import { createAction, createResource } from "../lib/resource";
+import { InstallChatButton, type MissingPrograms } from "../lib/install-chat";
 import { backupDatabaseLabel, type Backup, type SessionActions } from "../lib/session-actions";
 import { ConnectionStatus, HostCapabilities } from "../hosts";
 import { Icon } from "../icons";
@@ -50,7 +51,9 @@ export function Details(props: DetailsProps) {
             <If when={props.view()?.tunnel}>{() => <TunnelSection {...props} current={current()} canStop={canWrite() && !archived()} />}</If>
             <If when={props.view()?.context}>{usage => <ContextSection usage={usage()} />}</If>
             <HostSection {...props} current={current()} />
-            <If when={props.view()?.extensions}>{extensions => <ExtensionsSection extensions={extensions()} />}</If>
+            <If when={props.view()?.extensions}>
+              {extensions => <ExtensionsSection extensions={extensions()} host={props.hosts()?.find(item => item.id === current().connectorId)} go={props.go} />}
+            </If>
             <RepositoriesSection {...props} current={current()} />
             <PeopleSection {...props} current={current()} workspaceRole={workspaceRole()} />
             <TranscriptSection {...props} current={current()} manages={manages()} />
@@ -158,9 +161,19 @@ function HostSection(props: Part) {
   );
 }
 
-function ExtensionsSection(props: { extensions: NonNullable<SessionView["extensions"]> }) {
+type UnavailableExtension = NonNullable<NonNullable<SessionView["extensions"]>["unavailable"]>[number];
+
+export function installablePrograms(item: UnavailableExtension): MissingPrograms | undefined {
+  const tool = item.tools[0] ?? item.source;
+  if (item.programs?.length) return { [tool]: item.programs };
+  const programs = item.reason === "missing" || item.reason === "failed" ? hostToolPrograms(tool) : undefined;
+  return programs ? { [tool]: programs } : undefined;
+}
+
+function ExtensionsSection(props: { extensions: NonNullable<SessionView["extensions"]>; host: ConnectorInfo | undefined; go: DetailsProps["go"] }) {
+  const chat = createAction();
   return (
-    <Section title="Extensions" info="Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls run only for the host's owner and members granted host commands, unless the host's owner lets every session run them. Built-in ones come with Pikibun, as the host's configuration turns them on.">
+    <Section title="Extensions" info="Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls run only for the host's owner and members granted host commands, unless the host's owner lets every session run them. Built-in ones come with Pikibun, as the host's configuration turns them on. Where the host lacks a program one needs, its owner can start a chat on the host, in their private workspace, whose agent installs it.">
       <Each of={props.extensions.running} key={item => item.source}>
         {item => <Row leading={icon("tool")} title={item().source} hint={item().tools.length ? `Tools: ${item().tools.join(", ")}` : "No tools: prompt or hooks only"}
           trailing={item().dev ? <Badge tone="warning">Dev</Badge> : <Badge tone="success">{item().required ? "Required by the host" : "Running"}</Badge>} />}
@@ -170,7 +183,12 @@ function ExtensionsSection(props: { extensions: NonNullable<SessionView["extensi
           hint={item().programs ? programsMissingText({ [item().tools[0] ?? item().source]: item().programs! }) ?? ""
             : item().source === "piki:browser" ? browserUnavailableText(item().reason as never) : item().source === "piki:tunnel" ? tunnelUnavailableText(item().reason as never)
             : "The workspace has it on, but this session can't offer its tools"}
-          trailing={<Badge tone={["missing", "failed", "programs"].includes(item().reason) ? "warning" : "neutral"}>{item().programs ? "Missing programs" : item().reason === "downloading" ? "Not ready yet" : "Unavailable"}</Badge>} />}
+          trailing={<>
+            <Badge tone={["missing", "failed", "programs"].includes(item().reason) ? "warning" : "neutral"}>{item().programs ? "Missing programs" : item().reason === "downloading" ? "Not ready yet" : "Unavailable"}</Badge>
+            <If when={installablePrograms(item())}>
+              {missing => <InstallChatButton host={props.host} missing={missing()} action={chat} go={props.go} testID={`install-chat-${item().tools[0] ?? item().source}`} />}
+            </If>
+          </>} />}
       </Each>
       <Each of={props.extensions.missingRequired ?? []}>
         {source => <Row leading={icon("alert")} title={source()} hint="The host's owner requires it of every session on the host, which can't run it now: no message is sent until it can" trailing={<Badge tone="danger">Missing</Badge>} />}
@@ -186,6 +204,7 @@ function ExtensionsSection(props: { extensions: NonNullable<SessionView["extensi
             trailing={<Badge tone="success">Running</Badge>} />;
         }}
       </Each>
+      <If when={chat.error()}><CardBody><Feedback error={chat.error()} /></CardBody></If>
     </Section>
   );
 }
