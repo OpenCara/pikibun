@@ -1197,17 +1197,24 @@ def glob_expression(glob, ignore_case=False):
             source += ')'
         elif braces and char == ',' and depth > 0:
             source += '|'
-        elif char == '[' and glob.find(']', index + 2) != -1:
-            end = glob.find(']', index + 2)
-            body = glob[index + 1:end]
-            if body.startswith('!'):
-                body = '^' + body[1:]
-            source += '[' + body.replace('\\', '\\\\').replace('[', '\\[') + ']'
+        elif char == '[' and class_end(glob, index) != -1:
+            negated = glob[index + 1:index + 2] in ('!', '^')
+            end = class_end(glob, index)
+            members = re.sub(r'[\\\[\]^&~|]', lambda match: '\\' + match.group(), glob[index + (2 if negated else 1):end])
+            source += '[' + ('^/' if negated else '') + members + ']'
             index = end
         else:
             source += re.escape(char)
         index += 1
-    return re.compile('^' + source + '$', re.IGNORECASE if ignore_case else 0)
+    try:
+        return re.compile('^' + source + '$', re.IGNORECASE if ignore_case else 0)
+    except re.error:
+        raise ValueError('invalid glob') from None
+
+
+def class_end(glob, index):
+    first = index + 2 if glob[index + 1:index + 2] in ('!', '^') else index + 1
+    return glob.find(']', first + 1)
 
 
 FIND_RESULTS = 5000
@@ -1216,11 +1223,12 @@ FIND_ENTRIES = 100000
 
 def find(root, request):
     pattern, show_all, max_results, ignore_case = request['pattern'], request['all'], request['maxResults'], request['ignoreCase']
+    by_path = request.get('byPath')
     if not isinstance(pattern, str) or not pattern or len(pattern) > 1000 or not isinstance(show_all, bool) or not isinstance(ignore_case, bool) \
+            or not isinstance(by_path, bool) \
             or type(max_results) is not int or not 1 <= max_results <= FIND_RESULTS:
         raise ValueError('invalid find request')
     expression = glob_expression(pattern, ignore_case)
-    by_path = '/' in pattern
     deadline = time.monotonic() + SEARCH_SECONDS
     paths, state = [], {'entries': 0, 'truncated': False}
 

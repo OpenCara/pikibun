@@ -158,6 +158,7 @@ const finds: Record<string, unknown>[] = [
   { pattern: "*.ts", path: "src" }, { pattern: "lib", path: "src" }, { pattern: "lib/*.ts", path: "src" }, { pattern: "src/**/*.ts" },
   { pattern: "*.{ts,txt}", path: "dir" }, { pattern: "b.txt", path: "dir" }, { pattern: "B.TXT", path: "dir" }, { pattern: "zzz", path: "dir" },
   { pattern: ".hidden", path: "dir" }, { pattern: "*", path: "dir" }, { pattern: "*.txt", path: "many" }, { pattern: "[a-c].txt" },
+  { pattern: "[!a].txt", path: "dir" }, { pattern: "src/lib[!x]util.ts" },
 ];
 
 const edits: { file: string; content: string; args: Record<string, unknown> }[] = [

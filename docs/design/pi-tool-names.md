@@ -331,8 +331,12 @@ Phase 2 landed as decisions 6 to 13 describe, with these differences and details
   matches either case, as fd's smart case does. Directories end in `/`. Links are listed and never followed. It skips
   `.git`, and `node_modules` unless `all` (as `grep` does; Pi's own `find` reads `.gitignore` instead). It walks one
   result past the limit, as Pi's `find` asks fd to, to tell whether the limit cut anything off.
-- **Globs.** `grep`'s and `find`'s globs take `{a,b}` and `[ab]` or `[!ab]`, as ripgrep's and fd's do. A backslash
-  is refused, as for `grep`'s glob, rather than read as an escape.
+- **Globs.** `grep`'s and `find`'s globs take `{a,b}` and `[ab]` or `[!ab]`, as ripgrep's and fd's do. A negated class
+  never matches `/`. A `]` straight after `[` or `[!` is a member, as in POSIX, and a `[` with no class after it is
+  itself. A class whose range runs backwards is refused as an invalid glob, on every backend alike. A backslash is
+  refused, as for `grep`'s glob, rather than read as an escape.
+- **A leading `/`** anchors the whole pattern at `path`, even a single name: `/lib` finds `lib` at the top of `path`
+  alone. `findRequest` sends whether to match by path (`byPath`), taken from the pattern before its `/` is removed.
 - **Tool groups.** `find` has no box of its own: it goes with `grep` (`groupedToolNames`, `toolGroupEntry`). A group
   without `grep` sends `find` in its `off` list too; a connector adds `find` to an `off` list that turns off `grep`,
   whichever control plane sent it; and the control plane checks `find` against `grep`'s entry. So no saved group

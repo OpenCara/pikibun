@@ -81,6 +81,7 @@ export interface FindRequest {
   kind: "find";
   path: string;
   pattern: string;
+  byPath: boolean;
   ignoreCase: boolean;
   maxResults: number;
   all: boolean;
@@ -98,7 +99,7 @@ export function findRequest(args: { path?: unknown; pattern?: unknown; limit?: u
   const glob = anchored === pattern && anchored.includes("/") && !anchored.startsWith("**/") && anchored !== "**" ? `**/${anchored}` : anchored;
   const path = args.path === undefined || args.path === "" ? "." : typeof args.path === "string" ? args.path.replace(/\/+$/, "") || "." : fail("path must be a path in the worktree");
   const limit = whole(args.limit, "limit");
-  return { kind: "find", path, pattern: glob, ignoreCase: (pattern as string) === (pattern as string).toLowerCase(),
+  return { kind: "find", path, pattern: glob, byPath: (pattern as string).includes("/"), ignoreCase: (pattern as string) === (pattern as string).toLowerCase(),
     maxResults: Math.min(Math.max(1, Math.floor(limit ?? findLimits.defaultResults)), findLimits.maxResults), all: flag(args.all, "all") };
 }
 
@@ -182,7 +183,7 @@ function searchTree(fs, start, startPath, request) {
 function findTree(fs, start, request) {
   const LIMITS = { entries: ${findLimits.entries}, seconds: ${findLimits.seconds} };
   const deadline = Date.now() + LIMITS.seconds * 1000;
-  const byPath = request.pattern.includes("/");
+  const byPath = request.byPath === true;
   const glob = globExpression(request.pattern, request.ignoreCase);
   const paths = [];
   let entries = 0, truncated = false;
@@ -225,15 +226,21 @@ function globExpression(glob, ignoreCase) {
     else if (braces && char === "{") { depth++; source += "(?:"; }
     else if (braces && char === "}" && depth > 0) { depth--; source += ")"; }
     else if (braces && char === "," && depth > 0) source += "|";
-    else if (char === "[" && glob.indexOf("]", index + 2) !== -1) {
-      const end = glob.indexOf("]", index + 2);
-      const body = glob.slice(index + 1, end);
-      source += "[" + (body[0] === "!" ? "^" + body.slice(1) : body).replace(/[\\[]/g, "\\$&") + "]";
+    else if (char === "[" && classEnd(glob, index) !== -1) {
+      const negated = glob[index + 1] === "!" || glob[index + 1] === "^";
+      const end = classEnd(glob, index);
+      source += "[" + (negated ? "^/" : "") + glob.slice(index + (negated ? 2 : 1), end).replace(/[\\[\]^]/g, "\\$&") + "]";
       index = end;
     }
     else source += char.replace(/[.+^$(){}|[\]\\]/g, "\\$&");
   }
-  return new RegExp("^" + source + "$", ignoreCase ? "iu" : "u");
+  try { return new RegExp("^" + source + "$", ignoreCase ? "iu" : "u"); }
+  catch { throw new SearchRefusal("invalid glob"); }
+}
+
+function classEnd(glob, index) {
+  const first = glob[index + 1] === "!" || glob[index + 1] === "^" ? index + 2 : index + 1;
+  return glob.indexOf("]", first + 1);
 }
 
 class SearchRefusal extends Error {}

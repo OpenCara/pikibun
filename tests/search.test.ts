@@ -21,11 +21,12 @@ test("search: Pi's grep arguments become a request, with Pi's defaults, lowered 
 });
 
 test("find: Pi's find arguments become a request: fd's prefix for a path pattern, its smart case, Pi's default limit lowered to Pikibun's most", () => {
-  assert.deepEqual(findRequest({ pattern: "*.ts" }), { kind: "find", path: ".", pattern: "*.ts", ignoreCase: true, maxResults: 1000, all: false });
+  assert.deepEqual(findRequest({ pattern: "*.ts" }), { kind: "find", path: ".", pattern: "*.ts", byPath: false, ignoreCase: true, maxResults: 1000, all: false });
   assert.deepEqual(findRequest({ pattern: "src/**/*.Spec.ts", path: "app/", limit: 9000, all: true }),
-    { kind: "find", path: "app", pattern: "**/src/**/*.Spec.ts", ignoreCase: false, maxResults: 5000, all: true });
+    { kind: "find", path: "app", pattern: "**/src/**/*.Spec.ts", byPath: true, ignoreCase: false, maxResults: 5000, all: true });
   assert.equal(findRequest({ pattern: "**/x/*.ts" }).pattern, "**/x/*.ts");
   assert.equal(findRequest({ pattern: "/src/*.ts" }).pattern, "src/*.ts", "a leading / is the searched directory's top");
+  assert.deepEqual([findRequest({ pattern: "/lib" }).pattern, findRequest({ pattern: "/lib" }).byPath], ["lib", true], "even for a single name, which is matched as a path");
   assert.equal(findRequest({ pattern: "x", limit: 0 }).maxResults, 1);
   assert.throws(() => findRequest({ pattern: "" }), /pattern must be/);
   assert.throws(() => findRequest({ pattern: "a\\b" }), /pattern must be/);
