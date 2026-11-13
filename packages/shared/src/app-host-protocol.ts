@@ -57,8 +57,6 @@ export interface StartRequest extends DevelopmentOptions, IsolationOptions {
 
 export interface StopRequest { type: "stop"; id: number }
 
-export interface UploadRequest { type: "upload"; id: number; grant: string; body: string }
-
 export interface ProvidersRequest { type: "providers"; id: number }
 
 export interface LoginRequest { type: "login"; id: number; provider: string; method: LoginMethodType }
@@ -71,7 +69,7 @@ export interface ViewRequest { type: "view"; id: number; sessionId: string; sinc
 
 export interface EntriesRequest { type: "entries"; id: number; sessionId: string; conversation: string; before: string; limit: number; brief?: boolean }
 
-export type HostRequest = InspectRequest | StartRequest | StopRequest | UploadRequest | ProvidersRequest | LoginRequest | LoginAnswerRequest | LoginCancelRequest
+export type HostRequest = InspectRequest | StartRequest | StopRequest | ProvidersRequest | LoginRequest | LoginAnswerRequest | LoginCancelRequest
   | ViewRequest | EntriesRequest;
 
 export type LocalView = { view: SessionView; revision: string } | { patch: SessionViewPatch };
@@ -105,8 +103,6 @@ export type LoginEvent =
   | { kind: "info"; message: string; links?: { url: string; label?: string }[] }
   | { kind: "progress"; message: string };
 
-export const uploadRequestLimits = { grant: 16_384, body: 1024 * 1024 } as const;
-
 export type HostState = "stopped" | "starting" | "connecting" | "connected" | "disconnected" | "stopping";
 
 export interface HostInspection {
@@ -137,7 +133,7 @@ export interface HostError {
 
 export type HostEvent =
   | { type: "ready" }
-  | { type: "result"; id: number; ok: true; inspection?: HostInspection; reply?: { status: number; body: string }; providers?: LoginProvider[]; view?: LocalView;
+  | { type: "result"; id: number; ok: true; inspection?: HostInspection; providers?: LoginProvider[]; view?: LocalView;
     page?: LocalPage | null }
   | { type: "login"; login: number; event: LoginEvent }
   | { type: "result"; id: number; ok: false; error: HostError }

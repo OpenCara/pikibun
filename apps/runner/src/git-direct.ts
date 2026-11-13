@@ -7,7 +7,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 import { Readable } from "node:stream";
-import { publicAddress, TRANSPORT_HEADER, type RelayRequest } from "./egress.js";
+import { fakeIpAddress, publicAddress, TRANSPORT_HEADER, type RelayRequest } from "./egress.js";
 
 const UNREACHABLE_RELAY_MS = 5 * 60_000;
 const EXPIRY_MARGIN_MS = 5 * 60_000;
@@ -47,6 +47,7 @@ export interface DirectGitOptions {
   onFallback?: (request: RelayRequest, reason: string) => void;
   lookup?: (host: string) => Promise<ResolvedAddress[]>;
   pinnedFetch?: (url: URL, init: RequestInit | undefined, addresses: ResolvedAddress[]) => Promise<Response>;
+  fakeIpTunnels?: () => Promise<boolean>;
 }
 export interface ResolvedAddress { address: string; family: number }
 
@@ -116,6 +117,11 @@ export class DirectGit {
     return grant;
   }
 
+  async #fakeIpTunnels(): Promise<boolean> {
+    try { return await this.#options.fakeIpTunnels?.() === true; }
+    catch { return false; }
+  }
+
   #publicOnly(remote: string, fetchImpl: typeof fetch): typeof fetch {
     const origin = new URL(remote).origin;
     const lookup = this.#options.lookup ?? (name => dnsLookup(name, { all: true, verbatim: true }));
@@ -127,8 +133,14 @@ export class DirectGit {
       let addresses: ResolvedAddress[];
       try { addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await lookup(host); }
       catch { addresses = []; }
-      if (!addresses.length || addresses.some(entry => !publicAddress(entry.address))) {
-        throw new GitTransferError(502, "lfs_unavailable", `${url.hostname.slice(0, 253)} does not resolve to a public address; Git LFS objects are downloaded only from public addresses`);
+      const name = url.hostname.slice(0, 253);
+      if (!addresses.length || addresses.some(entry => !publicAddress(entry.address) && (isIP(host) || !fakeIpAddress(entry.address)))) {
+        throw new GitTransferError(502, "lfs_unavailable", `${name} does not resolve to a public address; Git LFS objects are downloaded only from public addresses`);
+      }
+      const fake = addresses.find(entry => fakeIpAddress(entry.address));
+      if (fake && !await this.#fakeIpTunnels()) {
+        throw new GitTransferError(502, "lfs_unavailable", `${name} resolves to ${fake.address}, a fake-IP address of a proxy on this host; Git LFS objects are downloaded `
+          + "from such addresses only once the host's owner trusts that proxy (Settings → Hosts → the host → Configuration → Fake-IP proxy)");
       }
       return pinned(url, init, addresses.slice(0, 8));
     }) as typeof fetch;

@@ -289,7 +289,10 @@ test("pikibun serve's server pairs this computer as its owner's host once they h
   t.after(() => server.close());
   assert.equal(server.origin, `http://127.0.0.1:${state.port}`);
   assert.match(await (await fetch(server.origin)).text(), /<title>Pikibun<\/title>/);
-  assert.equal(server.signInUrl(), `${server.origin}/api/auth/local?token=${state.claimSecret}`);
+  const signInToken = new URL(server.signInUrl()!).searchParams.get("token")!;
+  assert.equal(server.signInUrl(), `${server.origin}/api/auth/local?token=${signInToken}`);
+  assert.match(signInToken, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(signInToken, state.claimSecret, "the link's token is made at this start, not kept in the state file");
   assert.equal(server.env.LOCAL_OWNER_NAME, localUsername());
   assert.equal(server.env.GITHUB_CLIENT_ID, undefined);
 
@@ -524,9 +527,20 @@ test("an owner who signed in without a password is pinned when Pikibun is shared
   await loadLocalState(stateDir, { port: await freePort() });
   let { state, release } = await openLocalState(stateDir);
   let server = await startLocalServer({ stateDir, state, release, staticDir: web, extraEnv: { LOCAL_OWNER_NAME: "ada" } });
-  const signedIn = await fetch(`${server.origin}/api/auth/native/local`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: state.claimSecret }) });
+  const signIn = (token: string | null) => fetch(`${server.origin}/api/auth/native/local`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }) });
+  const firstToken = new URL(server.signInUrl()!).searchParams.get("token");
+  assert.equal((await signIn(state.claimSecret)).status, 403, "the secret in the state file signs nobody in");
+  const signedIn = await signIn(firstToken);
   assert.equal((await signedIn.json() as { user: { id: string } }).user.id, "password:ada");
+  await server.close();
+
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web, extraEnv: { LOCAL_OWNER_NAME: "ada" } });
+  const secondToken = new URL(server.signInUrl()!).searchParams.get("token");
+  assert.notEqual(secondToken, firstToken, "each start makes a new link");
+  assert.equal((await signIn(firstToken)).status, 403, "the link from before the restart signs nobody in");
+  assert.equal((await signIn(secondToken)).status, 200);
   await server.close();
 
   ({ state, release } = await openLocalState(stateDir, { shared: { ...sharedBase, admins: ["password:ada"] } }));

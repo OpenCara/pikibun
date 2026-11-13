@@ -6,7 +6,6 @@ import {
   removedHostStatements, requireSharedWorkspace, shareHostStatements, sourceRead, unshareHostStatements, viewerHostAuthority,
 } from './authority/index.js';
 import { withHostToolCapabilities } from './host-capabilities.js';
-import { verifyDirectUpload } from './file-uploads.js';
 import type { Hono } from 'hono';
 import type { ConnectorCapabilities, ConnectorInfo, ConnectorPairing, LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { gpuKinds, type GpuKind } from '../../../packages/shared/src/host-config.js';
@@ -325,7 +324,6 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/self/git/relay/:bindingId/:service', async c => gitRelay(c, await authenticateConnector(c)));
   app.post('/api/connectors/self/git/direct', async c => gitDirect(c, await authenticateConnector(c)));
   app.post('/api/connectors/self/api/credential', async c => apiCredential(c, await authenticateConnector(c)));
-  app.post('/api/connectors/self/uploads/verify', async c => verifyDirectUpload(c, await authenticateConnector(c)));
 }
 
 export async function createPairing(env: Env, ownerId: string, name: string): Promise<ConnectorPairing> {

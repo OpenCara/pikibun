@@ -9,7 +9,7 @@ const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const server = "apps/server/src";
 const authority = `${server}/authority`;
 const index = `${authority}/index.ts`;
-const infrastructure = new Set([`${server}/types.ts`, `${server}/http.ts`, `${server}/db.ts`, `${server}/db/types.ts`]);
+const infrastructure = new Set([`${server}/types.ts`, `${server}/http.ts`, `${server}/schemas.ts`, `${server}/db.ts`, `${server}/db/types.ts`]);
 
 function sources(directory: string, files: string[] = []): string[] {
   for (const name of readdirSync(join(repository, directory))) {

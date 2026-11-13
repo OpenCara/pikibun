@@ -48,10 +48,11 @@ function forge(handler?: (url: string, init: RequestInit) => Response | Promise<
 const addresses: Record<string, string> = { "media.example.com": "93.184.216.34", "internal.example.com": "10.0.0.5" };
 
 function directGit(grant: (request: Omit<GitDirectRequest, "sessionId">) => Promise<unknown>, fetch: typeof globalThis.fetch, fallbacks: string[] = [],
-  pinned: { url: string; addresses: ResolvedAddress[] }[] = []) {
+  pinned: { url: string; addresses: ResolvedAddress[] }[] = [], options: { lookups?: Readonly<Record<string, readonly string[]>>; fakeIpTunnels?: () => Promise<boolean> } = {}) {
   const asked: Omit<GitDirectRequest, "sessionId">[] = [];
   const direct = new DirectGit({ grant: async request => { asked.push(request); return grant(request); }, fetch, onFallback: (_request, reason) => fallbacks.push(reason),
-    lookup: async host => addresses[host] ? [{ address: addresses[host], family: 4 }] : [],
+    lookup: async host => options.lookups?.[host]?.map(address => ({ address, family: 4 })) ?? (addresses[host] ? [{ address: addresses[host], family: 4 }] : []),
+    ...(options.fakeIpTunnels ? { fakeIpTunnels: options.fakeIpTunnels } : {}),
     pinnedFetch: async (url, init, checked) => { pinned.push({ url: url.href, addresses: checked }); return fetch(url, init); } });
   return { direct, asked };
 }
@@ -159,6 +160,44 @@ test("direct Git LFS downloads answer in the relay's own form; the provider's UR
   assert.equal(await guarded.direct.forward({ bindingId: "binding-app", service: "lfs-object", contentType: "application/json", body: json({ oid, size: 3 }) }), undefined);
   assert.ok(!inward.calls.some(call => call.url.startsWith("https://internal.example.com/")));
   assert.deepEqual(fallbacks, ["internal.example.com does not resolve to a public address; Git LFS objects are downloaded only from public addresses"]);
+});
+
+test("behind a fake-IP proxy, Git LFS downloads go direct only once the host's owner trusts it, and never to a private address", async () => {
+  const json = (value: unknown) => new Uint8Array(Buffer.from(JSON.stringify(value)));
+  const object = { bindingId: "binding-app", service: "lfs-object", contentType: "application/json", body: json({ oid, size: 3 }) } as const;
+  const fake = { "media.example.com": ["198.18.0.7"] };
+  let trusted: boolean | Error = false;
+  const fakeIpTunnels = async () => { if (trusted instanceof Error) throw trusted; return trusted; };
+
+  const fallbacks: string[] = [];
+  const untrusted = directGit(async () => readGrant(), forge().fetch, fallbacks, [], { lookups: fake, fakeIpTunnels });
+  assert.equal(await untrusted.direct.forward(object), undefined, "the relay takes it, as before");
+  assert.match(fallbacks[0]!, /^media\.example\.com resolves to 198\.18\.0\.7, a fake-IP address of a proxy on this host; .* Fake-IP proxy\)$/);
+
+  trusted = true;
+  const pinned: { url: string; addresses: ResolvedAddress[] }[] = [];
+  const upstream = forge();
+  const allowed = directGit(async () => readGrant(), upstream.fetch, [], pinned, { lookups: fake, fakeIpTunnels });
+  assert.equal(await (await allowed.direct.forward(object))!.text(), "big");
+  assert.deepEqual(pinned, [{ url: `https://media.example.com/${oid}`, addresses: [{ address: "198.18.0.7", family: 4 }] }]);
+
+  for (const [label, lookups] of [["fake-IP mixed with a private address", { "media.example.com": ["198.18.0.7", "10.0.0.5"] }],
+    ["a bare fake-IP address", { "198.18.0.7": ["198.18.0.7"] }]] as const) {
+    const refused: string[] = [];
+    const host = Object.keys(lookups)[0]!;
+    const inward = forge(url => url.endsWith("/info/lfs/objects/batch")
+      ? Response.json({ objects: [{ oid, size: 3, actions: { download: { href: `https://${host}/${oid}` } } }] }) : undefined);
+    const guarded = directGit(async () => readGrant(), inward.fetch, refused, [], { lookups, fakeIpTunnels });
+    assert.equal(await guarded.direct.forward(object), undefined, label);
+    assert.match(refused[0]!, /does not resolve to a public address|somewhere Pikibun does not fetch from/, label);
+    assert.ok(!inward.calls.some(call => call.url.startsWith(`https://${host}/`)), label);
+  }
+
+  trusted = new Error("configuration unavailable");
+  const failing: string[] = [];
+  const unknown = directGit(async () => readGrant(), forge().fetch, failing, [], { lookups: fake, fakeIpTunnels });
+  assert.equal(await unknown.direct.forward(object), undefined, "a setting that can't be read counts as off");
+  assert.match(failing[0]!, /fake-IP address/);
 });
 
 test("a pinned download connects to the address that was checked and never resolves the name again", async t => {

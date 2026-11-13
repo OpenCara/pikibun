@@ -2,10 +2,9 @@ import { Buffer } from "node:buffer";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ConnectorCredentials, ConnectorRpcRequest, ConnectorRpcResponse } from "../../../../packages/shared/src/connector.js";
 import { connectorLimits, connectorRequestTimeoutMs } from "../../../../packages/shared/src/connector.js";
-import type { ControlPlaneCalls } from "./control-plane.js";
 import type { Generation } from "./generation.js";
-import { requestSchema, ticketSchema, validateRelayRequest } from "./relay-request.js";
-import { boundedBody, encoder } from "./wire.js";
+import { requestSchema, validateRelayRequest } from "./relay-request.js";
+import { boundedBody } from "./wire.js";
 import { FailureLog, type LogLine } from "../failure-log.js";
 
 const DRAIN_TIMEOUT = 30_000;
@@ -22,8 +21,6 @@ export interface RelayFramesOptions {
   state(): ConnectorCredentials | undefined;
   restarting(): boolean;
   runtime(): RelayRuntime | undefined;
-  welcomed(): Generation | undefined;
-  calls: Pick<ControlPlaneCalls, "callback">;
   disconnect(generation: Generation, reason: string): void;
   requireGeneration(generation: Generation): void;
   log?: LogLine;
@@ -31,7 +28,6 @@ export interface RelayFramesOptions {
 
 export class RelayFrames {
   readonly #relayed = new Map<string, number>();
-  readonly #uploaded = new Map<string, number>();
   readonly #executing = new Set<Promise<void>>();
   readonly #failures: FailureLog;
 
@@ -43,12 +39,12 @@ export class RelayFrames {
     await Promise.allSettled([...this.#executing]);
   }
 
-  #claim(seen: Map<string, number>, rpc: ConnectorRpcRequest): "claimed" | "replayed" | "full" {
+  #claim(rpc: ConnectorRpcRequest): "claimed" | "replayed" | "full" {
     const now = Date.now();
-    const all = [this.#relayed, this.#uploaded];
-    for (const each of all) for (const [key, expiry] of each) if (expiry <= now) each.delete(key);
+    const seen = this.#relayed;
+    for (const [key, expiry] of seen) if (expiry <= now) seen.delete(key);
     const keys = [`request:${rpc.id}`, `ticket:${rpc.ticket.jti}`];
-    if (keys.some(key => all.some(each => each.has(key)))) return "replayed";
+    if (keys.some(key => seen.has(key))) return "replayed";
     if (seen.size > REPLAY_KEYS_LIMIT) return "full";
     const expiry = Math.min((rpc.ticket.exp + 5) * 1000, now + 70_000);
     for (const key of keys) seen.set(key, expiry);
@@ -61,7 +57,7 @@ export class RelayFrames {
     const parsed = requestSchema.safeParse(value);
     if (!parsed.success) return this.options.disconnect(generation, "Invalid relay request");
     const rpc = parsed.data;
-    const claim = this.#claim(this.#relayed, rpc);
+    const claim = this.#claim(rpc);
     if (claim !== "claimed") return this.options.disconnect(generation, claim === "full" ? "Relay exceeded the recent request limit" : "Replayed relay request");
     generation.incomingBytes += frameSize;
     const previous = generation.tail;
@@ -156,39 +152,5 @@ export class RelayFrames {
     const reply = frame(JSON.stringify(result));
     if (reply.payloadSize > connectorLimits.frameBytes) return failed(502, "The host's reply is too large to relay.");
     return reply;
-  }
-
-  async direct(input: { grant: string; body: string }): Promise<{ status: number; body: string }> {
-    const refused = (status: number, error: string) => ({ status, body: JSON.stringify({ error, code: "connector_reply_error" }) });
-    const generation = this.options.welcomed();
-    const state = this.options.state();
-    if (!state || !generation || generation.abort.signal.aborted || !generation.connectionToken) return refused(503, "The host is not connected.");
-    if (typeof input?.grant !== "string" || input.grant.length > 16_384 || typeof input.body !== "string"
-      || encoder.encode(input.body).length > connectorLimits.requestBytes) return refused(400, "Invalid upload request.");
-    let verified: { ticket: ConnectorRpcRequest["ticket"]; size: number; path: string };
-    try {
-      const value = await this.options.calls.callback(generation, "/api/connectors/self/uploads/verify", { grant: input.grant }) as Record<string, unknown> | undefined;
-      const ticket = ticketSchema.parse(value?.ticket);
-      if (ticket.action !== "upload" || ticket.connectorId !== state.connectorId || !Number.isSafeInteger(value?.size)
-        || value?.path !== `/v1/sessions/${ticket.sessionId}/upload`) throw new Error("Invalid upload grant");
-      verified = { ticket, size: value.size as number, path: value.path };
-    } catch { return refused(403, "The control plane refused the upload grant."); }
-    let declared: unknown;
-    try { declared = (JSON.parse(input.body) as { size?: unknown } | null)?.size; } catch { declared = undefined; }
-    if (declared !== verified.size) return refused(400, "The upload doesn't match its grant.");
-    const rpc: ConnectorRpcRequest = { type: "request", id: verified.ticket.jti, method: "POST", path: verified.path, body: input.body, ticket: verified.ticket };
-    const claim = this.#claim(this.#uploaded, rpc);
-    if (claim === "replayed") return refused(409, "That upload grant was already used.");
-    if (claim === "full") return refused(503, "The host is taking too many requests at once; try again shortly.");
-    let authorization: string;
-    try { ({ authorization } = await validateRelayRequest(rpc, state.connectorId, this.options.secret)); }
-    catch { return refused(400, "Invalid upload request."); }
-    if (this.options.restarting()) return refused(503, "The host's runner is restarting; try again shortly.");
-    try {
-      await generation.runtimeReady.promise;
-      const { payload } = await this.#answer(generation, rpc, authorization);
-      const reply = JSON.parse(payload) as ConnectorRpcResponse;
-      return { status: reply.status, body: reply.body };
-    } catch { return refused(503, "The host lost its connection; inspect the session before retrying."); }
   }
 }

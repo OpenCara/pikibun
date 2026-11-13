@@ -1,8 +1,10 @@
 import type { Hono, MiddlewareHandler } from 'hono';
+import { z } from 'zod';
 import { sha256 } from '../../../../packages/shared/src/crypto.js';
 import type { AppSignInCode, AppSignInCodeState, NativeSignIn } from '../../../../packages/shared/src/types.js';
 import { getUser } from '../db.js';
-import { appOrigin, fail, id, identifier, jsonObject, localMode, now, passwordAuthEnabled, randomToken } from '../http.js';
+import { appOrigin, fail, id, identifier, localMode, now, passwordAuthEnabled, randomToken } from '../http.js';
+import { body, fields } from '../schemas.js';
 import type { AppContext, AppEnv } from '../types.js';
 import { auditAfterChange } from './audit.js';
 import { authenticate, csrfGuard, dbResult, localOwner, newSession, ownProfile, privateResponse, safeText, SUSPENDED } from './auth.js';
@@ -14,15 +16,16 @@ const CODE = /^[A-Za-z0-9_-]{43}$/;
 export const APP_CODE_LINK = 'pikibun://auth/code';
 const EXPIRED = 'This sign-in code has expired or was already used. Make a new one under Settings → Profile → Signed-in apps.';
 
-function only(body: Record<string, unknown>, fields: string[]): void {
-  if (Object.keys(body).some(key => !fields.includes(key))) fail(400, 'invalid_input', `Only ${fields.join(' and ')} ${fields.length === 1 ? 'is' : 'are'} accepted.`);
-}
+const makeCodeBody = fields({ currentPassword: z.unknown().optional() }, 'Only currentPassword is accepted.');
+const signInBody = fields({
+  code: z.custom<string>(value => typeof value === 'string' && CODE.test(value), { message: EXPIRED, params: { code: 'invalid_grant' } }),
+  deviceName: z.unknown().optional(),
+}, 'Only code and deviceName are accepted.');
 
 async function makeCode(c: AppContext) {
   const auth = c.get('auth');
-  const body = await jsonObject(c, 4096);
-  only(body, ['currentPassword']);
-  const proof = await requireRecentOwner(c, body.currentPassword);
+  const input = await body(c, makeCodeBody, { maxBytes: 4096 });
+  const proof = await requireRecentOwner(c, input.currentPassword);
   const source = await dbResult(c.env.DB.query<{ method: string | null }>('SELECT method FROM auth_sessions WHERE token_hash = ? AND user_id = ?')
     .bind(auth.tokenHash, auth.userId).first());
   if (!source) fail(401, 'unauthorized', 'Authentication is required.');
@@ -64,13 +67,11 @@ async function cancelCode(c: AppContext) {
 }
 
 async function signInWithCode(c: AppContext) {
-  const body = await jsonObject(c, 4096);
-  only(body, ['code', 'deviceName']);
-  if (typeof body.code !== 'string' || !CODE.test(body.code)) fail(400, 'invalid_grant', EXPIRED);
-  const deviceName = body.deviceName === undefined || body.deviceName === null ? null : safeText(body.deviceName, 'deviceName', 100);
+  const input = await body(c, signInBody, { maxBytes: 4096 });
+  const deviceName = input.deviceName === undefined || input.deviceName === null ? null : safeText(input.deviceName, 'deviceName', 100);
   const found = await dbResult(c.env.DB.query<{ id: string; user_id: string; session_hash: string; method: string | null }>(
     'SELECT id, user_id, session_hash, method FROM app_sign_in_codes WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?')
-    .bind(await sha256(body.code), Date.now()).first());
+    .bind(await sha256(input.code), Date.now()).first());
   if (!found) fail(400, 'invalid_grant', EXPIRED);
   const user = await dbResult(getUser(c.env, found.user_id));
   if (!user || !['github', 'password', 'test'].includes(user.auth_kind)) fail(400, 'invalid_grant', EXPIRED);

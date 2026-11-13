@@ -133,6 +133,11 @@ export function agentInstructions(input: InstructionsInput): string {
     + "Use the selectors its answer lists.";
   else if (mode !== "ask" && browserUnavailable) instructions += `\n\nThis session has no browser tool: ${browserUnavailableText(browserUnavailable)} `
     + "If you're asked to look at or test a web page, say so, and use what you have instead (fetching it, or running its tests).";
+  if (mode !== "ask" && input.browser) instructions += "\n\nThis host's Chromium is at $CHROME_BIN, also in $PUPPETEER_EXECUTABLE_PATH, which Puppeteer reads itself. "
+    + "Point scripts and test runners that start a browser themselves (Playwright, Selenium, Karma) at it, and launch it with --no-sandbox, "
+    + "since Chrome's own sandbox can't start inside this one, which is the boundary: in Python Playwright, "
+    + "p.chromium.launch(executable_path=os.environ[\"CHROME_BIN\"], args=[\"--no-sandbox\"]). "
+    + "Don't run playwright install or download another browser: it costs the download and this session already has one.";
   if (mode === "write" && input.tools.includes("tunnel") && !off.has("tunnel")) instructions += "\n\nTo put the web app you work on online "
     + "at a public https:// address, so people can open it in a browser or on a phone, use the tunnel tool: "
     + "tunnel {action: \"start\", serve: {program: \"pnpm\", args: [\"preview\", \"--port\", \"4173\"], directory: \"<name>\", port: 4173}} runs the server "

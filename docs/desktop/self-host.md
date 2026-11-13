@@ -32,7 +32,7 @@ Choose **Sign in to it**:
 - From the sign-in screen, the app switches its **Server** to your Pikibun and signs you in.
 - From Settings, the app asks first, then signs out of the server you were using and signs in to your Pikibun. Nothing moves: your sessions and workspaces there stay where they are.
 
-There is nothing to type: your Pikibun keeps a private sign-in token with its state on this computer, and the app signs you in with it as your Pikibun's owner, the only account that can ever sign in to it. Your first sign-in makes that account, named after your user on this computer (`password:ada` for the user `ada`). Signed out later, the sign-in screen's **Sign in to Pikibun on this Mac** signs you back in.
+There is nothing to type: each time your Pikibun starts, it makes a private sign-in token and tells only the app, which signs you in with it as your Pikibun's owner, the only account that can ever sign in to it. Your first sign-in makes that account, named after your user on this computer (`password:ada` for the user `ada`). Signed out later, the sign-in screen's **Sign in to Pikibun on this Mac** signs you back in.
 
 Once you're signed in, this computer pairs itself with your Pikibun as its host. **This Mac as its host** on the Self host page turns **Online**, and the computer appears under **Settings → Hosts**. Start a session in your **Private** workspace, as in [Client](client.md#3-work-in-sessions).
 

@@ -2,16 +2,11 @@ import { workspaceAdminSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import { hostCapabilities } from './authority/index.js';
 import { base64Bytes, fileUploadLimits, formatBytes, parseUploadChunk, type UploadResult } from '../../../packages/shared/src/file-uploads.js';
-import { signToken, verifyToken } from '../../../packages/shared/src/crypto.js';
-import type { RunnerTicket } from '../../../packages/shared/src/types.js';
 import type { Database } from './db/types.js';
-import {
-  auditStatement, authorizeConnectorTicket, connectorPermissions, type ConnectorRow, requireMember, requireRunnerAccess, requireSession,
-} from './authority/index.js';
-import { fail, id, identifier, jsonObject, now } from './http.js';
-import { connectorPath } from './connector-transport.js';
+import { auditStatement, requireMember, requireSession } from './authority/index.js';
+import { fail, identifier, jsonObject, now } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
-import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
+import type { Env, SessionRow, AppEnv } from './types.js';
 
 export interface AttachmentSettings {
   maxFileBytes: number;
@@ -29,40 +24,15 @@ export async function workspaceAttachmentSettings(db: Database, workspaceId: str
     .bind(workspaceId).first());
 }
 
-async function hostUploads(env: Env, row: SessionRow, direct = false): Promise<boolean> {
-  if (!row.connector_id) return !direct;
-  const capabilities = await hostCapabilities(env, row.connector_id);
-  return capabilities?.fileUploads === true && (!direct || capabilities.directUploads === true);
+async function hostUploads(env: Env, row: SessionRow): Promise<boolean> {
+  if (!row.connector_id) return true;
+  return (await hostCapabilities(env, row.connector_id))?.fileUploads === true;
 }
 
-async function requireUploads(env: Env, row: SessionRow, direct = false): Promise<void> {
-  if (!await hostUploads(env, row, direct)) {
-    fail(409, 'uploads_unsupported', direct ? 'This session\'s host doesn\'t take files from the desktop app directly.'
-      : 'This session\'s host can\'t take attached files yet. Its owner can update the pikibun connector there.');
+async function requireUploads(env: Env, row: SessionRow): Promise<void> {
+  if (!await hostUploads(env, row)) {
+    fail(409, 'uploads_unsupported', 'This session\'s host can\'t take attached files yet. Its owner can update the pikibun connector there.');
   }
-}
-
-async function grantSecret(env: Env): Promise<string> {
-  const secret = env.SESSION_SECRET;
-  if (!secret || secret.length < 32) fail(503, 'uploads_unavailable', 'Direct uploads are not configured on this server.');
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const derived = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('pikibun direct upload grants v1')));
-  return Buffer.from(derived).toString('base64url');
-}
-
-interface DirectGrant {
-  purpose: 'direct-upload';
-  ticket: RunnerTicket;
-  size: number;
-  iat: number;
-  exp: number;
-}
-
-function directInput(input: Record<string, unknown>): { bodyHash: string; size: number } {
-  const keys = Object.keys(input).sort().join(',');
-  if (keys !== 'bodyHash,size' || typeof input.bodyHash !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.bodyHash)
-    || !Number.isSafeInteger(input.size) || (input.size as number) < 0) fail(400, 'invalid_input', 'Expected bodyHash and size.');
-  return { bodyHash: input.bodyHash as string, size: input.size as number };
 }
 
 function requireWithinLimit(size: number, settings: AttachmentSettings): void {
@@ -108,23 +78,6 @@ export function registerFileUploads(app: Hono<AppEnv>): void {
     c.header('Cache-Control', 'no-store');
     return c.json(checkedResult(result, chunk.offset + base64Bytes(chunk.data), chunk.size));
   });
-
-  app.post('/api/sessions/:id/uploads/direct', async c => {
-    const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
-    if (!row.connector_id) fail(409, 'uploads_unsupported', 'This session\'s host doesn\'t take files from the desktop app directly.');
-    await requireUploads(c.env, row, true);
-    const { bodyHash, size } = directInput(await jsonObject(c, 1024));
-    requireWithinLimit(size, await workspaceAttachmentSettings(c.env.DB, row.workspace_id));
-    const actorId = c.get('auth').userId;
-    const current = await requireRunnerAccess(c, actorId, row, 'upload');
-    const issuedAt = Math.floor(Date.now() / 1000);
-    const ticket: RunnerTicket = { aud: 'runner', sessionId: current.id, actorId, ownerId: current.owner_id, connectorId: current.connector_id!, action: 'upload',
-      policyVersion: current.policy_version, iat: issuedAt, exp: issuedAt + 60, jti: id(), bodyHash };
-    await authorizeConnectorTicket(c.env, ticket);
-    const grant: DirectGrant = { purpose: 'direct-upload', ticket, size, iat: issuedAt, exp: ticket.exp };
-    c.header('Cache-Control', 'no-store');
-    return c.json({ connectorId: current.connector_id, grant: await signToken(grant, await grantSecret(c.env)) });
-  });
 }
 
 function checkedResult(value: UploadResult | null, received: number, size: number): UploadResult {
@@ -134,19 +87,4 @@ function checkedResult(value: UploadResult | null, received: number, size: numbe
     fail(502, 'invalid_runner_response', 'The runner returned an invalid upload response.');
   }
   return path === undefined ? { received } : { received, path };
-}
-
-export async function verifyDirectUpload(c: AppContext, connector: ConnectorRow): Promise<Response> {
-  const input = await jsonObject(c, 32 * 1024);
-  if (Object.keys(input).join(',') !== 'grant' || typeof input.grant !== 'string') fail(400, 'invalid_input', 'Expected a grant.');
-  const grant = await verifyToken<DirectGrant>(input.grant, await grantSecret(c.env));
-  const ticket = grant?.ticket;
-  if (!grant || grant.purpose !== 'direct-upload' || !ticket || typeof ticket !== 'object' || ticket.aud !== 'runner' || ticket.action !== 'upload'
-    || ticket.connectorId !== connector.id || ticket.exp !== grant.exp || ticket.exp * 1000 <= Date.now()
-    || !Number.isSafeInteger(grant.size) || grant.size < 0 || !Object.hasOwn(connectorPermissions, ticket.action)) {
-    fail(403, 'invalid_grant', 'The upload grant is invalid or has expired.');
-  }
-  const row = await authorizeConnectorTicket(c.env, ticket, connector.connection_hash ?? undefined);
-  requireWithinLimit(grant.size, await workspaceAttachmentSettings(c.env.DB, row.workspace_id));
-  return c.json({ ticket, size: grant.size, path: connectorPath('upload', ticket.sessionId) });
 }

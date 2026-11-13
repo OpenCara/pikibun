@@ -18,8 +18,7 @@ So the desktop app reads a session that its own host runs **from that host first
 - While the server can't be reached (no answer from Pikibun's API: the network fails, or a proxy in front of it gives up
   with a gateway error), reads of a session the server said runs here carry on from the host, and the page shows no
   error. A server that answers with an error of its own isn't unreachable, and vouches for nothing. The session is then
-  **read-only**: sending, stopping, approvals and everything else that changes a session go through the server, as
-  always.
+  **read-only**: sending, stopping and everything else that changes a session go through the server, as always.
 - Where the host can't answer (it stopped, it hasn't connected since it started, the session isn't on it), the app goes
   back to the server's stream at once, and asks the host again at the next access check, 30 seconds later.
 

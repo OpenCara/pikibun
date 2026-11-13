@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -78,13 +79,14 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   }
   const owner = shared ? undefined : await pinnedOwner(state, stateDir, staticDir);
   const ownerName = shared ? undefined : localUsername();
+  const signInToken = randomBytes(32).toString('base64url');
   const settings: Record<string, string> = shared ? {
     ...common, TRUST_PROXY: String(shared.trustProxy), LOCAL_MODE: 'false', SIGNUP: shared.signup, PASSWORD_AUTH: String(shared.passwordAuth),
     ADMIN_USER_IDS: shared.admins.join(','),
     ...(shared.github ? { GITHUB_CLIENT_ID: shared.github.clientId, GITHUB_CLIENT_SECRET: shared.github.clientSecret } : {}),
     ...options.extraEnv,
   } : {
-    ...common, TRUST_PROXY: 'false', LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: state.claimSecret, ...(owner ? { LOCAL_OWNER_ID: owner } : {}),
+    ...common, TRUST_PROXY: 'false', LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: signInToken, ...(owner ? { LOCAL_OWNER_ID: owner } : {}),
     ...(ownerName ? { LOCAL_OWNER_NAME: ownerName } : {}),
     ...options.extraEnv,
   };
@@ -110,7 +112,7 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
       return first ? { id: first } : null;
     },
     signInUrl() {
-      return shared ? null : `${origin}/api/auth/local?token=${state.claimSecret}`;
+      return shared ? null : `${origin}/api/auth/local?token=${signInToken}`;
     },
     async createAdmin(username, password) {
       if (!shared) throw new LocalServerError('Administrator accounts are for a shared Pikibun: for yourself alone, you sign in with its sign-in link.');

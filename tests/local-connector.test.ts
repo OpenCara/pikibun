@@ -366,7 +366,6 @@ type FixtureOptions = {
   hostConfig?: () => Response | Promise<Response>;
   gpu?: 'dxg' | 'render';
   piSettings?: Pick<LocalModels, 'compaction' | 'identity'>;
-  uploadVerify?: (request: Request) => Response | Promise<Response>;
   extensions?: HostExtensions;
   extensionsSync?: (body: unknown) => Response | Promise<Response>;
   browser?: NonNullable<Parameters<typeof createConnector>[0]['browser']>;
@@ -439,7 +438,6 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
       }
       if (request.url === `${origin}/api/connectors/self/git/push/credential` && options.pushCredential) return options.pushCredential(request);
       if ((request.url.startsWith(`${origin}/api/connectors/self/github/`) || request.url === `${origin}/api/connectors/self/sources/read`) && options.github) return options.github(request);
-      if (request.url === `${origin}/api/connectors/self/uploads/verify` && options.uploadVerify) return options.uploadVerify(request);
       assert.fail(`Unexpected fixture Worker request: ${request.url}`);
     },
     onStatus: (status, reason) => {
@@ -684,44 +682,6 @@ test('github reads and merges reach the control plane over the connection, pass 
   answer = () => Response.json(['no', 'object']);
   await assert.rejects(config.brokered!('sources/read', sourceRead));
   await assert.rejects(config.brokered!('../internal/sources/read', sourceRead), /Invalid brokered tool route/);
-});
-
-test('a chunk the desktop app hands the host runs once, as relayed, after the control plane checked its grant', { timeout: 10000 }, async t => {
-  const body = JSON.stringify({ uploadId: 'upload-0001', name: 'a.txt', size: 2, offset: 0, data: 'aGk=' });
-  let verify = async (): Promise<Response> => Response.json({});
-  const fixture = await connectorFixture(t, {
-    uploadVerify: () => verify(),
-    execute: request => request.url.endsWith('/upload') ? Response.json({ received: 2, path: 'attachments/a.txt' }) : Response.json({ ok: true }),
-  });
-  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 503);
-  await startFixture(fixture);
-  const granted = (await rpc('upload', body, 'direct-1')).ticket;
-  verify = async () => Response.json({ ticket: granted, size: 2, path: '/v1/sessions/session/upload' });
-  const reply = await fixture.connector.direct({ grant: 'grant', body });
-  assert.deepEqual(JSON.parse(fixture.allCalls.filter(call => call.request.url.endsWith('/api/connectors/self/uploads/verify')).at(-1)!.body), { grant: 'grant' });
-  assert.deepEqual([reply.status, JSON.parse(reply.body)], [200, { received: 2, path: 'attachments/a.txt' }]);
-  const executed = fixture.runtimes[0]!.requests.at(-1)!;
-  assert.equal(new URL(executed.url).pathname, '/v1/sessions/session/upload');
-  assert.equal(await executed.text(), body);
-  const config = fixture.runtimes[0]!.config;
-  assert.deepEqual(await verifyRunnerTicket(executed.headers.get('authorization')!.slice(7), config.sharedSecret, 'upload', 'session', body), granted);
-  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 409);
-  const runs = fixture.runtimes[0]!.requests.length;
-  const other = (await rpc('upload', body, 'direct-2')).ticket;
-  verify = async () => Response.json({ ticket: other, size: 3, path: '/v1/sessions/session/upload' });
-  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 400);
-  const changed = (await rpc('upload', body, 'direct-3')).ticket;
-  verify = async () => Response.json({ ticket: changed, size: 2, path: '/v1/sessions/session/upload' });
-  assert.equal((await fixture.connector.direct({ grant: 'grant', body: body.replace('aGk=', 'aGl=') })).status, 400);
-  const foreign = { ...(await rpc('upload', body, 'direct-4')).ticket, connectorId: 'another-host' };
-  verify = async () => Response.json({ ticket: foreign, size: 2, path: '/v1/sessions/session/upload' });
-  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 403);
-  const submit = (await rpc('submit', body, 'direct-5')).ticket;
-  verify = async () => Response.json({ ticket: submit, size: 2, path: '/v1/sessions/session/submit' });
-  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 403);
-  verify = async () => Response.json({ error: 'The upload grant is invalid or has expired.', code: 'invalid_grant' }, { status: 403 });
-  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 403);
-  assert.equal(fixture.runtimes[0]!.requests.length, runs);
 });
 
 test('the desktop app reads a session from the host itself once it has a runtime, and still while the relay is away', { timeout: 10000 }, async t => {
