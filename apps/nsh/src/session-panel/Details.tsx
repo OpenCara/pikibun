@@ -163,7 +163,6 @@ function HostSection(props: Part) {
 
 type UnavailableExtension = NonNullable<NonNullable<SessionView["extensions"]>["unavailable"]>[number];
 
-/** The programs the host lacks for an extension this session can't offer, which a chat on the host can install. */
 export function installablePrograms(item: UnavailableExtension): MissingPrograms | undefined {
   const tool = item.tools[0] ?? item.source;
   if (item.programs?.length) return { [tool]: item.programs };

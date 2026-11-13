@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { host, ORIGIN, server, signedIn, view, workspace } from "./fixtures";
+import { host, ORIGIN, server, sessionRecord, signedIn, view, workspace } from "./fixtures";
 
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
@@ -70,6 +70,7 @@ describe("a session's panel", () => {
 
   test("Details offers no install chat on someone else's host", async () => {
     const app = await openPanel({
+      [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, connectorOwnerId: "u2", viewable: true } } },
       [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, extensions: { running: [], missing: [],
         unavailable: [{ source: "piki:node", tools: ["node"], reason: "programs", programs: ["pnpm"] }] } }, revision: "r1" } },
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [{ ...host, ownerId: "u2", ownerName: "grace" }] } },

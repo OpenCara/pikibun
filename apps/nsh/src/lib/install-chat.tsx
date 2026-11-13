@@ -10,7 +10,6 @@ import type { Action } from "./resource";
 
 export type MissingPrograms = Readonly<Record<string, readonly string[]>>;
 
-/** Why a chat that installs programs can't start on this host for the person signed in, if it can't. */
 export function installChatUnavailable(host: ConnectorInfo | undefined, userId: string): string | undefined {
   if (!host) return "The host isn't in your list";
   if (host.ownerId !== userId) return "Only the host's owner installs programs on it";
@@ -20,10 +19,6 @@ export function installChatUnavailable(host: ConnectorInfo | undefined, userId: 
   return undefined;
 }
 
-/**
- * Starts a session in the signed-in person's private workspace on their host, on the host itself where it can run there, whose
- * opening message asks its agent to install the programs the host's sessions lack, and opens it.
- */
 export function createInstallChat(go: (route: PageRoute) => void) {
   const data = useAppData();
   return async (host: ConnectorInfo, missing: MissingPrograms): Promise<void> => {
@@ -53,7 +48,6 @@ export function createInstallChat(go: (route: PageRoute) => void) {
   };
 }
 
-/** The Chat button beside programs a host lacks: hidden from anyone but the host's owner. */
 export function InstallChatButton(props: { host: ConnectorInfo | undefined; missing: MissingPrograms; action: Action; go: (route: PageRoute) => void; testID?: string }) {
   const { user } = untracked(session);
   const start = createInstallChat(route => props.go(route));

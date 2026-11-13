@@ -26,7 +26,6 @@ const hostPrograms: Readonly<Record<string, InstallStep>> = Object.freeze({
   tunnel: { programs: ["cloudflared"], how: "Cloudflare's cloudflared package (sudo apt install cloudflared from Cloudflare's repository) or its release in /usr/local/bin; the connector finds it within a minute while the host's page (Settings → Hosts → the host → Extensions → piki:tunnel) says Find it" },
 });
 
-/** The programs a tool of a host lacks: a program tool's (node: pnpm, ...), or browser and tunnel, whose programs the connector runs. */
 export function hostToolPrograms(tool: string): readonly string[] | undefined {
   return hostPrograms[tool]?.programs;
 }
@@ -40,7 +39,6 @@ export function installChatTitle(chat: InstallChat): string {
   return Array.from(`Install ${programs.length > 3 ? `${programs.slice(0, 3).join(", ")} and more` : list(programs)} on ${chat.host}`).slice(0, 80).join("");
 }
 
-/** The opening message of a session in its owner's private workspace that installs on the host the programs its sessions lack. */
 export function installChatMessage(chat: InstallChat): string {
   const tools = Object.entries(chat.missing).filter(([, programs]) => programs.length);
   const programs = missingPrograms(chat.missing);
