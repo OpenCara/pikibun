@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { findInWorker, findRequest, searchInWorker, searchRequest } from "../apps/runner/src/search.js";
+import { findInWorker, findRequest, SEARCH_CORE, searchInWorker, searchRequest } from "../apps/runner/src/search.js";
 
 test("search: Pi's grep arguments become a request, with Pi's defaults, lowered to Pikibun's limits, or say what is wrong", () => {
   assert.deepEqual(searchRequest({ pattern: "x" }), { kind: "search", path: ".", pattern: "x", literal: false, ignoreCase: false, context: 0, maxResults: 100, all: false });
@@ -56,4 +56,25 @@ test("search on an unsandboxed host: a pattern that backtracks without end stops
   await writeFile(join(directory, "a.ts"), "export const answer = 42;\n");
   assert.deepEqual(await searchInWorker(directory, ".", searchRequest({ pattern: "answer", glob: "*.ts" })),
     { matches: [{ path: "a.ts", line: 1, text: "export const answer = 42;" }], files: 1, truncated: false });
+});
+
+test("a walk that can't go on, its path too long or its descriptors spent, is cut short and says so; a directory it can't read is skipped", () => {
+  const { findTree, searchTree } = new Function(`${SEARCH_CORE}; return { findTree, searchTree };`)() as {
+    findTree: (fs: unknown, start: string, request: unknown) => unknown;
+    searchTree: (fs: unknown, start: string, startPath: string, request: unknown) => { matches: { path: string }[]; truncated: boolean };
+  };
+  const fs = (code: string) => ({
+    lstat: (path: string) => ({ directory: path !== "/root/b", file: path === "/root/b", link: false, size: 7 }),
+    list: (path: string) => { if (path === "/root") return ["a", "b"]; throw Object.assign(new Error(code), { code }); },
+    read: () => Buffer.from("needle\n"),
+    join: (a: string, b: string) => `${a}/${b}`,
+  });
+  for (const code of ["ENAMETOOLONG", "EMFILE"]) {
+    assert.deepEqual(findTree(fs(code), "/root", findRequest({ pattern: "*" })), { paths: ["a/"], truncated: true }, code);
+    const searched = searchTree(fs(code), "/root", ".", searchRequest({ pattern: "needle" }));
+    assert.deepEqual([searched.matches, searched.truncated], [[], true], code);
+  }
+  assert.deepEqual(findTree(fs("EACCES"), "/root", findRequest({ pattern: "*" })), { paths: ["a/", "b"], truncated: false });
+  const searched = searchTree(fs("EACCES"), "/root", ".", searchRequest({ pattern: "needle" }));
+  assert.deepEqual([searched.matches.map(match => match.path), searched.truncated], [["b"], false]);
 });

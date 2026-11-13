@@ -157,6 +157,16 @@ const cases: Case[] = [
   ["reads [ as itself where no class follows, rather than failing", located({ pattern: "[!]*", path: "src" }), { ok: { paths: [], truncated: false } }],
   ["refuses a class with a range backwards", located({ pattern: "[z-a]*", path: "src" }), { refused: /invalid glob/ }],
   ["refuses a search glob with a range backwards", find({ pattern: "x", glob: "[z-a]*" }), { refused: /invalid glob/ }],
+  ["finds and searches deeper than a helper keeps directories open, coming back to each for what lies beside the way down", async workspace => {
+    await workspace.writeFile(`deep/${"d/".repeat(300)}needle.txt`, "needle\n", allow);
+    await workspace.writeFile(`deep/${"d/".repeat(150)}needle-too.txt`, "needle\n", allow);
+    const located = await workspace.find(findRequest({ pattern: "needle*", path: "deep" }), allow);
+    const searched = await workspace.search(searchRequest({ pattern: "needle", path: "deep" }), allow);
+    return { located, searched: { paths: searched.matches.map(match => match.path), truncated: searched.truncated } };
+  }, { ok: {
+    located: { paths: [`${"d/".repeat(300)}needle.txt`, `${"d/".repeat(150)}needle-too.txt`], truncated: false },
+    searched: { paths: [`deep/${"d/".repeat(300)}needle.txt`, `deep/${"d/".repeat(150)}needle-too.txt`], truncated: false },
+  } }],
   ["refuses finding in a file", located({ pattern: "*", path: "long.txt" }), { refused: /not a directory/ }],
   ["refuses finding through a link outside", located({ pattern: "*", path: "out-dir" }), { refused: ESCAPES }],
   ["refuses finding above the worktree", located({ pattern: "*", path: "../outside" }), { refused: TRAVERSAL }],

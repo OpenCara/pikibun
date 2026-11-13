@@ -156,7 +156,7 @@ function searchTree(fs, start, startPath, request) {
   const below = relative => startPath === "." ? relative : relative.slice(startPath.length + 1);
   function visit(directory, prefix) {
     let names;
-    try { names = fs.list(directory); } catch { return; }
+    try { names = fs.list(directory); } catch (error) { if (walkCut(error)) truncated = true; return; }
     names.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
     for (const name of names) {
       if (done()) return;
@@ -164,7 +164,7 @@ function searchTree(fs, start, startPath, request) {
       const path = fs.join(directory, name);
       const relative = prefix === "." ? name : prefix + "/" + name;
       let info;
-      try { info = fs.lstat(path); } catch { continue; }
+      try { info = fs.lstat(path); } catch (error) { if (walkCut(error)) { truncated = true; return; } continue; }
       if (info.link) continue;
       if (info.directory) {
         if (name === ".git" || (!request.all && name === "node_modules")) continue;
@@ -189,7 +189,7 @@ function findTree(fs, start, request) {
   let entries = 0, truncated = false;
   function visit(directory, prefix) {
     let names;
-    try { names = fs.list(directory); } catch { return; }
+    try { names = fs.list(directory); } catch (error) { if (walkCut(error)) truncated = true; return; }
     names.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
     for (const name of names) {
       if (truncated) return;
@@ -198,7 +198,7 @@ function findTree(fs, start, request) {
       const path = fs.join(directory, name);
       const relative = prefix === "" ? name : prefix + "/" + name;
       let info;
-      try { info = fs.lstat(path); } catch { continue; }
+      try { info = fs.lstat(path); } catch (error) { if (walkCut(error)) { truncated = true; return; } continue; }
       const inside = info.directory && !info.link;
       if (inside && (name === ".git" || (!request.all && name === "node_modules"))) continue;
       if (glob.test(byPath ? relative : name)) paths.push(inside ? relative + "/" : relative);
@@ -236,6 +236,10 @@ function globExpression(glob, ignoreCase) {
   }
   try { return new RegExp("^" + source + "$", ignoreCase ? "iu" : "u"); }
   catch { throw new SearchRefusal("invalid glob"); }
+}
+
+function walkCut(error) {
+  return !!error && ["ENAMETOOLONG", "EMFILE", "ENFILE", "ENOMEM"].includes(error.code);
 }
 
 function classEnd(glob, index) {
