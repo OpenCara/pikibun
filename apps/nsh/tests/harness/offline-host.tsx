@@ -3,16 +3,17 @@ import { OfflineHostBanner } from "../../src/components/OfflineHost";
 import { computerHosts, setHostLauncher, setUnsandboxedConsent } from "../../src/lib/this-computer";
 import type { ConnectorInfo } from "../../src/shared";
 
-const params = embedder.params as { paired?: unknown };
+const params = (embedder.params ?? {}) as { paired?: unknown; state?: unknown; inspectMs?: unknown };
 const SERVER = "https://pikibun.test";
 const paired = typeof params.paired === "string" ? params.paired : SERVER;
+const inspectMs = typeof params.inspectMs === "number" ? params.inspectMs : 1;
 const sent = signal<string[]>([]);
 const settings = signal(0);
 
 setUnsandboxedConsent(async () => true);
 setHostLauncher(() => {
   const messages: ((value: unknown) => void)[] = [];
-  const emit = (value: unknown) => setTimeout(() => { for (const listener of messages) listener(value); }, 1);
+  const emit = (value: unknown, ms = 1) => setTimeout(() => { for (const listener of messages) listener(value); }, ms);
   setTimeout(() => emit({ type: "ready" }), 1);
   return {
     send: message => {
@@ -20,7 +21,8 @@ setHostLauncher(() => {
       sent.update(list => [...list, request.type]);
       if (request.type === "inspect") {
         emit({ type: "result", id: request.id, ok: true, inspection: { platform: "darwin", stateDir: "/Users/ada/.local/share/pikibun/connector", mode: "sandboxed", sandbox: "seatbelt",
-          prerequisites: [], models: [{ provider: "anthropic", modelId: "claude-sonnet", name: "Claude Sonnet" }], pairedServer: paired } });
+          prerequisites: [], models: [{ provider: "anthropic", modelId: "claude-sonnet", name: "Claude Sonnet" }], pairedServer: paired } }, inspectMs);
+        if (typeof params.state === "string") emit({ type: "status", state: params.state, server: paired }, inspectMs + 1);
       } else if (request.type === "start") {
         emit({ type: "status", state: "starting", server: request.server });
         emit({ type: "result", id: request.id, ok: true });

@@ -54,6 +54,30 @@ describe("a private session whose host is offline", () => {
     expect(app.texts().some(text => text.startsWith("sent: ") && text.includes("start"))).toBe(true);
   });
 
+  test("offers nothing to press until it knows whether this Mac hosts for the server", async () => {
+    const app = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, host: { params: { inspectMs: 800 } } });
+    await app.waitFor("id:session-host-offline");
+    expect(app.texts().some(text => text.includes("Checking whether this Mac hosts for pikibun.test"))).toBe(true);
+    expect(app.shows("id:session-host-connect")).toBe(false);
+    expect(app.shows("id:session-host-start")).toBe(false);
+    await app.waitFor("id:session-host-start");
+    expect(app.shows("id:session-host-connect")).toBe(false);
+  });
+
+  test("a host reconnecting on its own is said to be, with nothing to press", async () => {
+    const app = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, host: { params: { state: "disconnected" } } });
+    await app.waitUntil(() => app.texts().some(text => text.includes("This Mac's host for pikibun.test lost its connection and is reconnecting by itself.")));
+    expect(app.texts().some(text => text.includes("is starting"))).toBe(false);
+    expect(app.shows("id:session-host-start")).toBe(false);
+    expect(app.shows("id:session-host-connect")).toBe(false);
+  });
+
+  test("a host still stopping is started again once it has stopped", async () => {
+    const app = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, host: { params: { state: "stopping" } } });
+    await app.waitUntil(() => app.texts().some(text => text.includes("This Mac's host for pikibun.test is stopping. Start it again once it has stopped")));
+    expect(app.shows("id:session-host-start")).toBe(false);
+  });
+
   test("where this Mac is paired with another server only, sends to its settings to connect this one too", async () => {
     const app = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, host: { params: { paired: "https://other.example" } } });
     await app.waitFor("id:session-host-connect");
