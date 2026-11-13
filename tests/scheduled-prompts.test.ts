@@ -52,7 +52,7 @@ test('a session at rest with a schedule shows as scheduled, unless what its agen
     assert.deepEqual(sessionStatus({ ...ready, activity }), { tone: 'info', label: 'Scheduled', icon: 'clock' }, String(activity));
   }
   assert.equal(sessionStatus({ ...ready, activity: 'working' }).label, 'In progress');
-  assert.equal(sessionStatus({ ...ready, activity: 'waiting' }).label, 'Needs approval');
+  assert.equal(sessionStatus({ ...ready, activity: 'waiting' }).label, 'Needs you');
   assert.equal(sessionStatus({ ...ready, activity: 'failed' }).label, 'Failed');
   assert.equal(sessionStatus({ ...ready, status: 'archived' }).label, 'Archived');
   assert.equal(sessionStatus({ status: 'ready', activity: 'done' }).label, 'Done', 'no schedule');

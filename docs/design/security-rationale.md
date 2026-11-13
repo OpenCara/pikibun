@@ -68,6 +68,8 @@ In the private workspace, **Where it runs** starts on the host for the host's ow
 
   It also covers the host owner's own on-host sessions in shared workspaces, not just the private one. There, only the owner and members granted host commands run commands at all, and those members already run anything as the owner's OS user, so the owner's agent and sign-ins add little. The owner picks **Sandbox** for a session that others' messages shouldn't reach their sign-ins from. A member's session, even one granted sessions on the host, keeps the session's own `HOME` and Git configuration: it runs on someone else's account, and their agent and sign-ins aren't the member's to use. The host decides from the binding alone, with no field from the server, because bindings are immutable and a new field would refuse restarting a session made before it.
 
+In the private workspace's sessions of the host's owner, `sudo -A` asks the owner for their password in Pikibun, per use, in a box of its own, and nothing keeps it; see [sudo's password](sudo-prompts.md) for why per use and not once, and what that does and doesn't protect.
+
 What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. Extensions run in the connector process, on the host, for every session (`apps/runner/src/extensions/`), so a workspace's extensions are trusted code whichever environment a session uses.
 
 ## Whose tools a message runs

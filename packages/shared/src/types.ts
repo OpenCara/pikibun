@@ -172,7 +172,7 @@ export interface RunnerBinding {
   model: ModelDefinition;
 }
 export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "backup" | "restart" | "restore" | "stop" | "files"
-  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel" | "image";
+  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel" | "image" | "sudo";
 
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
 
@@ -577,6 +577,14 @@ export interface SessionView {
   extensions?: { running: { source: string; dev: boolean; tools: string[]; required?: true }[]; missing: string[]; builtin?: string[]; missingRequired?: string[];
     unavailable?: { source: string; tools: string[]; reason: string; programs?: string[] }[] };
   tunnel?: SessionTunnelView;
+  sudo?: SudoPromptView;
+}
+export interface SudoPromptView {
+  id: string;
+  prompt: string;
+  command?: string;
+  requestedAt: string;
+  expiresAt: string;
 }
 export interface SessionContextView {
   tokens: number;

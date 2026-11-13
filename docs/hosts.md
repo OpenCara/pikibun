@@ -106,6 +106,7 @@ Such a session runs like one on an [unsandboxed host](#running-without-the-sandb
 - Turning **Sessions on the host** off stops the next command of every such session of a member (within half a minute) before it runs; nothing else of theirs changes, and the owner's own carry on. So does a member's grant ending or no longer including sessions on the host, for their sessions.
 - Pushes with the [host's Git credentials](pushes.md#push-access) stay the owner's alone; a member's clones still use Git on the host, with whatever credential helpers it has set up.
 - Everyone who can see the session is warned that it runs without a sandbox (**Runs on the host**).
+- **sudo asks you.** In your own such sessions in your [private workspace](workspaces.md#your-private-workspace), on Linux and macOS, the agent runs commands as root with `sudo -A`. sudo then asks for your password in Pikibun, in a box of its own above the chat box, showing the command it is for. The session is **Needs you** meanwhile, and you get a notification. Type it and **Send to sudo**, or **Decline**. It goes to that one sudo and nowhere else: not into the chat, the transcript or the agent's context, and nothing keeps it. Each use asks again, as far as sudo's own caching allows. A prompt left five minutes is declined, and the wait doesn't count against the command's time limit. Elsewhere you can only decline, and others only see that sudo waits. See [the design](design/sudo-prompts.md) for what this does and doesn't protect.
 
 ## The sandbox
 

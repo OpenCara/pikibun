@@ -135,6 +135,49 @@ describe("a session's panel", () => {
   });
 });
 
+describe("sudo's password box", () => {
+  const prompt = { id: "prompt1", prompt: "[sudo] password for ada:", command: "python3 -c 'sudo -A apt-get install -y make'",
+    requestedAt: "2026-11-06T09:10:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" };
+  const open_ = (routes: Parameters<typeof server>[0]) => open("../App.tsx", { network: server({
+    [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, sudo: prompt }, revision: "r1" } },
+    [`POST ${ORIGIN}/api/sessions/s1/sudo`]: { body: { answered: true } },
+    ...routes,
+  }), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+
+  test("in the private workspace, takes the host owner's password apart from the chat box, sends it to that sudo alone and clears it", async () => {
+    const app = await open_({ [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, personal: true }] } } });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:sudo-prompt");
+    expect(app.shows("text:sudo asks for your password on ada-mac")).toBe(true);
+    expect(app.shows("text:sudo's prompt: “[sudo] password for ada:”, while this command ran:")).toBe(true);
+    expect(app.shows("text:python3 -c 'sudo -A apt-get install -y make'")).toBe(true);
+    await app.type("id:sudo-password", "hunter2");
+    expect(app.value("id:composer-input")).toBe("");
+    await app.press("id:sudo-send");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)));
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)).toEqual({ id: "prompt1", password: "hunter2" });
+    expect(app.value("id:sudo-password")).toBe("");
+    expect(app.requests().some(request => request.url.endsWith("/submit") && (request.body ?? "").includes("hunter2"))).toBe(false);
+  });
+
+  test("outside the private workspace, the host's owner can only decline, and anyone else only sees that sudo waits", async () => {
+    const app = await open_({});
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:sudo-prompt");
+    expect(app.shows("id:sudo-password")).toBe(false);
+    await app.press("id:sudo-decline");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)));
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)).toEqual({ id: "prompt1", decline: true });
+    app.dispose();
+    const viewer = await open_({ [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, ownerId: "u2", connectorOwnerId: "u2", viewable: true } } } });
+    await viewer.press("id:session-row-s1");
+    await viewer.waitFor("id:sudo-prompt");
+    expect(viewer.shows("text:sudo asks for the host owner's password on ada-mac")).toBe(true);
+    expect(viewer.shows("id:sudo-password")).toBe(false);
+    expect(viewer.shows("id:sudo-decline")).toBe(false);
+  });
+});
+
 describe("a session's header menu", () => {
   test("renames the session", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1280, height: 820 });

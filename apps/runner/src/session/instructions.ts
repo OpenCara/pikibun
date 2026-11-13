@@ -33,7 +33,16 @@ export interface InstructionsInput {
   nodeBin: boolean;
   codemode: boolean;
   browser: boolean;
+  sudo?: boolean;
 }
+
+export const sudoInstructions = "This session runs on its host itself, as its owner, in their private workspace. To run a command as root, "
+  + "use sudo -A (--askpass), from any tool that runs a program, such as python {program: \"python3\", args: [\"-c\", "
+  + "\"import subprocess; subprocess.run([\\\"sudo\\\", \\\"-A\\\", \\\"apt-get\\\", \\\"install\\\", \\\"-y\\\", \\\"make\\\"], check=True)\"]}: "
+  + "sudo then asks the host's owner for their password in Pikibun, in a box of its own beside the chat, showing them the command, "
+  + "and the call waits for their answer, without counting that wait against its time limit. It fails if they decline or don't answer within five minutes. "
+  + "Never ask for the password in the chat, and never put a password in a command, a file or your output: sudo -A is the only way it reaches sudo. "
+  + "Use sudo only for what the task needs, and say what each command is for before you run it.";
 
 export function lfsInstructions(lfsRepositories: readonly string[]): string {
   if (!lfsRepositories.length) return "";
@@ -147,6 +156,7 @@ export function agentInstructions(input: InstructionsInput): string {
     + "whether it is connected and the server's last output; tunnel {action: \"stop\"} takes it offline. Stop it once it isn't needed.";
   else if (mode === "write" && tunnelUnavailable) instructions += `\n\nThis session has no tunnel tool: ${tunnelUnavailableText(tunnelUnavailable)} `
     + "If you're asked to put a web app online, say so.";
+  if (mode === "write" && input.sudo) instructions += `\n\n${sudoInstructions}`;
   if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
   if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; a tool call that changes files, runs a command or has any other effect is refused at once, and nothing waits for anyone to allow it. If the task needs a change, say what you would change, and that a message that may act can make it.";
   return instructions;
