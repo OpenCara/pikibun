@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import type { HostEvent, HostRequest } from "../../runner/src/app-host-protocol";
+import type { HostEvent, HostRequest } from "../../../packages/shared/src/app-host-protocol";
 import { CommandChannel } from "../src/lib/pikibun-command";
 import { appCliFolder, COMMAND_UPDATED_KEY, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, updateFailure } from "../src/lib/this-computer";
 import { server, signedIn } from "./fixtures";

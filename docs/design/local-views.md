@@ -11,7 +11,7 @@ computer, and a session running a few centimetres away can't be followed at all 
 So the desktop app reads a session that its own host runs **from that host first**:
 
 - It reads the session's view straight from the host it started, over the `pikibun host --stdio` channel it already
-  has (`view` and `entries` in `apps/runner/src/app-host-protocol.ts`), about twice a second while the session works and
+  has (`view` and `entries` in `packages/shared/src/app-host-protocol.ts`), about twice a second while the session works and
   every 1.5 seconds while it is idle. Only what changed crosses the channel after the first read, as with the server.
 - It still asks the server, every 30 seconds as before, whether the signed-in account may read the session. A refusal
   (401, 403, 404) stops the reads at once, and so does the server's record saying the session runs on another host.
@@ -56,7 +56,7 @@ entries come from the host too, and from the server where the host can't read th
 |---|---|
 | The view the host shows the app, and its revisions | `apps/runner/src/local-view.ts`, `RunnerService.localView` and `localEntries` in `apps/runner/src/server.ts` |
 | Reading it through the connector's runtime, which outlives the relay connection | `LocalConnector.localView` in `apps/runner/src/connector.ts` |
-| The `view` and `entries` requests | `apps/runner/src/app-host-protocol.ts`, `apps/runner/src/app-host.ts` |
+| The `view` and `entries` requests | `packages/shared/src/app-host-protocol.ts`, `apps/runner/src/app-host.ts` |
 | The app's side of the channel, which never starts the host to read | `readView`, `readEntries` in `apps/nsh/src/lib/this-computer.ts` |
 | Which sessions run here | `apps/nsh/src/lib/local-sessions.ts` |
 | Reading here first, falling back to the server, and the access checks | `startLiveSession` in `packages/client/src/live-session.ts` |

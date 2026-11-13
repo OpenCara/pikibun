@@ -1,6 +1,6 @@
-import type { LocalModelSummary } from "../../../packages/shared/src/connector.js";
-import type { EntryView, SessionView } from "../../../packages/shared/src/types.js";
-import type { SessionViewPatch } from "../../../packages/shared/src/view-patch.js";
+import type { LocalModelSummary } from "./connector.js";
+import type { EntryView, SessionView } from "./types.js";
+import type { SessionViewPatch } from "./view-patch.js";
 
 export type SetupAction =
   | { kind: "xcode-tools" }

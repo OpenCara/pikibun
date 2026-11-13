@@ -31,7 +31,7 @@ import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
 import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
-import type { LocalPage, LocalView } from "./app-host-protocol.js";
+import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
 
 const STATE_FILE = "connector.json";
 const EXTENSION_SYNC_MS = 30_000;

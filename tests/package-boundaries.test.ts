@@ -12,12 +12,11 @@ const mayImport: Record<string, readonly string[]> = {
   'packages/cli': ['apps/runner', 'apps/server'],
   'apps/server': ['packages/shared', 'apps/runner'],
   'apps/runner': ['packages/shared', 'extensions'],
-  'apps/nsh': ['packages/shared', 'packages/client', 'apps/runner'],
+  'apps/nsh': ['packages/shared', 'packages/client'],
   extensions: [],
 };
 const areas = Object.keys(mayImport);
 const platformNeutral = ['packages/shared', 'packages/client'];
-const runnerFilesTheClientReads = ['apps/runner/src/app-host-protocol'];
 
 interface Import { file: string; specifier: string }
 
@@ -55,13 +54,4 @@ test('the shared and client packages import no npm package and nothing of Node.j
     .filter(({ specifier }) => !specifier.startsWith('.'))
     .map(({ file, specifier }) => `${file} imports ${specifier}`));
   assert.deepEqual(bare, []);
-});
-
-test('the client reads only the app host protocol of the connector', () => {
-  const others = imports('apps/nsh')
-    .filter(({ specifier }) => specifier.startsWith('.'))
-    .map(found => ({ ...found, target: targetOf(found) }))
-    .filter(({ target }) => areaOf(target) === 'apps/runner' && !runnerFilesTheClientReads.includes(target.replace(/\.(ts|js)$/, '')))
-    .map(({ file, target }) => `${file} imports ${target}`);
-  assert.deepEqual(others, []);
 });

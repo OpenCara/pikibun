@@ -2,7 +2,7 @@ import type { EntryView, SessionView } from "../../../packages/shared/src/types.
 import { redactEntry } from "../../../packages/shared/src/redaction.js";
 import { briefEntry, entriesBefore, latestEntries } from "../../../packages/shared/src/transcript-display.js";
 import { ViewRevisions } from "../../../packages/shared/src/view-patch.js";
-import type { LocalPage, LocalView } from "./app-host-protocol.js";
+import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
 
 export class LocalViews {
   readonly #revisions = new WeakMap<object, { brief: boolean; revisions: ViewRevisions }>();

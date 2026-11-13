@@ -1,4 +1,4 @@
-import type { PrerequisiteFix } from "./app-host-protocol.js";
+import type { PrerequisiteFix } from "../../../packages/shared/src/app-host-protocol.js";
 import { MXC_SDK_VERSION, mxcInstallHint } from "./sandbox-backend.js";
 
 export const fixes = {

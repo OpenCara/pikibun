@@ -1,9 +1,9 @@
 import { platform } from "nsh";
 import { homedir } from "os";
 import nshProcess from "process";
+import { STDIO_FRAME } from "../../../../packages/shared/src/app-host-protocol";
 import { CMD, cmdArgs, cmdRun, cmdRunOwn, lastLines } from "./windows-cmd";
 
-const STDIO_FRAME = "\u001epikibun ";
 const SHELLS = ["zsh", "bash", "sh"];
 const CLI_FOLDER = "cli";
 export const INSTALL_COMMAND = "npm install -g pikibun@latest";

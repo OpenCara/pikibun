@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createConnector, controlPlaneOrigin, LocalViewUnavailable, type LocalConnector } from "./connector.js";
 import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, unsandboxedWarning, type HostIsolation } from "./connect-setup.js";
 import { stdioTransport, type Transport } from "./app-host-transport.js";
-import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "./app-host-protocol.js";
+import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "../../../packages/shared/src/app-host-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
 import { ConnectorSetupError, RunnerError } from "./protocol.js";
 import { transcriptPage } from "../../../packages/shared/src/transcript-display.js";

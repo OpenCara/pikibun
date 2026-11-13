@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import type { AuthEvent, AuthInteraction, AuthPrompt, LoginOptions } from "@earendil-works/pi-ai";
-import type { LoginEvent, LoginMethodType, LoginPrompt, LoginProvider } from "./app-host-protocol.js";
+import type { LoginEvent, LoginMethodType, LoginPrompt, LoginProvider } from "../../../packages/shared/src/app-host-protocol.js";
 
 export interface LoginRuntime {
   getProviders(): readonly { id: string; name: string; auth: { apiKey?: { name: string; login?: unknown }; oauth?: { name: string; isSubscription?: boolean } } }[];

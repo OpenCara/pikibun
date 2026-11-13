@@ -4,7 +4,7 @@ import nshProcess from "process";
 import { APP_VERSION } from "../app-version";
 import type {
   HostEvent, HostInspection, HostRequest, HostState, LocalPage, LocalView, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
-} from "../../../runner/src/app-host-protocol";
+} from "../../../../packages/shared/src/app-host-protocol";
 import {
   appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine,
 } from "./pikibun-command";

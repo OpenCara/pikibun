@@ -190,7 +190,7 @@ React web client's address for it) makes this computer one of your hosts:
 
 The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command as `pikibun host --stdio`
 (`apps/runner/src/host-cli.ts` and `app-host.ts`), and talks to it with JSON lines
-on its stdin and stdout (`app-host-protocol.ts`), where pairing codes and API keys travel; never its command line.
+on its stdin and stdout (`packages/shared/src/app-host-protocol.ts`), where pairing codes and API keys travel; never its command line.
 When the command is missing or too old, the page's **Install pikibun** or **Update pikibun** button runs npm, with the
 owner's Node.js, into a `cli` folder of the app's data directory (`npm install --prefix <data dir>/cli pikibun@latest`),
 not npm's global folder: nothing needs sudo or a PATH change, and the copy is the app's to update. npm's output goes to
