@@ -35,6 +35,11 @@ export const CONNECTOR_ENVIRONMENT = new RegExp("^(?:PIKIBUN_|RUNNER_|TEST_AUTH_
   + "SANDBOX_GITHUB_API|PASSWORD_AUTH|SIGNUP|MICROSOFT_TENANT|WEB_PUSH_CONTACT|DATABASE_URL|STORAGE_URL|STATIC_DIR|STATIC_CLIENT|"
   + "PREVIEW_ORIGIN|PREVIEW_STATIC_DIR|TRUST_PROXY|CONTROL_PLANE_URL|DATA_DIR|ALLOW_FAUX_MODEL|ALLOW_TEST_SHELL)$", "i");
 
+export function hostOwnersSession(binding: RunnerBinding): boolean {
+  const hostOwner = binding.session.connectorOwnerId;
+  return !!hostOwner && hostOwner === binding.owner.id && binding.session.ownerId === hostOwner;
+}
+
 export function ownerHostEnvironment(identity: Readonly<SandboxIdentity>, base: NodeJS.ProcessEnv = process.env): Readonly<Record<string, string>> {
   const inherited = Object.fromEntries(Object.entries(base)
     .filter((entry): entry is [string, string] => typeof entry[1] === "string" && !CONNECTOR_ENVIRONMENT.test(entry[0])));

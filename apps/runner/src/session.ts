@@ -30,7 +30,7 @@ import { renamedToolsHook } from "./session/renamed-tools.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
-import { HostWorkspace } from "./host-workspace.js";
+import { HostWorkspace, hostOwnersSession } from "./host-workspace.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { HelperWorkspace } from "./helper-workspace.js";
@@ -230,7 +230,7 @@ export class RunnerSession {
       : (request: Omit<GitDirectRequest, "sessionId">) => this.controlPlane("/api/internal/git/direct", { sessionId: binding.session.id, ...request });
     this.#direct = directGrant && new DirectGit({ grant: directGrant, onFallback: (request, reason) => this.#egress?.noteFallback(request.bindingId, reason) });
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
-      { ownerEnvironment: !!binding.session.connectorOwnerId && binding.session.connectorOwnerId === binding.owner.id });
+      { ownerEnvironment: hostOwnersSession(binding) });
     else if (config.sandboxBackend) {
       const egress = this.egressProxy(egressSocketPath(binding.session.id, directory), randomBytes(24).toString("base64url"));
       this.#egress = egress;

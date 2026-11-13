@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HostWorkspace } from "../apps/runner/src/host-workspace.js";
+import { CONNECTOR_ENVIRONMENT, HostWorkspace, hostOwnersSession } from "../apps/runner/src/host-workspace.js";
+import { stringVars } from "../apps/server/src/config.js";
 import { runHostShell } from "../apps/runner/src/host-shell.js";
 import { Sandbox, type SandboxAuthorize } from "../apps/runner/src/sandbox.js";
 import { isolatedWorkspace } from "../apps/runner/src/workspace.js";
@@ -72,6 +73,64 @@ test("approved unsandboxed commands run in the worktree without the connector en
   const snapshot = await workspace.snapshot(authorize);
   assert.ok(snapshot.some(file => file.path === "worktree/README.md" && Buffer.from(file.data, "base64").toString() === "hello"));
   assert.ok(snapshot.some(file => file.path === "owner.gitconfig"));
+});
+
+test("the host owner's own session runs in the owner's own environment, without Pikibun's or the server's configuration", hostMode, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-owner-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const home = join(directory, "owner home");
+  await mkdir(home);
+  await writeFile(join(home, ".gitconfig"), "[alias]\n\twho = config --get pikibun.marker\n[pikibun]\n\tmarker = from-the-owner\n");
+  const saved = { HOME: process.env.HOME, SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK, GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+    GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM };
+  delete process.env.GIT_CONFIG_GLOBAL;
+  delete process.env.GIT_CONFIG_NOSYSTEM;
+  Object.assign(process.env, { HOME: home, SSH_AUTH_SOCK: join(directory, "agent.sock"), PIKIBUN_CONNECTOR_SECRET: "must-not-leak",
+    SESSION_SECRET: "server-secret", GITHUB_CLIENT_SECRET: "oauth-secret", RUNNER_SHARED_SECRET: "runner-secret" });
+  t.after(() => {
+    for (const name of ["PIKIBUN_CONNECTOR_SECRET", "SESSION_SECRET", "GITHUB_CLIENT_SECRET", "RUNNER_SHARED_SECRET"]) delete process.env[name];
+    for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  });
+  const own = binding("host-owner");
+  own.session.connectorId = "host";
+  own.session.connectorOwnerId = own.owner.id;
+  const workspace = new HostWorkspace(own, join(directory, "session"), { ownerEnvironment: true });
+  t.after(() => workspace.close());
+  await workspace.initialize();
+  const show = 'echo "$HOME|$SSH_AUTH_SOCK|${PIKIBUN_CONNECTOR_SECRET:-unset}|${SESSION_SECRET:-unset}|${GITHUB_CLIENT_SECRET:-unset}|${RUNNER_SHARED_SECRET:-unset}|$APP_TEAM"; git who';
+  assert.equal(await workspace.execute({ kind: "bash", command: show }, false, authorize),
+    `${home}|${join(directory, "agent.sock")}|unset|unset|unset|unset|core\nfrom-the-owner\n`);
+  assert.equal((await workspace.identity(authorize)).home, home, "identity names the HOME its commands run with");
+  await workspace.writeFile("README.md", "hello", authorize);
+  await workspace.execute({ kind: "bash", command: "git add -A && git commit -q -m 'Owner commit'" }, false, authorize);
+  assert.equal((await workspace.execute({ kind: "bash", command: "git log -1 --format='%an <%ae>'" }, false, authorize)).trim(), "Alice Owner <alice@example.test>");
+  assert.ok((await workspace.snapshot(authorize)).every(file => !file.path.includes("owner home")), "a backup holds the session's files, never the owner's home");
+
+  const member = new HostWorkspace(binding("host-member"), join(directory, "member"));
+  t.after(() => member.close());
+  await member.initialize();
+  const theirs = await member.execute({ kind: "bash", command: 'echo "$HOME|${SSH_AUTH_SOCK:-unset}"; git who 2>/dev/null || echo no-alias' }, false, authorize);
+  assert.equal(theirs, `${member.home}|unset\nno-alias\n`);
+});
+
+test("only the host owner's own sessions run in the owner's environment", () => {
+  const session = (connectorOwnerId?: string) => {
+    const value = binding("whose");
+    if (connectorOwnerId) Object.assign(value.session, { connectorId: "host", connectorOwnerId });
+    return value;
+  };
+  assert.equal(hostOwnersSession(session("test:alice")), true);
+  assert.equal(hostOwnersSession(session("test:bob")), false, "a member's session on someone else's host");
+  assert.equal(hostOwnersSession(session()), false, "a session on the server's own runner");
+});
+
+test("the host strips every variable of the server's configuration from the owner's environment", () => {
+  for (const name of [...stringVars, "DATABASE_URL", "STORAGE_URL", "S3_SECRET_ACCESS_KEY", "CONTROL_PLANE_URL", "PIKIBUN_GITHUB_CLIENT_SECRET"]) {
+    assert.ok(CONNECTOR_ENVIRONMENT.test(name), `${name} reaches the owner's commands`);
+  }
+  for (const name of ["HOME", "SSH_AUTH_SOCK", "PATH", "LANG", "XDG_CONFIG_HOME", "GH_TOKEN", "AWS_PROFILE", "DISPLAY"]) {
+    assert.ok(!CONNECTOR_ENVIRONMENT.test(name), `${name} is kept from the owner`);
+  }
 });
 
 test("an unsandboxed clone session's Git uses the host user's own credential helpers, and no other session's does", hostMode, async t => {
