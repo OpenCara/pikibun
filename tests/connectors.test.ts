@@ -2945,36 +2945,14 @@ test('files attached to messages go to the session host in chunks, within the wo
   await denied(await upload(chunk(Buffer.from('x'), 0, 1), s.host), 403, 'forbidden');
 });
 
-test('a desktop app hands a chunk to the session host on its own computer with a grant only this server signs', async t => {
+test('direct uploads are gone: an older connector that still offers them pairs as before, and no grant is made or checked', async t => {
   const f = await fixture(t); const s = await sharedSession(f);
-  f.env.SESSION_SECRET = 'connectors-session-secret-not-for-deployment';
-  const direct = (body: Record<string, unknown>, client = s.creator) => client.request('POST', `/api/sessions/${s.session.id}/uploads/direct`, body);
-  const body = JSON.stringify({ uploadId: 'upload-0001', name: 'notes.txt', size: 2, offset: 0, data: 'aGk=' });
-  const declared = { bodyHash: await sha256(body), size: 2 };
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, fileUploads: true } }));
-  await denied(await direct(declared), 409, 'uploads_unsupported');
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, fileUploads: true, directUploads: true } }));
-  await denied(await direct({ ...declared, size: fileUploadLimits.defaultBytes + 1 }), 413, 'file_too_large');
-  await denied(await direct({ bodyHash: 'x', size: 2 }), 400, 'invalid_input');
-  const { connectorId, grant } = await json<{ connectorId: string; grant: string }>(await direct(declared));
-  assert.equal(connectorId, s.connector.connectorId);
-
-  const verified = await json<{ ticket: { action: string; actorId: string; sessionId: string; bodyHash: string; connectorId: string }; size: number; path: string }>(
-    await self(f, s.connector, 'uploads/verify', { grant }));
-  assert.deepEqual([verified.ticket.action, verified.ticket.actorId, verified.ticket.sessionId, verified.ticket.bodyHash, verified.ticket.connectorId, verified.size, verified.path],
-    ['upload', s.creator.user.id, s.session.id, declared.bodyHash, s.connector.connectorId, 2, `/v1/sessions/${s.session.id}/upload`]);
-  const [header, payload, signature] = grant.split('.');
-  const forged = JSON.parse(Buffer.from(payload!, 'base64url').toString()) as { size: number };
-  forged.size = 1;
-  await denied(await self(f, s.connector, 'uploads/verify', { grant: `${header}.${Buffer.from(JSON.stringify(forged)).toString('base64url')}.${signature}` }), 403, 'invalid_grant');
-  const other = await connect(f, s.host);
-  await denied(await self(f, other, 'uploads/verify', { grant }), 403, 'invalid_grant');
-  const viewer = await f.client('viewer');
-  await addMember(s.admin, s.team.id, viewer);
-  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: viewer.user.id, role: 'collaborator' }));
-  const granted = await json<{ grant: string }>(await direct(declared, viewer));
-  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: viewer.user.id, role: 'viewer' }));
-  await denied(await self(f, s.connector, 'uploads/verify', { grant: granted.grant }), 403, 'permission_revoked');
+  const stored = f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(s.connector.connectorId) as { capabilities_json: string } | undefined;
+  assert.ok(stored && !('directUploads' in JSON.parse(stored.capabilities_json)), stored?.capabilities_json);
+  assert.equal((await s.creator.request('POST', `/api/sessions/${s.session.id}/uploads/direct`, { bodyHash: 'h'.repeat(43), size: 2 })).status, 404);
+  const verify = await self(f, s.connector, 'uploads/verify', { grant: 'grant' });
+  assert.ok([401, 404].includes(verify.status), `the verify route is gone: ${verify.status}`);
 });
 
 test('a host\'s owner starts a session directly on the host, without its configuration accepting that once its connector allows it, and its binding says so', async t => {
