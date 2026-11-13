@@ -7,5 +7,5 @@ export function agentSocketImport(os: string): string {
   const lookup = SESSION_LOOKUP[os];
   if (!lookup) return "";
   return `[ -n "$SSH_AUTH_SOCK" ] || SSH_AUTH_SOCK=$(${lookup}); `
-    + `case "$SSH_AUTH_SOCK" in /*) export SSH_AUTH_SOCK ;; *) unset SSH_AUTH_SOCK ;; esac; `;
+    + `case "$SSH_AUTH_SOCK" in /*) export SSH_AUTH_SOCK ;; *) unset SSH_AUTH_SOCK SSH_AGENT_PID ;; esac; `;
 }

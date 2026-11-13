@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentSocketImport } from "../apps/nsh/src/lib/agent-socket.js";
@@ -19,11 +19,25 @@ async function standIns(t: test.TestContext, launchctl: string, systemctl: strin
   return directory;
 }
 
-function exported(shell: string, os: string, bin: string, socket?: string): string {
-  const env: NodeJS.ProcessEnv = { PATH: `${bin}:/usr/bin:/bin`, ...(socket === undefined ? {} : { SSH_AUTH_SOCK: socket }) };
-  const run = spawnSync(shell, ["-c", `${agentSocketImport(os)}exec sh -c 'printf "%s" "\${SSH_AUTH_SOCK-unset}"'`], { env, encoding: "utf8" });
+function exported(shell: string, os: string, bin: string, socket?: string, extra: NodeJS.ProcessEnv = {}, path = `${bin}:/usr/bin:/bin`): string {
+  const env: NodeJS.ProcessEnv = { PATH: path, ...extra, ...(socket === undefined ? {} : { SSH_AUTH_SOCK: socket }) };
+  const run = spawnSync(shell, ["-c", `${agentSocketImport(os)}exec sh -c 'printf "%s|%s" "\${SSH_AUTH_SOCK-unset}" "\${SSH_AGENT_PID-unset}"'`], { env, encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
-  return run.stdout;
+  const [value, pid] = run.stdout.split("|");
+  if (value === "unset") assert.equal(pid, "unset", "an agent's pid never stays without its socket");
+  return value!;
+}
+
+async function onlyShellAndSed(t: test.TestContext): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "pikibun-agent-path-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const bin = join(directory, "bin");
+  await mkdir(bin);
+  for (const program of ["sh", "sed"]) {
+    const found = spawnSync("sh", ["-c", `command -v ${program}`], { encoding: "utf8" }).stdout.trim();
+    await symlink(found, join(bin, program));
+  }
+  return bin;
 }
 
 test("the desktop app's host takes the GUI session's ssh agent socket when neither NSH nor the shell profile set one", unix, async t => {
@@ -44,7 +58,15 @@ test("without a usable socket the host gets none, never an empty or relative one
     assert.equal(exported(shell, "linux", empty), "unset", `${shell}: the session has none`);
     assert.equal(exported(shell, "macos", odd), "unset", `${shell}: a relative path`);
     assert.equal(exported(shell, "linux", odd), "unset", `${shell}: a relative path from the session`);
-    assert.equal(exported(shell, "linux", "/nonexistent"), "unset", `${shell}: no systemctl at all`);
+  }
+});
+
+test("where there is no systemctl at all, the host gets no socket and starts as before", unix, async t => {
+  const bin = await onlyShellAndSed(t);
+  assert.equal(spawnSync("sh", ["-c", "command -v systemctl"], { env: { PATH: bin }, encoding: "utf8" }).status, 1, "systemctl is out of reach");
+  for (const shell of shells) {
+    const found = spawnSync("sh", ["-c", `command -v ${shell}`], { encoding: "utf8" }).stdout.trim();
+    assert.equal(exported(found, "linux", bin, undefined, { SSH_AGENT_PID: "4242" }, bin), "unset", `${shell}: no systemctl, and the stray pid goes too`);
   }
 });
 
