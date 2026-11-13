@@ -221,7 +221,12 @@ as Terminal would; zsh, bash or sh, else the platform's), and on Windows cmd (`c
 cli\node_modules\.bin\pikibun.cmd (…) else pikibun host --stdio`, named from the data directory, its working
 directory). Either way the app's own copy wins, and a `pikibun` installed from a terminal runs where it has none. `nsh.json` grants exactly those programs (`capabilities.process`), by name, since it is every
 target's and an absolute path of one platform isn't one on another (NSH refuses to build or start with one), and the
-environment the connector needs. The first server's host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
+environment the connector needs. NSH passes a child only a base set and the names granted, never the whole
+environment, and the login shell restores only what the shell profile sets. So `SSH_AUTH_SOCK` and `SSH_AGENT_PID` are
+granted too, and on macOS and Linux the command first fills an unset `SSH_AUTH_SOCK` from the GUI session
+(`agentSocketImport` in `src/lib/agent-socket.ts`: `launchctl getenv`, `systemctl --user show-environment`), so the
+owner's on-host sessions reach their ssh agent (see
+[upstream workarounds](../../docs/design/upstream-workarounds.md)). The first server's host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
 one of them runs at a time. Hosting lasts while the app is open, and each server's host starts again at the next launch if it was running
 when the app quit, with the consent given for it then (`src/lib/this-computer.ts`). A `pikibun` too old to take `--state-dir` there is offered
 as an update, as one without `host` is.

@@ -1,5 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import type { HostEvent, HostRequest } from "../../../packages/shared/src/app-host-protocol";
+import { agentSocketImport } from "../src/lib/agent-socket";
 import { CommandChannel, pikibunCommand } from "../src/lib/pikibun-command";
 import {
   appCliFolder, COMMAND_UPDATED_KEY, hostArgs, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, serverStateDir, updateFailure,
@@ -20,8 +21,10 @@ async function openPanel(params: Record<string, unknown> = {}, storage: Record<s
 
 describe("starting Pikibun's command", () => {
   test("runs it through the owner's login shell, as Terminal would, or cmd.exe on Windows; never another program", () => {
-    expect(hostCommand("macos", "/bin/zsh")).toEqual({ command: "zsh", args: ["-ilc", "exec pikibun host --stdio"] });
-    expect(hostCommand("linux", "/usr/bin/bash")).toEqual({ command: "bash", args: ["-ilc", "exec pikibun host --stdio"] });
+    expect(hostCommand("macos", "/bin/zsh")).toEqual({ command: "zsh", args: ["-ilc", `${agentSocketImport("macos")}exec pikibun host --stdio`] });
+    expect(hostCommand("linux", "/usr/bin/bash")).toEqual({ command: "bash", args: ["-ilc", `${agentSocketImport("linux")}exec pikibun host --stdio`] });
+    expect(agentSocketImport("macos")).toContain("launchctl getenv SSH_AUTH_SOCK");
+    expect(agentSocketImport("linux")).toContain("systemctl --user show-environment");
     expect(hostCommand("macos", "/opt/homebrew/bin/fish").command).toBe("zsh");
     expect(hostCommand("linux", undefined).command).toBe("bash");
     expect(hostCommand("windows", "/bin/zsh")).toEqual({ command: "cmd",
@@ -39,9 +42,9 @@ describe("starting Pikibun's command", () => {
   test("starts the app's own copy where there is one, else the one on PATH", () => {
     const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
     expect(hostCommand("macos", "/bin/zsh", mac)).toEqual({ command: "zsh",
-      args: ["-ilc", "PATH='/Users/ada/Library/Application Support/com.pikibun.app/cli/node_modules/.bin':\"$PATH\"; export PATH; exec pikibun host --stdio"] });
+      args: ["-ilc", `${agentSocketImport("macos")}PATH='/Users/ada/Library/Application Support/com.pikibun.app/cli/node_modules/.bin':"$PATH"; export PATH; exec pikibun host --stdio`] });
     expect(hostCommand("linux", "/bin/bash", "/home/o'neil/.local/share/pikibun/cli").args[1])
-      .toBe("PATH='/home/o'\\''neil/.local/share/pikibun/cli/node_modules/.bin':\"$PATH\"; export PATH; exec pikibun host --stdio");
+      .toBe(`${agentSocketImport("linux")}PATH='/home/o'\\''neil/.local/share/pikibun/cli/node_modules/.bin':"$PATH"; export PATH; exec pikibun host --stdio`);
     expect(hostCommand("windows", undefined, "C:\\Users\\Ada Lovelace\\AppData\\Roaming\\com.pikibun.app\\cli")).toEqual({ command: "cmd",
       args: ["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "if", "exist", "cli\\node_modules\\.bin\\pikibun.cmd", "(", "cli\\node_modules\\.bin\\pikibun.cmd", "host", "--stdio", ")",
         "else", "(", "(", "where", "/q", "pikibun", "||", "exit", "9009", ")", "&&", "pikibun", "host", "--stdio", ")"] });
@@ -313,9 +316,9 @@ describe("This Mac", () => {
 
   test("passes each argument to the login shell as one word", () => {
     expect(pikibunCommand("linux", "/bin/bash", null, hostArgs("~/.local/share/pikibun/servers/third.example")).args[1])
-      .toBe("exec pikibun host --stdio --state-dir '~/.local/share/pikibun/servers/third.example'");
+      .toBe(`${agentSocketImport("linux")}exec pikibun host --stdio --state-dir '~/.local/share/pikibun/servers/third.example'`);
     expect(pikibunCommand("macos", "/bin/zsh", null, ["host", "--state-dir", "/tmp/a b; touch /tmp/owned '"]).args[1])
-      .toBe("exec pikibun host --state-dir '/tmp/a b; touch /tmp/owned '\\'''");
+      .toBe(`${agentSocketImport("macos")}exec pikibun host --state-dir '/tmp/a b; touch /tmp/owned '\\'''`);
   });
 
   test("removing a server stops its host and forgets its pairing here, after asking", async () => {
@@ -346,7 +349,7 @@ describe("This Mac", () => {
     const names = ["https://foo_bar.example", "https://foo-bar.example", "https://http-a.example", "http://a.example", "https://a.example-8443", "https://a.example:8443",
       "http://[::1]:7878", "http://[::2]:7878"].map(serverStateDir);
     expect(new Set(names).size).toBe(names.length);
-    expect(hostCommand("macos", "/bin/zsh", null)).toEqual({ command: "zsh", args: ["-ilc", "exec pikibun host --stdio"] });
+    expect(hostCommand("macos", "/bin/zsh", null)).toEqual({ command: "zsh", args: ["-ilc", `${agentSocketImport("macos")}exec pikibun host --stdio`] });
     expect(hostArgs("~/.local/share/pikibun/servers/pikibun.example.com")).toEqual(["host", "--stdio", "--state-dir", "~/.local/share/pikibun/servers/pikibun.example.com"]);
     expect(launchProblem(["Unknown option. Run \"pikibun host --help\"."], 1)).toEqual({ kind: "outdated" });
   });

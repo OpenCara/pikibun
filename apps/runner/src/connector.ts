@@ -183,6 +183,7 @@ export interface ConnectorOptions {
   capabilities?: ConnectorCapabilities;
   resources?: RunnerConfig["resources"];
   unsandboxed?: boolean;
+  privateEnvironment?: readonly string[];
   directUploads?: boolean;
   sandboxBackend?: SandboxBackendConfig;
   gpu?: GpuKind | null;
