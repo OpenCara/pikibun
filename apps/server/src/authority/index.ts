@@ -15,7 +15,7 @@ export {
   acceptJoinRequestStatement, addMemberStatement, changeMemberRoleStatement, grantSessionStatement, removeMemberStatements, revokeSessionGrantStatement,
   workspaceOwnerStatement,
 } from './memberships.js';
-export { isPersonalWorkspace, personalWorkspaceName, personalWorkspaceSQL, requireSharedWorkspace } from './personal-workspaces.js';
+export { isPersonalWorkspace, ownHostsOnlySQL, personalWorkspaceName, personalWorkspaceSQL, requireSharedWorkspace } from './personal-workspaces.js';
 export { authorizeConnectorTicket, connectorPermissions, requireRunnerAccess } from './runner-access.js';
 export { authorizeSession } from './authorize.js';
 export {
