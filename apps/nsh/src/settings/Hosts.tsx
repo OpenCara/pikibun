@@ -253,7 +253,7 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
       </Section>
       <HostConfigSection connector={connector()} refresh={props.refresh} />
       <If when={connector().config}><HostCompactionSection connector={connector()} refresh={props.refresh} /></If>
-      <If when={connector().role}><HostExtensionsSection connector={connector()} refresh={props.refresh} /></If>
+      <If when={connector().role}><HostExtensionsSection connector={connector()} refresh={props.refresh} go={props.go} /></If>
       <If when={connector().capabilities.hostCommands}><HostCommandGrantsSection connector={connector()} refresh={props.refresh} /></If>
       <HostAdminsSection connector={connector()} refresh={props.refresh} />
       <Section title="Details">

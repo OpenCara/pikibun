@@ -1,4 +1,4 @@
-import { computed, effect, signal, untracked, View } from "nsh";
+import { computed, effect, signal, untracked, View, type JSX } from "nsh";
 import type { ConnectorInfo } from "../../../../packages/shared/src/connector";
 import { builtinExtensions, hostConfigLimits, type BuiltinExtensionName, type RequiredExtension } from "../../../../packages/shared/src/host-config";
 import {
@@ -8,8 +8,11 @@ import {
 import { pikiExtension } from "../../../../packages/shared/src/piki-extensions";
 import { defaultHostBrowserConfig, type BrowserSource, type HostBrowserConfig, type HostBrowserStatus } from "../../../../packages/shared/src/browser";
 import { defaultHostTunnelConfig, type HostTunnelConfig, type HostTunnelStatus, type TunnelSource } from "../../../../packages/shared/src/tunnel";
+import { hostToolPrograms } from "../../../../packages/shared/src/program-install";
 import { segment } from "../shared";
 import { session } from "../lib/auth";
+import { InstallChatButton } from "../lib/install-chat";
+import type { PageRoute } from "../lib/page";
 import { relativeTime } from "../lib/format";
 import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
@@ -73,6 +76,7 @@ const tunnelSources: { value: TunnelSource; label: string; hint: string }[] = [
 export function ToolSetup<S extends "auto" | "path" | "download" | "off">(props: {
   kind: "browser" | "tunnel"; saved: { source: S; path?: string }; status?: { state: ToolState; source: S; executable?: string; version?: string; error?: string; downloadable?: boolean };
   owner: boolean; busy: boolean; revoked: boolean; sources: { value: S; label: string; hint: string }[]; save: (value: { source: S; path?: string }) => void;
+  chat?: JSX.Element;
 }) {
   const browser = props.kind === "browser";
   const source = signal<S>(untracked(() => props.saved.source));
@@ -103,7 +107,7 @@ export function ToolSetup<S extends "auto" | "path" | "download" | "off">(props:
       </If>
       <If when={current() && current()!.state !== "ready" && current()!.state !== "off" ? current() : null}>
         {status => (
-          <Banner tone={status().state === "downloading" ? "info" : "warning"}
+          <Banner tone={status().state === "downloading" ? "info" : "warning"} actions={status().state === "missing" || status().state === "failed" ? props.chat : undefined}
             title={status().state === "downloading" ? `Downloading ${browser ? "Chromium" : "cloudflared"}` : status().state === "failed" ? `${browser ? "Chromium" : "cloudflared"}'s download failed`
               : status().state === "unsupported" ? "Not on this host" : browser ? "No Chromium for the browser" : "No cloudflared for the tunnel"}>
             {status().error ?? hints[status().state]}
@@ -161,10 +165,12 @@ const info = (
   </View>
 );
 
-export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh: () => void }) {
+export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh: () => void; go?: (route: PageRoute) => void }) {
   const path = () => `/api/connectors/${segment(props.connector.id)}/extensions`;
   const resource = createResource<HostExtensionsResponse>(path);
   const action = createAction();
+  const installChat = (tool: "browser" | "tunnel") => (props.go
+    ? <InstallChatButton host={props.connector} missing={{ [tool]: hostToolPrograms(tool) ?? [] }} action={action} go={props.go} testID={`install-chat-${tool}`} /> : undefined);
   const installing = signal(false);
   const configuring = signal<{ extension: RequiredExtension; flags: InstalledExtension["modules"][number]["flags"] } | null>(null);
   const data = () => resource.data();
@@ -270,11 +276,11 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
                   : waiting(source()) ? <Badge dot>Removing</Badge> : <Badge tone="success">Installed</Badge>}>
                 <If when={source() === BROWSER && config()}>
                   <ToolSetup<BrowserSource> kind="browser" saved={config()?.browser ?? defaultHostBrowserConfig} status={report()?.browser} owner={owner()} busy={action.busy()} revoked={revoked()}
-                    sources={browserSources} save={value => saveTool("browser", value as HostBrowserConfig)} />
+                    sources={browserSources} save={value => saveTool("browser", value as HostBrowserConfig)} chat={installChat("browser")} />
                 </If>
                 <If when={source() === TUNNEL && config()}>
                   <ToolSetup<TunnelSource> kind="tunnel" saved={config()?.tunnel ?? defaultHostTunnelConfig} status={report()?.tunnel} owner={owner()} busy={action.busy()} revoked={revoked()}
-                    sources={tunnelSources} save={value => saveTool("tunnel", value as HostTunnelConfig)} />
+                    sources={tunnelSources} save={value => saveTool("tunnel", value as HostTunnelConfig)} chat={installChat("tunnel")} />
                 </If>
                 <ModuleDetails extension={extension()} />
                 <If when={!extension().dev && !extension().error && !pikiExtension(source())?.sessionTools && (owner() || isRequired(source()))}>
