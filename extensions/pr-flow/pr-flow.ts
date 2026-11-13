@@ -6,6 +6,7 @@ export const prFlowFlags = Object.freeze({
   "review-minutes": "How long to wait for reviews once a pull request is ready for review, and again for a re-review after pushed fixes, in minutes. 0 merges it as soon as it is ready, without waiting for reviews",
   "merge-method": "How to merge: squash (default), merge or rebase",
   "wait-for-checks": "Wait for the pull request's checks to finish, and fix failing ones, before merging",
+  "auto-merge": "Merge the pull request once it is approved, or once its review window ends with nothing left to address. Off leaves the merge to people: the agent tells the person it is ready to merge instead",
 });
 
 export const DEFAULT_REVIEW_MINUTES = 30;
@@ -13,7 +14,7 @@ export const MAX_REVIEW_MINUTES = 7 * 24 * 60;
 const GITHUB_WAIT_SECONDS = 1800;
 
 export type MergeMethod = "squash" | "merge" | "rebase";
-export interface PrFlowSettings { reviewMinutes: number; mergeMethod: MergeMethod; waitForChecks: boolean }
+export interface PrFlowSettings { reviewMinutes: number; mergeMethod: MergeMethod; waitForChecks: boolean; autoMerge: boolean }
 
 export function reviewMinutes(setting: unknown): number {
   const text = typeof setting === "number" ? String(setting) : typeof setting === "string" ? setting.trim() : "";
@@ -24,6 +25,11 @@ export function reviewMinutes(setting: unknown): number {
 export function mergeMethod(setting: unknown): MergeMethod {
   const value = typeof setting === "string" ? setting.trim().toLowerCase() : "";
   return value === "merge" || value === "rebase" ? value : "squash";
+}
+
+export function autoMerge(setting: unknown): boolean {
+  if (typeof setting === "string") return !["false", "off", "no", "0"].includes(setting.trim().toLowerCase());
+  return setting !== false;
 }
 
 export interface PullRequestFlow {
@@ -217,19 +223,28 @@ function waitCall(flow: PullRequestFlow, settings: PrFlowSettings): string {
 }
 
 const checksStep = (settings: PrFlowSettings) => settings.waitForChecks
-  ? " Before merging, let its checks finish (on GitHub, github_read with wait: \"checks\") and fix any that fail, pushing the fix as you would for a review point."
+  ? ` Before ${settings.autoMerge ? "merging" : "telling the person it is ready to merge"}, let its checks finish (on GitHub, github_read with wait: \"checks\") `
+    + "and fix any that fail, pushing the fix as you would for a review point."
   : "";
+
+const handOver = "tell the person, with its link, that it is ready for them to merge, and leave it open: don't merge it yourself, nor queue an automatic merge";
 
 function reviewNote(flow: PullRequestFlow, settings: PrFlowSettings, again: boolean): string {
   const pull = flow.pull ? `#${flow.pull.number}` : "The pull request";
   if (settings.reviewMinutes === 0) {
-    return again ? "" : `[pr-flow] ${pull} is ready for review. This workspace's review window is 0 minutes: merge it now, without waiting for reviews, with ${mergeCall(flow, settings)}.${checksStep(settings)}`;
+    if (again) return "";
+    return settings.autoMerge
+      ? `[pr-flow] ${pull} is ready for review. This workspace's review window is 0 minutes: merge it now, without waiting for reviews, with ${mergeCall(flow, settings)}.${checksStep(settings)}`
+      : `[pr-flow] ${pull} is ready for review. This workspace's review window is 0 minutes and it leaves merges to people (auto-merge is off): ${handOver}.${checksStep(settings)}`;
   }
   const until = clock(flow.windowStart! + settings.reviewMinutes * 60_000);
+  const finish = settings.autoMerge
+    ? `Merge, with ${mergeCall(flow, settings)}, once it is approved with nothing left to address, or once the window ends with nothing new to address.`
+    : "This workspace leaves merges to people (auto-merge is off): once it is approved with nothing left to address, or once the window ends with nothing new "
+      + `to address, ${handOver}.`;
   return `[pr-flow] ${pull} ${again ? "has new commits, so its re-review window starts again" : "is ready for review"}: wait for reviews until ${until} `
     + `(${minutes(settings.reviewMinutes)}) with ${waitCall(flow, settings)}. Fix the review points you judge valid, push, and answer each point; `
-    + `a pushed fix starts a new ${minuteWindow(settings.reviewMinutes)} window. Merge, with ${mergeCall(flow, settings)}, once it is approved with nothing left `
-    + `to address, or once the window ends with nothing new to address.${checksStep(settings)}`;
+    + `a pushed fix starts a new ${minuteWindow(settings.reviewMinutes)} window. ${finish}${checksStep(settings)}`;
 }
 
 export class PrFlowState {
@@ -385,19 +400,27 @@ function flowLine(flow: PullRequestFlow, settings: PrFlowSettings, now: number):
   if (flow.draft === true) return `- ${flow.directory}: draft ${pull}: make it ready for review once the change is done.`;
   if (flow.draft === undefined) return `- ${flow.directory}: ${pull} is open; if it is still a draft, make it ready for review once the change is done.`;
   if (flow.windowStart === undefined) return `- ${flow.directory}: ${pull} is open.`;
-  if (settings.reviewMinutes === 0) return `- ${flow.directory}: ${pull} is ready for review: merge it.`;
+  if (settings.reviewMinutes === 0) {
+    return settings.autoMerge ? `- ${flow.directory}: ${pull} is ready for review: merge it.`
+      : `- ${flow.directory}: ${pull} is ready for review: tell the person it is ready for them to merge; don't merge it.`;
+  }
   const end = flow.windowStart + settings.reviewMinutes * 60_000;
   return end > now
     ? `- ${flow.directory}: ${pull} is ready for review; its review window ends at ${clock(end)}.`
-    : `- ${flow.directory}: ${pull} is ready for review; its review window ended at ${clock(end)}: address what reviews came in, or merge.`;
+    : `- ${flow.directory}: ${pull} is ready for review; its review window ended at ${clock(end)}: address what reviews came in, or `
+      + `${settings.autoMerge ? "merge" : "tell the person it is ready for them to merge; don't merge it"}.`;
 }
 
 export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullRequestFlow[] = [], now = Date.now()): string {
   const window = minutes(settings.reviewMinutes);
-  const merge = `merge it: on GitHub with github_merge {repository, pull, sha: its head commit as github_read reports it, method: "${settings.mergeMethod}"}; `
-    + "elsewhere with the forge's tool (glab mr merge, az repos pr update --status completed).";
+  const merge = settings.autoMerge
+    ? `merge it: on GitHub with github_merge {repository, pull, sha: its head commit as github_read reports it, method: "${settings.mergeMethod}"}; `
+      + "elsewhere with the forge's tool (glab mr merge, az repos pr update --status completed)."
+    : `${handOver}.`;
   const review = settings.reviewMinutes === 0
-    ? [`4. Merge at once. This workspace's review window is 0 minutes: as soon as the pull request is ready, ${merge}${checksStep(settings)} Don't wait for reviews.`]
+    ? [settings.autoMerge
+      ? `4. Merge at once. This workspace's review window is 0 minutes: as soon as the pull request is ready, ${merge}${checksStep(settings)} Don't wait for reviews.`
+      : `4. Hand it over at once. This workspace's review window is 0 minutes: as soon as the pull request is ready, ${merge}${checksStep(settings)} Don't wait for reviews.`]
     : [
       `4. Wait for review: ${window}. From when it is ready, wait up to ${window} for reviews: on GitHub, github_read {repository, issue, wait: "change", timeout_seconds} `
         + `(at most ${GITHUB_WAIT_SECONDS} seconds a call, so call it again, or loop in a code mode script, until the window ends); elsewhere read its reviews and `
@@ -405,7 +428,8 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
       "   - Judge each review point and comment on its merits. Fix the valid ones (a real bug, a reasonable request within the task), commit, push to the session "
         + "branch and answer the point with what you changed; answer one you judge invalid with why, briefly, and leave the code as it is. On GitHub, answer "
         + `with github_comment. A pushed fix starts a new ${minuteWindow(settings.reviewMinutes)} window, for re-review.`,
-      `   - Approved with nothing left to address: ${merge} Don't wait out the window. The window ends with nothing new to address: merge it the same way.`,
+      `   - Approved with nothing left to address: ${merge} Don't wait out the window. The window ends with nothing new to address: `
+        + `${settings.autoMerge ? "merge it" : "hand it over"} the same way.`,
       "   - Never merge over a request for changes you didn't make: if a reviewer's latest review still requests changes once the re-review window ends, "
         + "leave the pull request open and tell the person why.",
       ...(settings.waitForChecks ? [`   -${checksStep(settings)}`] : []),
@@ -413,7 +437,8 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
   const lines = [
     "## Pull request flow",
     "",
-    "This workspace carries each change to a repository through a pull request (a merge request on GitLab), from the first edit to the merge. Follow it whenever "
+    "This workspace carries each change to a repository through a pull request (a merge request on GitLab), from the first edit to the merge"
+      + `${settings.autoMerge ? "" : ", which it leaves to people (auto-merge is off)"}. Follow it whenever `
       + "you change files in a clone of one of the workspace's repositories, unless the person asks for something else (no pull request, no merge, another branch). "
       + "Questions, reviews and explorations that change nothing need none of it.",
     "",
@@ -424,11 +449,17 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
     "3. Ready for review when done. Once the change is complete, its tests pass and its last commit is pushed, make it ready: git_push {directory, branch: "
       + "<the session branch>, pull_request: {title, body, draft: false}}, with a title and body for the finished change.",
     ...review,
-    "5. If the forge refuses the merge (branch protection, required reviews or checks), say so and stop rather than work around it.",
+    settings.autoMerge
+      ? "5. If the forge refuses the merge (branch protection, required reviews or checks), say so and stop rather than work around it."
+      : "5. Never merge it yourself, nor queue an automatic merge (gh pr merge --auto, glab mr merge --auto-merge, az repos pr update --auto-complete), "
+        + "unless the person asks you to: this workspace leaves merges to people.",
     "6. Tell the person the pull request's link when it opens, when it is ready, and when it is merged or left open.",
     "",
-    "Where there is no git_push (a host whose sessions push with git itself), do the same with the forge's tool: gh pr create --draft, gh pr ready and "
-      + "gh pr merge; glab mr create --draft, glab mr update --ready and glab mr merge.",
+    settings.autoMerge
+      ? "Where there is no git_push (a host whose sessions push with git itself), do the same with the forge's tool: gh pr create --draft, gh pr ready and "
+        + "gh pr merge; glab mr create --draft, glab mr update --ready and glab mr merge."
+      : "Where there is no git_push (a host whose sessions push with git itself), do the same with the forge's tool: gh pr create --draft and gh pr ready; "
+        + "glab mr create --draft and glab mr update --ready.",
   ];
   const known = flows.filter(flow => flow.pull || flow.told);
   if (known.length) lines.push("", `This session's pull requests, as of ${clock(now)}:`, ...known.map(flow => flowLine(flow, settings, now)));
@@ -439,10 +470,12 @@ export const prFlowExtension: ExtensionFactory = pi => {
   pi.registerFlag("review-minutes", { type: "string", default: String(DEFAULT_REVIEW_MINUTES), description: prFlowFlags["review-minutes"] });
   pi.registerFlag("merge-method", { type: "string", default: "squash", description: prFlowFlags["merge-method"] });
   pi.registerFlag("wait-for-checks", { type: "boolean", default: true, description: prFlowFlags["wait-for-checks"] });
+  pi.registerFlag("auto-merge", { type: "boolean", default: true, description: prFlowFlags["auto-merge"] });
   const settings = (): PrFlowSettings => ({
     reviewMinutes: reviewMinutes(pi.getFlag("review-minutes")),
     mergeMethod: mergeMethod(pi.getFlag("merge-method")),
     waitForChecks: pi.getFlag("wait-for-checks") !== false,
+    autoMerge: autoMerge(pi.getFlag("auto-merge")),
   });
   const state = new PrFlowState();
 
