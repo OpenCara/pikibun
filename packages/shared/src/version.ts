@@ -8,7 +8,7 @@ export function validVersion(value: string | undefined | null): string | undefin
   return value && /^[0-9A-Za-z][0-9A-Za-z .+_-]{0,63}$/.test(value) ? value : undefined;
 }
 
-export const MINIMUM_CONNECTOR_VERSION = "0.24.0";
+export const MINIMUM_CONNECTOR_VERSION = "0.33.0";
 
 export const FIRST_REPORTING_CONNECTOR_VERSION = "0.24.0";
 
