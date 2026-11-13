@@ -3,7 +3,7 @@ import { link, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/prom
 import { join } from "node:path";
 import test from "node:test";
 import type { SessionWorkspace } from "../apps/runner/src/workspace.js";
-import { searchRequest } from "../apps/runner/src/search.js";
+import { findRequest, searchRequest } from "../apps/runner/src/search.js";
 import { fileOperationRequest } from "../apps/runner/src/file-operations.js";
 import { workspaceKinds } from "./helpers/workspaces.js";
 
@@ -24,6 +24,7 @@ const copy = (from: string, to: string): Operation => workspace => workspace.fil
 const remove = (path: string, recursive = false): Operation => workspace => workspace.fileOperation(fileOperationRequest("delete", { path, recursive }), allow);
 const names = (path: string): Operation => async workspace => (await workspace.listFiles(path, allow)).filter(name => name !== "n");
 const entries = (path: string, only?: readonly string[]): Operation => async workspace => (await workspace.listEntries(path, allow)).filter(name => !only || only.includes(name.replace(/\/$/, "")));
+const located = (args: Parameters<typeof findRequest>[0]): Operation => workspace => workspace.find(findRequest(args), allow);
 const found = (args: Parameters<typeof searchRequest>[0]): Operation => async workspace => (await workspace.search(searchRequest(args), allow)).matches;
 
 const TRAVERSAL = /path traversal is not allowed/;
@@ -137,6 +138,28 @@ const cases: Case[] = [
   ["refuses searching above the worktree", find({ pattern: "secret", path: "../outside" }), { refused: TRAVERSAL }],
   ["refuses searching through a link outside", find({ pattern: "secret", path: "out-dir" }), { refused: ESCAPES }],
   ["refuses an invalid regular expression", find({ pattern: "(", path: "src" }), { refused: /invalid regular expression/ }],
+  ["searches with a glob of alternatives and a class", found({ pattern: "hello|dep", ignoreCase: true, glob: "*.{ts,js}", all: true }),
+    { ok: [{ path: "node_modules/dep/index.js", line: 1, text: "hello dep" }, { path: "src/app.ts", line: 2, text: "export function hello() {" },
+      { path: "src/lib/util.ts", line: 1, text: "export const HELLO = 2;" }] }],
+  ["finds files by name at any depth, from the path searched", located({ pattern: "*.ts", path: "src" }), { ok: { paths: ["app.ts", "lib/util.ts"], truncated: false } }],
+  ["finds directories too, with / after them", located({ pattern: "lib", path: "src" }), { ok: { paths: ["lib/"], truncated: false } }],
+  ["finds by a path below the path searched", located({ pattern: "lib/*.ts", path: "src" }), { ok: { paths: ["lib/util.ts"], truncated: false } }],
+  ["finds with alternatives and a class, in either case for an all-lowercase pattern", located({ pattern: "[a-u]*.{TS,js}", path: "src" }), { ok: { paths: [], truncated: false } }],
+  ["finds an all-lowercase pattern in either case", located({ pattern: "util.ts", path: "src" }), { ok: { paths: ["lib/util.ts"], truncated: false } }],
+  ["skips node_modules unless all", located({ pattern: "*.js" }), { ok: { paths: [], truncated: false } }],
+  ["finds in node_modules with all", located({ pattern: "*.js", all: true }), { ok: { paths: ["node_modules/dep/index.js"], truncated: false } }],
+  ["finds one past its limit, which says the limit cut something off", located({ pattern: "*", path: "src", limit: 1 }), { ok: { paths: ["app.ts", "lib/"], truncated: true } }],
+  ["lists a link as it is, and never follows it", located({ pattern: "in-*" }), { ok: { paths: ["in-dir", "in-file", "nested/in-file"], truncated: false } }],
+  ["never finds what lies outside, through links", located({ pattern: "secret*" }), { ok: { paths: [], truncated: false } }],
+  ["anchors a leading / at the path searched, even for a single name", located({ pattern: "/app.ts", path: "src" }), { ok: { paths: ["app.ts"], truncated: false } }],
+  ["never finds a name below the path searched for a pattern with a leading /", located({ pattern: "/util.ts", path: "src" }), { ok: { paths: [], truncated: false } }],
+  ["matches / with a negated class, as fd does", located({ pattern: "/lib[!x]util.ts", path: "src" }), { ok: { paths: ["lib/util.ts"], truncated: false } }],
+  ["reads [ as itself where no class follows, rather than failing", located({ pattern: "[!]*", path: "src" }), { ok: { paths: [], truncated: false } }],
+  ["refuses a class with a range backwards", located({ pattern: "[z-a]*", path: "src" }), { refused: /invalid glob/ }],
+  ["refuses a search glob with a range backwards", find({ pattern: "x", glob: "[z-a]*" }), { refused: /invalid glob/ }],
+  ["refuses finding in a file", located({ pattern: "*", path: "long.txt" }), { refused: /not a directory/ }],
+  ["refuses finding through a link outside", located({ pattern: "*", path: "out-dir" }), { refused: ESCAPES }],
+  ["refuses finding above the worktree", located({ pattern: "*", path: "../outside" }), { refused: TRAVERSAL }],
 
   ["writes a tree to copy", write("tree/x/y.txt", "Y"), { ok: undefined }],
   ["copies a file, making its directories", copy("inside/a.txt", "copies/a.txt"), { ok: { entries: 1, bytes: 1 } }],

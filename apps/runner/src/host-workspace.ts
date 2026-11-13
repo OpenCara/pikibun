@@ -14,7 +14,7 @@ import {
 import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
 import { browseDirectory, browseFile, checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser.js";
 import type { SessionWorkspace } from "./workspace.js";
-import { searchInWorker, type SearchRequest, type SearchResult } from "./search.js";
+import { findInWorker, searchInWorker, type FindRequest, type FindResult, type SearchRequest, type SearchResult } from "./search.js";
 import { bashPath, CREATE_FILE, hostBashArgs, killTree, OPEN_DIRECTORY, OPEN_FILE, privateEntry, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
 import { readCloneBranches, type CloneBranch } from "./clone-branches.js";
 import { fileOperationInWorker, type FileOperationRequest, type FileOperationResult, type ResolvedFileOperation } from "./file-operations.js";
@@ -250,6 +250,16 @@ export class HostWorkspace implements SessionWorkspace {
       const start = parts.length ? join(await directoryAt(this.worktree, parts.slice(0, -1)), parts.at(-1)!) : this.worktree;
       try { return await searchInWorker(start, parts.length ? parts.join("/") : ".", { ...request, path: value }); }
       catch (error) { throw hostError(error instanceof Error ? error.message : "search failed"); }
+    });
+  }
+
+  async find(request: FindRequest, authorize: SandboxAuthorize): Promise<FindResult> {
+    const value = text(request.path, "path", 1024);
+    return this.#operation(authorize, async () => {
+      const parts = await this.#parts(value, false);
+      const start = parts.length ? join(await directoryAt(this.worktree, parts.slice(0, -1)), parts.at(-1)!) : this.worktree;
+      try { return await findInWorker(start, { ...request, path: value }); }
+      catch (error) { throw hostError(error instanceof Error ? error.message : "find failed"); }
     });
   }
 

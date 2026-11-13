@@ -72,6 +72,11 @@ export function callTarget(name: string, args: Fields | undefined): string {
       if (from && to) return `${from} → ${to}`;
       break;
     }
+    case "find": {
+      const pattern = string(args, "pattern");
+      if (!pattern) break;
+      return oneLine(`${JSON.stringify(pattern)}${path ? ` in ${path}` : ""}`);
+    }
     case "grep": case "search": {
       const pattern = string(args, "pattern");
       if (!pattern) break;
@@ -238,12 +243,12 @@ function answerSummary(all: Fields, images: number): ResultSummary {
   return done(fieldsSummary(fields) || "Done");
 }
 
-const PI_CONTRACT: Record<string, "read" | "write" | "edit" | "ls" | "grep"> = {
-  read: "read", write: "write", edit: "edit", ls: "ls", grep: "grep",
+const PI_CONTRACT: Record<string, "read" | "write" | "edit" | "ls" | "grep" | "find"> = {
+  read: "read", write: "write", edit: "edit", ls: "ls", grep: "grep", find: "find",
   read_file: "read", write_file: "write", edit_file: "edit", list_files: "ls", search: "grep",
 };
 
-export function piContract(tool: string | undefined, text: string): "read" | "write" | "edit" | "ls" | "grep" | undefined {
+export function piContract(tool: string | undefined, text: string): "read" | "write" | "edit" | "ls" | "grep" | "find" | undefined {
   const contract = tool === undefined ? undefined : PI_CONTRACT[tool];
   return contract && !text.startsWith("{\"initiatedBy\"") ? contract : undefined;
 }
@@ -254,7 +259,7 @@ function lineCount(text: string): number {
 
 const GREP_LINE = /^(.*?)(?::(\d+): |-(\d+)- )/;
 
-function piSummary(contract: "read" | "write" | "edit" | "ls" | "grep", text: string): string {
+function piSummary(contract: "read" | "write" | "edit" | "ls" | "grep" | "find", text: string): string {
   const notice = /\n\n\[([^\n]*)\]$/.exec(text);
   const body = notice ? text.slice(0, notice.index) : text;
   const said = notice?.[1] ?? "";
@@ -283,6 +288,11 @@ function piSummary(contract: "read" | "write" | "edit" | "ls" | "grep", text: st
       if (text === "(empty directory)") return "Empty directory";
       const entries = plural(lineCount(body), "entry", "entries");
       return /entries limit reached/.test(said) ? `${entries} (more not shown)` : entries;
+    }
+    case "find": {
+      if (body === "No files found matching pattern") return /stopped early/.test(said) ? "No files (stopped early)" : "No files";
+      const found = plural(lineCount(body), "path");
+      return /results limit reached|stopped early/.test(said) ? `${found} (stopped early)` : found;
     }
     case "grep": {
       const stopped = /matches limit reached|stopped early/.test(said) ? " (stopped early)" : "";

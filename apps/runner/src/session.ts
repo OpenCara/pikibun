@@ -8,7 +8,7 @@ import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Mod
 import { ConversationIdle, createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
-import { accessModes, canonicalToolNames, thinkingLevels } from "../../../packages/shared/src/types.js";
+import { accessModes, sessionToolNames, thinkingLevels } from "../../../packages/shared/src/types.js";
 import type { SessionsToolRequest, SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote } from "../../../packages/shared/src/repositories.js";
@@ -100,7 +100,7 @@ interface RunnerBackup {
   createdAt: string;
 }
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
-const readOnlyTools = ["identity", "read", "ls", "grep"];
+const readOnlyTools = ["identity", "read", "ls", "grep", "find"];
 export type RunnerConfig = {
   dataDir: string; controlPlaneUrl: string; sharedSecret: string; allowFaux: boolean; allowTestShell?: boolean; fetch?: typeof fetch;
   connectorId?: string;
@@ -446,7 +446,7 @@ export class RunnerSession {
 
   private agentInstructions(mode: InstructionsMode, off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason,
     tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set()): string {
-    return agentInstructions({ base: this.binding.agent.instructions, agentTools: canonicalToolNames(this.binding.agent.tools), mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
+    return agentInstructions({ base: this.binding.agent.instructions, agentTools: sessionToolNames(this.binding.agent.tools), mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
       extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
@@ -962,7 +962,7 @@ export class RunnerSession {
         const head = transcript.entries.at(-1);
         const fork = { ownership: { kind: "ownerless" as const }, agent: {
           model: (await shared.agent(context)).model ?? this.modelRef, instructions: this.agentInstructions("ask"),
-          tools: this.tools.filter(tool => readOnlyTools.includes(tool.name) && canonicalToolNames(this.binding.agent.tools).includes(tool.name)),
+          tools: this.tools.filter(tool => readOnlyTools.includes(tool.name) && sessionToolNames(this.binding.agent.tools).includes(tool.name)),
         } };
         conversation = head ? await shared.fork(head.id, fork, context) : await this.harness.createConversation(fork, context);
       }

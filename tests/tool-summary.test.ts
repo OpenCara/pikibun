@@ -82,6 +82,10 @@ test("a file tool's result in Pi's words: its summary reads Pi's text and notice
   assert.equal(summary("search", "src/a-1- before\nsrc/a:2: x\nb.ts:9: y: z\nb.ts-10- after"), "2 matches in 2 files");
   assert.equal(summary("search", "a.ts:1: x\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]"), "1 match in 1 file (stopped early)");
   assert.equal(summary("search", "No matches found"), "No matches");
+  assert.equal(summary("find", "a.ts\nlib/"), "2 paths");
+  assert.equal(summary("find", "a.ts\n\n[1 results limit reached. Use limit=2 for more, or refine pattern]"), "1 path (stopped early)");
+  assert.equal(summary("find", "No files found matching pattern"), "No files");
+  assert.equal(target("find", { pattern: "*.ts", path: "src" }), '"*.ts" in src');
   assert.equal(summary("search", answer({ matches: [], files: 95, truncated: false })), "No matches", "a result from before Pi's contract still reads as it did");
   assert.equal(summary("read_file", answer({ content: "a\nb\n" })), "2 lines");
   for (const tool of ["read_file", "list_files", "search", "write_file", "edit_file"]) {

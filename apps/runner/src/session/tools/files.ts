@@ -5,10 +5,10 @@ import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } 
 import { commandLimits } from "../../host-config.js";
 import { prepareImage } from "../../images.js";
 import { RunnerError } from "../../protocol.js";
-import { editTarget, GREP_LINE_CHARS, PI_OUTPUT_LIMITS, grepText, imageText, LS_DEFAULT_ENTRIES, lsText, PathRefusal, piParameters, prepareEditArguments, readText, runPiEdit,
+import { editTarget, findText, GREP_LINE_CHARS, PI_OUTPUT_LIMITS, grepText, imageText, LS_DEFAULT_ENTRIES, lsText, PathRefusal, piParameters, prepareEditArguments, readText, runPiEdit,
   worktreePath, type EditInput } from "../../pi-file-tools.js";
 import { inScriptCall } from "../../script-output.js";
-import { searchLimits, searchRequest, type SearchRequest } from "../../search.js";
+import { findLimits, findRequest, searchLimits, searchRequest, type FindRequest, type SearchRequest } from "../../search.js";
 import { text, type ToolContext } from "./context.js";
 import type { ToolAttribution } from "./calls.js";
 
@@ -66,6 +66,17 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
         const attribution = await calls.actor(api, false);
         await calls.check(api, "grep");
         const found = grepText(await sandbox.search(request, () => calls.recheck(attribution)), request.path, request.maxResults, searchLimits.maxResults);
+        return piResult(attribution, found.text, found.details);
+      } }),
+    defineTool({ name: "find", parameters: piParameters.find, outputLimits: PI_OUTPUT_LIMITS,
+      description: `Find files and directories in the worktree by glob, without a shell. A pattern without / matches names at any depth (*.ts, *.{ts,tsx}); one with / matches paths below path (src/**/*.spec.ts); an all-lowercase pattern matches either case. path is the directory to search (the worktree's top by default). Each result is a path from path, one a line, with / after a directory; ${findLimits.defaultResults} unless limit (at most ${findLimits.maxResults}). It skips .git directories, and node_modules unless all is true; links are listed, never followed, and .gitignore isn't read.`,
+      execute: async (input, api, _call) => {
+        let request: FindRequest;
+        try { request = findRequest(input as Record<string, unknown>); worktreeArgument(request.path); }
+        catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid find"); }
+        const attribution = await calls.actor(api, false);
+        await calls.check(api, "find");
+        const found = findText(await sandbox.find(request, () => calls.recheck(attribution)), request.maxResults, findLimits.maxResults);
         return piResult(attribution, found.text, found.details);
       } }),
     defineTool({ name: "write", executionMode: "sequential", parameters: piParameters.write,

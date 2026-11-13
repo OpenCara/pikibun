@@ -8,11 +8,11 @@ import { isDeepStrictEqual } from "node:util";
 import test, { type TestContext } from "node:test";
 import type { ToolExecutionApi, ToolRegistration } from "@earendil-works/pi-durable";
 import {
-  createEditToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition,
+  createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { defaultHostConfig } from "../packages/shared/src/host-config.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
-import { EDIT_ROOT, editTarget, grepText, lsText, prepareEditArguments, readText, runPiEdit } from "../apps/runner/src/pi-file-tools.js";
+import { EDIT_ROOT, editTarget, findText, grepText, lsText, prepareEditArguments, readText, runPiEdit } from "../apps/runner/src/pi-file-tools.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import { wholeForScripts } from "../apps/runner/src/script-output.js";
 import { ToolCalls } from "../apps/runner/src/session/tools/calls.js";
@@ -25,6 +25,7 @@ import { workspaceKinds } from "./helpers/workspaces.js";
 process.env.PI_OFFLINE = "1";
 
 const ripgrep = spawnSync("rg", ["--version"], { stdio: "ignore" }).error === undefined;
+const fd = ["fd", "fdfind"].some(name => spawnSync(name, ["--version"], { stdio: "ignore" }).error === undefined);
 const attribution = { initiatedBy: "github:2", actingAs: "github:1", mode: "write" };
 
 type Outcome = { text: string; details?: unknown; images?: number } | { error: string };
@@ -75,7 +76,7 @@ function ours(sandbox: SessionWorkspace, script = false): Run {
 
 function pi(root: string): Run {
   const definitions = { read: createReadToolDefinition(root), write: createWriteToolDefinition(root), edit: createEditToolDefinition(root),
-    ls: createLsToolDefinition(root), grep: createGrepToolDefinition(root) } as Record<string, { execute: Function; prepareArguments?: (args: unknown) => unknown }>;
+    ls: createLsToolDefinition(root), grep: createGrepToolDefinition(root), find: createFindToolDefinition(root) } as Record<string, { execute: Function; prepareArguments?: (args: unknown) => unknown }>;
   return async (name, args) => {
     const definition = definitions[name]!;
     try {
@@ -153,6 +154,13 @@ const searches: Record<string, unknown>[] = [
   { pattern: "\u65e5", path: "unicode.txt" },
 ];
 
+const finds: Record<string, unknown>[] = [
+  { pattern: "*.ts", path: "src" }, { pattern: "lib", path: "src" }, { pattern: "lib/*.ts", path: "src" }, { pattern: "src/**/*.ts" },
+  { pattern: "*.{ts,txt}", path: "dir" }, { pattern: "b.txt", path: "dir" }, { pattern: "B.TXT", path: "dir" }, { pattern: "zzz", path: "dir" },
+  { pattern: ".hidden", path: "dir" }, { pattern: "*", path: "dir" }, { pattern: "*.txt", path: "many" }, { pattern: "[a-c].txt" },
+  { pattern: "[!a].txt", path: "dir" }, { pattern: "src/lib[!x]util.ts" },
+];
+
 const edits: { file: string; content: string; args: Record<string, unknown> }[] = [
   { file: "e1.txt", content: "alpha\nbeta\ngamma\n", args: { path: "e1.txt", edits: [{ oldText: "beta", newText: "BETA" }] } },
   { file: "e2.txt", content: "alpha\nbeta\ngamma\ndelta\n", args: { path: "e2.txt", edits: [{ oldText: "alpha\n", newText: "ALPHA\n" }, { oldText: "delta", newText: "DELTA\nEPSILON" }] } },
@@ -170,7 +178,7 @@ const edits: { file: string; content: string; args: Record<string, unknown> }[] 
 ];
 
 for (const kind of workspaceKinds) {
-  test(`${kind.name}: the file tools answer as Pi's own read, ls, grep, write and edit do`, { skip: kind.missing }, async t => {
+  test(`${kind.name}: the file tools answer as Pi's own read, ls, grep, find, write and edit do`, { skip: kind.missing }, async t => {
     const { workspace, worktree } = await kind.open(t);
     const root = await scratch(t, "pi-tools-");
     await lay(root);
@@ -209,7 +217,14 @@ for (const kind of workspaceKinds) {
     if (ripgrep) {
       const sorted = (outcome: Outcome) => "text" in outcome ? { ...outcome, text: outcome.text.split("\n").sort() } : outcome;
       for (const args of searches) await same("grep", args, typeof args.path === "string" && args.path.includes(".") ? undefined : sorted);
-    } else t.diagnostic("ripgrep (rg) is not installed: Pi's grep can't run, so search isn't compared with it here");
+    } else t.diagnostic("ripgrep (rg) is not installed: Pi's grep can't run, so grep isn't compared with it here");
+
+    if (fd) {
+      const sorted = (outcome: Outcome) => "text" in outcome ? { ...outcome, text: outcome.text.split("\n").sort() } : outcome;
+      for (const args of finds) await same("find", args, sorted);
+      const counted = (outcome: Outcome) => "text" in outcome ? { details: outcome.details, lines: outcome.text.split("\n").length, notice: outcome.text.split("\n").at(-1) } : outcome;
+      await same("find", { pattern: "*.txt", path: "many", limit: 10 }, counted);
+    } else t.diagnostic("fd is not installed: Pi's find can't run, so find isn't compared with it here");
   });
 }
 
@@ -252,6 +267,15 @@ test("search: Pi's grep text from Pikibun's matches, merged context, paths from 
   assert.deepEqual(grepText({ matches: [match("a.ts", 1, "x")], files: 1, truncated: true }, ".", 1, 500),
     { text: "a.ts:1: x\n\n[Search stopped early at Pikibun's file, size or time limit; narrow it with path or glob]" }, "stopped by Pikibun's own limits, which Pi doesn't have");
   assert.deepEqual(grepText({ matches: [], files: 0, truncated: false }, ".", 100, 500), { text: "No matches found" });
+});
+
+test("find: Pi's text from Pikibun's paths, and the limit's notice only when more were found", () => {
+  assert.deepEqual(findText({ paths: ["a.ts", "lib/"], truncated: false }, 1000, 5000), { text: "a.ts\nlib/" });
+  assert.deepEqual(findText({ paths: ["a.ts", "b.ts"], truncated: true }, 1, 5000),
+    { text: "a.ts\n\n[1 results limit reached. Use limit=2 for more, or refine pattern]", details: { resultLimitReached: 1 } });
+  assert.equal(findText({ paths: ["a.ts", "b.ts"], truncated: true }, 1, 1).text, "a.ts\n\n[1 results limit reached. Refine pattern or path]");
+  assert.deepEqual(findText({ paths: [], truncated: false }, 1000, 5000), { text: "No files found matching pattern" });
+  assert.match(findText({ paths: [], truncated: true }, 1000, 5000).text, /^No files found matching pattern\n\n\[Search stopped early/);
 });
 
 test("read and ls: Pi's selection, notices and details from the whole text", () => {

@@ -2,10 +2,10 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, posix, relative, resolve, sep } from "node:path";
 import {
-  createEditToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition,
+  createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition,
   DEFAULT_MAX_BYTES, formatSize, truncateHead, truncateLine, type EditToolDetails, type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
-import type { SearchMatch, SearchResult } from "./search.js";
+import type { FindResult, SearchMatch, SearchResult } from "./search.js";
 
 export const EDIT_ROOT = resolve(sep, `pikibun-edit-${randomUUID()}`);
 
@@ -14,13 +14,16 @@ export const LS_DEFAULT_ENTRIES = 500;
 export const PI_OUTPUT_LIMITS = { maxBytes: DEFAULT_MAX_BYTES + 4096, maxLines: Number.MAX_SAFE_INTEGER };
 
 const grepSchema = createGrepToolDefinition(EDIT_ROOT).parameters;
+const findSchema = createFindToolDefinition(EDIT_ROOT).parameters;
+const allNodeModules = { type: "boolean", description: "Search node_modules too (default: false)" };
 
 export const piParameters = {
   read: createReadToolDefinition(EDIT_ROOT).parameters,
   write: createWriteToolDefinition(EDIT_ROOT).parameters,
   edit: createEditToolDefinition(EDIT_ROOT).parameters,
   ls: createLsToolDefinition(EDIT_ROOT).parameters,
-  grep: { ...grepSchema, properties: { ...grepSchema.properties, all: { type: "boolean", description: "Search node_modules too (default: false)" } } },
+  grep: { ...grepSchema, properties: { ...grepSchema.properties, all: allNodeModules } },
+  find: { ...findSchema, properties: { ...findSchema.properties, all: allNodeModules } },
 };
 
 export const prepareEditArguments = (args: unknown): unknown => createEditToolDefinition(EDIT_ROOT).prepareArguments!(structuredClone(args));
@@ -179,6 +182,34 @@ export function grepText(result: SearchResult, startPath: string, limit: number,
   if (linesTruncated) {
     notices.push(`Some lines truncated to ${GREP_LINE_CHARS} chars. Use read tool to see full lines`);
     details.linesTruncated = true;
+  }
+  if (stoppedEarly) notices.push(stopped);
+  const text = notices.length ? `${truncation.content}\n\n[${notices.join(". ")}]` : truncation.content;
+  return Object.keys(details).length ? { text, details } : { text };
+}
+
+export interface FindDetails {
+  truncation?: TruncationResult;
+  resultLimitReached?: number;
+}
+
+export function findText(result: FindResult, limit: number, maxLimit: number): { text: string; details?: FindDetails } {
+  const more = result.paths.length > limit;
+  const stopped = "Search stopped early at Pikibun's entry or time limit; narrow it with path or pattern";
+  const stoppedEarly = result.truncated && !more;
+  const shown = result.paths.slice(0, limit);
+  if (!shown.length) return { text: stoppedEarly ? `No files found matching pattern\n\n[${stopped}]` : "No files found matching pattern" };
+  const raw = shown.join("\n");
+  const truncation = { ...truncateHead(raw, { maxLines: Number.MAX_SAFE_INTEGER }), totalLines: shown.length, totalBytes: Buffer.byteLength(raw, "utf-8") };
+  const details: FindDetails = {};
+  const notices: string[] = [];
+  if (more) {
+    notices.push(limit < maxLimit ? `${limit} results limit reached. Use limit=${limit * 2} for more, or refine pattern` : `${limit} results limit reached. Refine pattern or path`);
+    details.resultLimitReached = limit;
+  }
+  if (truncation.truncated) {
+    notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+    details.truncation = truncation;
   }
   if (stoppedEarly) notices.push(stopped);
   const text = notices.length ? `${truncation.content}\n\n[${notices.join(". ")}]` : truncation.content;

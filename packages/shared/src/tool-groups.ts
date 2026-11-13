@@ -1,4 +1,4 @@
-import { canonicalToolName, canonicalToolNames, legacyToolNames, toolNames, type WorkspaceRole } from "./types.js";
+import { canonicalToolName, canonicalToolNames, groupedToolNames, legacyToolNames, toolNames, toolsGroupedUnder, type WorkspaceRole } from "./types.js";
 
 export const groupTools = [
   "identity", "ls", "read", "grep", "write", "edit", "move_file", "copy_file", "delete_file",
@@ -115,10 +115,10 @@ export function toolsLeftOut(tools: readonly string[]): GroupTool[] {
   return groupTools.filter(tool => !canonical.includes(tool));
 }
 
-export const retiredGroupTools: readonly string[] = toolNames.filter(tool => !isGroupTool(tool));
+export const retiredGroupTools: readonly string[] = toolNames.filter(tool => !isGroupTool(tool) && !(tool in groupedToolNames));
 
 export function toolsOff(tools: readonly string[]): string[] {
-  const out = toolsLeftOut(tools);
+  const out = toolsLeftOut(tools).flatMap(tool => [tool, ...toolsGroupedUnder(tool)]);
   return out.length ? [...out, ...retiredGroupTools] : [];
 }
 
@@ -134,7 +134,8 @@ export function parseMemberToolGroups(value: unknown): Record<string, MemberTool
     if (typeof name !== "string" || name.length > toolGroupLimits.name || !Array.isArray(off) || off.some(tool => typeof tool !== "string" || tool.length > 64)) {
       throw new Error("Invalid tool groups");
     }
-    result[userId] = { name, off: canonicalToolNames(off as string[]) };
+    const canonical = canonicalToolNames(off as string[]);
+    result[userId] = { name, off: [...new Set([...canonical, ...canonical.flatMap(toolsGroupedUnder)])] };
   }
   return result;
 }

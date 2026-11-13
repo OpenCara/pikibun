@@ -104,6 +104,7 @@ export function agentInstructions(input: InstructionsInput): string {
   if (input.tools.includes("grep")) instructions += "\n\nTo find and read code, use grep (a regular expression or text across the worktree's files, "
     + "with path, glob and context) and read with offset and limit (just the lines around a match) rather than reading whole files: "
     + "their output is already bounded.";
+  if (input.tools.includes("find")) instructions += "\n\nTo find files by name, use find with a glob (*.ts, src/**/*.spec.ts) rather than listing directories one by one.";
   if (mode !== "ask" && input.tools.includes("move_file")) instructions += "\n\nTo move, copy or delete files and directories, "
     + "use move_file, copy_file and delete_file (write makes the directories it needs).";
   if (mode !== "ask" && input.tools.includes("git") && !off.has("git")) instructions += "\n\nRun Git with the git tool: "

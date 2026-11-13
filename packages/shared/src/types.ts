@@ -10,7 +10,7 @@ export const assignableWorkspaceRoles = ["admin", "collaborator", "member", "vie
 export type AssignableWorkspaceRole = (typeof assignableWorkspaceRoles)[number];
 export const sessionRoles = ["viewer", "member", "collaborator", "admin"] as const;
 export type SessionRole = (typeof sessionRoles)[number];
-export const toolNames = ["identity", "ls", "read", "write", "edit", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "grep", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "make", "browser"] as const;
+export const toolNames = ["identity", "ls", "read", "write", "edit", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "grep", "find", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "make", "browser"] as const;
 export type ToolName = (typeof toolNames)[number];
 export type AnyToolName = ToolName | (string & {});
 export const definedToolNamePattern = /^[a-z][a-z0-9_]{0,63}$/;
@@ -25,6 +25,19 @@ export function legacyToolNames(name: string): string[] {
 }
 export function canonicalToolNames(names: readonly string[]): string[] {
   return [...new Set(names.map(canonicalToolName))];
+}
+export const groupedToolNames: Readonly<Record<string, ToolName>> = Object.freeze({ find: "grep" });
+const groupedTools = new Map<string, string>(Object.entries(groupedToolNames));
+export function toolGroupEntry(name: string): string {
+  const canonical = canonicalToolName(name);
+  return groupedTools.get(canonical) ?? canonical;
+}
+export function toolsGroupedUnder(name: string): string[] {
+  return Object.keys(groupedToolNames).filter(grouped => groupedToolNames[grouped] === name);
+}
+export function sessionToolNames(names: readonly string[]): string[] {
+  const canonical = canonicalToolNames(names);
+  return [...new Set(canonical.flatMap(name => [name, ...toolsGroupedUnder(name)]))];
 }
 export function withLegacyToolNames(names: readonly string[]): string[] {
   return [...new Set(names.flatMap(name => [name, ...legacyToolNames(name)]))];

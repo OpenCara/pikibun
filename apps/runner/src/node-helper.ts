@@ -484,6 +484,11 @@ async function main() {
     try { return print(searchTree(searchFs, start, parts.length ? parts.join("/") : ".", request)); }
     catch (error) { if (error instanceof SearchRefusal) refuse(error.message); throw error; }
   }
+  if (kind === "find") {
+    const start = parts.length ? join(directoryAt(parts.slice(0, -1)), parts.at(-1)) : worktreeRoot();
+    try { return print(findTree(searchFs, start, request)); }
+    catch (error) { if (error instanceof SearchRefusal) refuse(error.message); throw error; }
+  }
   if (kind === "list") {
     const directory = directoryAt(parts);
     const names = readdirSync(directory);
@@ -507,6 +512,6 @@ main().catch(error => {
 });
 `;
 
-export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "search", "snapshot", "bash",
+export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "search", "find", "snapshot", "bash",
   "move", "copy", "delete",
   "clone-head", "clone-push-prepare", "clone-push-pack"]);

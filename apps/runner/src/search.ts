@@ -69,6 +69,48 @@ export function checkedSearch(value: unknown): SearchResult {
   return { matches, files, truncated };
 }
 
+export const findLimits = Object.freeze({
+  pattern: 1000,
+  defaultResults: 1000,
+  maxResults: 5000,
+  entries: 100000,
+  seconds: 10,
+});
+
+export interface FindRequest {
+  kind: "find";
+  path: string;
+  pattern: string;
+  byPath: boolean;
+  ignoreCase: boolean;
+  maxResults: number;
+  all: boolean;
+}
+
+export interface FindResult {
+  paths: string[];
+  truncated: boolean;
+}
+
+export function findRequest(args: { path?: unknown; pattern?: unknown; limit?: unknown; all?: unknown }): FindRequest {
+  const { pattern } = args;
+  if (typeof pattern !== "string" || !pattern || pattern.length > findLimits.pattern || /[\0\\]/.test(pattern)) fail(`pattern must be 1 to ${findLimits.pattern} characters, with / between directories`);
+  const anchored = (pattern as string).replace(/^\/+/, "") || "**";
+  const glob = anchored === pattern && anchored.includes("/") && !anchored.startsWith("**/") && anchored !== "**" ? `**/${anchored}` : anchored;
+  const path = args.path === undefined || args.path === "" ? "." : typeof args.path === "string" ? args.path.replace(/\/+$/, "") || "." : fail("path must be a path in the worktree");
+  const limit = whole(args.limit, "limit");
+  return { kind: "find", path, pattern: glob, byPath: (pattern as string).includes("/"), ignoreCase: (pattern as string) === (pattern as string).toLowerCase(),
+    maxResults: Math.min(Math.max(1, Math.floor(limit ?? findLimits.defaultResults)), findLimits.maxResults), all: flag(args.all, "all") };
+}
+
+export function checkedFind(value: unknown): FindResult {
+  if (!value || typeof value !== "object") fail("Invalid sandbox find response");
+  const { paths, truncated } = value as FindResult;
+  if (!Array.isArray(paths) || paths.length > findLimits.maxResults + 1 || typeof truncated !== "boolean"
+    || !paths.every(path => typeof path === "string" && path.length > 0 && !path.startsWith("/") && !path.includes("\0"))) fail("Invalid sandbox find response");
+  return { paths, truncated };
+}
+
 export const SEARCH_CORE = String.raw`
 function searchTree(fs, start, startPath, request) {
   const LIMITS = { fileBytes: ${searchLimits.fileBytes}, files: ${searchLimits.files}, bytes: ${searchLimits.bytes}, lineText: ${searchLimits.lineText}, seconds: ${searchLimits.seconds}, text: ${searchLimits.text} };
@@ -78,7 +120,7 @@ function searchTree(fs, start, startPath, request) {
     const source = request.literal ? request.pattern.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&") : request.pattern;
     expression = new RegExp(source, request.ignoreCase ? "iu" : "u");
   } catch { throw new SearchRefusal("invalid regular expression"); }
-  const glob = request.glob === undefined ? undefined : globExpression(request.glob);
+  const glob = request.glob === undefined ? undefined : globExpression(request.glob, false);
   const matches = [];
   let files = 0, bytes = 0, characters = 0, truncated = false;
   const shown = line => { const chars = Array.from(line); return chars.length > LIMITS.lineText ? chars.slice(0, LIMITS.lineText).join("") + "\u2026" : line; };
@@ -138,8 +180,42 @@ function searchTree(fs, start, startPath, request) {
   return { matches, files, truncated };
 }
 
-function globExpression(glob) {
-  let source = "";
+function findTree(fs, start, request) {
+  const LIMITS = { entries: ${findLimits.entries}, seconds: ${findLimits.seconds} };
+  const deadline = Date.now() + LIMITS.seconds * 1000;
+  const byPath = request.byPath === true;
+  const glob = globExpression(request.pattern, request.ignoreCase);
+  const paths = [];
+  let entries = 0, truncated = false;
+  function visit(directory, prefix) {
+    let names;
+    try { names = fs.list(directory); } catch { return; }
+    names.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    for (const name of names) {
+      if (truncated) return;
+      if (paths.length > request.maxResults || entries >= LIMITS.entries || Date.now() > deadline) { truncated = true; return; }
+      entries++;
+      const path = fs.join(directory, name);
+      const relative = prefix === "" ? name : prefix + "/" + name;
+      let info;
+      try { info = fs.lstat(path); } catch { continue; }
+      const inside = info.directory && !info.link;
+      if (inside && (name === ".git" || (!request.all && name === "node_modules"))) continue;
+      if (glob.test(byPath ? relative : name)) paths.push(inside ? relative + "/" : relative);
+      if (inside) visit(path, relative);
+    }
+  }
+  const info = fs.lstat(start);
+  if (info.link || !info.directory) throw new SearchRefusal("the path is not a directory");
+  visit(start, "");
+  return { paths, truncated };
+}
+
+function globExpression(glob, ignoreCase) {
+  let open = 0, closed = 0;
+  for (const char of glob) { if (char === "{") open++; else if (char === "}") closed++; }
+  const braces = open > 0 && open === closed;
+  let source = "", depth = 0;
   for (let index = 0; index < glob.length; index++) {
     const char = glob[index];
     if (char === "*" && glob[index + 1] === "*") {
@@ -147,9 +223,24 @@ function globExpression(glob) {
       if (glob[index + 1] === "/") { index++; source += "(?:.*/)?"; } else source += ".*";
     } else if (char === "*") source += "[^/]*";
     else if (char === "?") source += "[^/]";
+    else if (braces && char === "{") { depth++; source += "(?:"; }
+    else if (braces && char === "}" && depth > 0) { depth--; source += ")"; }
+    else if (braces && char === "," && depth > 0) source += "|";
+    else if (char === "[" && classEnd(glob, index) !== -1) {
+      const negated = glob[index + 1] === "!" || glob[index + 1] === "^";
+      const end = classEnd(glob, index);
+      source += "[" + (negated ? "^" : "") + glob.slice(index + (negated ? 2 : 1), end).replace(/[\\[\]^]/g, "\\$&") + "]";
+      index = end;
+    }
     else source += char.replace(/[.+^$(){}|[\]\\]/g, "\\$&");
   }
-  return new RegExp("^" + source + "$", "u");
+  try { return new RegExp("^" + source + "$", ignoreCase ? "iu" : "u"); }
+  catch { throw new SearchRefusal("invalid glob"); }
+}
+
+function classEnd(glob, index) {
+  const first = glob[index + 1] === "!" || glob[index + 1] === "^" ? index + 2 : index + 1;
+  return glob.indexOf("]", first + 1);
 }
 
 class SearchRefusal extends Error {}
@@ -158,6 +249,14 @@ class SearchRefusal extends Error {}
 const WORKER_TIMEOUT_MS = (searchLimits.seconds + 20) * 1000;
 
 export async function searchInWorker(start: string, startPath: string, request: SearchRequest, timeoutMs = WORKER_TIMEOUT_MS): Promise<SearchResult> {
+  return checkedSearch(await walkInWorker(start, startPath, request, timeoutMs));
+}
+
+export async function findInWorker(start: string, request: FindRequest, timeoutMs = WORKER_TIMEOUT_MS): Promise<FindResult> {
+  return checkedFind(await walkInWorker(start, ".", request, timeoutMs));
+}
+
+async function walkInWorker(start: string, startPath: string, request: SearchRequest | FindRequest, timeoutMs: number): Promise<unknown> {
   const code = `
 const { parentPort, workerData } = require("node:worker_threads");
 const { lstatSync, readdirSync, readFileSync } = require("node:fs");
@@ -169,21 +268,22 @@ const fs = {
   read: path => { const info = lstatSync(path); if (!info.isFile() || info.nlink !== 1) throw new Error("skipped"); return readFileSync(path); },
   join,
 };
-try { parentPort.postMessage({ result: searchTree(fs, workerData.start, workerData.startPath, workerData.request) }); }
+try { parentPort.postMessage({ result: workerData.request.kind === "find" ? findTree(fs, workerData.start, workerData.request)
+  : searchTree(fs, workerData.start, workerData.startPath, workerData.request) }); }
 catch (error) { parentPort.postMessage({ error: error instanceof SearchRefusal ? error.message : "search failed" }); }
 `;
   const worker = new Worker(code, { eval: true, workerData: { start, startPath, request }, resourceLimits: { maxOldGenerationSizeMb: 512 } });
   try {
-    return await new Promise<SearchResult>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("search took too long; narrow it with path or glob")), timeoutMs);
+    return await new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${request.kind} took too long; narrow it with path or ${request.kind === "find" ? "pattern" : "glob"}`)), timeoutMs);
       timer.unref();
       worker.once("message", (message: { result?: unknown; error?: string }) => {
         clearTimeout(timer);
         if (message.error !== undefined) reject(new Error(message.error));
-        else { try { resolve(checkedSearch(message.result)); } catch (error) { reject(error); } }
+        else resolve(message.result);
       });
       worker.once("error", error => { clearTimeout(timer); reject(error); });
-      worker.once("exit", code => { clearTimeout(timer); reject(new Error(`search stopped (${code})`)); });
+      worker.once("exit", code => { clearTimeout(timer); reject(new Error(`${request.kind} stopped (${code})`)); });
     });
   } finally { await worker.terminate(); }
 }

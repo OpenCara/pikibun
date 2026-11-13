@@ -15,7 +15,7 @@ import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
 import { CA_BUNDLE, sandboxCertificates } from "./trust-store.js";
 import { runHostShell } from "./host-shell.js";
 import { checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser.js";
-import { checkedSearch, type SearchRequest, type SearchResult } from "./search.js";
+import { checkedFind, checkedSearch, type FindRequest, type FindResult, type SearchRequest, type SearchResult } from "./search.js";
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
 import type { IsolatedWorkspace } from "./workspace.js";
@@ -139,6 +139,7 @@ type Request =
   | { kind: "read" | "read-content" | "list" | "browse"; path: string }
   | { kind: "list"; path: string; marked: true }
   | SearchRequest
+  | FindRequest
   | { kind: "write"; path: string; content: string }
   | FileOperationRequest
   | { kind: "import"; directory: string; name: string; data: string }
@@ -531,6 +532,10 @@ export class Sandbox implements IsolatedWorkspace {
 
   async search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult> {
     return checkedSearch(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, true, authorize)));
+  }
+
+  async find(request: FindRequest, authorize: SandboxAuthorize): Promise<FindResult> {
+    return checkedFind(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, true, authorize)));
   }
 
   async fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult> {

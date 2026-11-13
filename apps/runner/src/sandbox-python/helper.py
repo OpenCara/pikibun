@@ -1173,8 +1173,9 @@ SEARCH_SECONDS = 10
 SEARCH_TEXT = 256 * 1024
 
 
-def glob_expression(glob):
-    source, index = '', 0
+def glob_expression(glob, ignore_case=False):
+    braces = glob.count('{') > 0 and glob.count('{') == glob.count('}')
+    source, index, depth = '', 0, 0
     while index < len(glob):
         char = glob[index]
         if char == '*' and glob[index + 1:index + 2] == '*':
@@ -1188,10 +1189,98 @@ def glob_expression(glob):
             source += '[^/]*'
         elif char == '?':
             source += '[^/]'
+        elif braces and char == '{':
+            depth += 1
+            source += '(?:'
+        elif braces and char == '}' and depth > 0:
+            depth -= 1
+            source += ')'
+        elif braces and char == ',' and depth > 0:
+            source += '|'
+        elif char == '[' and class_end(glob, index) != -1:
+            negated = glob[index + 1:index + 2] in ('!', '^')
+            end = class_end(glob, index)
+            members = re.sub(r'[\\\[\]^&~|]', lambda match: '\\' + match.group(), glob[index + (2 if negated else 1):end])
+            source += '[' + ('^' if negated else '') + members + ']'
+            index = end
         else:
             source += re.escape(char)
         index += 1
-    return re.compile('^' + source + '$')
+    try:
+        return re.compile('^' + source + '$', re.IGNORECASE if ignore_case else 0)
+    except re.error:
+        raise ValueError('invalid glob') from None
+
+
+def class_end(glob, index):
+    first = index + 2 if glob[index + 1:index + 2] in ('!', '^') else index + 1
+    return glob.find(']', first + 1)
+
+
+FIND_RESULTS = 5000
+FIND_ENTRIES = 100000
+
+
+def find(root, request):
+    pattern, show_all, max_results, ignore_case = request['pattern'], request['all'], request['maxResults'], request['ignoreCase']
+    by_path = request.get('byPath')
+    if not isinstance(pattern, str) or not pattern or len(pattern) > 1000 or not isinstance(show_all, bool) or not isinstance(ignore_case, bool) \
+            or not isinstance(by_path, bool) \
+            or type(max_results) is not int or not 1 <= max_results <= FIND_RESULTS:
+        raise ValueError('invalid find request')
+    expression = glob_expression(pattern, ignore_case)
+    deadline = time.monotonic() + SEARCH_SECONDS
+    paths, state = [], {'entries': 0, 'truncated': False}
+
+    def visit(directory, prefix):
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            return
+        for name in names:
+            if state['truncated']:
+                return
+            if len(paths) > max_results or state['entries'] >= FIND_ENTRIES or time.monotonic() > deadline:
+                state['truncated'] = True
+                return
+            state['entries'] += 1
+            relative = name if not prefix else prefix + '/' + name
+            try:
+                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except OSError:
+                continue
+            inside = stat.S_ISDIR(info.st_mode)
+            if inside and (name == '.git' or (not show_all and name == 'node_modules')):
+                continue
+            if expression.match(relative if by_path else name):
+                paths.append(relative + '/' if inside else relative)
+            if inside:
+                try:
+                    child = os.open(name, DIR_FLAGS, dir_fd=directory)
+                except OSError:
+                    continue
+                try:
+                    visit(child, relative)
+                finally:
+                    os.close(child)
+
+    parts = parts_for(request['path'])
+    if not parts:
+        visit(root, '')
+    else:
+        parent = walk(root, parts[:-1])
+        try:
+            info = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError('the path is not a directory')
+            directory = os.open(parts[-1], DIR_FLAGS, dir_fd=parent)
+            try:
+                visit(directory, '')
+            finally:
+                os.close(directory)
+        finally:
+            os.close(parent)
+    return {'paths': paths, 'truncated': state['truncated']}
 
 
 def search(root, request):
@@ -1373,6 +1462,9 @@ def main():
             return
         if kind == 'search':
             print(json.dumps(search(root, request), ensure_ascii=True))
+            return
+        if kind == 'find':
+            print(json.dumps(find(root, request), ensure_ascii=True))
             return
         if kind in ('move', 'copy', 'delete'):
             print(json.dumps(file_operation(root, request), ensure_ascii=True))
