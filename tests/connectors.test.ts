@@ -1470,17 +1470,17 @@ test('a session starts from a model and gets its own chat agent with every tool 
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true } }));
   const { session: second } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(second.agentVersionId, session.agentVersionId);
-  assert.deepEqual(startedAgent().tools, offered.filter(tool => !['github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'source_read'].includes(tool)));
+  assert.deepEqual(startedAgent().tools, withLegacyToolNames(offered.filter(tool => !['github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'source_read'].includes(tool))));
 
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true, github: true, hostCommands: true } }));
   const { session: third } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(third.agentVersionId, second.agentVersionId);
-  assert.deepEqual(startedAgent().tools, offered.filter(tool => !['github_issue', 'schedule', 'sessions', 'source_read'].includes(tool)));
+  assert.deepEqual(startedAgent().tools, withLegacyToolNames(offered.filter(tool => !['github_issue', 'schedule', 'sessions', 'source_read'].includes(tool))));
 
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true, github: true, githubIssues: true, schedules: true, crossSessions: true, sources: true, hostCommands: true, web: true } }));
   const { session: fourth } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(fourth.agentVersionId, third.agentVersionId);
-  assert.deepEqual(startedAgent().tools, offered);
+  assert.deepEqual(startedAgent().tools, withLegacyToolNames(offered));
   assert.ok(offered.includes('github_issue') && offered.includes('schedule') && offered.includes('sessions'));
   assert.ok(!offered.includes('web_fetch') && !offered.includes('web_search'));
 });
