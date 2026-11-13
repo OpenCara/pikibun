@@ -296,6 +296,7 @@ export interface WorkspaceExtensionsAnswer {
   extensions: WorkspaceExtension[];
   automaticTools: boolean;
   toolGroups?: Record<string, MemberToolGroup>;
+  ownerPrivate?: true;
 }
 
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -312,7 +313,8 @@ export function parseExtensionsSyncAnswer(value: unknown): ExtensionsSyncAnswer 
 export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensionsAnswer {
   if (!isPlainObject(value) || typeof value.automaticTools !== "boolean") throw new Error("Invalid workspace extensions");
   const toolGroups = parseMemberToolGroups(value.toolGroups);
-  return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools, ...(Object.keys(toolGroups).length ? { toolGroups } : {}) };
+  return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools, ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
+    ...(value.ownerPrivate === true ? { ownerPrivate: true as const } : {}) };
 }
 
 export function parseExtensionsSync(value: unknown): ExtensionsSync {

@@ -26,6 +26,8 @@ import type { BrowserToolchain } from "./browser-toolchain.js";
 import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import type { HostTunnelStatus, SessionTunnelReport, TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
 import { SessionTunnel } from "./session/tunnel.js";
+import { SudoPrompts } from "./sudo-prompts.js";
+import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
@@ -203,6 +205,8 @@ export class RunnerSession {
   #conversationOnlyRestore = false;
   #configuredCompaction: HostCompaction | undefined;
   #tunnel: SessionTunnel | undefined;
+  readonly #sudo: SudoPrompts | undefined;
+  #sudoOffered = false;
 
   constructor(readonly binding: RunnerBinding, readonly directory: string, readonly config: RunnerConfig) {
     if (binding.session.connectorId !== config.connectorId || binding.model.connectorId !== config.connectorId)
@@ -231,8 +235,12 @@ export class RunnerSession {
       : (request: Omit<GitDirectRequest, "sessionId">) => this.controlPlane("/api/internal/git/direct", { sessionId: binding.session.id, ...request });
     this.#direct = directGrant && new DirectGit({ grant: directGrant, onFallback: (request, reason) => this.#egress?.noteFallback(request.bindingId, reason),
       fakeIpTunnels: async () => (await this.hostConfig()).fakeIpTunnels });
+    this.#sudo = this.#onHost && hostOwnersSession(binding) && process.platform !== "win32" ? new SudoPrompts({
+      allowed: () => this.sudoAllowed(), changed: () => this.#activity?.changed(),
+      command: () => (this.sandbox instanceof HostWorkspace ? this.sandbox.activeCommand : undefined),
+    }) : undefined;
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
-      { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment });
+      { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment, ...(this.#sudo ? { sudo: this.#sudo } : {}) });
     else if (config.sandboxBackend) {
       const egress = this.egressProxy(egressSocketPath(binding.session.id, directory), randomBytes(24).toString("base64url"));
       this.#egress = egress;
@@ -442,7 +450,14 @@ export class RunnerSession {
       extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
-      linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser });
+      linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser,
+      sudo: mode !== "ask" && this.#sudoOffered });
+  }
+
+  private async sudoAllowed(): Promise<boolean> {
+    const answer = this.#sudo && this.config.extensions ? await this.config.extensions.workspace(this.binding.session.workspaceId).catch(() => undefined) : undefined;
+    this.#sudoOffered = answer?.ownerPrivate === true;
+    return this.#sudoOffered;
   }
 
   get packed(): boolean { return this.#packed; }
@@ -666,6 +681,7 @@ export class RunnerSession {
   private async activity(): Promise<SessionActivity> {
     const preparation = this.#repositories.status;
     if (preparation !== "ready") return preparation === "preparing" ? "working" : "failed";
+    if (this.#sudo?.waiting()) return "waiting";
     const state = await this.metadata();
     const runs = Object.values(state.runs).filter(tellsActivity);
     const approvals = Object.values(state.approvals);
@@ -693,6 +709,7 @@ export class RunnerSession {
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
+    if (run.mode === "write") await this.#sudo?.prepare();
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();
     const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.#availability.browserUnavailable() : undefined;
@@ -763,6 +780,18 @@ export class RunnerSession {
       changed: () => this.#activity?.changed(),
     });
     return this.#tunnel;
+  }
+
+  async sudoAction(ticket: RunnerTicket, input: unknown): Promise<{ answered: boolean }> {
+    this.assertTicket(ticket);
+    let answer;
+    try { answer = parseSudoAnswer(input); }
+    catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid sudo answer"); }
+    await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    if (!this.#sudo || ticket.actorId !== this.binding.session.connectorOwnerId) throw new RunnerError(403, "Only the host's owner answers sudo on it, in their own sessions");
+    if (answer.password !== undefined && !await this.sudoAllowed()) throw new RunnerError(403, "sudo takes a password only in sessions of the host owner's private workspace");
+    await this.consumeTicket(ticket);
+    return { answered: this.#sudo.answer(answer.id, answer.password) };
   }
 
   async tunnelAction(ticket: RunnerTicket, input: unknown): Promise<{ stopped: boolean; url?: string }> {
@@ -1133,7 +1162,7 @@ export class RunnerSession {
 
   view(): Promise<SessionView> {
     return sessionView({
-      binding: this.binding, tunnel: () => this.#tunnel?.view(), metadata: () => this.metadata(),
+      binding: this.binding, tunnel: () => this.#tunnel?.view(), sudo: () => this.#sudo?.view(), metadata: () => this.metadata(),
       conversation: id => this.harness.conversation(id as ConversationId, context), agent: () => this.#shared.agent(context),
       context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
@@ -1269,6 +1298,7 @@ export class RunnerSession {
     const tunnel = this.#tunnel;
     this.#tunnel = undefined;
     await tunnel?.close().catch(() => {});
+    await this.#sudo?.close().catch(() => {});
     if (abortPushes) await this.#operations.abortPushes();
     this.generation++;
     const extensions = this.#hostExtensions;

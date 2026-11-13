@@ -6,7 +6,7 @@ import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type
 import type { HostConfig, RequiredExtension } from "../../../../packages/shared/src/host-config.js";
 import { sessionToolsOff } from "../../../../packages/shared/src/piki-extensions.js";
 import type { TunnelUnavailableReason } from "../../../../packages/shared/src/tunnel.js";
-import type { RepositoryPreparationView, RunnerBinding, SessionView } from "../../../../packages/shared/src/types.js";
+import type { RepositoryPreparationView, RunnerBinding, SessionView, SudoPromptView } from "../../../../packages/shared/src/types.js";
 import { sessionActivity, type ActivityEntry } from "../activity.js";
 import { compactionThreshold } from "../compaction.js";
 import { settleToolNames } from "../extensions/adapter.js";
@@ -27,6 +27,7 @@ export function activityEntry(entry: EntryRecord | undefined): ActivityEntry | u
 export interface ViewSource {
   binding: RunnerBinding;
   tunnel(): SessionView["tunnel"] | undefined;
+  sudo?(): SudoPromptView | undefined;
   metadata(): Promise<Metadata>;
   conversation(id: number): ReturnType<Harness["conversation"]>;
   agent(): ReturnType<Conversation["agent"]>;
@@ -37,6 +38,7 @@ export interface ViewSource {
 
 export async function sessionView(source: ViewSource): Promise<SessionView> {
   const tunnel = source.tunnel();
+  const sudo = source.sudo?.();
   const initial = await source.metadata();
   const snapshots: { branch: Branch; entries: readonly EntryRecord[]; messages: readonly Message[] }[] = [];
   for (const branch of initial.branches.filter(item => !item.superseded)) {
@@ -91,10 +93,12 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
     ...(access ? { access } : {}),
     ...(repositories ? { repositories } : {}),
     activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
+      : sudo ? "waiting"
       : sessionActivity(Object.values(state.runs).filter(tellsActivity), Object.values(state.approvals),
         activityEntry(shared?.entries.at(-1))),
     ...await source.extensions(),
     ...(tunnel ? { tunnel } : {}),
+    ...(sudo ? { sudo } : {}),
   };
 }
 

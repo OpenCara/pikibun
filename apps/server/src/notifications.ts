@@ -32,9 +32,9 @@ const preferenceOf: Record<Exclude<NotificationKind, 'test'>, keyof Notification
 
 export function notificationText(kind: NotificationKind, details: boolean, session?: { title: string; workspace: string }): { title: string; body: string } {
   if (kind === 'test') return { title: 'Pikibun', body: 'Notifications work on this device.' };
-  const event = { approval: 'Waiting for an approval', finished: 'Finished', failed: 'Stopped on an error' }[kind];
+  const event = { approval: 'Waiting for you', finished: 'Finished', failed: 'Stopped on an error' }[kind];
   if (!details || !session) {
-    return { title: 'Pikibun', body: { approval: 'A session is waiting for an approval.', finished: 'A session finished.', failed: 'A session stopped on an error.' }[kind] };
+    return { title: 'Pikibun', body: { approval: 'A session is waiting for you.', finished: 'A session finished.', failed: 'A session stopped on an error.' }[kind] };
   }
   return { title: oneLine(session.title, 120) || 'Untitled session', body: `${event} · ${oneLine(session.workspace, 80)}` };
 }

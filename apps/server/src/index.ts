@@ -17,6 +17,7 @@ import { registerSessionLinks, registerSharedSessions } from './session-links.js
 import { registerBackups } from './backups.js';
 import { registerSessionFiles } from './session-files.js';
 import { registerSessionTunnels } from './session-tunnels.js';
+import { registerSessionSudo } from './session-sudo.js';
 import { registerFileUploads } from './file-uploads.js';
 import { legacyRunnerEnabled, registerLegacyRunner } from './legacy-runner.js';
 import { fail, localMode, passwordAuthEnabled, signupMode, testMode } from './http.js';
@@ -103,6 +104,7 @@ registerSessionLinks(app);
 registerBackups(app);
 registerSessionFiles(app);
 registerSessionTunnels(app);
+registerSessionSudo(app);
 registerFileUploads(app);
 registerScheduledPrompts(app);
 registerCrossSession(app);
