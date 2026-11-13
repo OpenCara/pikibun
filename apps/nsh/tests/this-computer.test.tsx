@@ -1,11 +1,15 @@
 import { describe, expect, open, test } from "nsh/test";
 import type { HostEvent, HostRequest } from "../../../packages/shared/src/app-host-protocol";
 import { CommandChannel } from "../src/lib/pikibun-command";
-import { appCliFolder, COMMAND_UPDATED_KEY, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, updateFailure } from "../src/lib/this-computer";
+import {
+  appCliFolder, COMMAND_UPDATED_KEY, hostArgs, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, serverStateDir, updateFailure,
+} from "../src/lib/this-computer";
 import { server, signedIn } from "./fixtures";
 
 const SERVER = "https://pikibun.test";
 const PAIRING_ID = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
+const SERVERS_KEY = "pikibun.thisComputer.servers";
+const STATE_DIR = "~/.local/share/pikibun/servers/pikibun.test";
 
 async function openPanel(params: Record<string, unknown> = {}, storage: Record<string, string> = {}) {
   const app = await open("./harness/this-computer.tsx", { platform: "macos", width: 900, height: 2400, host: { params }, storage });
@@ -259,14 +263,75 @@ describe("This Mac", () => {
     expect(sent()).not.toContain("pairing My Mac");
   });
 
-  test("a computer paired with another server is paired again only by replacing that pairing", async () => {
+  test("a computer paired with another server pairs with this one too, in a folder of its own, and keeps the first pairing", async () => {
     const { app, sent, showsText } = await openPanel({ paired: "https://other.example" });
     await app.waitFor("id:this-computer-pair-button");
-    await app.waitUntil(() => showsText("This Mac is paired elsewhere (https://other.example)"));
+    await app.waitUntil(() => showsText("Pair this Mac with pikibun.test as your host in one step: no code to copy. It keeps hosting for other.example too."));
+    expect(app.shows("id:this-computer-other-other.example")).toBe(true);
     app.onDialog(() => "Run unsandboxed");
     await app.press("id:this-computer-pair-button");
     await app.waitFor("id:this-computer-stop");
-    expect(sent()).toContain(JSON.stringify({ type: "start", server: SERVER, pairing: { id: PAIRING_ID, code: "<code>" }, replacePairing: true, unsandboxedConsent: true }));
+    expect(sent()).toContain(`launch ${STATE_DIR}`);
+    expect(sent()).toContain(JSON.stringify({ type: "start", server: SERVER, pairing: { id: PAIRING_ID, code: "<code>" }, replacePairing: false, unsandboxedConsent: true }));
+    await app.waitUntil(() => showsText(`hosts: https://other.example=stopped ${SERVER}=connected`));
+    await app.waitUntil(() => showsText("this computer's host: c10"));
+    expect(JSON.parse(app.storage()[SERVERS_KEY]!)).toEqual([{ server: SERVER, stateDir: STATE_DIR }]);
+
+    await app.press("id:this-computer-other-start-other.example");
+    await app.waitUntil(() => showsText(`hosts: https://other.example=connected ${SERVER}=connected`));
+    expect(sent()).toContain(JSON.stringify({ type: "start", server: "https://other.example", unsandboxedConsent: true }));
+    expect(app.dialogs().map(dialog => dialog.title)).toEqual(["Run pikibun.test's agent work directly on this Mac?", "Run other.example's agent work directly on this Mac?"]);
+    expect(showsText("this computer's host: c10")).toBe(true);
+    await app.press("id:this-computer-other-stop-other.example");
+    await app.waitUntil(() => showsText(`hosts: https://other.example=stopped ${SERVER}=connected`));
+  });
+
+  test("each server it hosts for starts again at the next launch, with the consent given for it", async () => {
+    const third = "https://third.example";
+    const thirdDir = "~/.local/share/pikibun/servers/third.example";
+    const { app, sent, showsText } = await openPanel({ paired: "https://other.example", pairedDirs: { [thirdDir]: third } }, {
+      "pikibun.thisComputer": JSON.stringify({ resume: { server: "https://other.example", unsandboxedConsent: true } }),
+      [SERVERS_KEY]: JSON.stringify([{ server: third, stateDir: thirdDir }]),
+      [`pikibun.thisComputer:${thirdDir}`]: JSON.stringify({ resume: { server: third, unsandboxedConsent: true } }),
+    });
+    await app.waitFor("id:this-computer-pair-button");
+    await app.press("id:fake-resume");
+    await app.waitUntil(() => showsText(`hosts: https://other.example=connected ${third}=connected`));
+    expect(sent()).toContain(JSON.stringify({ type: "start", server: third, unsandboxedConsent: true }));
+    expect(app.dialogs().length).toBe(0);
+  });
+
+  test("removing a server stops its host and forgets its pairing here, after asking", async () => {
+    const third = "https://third.example";
+    const thirdDir = "~/.local/share/pikibun/servers/third.example";
+    const { app, showsText } = await openPanel({ paired: SERVER, pairedDirs: { [thirdDir]: third } }, {
+      [SERVERS_KEY]: JSON.stringify([{ server: third, stateDir: thirdDir }]),
+    });
+    await app.waitFor("id:this-computer-other-third.example");
+    expect(app.shows("id:this-computer-other-remove-third.example")).toBe(true);
+    app.onDialog(dialog => (dialog.title === "Run third.example's agent work directly on this Mac?" ? "Run unsandboxed" : null));
+    await app.press("id:this-computer-other-start-third.example");
+    await app.waitUntil(() => showsText(`hosts: ${SERVER}=stopped ${third}=connected`));
+    app.onDialog(dialog => (dialog.title === "Stop hosting for third.example?" ? "Remove" : null));
+    await app.press("id:this-computer-other-remove-third.example");
+    await app.waitUntil(() => !app.shows("id:this-computer-others"));
+    expect(showsText(`hosts: ${SERVER}=stopped`)).toBe(true);
+    expect(JSON.parse(app.storage()[SERVERS_KEY]!)).toEqual([]);
+    expect(app.dialogs().at(-1)?.message).toMatch(/stays in that Pikibun's Settings › Hosts, offline, until you remove it there/);
+  });
+
+  test("each server gets a folder of its own, named for it", () => {
+    expect(serverStateDir("https://pikibun.example.com")).toBe("~/.local/share/pikibun/servers/pikibun.example.com");
+    expect(serverStateDir("https://Pikibun.Example.com")).toBe("~/.local/share/pikibun/servers/pikibun.example.com");
+    expect(serverStateDir("https://Pikibun.Example.com:8443")).toMatch(/^~\/\.local\/share\/pikibun\/servers\/pikibun\.example\.com-8443-[0-9a-f]{8}$/);
+    expect(serverStateDir("http://127.0.0.1:7878")).toMatch(/^~\/\.local\/share\/pikibun\/servers\/http-127\.0\.0\.1-7878-[0-9a-f]{8}$/);
+    expect(serverStateDir("http://[::1]:7878")).toMatch(/^~\/\.local\/share\/pikibun\/servers\/http-1-7878-[0-9a-f]{8}$/);
+    const names = ["https://foo_bar.example", "https://foo-bar.example", "https://http-a.example", "http://a.example", "https://a.example-8443", "https://a.example:8443",
+      "http://[::1]:7878", "http://[::2]:7878"].map(serverStateDir);
+    expect(new Set(names).size).toBe(names.length);
+    expect(hostCommand("macos", "/bin/zsh", null)).toEqual({ command: "zsh", args: ["-ilc", "exec pikibun host --stdio"] });
+    expect(hostArgs("~/.local/share/pikibun/servers/pikibun.example.com")).toEqual(["host", "--stdio", "--state-dir", "~/.local/share/pikibun/servers/pikibun.example.com"]);
+    expect(launchProblem(["Unknown option. Run \"pikibun host --help\"."], 1)).toEqual({ kind: "outdated" });
   });
 
   test("without Pikibun's command it offers to install it from npm, and then carries on to pairing", async () => {

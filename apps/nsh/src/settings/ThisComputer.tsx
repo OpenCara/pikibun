@@ -6,7 +6,7 @@ import { session } from "../lib/auth";
 import { openExternal } from "../lib/links";
 import { createAction } from "../lib/resource";
 import {
-  computerName, computerTitle, INSTALL_COMMAND, setUnsandboxedConsent, thisComputer, type LaunchProblem, type MacSandbox, type ThisComputerHost,
+  computerHosts, computerName, computerTitle, INSTALL_COMMAND, setUnsandboxedConsent, thisComputer, type LaunchProblem, type LogLine, type MacSandbox, type ThisComputerHost,
 } from "../lib/this-computer";
 import { Checkbox, Field, Select, TextField } from "../form";
 import { Icon } from "../icons";
@@ -56,7 +56,17 @@ function stateBadge(host: ThisComputerHost) {
 
 export function ThisComputerPanel(props: { host: ThisComputerHost; server: string; createPairing: (name: string) => Promise<{ id: string; code: string }> }) {
   const host = props.host;
+  const hosts = computerHosts();
+  void hosts.load();
   void host.load().then(() => host.refresh(props.server));
+  const slot = () => hosts.slotFor(props.server);
+  let inspected: ThisComputerHost | undefined;
+  effect(() => {
+    const current = slot();
+    if (current === host || current === inspected) return;
+    inspected = current;
+    void current.load().then(() => current.refresh(props.server));
+  });
   return (
     <SectionPage testID="settings-this-computer">
       <If when={host.problem()}>{problem => <CommandProblem problem={problem()} host={host} server={props.server} />}</If>
@@ -69,14 +79,15 @@ export function ThisComputerPanel(props: { host: ThisComputerHost; server: strin
           </CardBody>
         </Section>
       </If>
-      <ThisServerSection host={host} server={props.server} createPairing={props.createPairing} />
+      <ThisServerSection host={slot()} server={props.server} createPairing={props.createPairing} />
+      <OtherServersSection server={props.server} />
       <If when={host.inspection()}>
         <SandboxSection host={host} server={props.server} />
         <ModelsSection host={host} />
         <SignInSection host={host} />
         <PrerequisitesSection host={host} />
       </If>
-      <ActivitySection host={host} server={props.server} />
+      <ActivitySection host={slot()} computer={host} server={props.server} />
     </SectionPage>
   );
 }
@@ -117,60 +128,64 @@ function CommandProblem(props: { problem: LaunchProblem; host: ThisComputerHost;
 }
 
 function ThisServerSection(props: { host: ThisComputerHost; server: string; createPairing: (name: string) => Promise<{ id: string; code: string }> }) {
-  const host = props.host;
+  const host = () => props.host;
   const name = signal(computerTitle === "This Mac" ? "My Mac" : "My computer");
   const action = createAction();
-  const paired = () => host.inspection()?.pairedServer === props.server;
-  const otherPairing = () => { const inspection = host.inspection(); return Boolean(inspection && !paired() && (inspection.pairedServer || inspection.pairingError)); };
-  const elsewhere = () => { const running = host.running(); return running && running.server !== props.server ? running.server : null; };
+  const paired = () => host().inspection()?.pairedServer === props.server;
+  const otherPairing = () => { const inspection = host().inspection(); return Boolean(inspection && !paired() && (inspection.pairedServer || inspection.pairingError)); };
+  const others = () => computerHosts().others(props.server).map(item => hostOf(item.server));
   function pair() {
     if (action.busy() || !name().trim()) return;
     const hostName = name().trim();
+    const target = untracked(host);
     void action.run(async () => {
-      const outcome = await host.start(props.server, { create: () => props.createPairing(hostName), replace: otherPairing() });
+      const outcome = await target.start(props.server, { create: () => props.createPairing(hostName), replace: untracked(otherPairing) });
       if (!outcome.ok) throw new Error(outcome.error ?? "The host didn't start.");
+      await computerHosts().remember(props.server, target);
     }, `${computerTitle} is pairing with ${hostOf(props.server)}. It appears under Hosts once it is online.`);
   }
   function start() {
+    const target = untracked(host);
     void action.run(async () => {
-      const outcome = await host.start(props.server);
+      const outcome = await target.start(props.server);
       if (!outcome.ok) throw new Error(outcome.error ?? "The host didn't start.");
     });
   }
   function stop() {
+    const target = untracked(host);
     void action.run(async () => {
-      const outcome = await host.stop();
+      const outcome = await target.stop();
       if (!outcome.ok) throw new Error(outcome.error ?? "The host didn't stop.");
     });
   }
   return (
     <Section title={`${computerTitle} and ${hostOf(props.server)}`} testID="this-computer-server"
-      info={`${computerTitle} runs sessions for this server as one of your hosts, as pikibun connect does, while Pikibun is open. Its pairing is the command line's, so a computer paired with pikibun connect carries over; only one of them runs at a time.`}>
-      <If when={host.inspection() || host.state() !== "stopped"} else={<Row title={host.problem() ? `${computerTitle} can't host yet` : `Checking ${computerName}…`} hint={host.problem() ? "Pikibun's command is needed first: see above." : undefined} />}>
-        <If when={paired() || elsewhere() || host.state() !== "stopped"}
+      info={`${computerTitle} runs sessions for this server as one of your hosts, as pikibun connect does, while Pikibun is open. It can host for several servers at once, each with a pairing of its own. The first server's pairing is the command line's, so a computer paired with pikibun connect carries over; only one of them runs at a time.`}>
+      <If when={host().inspection() || host().state() !== "stopped"} else={<Row title={host().problem() ? `${computerTitle} can't host yet` : `Checking ${computerName}…`} hint={host().problem() ? "Pikibun's command is needed first: see above." : undefined} />}>
+        <If when={paired() || host().state() !== "stopped"}
           else={
             <CardBody testID="this-computer-pair">
               <Small>{otherPairing()
-                ? `${computerTitle} is paired elsewhere (${host.inspection()?.pairedServer ?? "an unreadable pairing"}). Pairing again replaces it; the old host stays in that Pikibun, offline, until you remove it there.`
-                : `Pair ${computerName} with ${hostOf(props.server)} as your host in one step: no code to copy.`}</Small>
+                ? `${computerTitle}'s pairing for ${hostOf(props.server)} can't be used (${host().inspection()?.pairedServer ?? "it can't be read"}). Pairing again replaces it; the old host stays in that Pikibun, offline, until you remove it there.`
+                : others().length
+                  ? `Pair ${computerName} with ${hostOf(props.server)} as your host in one step: no code to copy. It keeps hosting for ${others().join(", ")} too.`
+                  : `Pair ${computerName} with ${hostOf(props.server)} as your host in one step: no code to copy.`}</Small>
               <Field label="Host name">
                 <TextField testID="this-computer-name" value={name()} onChange={value => name.set(value)} maxLength={120} onSubmit={pair} />
               </Field>
               <View style={{ flexDirection: "row" }}>
                 <Button variant="primary" testID="this-computer-pair-button" label={action.busy() ? "Pairing" : `Pair ${computerTitle}`} busy={action.busy()}
-                  disabled={!name().trim() || Boolean(host.inspection()?.unsupported)} onPress={pair} />
+                  disabled={!name().trim() || Boolean(host().inspection()?.unsupported)} onPress={pair} />
               </View>
               <Feedback error={action.error()} notice={action.notice()} />
             </CardBody>
           }>
-          <Row title={elsewhere() ? `${computerTitle} is a host of ${hostOf(elsewhere()!)}` : `${computerTitle} is a host of ${hostOf(props.server)}`} hint={isolation(host)}
-            trailing={stateBadge(host)} />
+          <Row title={`${computerTitle} is a host of ${hostOf(props.server)}`} hint={isolation(host())} trailing={stateBadge(host())} />
           <CardBody>
-            <If when={host.error() && host.state() === "stopped"}><Banner tone="danger" title="The host stopped">{host.error()}</Banner></If>
-            <If when={elsewhere()}>{other => <Small>{`It runs for ${other()}, the server it is paired with. Stop it to pair ${computerName} with ${hostOf(props.server)} instead.`}</Small>}</If>
+            <If when={host().error() && host().state() === "stopped"}><Banner tone="danger" title="The host stopped">{host().error()}</Banner></If>
             <View style={{ flexDirection: "row", gap: 8 }}>
-              <If when={host.state() === "stopped"}
-                else={<Button variant="outline" testID="this-computer-stop" label="Stop host" disabled={action.busy() || host.state() === "stopping"} onPress={stop} />}>
+              <If when={host().state() === "stopped"}
+                else={<Button variant="outline" testID="this-computer-stop" label="Stop host" disabled={action.busy() || host().state() === "stopping"} onPress={stop} />}>
                 <Button variant="primary" testID="this-computer-start" label="Start host" busy={action.busy()} onPress={start} />
               </If>
             </View>
@@ -182,10 +197,67 @@ function ThisServerSection(props: { host: ThisComputerHost; server: string; crea
   );
 }
 
+const serverId = (origin: string) => hostOf(origin).replace(/[^A-Za-z0-9.-]+/g, "-");
+
+function OtherServersSection(props: { server: string }) {
+  const hosts = computerHosts();
+  const others = () => hosts.others(props.server);
+  const action = createAction();
+  const start = (host: ThisComputerHost, server: string) => void action.run(async () => {
+    const outcome = await host.start(server);
+    if (!outcome.ok) throw new Error(outcome.error ?? "The host didn't start.");
+  });
+  const stop = (host: ThisComputerHost) => void action.run(async () => {
+    const outcome = await host.stop();
+    if (!outcome.ok) throw new Error(outcome.error ?? "The host didn't stop.");
+  });
+  const remove = (server: string) => void action.run(async () => {
+    const sure = await confirm({
+      title: `Stop hosting for ${hostOf(server)}?`,
+      message: `${computerTitle} stops its host for ${hostOf(server)} and forgets that pairing here. The host stays in that Pikibun's Settings › Hosts, offline, until you remove it there, and its sessions' files stay on ${computerName}.`,
+      confirmLabel: "Remove",
+      destructive: true,
+    });
+    if (!sure) return;
+    const outcome = await hosts.remove(server);
+    if (!outcome.ok) throw new Error(outcome.error ?? "The pairing wasn't removed.");
+  });
+  return (
+    <If when={others().length > 0}>
+      <Section title="Other servers" testID="this-computer-others"
+        info={`${computerTitle} hosts for these servers too, each with a pairing of its own. Their sessions run here while their host is online, whichever server you're signed in to.`}>
+        <Each of={others()} key={item => item.server}>
+          {item => (
+            <>
+              <Row title={hostOf(item().server)} testID={`this-computer-other-${serverId(item().server)}`}
+                hint={item().host.inspection()?.stateDir ?? item().host.stateDir} trailing={stateBadge(item().host)} />
+              <CardBody>
+                <If when={item().host.error() && item().host.state() === "stopped"}><Small>{item().host.error()}</Small></If>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <If when={item().host.state() === "stopped"}
+                    else={<Button small variant="outline" testID={`this-computer-other-stop-${serverId(item().server)}`} label="Stop host" disabled={action.busy() || item().host.state() === "stopping"}
+                      onPress={() => stop(item().host)} />}>
+                    <Button small variant="outline" testID={`this-computer-other-start-${serverId(item().server)}`} label="Start host" disabled={action.busy()}
+                      onPress={() => start(item().host, item().server)} />
+                  </If>
+                  <If when={item().added}>
+                    <Button small variant="ghost" testID={`this-computer-other-remove-${serverId(item().server)}`} label="Remove" disabled={action.busy()} onPress={() => remove(item().server)} />
+                  </If>
+                </View>
+              </CardBody>
+            </>
+          )}
+        </Each>
+        <CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody>
+      </Section>
+    </If>
+  );
+}
+
 function SandboxSection(props: { host: ThisComputerHost; server: string }) {
   const host = props.host;
   const action = createAction();
-  const stopped = () => host.state() === "stopped";
+  const stopped = () => computerHosts().all().every(item => item.state() === "stopped");
   const change = (choice: MacSandbox) => {
     if (!stopped() || action.busy() || choice === host.sandbox()) return;
     void action.run(async () => {
@@ -202,7 +274,7 @@ function SandboxSection(props: { host: ThisComputerHost; server: string }) {
           <Small>{host.sandbox() === "seatbelt"
             ? "Sessions run in macOS's own Seatbelt sandbox, which is experimental (macOS 15 or later with the developer tools: xcode-select --install), or without one, after your consent, while it isn't ready. Each session sees only its own files and reaches the network only through its egress proxy. macOS can't limit a session's memory or processes, so shell commands run only in your own sessions on this host."
             : "Sessions run directly as you on this Mac, after your consent at each start: its commands can read and change anything you can. Choose macOS sandbox to isolate them."}</Small>
-          <If when={!stopped()}><Small>Stop the host to change where its sessions run.</Small></If>
+          <If when={!stopped()}><Small>{`Stop ${computerName}'s hosts to change where their sessions run.`}</Small></If>
           <Feedback error={action.error()} />
         </CardBody>
       </Section>
@@ -400,15 +472,21 @@ function PrerequisitesSection(props: { host: ThisComputerHost }) {
   );
 }
 
-function ActivitySection(props: { host: ThisComputerHost; server: string }) {
-  const host = props.host;
+function ActivitySection(props: { host: ThisComputerHost; computer: ThisComputerHost; server: string }) {
+  const host = () => props.host;
+  const logs = (): LogLine[] => props.host === props.computer ? props.host.logs()
+    : [...props.computer.logs(), ...props.host.logs()].sort((a, b) => a.time - b.time);
+  const refresh = () => {
+    void props.host.refresh(props.server);
+    if (props.host !== props.computer) void props.computer.refresh(props.server);
+  };
   return (
     <Section title="Host" testID="this-computer-activity"
-      action={<Button small variant="ghost" icon="refresh" label="Refresh" testID="this-computer-refresh" disabled={host.inspecting()} onPress={() => void host.refresh(props.server)} />}>
-      <If when={host.inspection()?.stateDir}>{dir => <Row title="State directory" hint={<Value monospace>{dir()}</Value>} />}</If>
-      <If when={host.inspection()?.pairedServer}>{server => <Row title="Paired with" trailing={server()} />}</If>
-      <CollapsibleRow title="Recent activity" hint={host.logs().length ? undefined : "Nothing yet"} testID="this-computer-logs">
-        <Each of={host.logs().slice(-50).reverse()} key="index">
+      action={<Button small variant="ghost" icon="refresh" label="Refresh" testID="this-computer-refresh" disabled={host().inspecting()} onPress={refresh} />}>
+      <If when={host().inspection()?.stateDir}>{dir => <Row title="State directory" hint={<Value monospace>{dir()}</Value>} />}</If>
+      <If when={host().inspection()?.pairedServer}>{server => <Row title="Paired with" trailing={server()} />}</If>
+      <CollapsibleRow title="Recent activity" hint={logs().length ? undefined : "Nothing yet"} testID="this-computer-logs">
+        <Each of={logs().slice(-50).reverse()} key="index">
           {line => (
             <Note>{`${new Date(line().time).toLocaleTimeString()} ${line().level === "info" ? "" : `${line().level}: `}${line().message}`}</Note>
           )}

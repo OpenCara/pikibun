@@ -1,5 +1,5 @@
 import { readFile } from "fs/promises";
-import { platform, signal, Storage, untracked } from "nsh";
+import { platform, signal, Storage, untracked, type Signal } from "nsh";
 import nshProcess from "process";
 import { APP_VERSION } from "../app-version";
 import type {
@@ -8,6 +8,7 @@ import type {
 import {
   appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine,
 } from "./pikibun-command";
+import { auth } from "./auth";
 import { isVersion } from "./version";
 import { lastLines } from "./windows-cmd";
 
@@ -28,10 +29,32 @@ export function hostCommand(os: string, shell: string | undefined, cli?: string 
   return pikibunCommand(os, shell, cli, HOST_ARGS);
 }
 
-export type HostLink = CommandLink;
-export type HostLauncher = () => HostLink;
+export function hostArgs(stateDir?: string): string[] {
+  return stateDir ? [...HOST_ARGS, "--state-dir", stateDir] : [...HOST_ARGS];
+}
 
-export const spawnHost: HostLauncher = () => spawnPikibun(HOST_ARGS);
+const PLAIN_HOST = /^[a-z0-9][a-z0-9.-]{0,99}$/;
+
+function shortHash(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0;
+  return hash.toString(16).padStart(8, "0");
+}
+
+export function serverStateDir(server: string): string {
+  let url: URL | undefined;
+  try { url = new URL(server); } catch { url = undefined; }
+  const hostname = url?.hostname.toLowerCase() ?? "";
+  if (url && url.protocol === "https:" && !url.port && PLAIN_HOST.test(hostname)) return `~/.local/share/pikibun/servers/${hostname}`;
+  const readable = url ? `${url.protocol === "https:" ? "" : "http-"}${hostname}${url.port ? `-${url.port}` : ""}` : server.toLowerCase();
+  const name = readable.replace(/[^a-z0-9.-]+/g, "-").replace(/-{2,}/g, "-").replace(/^[^a-z0-9]+/, "").slice(0, 80) || "server";
+  return `~/.local/share/pikibun/servers/${name}-${shortHash(url?.origin ?? server)}`;
+}
+
+export type HostLink = CommandLink;
+export type HostLauncher = (args: string[]) => HostLink;
+
+export const spawnHost: HostLauncher = args => spawnPikibun(args);
 
 let launcher: HostLauncher = spawnHost;
 export function setHostLauncher(next: HostLauncher): void { launcher = next; }
@@ -115,7 +138,7 @@ export function updateFailure(lines: readonly string[], result: InstallResult): 
 }
 
 export function launchProblem(lines: readonly string[], code: number | null | undefined): LaunchProblem {
-  return commandProblem(lines, code, /Unknown command: host/, "The host");
+  return commandProblem(lines, code, /Unknown command: host|Unknown option\. Run "pikibun host --help"/, "The host");
 }
 
 type HostResult = Extract<HostEvent, { type: "result" }>;
@@ -141,8 +164,14 @@ interface Saved {
 }
 
 const SAVED_KEY = "pikibun.thisComputer";
+const SERVERS_KEY = "pikibun.thisComputer.servers";
 
 export interface Outcome { ok: boolean; error?: string }
+
+export interface HostOptions {
+  stateDir?: string;
+  computer?: ThisComputerHost;
+}
 
 const isLoopbackHttp = (origin: string) => {
   try {
@@ -166,27 +195,40 @@ export class ThisComputerHost {
   readonly providers = signal<LoginProvider[] | null>(null);
   readonly providersError = signal("");
   readonly signIn = signal<(SignInView & { login?: number }) | null>(null);
-  readonly sandbox = signal<MacSandbox>("none");
-  readonly models = signal<ModelChoice[] | null>(null);
+  readonly sandbox: Signal<MacSandbox>;
+  readonly models: Signal<ModelChoice[] | null>;
+  readonly stateDir?: string;
+  private readonly computer?: ThisComputerHost;
+  private readonly savedKey: string;
   private resume: Saved["resume"];
   private loaded?: Promise<void>;
   private server?: string;
   private inspectError = false;
   private updated?: Promise<void>;
   private readonly channel = new CommandChannel<HostEvent, HostRequest>({
-    launch: () => launcher(), before: () => this.commandUpdated(), eventTypes: hostEventTypes, problem: launchProblem, subject: "The host",
+    launch: () => launcher(hostArgs(this.stateDir)), before: () => this.commandUpdated(), eventTypes: hostEventTypes, problem: launchProblem, subject: "The host",
     failure: (id, message, notReady) => ({ type: "result", id, ok: false, error: { code: notReady ? "unsupported" : "failed", message } }),
     onEvent: event => this.handleEvent(event),
     onOutput: line => this.log("info", line),
     onExit: (code, expected) => this.handleExit(code, expected),
   });
 
-  constructor(private readonly confirmUnsandboxed: (warning: string, server: string, missing: string[]) => Promise<boolean>) {}
+  constructor(private readonly confirmUnsandboxed: (warning: string, server: string, missing: string[]) => Promise<boolean>, options: HostOptions = {}) {
+    this.stateDir = options.stateDir;
+    this.computer = options.computer;
+    this.sandbox = options.computer?.sandbox ?? signal<MacSandbox>("none");
+    this.models = options.computer?.models ?? signal<ModelChoice[] | null>(null);
+    this.savedKey = options.stateDir ? `${SAVED_KEY}:${options.stateDir}` : SAVED_KEY;
+  }
 
   load(): Promise<void> {
-    this.loaded ??= Storage.getItem(SAVED_KEY).then(raw => {
+    this.loaded ??= Promise.all([this.computer?.load(), Storage.getItem(this.savedKey)]).then(([, raw]) => {
       if (!raw) return;
       const saved = JSON.parse(raw) as Saved;
+      if (this.computer) {
+        if (saved.resume && typeof saved.resume.server === "string") this.resume = { server: saved.resume.server, unsandboxedConsent: saved.resume.unsandboxedConsent === true };
+        return;
+      }
       if (saved.sandbox === "seatbelt") this.sandbox.set("seatbelt");
       const models = Array.isArray(saved.models) ? saved.models.filter(model => typeof model?.provider === "string" && typeof model?.modelId === "string") : [];
       if (models.length) this.models.set(models);
@@ -196,9 +238,19 @@ export class ThisComputerHost {
   }
 
   private save(): void {
-    const saved: Saved = { ...(untracked(this.sandbox) === "seatbelt" ? { sandbox: "seatbelt" as const } : {}), ...(untracked(this.models)?.length ? { models: untracked(this.models)! } : {}),
+    const own = !this.computer;
+    const saved: Saved = { ...(own && untracked(this.sandbox) === "seatbelt" ? { sandbox: "seatbelt" as const } : {}), ...(own && untracked(this.models)?.length ? { models: untracked(this.models)! } : {}),
       ...(this.resume ? { resume: this.resume } : {}) };
-    Storage.setItem(SAVED_KEY, JSON.stringify(saved)).catch(() => undefined);
+    Storage.setItem(this.savedKey, JSON.stringify(saved)).catch(() => undefined);
+  }
+
+  pairedWith(): string | undefined {
+    return this.running()?.server ?? this.inspection()?.pairedServer;
+  }
+
+  forget(): Promise<void> {
+    this.resume = undefined;
+    return Storage.removeItem(this.savedKey).catch(() => undefined);
   }
 
   private setResume(resume: Saved["resume"]): void {
@@ -330,6 +382,7 @@ export class ThisComputerHost {
   }
 
   commandUpdated(): Promise<void> {
+    if (this.computer) return this.computer.commandUpdated();
     this.updated ??= this.updateOwnCommand().catch(() => undefined);
     return this.updated;
   }
@@ -404,10 +457,15 @@ export class ThisComputerHost {
 
   async setSandbox(choice: MacSandbox): Promise<Outcome> {
     if (platform.os !== "macos") return { ok: false, error: "Only macOS offers a choice of sandbox here." };
-    if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first: its sandbox changes from its next start." };
+    if (computerHosts().all().some(host => untracked(host.state) !== "stopped")) return { ok: false, error: `Stop ${computerName}'s hosts first: their sandbox changes from their next start.` };
     if (untracked(this.signIn)?.state === "running") return { ok: false, error: "Finish or cancel the sign-in first." };
     if (choice === untracked(this.sandbox)) return { ok: true };
     this.sandbox.set(choice);
+    for (const host of computerHosts().all()) {
+      if (host === this) continue;
+      void host.forget();
+      host.inspection.set(null);
+    }
     this.resume = undefined;
     this.save();
     this.inspection.set(null);
@@ -524,20 +582,138 @@ export class ThisComputerHost {
 
 let shared: ThisComputerHost | undefined;
 let consent: (warning: string, server: string, missing: string[]) => Promise<boolean> = async () => false;
+const ask = (warning: string, server: string, missing: string[]) => consent(warning, server, missing);
 
-export function setUnsandboxedConsent(ask: typeof consent): void { consent = ask; }
+export function setUnsandboxedConsent(next: typeof consent): void { consent = next; }
 
 export function thisComputer(): ThisComputerHost {
-  shared ??= new ThisComputerHost((warning, server, missing) => consent(warning, server, missing));
+  shared ??= new ThisComputerHost(ask);
   return shared;
 }
 
-export function thisComputerHostId(): string | undefined {
-  return hostsHere ? thisComputer().running()?.connectorId : undefined;
+const originOf = (value: string) => { try { return new URL(value).origin; } catch { return value; } };
+
+interface SavedServer { server: string; stateDir: string }
+
+export class ComputerHosts {
+  readonly added = signal<{ server: string; host: ThisComputerHost }[]>([]);
+  private readonly candidates = new Map<string, ThisComputerHost>();
+  private loaded?: Promise<void>;
+
+  constructor(readonly computer: ThisComputerHost) {}
+
+  load(): Promise<void> {
+    this.loaded ??= Promise.all([this.computer.load(), Storage.getItem(SERVERS_KEY).catch(() => null)]).then(([, raw]) => {
+      let saved: SavedServer[] = [];
+      try { saved = raw ? (JSON.parse(raw) as SavedServer[]).filter(item => typeof item?.server === "string" && typeof item?.stateDir === "string") : []; } catch { saved = []; }
+      const known = untracked(this.added);
+      const loaded = saved.filter(item => !known.some(entry => entry.server === item.server))
+        .map(item => ({ server: item.server, host: this.candidates.get(item.server) ?? new ThisComputerHost(ask, { stateDir: item.stateDir, computer: this.computer }) }));
+      if (loaded.length) this.added.set([...known, ...loaded]);
+    });
+    return this.loaded;
+  }
+
+  all(): ThisComputerHost[] {
+    const added = this.added().map(entry => entry.host);
+    const starting = [...this.candidates.values()].filter(host => !added.includes(host) && host.state() !== "stopped");
+    return [this.computer, ...added, ...starting];
+  }
+
+  others(server: string): { server: string; host: ThisComputerHost; added: boolean }[] {
+    const own = this.computer.pairedWith();
+    return [
+      ...(own && originOf(own) !== originOf(server) ? [{ server: own, host: this.computer, added: false }] : []),
+      ...this.added().filter(entry => originOf(entry.server) !== originOf(server)).map(entry => ({ ...entry, added: true })),
+    ];
+  }
+
+  forServer(server: string): ThisComputerHost | undefined {
+    const origin = originOf(server);
+    const own = this.computer.pairedWith();
+    if (own && originOf(own) === origin) return this.computer;
+    return this.added().find(entry => originOf(entry.server) === origin)?.host;
+  }
+
+  slotFor(server: string): ThisComputerHost {
+    const found = this.forServer(server);
+    if (found) return found;
+    const inspection = this.computer.inspection();
+    const free = this.computer.state() === "stopped" && (!inspection || (!inspection.pairedServer && !inspection.pairingError));
+    if (free) return this.computer;
+    const origin = originOf(server);
+    let candidate = this.candidates.get(origin);
+    if (!candidate) {
+      candidate = new ThisComputerHost(ask, { stateDir: serverStateDir(origin), computer: this.computer });
+      this.candidates.set(origin, candidate);
+    }
+    return candidate;
+  }
+
+  async remember(server: string, host: ThisComputerHost): Promise<void> {
+    if (host === this.computer || !host.stateDir) return;
+    const origin = originOf(server);
+    if (!untracked(this.added).some(entry => entry.host === host)) this.added.update(list => [...list.filter(entry => originOf(entry.server) !== origin), { server: origin, host }]);
+    if (this.candidates.get(origin) === host) this.candidates.delete(origin);
+    await this.persist();
+  }
+
+  async remove(server: string): Promise<Outcome> {
+    const origin = originOf(server);
+    const entry = untracked(this.added).find(item => originOf(item.server) === origin);
+    if (!entry) return { ok: false, error: `${computerTitle} has no pairing of its own for ${server} to remove.` };
+    const stopped = await entry.host.stop();
+    if (!stopped.ok) return stopped;
+    await entry.host.forget();
+    this.added.update(list => list.filter(item => item !== entry));
+    this.candidates.delete(origin);
+    await this.persist();
+    void entry.host.shutdown();
+    return { ok: true };
+  }
+
+  serving(server: string): { host: ThisComputerHost; connectorId: string } | undefined {
+    const origin = originOf(server);
+    for (const host of this.all()) {
+      const serving = host.serving();
+      if (serving && originOf(serving.server) === origin) return { host, connectorId: serving.connectorId };
+    }
+    return undefined;
+  }
+
+  async resumeHosting(): Promise<void> {
+    await this.load();
+    await Promise.all(this.all().map(host => host.resumeHosting()));
+  }
+
+  shutdown(): Promise<unknown> {
+    return Promise.all([...new Set([...untracked(() => this.all()), ...this.candidates.values()])].map(host => host.shutdown()));
+  }
+
+  private persist(): Promise<void> {
+    const saved: SavedServer[] = untracked(this.added).map(entry => ({ server: entry.server, stateDir: entry.host.stateDir! }));
+    return Storage.setItem(SERVERS_KEY, JSON.stringify(saved)).catch(() => undefined);
+  }
+}
+
+let hosts: ComputerHosts | undefined;
+
+export function computerHosts(): ComputerHosts {
+  hosts ??= new ComputerHosts(thisComputer());
+  return hosts;
+}
+
+export function thisComputerHostId(server?: string): string | undefined {
+  if (!hostsHere) return undefined;
+  const signedIn = server === undefined ? auth() : undefined;
+  const origin = server ?? (signedIn?.status === "signedIn" ? signedIn.origin : undefined);
+  if (!origin) return undefined;
+  for (const host of computerHosts().all()) host.running();
+  return computerHosts().serving(origin)?.connectorId;
 }
 
 export function resumeThisComputer(): void {
   if (!hostsHere) return;
   void thisComputer().commandUpdated();
-  void thisComputer().resumeHosting();
+  void computerHosts().resumeHosting();
 }
