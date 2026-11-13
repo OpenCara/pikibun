@@ -4,6 +4,7 @@ import { chatOptionsBody, preferredSelection, segment, type ConnectorInfo, type 
 import { Button } from "../ui";
 import { useAppData } from "./app-data";
 import { session } from "./auth";
+import { saveDraft } from "./drafts";
 import { randomId } from "./format";
 import type { PageRoute } from "./page";
 import type { Action } from "./resource";
@@ -40,9 +41,12 @@ export function createInstallChat(go: (route: PageRoute) => void) {
       workspaceId: workspace.id, modelId: model.id, title: installChatTitle(chat), visibility: "private", ...(onHost ? { hostEnvironment: true } : {}),
     } });
     const sessionId = created.session.id;
-    await api(`/api/sessions/${segment(sessionId)}/submit`, { method: "POST", body: {
-      content: installChatMessage(chat), requestId: randomId(), ...(options ? { options } : {}),
-    } });
+    const content = installChatMessage(chat);
+    try {
+      await api(`/api/sessions/${segment(sessionId)}/submit`, { method: "POST", body: { content, requestId: randomId(), ...(options ? { options } : {}) } });
+    } catch {
+      saveDraft(sessionId, content);
+    }
     void data.refreshSessions();
     go({ name: "session", sessionId });
   };

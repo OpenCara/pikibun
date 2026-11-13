@@ -68,6 +68,21 @@ describe("a session's panel", () => {
     await app.waitFor("text:Add a dark mode");
   });
 
+  test("an install chat whose opening message can't be sent still opens, with the message waiting in its chat box", async () => {
+    const app = await openPanel({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, extensions: { running: [], missing: [],
+        unavailable: [{ source: "piki:node", tools: ["node"], reason: "programs", programs: ["pnpm"] }] } }, revision: "r1" } },
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },
+      [`GET ${ORIGIN}/api/workspaces/w0/models`]: { body: { models: [{ id: "m0", workspaceId: "w0", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" }] } },
+      [`POST ${ORIGIN}/api/sessions/s3/submit`]: { status: 503, body: { error: "The host is busy" } },
+    });
+    await app.waitFor("id:install-chat-node");
+    await app.press("id:install-chat-node");
+    await app.waitFor("text:Add a dark mode");
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install pnpm on ada-mac", visibility: "private" });
+    await app.waitUntil(() => (app.value("id:composer-input") ?? "").startsWith("Install on this host (ada-mac)"));
+  });
+
   test("Details offers no install chat on someone else's host", async () => {
     const app = await openPanel({
       [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, connectorOwnerId: "u2", viewable: true } } },

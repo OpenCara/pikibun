@@ -165,12 +165,13 @@ const info = (
   </View>
 );
 
-export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh: () => void; go?: (route: PageRoute) => void }) {
+export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh: () => void; go: (route: PageRoute) => void }) {
   const path = () => `/api/connectors/${segment(props.connector.id)}/extensions`;
   const resource = createResource<HostExtensionsResponse>(path);
   const action = createAction();
-  const installChat = (tool: "browser" | "tunnel") => (props.go
-    ? <InstallChatButton host={props.connector} missing={{ [tool]: hostToolPrograms(tool) ?? [] }} action={action} go={props.go} testID={`install-chat-${tool}`} /> : undefined);
+  const chat = createAction();
+  const installChat = (tool: "browser" | "tunnel") => (
+    <InstallChatButton host={props.connector} missing={{ [tool]: hostToolPrograms(tool) ?? [] }} action={chat} go={props.go} testID={`install-chat-${tool}`} />);
   const installing = signal(false);
   const configuring = signal<{ extension: RequiredExtension; flags: InstalledExtension["modules"][number]["flags"] } | null>(null);
   const data = () => resource.data();
@@ -363,6 +364,7 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
         </If>
       </ResourceState>
       <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+      <If when={chat.error()}><CardBody><Feedback error={chat.error()} /></CardBody></If>
       <InstallSheet open={installing()} close={() => installing.set(false)} busy={action.busy()} error={action.error()}
         install={async source => { if (await request("install", source)) installing.set(false); }} />
       <If when={configuring()}>
