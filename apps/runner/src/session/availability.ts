@@ -14,6 +14,10 @@ import type { SandboxBackendConfig } from "../sandbox-backend.js";
 import { Sandbox } from "../sandbox.js";
 import type { SessionWorkspace } from "../workspace.js";
 
+function ownerGroupRefusal(tool: string, group: string): string {
+  return `${tool} isn't among the tools of this session's owner (${group}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`;
+}
+
 export interface ToolAvailabilityOptions {
   binding: RunnerBinding;
   config: {
@@ -115,6 +119,11 @@ export class ToolAvailability {
     return last ? last.toolGroups?.[userId] : unknownToolGroup;
   }
 
+  async requireOwnerTool(tool: string): Promise<void> {
+    const group = await this.memberToolGroup(this.options.binding.owner.id);
+    if (group?.off.includes(tool)) throw new RunnerError(403, ownerGroupRefusal(tool, group.name));
+  }
+
   async requireSenderTool(tool: string, senderId: string): Promise<void> {
     if (senderId === this.options.binding.owner.id) return;
     const group = await this.memberToolGroup(senderId);
@@ -132,9 +141,7 @@ export class ToolAvailability {
   async requireSessionTool(tool: string): Promise<void> {
     if (!(await this.sessionToolsOff()).has(tool)) return;
     const group = await this.memberToolGroup(this.options.binding.owner.id);
-    if (group?.off.includes(tool)) {
-      throw new RunnerError(403, `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
-    }
+    if (group?.off.includes(tool)) throw new RunnerError(403, ownerGroupRefusal(tool, group.name));
     const defined = this.options.definitions().find(item => item.name === tool);
     const extensions = defined ? [...defined.extensions] : sessionToolExtensions(tool).map(item => item.source);
     throw new RunnerError(403, `${tool} is turned off in this workspace${extensions.length ? ` (${extensions.join(", ")})` : ""}. Its owners and admins add it under Settings → Workspaces → Extensions.`);

@@ -484,14 +484,16 @@ function toolApi(state: Metadata, taskId = 1): ToolExecutionApi {
     } } as unknown as ToolExecutionApi;
 }
 
-function toolsFixture(state: Metadata, sandbox: Partial<SessionWorkspace> = {}, overrides: Partial<ToolContext> = {}) {
+function toolsFixture(state: Metadata, sandbox: Partial<SessionWorkspace> = {}, overrides: Partial<ToolContext> = {}, ownerOff: readonly string[] = []) {
   const events: string[] = [];
   const hostCommands = hostPolicy({ ownerId: "github:1", connectorOwnerId: "github:1", testShell: true }).policy;
   const workspace = { isolated: true, writeFile: async (path: string, _content: string, authorize: () => Promise<void>) => { await authorize(); events.push(`write ${path}`); },
     ...sandbox } as unknown as SessionWorkspace;
   const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
   const calls = new ToolCalls({ ownerId: "github:1", sandbox: workspace, hostCommands, authorize, metadata: async () => structuredClone(state),
-    hostConfig: async () => ({ ...defaultHostConfig, commandTimeoutSeconds: 600 }), requireSenderTool: async (tool, senderId) => { events.push(`sender ${senderId} ${tool}`); } });
+    hostConfig: async () => ({ ...defaultHostConfig, commandTimeoutSeconds: 600 }),
+    requireOwnerTool: async tool => { events.push(`owner ${tool}`); if (ownerOff.includes(tool)) throw new RunnerError(403, `${tool} isn't among the owner's tools`); },
+    requireSenderTool: async (tool, senderId) => { events.push(`sender ${senderId} ${tool}`); } });
   const context: ToolContext = {
     binding: { session: { id: "s1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox: workspace, onHost: false, calls, hostCommands,
     waits: new ApprovalWaits(), operations: { run: async () => { events.push("run"); return {} as never; }, internalGitHub: async () => ({}), internalBroker: async () => ({}) },
@@ -549,7 +551,7 @@ test("tools: a tool checks that it is on first, then who acts, then the call, an
   const { events, tool } = toolsFixture(state);
   const written = await tool("write_file").execute({ path: "a.txt", content: "x" }, toolApi(state), {});
   assert.deepEqual(JSON.parse(written.output[0]!.text), { initiatedBy: "github:2", actingAs: "github:1", mode: "write", written: "a.txt" });
-  assert.deepEqual(events, ["authorize github:2 write", "sender github:2 write_file", "authorize github:2 write", "write a.txt"]);
+  assert.deepEqual(events, ["authorize github:2 write", "owner write_file", "sender github:2 write_file", "authorize github:2 write", "write a.txt"]);
   events.length = 0;
   await assert.rejects(tool("github_merge").execute({ repository: "acme/app", pull: 1, sha: "short", method: "squash" }, toolApi(state), {}), /40-character head commit/);
   assert.deepEqual(events, ["tool github_merge", "authorize github:2 write"]);
@@ -566,6 +568,19 @@ test("tools: a tool checks that it is on first, then who acts, then the call, an
   const refused = toolsFixture(readOnly);
   await assert.rejects(refused.tool("git").execute({ args: ["status"] }, toolApi(readOnly), {}), /Read-only message/);
   assert.ok(!refused.events.includes("run"));
+});
+
+test("tool calls: every call is checked against the owner's group, the file tools and the owner's own messages too", async () => {
+  const own = toolState({ initiatedBy: "github:1" });
+  const { events, tool } = toolsFixture(own, {}, {}, ["write_file", "read_file"]);
+  await assert.rejects(tool("write_file").execute({ path: "a.txt", content: "x" }, toolApi(own), {}), /write_file isn't among the owner's tools/);
+  assert.ok(!events.includes("write a.txt"), "a file tool the owner's group leaves out writes nothing");
+  await assert.rejects(tool("read_file").execute({ path: "a.txt" }, toolApi(own, 2), {}), /read_file isn't among the owner's tools/);
+  const asked = toolState({ mode: "ask" });
+  asked.toolActors["1"] = { initiatedBy: "github:2", ownerId: "github:1", runKey: "r1" };
+  const ask = toolsFixture(asked, {}, {}, ["search"]);
+  await assert.rejects(ask.calls.check(toolApi(asked), "search"), /search isn't among the owner's tools/);
+  assert.deepEqual(ask.events, ["owner search"], "an ask checks the owner's group, and no sender's");
 });
 
 function definitionsFixture(options: Partial<SessionDefinitionsOptions> = {}) {
@@ -632,7 +647,7 @@ function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {},
   }, writeFile: async (path: string) => { events.push(`write ${path}`); }, listFiles: async () => [] } as unknown as SessionWorkspace;
   const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
   const calls = new ToolCalls({ ownerId: "github:1", sandbox, hostCommands: hostPolicy().policy, authorize, metadata: async () => structuredClone(state),
-    hostConfig: async () => defaultHostConfig, requireSenderTool: async () => {} });
+    hostConfig: async () => defaultHostConfig, requireOwnerTool: async () => {}, requireSenderTool: async () => {} });
   const piki = new SessionPiki({
     binding: { session: { id: "s1", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox, onHost: false,
     sandboxed: true, calls, hostCommands: hostPolicy({ ownerId: "github:1" }, grants).policy, waits: new ApprovalWaits(),
@@ -1008,6 +1023,12 @@ test("availability: a message runs the tools both its sender and the session's o
     && /tunnel isn't among the tools of the person who sent this message \(Guests\)/.test(error.message));
   await assert.rejects(tools.requireSessionTool("github_merge"), /github_merge isn't among the tools of this session's owner \(Owners\)/);
   await tools.requireSessionTool("git");
+  await assert.rejects(tools.requireOwnerTool("github_merge"), (error: unknown) => error instanceof RunnerError && error.status === 403
+    && /github_merge isn't among the tools of this session's owner \(Owners\)/.test(error.message));
+  await tools.requireOwnerTool("tunnel");
+  const unheard = availability({ config: { extensions: { workspace: async () => ({ extensions: [], automaticTools: false }), lastKnown: () => undefined } } });
+  await assert.rejects(unheard.requireOwnerTool("write_file"), /write_file isn't among the tools of this session's owner/, "a host that never heard the owner's group only reads");
+  await unheard.requireOwnerTool("read_file");
   const off = availability({}, { extensions: [{ source: "piki:tunnel", enabled: false, tools: "approval", settings: {} }] as never });
   await assert.rejects(off.requireSessionTool("tunnel"), /tunnel is turned off in this workspace \(piki:tunnel\)/);
   const unknown = availability({ config: { extensions: { workspace: async () => ({ extensions: [], automaticTools: false }), lastKnown: () => undefined } } });

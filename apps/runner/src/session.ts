@@ -251,7 +251,7 @@ export class RunnerSession {
       definitions: () => this.#defined.definitions, toolNames: () => this.tools.map(tool => tool.name) });
     this.#calls = new ToolCalls({ ownerId: binding.owner.id, sandbox: this.sandbox, hostCommands: this.hostCommands,
       authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig(),
-      requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
+      requireOwnerTool: tool => this.#availability.requireOwnerTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
     this.#operations = new SessionOperations({
       binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, waits: this.#waits,
       requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
