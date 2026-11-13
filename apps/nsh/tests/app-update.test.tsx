@@ -1,5 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
-import { assetSuffix, compareVersions, newerRelease, preferProxy, ProxyDownloadFailed, RELEASES_API, updatesFolder } from "../src/lib/app-update";
+import { assetSuffix, compareVersions, newerRelease, preferProxy, ProxyDownloadFailed, RELEASES_API, requireUpdateSignature, UNSIGNED, updatesFolder } from "../src/lib/app-update";
+import { updateSignatureMessage, verifyUpdateSignature } from "../../../packages/shared/src/update-signature";
 import { curlArguments, gnomeProxy, proxyUrl, shellProxy, shownProxy, windowsProxy } from "../src/lib/update-proxy";
 import { utf16le, windowsInstallerArguments, windowsUpdateTask } from "../src/lib/update-scripts";
 import { server, signedIn } from "./fixtures";
@@ -15,6 +16,7 @@ const release = (tag: string, extra: Record<string, unknown> = {}) => {
     assets: [
       asset(`Pikibun-${version}-macos-arm64.dmg`), asset(`Pikibun-${version}-windows-x64-setup.exe`, { size: 16_493_012 }),
       asset(`Pikibun-${version}-linux-x86_64.tar.gz`, { size: 21_444_047 }), asset(`Pikibun-${version}-android.apk`),
+      ...["macos-arm64.dmg", "windows-x64-setup.exe", "linux-x86_64.tar.gz"].map(suffix => asset(`Pikibun-${version}-${suffix}.sig`, { size: 89 })),
     ],
     ...extra,
   };
@@ -41,6 +43,7 @@ describe("finding a newer release", () => {
       asset: {
         name: "Pikibun-0.17.0-macos-arm64.dmg", size: 22_931_985, sha256: "ab".repeat(32),
         url: "https://github.com/OpenCara/pikibun/releases/download/app-v0.17.0/Pikibun-0.17.0-macos-arm64.dmg",
+        signatureUrl: "https://github.com/OpenCara/pikibun/releases/download/app-v0.17.0/Pikibun-0.17.0-macos-arm64.dmg.sig",
       },
     });
     expect(newerRelease(releases, "0.17.0", "macos", "aarch64")).toBe(undefined);
@@ -62,9 +65,58 @@ describe("finding a newer release", () => {
     expect(assetSuffix("ios", "aarch64")).toBe(null);
   });
 
+  test("offers in the app only a package the release signed: one without its .sig is installed from the release page", () => {
+    const unsigned = release("app-v0.17.0", { assets: [asset("Pikibun-0.17.0-linux-x86_64.tar.gz")] });
+    expect(newerRelease([unsigned], "0.16.0", "linux", "x86_64")).toMatchObject({ version: "0.17.0", asset: null });
+    const pending = release("app-v0.17.0", { assets: [asset("Pikibun-0.17.0-linux-x86_64.tar.gz"), asset("Pikibun-0.17.0-linux-x86_64.tar.gz.sig", { state: "starter" })] });
+    expect(newerRelease([pending], "0.16.0", "linux", "x86_64")?.asset).toBe(null);
+  });
+
   test("a development build never asks", () => {
     expect(newerRelease(releases, "dev", "macos", "aarch64")).toBe(undefined);
     expect(newerRelease({ message: "API rate limit exceeded" }, "0.16.0", "macos", "aarch64")).toBe(undefined);
+  });
+});
+
+describe("the release's signature", () => {
+  const sha256 = "ab".repeat(32);
+  const name = "Pikibun-0.17.0-linux-x86_64.tar.gz";
+  const base64 = (bytes: ArrayBuffer | Uint8Array) => {
+    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let text = "";
+    for (let index = 0; index < view.length; index += 3) {
+      const [a, b, c] = [view[index]!, view[index + 1], view[index + 2]];
+      const value = (a << 16) | ((b ?? 0) << 8) | (c ?? 0);
+      text += alphabet[(value >> 18) & 63]! + alphabet[(value >> 12) & 63]!
+        + (b === undefined ? "=" : alphabet[(value >> 6) & 63]!) + (c === undefined ? "=" : alphabet[value & 63]!);
+    }
+    return text;
+  };
+  const keys = async () => {
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]) as { publicKey: CryptoKey; privateKey: CryptoKey };
+    const publicKey = base64(await crypto.subtle.exportKey("spki", pair.publicKey));
+    const sign = async (signedName: string, signedSha: string) =>
+      `${base64(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(updateSignatureMessage(signedName, signedSha))))}\n`;
+    return { publicKey, sign };
+  };
+
+  test("an update installs only with a signature by the release key over its name and checksum", async () => {
+    const { publicKey, sign } = await keys();
+    const signature = await sign(name, sha256);
+    expect(await verifyUpdateSignature(name, sha256, signature, publicKey)).toBe(true);
+    await requireUpdateSignature({ name, sha256 }, signature, publicKey);
+    const refused = async (asset: { name: string; sha256: string }, given: string, key = publicKey) => {
+      try { await requireUpdateSignature(asset, given, key); return "installed"; } catch (error) { return (error as Error).message; }
+    };
+    expect(await refused({ name, sha256 }, signature)).toBe("installed");
+    expect(await refused({ name, sha256: "cd".repeat(32) }, signature)).toBe(UNSIGNED);
+    expect(await refused({ name: "Pikibun-0.16.0-linux-x86_64.tar.gz", sha256 }, signature)).toBe(UNSIGNED);
+    expect(await refused({ name, sha256 }, signature, (await keys()).publicKey)).toBe(UNSIGNED);
+    expect(await refused({ name, sha256 }, "")).toBe(UNSIGNED);
+    expect(await refused({ name, sha256 }, "not base64!")).toBe(UNSIGNED);
+    expect(await refused({ name, sha256 }, signature.repeat(20))).toBe(UNSIGNED);
+    expect(await verifyUpdateSignature(name, sha256, signature)).toBe(false);
   });
 });
 
