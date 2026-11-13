@@ -102,8 +102,9 @@ test("pikibun serve --stdio runs the local server for the app: no GitHub app, it
   const running = await server.next(event => event.type === "status" && event.state === "running", before);
   assert.ok(running.type === "status");
   assert.equal(running.origin, origin);
-  assert.equal(running.signInToken, claimSecret);
-  assert.ok(!server.output.some(line => !line.startsWith(STDIO_FRAME) && line.includes(claimSecret)), "the sign-in token goes only to the app, in its status");
+  assert.match(running.signInToken ?? "", /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(running.signInToken, claimSecret, "the token is made at this start, not kept in the state file");
+  assert.ok(!server.output.some(line => !line.startsWith(STDIO_FRAME) && line.includes(running.signInToken!)), "the sign-in token goes only to the app, in its status");
 
   const health = async () => await (await fetch(`${origin}/api/health`)).json() as { githubConfigured?: boolean; localServer?: { claimed: boolean } };
   assert.deepEqual([(await health()).githubConfigured, (await health()).localServer], [false, { claimed: false }]);

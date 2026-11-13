@@ -117,6 +117,15 @@ opted in within a sync. That is why it is opt-in until extensions run in a proce
 - **What stands for the owner.** Setting, changing or removing a GitHub account's password takes the current password or a GitHub sign-in from the last 15 minutes. An older stolen browser session can't add a password to keep its way in, and a wrong current password counts as a failed sign-in.
 - **Races.** A sign-in or change completes only while the password it checked is still the account's (a reset that lands while it hashes wins), and replacing a password signs out every other browser and app.
 
+## The self-host sign-in link
+
+`apps/server/src/local/launch.ts`: a Pikibun that runs for its owner alone (`pikibun serve`, the app's self host) signs its owner in with a link, `/api/auth/local?token=…`, that works for whoever opens it (`requireLocalToken` in `authority/auth.ts`).
+
+- **A new token at each start.** The token is 256 random bits made when the server starts, handed to the server as `LOCAL_CLAIM_SECRET`, printed by `pikibun serve` and sent to the app over its stdio pipe, and never written down. A link travels where secrets shouldn't (browser history and its sync, terminal scrollback, screen shares), and before this it was the state file's `claimSecret`, the same at every start with no way to replace it. Now a restart retires every earlier link.
+- **What a restart doesn't end.** Sessions already signed in are kept: they are rows of their own, which signing out or a suspension ends as for any account. Retiring a leaked link is a restart; ending what someone already did with it is signing out the other browsers and apps.
+- **`claimSecret` stays in the state file, unused,** so an older `pikibun` that opens the same state directory still reads it. It signs nobody in.
+- **What stays as it was.** The server listens on loopback only, the comparison is constant-time, a cross-site request is refused (`requireOrigin`), and the token reaches the app only in its status, never in the server's output (`tests/serve-stdio.test.ts`).
+
 ## Signing in an app with a code
 
 `apps/server/src/authority/app-codes.ts`: a signed-in browser or app makes a one-use code another app exchanges for a session of its own ([Signing in an app with a code](../accounts.md#signing-in-an-app-with-a-code)).
