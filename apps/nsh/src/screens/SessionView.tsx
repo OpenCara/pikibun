@@ -8,6 +8,7 @@ import {
 } from "../shared";
 import { RenameSheet } from "../components/SessionMenu";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
+import { OfflineHostBanner } from "../components/OfflineHost";
 import { Composer } from "../components/Composer";
 import { PullRequestLink } from "../components/PullRequest";
 import { RepositoryPreparationCard } from "../components/RepositoryPreparation";
@@ -65,6 +66,10 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   const manages = () => {
     const current = live.session();
     return Boolean(current && managesSession(user.id, current.ownerId, workspace()?.role));
+  };
+  const offlineHost = () => {
+    const current = host();
+    return !archived() && !live.session()?.frozen && workspace()?.personal === true && current && !current.online && current.ownerId === user.id ? current : undefined;
   };
   const backupBlocked = () => {
     const current = live.view();
@@ -201,8 +206,11 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{subtitle()}</Text>
           </View>
         </If>
-        <If when={archived() || live.session()?.frozen || live.session()?.cloneUnavailable || (live.error() && !startFailed()) || action.error() || action.notice()}>
+        <If when={archived() || live.session()?.frozen || live.session()?.cloneUnavailable || offlineHost() || (live.error() && !startFailed()) || action.error() || action.notice()}>
           <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
+            <If when={offlineHost()}>
+              {offline => <OfflineHostBanner host={offline()} server={untracked(session).origin} openSettings={() => props.go({ name: "settings", section: "desktop" })} />}
+            </If>
             <If when={live.session()?.frozen && !archived()}>
               <Banner testID="session-frozen" title="Read-only">
                 This session pinned its repositories when it started, which sessions no longer do. Its conversation and backups stay viewable, but it no longer runs. Start a new session to continue the work.

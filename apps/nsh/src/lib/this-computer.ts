@@ -156,6 +156,48 @@ interface Saved {
 
 const SAVED_KEY = "pikibun.thisComputer";
 const SERVERS_KEY = "pikibun.thisComputer.servers";
+const CONNECTORS_KEY = "pikibun.thisComputer.connectors";
+const CONNECTORS_KEPT = 20;
+
+const originOf = (value: string) => { try { return new URL(value).origin; } catch { return value; } };
+
+const seenConnectors = signal<Record<string, string[]> | null>(null);
+let seenLoading: Promise<Record<string, string[]>> | undefined;
+
+function loadSeen(): Promise<Record<string, string[]>> {
+  seenLoading ??= Storage.getItem(CONNECTORS_KEY).catch(() => null).then(raw => {
+    let seen: Record<string, string[]> = {};
+    try {
+      const parsed = raw ? JSON.parse(raw) as unknown : {};
+      if (parsed && typeof parsed === "object") {
+        for (const [origin, ids] of Object.entries(parsed)) if (Array.isArray(ids)) seen[origin] = ids.filter(id => typeof id === "string");
+      }
+    } catch { seen = {}; }
+    const current = untracked(seenConnectors);
+    const merged = current ? { ...seen, ...Object.fromEntries(Object.entries(current).map(([origin, ids]) => [origin, [...new Set([...(seen[origin] ?? []), ...ids])]])) } : seen;
+    seenConnectors.set(merged);
+    return merged;
+  });
+  return seenLoading;
+}
+
+function noteConnector(server: string, connectorId: string): void {
+  const origin = originOf(server);
+  void loadSeen().then(() => {
+    const seen = untracked(seenConnectors) ?? {};
+    const ids = seen[origin] ?? [];
+    if (ids.includes(connectorId)) return;
+    const next = { ...seen, [origin]: [...ids, connectorId].slice(-CONNECTORS_KEPT) };
+    seenConnectors.set(next);
+    Storage.setItem(CONNECTORS_KEY, JSON.stringify(next)).catch(() => undefined);
+  });
+}
+
+export function ranHere(server: string, connectorId: string): boolean {
+  const seen = seenConnectors();
+  if (seen === null) { void loadSeen(); return false; }
+  return seen[originOf(server)]?.includes(connectorId) ?? false;
+}
 
 export interface Outcome { ok: boolean; error?: string }
 
@@ -263,6 +305,7 @@ export class ThisComputerHost {
     else if (event.server !== undefined) {
       const before = untracked(this.running);
       const connectorId = event.connectorId ?? (before?.server === event.server ? before.connectorId : undefined);
+      if (event.connectorId) noteConnector(event.server, event.connectorId);
       this.running.set({ server: event.server, unsandboxed: event.unsandboxed === true,
         ...(event.sandbox === "bubblewrap" || event.sandbox === "seatbelt" || event.sandbox === "windows" ? { sandbox: event.sandbox } : {}),
         ...(connectorId ? { connectorId } : {}) });
@@ -581,8 +624,6 @@ export function thisComputer(): ThisComputerHost {
   shared ??= new ThisComputerHost(ask);
   return shared;
 }
-
-const originOf = (value: string) => { try { return new URL(value).origin; } catch { return value; } };
 
 interface SavedServer { server: string; stateDir: string }
 
