@@ -275,8 +275,8 @@ Phase 1 landed as decisions 1 to 5 describe, with these differences and details.
   bound their output at 54 KB, with no line limit, instead of the harness's 50 KB and 2,000 lines.
 - **`details.pikibun`** is on a successful result; a call that fails throws, as before, and carries none.
 - **The transcript.** `resultSummary` and `resultBody` take the tool's name: a file tool's result is read in Pi's
-  words (`Lines 60–89 of 975`, `3 matches in 2 files`, `Edited (2 edits)`), and a result from before, which starts
-  with `{"initiatedBy"`, keeps its old summary.
+  words (`Lines 60–89 of 975`, `3 matches in 2 files`, `Edited (2 edits)`), a failed call reads as its error, and a
+  result from before, which starts with `{"initiatedBy"`, keeps its old summary.
 - **The conformance suite** is `tests/pi-file-tools.test.ts`. It runs Pi's real `read`, `ls`, `grep`, `write` and
   `edit` over one directory and ours over each backend of the sandbox conformance suite, and compares `content` and
   `details`, sorting a directory search's lines. Pi's `grep` needs ripgrep: CI installs it, and elsewhere the suite

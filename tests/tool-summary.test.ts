@@ -84,6 +84,9 @@ test("a file tool's result in Pi's words: its summary reads Pi's text and notice
   assert.equal(summary("search", "No matches found"), "No matches");
   assert.equal(summary("search", answer({ matches: [], files: 95, truncated: false })), "No matches", "a result from before Pi's contract still reads as it did");
   assert.equal(summary("read_file", answer({ content: "a\nb\n" })), "2 lines");
+  for (const tool of ["read_file", "list_files", "search", "write_file", "edit_file"]) {
+    assert.deepEqual(resultSummary("invalid regular expression", { error: true, tool }), { text: "invalid regular expression", failed: true }, `a failed ${tool} reads as its error`);
+  }
   assert.equal(resultBody("{\"name\": \"app\"}\n", { tool: "read_file" }), "{\"name\": \"app\"}\n", "a JSON file opens as it is");
   assert.equal(resultBody(answer({ content: "const a = 1;\n" }), { tool: "read_file" }), "const a = 1;\n");
 });
