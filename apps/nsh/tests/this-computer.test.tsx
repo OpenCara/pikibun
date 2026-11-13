@@ -1,6 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import type { HostEvent, HostRequest } from "../../../packages/shared/src/app-host-protocol";
-import { CommandChannel } from "../src/lib/pikibun-command";
+import { CommandChannel, pikibunCommand } from "../src/lib/pikibun-command";
 import {
   appCliFolder, COMMAND_UPDATED_KEY, hostArgs, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, serverStateDir, updateFailure,
 } from "../src/lib/this-computer";
@@ -299,6 +299,23 @@ describe("This Mac", () => {
     await app.waitUntil(() => showsText(`hosts: https://other.example=connected ${third}=connected`));
     expect(sent()).toContain(JSON.stringify({ type: "start", server: third, unsandboxedConsent: true }));
     expect(app.dialogs().length).toBe(0);
+  });
+
+  test("a saved server whose folder isn't the one made for it is ignored, so nothing saved reaches the shell", async () => {
+    const third = "https://third.example";
+    const { app, showsText } = await openPanel({ paired: SERVER }, {
+      [SERVERS_KEY]: JSON.stringify([{ server: third, stateDir: "~/x'; touch /tmp/owned; '" }, { server: "https://fourth.example", stateDir: "~/.local/share/pikibun/servers/third.example" }]),
+    });
+    await app.waitUntil(() => showsText(`hosts: ${SERVER}=stopped`));
+    expect(app.texts()).toContain(`hosts: ${SERVER}=stopped`);
+    expect(app.shows("id:this-computer-others")).toBe(false);
+  });
+
+  test("passes each argument to the login shell as one word", () => {
+    expect(pikibunCommand("linux", "/bin/bash", null, hostArgs("~/.local/share/pikibun/servers/third.example")).args[1])
+      .toBe("exec pikibun host --stdio --state-dir '~/.local/share/pikibun/servers/third.example'");
+    expect(pikibunCommand("macos", "/bin/zsh", null, ["host", "--state-dir", "/tmp/a b; touch /tmp/owned '"]).args[1])
+      .toBe("exec pikibun host --state-dir '/tmp/a b; touch /tmp/owned '\\'''");
   });
 
   test("removing a server stops its host and forgets its pairing here, after asking", async () => {

@@ -2,12 +2,14 @@ export type LogLine = (line: string) => void;
 
 export const stderrLine: LogLine = line => { process.stderr.write(`${line}\n`); };
 
-const plain = (text: string, limit: number) => text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, " ").slice(0, limit);
+const plain = (text: string, limit: number) => text.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, limit);
+const lines = (text: string, limit: number) => text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, " ").slice(0, limit);
 
 function described(error: unknown): string {
   if (!(error instanceof Error)) return plain(String(error), 500);
-  const stack = typeof error.stack === "string" && error.stack.includes(error.message) ? error.stack : `${error.name}: ${error.message}`;
-  return plain(stack, 4000);
+  const header = error.message ? `${error.name}: ${error.message}` : error.name;
+  const frames = typeof error.stack === "string" && error.stack.startsWith(header) ? error.stack.slice(header.length) : "";
+  return `${plain(header, 500)}${lines(frames, 3500)}`;
 }
 
 export function describeFailure(error: unknown): string {

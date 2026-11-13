@@ -94,7 +94,8 @@ async function fixture(t: TestContext) {
       return outer;
     },
   };
-  const env = { DB: hooked, APP_ORIGIN: 'https://app.example.test' } as Env;
+  const logged: string[] = [];
+  const env = { DB: hooked, APP_ORIGIN: 'https://app.example.test', LOG: (line: string) => { logged.push(line); } } as Env;
   const hub = new ConnectorHubRegistry(env);
   env.CONNECTOR_HUB = hub;
   const server = createServer((_request, response) => { response.statusCode = 404; response.end(); });
@@ -152,7 +153,7 @@ async function fixture(t: TestContext) {
     socket.send(JSON.stringify({ type: 'response', id: request.id, status, body }));
   };
   const connectionHash = () => db.query<{ connection_hash: string | null }>('SELECT connection_hash FROM connectors WHERE id = ?').bind('connector').first('connection_hash');
-  return { db, env, hub, initial, connect, envelope, rpc, reply, exec, connectionHash,
+  return { db, env, hub, initial, connect, envelope, rpc, reply, exec, connectionHash, logged,
     setBeforeQuery(hook?: (sql: string) => Promise<void>) { beforeQuery = hook; } };
 }
 
@@ -171,6 +172,19 @@ test('connector handshake stores only the connection hash, negotiates the protoc
   const wire = await socket.nextRequest();
   f.reply(socket, wire);
   assert.deepEqual(await (await pending).json(), { ok: true });
+});
+
+test('the server logs when a connector connects, why it disconnected, and the requests that failed with it', async t => {
+  const f = await fixture(t);
+  assert.deepEqual(f.logged, ['connector connector connected']);
+  const pending = f.rpc(await f.envelope());
+  await f.initial.socket.nextRequest();
+  f.initial.socket.ws.close(4000, 'going away');
+  assert.equal((await pending).status, 503);
+  await settled();
+  assert.equal(f.logged[1], 'connector connector disconnected: Connector disconnected (close code 4000, going away); 1 request failed with it');
+  await f.connect();
+  assert.equal(f.logged.at(-1), 'connector connector connected');
 });
 
 test('the relay compresses each message both ways for connectors that offer it, and stays plain for those that do not', async t => {

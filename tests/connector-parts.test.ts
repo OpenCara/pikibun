@@ -52,6 +52,17 @@ test("connector calls: an authorization for another owner is refused, a refused 
   await assert.rejects(opaque.calls.brokerCallback(opaque.current, "/x", {}), /Scoped connector callback denied or unavailable/);
 });
 
+test("connector calls: an answer that isn't JSON, such as a proxy's error page, says its status and type, and asks for JSON", async () => {
+  const page = () => new Response("<html>Bad gateway</html>", { status: 502, headers: { "content-type": "text/html; charset=UTF-8" } });
+  const broker = fixture(page);
+  await assert.rejects(broker.calls.brokerCallback(broker.current, "/x", {}), (error: unknown) => error instanceof RunnerError && error.status === 502
+    && error.message === "Scoped connector callback denied or unavailable: the Pikibun server, or a proxy in front of it, answered 502 text/html");
+  assert.equal(broker.asked[0]!.headers.accept, "application/json");
+  const callback = fixture(() => new Response("<html>ok</html>", { headers: { "content-type": "text/html" } }));
+  await assert.rejects(callback.calls.callback(callback.current, "/x", {}), /^Error: Invalid control-plane response \(200 text\/html\)$/);
+  assert.throws(() => decodeJson(new TextEncoder().encode("<")), /^Error: Invalid control-plane response$/);
+});
+
 test("connector calls: reports check what they send, and only a failure that may pass is an error", async () => {
   const { calls, current } = fixture(() => new Response(null, { status: 404 }));
   await calls.reportActivity(current, "s1", "working");
