@@ -653,6 +653,7 @@ function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {},
     sandboxed: true, calls, hostCommands: hostPolicy({ ownerId: "github:1" }, grants).policy, waits: new ApprovalWaits(),
     operations: { run: async (_actorId, operation) => { events.push(`run ${(operation as { tool: string }).tool}`); return { id: "tool-1", status: "executing" } as never; } },
     apiLease: () => { events.push("lease"); return { token: "lease-token", release: () => { events.push("release"); } }; },
+    forgeWrites: async senderId => { events.push(`forge writes ${senderId}`); return true; },
     model: () => undefined, thinkingLevel: () => undefined,
     extensionChoice: async () => ({ chosen: [{ source: "npm:ext", dev: false }], automaticTools: false }),
     metadata: async () => structuredClone(state), mutate: async change => { change(state); }, hostConfig: async () => defaultHostConfig,
@@ -674,7 +675,7 @@ test("piki: an extension's tool runs for a message that may act, while its exten
     return { output: [{ type: "text", text: "hello" }] };
   });
   assert.deepEqual(result.output, [{ type: "text", text: "hello" }]);
-  assert.deepEqual(events, ["authorize github:2 write", "run ext_tool", "authorize github:2 write", "tool ran"]);
+  assert.deepEqual(events, ["authorize github:2 write", "run ext_tool", "authorize github:2 write", "forge writes github:2", "tool ran"]);
   assert.deepEqual([state.approvals["tool-1"]!.status, state.approvals["tool-1"]!.result], ["executed", "hello"]);
   await assert.rejects(host.runTool(call(), async () => { throw new Error("broke"); }), /broke/);
   assert.deepEqual([state.approvals["tool-1"]!.status, state.approvals["tool-1"]!.result], ["failed", "broke"]);
@@ -705,13 +706,25 @@ test("piki: a CLI runs in the sandbox only inside a call the session admitted, w
     assert.match(await piki.saveOutput!("call-1", "gh", "long"), /gh/);
     return { output: [] };
   });
-  assert.deepEqual(events.slice(3), ["lease", "authorize github:2 write",
+  assert.deepEqual(events.slice(4), ["lease", "authorize github:2 write",
     `execute PATH="$PATH:/usr/local/bin" && export PATH && exec env 'GH_TOKEN=lease-token' 'gh' 'pr' 'view' </dev/null 2>&1`, "release",
     "authorize github:2 write", `execute read-only PATH="$PATH:/usr/local/bin" && export PATH && exec env 'gh' 'pr' 'view' </dev/null 2>&1`,
     "write tool-output/gh-call-1-d39038e4.txt"], "a read-only command gets no lease");
   const onHost = pikiFixture(state, { onHost: true }).host.piki!;
   assert.equal(onHost.sandbox, undefined);
   assert.equal(onHost.hostSignIn, true);
+  assert.equal(onHost.forgeWrites!("call-1"), true, "outside a call nothing is taken away");
+
+  const limited = pikiFixture(state, { forgeWrites: async () => false });
+  const limitedPiki = limited.host.piki!;
+  limited.events.length = 0;
+  await limited.host.runTool({ source: "npm:ext", tool: "gh", arguments: {}, api: toolApi(state), signal: new AbortController().signal, context: {} as never }, async () => {
+    assert.equal(limitedPiki.forgeWrites!("call-1"), false);
+    await limitedPiki.sandbox!(pikiRun("call-1"));
+    return { output: [] };
+  });
+  assert.ok(!limited.events.includes("lease"), "a sender or owner whose group lacks the GitHub writing tools gets no write lease");
+  assert.ok(limited.events.some(event => event.startsWith("execute PATH") && !event.includes("lease-token")));
 });
 
 test("view: context usage counts the conversation's tokens against its model's window, and says where it compacts", () => {
@@ -1029,6 +1042,12 @@ test("availability: a message runs the tools both its sender and the session's o
   const unheard = availability({ config: { extensions: { workspace: async () => ({ extensions: [], automaticTools: false }), lastKnown: () => undefined } } });
   await assert.rejects(unheard.requireOwnerTool("write_file"), /write_file isn't among the tools of this session's owner/, "a host that never heard the owner's group only reads");
   await unheard.requireOwnerTool("read_file");
+  assert.equal(await tools.forgeWrites("github:1"), false, "an owner whose group leaves out github_merge gives no write credential to gh");
+  const writers = availability({}, { toolGroups: { "github:2": { name: "Members", off: ["git_push", "github_comment"] } } });
+  assert.equal(await writers.forgeWrites("github:1"), true);
+  assert.equal(await writers.forgeWrites("github:2"), false, "nor does a sender whose group leaves out a GitHub writing tool");
+  assert.equal(await writers.forgeWrites("github:3"), true);
+  assert.equal(await unheard.forgeWrites("github:1"), false, "nor a host that never heard the groups");
   const off = availability({}, { extensions: [{ source: "piki:tunnel", enabled: false, tools: "approval", settings: {} }] as never });
   await assert.rejects(off.requireSessionTool("tunnel"), /tunnel is turned off in this workspace \(piki:tunnel\)/);
   const unknown = availability({ config: { extensions: { workspace: async () => ({ extensions: [], automaticTools: false }), lastKnown: () => undefined } } });

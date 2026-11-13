@@ -4,7 +4,7 @@ import { documentKindsOff, extensionSwitchOn, sessionToolExtensions, sessionTool
 import { programInstallStep } from "../../../../packages/shared/src/program-install.js";
 import type { DocumentKind } from "../../../../packages/shared/src/sources.js";
 import type { ProgramToolDefinition, ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
-import { unknownToolGroup, type MemberToolGroup } from "../../../../packages/shared/src/tool-groups.js";
+import { forgeWriteTools, unknownToolGroup, type MemberToolGroup } from "../../../../packages/shared/src/tool-groups.js";
 import { tunnelUnavailableReason, type HostTunnelStatus, type TunnelUnavailableReason } from "../../../../packages/shared/src/tunnel.js";
 import type { RunnerBinding } from "../../../../packages/shared/src/types.js";
 import { sandboxMissingPrograms } from "../program-availability.js";
@@ -122,6 +122,14 @@ export class ToolAvailability {
   async requireOwnerTool(tool: string): Promise<void> {
     const group = await this.memberToolGroup(this.options.binding.owner.id);
     if (group?.off.includes(tool)) throw new RunnerError(403, ownerGroupRefusal(tool, group.name));
+  }
+
+  async forgeWrites(senderId: string): Promise<boolean> {
+    for (const userId of new Set([this.options.binding.owner.id, senderId])) {
+      const group = await this.memberToolGroup(userId);
+      if (group && forgeWriteTools.some(tool => group.off.includes(tool))) return false;
+    }
+    return true;
   }
 
   async requireSenderTool(tool: string, senderId: string): Promise<void> {

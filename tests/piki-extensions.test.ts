@@ -261,6 +261,21 @@ test('read-only: only commands that read run, and outside the worktree', async t
   await assert.rejects(call({ args: ['pr', 'list'], directory: 'app' }), /leave out directory/);
 });
 
+test('without the GitHub writing tools in both tool groups, only commands that read run, on the host\'s sign-in and in the sandbox', async t => {
+  const onHost = await ghTool(t, false, { hostSignIn: true, forgeWrites: () => false });
+  assert.match(await onHost.call({ args: ['pr', 'view', '1'] }), /arg=view/);
+  await assert.rejects(onHost.call({ args: ['pr', 'merge', '1'] }),
+    /Refused: gh pr merge is not a command that only reads, and gh writes only in a message whose sender and session owner both have git_push, github_comment, github_issue, github_merge in their tool groups .*Nothing ran\./);
+  await assert.rejects(onHost.call({ args: ['api', '-X', 'POST', 'repos/acme/app/issues'] }), /gh writes only in a message whose sender and session owner/);
+  const runs: PikiSandboxRun[] = [];
+  const sandboxed = await ghTool(t, false, { hostSignIn: false, forgeWrites: () => false, sandbox: async run => { runs.push(run); return { exitCode: 0, signal: null, output: 'ok' }; } });
+  await sandboxed.call({ args: ['pr', 'list'], directory: 'app' });
+  await assert.rejects(sandboxed.call({ args: ['pr', 'create', '--fill'] }), /gh writes only in a message whose sender and session owner/);
+  assert.deepEqual(runs.map(run => [run.args, run.readOnly]), [[['pr', 'list'], false]], 'reads still run in the worktree');
+  const allowed = await ghTool(t, false, { hostSignIn: true, forgeWrites: () => true });
+  assert.match(await allowed.call({ args: ['pr', 'merge', '1'] }), /arg=merge/);
+});
+
 test('a missing command says how its host\'s owner gets it', async t => {
   const { call } = await ghTool(t);
   process.env.PATH = '/nonexistent';

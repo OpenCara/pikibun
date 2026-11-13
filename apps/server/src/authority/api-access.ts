@@ -9,6 +9,8 @@ import { recheckAccess, repositoryAccess, verifyRepository, type RepositoryAcces
 import { credentialOrganization, loadCredential, recheckCredential, type LoadedCredential } from './git/accounts.js';
 import { mintGitHubApiReadTokens } from './push/mint.js';
 import { failureCode, githubSignInExpired } from './github-sign-in.js';
+import { memberToolGroup } from './tool-groups.js';
+import { forgeWriteTools } from '../../../../packages/shared/src/tool-groups.js';
 
 export function sandboxGitHubApiMode(env: Env): 'on' | 'own-hosts' | 'off' {
   const value = env.SANDBOX_GITHUB_API?.trim().toLowerCase();
@@ -70,6 +72,13 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
     return unavailable(access === 'write'
       ? 'Writes through the API act as the session owner, so Pikibun allows them only on the session owner\'s own hosts; on this one, use github_comment, github_issue, github_merge and git_push'
       : `Pikibun reads the ${name} API with the session owner's personal access token, which can't be limited to the workspace's repositories, so only on the session owner's own hosts`);
+  }
+  if (access === 'write') {
+    const group = await memberToolGroup(c.env, original.workspace_id, original.owner_id);
+    const missing = forgeWriteTools.filter(tool => !group.tools.includes(tool));
+    if (missing.length) {
+      return unavailable(`Writes through the API can do what ${forgeWriteTools.join(', ')} do, and the session owner's tool group (${group.name}) leaves out ${missing.join(', ')}`);
+    }
   }
 
   const bindings = (await c.env.DB.query<RepositoryRow>('SELECT * FROM workspace_repositories WHERE workspace_id = ? ORDER BY id')
