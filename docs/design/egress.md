@@ -420,7 +420,11 @@ host, the host's proxy makes the request at the forge itself.
   the pointer's size). On the host, a download that points off the provider's own origin is made only when every address
   of its name is public, as for the proxy's tunnels, since its content goes to the sandbox, and it connects to exactly
   the addresses checked (`pinnedFetch`: its own agent, which never resolves the name again or takes a proxy from the
-  environment), so DNS rebinding can't send it elsewhere; otherwise it is relayed.
+  environment), so DNS rebinding can't send it elsewhere; otherwise it is relayed. On a host whose DNS answers with a
+  local proxy's fake-IP addresses, a download's name may resolve to them only where the host's owner turned on
+  `HostConfig.fakeIpTunnels`, the same trust the proxy's tunnels take: the provider's batch answer names the download's
+  host, and a self-hosted provider can name any. Without it, or where the setting can't be read, the download is
+  relayed as before, saying why; a bare fake-IP address, or fake-IP answers mixed with private ones, are never fetched.
   Direct answers keep the relay's form (a Git service's stream, the relay's LFS batch answer and
   object content), so the proxy and the mirror fills don't change; an internal header marks them for the proxy's log,
   `(direct <kind>)`, and never reaches the sandbox.

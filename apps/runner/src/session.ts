@@ -229,7 +229,8 @@ export class RunnerSession {
     const directGrant = config.gitDirect ? (request: Omit<GitDirectRequest, "sessionId">) => config.gitDirect!(binding.session.id, request)
       : config.gitRelay ? undefined
       : (request: Omit<GitDirectRequest, "sessionId">) => this.controlPlane("/api/internal/git/direct", { sessionId: binding.session.id, ...request });
-    this.#direct = directGrant && new DirectGit({ grant: directGrant, onFallback: (request, reason) => this.#egress?.noteFallback(request.bindingId, reason) });
+    this.#direct = directGrant && new DirectGit({ grant: directGrant, onFallback: (request, reason) => this.#egress?.noteFallback(request.bindingId, reason),
+      fakeIpTunnels: async () => (await this.hostConfig()).fakeIpTunnels });
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
       { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment });
     else if (config.sandboxBackend) {
