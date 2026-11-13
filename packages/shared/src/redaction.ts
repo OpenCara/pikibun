@@ -218,7 +218,7 @@ export function redactOperation(operation: Operation): Operation {
   }
 }
 
-export function redactApproval(approval: OperationRecord): OperationRecord {
+export function redactOperationRecord(approval: OperationRecord): OperationRecord {
   if (!approval || typeof approval !== "object" || !approval.operation || typeof approval.operation !== "object") return approval;
   return { ...approval, operation: redactOperation(approval.operation), ...(typeof approval.result === "string" ? { result: redactSecrets(approval.result) } : {}) };
 }
@@ -230,7 +230,7 @@ export function redactEntry(entry: EntryView): EntryView {
 export function redactView(view: SessionView): SessionView {
   if (!view || typeof view !== "object") return view;
   return { ...view, ...(Array.isArray(view.entries) ? { entries: view.entries.map(redactEntry) } : {}),
-    ...(Array.isArray(view.approvals) ? { approvals: view.approvals.map(redactApproval) } : {}) };
+    ...(Array.isArray(view.approvals) ? { approvals: view.approvals.map(redactOperationRecord) } : {}) };
 }
 
 export function containsRedaction(value: unknown): boolean {
