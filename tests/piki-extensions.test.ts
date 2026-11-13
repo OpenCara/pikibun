@@ -80,7 +80,7 @@ test('every connector has its Pikibun extensions: each command-line one offers o
     if (item.summary.source === 'piki:pr-flow') {
       assert.deepEqual([module!.tools, module!.events, module!.noops, module!.ignored], [[], ['before_agent_start', 'tool_result'], [], []]);
       assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['review-minutes', 'string', '30'], ['merge-method', 'string', 'squash'],
-        ['wait-for-checks', 'boolean', true]]);
+        ['wait-for-checks', 'boolean', true], ['auto-merge', 'boolean', true]]);
       continue;
     }
     if (item.summary.source === 'piki:context-files') {

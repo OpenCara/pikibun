@@ -223,7 +223,7 @@ function waitCall(flow: PullRequestFlow, settings: PrFlowSettings): string {
 }
 
 const checksStep = (settings: PrFlowSettings) => settings.waitForChecks
-  ? ` Before ${settings.autoMerge ? "merging" : "telling the person it is ready to merge"}, let its checks finish (on GitHub, github_read with wait: \"checks\") `
+  ? ` Before ${settings.autoMerge ? "merging" : "telling the person it is ready to merge"}, let its checks finish (on GitHub, github_read with wait: "checks") `
     + "and fix any that fail, pushing the fix as you would for a review point."
   : "";
 
