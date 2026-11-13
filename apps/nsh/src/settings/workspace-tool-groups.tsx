@@ -1,7 +1,7 @@
 import { signal, untracked, View } from "nsh";
 import { adminManagedRoles } from "../../../../packages/shared/src/policy";
 import {
-  groupToolInfo, roleGroupNames, toolsLeftOut, type GroupTool, type ToolGroup, type ToolGroupMember, type ToolGroupSettings,
+  canonicalGroupTools, groupToolInfo, roleGroupNames, toolsLeftOut, type GroupTool, type ToolGroup, type ToolGroupMember, type ToolGroupSettings,
 } from "../../../../packages/shared/src/tool-groups";
 import type { WorkspaceRole } from "../../../../packages/shared/src/types";
 import { segment, username, type Workspace } from "../shared";
@@ -19,7 +19,8 @@ const kinds: { kind: (typeof groupToolInfo)[GroupTool]["kind"]; title: string }[
 
 const label = (tool: GroupTool) => groupToolInfo[tool].label;
 
-function summary(tools: readonly GroupTool[]): string {
+function summary(names: readonly string[]): string {
+  const tools = canonicalGroupTools(names);
   const out = toolsLeftOut(tools);
   if (!out.length) return "Every tool";
   if (!tools.length) return "No tools";
@@ -116,7 +117,7 @@ export function ToolGroups(props: { workspace: Workspace; owner: boolean }) {
 
 function GroupEditor(props: { path: string; group: ToolGroup | null; close: () => void; saved: () => void }) {
   const name = signal(untracked(() => props.group?.name ?? ""));
-  const tools = signal<ReadonlySet<GroupTool>>(new Set(untracked(() => props.group?.tools ?? [])));
+  const tools = signal<ReadonlySet<GroupTool>>(new Set(untracked(() => canonicalGroupTools(props.group?.tools ?? []))));
   const action = createAction();
   const toggle = (tool: GroupTool, on: boolean) => tools.update(current => {
     const next = new Set(current);

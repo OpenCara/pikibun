@@ -22,7 +22,7 @@ function binding(id: string): RunnerBinding {
   return {
     session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Images", policyVersion: 1, status: "ready", createdAt: "2026-01-01T00:00:00Z" },
     owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice", gitEmail: "alice@example.test", env: {}, githubConnected: false },
-    agent: { id: "version-1", agentId: "agent", authorId: "test:author", workspaceId: "workspace", version: 1, name: "Agent", description: "Test", instructions: "Use tools.", tools: ["read_file"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    agent: { id: "version-1", agentId: "agent", authorId: "test:author", workspaceId: "workspace", version: 1, name: "Agent", description: "Test", instructions: "Use tools.", tools: ["read"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
     model: { id: "model-1", workspaceId: "workspace", name: "Explicit faux test provider", provider: "faux", modelId: "faux-1" },
   };
 }

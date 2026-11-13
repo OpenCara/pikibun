@@ -32,10 +32,10 @@ export function runnerModels(model: ModelDefinition, allowFaux: boolean) {
       let tool: string | undefined;
       let args: Parameters<typeof fauxToolCall>[1] = {};
       if (prompt === "TEST_IDENTITY") tool = "identity";
-      else if (/^TEST_READ [^\r\n]+$/.test(prompt)) { tool = "read_file"; args = { path: prompt.slice(10) }; }
+      else if (/^TEST_READ [^\r\n]+$/.test(prompt)) { tool = "read"; args = { path: prompt.slice(10) }; }
       else if (/^TEST_WRITE [^\r\n]+\n[\s\S]*$/.test(prompt)) {
         const newline = prompt.indexOf("\n");
-        tool = "write_file";
+        tool = "write";
         args = { path: prompt.slice(11, newline), content: prompt.slice(newline + 1) };
       } else if (/^TEST_BASH [^\r\n]+$/.test(prompt)) {
         tool = "node";

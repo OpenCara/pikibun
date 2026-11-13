@@ -141,7 +141,7 @@ function fixture(): RunnerBinding {
       id: "crash-agent-v1", agentId: "crash-agent", authorId: "different-agent-author",
       workspaceId: "crash-workspace", version: 1, name: "Crash recovery faux agent",
       description: "Deterministic test only", instructions: "Use deterministic test commands.",
-      tools: ["identity", "read_file", "write_file"], modelId: "crash-model", createdAt,
+      tools: ["identity", "read", "write"], modelId: "crash-model", createdAt,
     },
     model: { id: "crash-model", workspaceId: "crash-workspace", name: "Faux (not an LLM)", provider: "faux", modelId: "crash-faux" },
   };

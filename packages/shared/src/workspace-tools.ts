@@ -1,14 +1,15 @@
 import { builtinExtensions } from "./host-config.js";
 import { parseExtensionSourceSpec, type ExtensionToolMode, type InstalledExtension, type WorkspaceExtension } from "./host-extensions.js";
 import { pikiExtension, pikiExtensionOn, pikiSessionToolExtensions, sessionToolsOff } from "./piki-extensions.js";
+import { canonicalToolName } from "./types.js";
 
 export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.freeze({
   identity: "Tells the agent who the session is for: its owner's identity and the session's APP_ environment.",
-  list_files: "Lists the session's files.",
-  read_file: "Reads a session file, or some of its lines; images go to the model as images.",
-  search: "Searches the worktree's text files for a regular expression or text, like grep -rn.",
-  write_file: "Writes a whole file.",
-  edit_file: "Replaces exact text in a file, in place.",
+  ls: "Lists a directory of the session's files, as Pi's ls does.",
+  read: "Reads a session file, or some of its lines, as Pi's read does; images go to the model as images.",
+  grep: "Searches the worktree's text files for a regular expression or text, as Pi's grep does.",
+  write: "Writes a whole file, as Pi's write does.",
+  edit: "Replaces text in a file, in place, with Pi's own edit.",
   move_file: "Moves or renames a file, directory or link in the worktree.",
   copy_file: "Copies a file, directory or link in the worktree.",
   delete_file: "Deletes a file, directory or link in the worktree.",
@@ -103,7 +104,7 @@ export function workspaceTools(extensions: readonly WorkspaceExtension[], instal
     const offer = extensionOffer(extension.source, installed);
     if (!offer) { unreported.push(extension.source); continue; }
     for (const tool of offer.tools) {
-      const by = owners.get(tool.name);
+      const by = owners.get(tool.name) ?? (tool.own ? owners.get(canonicalToolName(tool.name)) : undefined);
       if (tool.own || (by && sessionToolSources.has(by))) {
         shadowed.push({ name: tool.name, source: extension.source, by: by && sessionToolSources.has(by) ? by : PIKIBUN, kind: "own" });
         continue;

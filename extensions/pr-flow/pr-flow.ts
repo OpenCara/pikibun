@@ -45,7 +45,7 @@ export interface ObservedCall {
 }
 
 const changingTools: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  write_file: ["path"], edit_file: ["path"], move_file: ["from", "to"], copy_file: ["to"], delete_file: ["path"],
+  write: ["path"], edit: ["path"], write_file: ["path"], edit_file: ["path"], move_file: ["from", "to"], copy_file: ["to"], delete_file: ["path"],
 });
 
 const upToDate = /\bEverything up-to-date\b|\bis already up to date\b/;

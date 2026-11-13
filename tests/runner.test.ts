@@ -33,7 +33,7 @@ function binding(id: string, ownerId = "test:alice"): RunnerBinding {
   return {
     session: { id, workspaceId: "workspace", ownerId, agentVersionId: "version-1", title: "Test", policyVersion: 1, status: "ready", createdAt: "2026-01-01T00:00:00Z" },
     owner: { id: ownerId, githubId: null, githubLogin: name.toLowerCase(), displayName: name, gitName: name, gitEmail: `${name.toLowerCase()}@example.test`, env: { APP_COLOR: name.toLowerCase() }, githubConnected: false },
-    agent: { id: "version-1", agentId: "shared-agent", authorId: "test:author", workspaceId: "workspace", version: 1, name: "Shared", description: "Tests", instructions: "Use tools.", tools: ["identity", "read_file", "write_file", "list_files", "node", "bash", "github_comment"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    agent: { id: "version-1", agentId: "shared-agent", authorId: "test:author", workspaceId: "workspace", version: 1, name: "Shared", description: "Tests", instructions: "Use tools.", tools: ["identity", "read", "write", "ls", "node", "bash", "github_comment"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
     model: { id: "model-1", workspaceId: "workspace", name: "Explicit faux test provider", provider: "faux", modelId: "faux-1" },
   };
 }
@@ -691,7 +691,7 @@ test("a tool outside the agent's pinned list runs at once for whoever sent the m
   const { service } = await hostFixture(t);
   const id = "permission-session";
   const base = binding(id);
-  const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read_file"] } }, await ticket(id, "create"));
+  const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read"] } }, await ticket(id, "create"));
   assert.equal((await session.view()).access, undefined, "no shared message has run at any access yet");
   await session.submit(await ticket(id, "submit", "test:bob"), { content: "TEST_BASH echo bob-marker", requestId: "bob" }, "write");
   await idle(session);
@@ -703,7 +703,7 @@ test("a tool outside the agent's pinned list runs at once for whoever sent the m
 test("a round's calls of a tool outside the agent's pinned list all run", hostMode, async t => {
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("list_files", { path: "." }), fauxToolCall("list_files", { path: "" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("ls", { path: "." }), fauxToolCall("ls", { path: "" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Both listed."),
   ]);
   const models = createModels();
@@ -711,7 +711,7 @@ test("a round's calls of a tool outside the agent's pinned list all run", hostMo
   const { service } = await hostFixture(t, { resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }) });
   const id = "permission-round";
   const base = binding(id);
-  const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read_file"] } }, await ticket(id, "create"));
+  const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read"] } }, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Run both.", requestId: "both" }, "write");
   await idle(session);
   const view = await session.view();
@@ -857,9 +857,9 @@ test("a conversation starts at the host's level for its model, and a model switc
 test("edit_file runs Pi's edit: replaces text in place, keeps a CRLF file CRLF, and refuses an ambiguous edit without writing", hostMode, async t => {
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("edit_file", { path: "notes.txt", edits: [{ oldText: "beta", newText: "BETA" }, { oldText: "alpha\n", newText: "ALPHA\n" }] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("edit", { path: "notes.txt", edits: [{ oldText: "beta", newText: "BETA" }, { oldText: "alpha\n", newText: "ALPHA\n" }] })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Edited."),
-    fauxAssistantMessage([fauxToolCall("edit_file", { path: "notes.txt", edits: [{ oldText: "a", newText: "b" }] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("edit", { path: "notes.txt", edits: [{ oldText: "a", newText: "b" }] })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Not edited."),
   ]);
   const models = createModels();
@@ -867,7 +867,7 @@ test("edit_file runs Pi's edit: replaces text in place, keeps a CRLF file CRLF, 
   const { service } = await hostFixture(t, { resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }) });
   const id = "edit-session";
   const base = binding(id);
-  const session = await service.provision({ ...base, agent: { ...base.agent, tools: [...base.agent.tools, "edit_file"] } }, await ticket(id, "create"));
+  const session = await service.provision({ ...base, agent: { ...base.agent, tools: [...base.agent.tools, "edit"] } }, await ticket(id, "create"));
   await session.sandbox.writeFile("notes.txt", "alpha\r\nbeta\r\ngamma\r\n", allowTestOperation);
   await session.submit(await ticket(id, "submit"), { content: "Edit it.", requestId: "edit" }, "write");
   await idle(session);

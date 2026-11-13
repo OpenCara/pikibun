@@ -118,7 +118,7 @@ export async function boundOutput(text: string, options: BoundOptions = {}): Pro
     catch (error) { unsaved = `saving it failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`; }
   }
   const note = (omitted: number) => saved
-    ? `[… ${omitted} bytes left out here. The whole output is in ${saved}: read it with read_file (offset and limit) or search it …]`
+    ? `[… ${omitted} bytes left out here. The whole output is in ${saved}: read it with read (offset and limit) or grep it …]`
     : `[… ${omitted} bytes left out here, and not saved: ${unsaved} …]`;
   let limits: OutputLimits = SHOWN_OUTPUT;
   let shown = excerpt(text, limits, note);

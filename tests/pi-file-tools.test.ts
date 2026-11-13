@@ -74,8 +74,8 @@ function ours(sandbox: SessionWorkspace, script = false): Run {
 }
 
 function pi(root: string): Run {
-  const definitions = { read_file: createReadToolDefinition(root), write_file: createWriteToolDefinition(root), edit_file: createEditToolDefinition(root),
-    list_files: createLsToolDefinition(root), search: createGrepToolDefinition(root) } as Record<string, { execute: Function; prepareArguments?: (args: unknown) => unknown }>;
+  const definitions = { read: createReadToolDefinition(root), write: createWriteToolDefinition(root), edit: createEditToolDefinition(root),
+    ls: createLsToolDefinition(root), grep: createGrepToolDefinition(root) } as Record<string, { execute: Function; prepareArguments?: (args: unknown) => unknown }>;
   return async (name, args) => {
     const definition = definitions[name]!;
     try {
@@ -183,11 +183,11 @@ for (const kind of workspaceKinds) {
       similar(compare(actual), compare(expected), `${name} ${JSON.stringify(args)}`);
     };
 
-    for (const args of reads) await same("read_file", args);
-    for (const args of listings) await same("list_files", args);
+    for (const args of reads) await same("read", args);
+    for (const args of listings) await same("ls", args);
 
-    const longline = await mine("read_file", { path: "longline.txt" });
-    const piLongline = await theirs("read_file", { path: "longline.txt" });
+    const longline = await mine("read", { path: "longline.txt" });
+    const piLongline = await theirs("read", { path: "longline.txt" });
     assert.ok("text" in longline && "text" in piLongline);
     assert.deepEqual(longline.details, piLongline.details, "a first line over 50 KB: Pi's details");
     assert.match(longline.text, /^\[Line 1 is 60\.0KB, exceeds 50\.0KB limit\. A code mode script's read gets whole lines\.\]$/, "with a notice that doesn't point to bash");
@@ -195,20 +195,20 @@ for (const kind of workspaceKinds) {
     for (const { file, content, args } of edits) {
       await writeFile(join(root, file), content);
       await writeFile(join(worktree, file), content);
-      const expected = await theirs("edit_file", args);
-      const actual = await mine("edit_file", args);
+      const expected = await theirs("edit", args);
+      const actual = await mine("edit", args);
       similar(actual, expected, `edit ${JSON.stringify(args)}`);
       assert.equal(await readFile(join(worktree, file), "utf8"), await readFile(join(root, file), "utf8"), `${file} as Pi left it`);
     }
 
     for (const args of [{ path: "w/deep/new.txt", content: "fresh\n" }, { path: "a.txt", content: "over" }]) {
-      await same("write_file", args);
+      await same("write", args);
       assert.equal(await readFile(join(worktree, args.path), "utf8"), await readFile(join(root, args.path), "utf8"));
     }
 
     if (ripgrep) {
       const sorted = (outcome: Outcome) => "text" in outcome ? { ...outcome, text: outcome.text.split("\n").sort() } : outcome;
-      for (const args of searches) await same("search", args, typeof args.path === "string" && args.path.includes(".") ? undefined : sorted);
+      for (const args of searches) await same("grep", args, typeof args.path === "string" && args.path.includes(".") ? undefined : sorted);
     } else t.diagnostic("ripgrep (rg) is not installed: Pi's grep can't run, so search isn't compared with it here");
   });
 }
@@ -220,24 +220,24 @@ test("the file tools' exceptions to Pi's contract: worktree paths, links, Pikibu
   await lay(worktree);
   const mine = ours(workspace);
   for (const path of ["~", "~/notes.txt"]) {
-    for (const [name, args] of [["read_file", { path }], ["write_file", { path, content: "x" }], ["list_files", { path }], ["search", { pattern: "x", path }], ["edit_file", { path, edits: [{ oldText: "a", newText: "b" }] }]] as const) {
+    for (const [name, args] of [["read", { path }], ["write", { path, content: "x" }], ["ls", { path }], ["grep", { pattern: "x", path }], ["edit", { path, edits: [{ oldText: "a", newText: "b" }] }]] as const) {
       const outcome = await mine(name, args);
       assert.ok("error" in outcome && /not a worktree path/.test(outcome.error), `${name} ${path}: ${JSON.stringify(outcome)}`);
     }
   }
-  assert.ok("error" in await mine("read_file", { path: "/etc/hostname" }), "an absolute path is refused");
+  assert.ok("error" in await mine("read", { path: "/etc/hostname" }), "an absolute path is refused");
   await writeFile(join(worktree, "dir", "data.bin"), Buffer.from([1, 0, 2]));
   await symlink("sub", join(worktree, "dir", "link-to-sub"));
-  assert.deepEqual(await mine("list_files", { path: "dir" }), { text: "_under\n.hidden\na.txt\nB.txt\ndata.bin\nlink-to-sub\nsub/\nZeta/" }, "a link is listed as it is, without /");
-  assert.deepEqual(await mine("search", { pattern: "match", path: "src/many.ts", limit: 9000 }).then(outcome => "text" in outcome && outcome.text.split("\n").length), 150,
+  assert.deepEqual(await mine("ls", { path: "dir" }), { text: "_under\n.hidden\na.txt\nB.txt\ndata.bin\nlink-to-sub\nsub/\nZeta/" }, "a link is listed as it is, without /");
+  assert.deepEqual(await mine("grep", { pattern: "match", path: "src/many.ts", limit: 9000 }).then(outcome => "text" in outcome && outcome.text.split("\n").length), 150,
     "a limit over 500 is lowered, not refused");
-  assert.deepEqual(await mine("search", { pattern: "hit 5", path: "src/ctx.ts", context: 99 }), { text: lines(10, index => index === 5 ? "ctx.ts:5: hit 5" : index === 7 ? "ctx.ts-7- hit 7" : `ctx.ts-${index}- plain ${index}`) },
+  assert.deepEqual(await mine("grep", { pattern: "hit 5", path: "src/ctx.ts", context: 99 }), { text: lines(10, index => index === 5 ? "ctx.ts:5: hit 5" : index === 7 ? "ctx.ts-7- hit 7" : `ctx.ts-${index}- plain ${index}`) },
     "context over 5 is lowered, not refused");
   const script = ours(workspace, true);
-  const whole = await script("read_file", { path: "big.txt" });
+  const whole = await script("read", { path: "big.txt" });
   assert.ok("text" in whole);
   assert.equal(whole.text, corpus["big.txt"], "a script's read gets the whole file, with no notice");
-  assert.deepEqual(await script("read_file", { path: "big.txt", offset: 2499, limit: 1 }), { text: "line 2499" }, "and the lines it asks for, with no notice");
+  assert.deepEqual(await script("read", { path: "big.txt", offset: 2499, limit: 1 }), { text: "line 2499" }, "and the lines it asks for, with no notice");
 });
 
 test("search: Pi's grep text from Pikibun's matches, merged context, paths from the path searched, and the limit's notice only when more were found", () => {
@@ -287,7 +287,7 @@ test("edit through the tool: a refused path reaches neither the sandbox nor Pi, 
   const touched: string[] = [];
   const sandbox = { readFile: async (path: string) => { touched.push(`read ${path}`); return "a\n"; }, writeFile: async (path: string) => { touched.push(`write ${path}`); } } as unknown as SessionWorkspace;
   const metadata = state();
-  const tool = pikibunTools(sandbox, metadata)("edit_file");
+  const tool = pikibunTools(sandbox, metadata)("edit");
   for (const path of ["/etc/passwd", "~/.bashrc", "@~/x", "../x"]) {
     await assert.rejects(tool.execute({ path, edits: [{ oldText: "a", newText: "b" }] } as never, api(metadata), {} as never),
       (error: unknown) => error instanceof RunnerError && error.status === 400 && /is not a worktree path/.test(error.message));

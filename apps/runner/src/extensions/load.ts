@@ -6,7 +6,7 @@ import { createEventBus, createExtensionRuntime, type Extension as PiExtension, 
   type LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { extensionLimits, type ExtensionModuleSummary, type InstalledExtension } from "../../../../packages/shared/src/host-extensions.js";
-import { retiredToolNames, toolNames } from "../../../../packages/shared/src/types.js";
+import { renamedToolNames, retiredToolNames, toolNames } from "../../../../packages/shared/src/types.js";
 import type { ExtensionStore, InstalledSource, ManagedInstall } from "./store.js";
 import { pikiModulePath, connectorPikiExtensions, type PikiExtension } from "./piki/index.js";
 
@@ -107,6 +107,10 @@ async function loadPikiExtension(extension: PikiExtension, cwd: string): Promise
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, extensionLimits.text);
 
+export function pikibunOwn(name: string): boolean {
+  return Object.keys(renamedToolNames).includes(name) || ((toolNames as readonly string[]).includes(name) && !(retiredToolNames as readonly string[]).includes(name));
+}
+
 export function summarizeModules(root: string, files: string[], result: LoadExtensionsResult, taken: Set<string>): ExtensionModuleSummary[] {
   const modules: ExtensionModuleSummary[] = [];
   const providers = [...result.runtime.pendingProviderRegistrations.map(item => ({ path: item.extensionPath, name: item.name })),
@@ -124,7 +128,7 @@ export function summarizeModules(root: string, files: string[], result: LoadExte
     const tools: ExtensionModuleSummary["tools"] = [];
     const ignored: string[] = [];
     for (const [name, tool] of extension.tools) {
-      if ((toolNames as readonly string[]).includes(name) && !(retiredToolNames as readonly string[]).includes(name)) { ignored.push(`tool ${name} (one of Pikibun's own)`); continue; }
+      if (pikibunOwn(name)) { ignored.push(`tool ${name} (one of Pikibun's own)`); continue; }
       if (taken.has(name)) { ignored.push(`tool ${name} (another module's)`); continue; }
       if (tools.length >= extensionLimits.toolsPerModule) { ignored.push(`tool ${name} (too many tools)`); continue; }
       taken.add(name);

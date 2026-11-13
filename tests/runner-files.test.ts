@@ -41,10 +41,10 @@ test("search and read_file's line ranges: the agent finds code and reads around 
   t.after(() => rm(directory, { recursive: true, force: true }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("write_file", { path: "src/a.ts", content: "// a\nexport const answer = 42;\nexport const other = 1;\n" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("search", { pattern: "answer", glob: "*.ts" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("read_file", { path: "src/a.ts", offset: 2, limit: 2 })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("search", { pattern: "(" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("write", { path: "src/a.ts", content: "// a\nexport const answer = 42;\nexport const other = 1;\n" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("grep", { pattern: "answer", glob: "*.ts" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("read", { path: "src/a.ts", offset: 2, limit: 2 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("grep", { pattern: "(" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Found it."),
   ]);
   const models = createModels();
@@ -67,9 +67,9 @@ test("search and read_file's line ranges: the agent finds code and reads around 
   assert.ok(transcript.includes("export const answer = 42;\nexport const other = 1;\n\n[1 more lines in file. Use offset=4 to continue.]"), "the lines asked for, in Pi's read words");
   const stored = await storedToolResults(session, view.entries.find(entry => entry.role === "toolResult")!.conversationId!);
   const alice = { initiatedBy: "test:alice", actingAs: "test:alice", mode: "write" };
-  assert.deepEqual(stored.map(result => [result.tool, result.details?.pikibun]), [["write_file", alice], ["search", alice], ["read_file", alice], ["search", undefined]],
+  assert.deepEqual(stored.map(result => [result.tool, result.details?.pikibun]), [["write", alice], ["grep", alice], ["read", alice], ["grep", undefined]],
     "who each call acted for is kept in its details; a refused call has none");
-  assert.deepEqual(stored.find(result => result.tool === "write_file")?.text, "Successfully wrote to src/a.ts");
+  assert.deepEqual(stored.find(result => result.tool === "write")?.text, "Successfully wrote to src/a.ts");
   assert.match(transcript, /invalid regular expression/);
   assert.match(transcript, /Found it\./);
 });
@@ -79,12 +79,12 @@ test("move_file, copy_file and delete_file: the agent moves, copies and deletes 
   t.after(() => rm(directory, { recursive: true, force: true }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("write_file", { path: "src/a.ts", content: "export const a = 1;\n" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("write", { path: "src/a.ts", content: "export const a = 1;\n" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("copy_file", { from: "src", to: "backup/src" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("move_file", { from: "src/a.ts", to: "lib/a.ts" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("delete_file", { path: "backup" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("delete_file", { path: "backup", recursive: true })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("list_files", { path: "." })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("ls", { path: "." })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Reorganized."),
   ]);
   const models = createModels();
