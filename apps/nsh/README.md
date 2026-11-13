@@ -188,6 +188,9 @@ React web client's address for it) makes this computer one of your hosts:
   host** and, for the ones added, **Remove**, which stops that host and forgets its pairing here; the host stays on its
   server, offline, and its sessions' files stay in its folder. The sandbox, the models offered, Pi's sign-in and the
   command are the computer's, shared by every server.
+- **Continue a private session from here**: a private session whose host is offline says so (`components/OfflineHost.tsx`). Where this
+  computer is paired with that server, **Start host** starts its host. Otherwise **Connect This Mac** opens this page to pair with it too.
+  The host IDs this computer has run as, per server (`pikibun.thisComputer.connectors`, `ranHere`), tell when the offline host was this computer.
 - **Read its sessions from it**: a session the server signed in to says runs on this computer's host for it opens from
   that host, over the same channel (`view` and `entries`), and carries on, read-only, while the server can't be
   reached; the server still checks who may read it ([the design](../../docs/design/local-views.md),
