@@ -10,7 +10,7 @@ import { ExtensionStore } from "../apps/runner/src/extensions/store.js";
 import { pullRequestLine } from "../apps/runner/src/push.js";
 import { pikiExtension, pikiWorkflowExtensions } from "../packages/shared/src/piki-extensions.js";
 import {
-  asksDraft, cloneOf, createdBranch, DEFAULT_REVIEW_MINUTES, forgeOwns, forgeStep, githubRepository, MAX_REVIEW_MINUTES, mergeMethod, operationOutcome, prFlowExtension, prFlowPrompt, PrFlowState,
+  asksDraft, autoMerge, cloneOf, createdBranch, DEFAULT_REVIEW_MINUTES, forgeOwns, forgeStep, githubRepository, MAX_REVIEW_MINUTES, mergeMethod, operationOutcome, prFlowExtension, prFlowPrompt, PrFlowState,
   pullRequestAddress, pushedBranches, pushedPullRequest, reviewMinutes, type ObservedCall, type PrFlowSettings,
 } from "../extensions/pr-flow/pr-flow.js";
 
@@ -20,7 +20,7 @@ async function directory(t: test.TestContext): Promise<string> {
   return root;
 }
 
-const settings = (reviewMinutes = 30, more: Partial<PrFlowSettings> = {}): PrFlowSettings => ({ reviewMinutes, mergeMethod: "squash", waitForChecks: true, ...more });
+const settings = (reviewMinutes = 30, more: Partial<PrFlowSettings> = {}): PrFlowSettings => ({ reviewMinutes, mergeMethod: "squash", waitForChecks: true, autoMerge: true, ...more });
 const isClone = (directory: string) => directory === "app" || directory === "libs/core";
 const executed = (result: string) => [{ type: "text", text: JSON.stringify({ id: "a1", status: "executed", result }) }];
 const call = (toolName: string, input: Record<string, unknown>, content: ObservedCall["content"] = [{ type: "text", text: "{}" }], isError = false): ObservedCall =>
@@ -41,6 +41,8 @@ test("its settings: whole minutes from 0 to a week, squash unless another method
   assert.equal(mergeMethod("merge"), "merge");
   assert.equal(mergeMethod("fast-forward"), "squash");
   assert.equal(mergeMethod(undefined), "squash");
+  for (const on of [true, undefined, "true", "on", ""]) assert.equal(autoMerge(on), true, String(on));
+  for (const off of [false, 0, "false", " Off ", "no", "0"]) assert.equal(autoMerge(off), false, String(off));
 });
 
 test("a file tool's path is in the clone that holds it; the worktree's own files, paths outside it and .git are in none", () => {
@@ -245,6 +247,42 @@ test("a review window of 0 minutes merges as soon as the pull request is ready, 
   assert.match(prompt, /- app: #12 .* is ready for review: merge it\./);
 });
 
+test("with auto-merge off, the agent still works the review window but hands the pull request over to people instead of merging it", () => {
+  const state = new PrFlowState();
+  const at = Date.parse("2026-11-09T19:00:00Z");
+  const off = (minutes: number, more: Partial<PrFlowSettings> = {}) => settings(minutes, { autoMerge: false, ...more });
+  state.observe(call("write_file", { path: "app/x.ts" }), off(30), "/w", isClone, at);
+  const ready = state.observe(call("git_push", { directory: "app", branch: "pikibun/s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: true, draft: false })),
+    off(30), "/w", isClone, at)!;
+  assert.match(ready, /wait for reviews until 2026-11-09T19:30:00Z/);
+  assert.match(ready, /leaves merges to people \(auto-merge is off\)/);
+  assert.match(ready, /tell the person, with its link, that it is ready for them to merge, and leave it open: don't merge it yourself/);
+  assert.match(ready, /Before telling the person it is ready to merge, let its checks finish/);
+  assert.doesNotMatch(ready, /github_merge/);
+  const again = state.observe(call("git", { directory: "app", args: ["push"] }, executed("ok")), off(30), "/w", isClone, at + 60_000)!;
+  assert.match(again, /re-review window starts again/);
+  assert.doesNotMatch(again, /github_merge/);
+  assert.match(prFlowPrompt(off(30), state.flows, at + 40 * 60_000), /review window ended at .*: address what reviews came in, or tell the person it is ready for them to merge; don't merge it\./);
+  assert.match(prFlowPrompt(off(0), state.flows, at), /- app: #12 .* is ready for review: tell the person it is ready for them to merge; don't merge it\./);
+
+  const prompt = prFlowPrompt(off(30));
+  for (const step of [/to the merge, which it leaves to people \(auto-merge is off\)/, /4\. Wait for review: 30 minutes/, /Fix the valid ones/,
+    /Approved with nothing left to address: tell the person, with its link, that it is ready for them to merge/, /hand it over the same way/,
+    /5\. Never merge it yourself, nor queue an automatic merge/, /gh pr create --draft and gh pr ready;/]) {
+    assert.match(prompt, step);
+  }
+  assert.doesNotMatch(prompt, /github_merge|gh pr merge\b(?! --auto)|If the forge refuses the merge/);
+
+  const instant = prFlowPrompt(off(0, { waitForChecks: false }));
+  assert.match(instant, /4\. Hand it over at once\. This workspace's review window is 0 minutes/);
+  assert.doesNotMatch(instant, /github_merge|checks finish/);
+  const zero = new PrFlowState();
+  zero.observe(call("write_file", { path: "app/x.ts" }), off(0), "/w", isClone, 0);
+  const handed = zero.observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: true, draft: false })), off(0), "/w", isClone, 0)!;
+  assert.match(handed, /review window is 0 minutes and it leaves merges to people \(auto-merge is off\): tell the person/);
+  assert.doesNotMatch(handed, /github_merge/);
+});
+
 test("the prompt holds the whole flow with the workspace's window, and fixes valid review points before merging", () => {
   const prompt = prFlowPrompt(settings(45, { mergeMethod: "merge" }));
   for (const step of [/1\. A draft at the first change/, /draft: true/, /3\. Ready for review when done/, /draft: false/, /4\. Wait for review: 45 minutes/,
@@ -265,9 +303,10 @@ test("piki:pr-flow is the connector's, offered as a workflow, and adds its promp
   const [loaded] = await loadInstalled(new ExtensionStore(join(root, "state")), connectorPikiExtensions.filter(item => item.info.name === "pr-flow"));
   assert.equal(loaded!.summary.source, "piki:pr-flow");
   const host: ExtensionHost = {
-    directory: root, model: () => undefined, state: async () => ({ active: true, settings: { "review-minutes": "0", "merge-method": "rebase" } }),
+    directory: root, model: () => undefined, state: async () => ({ active: true, settings: { "review-minutes": "0", "merge-method": "rebase", "auto-merge": active } }),
     runTool: async (_call, execute) => execute(new AbortController().signal), hookTimeoutMs: 2000, warn: () => {},
   };
+  let active = true;
   const session = new SessionExtensions(host, []);
   await session.ensure([loaded!]);
   t.after(() => session.shutdown());
@@ -275,6 +314,10 @@ test("piki:pr-flow is the connector's, offered as a workflow, and adds its promp
   assert.match(prompts["piki:pr-flow"]!, /## Pull request flow/);
   assert.match(prompts["piki:pr-flow"]!, /review window is 0 minutes/);
   assert.match(prompts["piki:pr-flow"]!, /method: "rebase"/);
+  active = false;
+  const handedOver = await session.beforeAgentStart("Fix the parser", undefined);
+  assert.match(handedOver["piki:pr-flow"]!, /4\. Hand it over at once/);
+  assert.doesNotMatch(handedOver["piki:pr-flow"]!, /github_merge/);
 });
 
 test("its tool_result handler adds the note to the result, finding clones by their .git in the session's worktree", async t => {
