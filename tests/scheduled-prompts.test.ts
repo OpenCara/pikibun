@@ -422,10 +422,11 @@ test('a sweep that ends frees only the hosts it still holds, never one a later s
   f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility) VALUES (?,?,?,?,?,?,?,'private')")
     .run('other-session', agent.workspace_id, f.owner.user.id, agent.agent_version_id, 'other', 'ready', new Date().toISOString());
   const other = '/api/sessions/other-session/schedules';
-  const slow = (await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Slow' })).json() as { schedule: SessionSchedule }).schedule;
-  await f.owner.request('POST', other, { cron: '0 9 * * *', content: 'Quick' });
-  const second = (await (await f.owner.request('POST', other, { cron: '5 9 * * *', content: 'Held' })).json() as { schedule: SessionSchedule }).schedule;
-  const third = (await (await f.owner.request('POST', other, { cron: '10 9 * * *', content: 'Third' })).json() as { schedule: SessionSchedule }).schedule;
+  const hour = (new Date().getUTCHours() + 2) % 24;
+  const slow = (await (await f.owner.request('POST', base, { cron: `0 ${hour} * * *`, content: 'Slow' })).json() as { schedule: SessionSchedule }).schedule;
+  await f.owner.request('POST', other, { cron: `0 ${hour} * * *`, content: 'Quick' });
+  const second = (await (await f.owner.request('POST', other, { cron: `5 ${hour} * * *`, content: 'Held' })).json() as { schedule: SessionSchedule }).schedule;
+  const third = (await (await f.owner.request('POST', other, { cron: `10 ${hour} * * *`, content: 'Third' })).json() as { schedule: SessionSchedule }).schedule;
   const first = Promise.withResolvers<void>();
   const held = Promise.withResolvers<void>();
   const previous = globalThis.fetch;
