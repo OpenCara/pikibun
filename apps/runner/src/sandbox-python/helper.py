@@ -868,9 +868,20 @@ def pack_ignored_files(directory, path, nested):
             raise ValueError('the clone ' + path + ' has ignored files too large to pack')
         kept.append(relative)
 
+    def listed(relative):
+        return iter(sorted(os.listdir(os.path.join(os.fsencode(directory), relative))))
+
     def walk(relative):
-        for name in sorted(os.listdir(os.path.join(os.fsencode(directory), relative))):
-            child = relative + b'/' + name
+        # Depth first and in name order, as recursion would, with a list rather than the call stack, so a deep tree of
+        # ignored directories can't end the helper with a RecursionError.
+        pending = [(relative, listed(relative))]
+        while pending:
+            parent, names = pending[-1]
+            name = next(names, None)
+            if name is None:
+                pending.pop()
+                continue
+            child = parent + b'/' + name
             info = None if inside_clone(child) else lstat_of(child)
             if info is None:
                 continue
@@ -878,7 +889,7 @@ def pack_ignored_files(directory, path, nested):
                 if name == b'.git':
                     raise ValueError('the clone ' + path + ' has a Git repository among its ignored files, which a pack can\'t keep')
                 if name not in dirs:
-                    walk(child)
+                    pending.append((child, listed(child)))
             elif not name.endswith(suffixes):
                 keep(child, info)
 
@@ -1219,6 +1230,82 @@ def class_end(glob, index):
 
 FIND_RESULTS = 5000
 FIND_ENTRIES = 100000
+WALK_HELD = 64
+WALK_CUT = (errno.EMFILE, errno.ENFILE, errno.ENOMEM)
+
+
+def walk_tree(start, prefix, descend, state):
+    # Depth first and in name order, without recursion. The walk keeps at most WALK_HELD directories open while it is
+    # below them: a deeper one is closed as the walk goes into it and opened again, one name at a time from the deepest
+    # one still open, once the walk comes back to it, so a tree of any depth needs a bounded number of descriptors. Run
+    # out of them anyway, and the walk ends with state['truncated'] set rather than leave a directory out unsaid.
+    # Yields (directory, name, relative, info) for each entry, with its directory open, and goes into each directory
+    # descend(name) allows.
+    def opened(directory, name):
+        try:
+            return os.open(name, DIR_FLAGS, dir_fd=directory)
+        except OSError as error:
+            if error.errno in WALK_CUT:
+                state['truncated'] = True
+            return None
+
+    def listed(directory):
+        try:
+            return sorted(os.listdir(directory))
+        except OSError as error:
+            if error.errno in WALK_CUT:
+                state['truncated'] = True
+            return []
+
+    def reopened(level):
+        held = level - 1
+        while frames[held]['fd'] is None:
+            held -= 1
+        directory, owned = frames[held]['fd'], False
+        for frame in frames[held + 1:level + 1]:
+            child = opened(directory, frame['name'])
+            if owned:
+                os.close(directory)
+            if child is None:
+                return None
+            directory, owned = child, True
+        return directory
+
+    frames = [{'fd': start, 'owned': False, 'prefix': prefix, 'names': listed(start), 'index': 0, 'name': None}]
+    try:
+        while frames and not state['truncated']:
+            frame = frames[-1]
+            if frame['index'] >= len(frame['names']):
+                frames.pop()
+                if frame['owned'] and frame['fd'] is not None:
+                    os.close(frame['fd'])
+                continue
+            if frame['fd'] is None:
+                frame['fd'] = reopened(len(frames) - 1)
+                if frame['fd'] is None:
+                    frame['index'] = len(frame['names'])
+                    continue
+            name = frame['names'][frame['index']]
+            frame['index'] += 1
+            relative = name if frame['prefix'] in ('', '.') else frame['prefix'] + '/' + name
+            try:
+                info = os.stat(name, dir_fd=frame['fd'], follow_symlinks=False)
+            except OSError:
+                continue
+            yield frame['fd'], name, relative, info
+            if state['truncated'] or not stat.S_ISDIR(info.st_mode) or not descend(name):
+                continue
+            child = opened(frame['fd'], name)
+            if child is None:
+                continue
+            if len(frames) >= WALK_HELD and frame['owned']:
+                os.close(frame['fd'])
+                frame['fd'] = None
+            frames.append({'fd': child, 'owned': True, 'prefix': relative, 'names': listed(child), 'index': 0, 'name': name})
+    finally:
+        for frame in frames:
+            if frame['owned'] and frame['fd'] is not None:
+                os.close(frame['fd'])
 
 
 def find(root, request):
@@ -1232,37 +1319,24 @@ def find(root, request):
     deadline = time.monotonic() + SEARCH_SECONDS
     paths, state = [], {'entries': 0, 'truncated': False}
 
+    def descend(name):
+        return name != '.git' and (show_all or name != 'node_modules')
+
     def visit(directory, prefix):
+        walker = walk_tree(directory, prefix, descend, state)
         try:
-            names = sorted(os.listdir(directory))
-        except OSError:
-            return
-        for name in names:
-            if state['truncated']:
-                return
-            if len(paths) > max_results or state['entries'] >= FIND_ENTRIES or time.monotonic() > deadline:
-                state['truncated'] = True
-                return
-            state['entries'] += 1
-            relative = name if not prefix else prefix + '/' + name
-            try:
-                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
-            except OSError:
-                continue
-            inside = stat.S_ISDIR(info.st_mode)
-            if inside and (name == '.git' or (not show_all and name == 'node_modules')):
-                continue
-            if expression.match(relative if by_path else name):
-                paths.append(relative + '/' if inside else relative)
-            if inside:
-                try:
-                    child = os.open(name, DIR_FLAGS, dir_fd=directory)
-                except OSError:
+            for _, name, relative, info in walker:
+                if len(paths) > max_results or state['entries'] >= FIND_ENTRIES or time.monotonic() > deadline:
+                    state['truncated'] = True
+                    return
+                state['entries'] += 1
+                inside = stat.S_ISDIR(info.st_mode)
+                if inside and not descend(name):
                     continue
-                try:
-                    visit(child, relative)
-                finally:
-                    os.close(child)
+                if expression.match(relative if by_path else name):
+                    paths.append(relative + '/' if inside else relative)
+        finally:
+            walker.close()
 
     parts = parts_for(request['path'])
     if not parts:
@@ -1349,37 +1423,22 @@ def search(root, request):
     def below(relative):
         return relative if base == '.' else relative[len(base) + 1:]
 
+    def descend(name):
+        return name != '.git' and (show_all or name != 'node_modules')
+
     def visit(directory, prefix):
+        walker = walk_tree(directory, prefix, descend, state)
         try:
-            names = sorted(os.listdir(directory))
-        except OSError:
-            return
-        for name in names:
-            if done():
-                return
-            if time.monotonic() > deadline:
-                state['truncated'] = True
-                return
-            relative = name if prefix == '.' else prefix + '/' + name
-            try:
-                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
-            except OSError:
-                continue
-            if stat.S_ISLNK(info.st_mode):
-                continue
-            if stat.S_ISDIR(info.st_mode):
-                if name == '.git' or (not show_all and name == 'node_modules'):
-                    continue
-                try:
-                    child = os.open(name, DIR_FLAGS, dir_fd=directory)
-                except OSError:
-                    continue
-                try:
-                    visit(child, relative)
-                finally:
-                    os.close(child)
-            elif stat.S_ISREG(info.st_mode) and (glob_match is None or glob_match.match(below(relative) if glob_path else name)):
-                search_file(directory, name, relative, info.st_size)
+            for parent, name, relative, info in walker:
+                if done():
+                    return
+                if time.monotonic() > deadline:
+                    state['truncated'] = True
+                    return
+                if stat.S_ISREG(info.st_mode) and (glob_match is None or glob_match.match(below(relative) if glob_path else name)):
+                    search_file(parent, name, relative, info.st_size)
+        finally:
+            walker.close()
 
     path = request['path']
     parts = parts_for(path)
