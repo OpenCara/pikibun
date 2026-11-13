@@ -6,7 +6,7 @@ import { bundledToolDefinitions } from '../../../packages/shared/src/tool-defini
 import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import {
-  addMemberStatement, auditAfterChange, defaultWorkspaceExtensionStatements, auditStatement, changeMemberRoleStatement, personalWorkspaceName, removeMemberStatements, requireMember,
+  addMemberStatement, auditAfterChange, defaultWorkspaceExtensionStatements, auditStatement, changeMemberRoleStatement, ownHostsOnlySQL, personalWorkspaceName, removeMemberStatements, requireMember,
   requireSharedWorkspace, workspaceOwnerStatement,
 } from './authority/index.js';
 import { modelDefinition } from './db.js';
@@ -83,6 +83,7 @@ export async function requireMemberManagement(
 
 function modelAccessSQL(actor: 'member.user_id' | 'actor.user_id' | 'a.author_id', disabled: 'excluded' | 'included' = 'excluded'): string {
   return `m.available = 1 AND (? = 1 OR m.provider <> 'faux')
+    AND ${ownHostsOnlySQL('m.workspace_id', 'm.connector_owner_id', actor)}
     AND (m.connector_id IS NULL OR EXISTS (
       SELECT 1 FROM connectors c
       JOIN connector_workspaces cw ON cw.connector_id = c.id AND cw.workspace_id = m.workspace_id
