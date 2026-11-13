@@ -254,7 +254,7 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
         if (readOnly) {
           const writes = spec.writes(args);
           if (writes) throw new Error(`Refused: this workspace runs ${spec.command} read-only, and ${writes}. Nothing ran.`);
-        } else if (session.forgeWrites?.(toolCallId) === false) {
+        } else if (session.forgeWrites?.(toolCallId) !== true) {
           const writes = spec.writes(args);
           if (writes) {
             throw new Error(`Refused: ${writes}, and ${spec.command} writes only in a message whose sender and session owner both have `

@@ -713,7 +713,7 @@ test("piki: a CLI runs in the sandbox only inside a call the session admitted, w
   const onHost = pikiFixture(state, { onHost: true }).host.piki!;
   assert.equal(onHost.sandbox, undefined);
   assert.equal(onHost.hostSignIn, true);
-  assert.equal(onHost.forgeWrites!("call-1"), true, "outside a call nothing is taken away");
+  assert.equal(onHost.forgeWrites!("call-1"), false, "outside a call of its tool, nothing writes");
 
   const limited = pikiFixture(state, { forgeWrites: async () => false });
   const limitedPiki = limited.host.piki!;

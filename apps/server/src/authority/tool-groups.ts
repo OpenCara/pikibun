@@ -57,7 +57,7 @@ const groupHasAdminsSQL = `EXISTS (SELECT 1 FROM workspace_member_tool_groups he
   WHERE held.group_id = ? AND held.workspace_id = ? AND holder.role IN ('owner', 'admin'))`;
 const groupManagerSQL = `${workspaceAdminSQL} AND (${workspaceOwnerSQL} OR NOT ${groupHasAdminsSQL})`;
 const groupManagerBinds = (workspaceId: string, groupId: string, actorId: string) => [workspaceId, actorId, workspaceId, actorId, groupId, workspaceId];
-const adminsGroup = 'Only the workspace owner changes or deletes a tool group with administrators among its members: it limits what they run.';
+const adminsGroup = 'Only the workspace owner changes or deletes a tool group with an administrator or the owner among its members: it limits what they run.';
 
 async function groupRefusal(env: Env, workspaceId: string, groupId: string, actorId: string): Promise<never> {
   const found = await env.DB.query<{ admin: number; owner: number; admins: number }>(`SELECT ${workspaceAdminSQL} AS admin, ${workspaceOwnerSQL} AS owner,

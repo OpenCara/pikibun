@@ -76,7 +76,7 @@ export class SessionPiki {
       ...(this.options.sandboxed && !onHost ? { sandbox: (run: PikiSandboxRun) => this.#runCommand(run) } : {}),
       saveOutput: (callId, tool, output) => this.#saveOutput(callId, tool, output),
       fromScript: callId => this.#pikiCalls.get(callId)?.script === true,
-      forgeWrites: callId => this.#pikiCalls.get(callId)?.forgeWrites !== false,
+      forgeWrites: callId => this.#pikiCalls.get(callId)?.forgeWrites === true,
     };
   }
 

@@ -210,7 +210,7 @@ test('the command gets its own sign-in and the host\'s tools from the connector\
   assert.equal(cliEnvironment(azureCliSpec, { GH_TOKEN: 'no' }).GH_TOKEN, undefined);
 });
 
-async function ghTool(t: TestContext, readOnly = false, session: PikiSession = { hostSignIn: true }) {
+async function ghTool(t: TestContext, readOnly = false, session: PikiSession = { hostSignIn: true, forgeWrites: () => true }) {
   const root = await directory(t);
   const bin = join(root, 'bin');
   await mkdir(bin);
@@ -274,6 +274,8 @@ test('without the GitHub writing tools in both tool groups, only commands that r
   assert.deepEqual(runs.map(run => [run.args, run.readOnly]), [[['pr', 'list'], false]], 'reads still run in the worktree');
   const allowed = await ghTool(t, false, { hostSignIn: true, forgeWrites: () => true });
   assert.match(await allowed.call({ args: ['pr', 'merge', '1'] }), /arg=merge/);
+  const unsaid = await ghTool(t, false, { hostSignIn: true });
+  await assert.rejects(unsaid.call({ args: ['pr', 'merge', '1'] }), /gh writes only in a message whose sender and session owner/, 'a session that doesn\'t say writes nothing');
 });
 
 test('a missing command says how its host\'s owner gets it', async t => {
@@ -307,7 +309,7 @@ test('a session runs a Pikibun extension like any other: its tool, behind the se
 test('in the sandbox: the command runs as the session owner, through the session, which says how it ends', async t => {
   const runs: PikiSandboxRun[] = [];
   let answer: CliRun = { exitCode: 0, signal: null, output: 'ran\n' };
-  const { call } = await ghTool(t, false, { hostSignIn: false, sandbox: async run => { runs.push(run); return answer; } });
+  const { call } = await ghTool(t, false, { hostSignIn: false, forgeWrites: () => true, sandbox: async run => { runs.push(run); return answer; } });
   assert.equal(await call({ args: ['pr', 'create', '--fill'], directory: './app/' }), 'ran');
   assert.equal(runs.length, 1);
   const [run] = runs;

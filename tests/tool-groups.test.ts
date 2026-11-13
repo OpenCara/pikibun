@@ -168,7 +168,7 @@ test('only the workspace owner changes or deletes a tool group that limits an ad
   const refused = async (response: Response) => {
     const value = await body<{ code: string; error: string }>(response, 403);
     assert.equal(value.code, 'admins_group');
-    assert.match(value.error, /Only the workspace owner changes or deletes a tool group with administrators among its members/);
+    assert.match(value.error, /Only the workspace owner changes or deletes a tool group with an administrator or the owner among its members/);
   };
   await refused(await f.admin.request('PATCH', `${f.path}/tool-groups/${leads.id}`, { tools: [...groupTools] }));
   await refused(await f.admin.request('DELETE', `${f.path}/tool-groups/${leads.id}`));
