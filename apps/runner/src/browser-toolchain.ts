@@ -96,6 +96,10 @@ export function connectorBrowser(): BrowserToolchain | undefined {
   return detected.value;
 }
 
+export function browserEnvironment(executable: string | undefined): Record<string, string> {
+  return executable ? { CHROME_BIN: executable, PUPPETEER_EXECUTABLE_PATH: executable } : {};
+}
+
 export const SANDBOX_BROWSER_DIRECTORY = "/opt/pikibun/chromium";
 export const SANDBOX_BROWSER_DRIVER = "/opt/pikibun/browser/pikibun-browser";
 
