@@ -58,6 +58,37 @@ A session's tools run as its owner (their Git accounts, their GitHub token), for
 
 What it doesn't protect against: the conversation is shared. A sender can leave instructions in it, or in the files, that the agent follows on the owner's next message, with the owner's tools. That is the same as any text the agent reads (see [Sessions on the host](#sessions-on-the-host)); where it matters, keep sessions that hold tools others lack private, or give people a session role of Member (side asks only).
 
+## Pikibun's extensions from npm (managed packages)
+
+`apps/runner/src/extensions/host.ts` (`applyManaged`), `store.ts` (`addManaged`), `packages/shared/src/managed-extensions.ts`; the plan is
+[Loading Pikibun's extensions without a connector release](extension-loading.md). A host ran Pikibun's extension code
+because its owner started that connector release. With `pikibun connect --managed-extensions` it runs code its
+connector fetched since, at the version Pikibun's control plane pins. What bounds that:
+
+- **Two parties must agree.** npm serves the tarball and the control plane names its digest (`integrity`, npm's own
+  `dist.integrity`), which the connector compares with the one npm wrote to the lock file. A compromised publish alone
+  changes nothing a pin names, and a compromised control plane alone can only name versions already published under
+  `@pikibun/`, each with provenance from this repository's release workflow.
+- **The scope is the connector's.** `MANAGED_EXTENSION_SCOPE` is a constant: a pin naming another package is refused
+  before npm runs, so a control plane can't make a host install anything else.
+- **Nothing runs at install, and nothing else is installed.** npm runs with `--ignore-scripts` and installs no peer
+  dependencies; a lock file that names any package besides the pinned one, another version, or no digest is refused,
+  and the install is deleted. Published extensions import only Node's modules and their peer dependencies
+  (`scripts/check-extension-packages.mjs`), so a dependency is never needed.
+- **Only what has no authority of its own.** A pin replaces only a hook package the connector bundles as one
+  (`PikiExtension.managed`: `pr-flow`, `context-files`) or names one it doesn't know. The extensions that run a forge's
+  command with the host's sign-in, switch the session's own tools, or call a model with the host's keys (the prompt
+  audit) are connector code, and a pin for one is ignored.
+- **The host's owner decides.** It is off unless the connector starts with `--managed-extensions`, and
+  `--no-remote-installs` refuses it as it refuses every install asked for in Pikibun. A connector run from source never
+  uses pins.
+- **It fails to the bundled copy.** A package that fails a check runs nothing; the host runs its bundled copy, so a
+  registry that is down or a bad pin can't stop a host that requires one of them.
+
+What it doesn't protect against: like every extension today, a managed package runs in the connector's process, as the
+host's user, outside the sandbox ([extension isolation](extension-isolation.md)), and a version reaches every host that
+opted in within a sync. That is why it is opt-in until extensions run in a process of their own.
+
 ## Password authentication
 
 `apps/server/src/authority/password-auth.ts`, for servers with `PASSWORD_AUTH=true`.

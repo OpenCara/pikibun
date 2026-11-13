@@ -150,6 +150,13 @@ the next sync.
 The connector already takes the control plane's word on who approved a host command, so an install the host's owner
 starts in Pikibun asks for the same trust; it is recorded in the audit log.
 
+The same answer carries `managed`, the control plane release's pins of Pikibun's own hook packages
+([extension loading](extension-loading.md), decisions 2 to 9). A connector started with `--managed-extensions` installs
+the pinned version into `<state-dir>/extensions/managed/<digest>/`, indexed in `managed.json` beside `sources.json`,
+checks its lock file against the pin, and runs it in place of its bundled copy of that `piki:` source. Managed packages
+aren't installed sources: they don't count among the 64, `pikibun extensions remove` refuses them, and the report names
+them by their `piki:` source with the package's `version`. `--no-remote-installs` refuses them too.
+
 ## Where things show
 
 - **Workspace → Extensions** (owners and admins edit, members read): the workspace's extensions, each with its source,
@@ -206,6 +213,7 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 | Control plane: tables, routes, owner/admin rules, connector reports, remote installs, audit | Done (`apps/server/src/extensions.ts`, migrations `0046`/`0039`) |
 | Web and mobile: workspace and host sections, install buttons, session list, approval card | Done (`WorkspaceExtensions.tsx`, `HostExtensions.tsx`, `session-panel.tsx`; mobile: the approval card) |
 | Pi's built-ins from the host's configuration: code mode | Done (`extensions/builtin.ts`, `host-config.ts`, `HostExtensions.tsx`) |
+| Pikibun's hook packages from npm at a pinned version (`--managed-extensions`) | Done, with no pins yet ([extension loading](extension-loading.md), phase 1) |
 
 ## Pikibun's built-in extensions (`piki:`)
 
