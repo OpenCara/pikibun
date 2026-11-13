@@ -29,8 +29,11 @@ for (const target of targets) {
     const name = target.slice("extension:".length);
     const path = join(root, "extensions", name, "package.json");
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || !existsSync(path)) throw new Error(`No Pi extension ${name} in extensions/.`);
-    setManifestVersion(path);
-    console.log(`${JSON.parse(readFileSync(path, "utf8")).name}@${version}`);
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    if (manifest.version !== version) {
+      throw new Error(`extensions/${name}/package.json is at ${manifest.version}, not ${version}: commit the version to main first, then tag that commit. Connectors compare a pinned version with the one they bundle, which is the committed one.`);
+    }
+    console.log(`${manifest.name}@${version}`);
   } else {
     throw new Error(`Unknown target ${target}: use cli or extension:NAME.`);
   }

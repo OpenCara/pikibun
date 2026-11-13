@@ -82,7 +82,11 @@ connector fetched since, at the version Pikibun's control plane pins. What bound
 - **The host's owner decides.** It is off unless the connector starts with `--managed-extensions`, and
   `--no-remote-installs` refuses it as it refuses every install asked for in Pikibun. A connector run from source never
   uses pins.
-- **It fails to the bundled copy.** A package that fails a check runs nothing; the host runs its bundled copy, so a
+- **Versions only go up.** A host runs the newest of the pinned package, the newest managed version it has run before
+  and its bundled copy (whose version is the committed one, which the extension release must publish), and installs a
+  pin only when it would run. So neither a mistaken pin nor a compromised control plane takes a host back to an older
+  version, with whatever that version got wrong.
+- **A failed pin runs nothing.** A package that fails a check is deleted; the host runs what it ran before, so a
   registry that is down or a bad pin can't stop a host that requires one of them.
 
 What it doesn't protect against: like every extension today, a managed package runs in the connector's process, as the

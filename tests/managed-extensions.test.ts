@@ -7,10 +7,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import { HostExtensions, MANAGED_RETRY_MS } from "../apps/runner/src/extensions/host.js";
-import { connectorPikiExtensions, type PikiExtension } from "../apps/runner/src/extensions/piki/index.js";
+import { connectorPikiExtensions, managedSource, type PikiExtension } from "../apps/runner/src/extensions/piki/index.js";
 import { ExtensionStore } from "../apps/runner/src/extensions/store.js";
 import { parseExtensionsSyncAnswer, parseHostExtensionsReport } from "../packages/shared/src/host-extensions.js";
-import { connectorRunsPin, managedExtensions, parseManagedExtensions, type ManagedExtensionPin } from "../packages/shared/src/managed-extensions.js";
+import { compareVersions, connectorRunsPin, managedExtensions, parseManagedExtensions, type ManagedExtensionPin } from "../packages/shared/src/managed-extensions.js";
 import { pikiExtension } from "../packages/shared/src/piki-extensions.js";
 
 const digest = (text: string) => `sha512-${createHash("sha512").update(text).digest("base64")}`;
@@ -20,6 +20,11 @@ const pin = (overrides: Partial<ManagedExtensionPin> = {}): ManagedExtensionPin 
 });
 
 const bundledPrFlow = connectorPikiExtensions.filter(item => item.info.source === "piki:pr-flow");
+const withBundled = (version: string): PikiExtension[] => [{ ...bundledPrFlow[0]!, version }];
+const prFlowPin = (version: string, overrides: Partial<ManagedExtensionPin> = {}) => pin({ version, integrity: digest(`@pikibun/pi-pr-flow@${version}`), ...overrides });
+const helloPin = (version: string, overrides: Partial<ManagedExtensionPin> = {}) => pin({ source: "piki:hello", package: "@pikibun/pi-hello", version,
+  integrity: digest(`@pikibun/pi-hello@${version}`), ...overrides });
+const tampered = { integrity: digest("tampered") };
 
 interface Published {
   version?: string;
@@ -67,6 +72,11 @@ async function fixture(t: test.TestContext, published: Record<string, Published>
 
 const entry = (host: HostExtensions, source: string) => host.loaded.find(item => item.summary.source === source);
 
+function runs(host: HostExtensions, source: string): string {
+  const item = entry(host, source);
+  return !item ? "nothing" : item.summary.error !== undefined ? "missing" : item.factories ? "bundled" : `managed ${item.managed!.version}`;
+}
+
 async function prompt(session: SessionExtensions): Promise<string> {
   return (await session.beforeAgentStart("hello", undefined))["piki:pr-flow"] ?? "";
 }
@@ -94,6 +104,21 @@ test("the pins Pikibun's release holds: none yet, each checked field by field, a
   assert.equal(connectorRunsPin(pin(), "0.29.9"), false);
   assert.equal(connectorRunsPin(pin(), "dev"), false, "a connector run from source runs the working tree's extensions");
   assert.equal(connectorRunsPin(pin(), undefined), false);
+  const ordered = ["0.1.0-alpha", "0.1.0-alpha.1", "0.1.0-alpha.beta", "0.1.0-beta", "0.1.0-beta.2", "0.1.0-beta.11", "0.1.0-rc.1", "0.1.0", "0.1.1", "0.2.0", "0.10.0", "1.0.0"];
+  for (const [index, version] of ordered.entries()) {
+    for (const [other, than] of ordered.entries()) assert.equal(compareVersions(version, than), Math.sign(index - other), `${version} against ${than}`);
+  }
+  assert.equal(compareVersions("1.0.0+build.1", "1.0.0"), 0);
+});
+
+test("a bundled copy's version is the one committed in its package, which the extension release publishes", async () => {
+  for (const extension of connectorPikiExtensions.filter(item => item.version !== undefined)) {
+    const manifest = JSON.parse(await readFile(join(import.meta.dirname, "..", "extensions", extension.info.name, "package.json"), "utf8"));
+    assert.equal(extension.version, manifest.version, extension.info.source);
+  }
+  assert.deepEqual(connectorPikiExtensions.filter(item => item.version !== undefined).map(item => item.info.source), ["piki:prompt-audit", "piki:pr-flow", "piki:context-files"]);
+  assert.deepEqual(connectorPikiExtensions.filter(item => managedSource(item.info.source)).map(item => item.info.source), ["piki:pr-flow", "piki:context-files"],
+    "the prompt audit runs only as built in until it can run in the extension process");
 });
 
 test("a pinned package that passes every check loads in place of the bundled copy, reports its version, and isn't an installed extension", async t => {
@@ -111,7 +136,7 @@ test("a pinned package that passes every check loads in place of the bundled cop
   assert.deepEqual(f.installs.map(install => install.args), [["install", "--save-exact", "--no-audit", "--no-fund", "--legacy-peer-deps", "--ignore-scripts", "@pikibun/pi-pr-flow@0.2.0"]]);
   assert.match(f.installs[0]!.cwd, /extensions[/\\]managed[/\\][0-9a-f]{16}$/);
   assert.deepEqual(await f.store.list(), [], "not one of the host's installed sources");
-  assert.deepEqual((await f.store.listManaged()).map(item => `${item.source} ${item.package}@${item.version}`), ["piki:pr-flow @pikibun/pi-pr-flow@0.2.0"]);
+  assert.deepEqual((await f.store.listManaged()).map(item => `${item.source} ${item.package}@${item.version} ${item.loaded}`), ["piki:pr-flow @pikibun/pi-pr-flow@0.2.0 true"]);
 
   const before = host.loaded;
   await host.refreshIfChanged();
@@ -123,12 +148,87 @@ test("a pinned package that passes every check loads in place of the bundled cop
 
   const again = f.host();
   await again.load();
+  assert.equal(runs(again, "piki:pr-flow"), "managed 0.2.0", "a restarted connector runs it before it hears from Pikibun");
   await again.applyManaged([pin()]);
-  assert.equal(entry(again, "piki:pr-flow")!.managed?.version, "0.2.0", "a restarted connector finds it installed");
+  assert.equal(runs(again, "piki:pr-flow"), "managed 0.2.0");
   assert.equal(f.installs.length, 1);
 });
 
-test("each failed check falls back to the bundled copy and leaves nothing installed", async t => {
+test("the newest version the host can vouch for runs: the pinned package, the newest it ran before, or its bundled copy", async t => {
+  const rows: { bundled?: string; loaded?: string; pin?: string; fails?: boolean; runs: string; installs?: number }[] = [
+    { bundled: "0.2.0", pin: "0.3.0", runs: "managed 0.3.0", installs: 1 },
+    { bundled: "0.2.0", pin: "0.1.5", runs: "bundled", installs: 0 },
+    { bundled: "0.2.0", loaded: "0.4.0", pin: "0.2.5", runs: "managed 0.4.0", installs: 0 },
+    { bundled: "0.3.0", loaded: "0.4.0", pin: "0.2.5", runs: "managed 0.4.0", installs: 0 },
+    { bundled: "0.2.0", loaded: "0.4.0", pin: "0.5.0", fails: true, runs: "managed 0.4.0", installs: 1 },
+    { bundled: "0.5.0", loaded: "0.4.0", pin: "0.6.0", fails: true, runs: "bundled", installs: 1 },
+    { bundled: "0.5.0", loaded: "0.4.0", runs: "bundled", installs: 0 },
+    { bundled: "0.2.0", loaded: "0.2.0", pin: "0.2.0", runs: "managed 0.2.0", installs: 0 },
+    { bundled: "0.3.0", pin: "0.3.0", runs: "managed 0.3.0", installs: 1 },
+    { loaded: "0.1.0", runs: "managed 0.1.0", installs: 0 },
+    { loaded: "0.1.0", pin: "0.2.0", fails: true, runs: "managed 0.1.0", installs: 1 },
+    { pin: "0.1.0", fails: true, runs: "missing", installs: 1 },
+  ];
+  for (const row of rows) {
+    const name = `bundled ${row.bundled ?? "none"}, ran before ${row.loaded ?? "none"}, pinned ${row.pin ?? "none"}${row.fails ? " failing" : ""}: ${row.runs}`;
+    await t.test(name, async t => {
+      const f = await fixture(t, { "@pikibun/pi-pr-flow": {}, "@pikibun/pi-hello": {} });
+      const source = row.bundled ? "piki:pr-flow" : "piki:hello";
+      const pinOf = (version: string, overrides: Partial<ManagedExtensionPin> = {}) => row.bundled ? prFlowPin(version, overrides) : helloPin(version, overrides);
+      if (row.loaded) {
+        const earlier = f.host({ pikiExtensions: row.bundled ? withBundled("0.0.1") : [] });
+        await earlier.load();
+        await earlier.applyManaged([pinOf(row.loaded)]);
+        assert.equal(runs(earlier, source), `managed ${row.loaded}`);
+      }
+      const installed = f.installs.length;
+      const host = f.host({ pikiExtensions: row.bundled ? withBundled(row.bundled) : [] });
+      await host.load();
+      await host.applyManaged(row.pin ? [pinOf(row.pin, row.fails ? tampered : {})] : []);
+      assert.equal(runs(host, source), row.runs);
+      assert.equal(f.installs.length - installed, row.installs, "a pin is installed only where it would run");
+      if (row.loaded) {
+        assert.ok((await f.store.listManaged()).some(item => item.version === row.loaded), "the version it ran before is kept");
+        const restarted = f.host({ pikiExtensions: row.bundled ? withBundled(row.bundled) : [] });
+        await restarted.load();
+        await restarted.applyManaged([]);
+        assert.equal(runs(restarted, source), row.runs, "and after the next restart's pruning");
+      }
+    });
+  }
+});
+
+test("a connector from source, one with --no-remote-installs and one without --managed-extensions run the bundled copy, with a newer version on disk", async t => {
+  const f = await fixture(t, { "@pikibun/pi-pr-flow": {}, "@pikibun/pi-hello": {} });
+  const earlier = f.host();
+  await earlier.load();
+  await earlier.applyManaged([prFlowPin("0.4.0"), helloPin("1.0.0")]);
+  assert.equal(runs(earlier, "piki:pr-flow"), "managed 0.4.0");
+  const installs = f.installs.length;
+  for (const options of [{ remoteInstalls: false }, { managed: false }, { connectorVersion: "dev" }, { connectorVersion: undefined }]) {
+    const host = f.host(options);
+    await host.load();
+    assert.equal(host.managesExtensions, false, JSON.stringify(options));
+    assert.equal(await host.applyManaged([prFlowPin("0.5.0")]), false);
+    assert.equal(runs(host, "piki:pr-flow"), "bundled", JSON.stringify(options));
+    assert.equal(runs(host, "piki:hello"), "nothing", JSON.stringify(options));
+  }
+  assert.equal(f.installs.length, installs);
+  assert.equal((await f.store.listManaged()).length, 2, "nor do they delete anything");
+});
+
+test("a control plane without pins changes nothing on a host that never ran a managed version", async t => {
+  const f = await fixture(t, { "@pikibun/pi-pr-flow": {} });
+  const host = f.host();
+  await host.load();
+  const report = host.report();
+  assert.equal(await host.applyManaged(parseExtensionsSyncAnswer({ requests: [] }).managed), false);
+  assert.deepEqual(host.report(), report);
+  assert.equal(runs(host, "piki:pr-flow"), "bundled");
+  assert.equal(f.installs.length, 0);
+});
+
+test("each failed check makes the pin no candidate, and leaves nothing installed", async t => {
   const cases: { name: string; published: Published; pin?: Partial<ManagedExtensionPin>; reason: RegExp; installs: number }[] = [
     { name: "a wrong digest", published: { integrity: digest("something else") }, reason: /digest isn't the one Pikibun pinned/, installs: 1 },
     { name: "a second package in the lock file", published: { others: ["left-pad"] }, reason: /npm installed left-pad with @pikibun\/pi-pr-flow@0.2.0/, installs: 1 },
@@ -145,9 +245,7 @@ test("each failed check falls back to the bundled copy and leaves nothing instal
       const host = f.host();
       await host.load();
       assert.equal(await host.applyManaged([pin(item.pin)]), false);
-      const loaded = entry(host, "piki:pr-flow")!;
-      assert.ok(loaded.factories, "the bundled copy");
-      assert.equal(loaded.summary.error, undefined);
+      assert.equal(runs(host, "piki:pr-flow"), "bundled");
       assert.equal(host.report().installed.length, 1);
       assert.equal(f.installs.length, item.installs);
       assert.ok(f.logs.some(line => item.reason.test(line)), f.logs.join("\n"));
@@ -157,7 +255,7 @@ test("each failed check falls back to the bundled copy and leaves nothing instal
   }
 });
 
-test("a failed pin is tried again no sooner than ten minutes later", async t => {
+test("a failed pin is tried again no sooner than ten minutes later, and once more after a restart", async t => {
   const f = await fixture(t, { "@pikibun/pi-pr-flow": { integrity: digest("tampered") } });
   const host = f.host();
   await host.load();
@@ -169,57 +267,46 @@ test("a failed pin is tried again no sooner than ten minutes later", async t => 
   f.advance(1);
   await host.applyManaged([pin()]);
   assert.equal(f.installs.length, 2);
+  const restarted = f.host();
+  await restarted.load();
+  await restarted.applyManaged([pin()]);
+  assert.equal(f.installs.length, 3);
 });
 
-test("--no-remote-installs, the option off, a connector run from source and an answer without pins all run the bundled copy and install nothing", async t => {
-  const f = await fixture(t, { "@pikibun/pi-pr-flow": {} });
-  for (const options of [{ remoteInstalls: false }, { managed: false }, { connectorVersion: "dev" }, { connectorVersion: undefined }]) {
-    const host = f.host(options);
-    await host.load();
-    assert.equal(host.managesExtensions, false, JSON.stringify(options));
-    assert.equal(await host.applyManaged([pin()]), false);
-    assert.ok(entry(host, "piki:pr-flow")!.factories, JSON.stringify(options));
-  }
-  const host = f.host();
-  await host.load();
-  const report = host.report();
-  assert.equal(await host.applyManaged(parseExtensionsSyncAnswer({ requests: [] }).managed), false, "a control plane from before");
-  assert.deepEqual(host.report(), report);
-  assert.equal(f.installs.length, 0);
-});
-
-test("a pin for a piki: name this connector doesn't know installs and loads it; where it can't, the host reports it missing with the reason", async t => {
+test("a pin for a piki: name this connector doesn't know installs and loads it; where it has none to run, the host reports it missing with the reason", async t => {
   const f = await fixture(t, { "@pikibun/pi-hello": {} });
   const host = f.host();
   await host.load();
   assert.equal(pikiExtension("piki:hello"), undefined);
-  assert.equal(await host.applyManaged([pin({ source: "piki:hello", package: "@pikibun/pi-hello", version: "1.0.0", integrity: digest("@pikibun/pi-hello@1.0.0") })]), true);
+  assert.equal(await host.applyManaged([helloPin("1.0.0")]), true);
   assert.deepEqual(host.report().installed.map(item => [item.source, item.version, item.name, item.error]),
     [["piki:pr-flow", undefined, pikiExtension("piki:pr-flow")!.title, undefined], ["piki:hello", "1.0.0", "@pikibun/pi-hello", undefined]]);
   assert.deepEqual(parseHostExtensionsReport(host.report()), host.report(), "the control plane takes the report");
 
-  assert.equal(await host.applyManaged([pin({ source: "piki:hello", package: "@pikibun/pi-hello", version: "1.1.0", integrity: digest("@pikibun/pi-hello@1.1.0"), minimumConnector: "9.0.0" })]), true);
-  assert.deepEqual(host.report().installed.find(item => item.source === "piki:hello"), { source: "piki:hello", dev: false, modules: [],
-    error: "@pikibun/pi-hello@1.1.0 needs connector 9.0.0 or later: update it (npx pikibun@latest connect)" });
+  assert.equal(await host.applyManaged([helloPin("1.1.0", { minimumConnector: "9.0.0" })]), false, "a newer pin it can't run leaves the one it ran");
+  assert.equal(runs(host, "piki:hello"), "managed 1.0.0");
+  assert.ok(f.logs.some(line => /@pikibun\/pi-hello@1.1.0 needs connector 9.0.0 or later/.test(line)));
+
   assert.equal(await host.applyManaged([pin({ source: "piki:gone", package: "@pikibun/pi-gone", version: "1.0.0", integrity: digest("@pikibun/pi-gone@1.0.0") })]), true);
   assert.match(host.report().installed.find(item => item.source === "piki:gone")!.error!, /404 @pikibun\/pi-gone/);
   assert.deepEqual(parseHostExtensionsReport(host.report()), host.report());
-  assert.equal(host.report().installed.some(item => item.source === "piki:hello"), false, "no longer pinned, so no longer run");
-  assert.equal(await host.applyManaged([]), true);
-  assert.deepEqual(host.report().installed.map(item => item.source), ["piki:pr-flow"]);
+  assert.equal(runs(host, "piki:hello"), "managed 1.0.0", "no longer pinned, but it ran here");
+  assert.equal(await host.applyManaged([pin({ source: "piki:gone", package: "@pikibun/pi-gone", version: "1.0.0", integrity: digest("@pikibun/pi-gone@1.0.0"), minimumConnector: "9.0.0" })]), true);
+  assert.equal(host.report().installed.find(item => item.source === "piki:gone")!.error, "@pikibun/pi-gone@1.0.0 needs connector 9.0.0 or later: update it (npx pikibun@latest connect)");
 });
 
 test("a pin can't replace what the connector runs itself: its command and session-tool extensions, and the prompt audit until it can run elsewhere", async t => {
-  const f = await fixture(t, { "@pikibun/pi-gh": {}, "@pikibun/pi-prompt-audit": {}, "@pikibun/pi-auto-mode": {} });
+  const f = await fixture(t, { "@pikibun/pi-gh": {}, "@pikibun/pi-prompt-audit": {}, "@pikibun/pi-auto-mode": {}, "@pikibun/pi-schedule": {} });
   const host = f.host({ pikiExtensions: connectorPikiExtensions });
   await host.load();
   const sources = host.loaded.map(item => item.summary.source);
-  assert.equal(await host.applyManaged([pin({ source: "piki:gh", package: "@pikibun/pi-gh" }), pin({ source: "piki:prompt-audit", package: "@pikibun/pi-prompt-audit" }),
-    pin({ source: "piki:auto-mode", package: "@pikibun/pi-auto-mode" })]), false);
+  assert.equal(await host.applyManaged([pin({ source: "piki:gh", package: "@pikibun/pi-gh", version: "9.0.0" }),
+    pin({ source: "piki:prompt-audit", package: "@pikibun/pi-prompt-audit", version: "9.0.0" }), pin({ source: "piki:auto-mode", package: "@pikibun/pi-auto-mode" }),
+    pin({ source: "piki:schedule", package: "@pikibun/pi-schedule" })]), false);
   assert.deepEqual(host.loaded.map(item => item.summary.source), sources);
   assert.ok(host.loaded.every(item => item.factories));
   assert.equal(f.installs.length, 0);
-  assert.deepEqual(connectorPikiExtensions.filter(item => item.managed).map(item => item.info.source), ["piki:pr-flow", "piki:context-files"]);
+  assert.ok(f.logs.some(line => /piki:prompt-audit: the pin for @pikibun\/pi-prompt-audit@9.0.0 is ignored/.test(line)));
 });
 
 test("an open session keeps the version it opened with; a session opened after the pin runs the managed package", async t => {
@@ -241,7 +328,7 @@ test("an open session keeps the version it opened with; a session opened after t
   await later.ensure(host.loaded);
   assert.match(await prompt(later), /from @pikibun\/pi-pr-flow@0.2.0/);
 
-  await host.applyManaged([pin({ version: "0.3.0", integrity: digest("@pikibun/pi-pr-flow@0.3.0") })]);
+  await host.applyManaged([prFlowPin("0.3.0")]);
   assert.equal(existsSync(join(f.store.directory, "managed", (await f.store.listManaged())[0]!.directory)), true,
     "a version no longer pinned stays on disk while the connector runs: an open session may still run it");
   assert.equal((await f.store.listManaged()).length, 2);
@@ -252,8 +339,8 @@ test("an open session keeps the version it opened with; a session opened after t
 
   const restarted = f.host();
   await restarted.load();
-  await restarted.applyManaged([pin({ version: "0.3.0", integrity: digest("@pikibun/pi-pr-flow@0.3.0") })]);
-  assert.deepEqual((await f.store.listManaged()).map(item => item.version), ["0.3.0"], "the next start deletes what is no longer pinned");
+  await restarted.applyManaged([prFlowPin("0.3.0")]);
+  assert.deepEqual((await f.store.listManaged()).map(item => item.version), ["0.3.0"], "the next start deletes what is neither pinned nor the newest it ran");
   assert.deepEqual(await readdir(join(f.store.directory, "managed")), [(await f.store.listManaged())[0]!.directory]);
-  assert.ok(f.logs.some(line => /removed @pikibun\/pi-pr-flow@0.2.0, which is no longer pinned/.test(line)));
+  assert.ok(f.logs.some(line => /removed @pikibun\/pi-pr-flow@0.2.0, which is neither pinned nor the newest version this host has run/.test(line)));
 });

@@ -4,9 +4,9 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { extensionLimits, extensionPackageKey, extensionSourceString, ExtensionSourceError, parseExtensionSourceSpec,
+import { EXACT_VERSION, extensionLimits, extensionPackageKey, extensionSourceString, ExtensionSourceError, parseExtensionSourceSpec,
   type ExtensionSourceSpec } from "../../../../packages/shared/src/host-extensions.js";
-import { inManagedScope, MANAGED_EXTENSION_SCOPE, managedPinKey, type ManagedExtensionPin } from "../../../../packages/shared/src/managed-extensions.js";
+import { compareVersions, inManagedScope, MANAGED_EXTENSION_SCOPE, managedPinKey, type ManagedExtensionPin } from "../../../../packages/shared/src/managed-extensions.js";
 
 const run = promisify(execFile);
 
@@ -25,6 +25,7 @@ export interface ManagedInstall {
   version: string;
   integrity: string;
   directory: string;
+  loaded?: boolean;
 }
 
 export { ExtensionSourceError };
@@ -36,6 +37,11 @@ export const managedDirectory = (pin: ManagedExtensionPin) => createHash("sha256
 
 export const sameManaged = (installed: ManagedInstall, pin: ManagedExtensionPin) => installed.source === pin.source && installed.package === pin.package
   && installed.version === pin.version && installed.integrity === pin.integrity && installed.directory === managedDirectory(pin);
+
+export function newestLoaded(managed: readonly ManagedInstall[], source: string): ManagedInstall | undefined {
+  return managed.filter(item => item.source === source && item.loaded).reduce<ManagedInstall | undefined>((newest, item) =>
+    !newest || compareVersions(item.version, newest.version) > 0 ? item : newest, undefined);
+}
 
 export function parseExtensionSource(spec: string, cwd = process.cwd()): ExtensionSource {
   if (spec.startsWith("piki:")) throw new ExtensionSourceError(`${spec} is built into the connector: every host has it, and a workspace that uses it runs it. Update the connector for newer ones.`);
@@ -75,7 +81,8 @@ export class ExtensionStore {
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
     const value: unknown = JSON.parse(text);
     if (!Array.isArray(value) || value.some(item => !item || typeof item !== "object" || ["source", "package", "version", "integrity", "directory"]
-      .some(key => typeof item[key] !== "string") || !DIRECTORY.test(item.directory))) {
+      .some(key => typeof item[key] !== "string") || !DIRECTORY.test(item.directory) || !EXACT_VERSION.test(item.version)
+      || (item.loaded !== undefined && item.loaded !== true))) {
       throw new ExtensionSourceError(`${join(this.directory, "managed.json")} is not a list of managed packages`);
     }
     return value as ManagedInstall[];
@@ -110,6 +117,16 @@ export class ExtensionStore {
     });
   }
 
+  markManagedLoaded(installed: ManagedInstall): Promise<void> {
+    return this.exclusive(async () => {
+      const managed = await this.listManaged().catch(() => []);
+      const entry = managed.find(item => item.directory === installed.directory);
+      if (!entry || entry.loaded) return;
+      entry.loaded = true;
+      await this.saveManaged(managed);
+    });
+  }
+
   removeManaged(installed: ManagedInstall): Promise<void> {
     return this.exclusive(async () => {
       const managed = await this.listManaged().catch(() => []);
@@ -122,7 +139,7 @@ export class ExtensionStore {
   pruneManaged(pins: readonly ManagedExtensionPin[]): Promise<ManagedInstall[]> {
     return this.exclusive(async () => {
       const managed = await this.listManaged().catch(() => []);
-      const kept = managed.filter(item => pins.some(pin => sameManaged(item, pin)));
+      const kept = managed.filter(item => pins.some(pin => sameManaged(item, pin)) || newestLoaded(managed, item.source) === item);
       const removed = managed.filter(item => !kept.includes(item));
       if (removed.length) await this.saveManaged(kept);
       let entries: string[] = [];

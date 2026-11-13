@@ -153,7 +153,8 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 The same answer carries `managed`, the control plane release's pins of Pikibun's own hook packages
 ([extension loading](extension-loading.md), decisions 2 to 9). A connector started with `--managed-extensions` installs
 the pinned version into `<state-dir>/extensions/managed/<digest>/`, indexed in `managed.json` beside `sources.json`,
-checks its lock file against the pin, and runs it in place of its bundled copy of that `piki:` source. Managed packages
+checks its lock file against the pin, and runs the newest of it, the newest managed version it has run before (which
+the index marks) and its bundled copy of that `piki:` source. Managed packages
 aren't installed sources: they don't count among the 64, `pikibun extensions remove` refuses them, and the report names
 them by their `piki:` source with the package's `version`. `--no-remote-installs` refuses them too.
 

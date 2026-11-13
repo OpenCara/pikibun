@@ -1,10 +1,12 @@
 name: Release Pi extensions (npm)
 # Pushing an ext-<name>-v1.2.3 tag (ext-<name>-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then
 # publishes the Pi package in extensions/<name> to npm, a prerelease to the `next` dist-tag: ext-pr-flow-v0.2.0
-# publishes @pikibun/pi-pr-flow 0.2.0. Each extension is a release line of its own, with its own version. The tag
-# decides the version: scripts/set-release-version.mjs sets it in the extension's package.json before publishing, so no
-# version bump needs committing first. scripts/check-extension-packages.mjs --release checks what npm would pack (its
-# modules, what they import, pi.extensions, the LICENSE copied in) before it is published.
+# publishes @pikibun/pi-pr-flow 0.2.0. Each extension is a release line of its own, with its own version. The tag must
+# name the version committed in the extension's package.json (scripts/set-release-version.mjs refuses another, before
+# CI runs): connectors bundle the committed version and compare it with the version Pikibun pins (managed packages,
+# docs/design/extension-loading.md), so the published one has to be the same. scripts/check-extension-packages.mjs
+# --release checks what npm would pack (its modules, what they import, pi.extensions, the LICENSE copied in) before it
+# is published.
 # npm auth: a trusted publisher on npmjs.com for each package, this workflow file (release-extensions.yml, keep its
 # name) and environment `release`, or an NPM_TOKEN secret. npm sets up a trusted publisher only for a package that
 # exists, so an extension's first release needs NPM_TOKEN, with publish rights to the @pikibun scope.
@@ -36,6 +38,7 @@ jobs:
             echo "::error::There is no Pi extension extensions/$name: tag one of $(ls extensions | tr '\n' ' ')"
             exit 1
           fi
+          node scripts/set-release-version.mjs "${GITHUB_REF_NAME#ext-$name-v}" "extension:$name"
           { echo "name=$name"; echo "prefix=ext-$name-"; } >> "$GITHUB_OUTPUT"
           echo "Releasing extensions/$name"
 
@@ -66,7 +69,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       # TypeScript, which the package check reads the modules' imports with.
       - run: pnpm install --frozen-lockfile
-      - name: Set the extension's version from the tag
+      - name: The tag's version is the committed one
         env:
           NAME: ${{ needs.extension.outputs.name }}
           VERSION: ${{ needs.check.outputs.version }}
