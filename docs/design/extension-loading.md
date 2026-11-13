@@ -169,6 +169,10 @@ The first pins are added by the release after phase 1: publish the extension (`e
 (`npm view @pikibun/pi-<name>@<version> dist.integrity`), add the pin, release the control plane. `docs/development.md`
 gets that step with phase 1.
 
+Phase 2 changes one line of [extension isolation](extension-isolation.md), which keeps every `piki:` extension in the
+connector: a bundled copy and the command extensions stay there, but a managed package is a store package and runs in
+the extension process like any other.
+
 `prompt-audit` waits for phase 4 because it calls a model with the host's keys (`ctx.modelRegistry`), which the
 extension process doesn't have. Until then it runs from its bundled copy, in the connector, and the connector ignores a
 pin for it.
