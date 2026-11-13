@@ -118,6 +118,26 @@ What it doesn't protect against: like every extension today, a managed package r
 host's user, outside the sandbox ([extension isolation](extension-isolation.md)), and a version reaches every host that
 opted in within a sync. That is why it is opt-in until extensions run in a process of their own.
 
+## Installed extensions and the host's models
+
+`apps/runner/src/extensions/worker.ts` (`describedRegistry`, `modelDescription`), `adapter.ts` (`SessionExtensions.channel`);
+the plan is [extension isolation](extension-isolation.md). Pi gives an extension the agent's model registry, which
+calls models and hands out keys with the host owner's provider accounts. On a shared host that let any installed
+extension, chosen by a workspace, spend the owner's accounts or read their keys for any member's session.
+
+- **Installed extensions get descriptions.** Every source that isn't built into the connector (the store's, and
+  managed packages) gets a registry that finds and lists the host's models, without their `headers`, and refuses every
+  other method, `streamSimple` and `getApiKeyForProvider` among them, with `MODEL_CALLS_REFUSED`. Its `ctx.model` is a
+  description too.
+- **The connector's own extensions keep the registry.** The prompt audit calls a model on purpose, with the owner's
+  account, and it is reviewed and released with the connector (`bundledOnlySources`), so it never comes from npm.
+- **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
+  through Pi's API now is what they will reach from their own process.
+
+What it doesn't protect against: until extensions run in a process of their own, an installed extension still runs as
+the host's user and can read Pi's `auth.json` and `models.json` itself. This closes the door Pi's API opened, not the
+process's.
+
 ## Password authentication
 
 `apps/server/src/authority/password-auth.ts`, for servers with `PASSWORD_AUTH=true`.

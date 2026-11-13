@@ -3,7 +3,7 @@
 Review 268, finding 14 (High): installed extensions run in the connector's own Node.js process, as the host owner's OS
 user, with the owner's files, credentials and network. The workspace's network policy doesn't confine them. This
 document says what is contained today, what isn't, and how extensions move into a per-session child process with the
-session's sandbox and egress proxy. It is the plan; the code hasn't changed yet.
+session's sandbox and egress proxy. Step 1 is built (see "Step 1 as built"); the rest is the plan.
 
 ## What is contained today
 
@@ -33,7 +33,7 @@ session's sandbox and egress proxy. It is the plan; the code hasn't changed yet.
 
 Each session that selects at least one installed extension gets one **extension process**: a Node.js child of the
 connector that loads that session's extensions and nothing else. The connector keeps everything that decides: the
-durable harness, approvals, host-command checks, the egress proxy and the session's files.
+durable harness, host-command checks, the egress proxy and the session's files.
 
 - **Same sandbox as the session's commands.** In a sandboxed session the process runs in the session's sandbox, with
   the session's worktree as its working directory, the extension store read-only, and no other path of the host. It
@@ -73,10 +73,12 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
 ## What changes for extensions
 
 - **`ctx.modelRegistry` has no credentials.** The child gets the session's model as a description (provider, id,
-  context window) and `getModel()` returns that. An extension that called a model with the connector's keys stops
+  context window) and `getModel()` returns that. Built in step 1: see below. An extension that called a model with the connector's keys stops
   working; a later grant could proxy model calls through the connector, under the session's own model access.
-- **`prepareArguments` runs in the child.** It is a function, so the connector sends the arguments and awaits the
-  prepared ones, under the hook timeout.
+- **`prepareArguments` runs in the child, before `execute`.** pi-durable calls a tool's `prepareArguments`
+  synchronously, before it validates the arguments, so the connector can't wait for the child there. The connector's
+  tool has none; the child runs the extension's on the validated arguments just before `execute`. Arguments that only
+  the repair would have made valid are refused, as any other invalid ones.
 - **`ctx.ui`** keeps its present behaviour: `notify` becomes a notice, the rest does nothing, as `noActions` does now.
 - **Host paths.** An extension that reads host files (`@pikibun/pi-context-files`' `host:` files) gets them only from
   directories the host's owner lists in the extension's settings, mounted read-only.
@@ -84,9 +86,9 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
 
 ## Steps
 
-1. **The protocol in-process.** Split `adapter.ts` into the connector half and the child half, joined by an in-memory
-   transport. Behaviour is unchanged, and `tests/extensions.test.ts`, `host-extensions.test.ts` and
-   `context-files.test.ts` hold it.
+1. **The protocol in-process** (done). Split `adapter.ts` into the connector half and the child half, joined by an
+   in-memory transport. Behaviour is unchanged but for the model registry, and `tests/extensions.test.ts`,
+   `host-extensions.test.ts` and `context-files.test.ts` hold it.
 2. **The child, unsandboxed.** Run the child half in a child process for every session. This already takes crashes,
    blocked event loops and leaks out of the connector, and makes timeouts kill.
 3. **The sandbox and the proxy.** Start the child in the session's sandbox per platform, with the mounts and egress
@@ -94,6 +96,35 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
    the policy refuses.
 4. **The docs.** `docs/extensions.md` loses "Outside the sandbox" for sandboxed sessions; `host-extensions.md` moves
    isolation from Later to Done.
+
+## Step 1 as built
+
+- **Three files.** `extensions/protocol.ts` is the protocol: one request per thing the connector asks of an
+  extension (`open`, `emit`, `input`, `beforeAgentStart`, `toolCall`, `toolResult`, `context`, `messageEnd`,
+  `turnEnd`, `beforeSettle`, `compact`, `execute`, `shutdown`), each with JSON parameters and a JSON answer.
+  `extensions/worker.ts` is the child half: `ExtensionWorker` holds Pi's `ExtensionRunner` for each source and answers
+  the requests. `extensions/adapter.ts` is the connector half: `SessionExtensions` and the durable tools, hooks and
+  sections, unchanged for `session.ts`, which ask a channel instead of a runner.
+- **Two channels per session.** Sources with factories (the `piki:` extensions built into the connector, and Pi's) go
+  through a direct channel to a worker that has the host's model registry and the session's `PikiSession`: they stay
+  in the connector, as above. Every other source (the store's, and managed packages) goes through a JSON channel, which
+  copies each request and answer through `JSON.stringify`, so nothing that wouldn't cross a process boundary does.
+  Step 2 replaces that channel with the child process; nothing else needs to change.
+- **What each request carries.** Each request for a source carries its settings, which the connector reads (with
+  whether the source applies) before asking, as it did before every call; the worker sets the source's flags from them.
+  Each also carries the session's current model, as a description, and reasoning level. Each answer carries the
+  events the source handles at that moment, so a handler an extension adds once it runs (in `session_start`, say) is
+  seen, as `hasHandlers` saw it before.
+- **The model registry, from step 1.** Sources behind the JSON channel get a registry over descriptions of the host's
+  models: `find`, `getAll` and `getAvailable` work, with the models' `headers` left out (custom headers in
+  `models.json` can hold keys); every other method (`streamSimple`, `getApiKeyForProvider`, …) throws
+  `MODEL_CALLS_REFUSED`. This is the one change people see before the child runs anywhere else: an installed extension
+  that called a model with the host's keys stops working with the next connector. It is in step 1 rather than 2 so that
+  the boundary is the one the child will have, and tested as such.
+- **Timeouts are the connector's.** It still stops waiting after `hookTimeoutMs` and `inputTimeoutMs`; a call it
+  stopped waiting for still runs in the worker until step 2 can end the child.
+- **Errors cross as their message.** A request that fails in the worker fails in the connector with the same message,
+  as a tool's error or a hook's warning did before.
 
 Until step 3 ships, the rule in `docs/extensions.md` stands: the host's owner installs only extensions they trust with
 their own account, as they would a program.
