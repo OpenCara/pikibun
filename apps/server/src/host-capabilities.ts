@@ -8,7 +8,7 @@ export function withHostToolCapabilities(input: Record<string, unknown>, parse: 
   if (!value || typeof value !== 'object' || Array.isArray(value)) return parse(input);
   const { hostCommands, hostGrants, hostSessionGrants, ownerHostSessions, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, memberAutoApprove, approvalFree, fileBrowser, fileUploads, directUploads, web, extensions, builtinExtensions, requiredExtensions, gitRepin, fakeIpTunnels, ...rest } = value as Record<string, unknown>;
   if ([hostCommands, hostGrants, hostSessionGrants, ownerHostSessions, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, memberAutoApprove, approvalFree, fileBrowser, fileUploads, directUploads, web, extensions, builtinExtensions, requiredExtensions, gitRepin, fakeIpTunnels].some(flag => flag !== undefined && typeof flag !== 'boolean')
-    || (hostGrants && !hostCommands) || (hostSessionGrants && !hostGrants) || (unboundedShellGrants && !hostGrants) || (hostOwnerDecides && !hostCommands) || (directUploads && !fileUploads)
+    || (hostGrants && !hostCommands) || (hostSessionGrants && !hostGrants) || (unboundedShellGrants && !hostGrants) || (hostOwnerDecides && !hostCommands)
     || (requiredExtensions && !extensions)) {
     fail(400, 'invalid_manifest', 'Invalid capabilities.');
   }
@@ -17,6 +17,6 @@ export function withHostToolCapabilities(input: Record<string, unknown>, parse: 
     ...(hostSessionGrants ? { hostSessionGrants: true } : {}), ...(ownerHostSessions ? { ownerHostSessions: true } : {}), ...(unboundedShellGrants ? { unboundedShellGrants: true } : {}),
     ...(hostOwnerDecides ? { hostOwnerDecides: true } : {}), ...(automaticGitHub ? { automaticGitHub: true } : {}), ...(requesterAutoApprove ? { requesterAutoApprove: true } : {}),
     ...(memberAutoApprove ? { memberAutoApprove: true } : {}), ...(approvalFree ? { approvalFree: true } : {}), ...(fileBrowser ? { fileBrowser: true } : {}),
-    ...(fileUploads ? { fileUploads: true } : {}), ...(directUploads ? { directUploads: true } : {}), ...(web ? { web: true } : {}), ...(extensions ? { extensions: true } : {}),
+    ...(fileUploads ? { fileUploads: true } : {}), ...(web ? { web: true } : {}), ...(extensions ? { extensions: true } : {}),
     ...(builtinExtensions ? { builtinExtensions: true } : {}), ...(requiredExtensions ? { requiredExtensions: true } : {}), ...(fakeIpTunnels ? { fakeIpTunnels: true } : {}) } };
 }
