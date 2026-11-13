@@ -141,6 +141,18 @@ test("connector frames: uploads sent straight to the host fill only their own sh
   await relay.settled();
 });
 
+test("connector frames: a relay that sends more requests than the replay guard holds is told so, not that it replayed one", async () => {
+  const { relay, reasons, current } = frames();
+  for (let index = 0; index < 4097; index++) {
+    relay.dispatch(current, request(`many-${index}`), 10);
+    await Promise.all([...current.active]);
+  }
+  reasons.length = 0;
+  relay.dispatch(current, request("one-more"), 10);
+  assert.deepEqual(reasons, ["Relay exceeded the recent request limit"]);
+  await relay.settled();
+});
+
 test("connector wire: bodies are read within their limit, and only as UTF-8 JSON", async () => {
   assert.deepEqual([...await boundedBody(new Response("abc"), 3)], [97, 98, 99]);
   await assert.rejects(boundedBody(new Response("abcd"), 3), /exceeds connector limit/);

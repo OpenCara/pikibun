@@ -56,7 +56,8 @@ export class RelayFrames {
     const parsed = requestSchema.safeParse(value);
     if (!parsed.success) return this.options.disconnect(generation, "Invalid relay request");
     const rpc = parsed.data;
-    if (this.#claim(this.#relayed, rpc) !== "claimed") return this.options.disconnect(generation, "Replayed relay request");
+    const claim = this.#claim(this.#relayed, rpc);
+    if (claim !== "claimed") return this.options.disconnect(generation, claim === "full" ? "Relay exceeded the recent request limit" : "Replayed relay request");
     generation.incomingBytes += frameSize;
     const previous = generation.tail;
     const task = this.#execute(generation, rpc, previous).catch((error: unknown) => {
