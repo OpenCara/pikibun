@@ -63,7 +63,7 @@ test("without a usable socket the host gets none, never an empty or relative one
 
 test("where there is no systemctl at all, the host gets no socket and starts as before", unix, async t => {
   const bin = await onlyShellAndSed(t);
-  assert.equal(spawnSync("sh", ["-c", "command -v systemctl"], { env: { PATH: bin }, encoding: "utf8" }).status, 1, "systemctl is out of reach");
+  assert.notEqual(spawnSync("sh", ["-c", "command -v systemctl"], { env: { PATH: bin }, encoding: "utf8" }).status, 0, "systemctl is out of reach");
   for (const shell of shells) {
     const found = spawnSync("sh", ["-c", `command -v ${shell}`], { encoding: "utf8" }).stdout.trim();
     assert.equal(exported(found, "linux", bin, undefined, { SSH_AGENT_PID: "4242" }, bin), "unset", `${shell}: no systemctl, and the stray pid goes too`);
