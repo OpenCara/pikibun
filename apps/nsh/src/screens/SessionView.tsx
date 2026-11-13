@@ -1,7 +1,7 @@
 import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
 import { Button as BaseButton, NavPage } from "nsh/base";
 import {
-  accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText,
+  activeStatuses, browserUnavailableText, chatOptionsBody, copyText,
   initialSelection, managesSession, messageCut, modelUnavailable, pairToolResults, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
@@ -340,7 +340,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     const kind = actualMode() === "ask" ? "ask" : "submit";
     const auto = autoChatOn() && host?.capabilities.chatOptions === true;
     const options = chatOptionsBody(host, selection(), kind);
-    const unavailable = accessUnavailable(host, selection(), kind) ?? (auto ? undefined : modelUnavailable(host, selection()));
+    const unavailable = auto ? undefined : modelUnavailable(host, selection());
     receipt.set(null);
     withdrawNotice.set("");
     const sent = text;
@@ -581,7 +581,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                     options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
                 </If>
                 <If when={permitted()}>
-                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} showAccess={actualMode() === "write"}
+                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)}
                     auto={autoMode.enabled() ? { selected: autoChat(), chosen: autoChosen(), perMessage: true,
                       hint: "Chooses the model and reasoning for each message from how complex it looks, on this session's host",
                       onSelect: () => autoChat.set(true), onLeave: () => autoChat.set(false) } : undefined} />

@@ -12,15 +12,7 @@ export const levelLabels: Record<ThinkingLevel, string> = {
   off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max",
 };
 
-export const accessLabels: Record<AccessMode, { label: string; hint: string }> = {
-  read: { label: "Read only", hint: "Inspect files; edits, commands, commits and pushes are refused" },
-  approval: { label: "Act", hint: "Runs the session's tools, as its owner's tool group allows" },
-  auto: { label: "Act", hint: "Runs the session's tools, as its owner's tool group allows" },
-};
-
-export const chatAccessModes: readonly AccessMode[] = ["read", "auto"];
-
-export const CONNECTOR_UPDATE_HINT = "Update the host's connector (npx pikibun@latest connect) to choose model, reasoning and access";
+export const CONNECTOR_UPDATE_HINT = "Update the host's connector (npx pikibun@latest connect) to choose model and reasoning";
 
 export const modelKey = (model: { provider: string; modelId: string }) => `${model.provider}\n${model.modelId}`;
 
@@ -101,11 +93,6 @@ export function initialSelection(view: SessionView): ChatSelection {
     thinkingLevel: view.agent?.thinkingLevel,
     access: "auto",
   };
-}
-
-export function accessUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): string | undefined {
-  if (mode !== "submit" || host || selection.access !== "read") return undefined;
-  return `Still checking this session's host, so "${accessLabels.read.label}" can't be applied yet. Try again in a moment.`;
 }
 
 export function modelUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection): string | undefined {
