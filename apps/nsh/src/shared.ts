@@ -3,7 +3,7 @@ export type { ConnectorInfo } from "../../../packages/shared/src/connector";
 export { AUTO_TASK_LIMIT, type AutoChoiceAnswer, type AutoChoiceRequest } from "../../../packages/shared/src/auto-mode";
 export type { WorkspaceRepositoryList } from "../../../packages/shared/src/repositories";
 export type {
-  AccessMode, ApprovalRecord, EntryView, ModelDefinition, SessionActivity, SessionPullRequest, SessionRecord, SessionView, SubmitResult,
+  AccessMode, OperationRecord, EntryView, ModelDefinition, SessionActivity, SessionPullRequest, SessionRecord, SessionView, SubmitResult,
   ThinkingLevel, UserProfile, Workspace,
 } from "../../../packages/shared/src/types";
 export type {} from "../../../packages/shared/src/sharing";

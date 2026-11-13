@@ -41,6 +41,14 @@ test("connector calls: a callback goes as this connector and connection, and not
   assert.equal(asked.length, 1);
 });
 
+test("connector calls: a host command grant an older server calls approve is the same as an auto one", async () => {
+  for (const level of ["approve", "auto"]) {
+    const { calls, current } = fixture(() => Response.json({ allowed: true, ownerId: "github:1", policyVersion: 3, hostCommands: level }));
+    assert.deepEqual(await calls.authorize(current, { sessionId: "s1", ownerId: "github:1", actorId: "github:2", permission: "write", host: true }),
+      { allowed: true, ownerId: "github:1", policyVersion: 3, hostCommands: "auto" });
+  }
+});
+
 test("connector calls: an authorization for another owner is refused, a refused callback says only its status, and a broker's reason passes through", async () => {
   const other = fixture(() => Response.json({ allowed: true, ownerId: "github:9", policyVersion: 1 }));
   await assert.rejects(other.calls.authorize(other.current, { sessionId: "s1", ownerId: "github:1", actorId: "github:1", permission: "write" }), /Invalid authorization response/);

@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ApprovalRecord, SessionActivity } from "../packages/shared/src/types.js";
+import type { OperationRecord, SessionActivity } from "../packages/shared/src/types.js";
 import { ActivityReporter, sessionActivity, type ActivityRun } from "../apps/runner/src/activity.js";
 import { sessionStatus } from "../packages/client/src/session-status.js";
 
 const run = (status: ActivityRun["status"], sequence: number, extra: Partial<ActivityRun> = {}): ActivityRun =>
   ({ mode: "write", status, sequence, startEntry: sequence * 10, ...extra });
-const approval = (status: ApprovalRecord["status"], kind: "bash" | "permission" = "bash"): Pick<ApprovalRecord, "status" | "operation"> => ({
+const approval = (status: OperationRecord["status"], kind: "bash" | "permission" = "bash"): Pick<OperationRecord, "status" | "operation"> => ({
   status, operation: kind === "bash" ? { kind: "bash", command: "make test" } : { kind: "permission", tool: "bash", target: "make test", needs: ["tool"] },
 });
 

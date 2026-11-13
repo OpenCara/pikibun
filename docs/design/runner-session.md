@@ -34,7 +34,7 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
 | `session/piki.ts` | The host extensions' view of the session, their tool calls, and the CLIs they run in the sandbox |
 | `session/view.ts` | What a session's view shows (functions over the state the session gives them) |
 | `session/run-queue.ts` | Running queued shared messages one at a time (a sender's next shared message, with the same options, steers their run at work instead) and side asks beside them, screening them with extensions, and settling their runs |
-| `session/uploads.ts`, `inputs.ts`, `mirrors.ts`, `approval-waits.ts`, `branch-reports.ts`, `host-commands.ts`, `tunnel.ts`, `entries.ts` | As before: uploads, queued images, cache mirrors, whole results, branch reports, the host-command policy, tunnels, transcript entries |
+| `session/uploads.ts`, `inputs.ts`, `mirrors.ts`, `whole-results.ts`, `branch-reports.ts`, `host-commands.ts`, `tunnel.ts`, `entries.ts` | As before: uploads, queued images, cache mirrors, whole results, branch reports, the host-command policy, tunnels, transcript entries |
 | `connector/control-plane.ts` | The connector's calls to the control plane, each tied to the connection it was made on |
 | `connector/runner-config.ts` | The callbacks the connector gives the runner (`RunnerConfig`) |
 | `connector/frames.ts` | Relay requests and their replies, the replay guard, and uploads sent straight to the host |
@@ -66,6 +66,12 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   remembers up to 8,192 keys; a relay request over that limit ends the connection. It used to count uploads the
   Electron app handed straight to its own host as well, apart from relay requests. That path is gone (#230): every
   client uploads through the server, as an ordinary relay request.
+- **Operation records keep their stored names.** A session's metadata keeps its operation records under `approvals`,
+  and an `OperationRecord` still has the statuses `pending`, `approved` and `denied`, from before approvals were
+  removed (#35). The code calls them operations (`OperationRecord`, `StoredOperation`, `WholeResults`), but the stored
+  names stay: sessions made back then still hold records with those names and statuses, their views show them, their
+  backups restore them, and their hosts compare a session's stored state as it is. New records are only ever
+  `executing`, then `executed`, `failed` or `interrupted`.
 - **Every call to the control plane is posted one way.** `ControlPlaneCalls` builds the request in one place, so each
   call carries the connector's version, and the activity, tunnel and branch reports share one body that checks the
   connection's generation before and after.

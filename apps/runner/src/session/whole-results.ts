@@ -1,12 +1,12 @@
-import type { ApprovalRecord } from "../../../../packages/shared/src/types.js";
-import { settled } from "../approval-view.js";
+import type { OperationRecord } from "../../../../packages/shared/src/types.js";
+import { settled } from "../operation-record.js";
 
 export function boundedResult(value: string): string {
   if (value.length <= 8000) return value;
   return `${value.slice(0, 2000)}\n… ${value.length - 7500} characters omitted …\n${value.slice(-5500)}`;
 }
 
-export class ApprovalWaits {
+export class WholeResults {
   readonly #wholeResults = new Map<string, string>();
 
   dropResults(): void {
@@ -20,10 +20,10 @@ export class ApprovalWaits {
     return bounded;
   }
 
-  whole(approval: ApprovalRecord): ApprovalRecord {
-    const result = this.#wholeResults.get(approval.id);
-    if (result === undefined || !settled(approval)) return approval;
-    this.#wholeResults.delete(approval.id);
-    return { ...approval, result };
+  whole(record: OperationRecord): OperationRecord {
+    const result = this.#wholeResults.get(record.id);
+    if (result === undefined || !settled(record)) return record;
+    this.#wholeResults.delete(record.id);
+    return { ...record, result };
   }
 }

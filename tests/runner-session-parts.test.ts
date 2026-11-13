@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { EgressGrant, EgressRepository } from "../packages/shared/src/network.js";
-import type { ApprovalRecord, AuthorizationResult, Operation } from "../packages/shared/src/types.js";
+import type { OperationRecord, AuthorizationResult, Operation } from "../packages/shared/src/types.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import { MIRROR_ROOT } from "../apps/runner/src/sandbox.js";
-import { ApprovalWaits, boundedResult } from "../apps/runner/src/session/approval-waits.js";
+import { WholeResults, boundedResult } from "../apps/runner/src/session/whole-results.js";
 import { BranchReports } from "../apps/runner/src/session/branch-reports.js";
 import { CRASHED_TEXT, endView, refusedView } from "../apps/runner/src/session/entries.js";
 import { HOST_COMMANDS_RULE, HostCommandPolicy, type HostCommandPolicyOptions } from "../apps/runner/src/session/host-commands.js";
@@ -110,11 +110,11 @@ test("message inputs: a run's images are kept whole, read back, discarded, and s
   assert.deepEqual(await readdir(join(root, "inputs")), []);
 });
 
-const card = (status: ApprovalRecord["status"], kind = "bash"): ApprovalRecord =>
-  ({ id: "tool-1", sessionId: "s", requestedBy: "alice", createdAt: "2026-01-01T00:00:00Z", status, operation: { kind, command: "true" } } as unknown as ApprovalRecord);
+const card = (status: OperationRecord["status"], kind = "bash"): OperationRecord =>
+  ({ id: "tool-1", sessionId: "s", requestedBy: "alice", createdAt: "2026-01-01T00:00:00Z", status, operation: { kind, command: "true" } } as unknown as OperationRecord);
 
 test("a long result: the session keeps an excerpt, and its tool call gets the whole of it once it settles", () => {
-  const waits = new ApprovalWaits();
+  const waits = new WholeResults();
   const long = "x".repeat(9000);
   const kept = waits.kept("tool-1", long);
   assert.equal(kept, boundedResult(long));
@@ -241,7 +241,7 @@ function hostPolicy(options: Partial<HostCommandPolicyOptions> = {}, grants: Rec
 const bash: Operation = { kind: "bash", command: "true" } as Operation;
 
 test("host commands need both the session's owner and the actor granted, and the host's owner always is", async () => {
-  const { policy, asked } = hostPolicy({}, { "github:2": { hostCommands: "approve" }, "github:3": {} });
+  const { policy, asked } = hostPolicy({}, { "github:2": { hostCommands: "auto" }, "github:3": {} });
   assert.equal(await policy.allowed("github:2"), true);
   assert.equal(await policy.allowed("github:3"), false);
   await assert.rejects(policy.require("github:3", "Putting a server online"), (error: unknown) =>
@@ -380,7 +380,7 @@ function operationsFixture(options: Partial<SessionOperationsOptions> = {}, run:
   } } as unknown as SessionWorkspace;
   const operations = new SessionOperations({
     binding, config: { connectorId: "connector", controlPlaneUrl: "https://control.invalid", sharedSecret: "secret" }, clone: true, sandboxed: true, sandbox,
-    hostCommands: hostPolicy({ ownerId: "github:1", connectorOwnerId: "github:1", testShell: true }).policy, waits: new ApprovalWaits(),
+    hostCommands: hostPolicy({ ownerId: "github:1", connectorOwnerId: "github:1", testShell: true }).policy, wholeResults: new WholeResults(),
     requireUnfrozen: () => { events.push("unfrozen"); }, authorize: async actorId => { events.push(`authorize ${actorId}`); },
     metadata: async () => structuredClone(state), mutate: async change => { change(state); },
     commandOptions: async () => ({ limits: { seconds: 60 } as never, gpu: false }), testShell: () => true,
@@ -496,7 +496,7 @@ function toolsFixture(state: Metadata, sandbox: Partial<SessionWorkspace> = {}, 
     requireSenderTool: async (tool, senderId) => { events.push(`sender ${senderId} ${tool}`); } });
   const context: ToolContext = {
     binding: { session: { id: "s1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox: workspace, onHost: false, calls, hostCommands,
-    waits: new ApprovalWaits(), operations: { run: async () => { events.push("run"); return {} as never; }, internalGitHub: async () => ({}), internalBroker: async () => ({}) },
+    wholeResults: new WholeResults(), operations: { run: async () => { events.push("run"); return {} as never; }, internalGitHub: async () => ({}), internalBroker: async () => ({}) },
     requireSessionTool: async tool => { events.push(`tool ${tool}`); }, requireSenderTool: async () => {}, metadata: async () => structuredClone(state), mutate: async change => { change(state); },
     authorize, hostConfig: async () => defaultHostConfig, programMissing: () => undefined, browserUnavailable: () => undefined, tunnelUnavailable: () => undefined,
     tunnel: () => undefined, startTunnel: () => { throw new Error("no tunnel"); }, grant: async () => ({ repositories: [] }) as never,
@@ -651,7 +651,7 @@ function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {},
     hostConfig: async () => defaultHostConfig, requireOwnerTool: async () => {}, requireSenderTool: async () => {} });
   const piki = new SessionPiki({
     binding: { session: { id: "s1", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox, onHost: false,
-    sandboxed: true, calls, hostCommands: hostPolicy({ ownerId: "github:1" }, grants).policy, waits: new ApprovalWaits(),
+    sandboxed: true, calls, hostCommands: hostPolicy({ ownerId: "github:1" }, grants).policy, wholeResults: new WholeResults(),
     operations: { run: async (_actorId, operation) => { events.push(`run ${(operation as { tool: string }).tool}`); return { id: "tool-1", status: "executing" } as never; } },
     apiLease: () => { events.push("lease"); return { token: "lease-token", release: () => { events.push("release"); } }; },
     forgeWrites: async senderId => { events.push(`forge writes ${senderId}`); return true; },

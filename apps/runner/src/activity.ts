@@ -1,4 +1,4 @@
-import type { ApprovalRecord, SessionActivity } from "../../../packages/shared/src/types.js";
+import type { OperationRecord, SessionActivity } from "../../../packages/shared/src/types.js";
 
 export interface ActivityRun {
   mode: "write" | "ask";
@@ -22,7 +22,7 @@ export function latestSharedRun<T extends ActivityRun>(runs: Iterable<T>): T | u
   return latest;
 }
 
-export function sessionActivity(runs: readonly ActivityRun[], approvals: readonly Pick<ApprovalRecord, "status" | "operation">[], last?: ActivityEntry): SessionActivity {
+export function sessionActivity(runs: readonly ActivityRun[], approvals: readonly Pick<OperationRecord, "status" | "operation">[], last?: ActivityEntry): SessionActivity {
   if (runs.some(run => run.stopped?.pending)) return "working";
   if (approvals.some(approval => approval.status === "pending")) return "waiting";
   if (runs.some(run => activeRuns.includes(run.status)) || approvals.some(approval => approval.status === "executing")) return "working";

@@ -1,13 +1,13 @@
-import type { ApprovalRecord, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubMergeRequest, GitHubMergeResult, GitPushOperation, HostPushCredential,
+import type { OperationRecord, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubMergeRequest, GitHubMergeResult, GitPushOperation, HostPushCredential,
   Operation, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, RunnerBinding } from "../../../../packages/shared/src/types.js";
-import type { StoredApproval } from "../approval-view.js";
+import type { StoredOperation } from "../operation-record.js";
 import { HostCredentialError } from "../git-credentials.js";
 import type { CommandLimits } from "../host-config.js";
 import { RunnerError, validateOperation } from "../protocol.js";
 import { performClonePush, PushError, pushSummary, type PushResult } from "../push.js";
 import { SandboxProcessError, type SandboxAuthorize } from "../sandbox.js";
 import { isolatedWorkspace, type SessionWorkspace } from "../workspace.js";
-import type { ApprovalWaits } from "./approval-waits.js";
+import type { WholeResults } from "./whole-results.js";
 import type { HostCommandPolicy } from "./host-commands.js";
 import type { Metadata } from "./state.js";
 
@@ -38,7 +38,7 @@ export interface SessionOperationsOptions {
   sandboxed: boolean;
   sandbox: SessionWorkspace;
   hostCommands: HostCommandPolicy;
-  waits: ApprovalWaits;
+  wholeResults: WholeResults;
   requireUnfrozen(): void;
   authorize(actorId: string, permission: "write"): Promise<unknown>;
   metadata(): Promise<Metadata>;
@@ -97,8 +97,8 @@ export class SessionOperations {
     return value;
   }
 
-  async run(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredApproval> {
-    const { binding, config, hostCommands, waits } = this.options;
+  async run(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredOperation> {
+    const { binding, config, hostCommands, wholeResults } = this.options;
     this.options.requireUnfrozen();
     const operation = validateOperation(input);
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests were removed: a session runs its tools or refuses them");
@@ -124,22 +124,22 @@ export class SessionOperations {
     if (brokered && admissionId === undefined) throw new RunnerError(403, "Pushes and GitHub effects need a write message");
     if (!consent.hostChecked && hostCommands.runsOnHost(operation, consent.unbounded === true)) await hostCommands.require(actorId, hostCommands.onHostMachine());
     const id = `tool-${toolTaskId}`;
-    const record: StoredApproval = { id, sessionId: binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)),
+    const record: StoredOperation = { id, sessionId: binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)),
       createdAt: new Date().toISOString(), status: "executing",
       ...(consent.unbounded && (operation.kind === "bash" || operation.kind === "program") ? { unbounded: true } : {}),
       ...(attribution.callId ? { callId: attribution.callId } : {}), ...(admissionId !== undefined ? { admissionId } : {}) };
     let created = false;
     await this.options.mutate(meta => { if (!meta.approvals[id]) { meta.approvals[id] = record; created = true; } });
-    if (!created) return waits.whole((await this.options.metadata()).approvals[id]!);
+    if (!created) return wholeResults.whole((await this.options.metadata()).approvals[id]!);
     if (operation.kind === "extension.tool") return record;
-    return waits.whole(await this.#execute(id, actorId, signal, consent.timeoutSeconds));
+    return wholeResults.whole(await this.#execute(id, actorId, signal, consent.timeoutSeconds));
   }
 
-  async #execute(id: string, actorId: string, signal?: AbortSignal, timeoutSeconds?: number): Promise<StoredApproval> {
-    const { binding, hostCommands, waits } = this.options;
+  async #execute(id: string, actorId: string, signal?: AbortSignal, timeoutSeconds?: number): Promise<StoredOperation> {
+    const { binding, hostCommands, wholeResults } = this.options;
     const approval = (await this.options.metadata()).approvals[id]!;
     const operation = approval.operation;
-    let status: ApprovalRecord["status"];
+    let status: OperationRecord["status"];
     let result: string;
     if (operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue") {
       try {
@@ -150,14 +150,14 @@ export class SessionOperations {
         if (error instanceof RunnerError && error.status === 422 && operation.kind !== "github.comment") { status = "failed"; result = error.message; }
         else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
       }
-      await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: waits.kept(id, result) }); });
+      await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: wholeResults.kept(id, result) }); });
       return (await this.options.metadata()).approvals[id]!;
     }
     if (operation.kind === "git.push") {
       const entry = { controller: new AbortController(), done: Promise.resolve() };
       const settled = (async () => {
         const outcome = await this.#runPush(id, operation, { actorId, admissionId: approval.admissionId }, async () => { await this.options.authorize(actorId, "write"); }, entry.controller.signal);
-        await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: waits.kept(id, outcome.result) }); });
+        await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: wholeResults.kept(id, outcome.result) }); });
       })();
       entry.done = settled.then(() => undefined, () => undefined);
       this.#pushes.add(entry);
@@ -182,7 +182,7 @@ export class SessionOperations {
       result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
         : refused ? (error as RunnerError).message : "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited.";
     }
-    await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: waits.kept(id, result) }); });
+    await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: wholeResults.kept(id, result) }); });
     return (await this.options.metadata()).approvals[id]!;
   }
 

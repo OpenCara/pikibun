@@ -1812,7 +1812,6 @@ test('the host\'s authorization callback admits reads of an archived session, pa
   const read = { ...authorization(s.session), permission: 'read' };
   assert.equal(await allowed(read), true);
   assert.equal(await allowed({ ...read, host: true }), false);
-  assert.equal(await allowed({ ...read, autoApprove: true }), false);
   assert.equal(await allowed({ ...read, permission: 'ask' }), false);
   assert.equal(await allowed({ ...manage, archived: true }), true);
   assert.equal(await allowed({ ...manage, archived: true, actorId: s.member.user.id }), false);
@@ -2435,14 +2434,14 @@ test('host owners add admins who manage sharing and host command grants, and gra
   await denied(await creator.request('DELETE', `/api/connectors/${id}`), 404, 'not_found');
   await denied(await creator.request('DELETE', `/api/connectors/${id}/permanent`), 404, 'not_found');
 
-  await denied(await creator.request('PUT', grants, { level: 'root' }), 400, 'invalid_grant');
+  for (const level of ['root', 'approve']) await denied(await creator.request('PUT', grants, { level }), 400, 'invalid_grant');
   await denied(await creator.request('PUT', grants, { level: 'auto', userId: host.user.id }), 400, 'invalid_grant');
   await denied(await creator.request('PUT', grants, { level: 'auto', expiresAt: new Date(Date.now() - 1000).toISOString() }), 400, 'invalid_expiry');
   await denied(await outsider.request('PUT', grants, { level: 'auto' }), 404, 'not_found');
   await json(await creator.request('PUT', grants, { level: 'auto', userId: creator.user.id }));
-  await json(await host.request('PUT', grants, { level: 'approve' }));
+  await json(await host.request('PUT', grants, { level: 'auto' }));
   assert.equal(await authority(creator.user.id), 'auto');
-  assert.equal(await authority(s.admin.user.id), 'approve');
+  assert.equal(await authority(s.admin.user.id), 'auto');
   const own = (await json<{ connectors: ConnectorInfo[] }>(await creator.request('GET', `/api/workspaces/${s.team.id}/connectors`))).connectors;
   assert.equal(own[0].hostCommandAccess, 'auto');
   const audits = f.sqlite.prepare(`SELECT action FROM audit WHERE action LIKE 'host.grant.%' OR action LIKE 'connector.admin.%' ORDER BY created_at, rowid`).all().map(row => row.action);
@@ -2452,7 +2451,7 @@ test('host owners add admins who manage sharing and host command grants, and gra
   f.sqlite.prepare(`INSERT INTO workspace_repositories (id, workspace_id, repository_id, full_name, ref, private, created_at) VALUES (?,?,?,?,?,?,?)`)
     .run('other-repository', other.id, '8', 'owner/other', 'main', 1, new Date().toISOString());
   await json(await host.request('PUT', `/api/connectors/${id}/shares/${other.id}`));
-  await json(await host.request('PUT', `/api/connectors/${id}/host-grants/${other.id}`, { level: 'approve' }));
+  await json(await host.request('PUT', `/api/connectors/${id}/host-grants/${other.id}`, { level: 'auto' }));
   await denied(await creator.request('DELETE', `/api/connectors/${id}/shares/${other.id}`), 404, 'not_found');
   await denied(await creator.request('DELETE', `/api/connectors/${id}/host-grants/${other.id}`), 404, 'not_found');
   await denied(await creator.request('PUT', `/api/connectors/${id}/host-grants/${other.id}`, { level: 'auto' }), 404, 'not_found');
@@ -2466,14 +2465,14 @@ test('host owners add admins who manage sharing and host command grants, and gra
   assert.ok(asOwner.workspaceIds.includes(other.id) && asOwner.hostGrants?.some(grant => grant.workspaceId === other.id));
 
   f.sqlite.prepare('UPDATE connector_host_grants SET expires_at = ? WHERE user_id = ?').run(Math.floor(Date.now() / 1000) - 1, creator.user.id);
-  assert.equal(await authority(creator.user.id), 'approve');
+  assert.equal(await authority(creator.user.id), 'auto');
   assert.equal((await creator.request('DELETE', grants)).status, 204);
   assert.equal(await authority(s.admin.user.id), undefined);
 
-  await json(await creator.request('PUT', grants, { level: 'approve', userId: s.admin.user.id }));
+  await json(await creator.request('PUT', grants, { level: 'auto', userId: s.admin.user.id }));
   assert.equal((await creator.request('DELETE', `/api/connectors/${id}/shares/${s.team.id}`)).status, 204);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_host_grants WHERE workspace_id = ?').get(s.team.id)!.n, 0);
-  await denied(await creator.request('PUT', grants, { level: 'approve' }), 409, 'grant_unavailable');
+  await denied(await creator.request('PUT', grants, { level: 'auto' }), 409, 'grant_unavailable');
   assert.equal((await creator.request('DELETE', `${admins}/${creator.user.id}`)).status, 204);
   await denied(await creator.request('PUT', `/api/connectors/${id}/shares/${s.team.id}`), 404, 'not_found');
 });
@@ -3028,7 +3027,7 @@ test('a member it is shared with starts sessions directly on a host only with a 
 
   await json(await s.host.request('PUT', `/api/connectors/${id}/admins/${s.admin.user.id}`));
   await denied(await s.admin.request('PUT', grants, { level: 'auto', userId: s.creator.user.id, hostSessions: true }), 403, 'host_owner_required');
-  const given = await json<{ hostGrants: HostCommandGrant[] }>(await s.host.request('PUT', grants, { level: 'approve', userId: s.creator.user.id, hostSessions: true }));
+  const given = await json<{ hostGrants: HostCommandGrant[] }>(await s.host.request('PUT', grants, { level: 'auto', userId: s.creator.user.id, hostSessions: true }));
   assert.equal(given.hostGrants.find(grant => grant.userId === s.creator.user.id)?.hostSessions, true);
   const kept = await json<{ hostGrants: HostCommandGrant[] }>(await s.admin.request('PUT', grants, { level: 'auto', userId: s.creator.user.id }));
   assert.equal(kept.hostGrants.find(grant => grant.userId === s.creator.user.id)?.hostSessions, true, 'an admin changing its level keeps them');
@@ -3055,7 +3054,7 @@ test('a member it is shared with starts sessions directly on a host only with a 
   assert.equal(Object.hasOwn(await json(await asked({ host: true, hostSessions: true })), 'hostSessions'), false);
   assert.equal(await offered(), undefined);
   await denied(await start(), 403, 'host_owner_required');
-  await json(await s.host.request('PUT', grants, { level: 'approve', hostSessions: true }));
+  await json(await s.host.request('PUT', grants, { level: 'auto', hostSessions: true }));
   assert.equal(await offered(), true, 'a workspace-wide grant counts too');
   await json(await s.host.request('PATCH', `/api/connectors/${id}/config`, { hostSessions: false }));
   assert.equal(await offered(), undefined);

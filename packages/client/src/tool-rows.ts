@@ -1,4 +1,4 @@
-import type { AutoApprovedCall, EntryView } from "../../shared/src/types";
+import type { CallOutcome, EntryView } from "../../shared/src/types";
 import { splitToolCalls } from "../../shared/src/transcript";
 import { callArguments, callTarget, readable, resultBody, resultSummary, type ResultSummary } from "../../shared/src/tool-summary";
 
@@ -40,11 +40,11 @@ export interface ToolCallRow {
   args: string;
   result?: EntryView;
   outcome?: ResultSummary;
-  autoApproved?: AutoApprovedCall;
+  autoApproved?: CallOutcome;
 }
 
-function callMarks(names: readonly string[], ids: readonly string[] | undefined, marks: EntryView["autoApproved"]): (AutoApprovedCall | undefined)[] {
-  const shown: (AutoApprovedCall | undefined)[] = names.map(() => undefined);
+function callMarks(names: readonly string[], ids: readonly string[] | undefined, marks: EntryView["autoApproved"]): (CallOutcome | undefined)[] {
+  const shown: (CallOutcome | undefined)[] = names.map(() => undefined);
   if (!Array.isArray(marks)) return shown;
   if (ids && marks.every(mark => typeof mark.callId === "string")) {
     for (const mark of marks) {

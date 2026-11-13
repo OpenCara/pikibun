@@ -12,7 +12,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { signToken, sha256 } from "../packages/shared/src/crypto.js";
-import type { ApprovalRecord, RunnerBinding, RunnerTicket, RunnerAction, Permission, AuthorizationRequest, SessionView } from "../packages/shared/src/types.js";
+import type { OperationRecord, RunnerBinding, RunnerTicket, RunnerAction, Permission, AuthorizationRequest, SessionView } from "../packages/shared/src/types.js";
 import { applyViewPatch, isRevision, type SessionViewPatch } from "../packages/shared/src/view-patch.js";
 import type { RestoreDescriptor, RestoreInput } from "../packages/shared/src/connector.js";
 import { RunnerError, assertId, requestKey, stableJson, validateBinding, validateOperation, verifyRunnerTicket } from "../apps/runner/src/protocol.js";
@@ -54,8 +54,8 @@ function commandOperation(session: RunnerSession, command: string) {
 
 const toolOutput = (view: SessionView, marker: RegExp) => view.entries.some(entry => entry.role === "toolResult" && marker.test(entry.text));
 
-async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
-  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+async function records(session: RunnerSession): Promise<OperationRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, OperationRecord> }> }).metadata()).approvals);
 }
 const ranCommands = async (session: RunnerSession) => (await records(session)).filter(record => record.operation.kind === "program" || record.operation.kind === "bash");
 const hostRule = /only in sessions of the host's owner and of members they granted host commands/;
@@ -477,7 +477,7 @@ test("the host's owner's own commands run without the resource limits the host l
 test("a member granted host commands runs commands in the sandbox without the limits the host lacks, while the grant lasts", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   const connectorId = "granted-shell-connector";
-  const grant: { hostCommands?: "approve" | "auto" } = { hostCommands: "approve" };
+  const grant: { hostCommands?: "auto" } = { hostCommands: "auto" };
   const asked: AuthorizationRequest[] = [];
   const authorize = async (input: AuthorizationRequest) => {
     asked.push(input);
@@ -499,14 +499,11 @@ test("a member granted host commands runs commands in the sandbox without the li
     await idle(session);
   };
 
-  for (const level of ["approve", "auto"] as const) {
-    grant.hostCommands = level;
-    await submit(`granted-${level}`, `echo granted-${level}-marker`);
-    const ran = (await ranCommands(session)).at(-1)!;
-    assert.equal(ran.status, "executed", ran.result);
-    assert.equal(ran.unbounded, true);
-    assert.match(ran.result ?? "", new RegExp(`granted-${level}-marker`));
-  }
+  await submit("granted", "echo granted-marker");
+  const ran = (await ranCommands(session)).at(-1)!;
+  assert.equal(ran.status, "executed", ran.result);
+  assert.equal(ran.unbounded, true);
+  assert.match(ran.result ?? "", /granted-marker/);
   assert.ok(asked.some(input => input.actorId === "test:alice" && input.host), "the host checks their grant before the command runs");
 
   delete grant.hostCommands;
@@ -589,7 +586,7 @@ test("in the private workspace, the host owner's session on the host asks them f
 test("a member the host's owner granted sessions on the host runs one there only while their grant includes it", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   const connectorId = "member-host-sessions-connector";
-  const grant: { hostCommands?: "approve" | "auto"; hostSessions?: true } = { hostCommands: "approve", hostSessions: true };
+  const grant: { hostCommands?: "auto"; hostSessions?: true } = { hostCommands: "auto", hostSessions: true };
   const asked: AuthorizationRequest[] = [];
   const authorize = async (input: AuthorizationRequest) => {
     asked.push(input);
@@ -615,13 +612,10 @@ test("a member the host's owner granted sessions on the host runs one there only
   };
   const toolText = async (text: string) => (await session.view()).entries.some(entry => entry.role === "toolResult" && entry.text.includes(text));
 
-  for (const level of ["approve", "auto"] as const) {
-    grant.hostCommands = level;
-    await send(level, `echo member-${level}`);
-    const ran = (await ranCommands(session)).at(-1)!;
-    assert.equal(ran.status, "executed", ran.result);
-    assert.match(ran.result ?? "", new RegExp(`member-${level}`));
-  }
+  await send("granted", "echo member-granted");
+  const ran = (await ranCommands(session)).at(-1)!;
+  assert.equal(ran.status, "executed", ran.result);
+  assert.match(ran.result ?? "", /member-granted/);
   assert.ok(asked.some(input => input.actorId === "test:alice" && input.host && input.hostSessions), "the host checks the grant before their command");
 
   const count = (await ranCommands(session)).length;

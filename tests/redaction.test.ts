@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { containsRedaction, REDACTED, redactApproval, redactOperation, redactSecrets, redactView } from '../packages/shared/src/redaction.js';
-import type { ApprovalRecord, SessionView } from '../packages/shared/src/types.js';
+import { containsRedaction, REDACTED, redactOperationRecord, redactOperation, redactSecrets, redactView } from '../packages/shared/src/redaction.js';
+import type { OperationRecord, SessionView } from '../packages/shared/src/types.js';
 
 const github = `ghp_${'a1B2'.repeat(9)}`;
 const pem = (type: string, body: string, newline = '\n') => `-----BEGIN ${type}PRIVATE KEY-----${newline}${body}${newline}-----END ${type}PRIVATE KEY-----`;
@@ -149,14 +149,14 @@ test('hostile text is redacted in linear time', () => {
 });
 
 test('views and approvals keep their shape, review hash and structural fields; only text people read changes', () => {
-  const approval = (operation: ApprovalRecord['operation'], extra: Partial<ApprovalRecord> = {}): ApprovalRecord =>
+  const approval = (operation: OperationRecord['operation'], extra: Partial<OperationRecord> = {}): OperationRecord =>
     ({ id: 'approval', sessionId: 'session', requestedBy: 'github:1', operation, status: 'pending', createdAt: '2026-01-01T00:00:00.000Z', reviewHash: 'h'.repeat(43), ...extra });
   const push = approval({ kind: 'git.push', repository: 'owner/repo', branch: 'token-fix', commit: 'a'.repeat(40),
     pullRequest: { title: `Rotate ${github}`, body: 'password: hunter22', base: 'main' } });
-  assert.deepEqual(redactApproval(push), approval({ kind: 'git.push', repository: 'owner/repo', branch: 'token-fix', commit: 'a'.repeat(40),
+  assert.deepEqual(redactOperationRecord(push), approval({ kind: 'git.push', repository: 'owner/repo', branch: 'token-fix', commit: 'a'.repeat(40),
     pullRequest: { title: 'Rotate ghp_[redacted]', body: 'password: [redacted]', base: 'main' } }));
   const merge = approval({ kind: 'github.merge', repository: 'owner/repo', pull: 5, sha: 'b'.repeat(40), method: 'squash' });
-  assert.deepEqual(redactApproval(merge), merge);
+  assert.deepEqual(redactOperationRecord(merge), merge);
   assert.deepEqual(redactOperation({ kind: 'git.commit', message: `Add ${github}` }), { kind: 'git.commit', message: 'Add ghp_[redacted]' });
   assert.deepEqual(redactOperation({ kind: 'github.comment', repository: 'o/r', issue: 1, body: 'TOKEN=abc123' }), { kind: 'github.comment', repository: 'o/r', issue: 1, body: 'TOKEN=[redacted]' });
   assert.deepEqual(redactOperation({ kind: 'github.issue', repository: 'o/r', title: `Leaked ${github}`, body: 'TOKEN=abc123' }),
@@ -164,7 +164,7 @@ test('views and approvals keep their shape, review hash and structural fields; o
   assert.deepEqual(redactOperation({ kind: 'bash', command: pem('', keyBody) }), { kind: 'bash', command: pem('', keyBody) });
   assert.deepEqual(redactOperation({ kind: 'permission', tool: 'bash', target: `GH_TOKEN=${github} gh pr list`, needs: ['tool'] }),
     { kind: 'permission', tool: 'bash', target: 'GH_TOKEN=[redacted] gh pr list', needs: ['tool'] });
-  const executed = redactApproval(approval({ kind: 'bash', command: `curl -H "Authorization: Bearer ${github}" https://api.github.com` },
+  const executed = redactOperationRecord(approval({ kind: 'bash', command: `curl -H "Authorization: Bearer ${github}" https://api.github.com` },
     { status: 'executed', decidedBy: 'github:1', result: `{"token": "${github}"}` }));
   assert.equal((executed.operation as { command: string }).command, 'curl -H "Authorization: Bearer [redacted]" https://api.github.com');
   assert.equal(executed.result, '{"token": "[redacted]"}');
@@ -180,7 +180,7 @@ test('views and approvals keep their shape, review hash and structural fields; o
     queue: [{ submissionId: 'submission', actorId: 'github:1', mode: 'write', status: 'running' }], agent: { provider: 'p', modelId: 'm', thinkingLevel: 'high' }, access: 'auto',
   };
   const shown = redactView(view);
-  assert.deepEqual(shown, { ...view, entries: [{ ...view.entries[0]!, text: 'Use ghp_[redacted]' }, view.entries[1]], approvals: [redactApproval(push)] });
+  assert.deepEqual(shown, { ...view, entries: [{ ...view.entries[0]!, text: 'Use ghp_[redacted]' }, view.entries[1]], approvals: [redactOperationRecord(push)] });
   assert.deepEqual(Object.keys(shown), Object.keys(view));
   assert.ok(view.entries[0]!.text.includes(github), 'The runner\'s view is never modified in place');
   for (const malformed of [{ ...view, entries: 'nope' }, { ...view, approvals: null }, { ...view, entries: [null, { id: 'x', text: 5 }] }]) {

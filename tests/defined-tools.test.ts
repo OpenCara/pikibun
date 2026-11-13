@@ -19,7 +19,7 @@ import { bundledToolDefinitions, parseToolDefinition, parseToolDefinitions, rese
 import { pikiExtension, pikiSessionToolExtensions } from "../packages/shared/src/piki-extensions.js";
 import { pikibunToolDescriptions } from "../packages/shared/src/workspace-tools.js";
 import { parseWorkspaceExtensions, type WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
-import { toolNames, type ApprovalRecord, type AuthorizationRequest, type RunnerAction, type RunnerBinding, type RunnerTicket } from "../packages/shared/src/types.js";
+import { toolNames, type OperationRecord, type AuthorizationRequest, type RunnerAction, type RunnerBinding, type RunnerTicket } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { writeFile } from "node:fs/promises";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
@@ -41,8 +41,8 @@ const notes: BrokeredToolDefinition = {
   target: ["note", "line"], route: "notes/read", write: false, instructions: "Read the workspace's notes with notes_read {note}.",
 };
 
-async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
-  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+async function records(session: RunnerSession): Promise<OperationRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, OperationRecord> }> }).metadata()).approvals);
 }
 
 test("the bundled definitions are data: they round-trip through the parser a connector reads them with", () => {

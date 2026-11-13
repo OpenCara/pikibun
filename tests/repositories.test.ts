@@ -1248,7 +1248,7 @@ test('a member granted host commands clones on a host without resource limits, o
   const host = async (capabilities: Record<string, unknown>) => {
     const connector = await connect(f, admin, { models: manifest.models, capabilities: { ...manifest.capabilities, hostCommands: true, hostGrants: true, ...capabilities } });
     await json(await admin.request('PUT', `/api/connectors/${connector.connectorId}/shares/${team.id}`));
-    await json(await admin.request('PUT', `/api/connectors/${connector.connectorId}/host-grants/${team.id}`, { level: 'approve', userId: member_.user.id }));
+    await json(await admin.request('PUT', `/api/connectors/${connector.connectorId}/host-grants/${team.id}`, { level: 'auto', userId: member_.user.id }));
     return connector;
   };
   const start = async (connector: { connectorId: string }) => {

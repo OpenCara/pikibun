@@ -18,11 +18,8 @@ export async function authorizeSession(c: AppContext, connectorId: string | null
     if (input.host !== undefined && input.host !== true) fail(400, 'invalid_authorization', 'Invalid authorization request.');
     if (input.hostSessions !== undefined && (input.hostSessions !== true || input.host !== true)) fail(400, 'invalid_authorization', 'Invalid authorization request.');
     if (input.archived !== undefined && (input.archived !== true || input.host !== undefined || input.permission !== 'manage')) fail(400, 'invalid_authorization', 'Invalid authorization request.');
-    if (input.autoApprove !== undefined && input.autoApprove !== true) fail(400, 'invalid_authorization', 'Invalid authorization request.');
-    if (input.memberAutoApprove !== undefined && input.memberAutoApprove !== true) fail(400, 'invalid_authorization', 'Invalid authorization request.');
     const archived = access?.row.status === 'archived';
-    const admitted = input.archived === true ? archived : !archived || (input.permission === 'read' && input.host === undefined && input.autoApprove === undefined
-      && input.memberAutoApprove === undefined);
+    const admitted = input.archived === true ? archived : !archived || (input.permission === 'read' && input.host === undefined);
     const allowed = !!access && access.row.owner_id === ownerId && admitted && hasPermission(access.permissions, input.permission as Permission);
     const result: AuthorizationResult = { allowed, policyVersion: access?.row.policy_version ?? 0, ownerId: access?.row.owner_id ?? '' };
     const host = allowed && input.host === true ? await hostAuthority(c.env, access!.row, actorId) : undefined;
