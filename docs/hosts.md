@@ -126,7 +126,7 @@ Only you see the executable's path and what went wrong; the host's admins and it
 
 The connector applies a change, an install or a finished download within a minute, without a restart, and open sessions get the tool at their next message. Only that browser's own installation directory is given to sandboxed commands, read-only (at `/opt/pikibun/chromium`), and only where they don't already see it under `/usr`. It runs with `python3` from `/usr`, as the sandbox's helper does, and the system's fonts. Sessions without the Linux sandbox are never offered the tool: the browser never runs on the host itself, as its user.
 
-The same Chromium serves scripts and test runners that start a browser themselves (Playwright, Puppeteer, Selenium, Karma): sandboxed commands find it in `CHROME_BIN` and `PUPPETEER_EXECUTABLE_PATH`, and the agent is told to launch it from there with `--no-sandbox` rather than download another, such as with `playwright install`. Chrome's own sandbox can't start inside the session's, which is the boundary.
+The same Chromium serves scripts and test runners that start a browser themselves: sandboxed commands find its path in `CHROME_BIN` and in `PUPPETEER_EXECUTABLE_PATH`, which Puppeteer reads by itself. The agent is told to point Playwright, Selenium or Karma at it and launch it with `--no-sandbox` rather than download another, such as with `playwright install`. Chrome's own sandbox can't start inside the session's, which is the boundary.
 
 ### Tunnels for sessions
 
