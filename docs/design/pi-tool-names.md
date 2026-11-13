@@ -55,7 +55,7 @@ would then run on data it misreads, which is worse than not running.
    - `ls` asks one `stat` per entry, and each would be a sandbox call.
    - `read` decodes images with Pi's processor, not `prepareImage` with its limits and queue.
    - A code mode script would get Pi's 50 KB excerpt of a file, where it gets up to 1 MB of it today
-     (`script-output.ts`).
+     (`apps/runner/src/script-output.ts`).
 
    So each tool keeps its own execution over `SessionWorkspace`. Its parameters are Pi's schema, taken from Pi's
    definition (`createReadToolDefinition(cwd).parameters`) and never copied. Its text is built with Pi's exported
@@ -112,9 +112,10 @@ would then run on data it misreads, which is worse than not running.
    matching changes. A test loads a real extension that blocks a path with `isToolCallEventType("write", event)` and
    reads a result with `isReadToolResult`.
 
-7. **Pikibun's tool wins a name.** The loader already ignores an extension's tool named like one of Pikibun's, and
-   reports it (`load.ts`; `shadowed`, kind `own`). After the rename that covers `read`, `write`, `edit`, `grep` and
-   `ls`, and `find` from phase 3. An extension's tool runs in the connector, outside the sandbox, so letting it take
+7. **Pikibun's tool wins a name.** The loader already ignores an extension's tool named like one of Pikibun's
+   (`apps/runner/src/extensions/load.ts`, among the module's `ignored`), and the workspace's page shows it as left out
+   (`packages/shared/src/workspace-tools.ts`: `shadowed`, kind `own`). After the rename that covers `read`, `write`,
+   `edit`, `grep` and `ls`, and `find` from phase 3. An extension's tool runs in the connector, outside the sandbox, so letting it take
    the confined `read`'s place would change what the name can reach without the workspace choosing that. Until
    phase 3 an extension's `find` is offered as now.
 
@@ -123,8 +124,13 @@ would then run on data it misreads, which is worse than not running.
 8. **The old names are renamed, not retired.** `retiredToolNames` are names with no tool behind them: an extension
    may take one, and a tool group that leaves anything out turns them all off. The five old names are another kind.
    Saved rows, older connectors and old transcripts still mean Pikibun's tools by them. So `packages/shared` gets
-   `renamedToolNames` (old to new), `canonicalToolName(name)` and `legacyToolNames(name)`. The old names stay reserved
-   against extensions and tool definitions (`reservedToolNames`), and never join `retiredGroupTools`.
+   `renamedToolNames` (old to new), `canonicalToolName(name)` and `legacyToolNames(name)`. The old names stay
+   Pikibun's own:
+
+   - The loader ignores an extension's tool with an old name as it ignores one with a new name. It decides by
+     `toolNames` less `retiredToolNames` today, which the rename alone would let `read_file` through.
+   - A tool definition can't take one either (`reservedToolNames`).
+   - They never join `retiredGroupTools`.
 
 9. **Canonical on the way in.** Every place that reads a tool name from storage or the wire maps it first:
 
@@ -141,7 +147,9 @@ would then run on data it misreads, which is worse than not running.
 10. **Both spellings on the way out to connectors.** Hosts update slowly, so the control plane sends a connector the
     new name and the old one:
 
-    - `agent.tools` in a binding. An older connector picks a side ask's tools by the old names (`session.ts`).
+    - `agent.tools` in a binding. An older connector gives a side ask the read-only tools that `agent.tools` names,
+      and it knows them as `read_file`, `list_files` and `search` (`apps/runner/src/session.ts`, `readOnlyTools`).
+      Without the old names its side asks would have no file tools.
     - A tool group's `off` list. Each tool left out goes with its old name. A tool the group has never goes with
       either. Otherwise a member with `write` turned off would still have `write_file` on an older host.
 
@@ -155,10 +163,15 @@ would then run on data it misreads, which is worse than not running.
     card), and an older app shows the new one with the default icon.
 
 12. **The model's side.** The tool descriptions, the runtime instructions (`session/instructions.ts`), the note that
-    points to a saved output (`tool-output.ts`) and code mode's names (`tools.read`) take the new names. A conversation
-    from before the change keeps its old calls in its transcript, as it kept `bash`'s, and each message offers only
-    the new names. A model may still call an old name out of habit. If the harness can hold a tool the model isn't
-    shown, the five old names stay as such tools, running the new ones. If not, the refusal names the new tool.
+    points to a saved output (`apps/runner/src/tool-output.ts`) and code mode's names (`tools.read`) take the new
+    names. A conversation from before the change keeps its old calls in its transcript, as it kept `bash`'s, and each
+    message offers only the new names.
+
+    The old names don't stay callable. A model may call one out of habit, and pi-durable settles a call to a tool the
+    request didn't offer as `tool_unavailable` ("Tool read_file is not available") without running anything, whatever
+    is registered. So no hidden alias can serve it. Where Pikibun's own tool hook sees that result for a renamed
+    name, it adds which tool to call instead. Where it doesn't, the model has the harness's refusal and the offered
+    list, and that is accepted.
 
 13. **Extensions that name the tools.** `piki:pr-flow` watches for the tools that change files (`changingTools`). As a
     managed package it will run on connectors of either age, so it matches both spellings, and its version goes up.
@@ -194,12 +207,12 @@ One pull request each.
 
 | Part | Where |
 |---|---|
-| The tools | `apps/runner/src/session/tools/files.ts`; `edits.ts` goes where nothing else uses it; `search.ts`, `images.ts`, the sandbox helpers (`ls`'s entry kinds, `find`) |
-| The names, the map | `packages/shared/src/types.ts` (`toolNames`), `tool-definitions.ts` (`reservedToolNames`), `piki-extensions.ts` (`piki:files`), `workspace-tools.ts` |
+| The tools | `apps/runner/src/session/tools/files.ts`; `apps/runner/src/edits.ts` goes where nothing else uses it; `apps/runner/src/search.ts`, `apps/runner/src/images.ts`, the sandbox helpers (`ls`'s entry kinds, `find`) |
+| The names, the map | `packages/shared/src/types.ts` (`toolNames`), `packages/shared/src/tool-definitions.ts` (`reservedToolNames`), `packages/shared/src/piki-extensions.ts` (`piki:files`), `packages/shared/src/workspace-tools.ts` |
 | Tool groups | `packages/shared/src/tool-groups.ts` (`groupTools`, `groupToolInfo`, `roleTools`, `toolsOff`, `retiredGroupTools`, the parsers); `apps/server/src/authority/tool-groups.ts`, `apps/server/src/tool-groups.ts`; `apps/nsh/src/settings/workspace-tool-groups.tsx` |
-| Bindings and agent versions | `apps/server/src/db.ts`, `catalog.ts`, `sessions.ts`; `apps/runner/src/protocol.ts`, `session.ts` (`readOnlyTools`) |
-| The model's side | `apps/runner/src/session/instructions.ts`, `tool-output.ts`, `provider.ts` (the test provider) |
-| Extensions | `apps/runner/src/extensions/load.ts` (which names are Pikibun's), `extensions/pr-flow/pr-flow.ts` |
+| Bindings and agent versions | `apps/server/src/db.ts`, `apps/server/src/catalog.ts`, `apps/server/src/sessions.ts`; `apps/runner/src/protocol.ts`, `apps/runner/src/session.ts` (`readOnlyTools`) |
+| The model's side | `apps/runner/src/session/instructions.ts`, `apps/runner/src/tool-output.ts`, `apps/runner/src/provider.ts` (the test provider) |
+| Extensions | `apps/runner/src/extensions/load.ts` (the old and new names are Pikibun's, decision 8); `extensions/pr-flow/pr-flow.ts` at the repository's root |
 | The transcript | `packages/shared/src/tool-summary.ts` (`callTarget`, both spellings); `apps/nsh/src/components/TranscriptEntry.tsx` has icons for both already |
 | For people | `docs/models-and-tools.md`, `docs/extensions.md`, `docs/sessions.md`, `docs/design/piki-extensions.md` (note 21), `packages/cli/README.md` |
 
@@ -208,6 +221,9 @@ One pull request each.
 - **Conformance.** Pi's real `read`, `write`, `edit`, `ls`, `grep` (and `find`) against ours, over one directory:
   `content` and `details` equal, apart from decision 5's exceptions. Ours runs on each sandbox backend that `search`'s
   conformance suite covers today.
+- **`edit` stays off the host.** With Pi's `execute` under decision 2, no path the model can give makes Pi read,
+  write or probe a path of the host: an absolute path, `~`, `..` and a leading `@` are refused or stay under the
+  made-up `cwd`. Phase 1 doesn't land without it.
 - **Hooks.** A real extension blocks a `write` by path, rewrites a `read`'s input, and reads `read`'s and `edit`'s
   results with Pi's type guards.
 - **Shadowing.** An extension's `read` and `read_file` are both ignored and reported; its `find` is offered until
