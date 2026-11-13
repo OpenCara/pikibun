@@ -28,7 +28,7 @@ function flag(processEnv: NodeJS.ProcessEnv, name: string): boolean {
 }
 
 export const defaultDatabaseUrl = 'sqlite:///data/pikibun.sqlite';
-const stringVars = [
+export const stringVars = [
   'APP_ORIGIN', 'RUNNER_URL', 'RUNNER_EVENT_TRANSPORT', 'RUNNER_SHARED_SECRET', 'SESSION_SECRET', 'VAULT_KEY',
   'GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'TEST_AUTH_ENABLED', 'TEST_AUTH_SECRET', 'TEST_AUTH_EXPIRES_AT',
   'GITHUB_APP_ID', 'GITHUB_APP_SLUG', 'GITHUB_APP_PRIVATE_KEY', 'OIDC_SIGNING_KEY', 'ADMIN_USER_IDS', 'GIT_DIRECT', 'SANDBOX_GITHUB_API',
