@@ -3,7 +3,7 @@ import type { BrowseResult } from "./file-browser.js";
 import type { FileContent } from "./images.js";
 import type { ClonePushWorkspace } from "./push.js";
 import type { CloneBackup, SandboxAuthorize, SandboxExecutionOptions, SandboxIdentity, SnapshotFile } from "./sandbox.js";
-import type { SearchRequest, SearchResult } from "./search.js";
+import type { FindRequest, FindResult, SearchRequest, SearchResult } from "./search.js";
 import type { FileOperationRequest, FileOperationResult } from "./file-operations.js";
 import type { SessionBrowser } from "./browser-command.js";
 
@@ -23,6 +23,7 @@ export interface SessionWorkspace {
   listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]>;
   listEntries(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]>;
   search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult>;
+  find(request: FindRequest, authorize: SandboxAuthorize): Promise<FindResult>;
   fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult>;
   browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult>;
   execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options?: SandboxExecutionOptions): Promise<string>;

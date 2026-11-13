@@ -6,7 +6,7 @@ import { validateUserEnv } from "../../../packages/shared/src/policy.js";
 import { validCloneDirectory } from "../../../packages/shared/src/repositories.js";
 import type { HostCommandOperation, Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
 import { checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser.js";
-import { checkedSearch, type SearchRequest, type SearchResult } from "./search.js";
+import { checkedFind, checkedSearch, type FindRequest, type FindResult, type SearchRequest, type SearchResult } from "./search.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
 import { runHostShell } from "./host-shell.js";
 import { imageType, type FileContent } from "./images.js";
@@ -207,6 +207,10 @@ export class HelperWorkspace implements IsolatedWorkspace {
 
   async search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult> {
     return checkedSearch(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, { readOnly: true }, authorize)));
+  }
+
+  async find(request: FindRequest, authorize: SandboxAuthorize): Promise<FindResult> {
+    return checkedFind(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, { readOnly: true }, authorize)));
   }
 
   async fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult> {
