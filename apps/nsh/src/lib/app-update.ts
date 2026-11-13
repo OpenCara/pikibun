@@ -12,6 +12,7 @@ import {
 import { LINUX_INSTALL, MAC_INSTALL, utf16le, windowsUpdateTask } from "./update-scripts";
 import { lastLines as lastOf } from "./windows-cmd";
 import { compareVersions, isPrerelease, isVersion } from "./version";
+import { UPDATE_SIGNATURE_SUFFIX, UPDATE_SIGNING_KEY, verifyUpdateSignature } from "../../../../packages/shared/src/update-signature";
 
 export { compareVersions, isVersion } from "./version";
 
@@ -33,7 +34,7 @@ const PROGRESS_EVERY_MS = 100;
 const FIRST_CHECK_MS = 5_000;
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 
-export interface ReleaseAsset { name: string; url: string; size: number; sha256: string }
+export interface ReleaseAsset { name: string; url: string; size: number; sha256: string; signatureUrl: string }
 
 export interface AvailableUpdate {
   version: string;
@@ -53,16 +54,15 @@ function releaseAsset(assets: unknown, tag: string, version: string, os: string,
   const suffix = assetSuffix(os, arch);
   if (!suffix || !Array.isArray(assets)) return null;
   const name = `Pikibun-${version}-${suffix}`;
-  for (const asset of assets) {
-    if (!asset || typeof asset !== "object") continue;
-    const entry = asset as Record<string, unknown>;
-    if (entry.name !== name || (entry.state !== undefined && entry.state !== "uploaded")) continue;
-    const size = typeof entry.size === "number" && Number.isSafeInteger(entry.size) && entry.size > 0 ? entry.size : 0;
-    const sha256 = typeof entry.digest === "string" ? DIGEST.exec(entry.digest)?.[1] : undefined;
-    if (!sha256) return null;
-    return { name, url: `${REPOSITORY}/releases/download/${tag}/${name}`, size, sha256 };
-  }
-  return null;
+  const signature = `${name}${UPDATE_SIGNATURE_SUFFIX}`;
+  const uploaded = (wanted: string) => assets.find((asset: unknown): asset is Record<string, unknown> => !!asset && typeof asset === "object"
+    && (asset as Record<string, unknown>).name === wanted && ((asset as Record<string, unknown>).state === undefined || (asset as Record<string, unknown>).state === "uploaded"));
+  const entry = uploaded(name);
+  if (!entry || !uploaded(signature)) return null;
+  const size = typeof entry.size === "number" && Number.isSafeInteger(entry.size) && entry.size > 0 ? entry.size : 0;
+  const sha256 = typeof entry.digest === "string" ? DIGEST.exec(entry.digest)?.[1] : undefined;
+  if (!sha256) return null;
+  return { name, url: `${REPOSITORY}/releases/download/${tag}/${name}`, size, sha256, signatureUrl: `${REPOSITORY}/releases/download/${tag}/${signature}` };
 }
 
 export function newerRelease(releases: unknown, current: string, os: string, arch: string): AvailableUpdate | undefined {
@@ -165,7 +165,47 @@ export async function preferProxy(proxy: string | null, through: (proxy: string)
 async function download(asset: ReleaseAsset, progress: (loaded: number, total: number) => void): Promise<string> {
   const dir = folder();
   const proxy = await updateProxy().catch(() => null);
-  return preferProxy(proxy, found => downloadThrough(found, dir, asset, progress), () => downloadInto(dir, asset, progress));
+  const file = await preferProxy(proxy, found => downloadThrough(found, dir, asset, progress), () => downloadInto(dir, asset, progress));
+  const signature = await preferProxy(proxy, found => signatureThrough(found, dir, asset), () => signatureDirect(asset));
+  try { await requireUpdateSignature(asset, signature); }
+  catch (error) { try { await unlink(file); } catch { } throw error; }
+  return file;
+}
+
+const SIGNATURE_LIMIT = 1024;
+export const UNSIGNED = "This download isn't signed with Pikibun's release key, so it wasn't installed. Install the update from its release page, "
+  + "or report it at https://github.com/OpenCara/pikibun/issues.";
+
+export async function requireUpdateSignature(asset: Pick<ReleaseAsset, "name" | "sha256">, signature: string, publicKey = UPDATE_SIGNING_KEY): Promise<void> {
+  if (signature.length > SIGNATURE_LIMIT || !await verifyUpdateSignature(asset.name, asset.sha256, signature, publicKey)) throw new Error(UNSIGNED);
+}
+
+async function signatureDirect(asset: ReleaseAsset): Promise<string> {
+  const response = await fetch(asset.signatureUrl, { headers: { Accept: "application/octet-stream", "User-Agent": USER_AGENT } });
+  if (!response.ok) throw new Error(`The update's signature couldn't be downloaded: GitHub answered ${response.status}.`);
+  const text = await response.text();
+  if (text.length > SIGNATURE_LIMIT) throw new Error(UNSIGNED);
+  return text;
+}
+
+async function signatureThrough(proxy: string, dir: string, asset: ReleaseAsset): Promise<string | null> {
+  const name = `${asset.name}${UPDATE_SIGNATURE_SUFFIX}`;
+  const args = curlArguments(asset.signatureUrl, proxy, name);
+  const [command, words] = platform.os === "windows"
+    ? ["cmd", ["/d", "/c", "curl.exe", ...args]]
+    : ["sh", ["-c", "exec curl \"$@\"", "pikibun-update", ...args]];
+  let output: { code?: number | null; stdout: string; stderr: string };
+  try { output = await nshProcess.run(command, words, { cwd: dir, timeoutMs: PROBE_MS * 4 }); }
+  catch (error) { throw new ProxyDownloadFailed(`The update's signature didn't download through the proxy at ${shownProxy(proxy)}: ${messageOf(error)}.`); }
+  if (output.code === 127 || output.code === 9009) return null;
+  if (output.code !== 0) {
+    throw new ProxyDownloadFailed(`The update's signature didn't download through the proxy at ${shownProxy(proxy)}: ${lastLines(`${output.stderr}\n${output.stdout}`) || `curl's exit code ${output.code ?? "unknown"}`}.`);
+  }
+  const path = inFolder(dir, name);
+  if ((await stat(path)).size > SIGNATURE_LIMIT) throw new Error(UNSIGNED);
+  const text = await readFile(path, "utf8");
+  try { await unlink(path); } catch { }
+  return text;
 }
 
 const later = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
