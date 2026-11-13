@@ -63,8 +63,8 @@ export function callTarget(name: string, args: Fields | undefined): string {
   }
   const path = string(args, "path");
   switch (name) {
-    case "read_file": if (path) return `${path}${lineSpan(args)}`; break;
-    case "edit_file": if (path) return Array.isArray(args.edits) && args.edits.length > 1 ? `${path} (${args.edits.length} edits)` : path; break;
+    case "read": case "read_file": if (path) return `${path}${lineSpan(args)}`; break;
+    case "edit": case "edit_file": if (path) return Array.isArray(args.edits) && args.edits.length > 1 ? `${path} (${args.edits.length} edits)` : path; break;
     case "delete_file": if (path) return args.recursive === true ? `${path} (recursive)` : path; break;
     case "move_file": case "copy_file": {
       const from = string(args, "from");
@@ -72,7 +72,7 @@ export function callTarget(name: string, args: Fields | undefined): string {
       if (from && to) return `${from} → ${to}`;
       break;
     }
-    case "search": {
+    case "grep": case "search": {
       const pattern = string(args, "pattern");
       if (!pattern) break;
       const where = [path, string(args, "glob")].filter(Boolean).join(" ");
@@ -239,6 +239,7 @@ function answerSummary(all: Fields, images: number): ResultSummary {
 }
 
 const PI_CONTRACT: Record<string, "read" | "write" | "edit" | "ls" | "grep"> = {
+  read: "read", write: "write", edit: "edit", ls: "ls", grep: "grep",
   read_file: "read", write_file: "write", edit_file: "edit", list_files: "ls", search: "grep",
 };
 

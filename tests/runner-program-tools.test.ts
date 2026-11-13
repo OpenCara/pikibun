@@ -315,7 +315,7 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   let seen: unknown;
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("browser", { url: "javascript:alert(1)" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("write_file", { path: "site/index.html", content: "<!doctype html><title>Faux app</title><h1>Hello from the sandbox</h1><button>Go</button>" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("write", { path: "site/index.html", content: "<!doctype html><title>Faux app</title><h1>Hello from the sandbox</h1><button>Go</button>" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("browser", { serve: { program: "python3", args: ["-m", "http.server", String(port), "--bind", "127.0.0.1"], port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
       actions: [{ action: "evaluate", expression: "document.querySelector('h1').textContent" }] })], { stopReason: "toolUse" }),
     context => { seen = context.messages.at(-1); return fauxAssistantMessage("Seen."); },

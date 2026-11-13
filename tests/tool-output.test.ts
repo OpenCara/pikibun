@@ -22,7 +22,7 @@ test('a long output: its start and end, which fit, and the whole of it saved, wh
   assert.ok(fitsModel(shown), 'pi-durable keeps all of it');
   assert.ok(shown.startsWith('ok 0 - a passing test'), 'its start');
   assert.ok(shown.endsWith('not ok 20000 - the failure\nFAILED: 1 test'), 'its end, where the failure is');
-  assert.match(shown, /\n\[… \d+ bytes left out here\. The whole output is in tool-output\/gh-call\.txt: read it with read_file \(offset and limit\) or search it …\]\n/);
+  assert.match(shown, /\n\[… \d+ bytes left out here\. The whole output is in tool-output\/gh-call\.txt: read it with read \(offset and limit\) or grep it …\]\n/);
   assert.deepEqual(saves, [text], 'saved whole, since it is under the file limit');
   const omitted = Number(/\[… (\d+) bytes left out/.exec(shown)![1]);
   const [start, end] = shown.split(/\n\[….*…\]\n/);

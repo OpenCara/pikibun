@@ -527,11 +527,11 @@ test("tool calls: a Read-only message's change is refused, and a shell call is u
   const state = toolState({ options: { access: "read" } });
   state.toolActors["1"] = { initiatedBy: "github:2", ownerId: "github:1", runKey: "r1" };
   const { calls } = toolsFixture(state);
-  await assert.rejects(calls.check(toolApi(state), "write_file", { write: true }), (error: unknown) => error instanceof RunnerError && error.status === 403
-    && error.message === "write_file changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.");
-  assert.deepEqual(await calls.check(toolApi(state), "read_file"), { unbounded: false });
+  await assert.rejects(calls.check(toolApi(state), "write", { write: true }), (error: unknown) => error instanceof RunnerError && error.status === 403
+    && error.message === "write changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.");
+  assert.deepEqual(await calls.check(toolApi(state), "read"), { unbounded: false });
   assert.deepEqual(await calls.check(toolApi(state), "git", { shell: true }), { unbounded: false });
-  await assert.rejects(calls.check(toolApi(state, 2), "read_file"), /no authorized writable submission/);
+  await assert.rejects(calls.check(toolApi(state, 2), "read"), /no authorized writable submission/);
   assert.equal((await calls.outputFiles(toolApi(state))), undefined, "a Read-only message writes no output files");
   assert.equal((await calls.commandOptions(30)).limits.seconds, 30);
   assert.equal((await calls.commandOptions()).limits.seconds, 600);
@@ -541,7 +541,7 @@ test("tools: the families keep their order, git_push comes last and only for a c
   const { context } = toolsFixture(toolState());
   const names = buildTools(context, false).map(tool => tool.name);
   const python = process.platform === "win32" ? [] : ["python"];
-  assert.deepEqual(names, ["identity", "read_file", "list_files", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file", "git", ...python, "browser",
+  assert.deepEqual(names, ["identity", "read", "ls", "grep", "write", "edit", "move_file", "copy_file", "delete_file", "git", ...python, "browser",
     "tunnel", "github_read", "github_comment", "github_merge", "github_issue", "schedule", "sessions"]);
   assert.deepEqual(buildTools(context, true).map(tool => tool.name), [...names, "git_push"]);
 });
@@ -549,10 +549,10 @@ test("tools: the families keep their order, git_push comes last and only for a c
 test("tools: a tool checks that it is on first, then who acts, then the call, and only then touches the worktree", async () => {
   const state = toolState();
   const { events, tool } = toolsFixture(state);
-  const written = await tool("write_file").execute({ path: "a.txt", content: "x" }, toolApi(state), {});
+  const written = await tool("write").execute({ path: "a.txt", content: "x" }, toolApi(state), {});
   assert.equal(written.output[0]!.text, "Successfully wrote to a.txt");
   assert.deepEqual((written as { details?: unknown }).details, { pikibun: { initiatedBy: "github:2", actingAs: "github:1", mode: "write" } }, "who the call acts for is in its details");
-  assert.deepEqual(events, ["authorize github:2 write", "owner write_file", "sender github:2 write_file", "authorize github:2 write", "write a.txt"]);
+  assert.deepEqual(events, ["authorize github:2 write", "owner write", "sender github:2 write", "authorize github:2 write", "write a.txt"]);
   events.length = 0;
   await assert.rejects(tool("github_merge").execute({ repository: "acme/app", pull: 1, sha: "short", method: "squash" }, toolApi(state), {}), /40-character head commit/);
   assert.deepEqual(events, ["tool github_merge", "authorize github:2 write"]);
@@ -573,19 +573,19 @@ test("tools: a tool checks that it is on first, then who acts, then the call, an
 
 test("tool calls: every call is checked against the owner's group, the file tools and the owner's own messages too", async () => {
   const own = toolState({ initiatedBy: "github:1" });
-  const { events, tool } = toolsFixture(own, {}, {}, ["write_file", "read_file"]);
-  await assert.rejects(tool("write_file").execute({ path: "a.txt", content: "x" }, toolApi(own), {}), /write_file isn't among the owner's tools/);
+  const { events, tool } = toolsFixture(own, {}, {}, ["write", "read"]);
+  await assert.rejects(tool("write").execute({ path: "a.txt", content: "x" }, toolApi(own), {}), /write isn't among the owner's tools/);
   assert.ok(!events.includes("write a.txt"), "a file tool the owner's group leaves out writes nothing");
-  await assert.rejects(tool("read_file").execute({ path: "a.txt" }, toolApi(own, 2), {}), /read_file isn't among the owner's tools/);
+  await assert.rejects(tool("read").execute({ path: "a.txt" }, toolApi(own, 2), {}), /read isn't among the owner's tools/);
   const asked = toolState({ mode: "ask" });
   asked.toolActors["1"] = { initiatedBy: "github:2", ownerId: "github:1", runKey: "r1" };
-  const ask = toolsFixture(asked, {}, {}, ["search"]);
-  await assert.rejects(ask.calls.check(toolApi(asked), "search"), /search isn't among the owner's tools/);
-  assert.deepEqual(ask.events, ["owner search"], "an ask checks the owner's group, and no sender's");
+  const ask = toolsFixture(asked, {}, {}, ["grep"]);
+  await assert.rejects(ask.calls.check(toolApi(asked), "grep"), /grep isn't among the owner's tools/);
+  assert.deepEqual(ask.events, ["owner grep"], "an ask checks the owner's group, and no sender's");
 });
 
 function definitionsFixture(options: Partial<SessionDefinitionsOptions> = {}) {
-  const tools: string[] = ["read_file"];
+  const tools: string[] = ["read"];
   const installed: string[] = [];
   const reserved: string[][] = [];
   const definitions = new SessionDefinitions({
@@ -616,7 +616,7 @@ test("defined tools: a refresh adds what Pikibun defines now as one more extensi
   const make = bundledToolDefinitions.find(item => item.name === "make")!;
   let served: ToolDefinition[] = [node];
   const { definitions, tools, installed, reserved } = definitionsFixture({ config: { toolDefinitions: async () => served } });
-  tools.push(...(await definitions.load(["read_file"])).map(tool => tool.name));
+  tools.push(...(await definitions.load(["read"])).map(tool => tool.name));
   assert.deepEqual(definitions.definitions.map(item => item.name), ["node"]);
   const notes: string[] = [];
   t.mock.method(process.stderr, "write", (chunk: string) => { notes.push(chunk); return true; });
@@ -627,7 +627,7 @@ test("defined tools: a refresh adds what Pikibun defines now as one more extensi
   await definitions.refresh([]);
   assert.deepEqual(installed, ["defined-tools-1"]);
   assert.deepEqual(reserved, [["make"]]);
-  assert.deepEqual(tools, ["read_file", "node", "make"]);
+  assert.deepEqual(tools, ["read", "node", "make"]);
   assert.deepEqual(definitions.definitions.map(item => item.name), ["node", "make"]);
   assert.equal(definitions.definitions[0]!.description, node.description, "a changed definition is used as it was until the session opens again");
   assert.deepEqual(notes, ["Session s1: the tool definition node changed; the session uses it as it was until it next opens.\n",
@@ -769,7 +769,7 @@ test("view: the queue, who is busy, the access of the latest write, the preparat
 test("view: extensions show what runs, what is missing, the built-ins, and tools the host can't offer", async () => {
   const base: ExtensionViewSource = {
     binding: { session: { workspaceId: "w", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding,
-    config: undefined, builtins: () => undefined, hostConfig: async () => defaultHostConfig, requiredExtensions: async () => [], toolNames: () => ["read_file"],
+    config: undefined, builtins: () => undefined, hostConfig: async () => defaultHostConfig, requiredExtensions: async () => [], toolNames: () => ["read"],
     definedToolsOff: off => off, browserUnavailable: () => "missing", tunnelUnavailable: () => undefined, missingPrograms: () => [{ tool: "node", source: "piki:node", programs: ["yarn"] }],
   };
   assert.deepEqual(await extensionView(base), {}, "a host without extensions or built-ins shows none");
@@ -1041,8 +1041,8 @@ test("availability: a message runs the tools both its sender and the session's o
     && /github_merge isn't among the tools of this session's owner \(Owners\)/.test(error.message));
   await tools.requireOwnerTool("tunnel");
   const unheard = availability({ config: { extensions: { workspace: async () => ({ extensions: [], automaticTools: false }), lastKnown: () => undefined } } });
-  await assert.rejects(unheard.requireOwnerTool("write_file"), /write_file isn't among the tools of this session's owner/, "a host that never heard the owner's group only reads");
-  await unheard.requireOwnerTool("read_file");
+  await assert.rejects(unheard.requireOwnerTool("write"), /write isn't among the tools of this session's owner/, "a host that never heard the owner's group only reads");
+  await unheard.requireOwnerTool("read");
   assert.equal(await tools.forgeWrites("github:1"), false, "an owner whose group leaves out github_merge gives no write credential to gh");
   const writers = availability({}, { toolGroups: { "github:2": { name: "Members", off: ["git_push", "github_comment"] } } });
   assert.equal(await writers.forgeWrites("github:1"), true);
@@ -1090,13 +1090,13 @@ test("instructions: a clone session names its branch, repositories, LFS and the 
 });
 
 test("instructions: tools add their lines only while on, and only outside an ask", () => {
-  const tools = ["search", "move_file", "git", "python", "browser", "tunnel", "github_read"];
+  const tools = ["grep", "move_file", "git", "python", "browser", "tunnel", "github_read"];
   const all = instructions({ tools, browser: true, codemode: true });
-  for (const line of [/use search/, /use move_file/, /Run Git with the git tool/, /Run Python, pip/, /use the browser tool/, /use the tunnel tool/, /codemode script/]) {
+  for (const line of [/use grep/, /use move_file/, /Run Git with the git tool/, /Run Python, pip/, /use the browser tool/, /use the tunnel tool/, /codemode script/]) {
     assert.match(all, line);
   }
   const ask = instructions({ tools, browser: true, codemode: true, mode: "ask" });
-  assert.match(ask, /use search/);
+  assert.match(ask, /use grep/);
   for (const line of [/use move_file/, /git tool/, /python tool/, /browser tool/, /tunnel tool/, /codemode/]) assert.doesNotMatch(ask, line);
   assert.doesNotMatch(instructions({ tools, mode: "read" }), /tunnel tool/, "a read-only message isn't offered the tunnel");
   const off = instructions({ tools, browser: true, off: new Set(["git", "python", "browser", "tunnel"]), browserUnavailable: "missing", tunnelUnavailable: "missing" });

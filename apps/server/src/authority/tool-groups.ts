@@ -1,7 +1,7 @@
 import {
-  isGroupTool, memberTools, retiredGroupTools, roleGroupNames, toolGroupLimits, toolsLeftOut, toolsOff, type GroupTool, type MemberToolGroup,
+  canonicalGroupTools, isGroupTool, memberTools, retiredGroupTools, roleGroupNames, toolGroupLimits, toolsLeftOut, toolsOff, type GroupTool, type MemberToolGroup,
 } from '../../../../packages/shared/src/tool-groups.js';
-import type { WorkspaceRole } from '../../../../packages/shared/src/types.js';
+import { canonicalToolName, type WorkspaceRole } from '../../../../packages/shared/src/types.js';
 import { ConstraintError } from '../db/types.js';
 import { fail, id, now } from '../http.js';
 import type { Env, SessionRow } from '../types.js';
@@ -15,7 +15,7 @@ function groupOf(row: MemberGroupRow): { name: string; tools: GroupTool[] } {
   if (row.tools_json !== null) {
     try { tools = JSON.parse(row.tools_json); } catch { tools = []; }
   }
-  const group = row.group_name !== null ? { tools: Array.isArray(tools) ? tools.filter(isGroupTool) : [] } : null;
+  const group = row.group_name !== null ? { tools: Array.isArray(tools) ? canonicalGroupTools(tools) : [] } : null;
   return { name: row.group_name ?? roleGroupNames[row.role], tools: memberTools(row.role, group) };
 }
 
@@ -118,15 +118,16 @@ export async function setMemberToolGroup(env: Env, workspaceId: string, targetId
   await auditStatement(env, actorId, 'workspace.member.tool_group', workspaceId, null, { userId: targetId, groupId }).run();
 }
 
-export async function requireSessionTool(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>, actorId: string, tool: string): Promise<void> {
+export async function requireSessionTool(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>, actorId: string, asked: string): Promise<void> {
+  const tool = canonicalToolName(asked);
   if (!isGroupTool(tool) && !retiredGroupTools.includes(tool)) return;
   const owner = await memberToolGroup(env, row.workspace_id, row.owner_id);
   if (!groupHas(owner, tool)) {
-    fail(403, 'tool_not_in_group', `${tool} isn't among the tools of this session's owner (${owner.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups.`);
+    fail(403, 'tool_not_in_group', `${asked} isn't among the tools of this session's owner (${owner.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups.`);
   }
   if (actorId === row.owner_id) return;
   const actor = await memberToolGroup(env, row.workspace_id, actorId);
   if (!groupHas(actor, tool)) {
-    fail(403, 'tool_not_in_group', `${tool} isn't among the tools of the person who sent this message (${actor.name}): a message runs only the tools both its sender and the session's owner have. Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups.`);
+    fail(403, 'tool_not_in_group', `${asked} isn't among the tools of the person who sent this message (${actor.name}): a message runs only the tools both its sender and the session's owner have. Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups.`);
   }
 }

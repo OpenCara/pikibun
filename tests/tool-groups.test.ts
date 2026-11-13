@@ -16,15 +16,17 @@ test('each role\'s sessions get their tools, and a group\'s own tools replace th
   assert.deepEqual(toolsLeftOut(roleTools.collaborator), ['tunnel', 'github_merge'], 'collaborators neither merge nor put apps online');
   assert.deepEqual(toolsLeftOut(roleTools.member), ['git_push', 'tunnel', 'github_comment', 'github_issue', 'github_merge', 'schedule', 'sessions'],
     'members work in the sandbox: files, commands, the session branch and reading GitHub');
-  assert.deepEqual(roleTools.viewer, ['identity', 'list_files', 'read_file', 'search']);
-  assert.deepEqual(memberTools('member', { tools: ['github_merge', 'read_file', 'unknown'] }), ['read_file', 'github_merge'], 'a group replaces the role\'s tools');
+  assert.deepEqual(roleTools.viewer, ['identity', 'ls', 'read', 'grep']);
+  assert.deepEqual(memberTools('member', { tools: ['github_merge', 'read_file', 'unknown'] }), ['read', 'github_merge'], 'a group replaces the role\'s tools, and a saved read_file is read');
   assert.deepEqual(memberTools('owner', null), [...groupTools]);
-  assert.deepEqual(parseGroupTools(['sessions', 'git', 'git', 'read_file']), ['read_file', 'git', 'sessions'], 'in the catalog\'s order, each once');
+  assert.deepEqual(parseGroupTools(['sessions', 'git', 'git', 'read_file', 'read']), ['read', 'git', 'sessions'], 'in the catalog\'s order, each once, either spelling');
   assert.deepEqual(parseGroupTools([]), []);
   assert.throws(() => parseGroupTools(['bash']), /bash isn't one of Pikibun's session tools/);
   assert.throws(() => parseGroupTools('git'), /list/);
   assert.deepEqual(parseMemberToolGroups(undefined), {});
   assert.deepEqual(parseMemberToolGroups({ u1: { name: 'Members', off: ['git_push'] } }), { u1: { name: 'Members', off: ['git_push'] } });
+  assert.deepEqual(parseMemberToolGroups({ u1: { name: 'Members', off: ['write', 'write_file', 'search'] } }), { u1: { name: 'Members', off: ['write', 'grep'] } },
+    'a host reads an off list in the new names, whichever spelling it came in');
   assert.throws(() => parseMemberToolGroups({ u1: { name: 'Members', off: 'git_push' } }), /Invalid tool groups/);
   assert.deepEqual(parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: false, toolGroups: { u1: { name: 'Members', off: ['sessions'] } } }).toolGroups,
     { u1: { name: 'Members', off: ['sessions'] } }, 'hosts read the groups with the workspace\'s extensions');
@@ -33,6 +35,20 @@ test('each role\'s sessions get their tools, and a group\'s own tools replace th
   assert.deepEqual(toolsOff(groupTools), [], 'a session with every tool keeps the retired ones old agents may pin');
   assert.deepEqual(toolsOff(roleTools.collaborator), ['tunnel', 'github_merge', ...retiredGroupTools], 'any other session runs without them');
   assert.deepEqual(unknownToolGroup.off, toolsOff(roleTools.viewer), 'a host that has never heard of the workspace only reads files');
+});
+
+test('the renamed file tools: a group\'s off list names each tool it leaves out in both spellings, for hosts of either age, and the old names never count as retired', () => {
+  const old = ['read_file', 'write_file', 'edit_file', 'list_files', 'search'];
+  assert.ok(old.every(name => !retiredGroupTools.includes(name)), 'the old names are renamed tools, not retired ones');
+  const noWrite = toolsOff(groupTools.filter(tool => tool !== 'write'));
+  assert.ok(noWrite.includes('write') && noWrite.includes('write_file'), 'leaving out write turns off write and write_file');
+  assert.ok(!noWrite.includes('read') && !noWrite.includes('read_file'), 'and neither read nor read_file');
+  const noTunnel = toolsOff(groupTools.filter(tool => tool !== 'tunnel'));
+  assert.ok(noTunnel.includes('tunnel'));
+  assert.deepEqual(noTunnel.filter(tool => old.includes(tool) || ['read', 'write', 'edit', 'ls', 'grep'].includes(tool)), [],
+    'leaving out only tunnel turns off none of the file tools in either spelling');
+  assert.deepEqual(toolsOff(['identity', 'list_files', 'read_file', 'search']), toolsOff(roleTools.viewer), 'a saved group in the old names leaves out what the new names do');
+  assert.deepEqual(memberTools('member', { tools: ['identity', 'read_file', 'list_files', 'search'] }), roleTools.viewer);
 });
 
 const origin = 'http://localhost:8787';
@@ -92,7 +108,12 @@ test('workspace owners and admins create tool groups and put members in them; th
   const initial = await body<ToolGroupSettings>(await f.member.request('GET', `${f.path}/tool-groups`));
   assert.equal(initial.admin, false, 'every member sees the groups; only owners and admins change them');
   assert.deepEqual(initial.groups, []);
-  assert.deepEqual(initial.roles.member, [...roleTools.member]);
+  assert.deepEqual(initial.roles.member, roleTools.member.map(tool => ({ read: 'read_file', write: 'write_file', edit: 'edit_file', ls: 'list_files', grep: 'search' } as Record<string, string>)[tool] ?? tool),
+    'the answer keeps the spellings apps from before the rename know');
+  const before = ['identity', 'list_files', 'read_file', 'search', 'write_file', 'edit_file', 'move_file', 'copy_file', 'delete_file', 'git', 'git_push', 'node', 'python', 'rust',
+    'go', 'dotnet', 'make', 'browser', 'tunnel', 'github_read', 'github_comment', 'github_issue', 'github_merge', 'source_read', 'schedule', 'sessions'];
+  assert.deepEqual(initial.tools.filter(tool => !before.includes(tool)), [], 'an app from before the rename knows every name the answer holds');
+  assert.ok(Object.values(initial.roles).flat().every(tool => before.includes(tool)));
   assert.deepEqual(initial.members.map(item => [item.userId, item.role, item.groupId]),
     [[f.owner.user.id, 'owner', null], [f.admin.user.id, 'admin', null], [f.member.user.id, 'member', null], [f.other.user.id, 'member', null]]);
   await requireSessionTool(f.env, row(f.owner.user.id), f.owner.user.id, 'github_merge');
@@ -136,6 +157,9 @@ test('workspace owners and admins create tool groups and put members in them; th
   assert.equal(assigned.members.find(item => item.userId === f.member.user.id)!.groupId, releasers.id);
   await requireSessionTool(f.env, row(f.member.user.id), f.member.user.id, 'github_merge');
   await refusedTool(f.member.user.id, 'write_file');
+  await refusedTool(f.member.user.id, 'write');
+  await requireSessionTool(f.env, row(f.member.user.id), f.member.user.id, 'read');
+  await requireSessionTool(f.env, row(f.member.user.id), f.member.user.id, 'read_file');
   assert.deepEqual((await memberToolGroups(f.env, f.workspace.id))[f.member.user.id], { name: 'Releasers', off: toolsOff(['read_file', 'git', 'git_push', 'github_merge']) });
 
   const renamed = await body<ToolGroupSettings>(await f.owner.request('PATCH', `${f.path}/tool-groups/${releasers.id}`, { name: 'Shippers', tools: [...groupTools] }));
@@ -158,6 +182,28 @@ test('workspace owners and admins create tool groups and put members in them; th
   const actions = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.%tool_group%' ORDER BY rowid").all().map(item => item.action);
   assert.deepEqual(actions, ['workspace.tool_group.created', 'workspace.member.tool_group', 'workspace.tool_group.updated', 'workspace.member.tool_group',
     'workspace.member.tool_group', 'workspace.tool_group.deleted', 'workspace.tool_group.created', 'workspace.member.tool_group']);
+});
+
+test('a tool group saved before the rename still lets its members read, and turns off both spellings of what it leaves out', async t => {
+  const f = await fixture(t);
+  const at = new Date().toISOString();
+  f.sqlite.prepare('INSERT INTO workspace_tool_groups (id, workspace_id, name, tools_json, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('old-readers', f.workspace.id, 'Old readers', JSON.stringify(['identity', 'list_files', 'read_file', 'search']), f.owner.user.id, at, f.owner.user.id, at);
+  await body(await f.owner.request('PUT', `${f.path}/members/${f.member.user.id}/tool-group`, { groupId: 'old-readers' }));
+  const row = { workspace_id: f.workspace.id, owner_id: f.member.user.id };
+  for (const tool of ['read', 'read_file', 'ls', 'list_files', 'grep', 'search']) await requireSessionTool(f.env, row, f.member.user.id, tool);
+  for (const tool of ['write', 'write_file', 'edit', 'edit_file']) {
+    await assert.rejects(requireSessionTool(f.env, row, f.member.user.id, tool), (error: { status?: number }) => error.status === 403, tool);
+  }
+  const off = (await memberToolGroups(f.env, f.workspace.id))[f.member.user.id]!.off;
+  assert.ok(['write', 'write_file', 'edit', 'edit_file'].every(tool => off.includes(tool)));
+  assert.ok(['read', 'read_file', 'ls', 'list_files', 'grep', 'search'].every(tool => !off.includes(tool)), 'the group\'s members keep their file tools on hosts of either age');
+  const settings = await body<ToolGroupSettings>(await f.owner.request('GET', `${f.path}/tool-groups`));
+  assert.deepEqual(settings.groups[0]!.tools, ['identity', 'list_files', 'read_file', 'search']);
+  const edited = await body<ToolGroupSettings>(await f.owner.request('PATCH', `${f.path}/tool-groups/old-readers`, { tools: [...settings.groups[0]!.tools, 'write'] }));
+  assert.deepEqual(edited.groups[0]!.tools, ['identity', 'list_files', 'read_file', 'search', 'write_file'], 'an app\'s save in either spelling keeps its tools');
+  assert.deepEqual(JSON.parse(String(f.sqlite.prepare('SELECT tools_json FROM workspace_tool_groups WHERE id = ?').get('old-readers')!.tools_json)), ['identity', 'ls', 'read', 'grep', 'write'],
+    'and the row takes the new names when it is next saved');
 });
 
 test('only the workspace owner changes or deletes a tool group that limits an admin', async t => {

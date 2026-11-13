@@ -23,7 +23,7 @@ function binding(id: string): RunnerBinding {
     session: { id, workspaceId: "workspace", ownerId: owner, agentVersionId: "version-1", title: "Tool groups", policyVersion: 1, status: "ready", createdAt: "2026-01-01T00:00:00Z", repositories: [], repositoryMode: "clone" },
     owner: { id: owner, githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice Owner", gitEmail: "alice@example.test", env: {}, githubConnected: false },
     agent: { id: "version-1", agentId: "agent", authorId: owner, workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.",
-      tools: ["read_file", "write_file", "sessions", "github_merge"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+      tools: ["read", "write", "sessions", "github_merge"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
     model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId: "faux-1" },
   };
 }
@@ -57,14 +57,14 @@ test("a message runs only the tools both its sender and the session's owner have
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-sender-tools-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const collaborators = { name: "Collaborators", off: toolsOff(roleTools.collaborator) };
-  const readers = { name: "Readers", off: toolsOff(["identity", "list_files", "read_file", "search"]) };
+  const readers = { name: "Readers", off: toolsOff(["identity", "ls", "read", "grep"]) };
   let current: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false, toolGroups: { [sender]: collaborators } };
   const offered: string[][] = [];
   const noting = (context: Context) => { offered.push(offeredTools(context)); return fauxAssistantMessage("Noted."); };
   const narrowed = (context: Context) => {
     offered.push(offeredTools(context));
     current = { ...current, toolGroups: { [sender]: readers } };
-    return fauxAssistantMessage([fauxToolCall("sessions", { action: "list" }), fauxToolCall("write_file", { path: "borrowed.txt", content: "x" })], { stopReason: "toolUse" });
+    return fauxAssistantMessage([fauxToolCall("sessions", { action: "list" }), fauxToolCall("write", { path: "borrowed.txt", content: "x" })], { stopReason: "toolUse" });
   };
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
@@ -93,7 +93,7 @@ test("a message runs only the tools both its sender and the session's owner have
 
   await send(sender, "collaborator");
   assert.ok(!offered[0]!.includes("github_merge"), `a collaborator's message isn't offered the owner's merges: ${offered[0]!.join()}`);
-  for (const tool of ["read_file", "write_file", "sessions"]) assert.ok(offered[0]!.includes(tool), `${tool}: ${offered[0]!.join()}`);
+  for (const tool of ["read", "write", "sessions"]) assert.ok(offered[0]!.includes(tool), `${tool}: ${offered[0]!.join()}`);
 
   await send(owner, "owner");
   assert.ok(offered[1]!.includes("github_merge"), "the owner's own message keeps every tool of theirs");

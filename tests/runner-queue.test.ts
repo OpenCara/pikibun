@@ -38,7 +38,7 @@ function binding(): RunnerBinding {
   return {
     session: { id: "queue-session", workspaceId: "workspace", ownerId: OWNER, agentVersionId: "version-1", title: "Queue tests", policyVersion: 1, status: "ready", createdAt },
     owner: { id: OWNER, githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice", gitEmail: "alice@example.test", env: {}, githubConnected: false },
-    agent: { id: "version-1", agentId: "queue-agent", authorId: "test:author", workspaceId: "workspace", version: 1, name: "Queue test agent", description: "Deterministic tests", instructions: "Use tools.", tools: ["identity", "read_file", "write_file"], modelId: "model-1", createdAt },
+    agent: { id: "version-1", agentId: "queue-agent", authorId: "test:author", workspaceId: "workspace", version: 1, name: "Queue test agent", description: "Deterministic tests", instructions: "Use tools.", tools: ["identity", "read", "write"], modelId: "model-1", createdAt },
     model: { id: "model-1", workspaceId: "workspace", name: "Explicit faux test provider (not an LLM)", provider: "faux", modelId: "queue-faux" },
   };
 }
@@ -629,8 +629,8 @@ test("queued asks remain read-only after recovery even when their actor also has
   const askStart = askEntries.findIndex(entry => entry.role === "user" && entry.text === input.content);
   assert.notEqual(askStart, -1);
   const askTurn = askEntries.slice(askStart + 1);
-  assert.ok(askTurn.some(entry => entry.role === "assistant" && entry.text.includes("Denied: write_file is not available")));
-  assert.equal(askTurn.some(entry => entry.role === "assistant" && entry.text.includes("write_file(")), false);
+  assert.ok(askTurn.some(entry => entry.role === "assistant" && entry.text.includes("Denied: write is not available")));
+  assert.equal(askTurn.some(entry => entry.role === "assistant" && entry.text.includes("write(")), false);
   assert.equal(askTurn.some(entry => entry.role === "toolResult"), false);
   assert.ok(view.entries.some(entry => entry.conversationId === ask.conversationId && entry.role === "user" && entry.text === "TEST_WRITE readonly.txt\noriginal"), "ask fork inherits the completed root transcript");
   assert.ok(view.entries.filter(entry => entry.conversationId === next.conversationId).length > seeded.entries.length);

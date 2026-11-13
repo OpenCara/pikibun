@@ -117,7 +117,7 @@ test('a session moves to another connected host and the source is archived', asy
   assert.equal(restore!.restore.migration, true);
   assert.equal(restore!.binding.model.connectorId, 'new-host');
   assert.equal(restore!.binding.agent.instructions, 'Instructions');
-  assert.deepEqual(restore!.binding.agent.tools, ['read_file']);
+  assert.deepEqual(restore!.binding.agent.tools, ['read', 'read_file'], 'an agent version in the old names moves with the new one, and the old for hosts from before');
   const source = f.sqlite.prepare("SELECT status, archived_status, policy_version FROM sessions WHERE id = 'source'").get()!;
   assert.deepEqual({ ...source }, { status: 'archived', archived_status: 'ready', policy_version: 4 });
   const job = f.sqlite.prepare('SELECT status, snapshot, download_token_hash FROM host_migrations').get()!;

@@ -131,23 +131,24 @@ test("the workspace page reads a host's real report: a tool named like one of Pi
       "package.json": JSON.stringify({ name: "pi-shell-helpers", version: "1.0.0", description: "Shell helpers.", pi: { extensions: ["./index.ts"] } }),
       "index.ts": `import { Type } from "typebox";
         export default function (pi) {
-          for (const name of ["read_file", "lint", "git"]) pi.registerTool({ name, label: name, description: name + ", the extension's way.", parameters: Type.Object({}),
+          for (const name of ["read_file", "lint", "read", "find", "git"]) pi.registerTool({ name, label: name, description: name + ", the extension's way.", parameters: Type.Object({}),
             async execute() { return { content: [], details: undefined }; } });
         }`,
     },
   });
   await store.add(parseExtensionSource("npm:pi-shell-helpers@1.0.0"));
   const [summary] = (await loadInstalled(store, [])).map(item => item.summary);
-  assert.deepEqual(summary!.modules[0]!.tools.map(tool => tool.name), ["lint"]);
+  assert.deepEqual(summary!.modules[0]!.tools.map(tool => tool.name), ["lint", "find"], "its find is offered until Pikibun has one of its own");
   const offer = extensionOffer("npm:pi-shell-helpers@1.0.0", [summary!]);
   assert.equal(offer?.description, "Shell helpers.");
-  assert.deepEqual(offer?.tools.map(tool => [tool.name, !!tool.own]), [["lint", false], ["read_file", true], ["git", true]]);
+  assert.deepEqual(offer?.tools.map(tool => [tool.name, !!tool.own]), [["lint", false], ["find", false], ["read_file", true], ["read", true], ["git", true]]);
   const usable = workspaceTools([{ source: "npm:pi-shell-helpers@1.0.0", enabled: true, tools: "approval", settings: {} }], [summary!]);
   assert.deepEqual(usable.shadowed, [
     { name: "read_file", source: "npm:pi-shell-helpers@1.0.0", by: "piki:files", kind: "own" },
+    { name: "read", source: "npm:pi-shell-helpers@1.0.0", by: "piki:files", kind: "own" },
     { name: "git", source: "npm:pi-shell-helpers@1.0.0", by: "piki:git", kind: "own" },
-  ]);
-  assert.deepEqual(usable.tools.filter(tool => tool.origin === "extension").map(tool => tool.name), ["lint"]);
+  ], "its read and its read_file are both left out: Pikibun's read has the name, and the old one");
+  assert.deepEqual(usable.tools.filter(tool => tool.origin === "extension").map(tool => tool.name), ["lint", "find"]);
 });
 
 test("a directory a package names loads as Pi loads it: its index alone, if it has one, else every module in it", async t => {

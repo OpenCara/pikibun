@@ -1,6 +1,6 @@
 import { workspaceManagerRolesSQL } from './authority/index.js';
 import type { Hono } from 'hono';
-import { assignableWorkspaceRoles, retiredToolNames, toolNames } from '../../../packages/shared/src/types.js';
+import { assignableWorkspaceRoles, canonicalToolName, retiredToolNames, toolNames, withLegacyToolNames } from '../../../packages/shared/src/types.js';
 import type { AnyToolName, AssignableWorkspaceRole, Workspace, WorkspaceRole } from '../../../packages/shared/src/types.js';
 import { bundledToolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
@@ -177,7 +177,7 @@ export async function chatAgentVersion(env: Env, ownerId: string, model: ModelRo
   const agentId = id();
   const createdAt = now();
   const tools = agentToolNames.filter(tool => carries(capabilities, tool));
-  const input: AgentInput = { name: model.name, description: '', instructions: '', toolsJson: JSON.stringify(tools), modelId: model.id };
+  const input: AgentInput = { name: model.name, description: '', instructions: '', toolsJson: JSON.stringify(withLegacyToolNames(tools)), modelId: model.id };
   return versionBatch(env, [
     env.DB.query<never>(`INSERT INTO agents (id, author_id, created_at, chat)
       SELECT ?, ?, ?, 1 FROM models m
@@ -191,10 +191,10 @@ export async function chatAgentVersion(env: Env, ownerId: string, model: ModelRo
 export async function migratedAgentVersion(env: Env, ownerId: string, source: AgentRow, model: ModelRow, capabilities: ConnectorCapabilities): Promise<AgentRow> {
   const agentId = id();
   const createdAt = now();
-  const wanted = JSON.parse(source.tools_json) as unknown[];
+  const wanted = (JSON.parse(source.tools_json) as unknown[]).map(tool => typeof tool === 'string' ? canonicalToolName(tool) : tool);
   const tools = agentToolNames.filter(tool => wanted.includes(tool) && carries(capabilities, tool));
   const input: AgentInput = { name: source.name, description: source.description, instructions: source.instructions,
-    toolsJson: JSON.stringify(tools), modelId: model.id };
+    toolsJson: JSON.stringify(withLegacyToolNames(tools)), modelId: model.id };
   return versionBatch(env, [
     env.DB.query<never>(`INSERT INTO agents (id, author_id, created_at, chat)
       SELECT ?, ?, ?, 1 FROM models m
