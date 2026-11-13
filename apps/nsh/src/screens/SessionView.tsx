@@ -538,7 +538,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           </If>
           <If when={queueOpen()}>
             <View style={{ gap: 6, padding: 12, borderRadius: radius.large, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
-              <Small>Submissions and side asks share one queue; permissions are checked again before work runs. You can leave this screen: accepted work continues while the host is online and authorized.</Small>
+              <Small>Submissions run one at a time; side asks start at once, beside them. Permissions are checked again before work runs. You can leave this screen: accepted work continues while the host is online and authorized.</Small>
               <If when={props.live.error()}><Small>This is the last received queue view; live host status is not confirmed.</Small></If>
               <If when={receipt()}>
                 {last => <Small>{`Last receipt ${last().submissionId} · ${last().status}${last().queuePosition !== undefined ? ` · queue position ${last().queuePosition}` : ""}`}</Small>}
