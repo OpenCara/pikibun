@@ -6,6 +6,7 @@ import type { ControlPlaneCalls } from "./control-plane.js";
 import type { Generation } from "./generation.js";
 import { requestSchema, ticketSchema, validateRelayRequest } from "./relay-request.js";
 import { boundedBody, encoder } from "./wire.js";
+import { describeFailure, stderrLine, type LogLine } from "../failure-log.js";
 
 const DRAIN_TIMEOUT = 30_000;
 const REPLAY_KEYS_LIMIT = 8192;
@@ -25,6 +26,7 @@ export interface RelayFramesOptions {
   calls: Pick<ControlPlaneCalls, "callback">;
   disconnect(generation: Generation, reason: string): void;
   requireGeneration(generation: Generation): void;
+  log?: LogLine;
 }
 
 export class RelayFrames {
@@ -142,8 +144,9 @@ export class RelayFrames {
         throw error;
       }
       result = { type: "response", id: rpc.id, status: response.status, body: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
-    } catch {
+    } catch (error) {
       this.options.requireGeneration(generation);
+      (this.options.log ?? stderrLine)(`Relay request ${rpc.method} ${rpc.path.slice(0, 300)} failed: ${describeFailure(error)}`);
       return failed(502, "The host could not complete the request.");
     }
     this.options.requireGeneration(generation);

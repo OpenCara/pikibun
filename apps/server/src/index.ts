@@ -33,11 +33,13 @@ import { registerTranscriptSettings } from './transcript-settings.js';
 import { registerNotifications } from './notifications.js';
 import { registerWorkspaceInvites } from './workspace-invites.js';
 import { compression } from './compression.js';
+import { failedRequests } from './log.js';
 import { buildVersion, validVersion } from '../../../packages/shared/src/version.js';
 
 export const app = new Hono<AppEnv>();
 
 app.use('*', compression);
+app.use('*', failedRequests);
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Referrer-Policy', 'no-referrer');

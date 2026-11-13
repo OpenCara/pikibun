@@ -14,6 +14,7 @@ import { restoreSession } from "./restore.js";
 import { PACK_FILE, readPack, settlePack, unpackSandbox, writePack, type PackSummary } from "./pack.js";
 import { LocalViews } from "./local-view.js";
 import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
+import { FailureLog, type LogLine } from "./failure-log.js";
 
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -28,8 +29,11 @@ export class RunnerService {
   private readonly packing = new Map<string, Promise<unknown>>();
   private readonly localViews = new LocalViews();
   private closed = false;
+  private readonly reported = new WeakSet<object>();
+  readonly failures: FailureLog;
   readonly dataDir: string;
-  constructor(readonly config: RunnerConfig) {
+  constructor(readonly config: RunnerConfig, log?: LogLine) {
+    this.failures = new FailureLog(log);
     if (config.sharedSecret.length < 32) throw new Error("RUNNER_SHARED_SECRET must have at least 32 characters");
     const control = new URL(config.controlPlaneUrl);
     if (control.protocol !== "https:" && !(control.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(control.hostname))) throw new Error("Control plane must use HTTPS except loopback development");
@@ -65,7 +69,22 @@ export class RunnerService {
     }
     const opening = this.openSession(id);
     this.sessions.set(id, opening);
-    try { return await opening; } catch (error) { if (this.sessions.get(id) === opening) this.sessions.delete(id); throw error; }
+    try { return await opening; } catch (error) {
+      if (this.sessions.get(id) === opening) this.sessions.delete(id);
+      this.reportOpenFailure(id, error, "couldn't open");
+      throw error;
+    }
+  }
+
+  private reportOpenFailure(id: string, error: unknown, what: string): void {
+    if (error instanceof RunnerError && error.status < 500) return;
+    this.failures.report(`Session ${id} ${what}`, error);
+    if (error && typeof error === "object") this.reported.add(error);
+  }
+
+  reportFailure(context: string, error: unknown): void {
+    if (error && typeof error === "object" && this.reported.has(error)) return;
+    this.failures.report(context, error);
   }
 
   async localView(id: string, options: { since?: string; brief?: boolean }): Promise<LocalView> {
@@ -107,7 +126,10 @@ export class RunnerService {
     })();
     const reopened = done.then(() => this.openSession(id));
     this.sessions.set(id, reopened);
-    reopened.catch(() => { if (this.sessions.get(id) === reopened) this.sessions.delete(id); });
+    reopened.catch(error => {
+      if (this.sessions.get(id) === reopened) this.sessions.delete(id);
+      this.reportOpenFailure(id, error, "couldn't reopen");
+    });
     const outcome = await done;
     if ("error" in outcome) throw outcome.error;
     return outcome.value;
@@ -274,13 +296,20 @@ export class RunnerService {
   }
 }
 
+function failureContext(method: string, url: string): string {
+  const path = new URL(url).pathname;
+  const session = /^\/v1\/sessions\/([A-Za-z0-9_-]{1,128})\/([a-z]+)/.exec(path);
+  return session ? `Session ${session[1]}: ${session[2]} failed` : `Runner: ${method} ${path} failed`;
+}
+
 export function createRunnerApp(service: RunnerService): Hono {
   const app = new Hono();
   const revisions = new WeakMap<object, ViewRevisions>();
   app.use("*", bodyLimit({ maxSize: 1024 * 1024, onError: c => c.json({ error: "Request too large" }, 413) }));
   app.onError((error, c) => {
-    if (error instanceof RunnerError) return c.json({ error: error.message }, error.status as 400);
     if (error instanceof SyntaxError) return c.json({ error: "Invalid JSON" }, 400);
+    if (!(error instanceof RunnerError) || error.status >= 500) service.reportFailure(failureContext(c.req.method, c.req.url), error);
+    if (error instanceof RunnerError) return c.json({ error: error.message }, error.status as 400);
     return c.json({ error: "Runner operation failed" }, 500);
   });
   app.get("/health", c => c.json({ ok: true, runtime: "node24", execution: "pi-durable", faux: service.config.allowFaux }));

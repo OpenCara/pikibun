@@ -16,6 +16,7 @@ export function loginShell(os: string, shell: string | undefined): string {
 }
 
 const shellWord = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
+export const shellArg = (text: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(text) ? text : shellWord(text));
 
 export function appCliFolder(os: string, dataDir: string | null | undefined): string | null {
   if (!dataDir) return null;
@@ -29,7 +30,7 @@ export function pikibunCommand(os: string, shell: string | undefined, cli: strin
     return { command: CMD, args: cmdArgs(cmdRunOwn(`${CLI_FOLDER}\\node_modules\\.bin\\pikibun.cmd`, "pikibun", args)) };
   }
   const path = cli ? `PATH=${shellWord(`${cli}/node_modules/.bin`)}:"$PATH"; export PATH; ` : "";
-  return { command: loginShell(os, shell), args: ["-ilc", `${path}exec pikibun ${args.join(" ")}`] };
+  return { command: loginShell(os, shell), args: ["-ilc", `${path}exec pikibun ${args.map(shellArg).join(" ")}`] };
 }
 
 export function ownCopyPackage(version: string = CLI_VERSION): string {

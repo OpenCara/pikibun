@@ -5,6 +5,7 @@ import { isRevision } from '../../../packages/shared/src/view-patch.js';
 import type { RunnerAction, RunnerTicket } from '../../../packages/shared/src/types.js';
 import { authorizeConnectorTicket, connectorPermissions } from './authority/index.js';
 import { fail, id } from './http.js';
+import { errorBody, serverLog } from './log.js';
 import type { AppContext, Env, SessionRow } from './types.js';
 
 export const connectorRequestFrameBytes = connectorLimits.requestBytes * 6 + 16384;
@@ -113,9 +114,13 @@ export async function connectorRequest(c: AppContext, row: SessionRow, action: R
     await requireConnectorGeneration(c.env, envelope.connectorId, envelope.credentialHash, envelope.connectionHash);
     await authorizeConnectorTicket(c.env, ticket, envelope.connectionHash);
     if (!response.ok) {
-      const status = [400, 403, 404, 409, 413, 422, 429, 503, 504].includes(response.status) ? response.status : 502;
+      const status = runnerFailureStatus(response.status);
+      if (response.status >= 500) {
+        const body = await errorBody(response);
+        serverLog(c.env)(`connector ${row.connector_id} answered ${response.status}${body.code ? ` ${body.code}` : ''} to ${action} for session ${row.id}${body.error ? `: ${body.error}` : ''}`);
+      }
       const reason = response.status === 422 ? await runnerReason(response) : '';
-      fail(status as 400 | 403 | 404 | 409 | 413 | 422 | 429 | 502 | 503 | 504, 'runner_error',
+      fail(status, 'runner_error',
         reason ? `The connector could not complete the operation: ${reason}` : 'The connector could not complete the operation. Inspect the session before retrying.');
     }
     return response;
@@ -123,6 +128,10 @@ export async function connectorRequest(c: AppContext, row: SessionRow, action: R
     await response.body?.cancel();
     throw error;
   }
+}
+
+export function runnerFailureStatus(status: number): 400 | 403 | 404 | 409 | 413 | 422 | 429 | 500 | 503 | 504 {
+  return [400, 403, 404, 409, 413, 422, 429, 503, 504].includes(status) ? status as 400 | 403 | 404 | 409 | 413 | 422 | 429 | 503 | 504 : 500;
 }
 
 async function runnerReason(response: Response): Promise<string> {
