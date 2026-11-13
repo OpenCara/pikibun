@@ -80,8 +80,7 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
 
 6. **What the connector checks before loading one.** All of these, or it doesn't load the package:
    - The package is in the `@pikibun/` scope. The scope is a constant of the connector, not something a pin can widen.
-   - Its own release is at least `minimumConnector`. A connector run from source (`dev`) never uses pins: it is
-     there to run the working tree's `extensions/`.
+   - Its own release is at least `minimumConnector`.
    - The lock file npm wrote names that one package and nothing else, at the pinned version, and its `integrity`
      equals the pin's. Published extensions import only Node's modules and their peer dependencies
      (`scripts/check-extension-packages.mjs`), so a second package in the lock file is a reason to refuse.
@@ -96,23 +95,35 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
    - the newest managed version this host has loaded before, while it is still installed;
    - its bundled copy, whose version is the one committed in `extensions/<name>/package.json`.
 
-   It runs the one with the highest version (as semantic versions; the pinned package where two are equal), and
-   nothing where it has none. That one rule covers every case:
-   - A pin older than the bundled copy: the bundled copy runs.
-   - A pin older than a version the host has loaded: the host keeps that version. The connector doesn't install the
-     pinned one at all, and decision 5 doesn't prune the one it keeps.
-   - A pin that can't be installed or fails a check (the registry out of reach, a wrong digest): the host keeps what
-     it ran, the version it had loaded or else the bundled copy.
-   - An extension added later, with no bundled copy: the candidates are the pin and what the host has loaded. With
-     neither, the host is without it, its page says why, and it is treated as any missing extension is
-     ([host extensions](host-extensions.md), "Missing means without", and "The host's owner requires extensions" for a
-     required one).
+   It runs the candidate with the highest version, compared as semantic versions, and nothing where it has none.
+   That is the whole rule: no candidate is passed over for any other reason, neither the bundled copy because a pin
+   exists nor a loaded version because a pin failed. Where two are equal, the pinned package goes before the loaded
+   one, and either before the bundled copy. The connector installs a pinned package only when its version is at least
+   the other two's, so only when it would run.
+
+   | Bundled | Loaded before | Pin | Runs |
+   |---|---|---|---|
+   | 0.2.0 | none | 0.3.0, passes | The pinned 0.3.0 |
+   | 0.2.0 | none | 0.1.5 | The bundled 0.2.0; the pin isn't installed |
+   | 0.2.0 | 0.4.0 | 0.2.5 | The loaded 0.4.0; the pin isn't installed, and decision 5 keeps 0.4.0 |
+   | 0.3.0 | 0.4.0 | 0.2.5 | The loaded 0.4.0, not the bundled copy |
+   | 0.2.0 | 0.4.0 | 0.5.0, fails a check or can't be installed | The loaded 0.4.0 |
+   | 0.5.0 | 0.4.0 | 0.6.0, fails a check or can't be installed | The bundled 0.5.0: a connector update still reaches the host |
+   | 0.5.0 | 0.4.0 | none | The bundled 0.5.0 |
+   | none | 0.1.0 | none, or one that fails | The loaded 0.1.0 |
+   | none | none | 0.1.0, fails a check or can't be installed | Nothing: the extension is missing |
 
    So neither a mistaken pin nor a compromised control plane takes a host back to an older version, with whatever
    that version got wrong, and a host that is offline or can't reach npm goes on as it was. This matters most for a
    guard: a host that requires `piki:prompt-audit` takes no messages while it can't run it, and must not stop because
-   a registry is down. The one way back is the host owner's own: with `--no-remote-installs`, or without
-   `--managed-extensions`, a connector installs nothing and runs its bundled copies only, as today.
+   a registry is down. An extension added later has no bundled copy (the last two rows); where a host is without it,
+   its page says why, and it is treated as any missing extension is ([host extensions](host-extensions.md), "Missing
+   means without", and "The host's owner requires extensions" for a required one).
+
+   Three connectors have the bundled copy as their only candidate, whatever is pinned and whatever is on disk, and
+   install nothing: one run from source (`dev`), which is there to run the working tree's `extensions/`; one started
+   with `--no-remote-installs`; and one started without `--managed-extensions`. The last two are the host owner's own
+   way back to the bundled copies.
 
    For the comparison to mean anything, the committed version in `extensions/<name>/package.json` has to be the
    published one: the extension release refuses a tag that differs from it (today it sets the tag's version, and the
@@ -189,7 +200,7 @@ Each is one pull request, and leaves every host working as before until its owne
 
 | Phase | What lands | How it is held |
 |---|---|---|
-| 1 | Managed packages (decisions 2 to 9) behind `--managed-extensions`, with an empty list of pins. A connector accepts a pin for a `piki:` name it doesn't know. | `tests/managed-extensions.test.ts`: a matching package loads in place of the bundled copy and reports its version; a wrong digest, a second package in the lock file, another scope, a newer `minimumConnector` and a module that fails each leave the host on what it ran (the bundled copy, or the managed version it had loaded); a pin older than the bundled copy runs the bundled copy; a pin older than a managed version the host has loaded keeps that version, without installing the pinned one, across a restart and the pruning after it; `--no-remote-installs` runs bundled copies only; a pin for `piki:prompt-audit` is ignored; an unknown `piki:` name with no bundled copy loads, and is missing when its install fails and the host has loaded no version of it; an open session keeps its version; a control plane without `managed` changes nothing |
+| 1 | Managed packages (decisions 2 to 9) behind `--managed-extensions`, with an empty list of pins. A connector accepts a pin for a `piki:` name it doesn't know. | `tests/managed-extensions.test.ts`: every row of decision 7's table, with all three versions set in each, so that a choice which looks at the bundled copy first, or at the pin first, fails one; the kept version survives a restart and the pruning after it; each check of decision 6 (a wrong digest, a second package in the lock file, another scope, a newer `minimumConnector`, a module that fails) makes the pin no candidate; a managed package that runs reports its version; a connector from source, one with `--no-remote-installs` and one without `--managed-extensions` run the bundled copy with a newer managed version on disk; a pin for `piki:prompt-audit` is ignored; a pin for a `piki:` name the connector doesn't know loads; an open session keeps its version; a control plane without `managed` changes nothing |
 | 2 | The extension process, unsandboxed ([extension isolation](extension-isolation.md), steps 1 and 2), for installed and managed extensions. Managed packages become the default where remote installs are allowed, and `--managed-extensions` goes. | The extension tests run through the process; a hook that blocks the event loop ends its process, not the connector |
 | 3 | `gh`, `glab` and `az` as definitions | `tests/piki-extensions.test.ts`' refusals and read-only cases run against the engine |
 | 4 | `prompt-audit` as a managed package, once the extension process can ask the connector for a model call; the sandbox for the extension process (isolation, step 3) | `tests/prompt-audit.test.ts` through the process; `tests/sandbox-conformance.test.ts` |
