@@ -4,16 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import pg from 'pg';
 import { PostgresDatabase } from '../apps/server/src/db/postgres.js';
+import { postgresDatabase, postgresServer } from './helpers/postgres.js';
 
-const url = process.env.TEST_DATABASE_URL;
-const DATABASE = 'pikibun_raise_rename';
-function inDatabase(base: string): string {
-  const u = new URL(base);
-  u.pathname = `/${DATABASE}`;
-  return u.toString();
-}
+const url = postgresServer;
+const ownDatabase = postgresDatabase('raise_rename');
 const migrations = fileURLToPath(new URL('../apps/server/migrations/postgres/', import.meta.url));
 
 test('a Postgres database from before the rename migrates past files that call pikibun_raise()', { skip: url ? false : 'TEST_DATABASE_URL is not set; skipping the Postgres run' }, async t => {
@@ -24,13 +19,8 @@ test('a Postgres database from before the rename migrates past files that call p
   assert.ok(files.length > before.length, 'later migrations remain to apply');
   for (const name of before) writeFileSync(join(old, name), readFileSync(join(migrations, name), 'utf8').replaceAll('pikibun_raise', 'pistead_raise'));
 
-  const admin = new pg.Client({ connectionString: url });
-  await admin.connect();
-  await admin.query(`DROP DATABASE IF EXISTS ${DATABASE} WITH (FORCE)`);
-  await admin.query(`CREATE DATABASE ${DATABASE}`);
-  t.after(async () => { await admin.query(`DROP DATABASE IF EXISTS ${DATABASE} WITH (FORCE)`); await admin.end(); });
-
-  const legacy = new PostgresDatabase(inDatabase(url!), old);
+  const database = await ownDatabase();
+  const legacy = new PostgresDatabase(database, old);
   try {
     await legacy.migrate();
     const proc = (name: string) => legacy.query<{ oid: string | null }>(`SELECT to_regprocedure('${name}()')::text AS oid`).first('oid');
@@ -40,7 +30,7 @@ test('a Postgres database from before the rename migrates past files that call p
     await legacy.close();
   }
 
-  const db = new PostgresDatabase(inDatabase(url!), migrations);
+  const db = new PostgresDatabase(database, migrations);
   try {
     await upgraded(db, files);
   } finally {

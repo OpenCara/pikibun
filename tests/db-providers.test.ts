@@ -6,8 +6,10 @@ import test, { type TestContext } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import pg from 'pg';
 import { ConstraintError, InstanceLockedError, InstanceLockLostError, lockInstance, openDatabase, sqliteHandle, type Database } from '../apps/server/src/db/index.js';
+import { postgresDatabase, postgresServer } from './helpers/postgres.js';
 
-const postgresUrl = process.env.TEST_DATABASE_URL;
+const postgresUrl = postgresServer;
+const ownDatabase = postgresDatabase('providers');
 const providers: { name: 'sqlite' | 'postgres'; url: string | undefined }[] = [
   { name: 'sqlite', url: 'sqlite::memory:' },
   { name: 'postgres', url: postgresUrl },
@@ -50,7 +52,7 @@ async function constraintError(operation: Promise<unknown>): Promise<ConstraintE
 
 for (const provider of providers) {
   test(`${provider.name} provider`, { skip: provider.url ? false : 'TEST_DATABASE_URL is not set; skipping the Postgres conformance run' }, async t => {
-    const url = provider.url!;
+    const url = provider.name === 'postgres' ? await ownDatabase() : provider.url!;
 
     await t.test('migrates from empty, records every file once, and is idempotent', async t => {
       const db = await open(t, url);
@@ -328,7 +330,7 @@ test('sqlite file databases use WAL, foreign keys and relative URLs', async t =>
 
 test('both providers end with the same tables and columns', { skip: postgresUrl ? false : 'TEST_DATABASE_URL is not set; skipping the schema comparison with Postgres' }, async t => {
   const sqlite = await open(t, 'sqlite::memory:');
-  const postgres = await open(t, postgresUrl!);
+  const postgres = await open(t, await ownDatabase());
   const sqliteColumns = sqliteHandle(sqlite).prepare(`SELECT m.name AS table_name, p.name AS column_name FROM sqlite_master m JOIN pragma_table_info(m.name) p
     WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'`).all() as { table_name: string; column_name: string }[];
   const postgresColumns = await postgres.query<{ table_name: string; column_name: string }>(
@@ -359,16 +361,18 @@ test('a database file serves one server at a time', async t => {
 });
 
 test('a Postgres database serves one server at a time', { skip: postgresUrl ? false : 'TEST_DATABASE_URL is not set; skipping the Postgres instance lock' }, async t => {
-  await refusesSecondInstance(t, postgresUrl!);
+  await refusesSecondInstance(t, await ownDatabase());
 });
 
 test('a Postgres server whose lock connection is killed takes the lock again, or stops if another server got it', { skip: postgresUrl ? false : 'TEST_DATABASE_URL is not set; skipping the Postgres lock watch' }, async t => {
-  const first = await openDatabase(postgresUrl!);
-  const second = await openDatabase(postgresUrl!);
-  const admin = new pg.Client({ connectionString: postgresUrl });
+  const database = await ownDatabase();
+  const first = await openDatabase(database);
+  const second = await openDatabase(database);
+  const admin = new pg.Client({ connectionString: database });
   await admin.connect();
   t.after(async () => { await admin.end(); await first.close(); await second.close(); });
-  const holders = async () => (await admin.query(`SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objid = $1::bigint::oid`, [0x70696b69])).rows as { pid: number }[];
+  const holders = async () => (await admin.query(`SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objid = $1::bigint::oid
+    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, [0x70696b69])).rows as { pid: number }[];
   const lock = await lockInstance(first, { heartbeatMs: 50, graceMs: 5000 });
   const lost: Error[] = [];
   lock.onLost?.(error => lost.push(error));
@@ -384,7 +388,7 @@ test('a Postgres server whose lock connection is killed takes the lock again, or
   assert.ok(retaken && retaken.pid !== original.pid, 'the lock is held again, on a new connection');
   assert.equal(lost.length, 0);
 
-  const waiter = new pg.Client({ connectionString: postgresUrl });
+  const waiter = new pg.Client({ connectionString: database });
   await waiter.connect();
   t.after(() => waiter.end());
   const waiterPid = (await waiter.query('SELECT pg_backend_pid() AS pid')).rows[0]?.pid as number;
