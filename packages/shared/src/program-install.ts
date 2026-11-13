@@ -21,6 +21,45 @@ export function programInstallStep(program: string): string | undefined {
 
 const list = (items: readonly string[]) => items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 
+const hostPrograms: Readonly<Record<string, InstallStep>> = Object.freeze({
+  browser: { programs: ["chromium"], how: "the distribution's chromium package (sudo apt install chromium on Debian; Ubuntu's is a snap, which can't run in another sandbox, so Google Chrome's .deb there), or npx playwright install chromium-headless-shell as the connector's user; the connector finds it within a minute while the host's page (Settings → Hosts → the host → Extensions → piki:browser) says Find it" },
+  tunnel: { programs: ["cloudflared"], how: "Cloudflare's cloudflared package (sudo apt install cloudflared from Cloudflare's repository) or its release in /usr/local/bin; the connector finds it within a minute while the host's page (Settings → Hosts → the host → Extensions → piki:tunnel) says Find it" },
+});
+
+/** The programs a tool of a host lacks: a program tool's (node: pnpm, ...), or browser and tunnel, whose programs the connector runs. */
+export function hostToolPrograms(tool: string): readonly string[] | undefined {
+  return hostPrograms[tool]?.programs;
+}
+
+export interface InstallChat { host: string; missing: Readonly<Record<string, readonly string[]>>; onHost: boolean }
+
+const missingPrograms = (missing: InstallChat["missing"]) => [...new Set(Object.values(missing).flat())];
+
+export function installChatTitle(chat: InstallChat): string {
+  const programs = missingPrograms(chat.missing);
+  return Array.from(`Install ${programs.length > 3 ? `${programs.slice(0, 3).join(", ")} and more` : list(programs)} on ${chat.host}`).slice(0, 80).join("");
+}
+
+/** The opening message of a session in its owner's private workspace that installs on the host the programs its sessions lack. */
+export function installChatMessage(chat: InstallChat): string {
+  const tools = Object.entries(chat.missing).filter(([, programs]) => programs.length);
+  const programs = missingPrograms(chat.missing);
+  const step = (program: string) => tools.map(([tool]) => hostPrograms[tool]).find(item => item?.programs.includes(program))?.how ?? programInstallStep(program);
+  const known = programs.filter(program => step(program));
+  const steps = [...new Set(known.map(step))].map(how => `- ${list(known.filter(program => step(program) === how))}: ${how}`);
+  const unknown = programs.filter(program => !step(program));
+  return [
+    `Install on this host (${chat.host}) the programs Pikibun's sessions on it lack: ${list(tools.map(([tool, items]) => `the ${tool} tool's ${list(items)}`))}.`,
+    "Sessions in the host's sandbox see only its /usr (and the connector's Node.js), so install them for the whole system, never into a home directory such as ~/.local or ~/.cargo, unless a step below says otherwise. The usual steps:",
+    [...steps, ...(unknown.length ? [`- ${list(unknown)}: the distribution's package`] : [])].join("\n"),
+    chat.onHost
+      ? "This session runs on the host itself, as its user, without the sandbox. First look at the host (its distribution and architecture, the Node.js the connector runs on) and what is already installed, then install each program and check that it runs from where sessions see it. "
+        + "Nothing here can type a password: if a step needs sudo and sudo asks for one, stop and tell me the exact commands to run in a terminal on the host."
+      : "This session runs in the host's sandbox, which can't install anything on the host: look at what you can of it, then tell me the exact commands to run in a terminal on the host, for its distribution and architecture.",
+    "Sessions find a program installed in /usr from their next message (one installed into a Node.js outside /usr, from their next session). Tell me what you installed, how you checked it, and anything left for me to do.",
+  ].join("\n\n");
+}
+
 export function programsMissingText(missing: Readonly<Record<string, readonly string[]>>): string | undefined {
   const tools = Object.entries(missing).filter(([, programs]) => programs.length);
   if (!tools.length) return undefined;
