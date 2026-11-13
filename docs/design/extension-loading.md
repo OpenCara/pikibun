@@ -57,34 +57,31 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
 3. **The control plane's release sets the version, for every host.** A workspace pins the version of an `npm:`
    extension because someone else publishes it. Pikibun publishes these, so their version is the control plane
    release's, as it was the connector release's. One pin per source also means every host of a control plane runs the
-   same version, which they don't today. The pin wins over the bundled copy whenever the connector can run it and it
-   is no older (decision 6). A pin is added only once its version is published. Versions only go up: a bad version is
-   withdrawn by publishing and pinning a newer one, never by pinning the one before.
+   same version, which they don't today, unless a host already has a newer one (decision 7). A pin is added only once
+   its version is published. Versions only go up: a bad version is withdrawn by publishing and pinning a newer one,
+   never by pinning the one before.
 
 4. **Pins travel in the sync a connector already makes.** The answer to `POST /api/connectors/self/extensions`
    (`ExtensionsSyncAnswer`) gains `managed`, the whole list. The connector decides which pins it can use, since it is
    the one that has to refuse a bad one. A connector from before reads only `requests` and ignores the rest; a control
-   plane from before sends no `managed`, and the connector runs its bundled copies. Nothing new is reported: the
+   plane from before sends no `managed`, which a connector takes as no pins (decision 7: its bundled copies, on a host
+   that never loaded a managed version). Nothing new is reported: the
    connector reports each `piki:` source as it does now, with the managed package's `version` where it runs one
    (`InstalledExtension.version`), so the host's page shows which version a host has.
 
 5. **Installed by the store, in a place of its own.** Managed packages install as other packages do (`npm install`
    of the exact version, `--ignore-scripts`, no peer dependencies) into `<state-dir>/extensions/managed/<digest>/`, with
    their own index beside `sources.json`. They don't count among a host's 64 installed sources, `pikibun extensions
-   remove` refuses them, and `pikibun extensions list` shows them as managed, with their version. A version that is no
-   longer pinned is deleted when the connector next starts, not before: an open session may still run it, and the
-   connector doesn't track which session loaded which. Until then a host keeps one directory for each version pinned
-   since it started, a few files each.
+   remove` refuses them, and `pikibun extensions list` shows them as managed, with their version. The index marks a
+   version once a session has loaded it. At the first sync after it starts, the connector deletes the versions that
+   are neither pinned nor the newest loaded one of their source (decision 7 needs that one). Not sooner: an open
+   session may still run an older one, and the connector doesn't track which session loaded which. Until then a host
+   keeps one directory for each version pinned since it started, a few files each.
 
 6. **What the connector checks before loading one.** All of these, or it doesn't load the package:
    - The package is in the `@pikibun/` scope. The scope is a constant of the connector, not something a pin can widen.
    - Its own release is at least `minimumConnector`. A connector run from source (`dev`) never uses pins: it is
      there to run the working tree's `extensions/`.
-   - The pinned version is not older than its bundled copy's, nor than the newest version this host has loaded for
-     that source, which the managed index remembers. So neither a mistaken pin nor a compromised control plane can
-     take a host back to an older version, with whatever that version got wrong. The bundled copy's version is the
-     one committed in `extensions/<name>/package.json`, so that has to be the published one: the extension release
-     refuses a tag that differs from it (today it sets the tag's version and the committed one need not match).
    - The lock file npm wrote names that one package and nothing else, at the pinned version, and its `integrity`
      equals the pin's. Published extensions import only Node's modules and their peer dependencies
      (`scripts/check-extension-packages.mjs`), so a second package in the lock file is a reason to refuse.
@@ -94,14 +91,32 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
    sooner than ten minutes later, so an unreachable registry isn't asked every sync. That wait is kept in memory: a
    connector that restarts tries each pin once more, which costs one install for each start.
 
-7. **The bundled copy is the fallback.** For each `piki:` source the connector runs the managed package if it passed
-   decision 6, else its bundled copy, else nothing. `pr-flow`, `context-files` and `prompt-audit` keep their bundled
-   copies, so a host that is offline, can't reach npm, or runs `pikibun connect --no-remote-installs` (which refuses
-   managed installs as it refuses the others) behaves as it does today. This matters most for a guard: a host that
-   requires `piki:prompt-audit` takes no messages while it can't run it ([host extensions](host-extensions.md), "The
-   host's owner requires extensions"), and must not stop because a registry is down. An extension added later has no
-   bundled copy: where its package can't be installed the host is without it, its page says why, and it is treated as
-   any missing extension is ("Missing means without", and the same rule for a required one).
+7. **The newest version a host can vouch for runs.** For each `piki:` source the connector has up to three candidates:
+   - the pinned package, once it has passed decision 6;
+   - the newest managed version this host has loaded before, while it is still installed;
+   - its bundled copy, whose version is the one committed in `extensions/<name>/package.json`.
+
+   It runs the one with the highest version (as semantic versions; the pinned package where two are equal), and
+   nothing where it has none. That one rule covers every case:
+   - A pin older than the bundled copy: the bundled copy runs.
+   - A pin older than a version the host has loaded: the host keeps that version. The connector doesn't install the
+     pinned one at all, and decision 5 doesn't prune the one it keeps.
+   - A pin that can't be installed or fails a check (the registry out of reach, a wrong digest): the host keeps what
+     it ran, the version it had loaded or else the bundled copy.
+   - An extension added later, with no bundled copy: the candidates are the pin and what the host has loaded. With
+     neither, the host is without it, its page says why, and it is treated as any missing extension is
+     ([host extensions](host-extensions.md), "Missing means without", and "The host's owner requires extensions" for a
+     required one).
+
+   So neither a mistaken pin nor a compromised control plane takes a host back to an older version, with whatever
+   that version got wrong, and a host that is offline or can't reach npm goes on as it was. This matters most for a
+   guard: a host that requires `piki:prompt-audit` takes no messages while it can't run it, and must not stop because
+   a registry is down. The one way back is the host owner's own: with `--no-remote-installs`, or without
+   `--managed-extensions`, a connector installs nothing and runs its bundled copies only, as today.
+
+   For the comparison to mean anything, the committed version in `extensions/<name>/package.json` has to be the
+   published one: the extension release refuses a tag that differs from it (today it sets the tag's version, and the
+   committed one need not match).
 
    Some sources run only from their bundled copy, whatever is pinned: a list in the connector, which holds
    `piki:prompt-audit` until phase 4 (it needs the host's model keys, which the extension process of phase 2 won't
@@ -117,8 +132,8 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
    release. With managed packages it runs code its connector fetched since. What bounds that:
    - Two parties must agree. The registry serves the tarball and the control plane names its digest: a compromised
      publish alone changes nothing a pin names, and a compromised control plane alone can only name versions already
-     published under `@pikibun/`, each with provenance from this repository's release workflow, and none older than
-     what the host already runs (decision 6).
+     published under `@pikibun/`, each with provenance from this repository's release workflow, and none of them
+     older than what the host already runs (decision 7).
    - Nothing runs at install (`--ignore-scripts`), and nothing else is installed (decision 6).
    - The host's owner can refuse it: `--no-remote-installs`.
    - It is off until the extension process exists. An extension runs in the connector's own process, and a version
@@ -174,7 +189,7 @@ Each is one pull request, and leaves every host working as before until its owne
 
 | Phase | What lands | How it is held |
 |---|---|---|
-| 1 | Managed packages (decisions 2 to 9) behind `--managed-extensions`, with an empty list of pins. A connector accepts a pin for a `piki:` name it doesn't know. | `tests/managed-extensions.test.ts`: a matching package loads in place of the bundled copy and reports its version; a wrong digest, a second package in the lock file, another scope, a newer `minimumConnector`, a version older than the bundled copy's or than one the host has loaded, a module that fails and `--no-remote-installs` each fall back to the bundled copy; a pin for `piki:prompt-audit` is ignored; an unknown `piki:` name with no bundled copy loads, and is missing when its install fails; an open session keeps its version; a control plane without `managed` changes nothing |
+| 1 | Managed packages (decisions 2 to 9) behind `--managed-extensions`, with an empty list of pins. A connector accepts a pin for a `piki:` name it doesn't know. | `tests/managed-extensions.test.ts`: a matching package loads in place of the bundled copy and reports its version; a wrong digest, a second package in the lock file, another scope, a newer `minimumConnector` and a module that fails each leave the host on what it ran (the bundled copy, or the managed version it had loaded); a pin older than the bundled copy runs the bundled copy; a pin older than a managed version the host has loaded keeps that version, without installing the pinned one, across a restart and the pruning after it; `--no-remote-installs` runs bundled copies only; a pin for `piki:prompt-audit` is ignored; an unknown `piki:` name with no bundled copy loads, and is missing when its install fails and the host has loaded no version of it; an open session keeps its version; a control plane without `managed` changes nothing |
 | 2 | The extension process, unsandboxed ([extension isolation](extension-isolation.md), steps 1 and 2), for installed and managed extensions. Managed packages become the default where remote installs are allowed, and `--managed-extensions` goes. | The extension tests run through the process; a hook that blocks the event loop ends its process, not the connector |
 | 3 | `gh`, `glab` and `az` as definitions | `tests/piki-extensions.test.ts`' refusals and read-only cases run against the engine |
 | 4 | `prompt-audit` as a managed package, once the extension process can ask the connector for a model call; the sandbox for the extension process (isolation, step 3) | `tests/prompt-audit.test.ts` through the process; `tests/sandbox-conformance.test.ts` |
@@ -198,9 +213,9 @@ extension process doesn't have. Until then it runs from its bundled copy, in the
 |---|---|
 | The pin's type, the list, its parser, the scope | `packages/shared/src/managed-extensions.ts` (new) |
 | `managed` in the sync answer | `packages/shared/src/host-extensions.ts` (`ExtensionsSyncAnswer`, `parseExtensionsSyncAnswer`); `apps/server/src/extensions.ts` |
-| Installing, checking the lock file, the newest version loaded, pruning | `apps/runner/src/extensions/store.ts` |
+| Installing, checking the lock file, marking a version loaded, pruning | `apps/runner/src/extensions/store.ts` |
 | The committed version is the published one | `.github/workflows/release-extensions.yml`, `scripts/set-release-version.mjs` |
-| Choosing the managed package or the bundled copy for each `piki:` source | `apps/runner/src/extensions/load.ts` (`loadInstalled`), `host.ts` (`HostExtensions`). `refreshIfChanged` tells store sources from bundled ones by `factories`; a managed source has files, so it needs a mark of its own |
+| Choosing among the pinned package, the newest loaded version and the bundled copy for each `piki:` source | `apps/runner/src/extensions/load.ts` (`loadInstalled`), `host.ts` (`HostExtensions`). `refreshIfChanged` tells store sources from bundled ones by `factories`; a managed source has files, so it needs a mark of its own |
 | Passing the pins on | `apps/runner/src/connector.ts` (`syncExtensions`) |
 | The option, and the list | `apps/runner/src/connect-cli.ts`, `extensions-cli.ts` |
 | For people | `docs/extensions.md`, `host-extensions.md`, `piki-extensions.md` (rule 2), `security-rationale.md`, `docs/development.md` |
