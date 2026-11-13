@@ -248,7 +248,10 @@ Where the code (#310) settles what the text above leaves open, or differs from i
   the bundled copy (decision 7 needs no pin for that), so sessions opened before the first sync don't go back to an
   older copy. Pruning (decision 5) and installs wait for the first answer.
 - **A version run before that no longer loads** is deleted like a failed pin, and the next newest one it ran is the
-  candidate.
+  candidate. Its files are on the host already, so a failure to load them isn't the kind that passes.
+- **A damaged index** (`managed.json` that doesn't parse) stops pruning and installs rather than count as empty: nothing
+  is deleted or replaced, the host runs its bundled copies, and the log says why. A bundled copy whose committed version
+  doesn't parse counts as no candidate, and is logged.
 - **Which pins count.** Besides the bundled-only list, the connector ignores a pin for a `piki:` source whose own copy
   isn't a hook package, or which the catalogue it was built with names as a command, session-tool or control-plane
   extension (`managedSource`, `piki/index.ts`). A pin for a name it doesn't know, or for a hook package in its

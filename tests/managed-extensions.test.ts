@@ -344,3 +344,29 @@ test("an open session keeps the version it opened with; a session opened after t
   assert.deepEqual(await readdir(join(f.store.directory, "managed")), [(await f.store.listManaged())[0]!.directory]);
   assert.ok(f.logs.some(line => /removed @pikibun\/pi-pr-flow@0.2.0, which is neither pinned nor the newest version this host has run/.test(line)));
 });
+
+test("a damaged index deletes nothing and installs nothing: the host runs its bundled copy and says why (review of #310)", async t => {
+  const f = await fixture(t, { "@pikibun/pi-pr-flow": {} });
+  const earlier = f.host();
+  await earlier.load();
+  await earlier.applyManaged([prFlowPin("0.4.0")]);
+  const [installed] = await f.store.listManaged();
+  await writeFile(join(f.store.directory, "managed.json"), "{ not json");
+  const host = f.host();
+  await host.load();
+  assert.equal(await host.applyManaged([prFlowPin("0.5.0")]), false);
+  assert.equal(runs(host, "piki:pr-flow"), "bundled");
+  assert.equal(existsSync(join(f.store.directory, "managed", installed!.directory)), true, "the version it ran is still there");
+  assert.equal(await readFile(join(f.store.directory, "managed.json"), "utf8"), "{ not json", "nor is the index replaced");
+  assert.ok(f.logs.some(line => /couldn't be pruned/.test(line)), f.logs.join("\n"));
+  assert.ok(f.logs.some(line => /@pikibun\/pi-pr-flow@0.5.0 isn't used/.test(line)), f.logs.join("\n"));
+});
+
+test("a bundled copy whose version doesn't parse counts as none, and says so, rather than stop the pins (review of #310)", async t => {
+  const f = await fixture(t, { "@pikibun/pi-pr-flow": {} });
+  const host = f.host({ pikiExtensions: withBundled("not-a-version") });
+  await host.load();
+  assert.equal(await host.applyManaged([prFlowPin("0.2.0")]), true);
+  assert.equal(runs(host, "piki:pr-flow"), "managed 0.2.0");
+  assert.ok(f.logs.some(line => /its bundled copy's version not-a-version isn't a version/.test(line)));
+});

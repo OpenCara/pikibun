@@ -1,6 +1,6 @@
 import { extensionLimits, isPikiExtensionSource, parseExtensionSourceSpec, parseWorkspaceExtensionsAnswer, type ExtensionRequest, type ExtensionRequestResult,
   type HostExtensionsReport, type WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
-import { compareVersions, connectorRelease, connectorRunsPin, inManagedScope, MANAGED_EXTENSION_SCOPE, managedPinKey,
+import { compareVersions, connectorRelease, connectorRunsPin, inManagedScope, isVersion, MANAGED_EXTENSION_SCOPE, managedPinKey,
   type ManagedExtensionPin } from "../../../../packages/shared/src/managed-extensions.js";
 import { connectorPikiExtensions, managedSource, type PikiExtension } from "./piki/index.js";
 import { loadInstalled, loadManaged, type LoadedSource } from "./load.js";
@@ -66,7 +66,12 @@ export class HostExtensions {
 
   async applyManaged(pins: readonly ManagedExtensionPin[] | undefined): Promise<boolean> {
     if (!this.managesExtensions) return false;
-    const managed = await this.choose(pins ?? []);
+    let managed: LoadedSource[];
+    try { managed = await this.choose(pins ?? []); }
+    catch (error) {
+      this.log(`the pins couldn't be applied: ${message(error)}`);
+      return false;
+    }
     const signature = (items: readonly LoadedSource[]) => JSON.stringify(items.map(item => [item.summary.source, item.managed?.directory, item.summary.error]));
     if (signature(managed) === signature(this.#managed)) return false;
     this.#managed = managed;
@@ -94,6 +99,8 @@ export class HostExtensions {
     const chosen: LoadedSource[] = [];
     for (const source of sources) {
       const copy = bundled.find(item => item.info.source === source);
+      const bundledVersion = copy?.version !== undefined && isVersion(copy.version) ? copy.version : undefined;
+      if (copy?.version !== undefined && bundledVersion === undefined) this.log(`${source}: its bundled copy's version ${copy.version} isn't a version, so it counts as none`);
       let before: LoadedSource | undefined;
       for (let entry = newestLoaded(installed, source); entry && !before; entry = newestLoaded(installed, source)) {
         const candidate = this.#managed.find(item => item.managed?.directory === entry!.directory) ?? await loadManaged(this.store, entry);
@@ -104,7 +111,7 @@ export class HostExtensions {
         installed = installed.filter(item => item !== entry);
       }
       const pin = usable.find(item => item.source === source);
-      const floor = [copy?.version, before?.managed?.version].filter((version): version is string => version !== undefined)
+      const floor = [bundledVersion, before?.managed?.version].filter((version): version is string => version !== undefined)
         .reduce<string | undefined>((highest, version) => !highest || compareVersions(version, highest) > 0 ? version : highest, undefined);
       let pinned: LoadedSource | undefined;
       let refusal: string | undefined;
@@ -120,7 +127,7 @@ export class HostExtensions {
       const candidates: { version: string; loaded?: LoadedSource }[] = [
         ...(pinned ? [{ version: pin!.version, loaded: pinned }] : []),
         ...(before ? [{ version: before.managed!.version, loaded: before }] : []),
-        ...(copy?.version !== undefined ? [{ version: copy.version }] : []),
+        ...(bundledVersion !== undefined ? [{ version: bundledVersion }] : []),
       ];
       const best = candidates.reduce<{ version: string; loaded?: LoadedSource } | undefined>((highest, candidate) =>
         !highest || compareVersions(candidate.version, highest.version) > 0 ? candidate : highest, undefined);

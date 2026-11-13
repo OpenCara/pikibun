@@ -82,6 +82,7 @@ export class ExtensionStore {
     const value: unknown = JSON.parse(text);
     if (!Array.isArray(value) || value.some(item => !item || typeof item !== "object" || ["source", "package", "version", "integrity", "directory"]
       .some(key => typeof item[key] !== "string") || !DIRECTORY.test(item.directory) || !EXACT_VERSION.test(item.version)
+      || !/^piki:[a-z][a-z0-9-]{0,63}$/.test(item.source) || !inManagedScope(item.package)
       || (item.loaded !== undefined && item.loaded !== true))) {
       throw new ExtensionSourceError(`${join(this.directory, "managed.json")} is not a list of managed packages`);
     }
@@ -96,7 +97,7 @@ export class ExtensionStore {
   addManaged(pin: ManagedExtensionPin): Promise<ManagedInstall> {
     if (!inManagedScope(pin.package)) return Promise.reject(new ExtensionSourceError(`${pin.package} is not a ${MANAGED_EXTENSION_SCOPE} package`));
     return this.exclusive(async () => {
-      const managed = await this.listManaged().catch(() => []);
+      const managed = await this.listManaged();
       const existing = managed.find(item => sameManaged(item, pin));
       if (existing) return existing;
       const directory = managedDirectory(pin);
@@ -119,7 +120,7 @@ export class ExtensionStore {
 
   markManagedLoaded(installed: ManagedInstall): Promise<void> {
     return this.exclusive(async () => {
-      const managed = await this.listManaged().catch(() => []);
+      const managed = await this.listManaged();
       const entry = managed.find(item => item.directory === installed.directory);
       if (!entry || entry.loaded) return;
       entry.loaded = true;
@@ -129,7 +130,7 @@ export class ExtensionStore {
 
   removeManaged(installed: ManagedInstall): Promise<void> {
     return this.exclusive(async () => {
-      const managed = await this.listManaged().catch(() => []);
+      const managed = await this.listManaged();
       const others = managed.filter(item => item.directory !== installed.directory);
       if (others.length !== managed.length) await this.saveManaged(others);
       if (DIRECTORY.test(installed.directory)) await rm(join(this.directory, "managed", installed.directory), { recursive: true, force: true });
@@ -138,7 +139,7 @@ export class ExtensionStore {
 
   pruneManaged(pins: readonly ManagedExtensionPin[]): Promise<ManagedInstall[]> {
     return this.exclusive(async () => {
-      const managed = await this.listManaged().catch(() => []);
+      const managed = await this.listManaged();
       const kept = managed.filter(item => pins.some(pin => sameManaged(item, pin)) || newestLoaded(managed, item.source) === item);
       const removed = managed.filter(item => !kept.includes(item));
       if (removed.length) await this.saveManaged(kept);

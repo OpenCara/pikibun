@@ -52,6 +52,10 @@ export function inManagedScope(name: string): boolean {
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
 
+export function isVersion(value: string): boolean {
+  return SEMVER.test(value);
+}
+
 export function compareVersions(a: string, b: string): number {
   const left = SEMVER.exec(a);
   const right = SEMVER.exec(b);
