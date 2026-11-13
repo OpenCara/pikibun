@@ -18,7 +18,7 @@ import type { SessionOperations } from "./operations.js";
 import type { Metadata } from "./state.js";
 import type { ToolCalls } from "./tools/calls.js";
 
-type PikiCall = { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" }; script: boolean };
+type PikiCall = { write: boolean; forgeWrites: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" }; script: boolean };
 
 export interface SessionPikiOptions {
   binding: RunnerBinding;
@@ -31,6 +31,7 @@ export interface SessionPikiOptions {
   waits: ApprovalWaits;
   operations: Pick<SessionOperations, "run">;
   apiLease(): { token: string; release(): void } | undefined;
+  forgeWrites(senderId: string): Promise<boolean>;
   model(): { provider: string; modelId: string } | undefined;
   thinkingLevel(): string | undefined;
   extensionChoice(): Promise<{ chosen: ChosenExtension[]; automaticTools: boolean }>;
@@ -75,6 +76,7 @@ export class SessionPiki {
       ...(this.options.sandboxed && !onHost ? { sandbox: (run: PikiSandboxRun) => this.#runCommand(run) } : {}),
       saveOutput: (callId, tool, output) => this.#saveOutput(callId, tool, output),
       fromScript: callId => this.#pikiCalls.get(callId)?.script === true,
+      forgeWrites: callId => this.#pikiCalls.get(callId)?.forgeWrites === true,
     };
   }
 
@@ -129,7 +131,8 @@ export class SessionPiki {
     await calls.recheck(attribution);
     const limits = commandLimits((await this.options.hostConfig()).commandTimeoutSeconds);
     const callId = String(call.api.callId);
-    this.#pikiCalls.set(callId, { write: trusted, attribution, script: inScriptCall() });
+    const forgeWrites = await this.options.forgeWrites(attribution.initiatedBy);
+    this.#pikiCalls.set(callId, { write: trusted && forgeWrites, forgeWrites, attribution, script: inScriptCall() });
     try {
       const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
       const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");

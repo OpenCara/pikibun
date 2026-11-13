@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { arr, int, obj, opt, str, type Static } from "@earendil-works/pi-schema";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { PikiExtensionInfo } from "../../../../../packages/shared/src/piki-extensions.js";
+import { forgeWriteTools } from "../../../../../packages/shared/src/tool-groups.js";
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
 import { boundOutput, fitsModel, SAVED_OUTPUT_BYTES, scriptOutput } from "../../tool-output.js";
 
@@ -205,6 +206,7 @@ export interface PikiSandboxRun {
 export interface PikiSession {
   sandbox?: (run: PikiSandboxRun) => Promise<CliRun>;
   hostSignIn: boolean;
+  forgeWrites?: (callId: string) => boolean;
   saveOutput?: (callId: string, tool: string, output: string) => Promise<string>;
   fromScript?: (callId: string) => boolean;
 }
@@ -252,6 +254,12 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
         if (readOnly) {
           const writes = spec.writes(args);
           if (writes) throw new Error(`Refused: this workspace runs ${spec.command} read-only, and ${writes}. Nothing ran.`);
+        } else if (session.forgeWrites?.(toolCallId) !== true) {
+          const writes = spec.writes(args);
+          if (writes) {
+            throw new Error(`Refused: ${writes}, and ${spec.command} writes only in a message whose sender and session owner both have `
+              + `${forgeWriteTools.join(", ")} in their tool groups (Settings → Workspaces → Tool groups). Nothing ran.`);
+          }
         }
         const timeoutSeconds = params.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS;
         const tool = spec.info.tool ?? spec.command;

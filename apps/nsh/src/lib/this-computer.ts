@@ -4,7 +4,7 @@ import nshProcess from "process";
 import { APP_VERSION } from "../app-version";
 import type {
   HostEvent, HostInspection, HostRequest, HostState, LocalPage, LocalView, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
-} from "../../../runner/src/app-host-protocol";
+} from "../../../../packages/shared/src/app-host-protocol";
 import {
   appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine,
 } from "./pikibun-command";
@@ -351,7 +351,7 @@ export class ThisComputerHost {
       const { lines, result } = await this.runInstall();
       if (result.code !== 0) { this.log("warning", updateFailure(lines, result)); return; }
       const has = await ownCopy().catch(() => null);
-      this.log("info", has && has === had ? `pikibun ${has} is the latest already.` : `npm updated pikibun${has ? ` to ${has}` : ""} in Pikibun's own folder.`);
+      this.log("info", has && has === had ? `pikibun ${has} is the one this version of Pikibun installs already.` : `npm updated pikibun${has ? ` to ${has}` : ""} in Pikibun's own folder.`);
       await Storage.setItem(COMMAND_UPDATED_KEY, appVersion).catch(() => undefined);
     } finally {
       this.updating.set(false);

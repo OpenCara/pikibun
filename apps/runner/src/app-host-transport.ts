@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { STDIO_FRAME } from "./app-host-protocol.js";
+import { STDIO_FRAME } from "../../../packages/shared/src/app-host-protocol.js";
 
 export interface Transport<Event> {
   send(event: Event): void;

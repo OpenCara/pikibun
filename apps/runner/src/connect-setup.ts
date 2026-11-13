@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readConnectorState } from "./connector.js";
 import { createFauxLocalModels, loadLocalPiModels, readPiSettings, type LocalModels } from "./local-pi.js";
-import type { Prerequisite } from "./app-host-protocol.js";
+import type { Prerequisite } from "../../../packages/shared/src/app-host-protocol.js";
 import { aptFix, fixes, linuxPackages } from "./prerequisite-fixes.js";
 import { ConnectorSetupError } from "./protocol.js";
 import { bashPath, gitForWindowsRoot, SANDBOX_SHELL_HINT, sandboxNodePath, sandboxShellPath } from "./platform.js";

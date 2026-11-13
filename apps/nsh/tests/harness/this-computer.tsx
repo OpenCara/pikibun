@@ -1,5 +1,5 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
-import type { HostInspection, LoginProvider } from "../../../runner/src/app-host-protocol";
+import type { HostInspection, LoginProvider } from "../../../../packages/shared/src/app-host-protocol";
 import {
   appCliFolder, installCommand, setCommandUpdate, setHostLauncher, setInstaller, thisComputer, thisComputerHostId, type HostLink, type InstallRun,
 } from "../../src/lib/this-computer";

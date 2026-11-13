@@ -7,6 +7,8 @@ export const groupTools = [
 ] as const;
 export type GroupTool = (typeof groupTools)[number];
 
+export const forgeWriteTools: readonly GroupTool[] = ["git_push", "github_comment", "github_issue", "github_merge"];
+
 export const groupToolInfo: Record<GroupTool, { label: string; kind: "files" | "commands" | "publish" | "workspace" }> = {
   identity: { label: "Session identity", kind: "files" },
   list_files: { label: "List files", kind: "files" },

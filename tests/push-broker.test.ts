@@ -1259,6 +1259,16 @@ test('the session owner\'s own credentials: writes and personal access tokens go
   assert.equal((await apiCredential(own, { access: 'admin' })).status, 400);
   own.sqlite.prepare("DELETE FROM git_credentials WHERE provider = 'gitlab'").run();
   assert.match((await apiCredential(own, { host: 'gitlab.com' })).body.reason, /no GitLab \(gitlab\.com\) account in Pikibun/);
+  const at = new Date().toISOString();
+  own.sqlite.prepare('INSERT INTO workspace_tool_groups (id, workspace_id, name, tools_json, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('no-merges', 'workspace', 'No merges', JSON.stringify(['read_file', 'git', 'git_push', 'github_comment', 'github_issue', 'github_read']), owner, at, owner, at);
+  own.sqlite.prepare('INSERT INTO workspace_member_tool_groups (workspace_id, user_id, group_id, assigned_by, assigned_at) VALUES (?,?,?,?,?)')
+    .run('workspace', owner, 'no-merges', owner, at);
+  const grouped = await apiCredential(own, { access: 'write' });
+  assert.equal(grouped.body.available, false, 'an owner whose group leaves out a GitHub writing tool gets no token that could do it');
+  assert.match(grouped.body.reason, /the session owner's tool group \(No merges\) leaves out github_merge$/);
+  assert.equal((await apiCredential(own, { host: 'dev.azure.com', access: 'write' })).body.available, false);
+  assert.equal((await apiCredential(own)).body.available, true, 'reads are as before');
 
   forgetRepositoryReadTokens();
   const shared = await fixture(t, { host: { owner: approver } });

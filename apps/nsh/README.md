@@ -104,8 +104,10 @@ machine's platforms: `pnpm nsh package App.tsx --target macos` (or `windows`, `l
 
 The macOS, Windows and Linux builds offer a newer release themselves (`src/lib/app-update.ts`, `src/components/AppUpdate.tsx`).
 NSH can't read the version a package was built with, so each release stamps it into `src/app-version.ts`
-(`node scripts/app-version.mjs <version>`, run by `release-app.yml` before `nsh package`); a build from the repository
-is a development build, which offers none. The app asks GitHub for the repository's releases at launch and every six
+(`node scripts/app-version.mjs <version>`, run by `release-app.yml` before `nsh package`), with the version of the
+`pikibun` command it installs into its own folder (`CLI_VERSION`: the latest `cli-v` tag at the release's commit, so its
+jobs check out the whole history); a build from the repository is a development build, which offers none, and installs
+`pikibun@latest`. The app asks GitHub for the repository's releases at launch and every six
 hours, takes the newest published `app-v` one (a prerelease only while it runs one), and shows it on the main page (the home
 beside the sidebar, above the chat box; above the session list in a narrow window; **Later** puts it off until the next
 launch) and under **Settings → Profile → This app**. **Update** downloads the release's package for
@@ -190,7 +192,7 @@ React web client's address for it) makes this computer one of your hosts:
 
 The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command as `pikibun host --stdio`
 (`apps/runner/src/host-cli.ts` and `app-host.ts`), and talks to it with JSON lines
-on its stdin and stdout (`app-host-protocol.ts`), where pairing codes and API keys travel; never its command line.
+on its stdin and stdout (`packages/shared/src/app-host-protocol.ts`), where pairing codes and API keys travel; never its command line.
 When the command is missing or too old, the page's **Install pikibun** or **Update pikibun** button runs npm, with the
 owner's Node.js, into a `cli` folder of the app's data directory (`npm install --prefix <data dir>/cli pikibun@latest`),
 not npm's global folder: nothing needs sudo or a PATH change, and the copy is the app's to update. npm's output goes to

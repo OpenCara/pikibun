@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import type { HostEvent, HostRequest } from "../../runner/src/app-host-protocol";
+import type { HostEvent, HostRequest } from "../../../packages/shared/src/app-host-protocol";
 import { CommandChannel } from "../src/lib/pikibun-command";
 import { appCliFolder, COMMAND_UPDATED_KEY, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, updateFailure } from "../src/lib/this-computer";
 import { server, signedIn } from "./fixtures";
@@ -55,6 +55,15 @@ describe("starting Pikibun's command", () => {
     expect(installCommand("linux", "/usr/bin/bash", null)).toEqual({ command: "bash", args: ["-ilc", "npm install -g pikibun@latest"], line: "npm install -g pikibun@latest" });
     expect(installCommand("windows", undefined, null).args)
       .toEqual(["/d", "/c", "chcp", "65001", ">nul", "2>nul", "&", "(", "where", "/q", "npm", "||", "exit", "9009", ")", "&&", "npm", "install", "-g", "pikibun@latest"]);
+  });
+
+  test("a released app installs into its own folder the pikibun it was released with, never npm's latest", () => {
+    const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
+    expect(installCommand("macos", "/bin/zsh", mac, "0.32.0").line)
+      .toBe("npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@0.32.0");
+    expect(installCommand("windows", undefined, "C:\\data\\cli", "0.32.0").line).toBe("npm install --prefix cli --no-audit --no-fund pikibun@0.32.0");
+    expect(installCommand("linux", "/usr/bin/bash", null, "0.32.0").line).toBe("npm install -g pikibun@latest");
+    expect(installCommand("linux", "/usr/bin/bash", "/home/ada/.local/share/pikibun/cli", "dev").line).toMatch(/ pikibun@latest$/);
   });
 
   test("says why an install failed in a way the owner can act on", () => {

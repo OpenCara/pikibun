@@ -210,7 +210,7 @@ test('the command gets its own sign-in and the host\'s tools from the connector\
   assert.equal(cliEnvironment(azureCliSpec, { GH_TOKEN: 'no' }).GH_TOKEN, undefined);
 });
 
-async function ghTool(t: TestContext, readOnly = false, session: PikiSession = { hostSignIn: true }) {
+async function ghTool(t: TestContext, readOnly = false, session: PikiSession = { hostSignIn: true, forgeWrites: () => true }) {
   const root = await directory(t);
   const bin = join(root, 'bin');
   await mkdir(bin);
@@ -261,6 +261,23 @@ test('read-only: only commands that read run, and outside the worktree', async t
   await assert.rejects(call({ args: ['pr', 'list'], directory: 'app' }), /leave out directory/);
 });
 
+test('without the GitHub writing tools in both tool groups, only commands that read run, on the host\'s sign-in and in the sandbox', async t => {
+  const onHost = await ghTool(t, false, { hostSignIn: true, forgeWrites: () => false });
+  assert.match(await onHost.call({ args: ['pr', 'view', '1'] }), /arg=view/);
+  await assert.rejects(onHost.call({ args: ['pr', 'merge', '1'] }),
+    /Refused: gh pr merge is not a command that only reads, and gh writes only in a message whose sender and session owner both have git_push, github_comment, github_issue, github_merge in their tool groups .*Nothing ran\./);
+  await assert.rejects(onHost.call({ args: ['api', '-X', 'POST', 'repos/acme/app/issues'] }), /gh writes only in a message whose sender and session owner/);
+  const runs: PikiSandboxRun[] = [];
+  const sandboxed = await ghTool(t, false, { hostSignIn: false, forgeWrites: () => false, sandbox: async run => { runs.push(run); return { exitCode: 0, signal: null, output: 'ok' }; } });
+  await sandboxed.call({ args: ['pr', 'list'], directory: 'app' });
+  await assert.rejects(sandboxed.call({ args: ['pr', 'create', '--fill'] }), /gh writes only in a message whose sender and session owner/);
+  assert.deepEqual(runs.map(run => [run.args, run.readOnly]), [[['pr', 'list'], false]], 'reads still run in the worktree');
+  const allowed = await ghTool(t, false, { hostSignIn: true, forgeWrites: () => true });
+  assert.match(await allowed.call({ args: ['pr', 'merge', '1'] }), /arg=merge/);
+  const unsaid = await ghTool(t, false, { hostSignIn: true });
+  await assert.rejects(unsaid.call({ args: ['pr', 'merge', '1'] }), /gh writes only in a message whose sender and session owner/, 'a session that doesn\'t say writes nothing');
+});
+
 test('a missing command says how its host\'s owner gets it', async t => {
   const { call } = await ghTool(t);
   process.env.PATH = '/nonexistent';
@@ -292,7 +309,7 @@ test('a session runs a Pikibun extension like any other: its tool, behind the se
 test('in the sandbox: the command runs as the session owner, through the session, which says how it ends', async t => {
   const runs: PikiSandboxRun[] = [];
   let answer: CliRun = { exitCode: 0, signal: null, output: 'ran\n' };
-  const { call } = await ghTool(t, false, { hostSignIn: false, sandbox: async run => { runs.push(run); return answer; } });
+  const { call } = await ghTool(t, false, { hostSignIn: false, forgeWrites: () => true, sandbox: async run => { runs.push(run); return answer; } });
   assert.equal(await call({ args: ['pr', 'create', '--fill'], directory: './app/' }), 'ran');
   assert.equal(runs.length, 1);
   const [run] = runs;

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { MXC_SDK_VERSION } from "./app-host-protocol.js";
+import { MXC_SDK_VERSION } from "../../../packages/shared/src/app-host-protocol.js";
 
 export type SandboxBackendConfig =
   | { kind: "seatbelt" }

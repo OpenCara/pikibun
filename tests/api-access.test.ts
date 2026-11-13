@@ -331,7 +331,8 @@ test("an approved call's write lease writes as the session owner, and only while
   lease.release();
   const after = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{}", headers: { authorization: `token ${lease.token}` } });
   assert.equal(after.status, 403);
-  assert.match(JSON.parse(after.body).message, /or the gh tool \(piki:gh\), on the session owner's own host$/);
+  assert.match(JSON.parse(after.body).message,
+    /or the gh tool \(piki:gh\), on the session owner's own host, in a message whose sender and owner both have git_push, github_comment, github_issue, github_merge in their tool groups$/);
   const forged = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{}", headers: { authorization: `token ${apiWriteToken("F".repeat(43))}` } });
   assert.equal(forged.status, 403);
   assert.equal(upstream.length, 2);

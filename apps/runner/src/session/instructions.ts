@@ -143,6 +143,6 @@ export function agentInstructions(input: InstructionsInput): string {
   else if (mode === "write" && tunnelUnavailable) instructions += `\n\nThis session has no tunnel tool: ${tunnelUnavailableText(tunnelUnavailable)} `
     + "If you're asked to put a web app online, say so.";
   if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
-  if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
+  if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; a tool call that changes files, runs a command or has any other effect is refused at once, and nothing waits for anyone to allow it. If the task needs a change, say what you would change, and that a message that may act can make it.";
   return instructions;
 }

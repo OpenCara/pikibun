@@ -69,42 +69,42 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "node", source: "piki:node", title: "Node.js", sessionTools: ["node"],
-    description: "The node tool: the agent runs Node.js and its package managers (node, npm, npx, pnpm, yarn, corepack) with their arguments as a list, without a shell, each call approved as a command is. Off until added here.",
+    description: "The node tool: the agent runs Node.js and its package managers (node, npm, npx, pnpm, yarn, corepack) with their arguments as a list, without a shell, each call checked as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "python", source: "piki:python", title: "Python", sessionTools: ["python"],
-    description: "The python tool: the agent runs Python and its package and test tools (python3, pip, pip3, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call approved as a command is. Off until added here.",
+    description: "The python tool: the agent runs Python and its package and test tools (python3, pip, pip3, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call checked as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "rust", source: "piki:rust", title: "Rust", sessionTools: ["rust"],
-    description: "The rust tool: the agent runs cargo, rustc, rustup and rustfmt with their arguments as a list, without a shell, each call approved as a command is. Off until added here.",
+    description: "The rust tool: the agent runs cargo, rustc, rustup and rustfmt with their arguments as a list, without a shell, each call checked as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "go", source: "piki:go", title: "Go", sessionTools: ["go"],
-    description: "The go tool: the agent runs go and gofmt with their arguments as a list, without a shell, each call approved as a command is. Off until added here.",
+    description: "The go tool: the agent runs go and gofmt with their arguments as a list, without a shell, each call checked as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "dotnet", source: "piki:dotnet", title: ".NET", sessionTools: ["dotnet"],
-    description: "The dotnet tool: the agent runs the .NET CLI with its arguments as a list, without a shell, each call approved as a command is. Off until added here.",
+    description: "The dotnet tool: the agent runs the .NET CLI with its arguments as a list, without a shell, each call checked as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "make", source: "piki:make", title: "Make", sessionTools: ["make"],
-    description: "The make tool: the agent runs make with its arguments as a list, without a shell of its own, each call approved as a command is (a Makefile's recipes are shell commands). Off until added here.",
+    description: "The make tool: the agent runs make with its arguments as a list, without a shell of its own, each call checked as a command is (a Makefile's recipes are shell commands). Off until added here.",
     providers: [],
   },
   {
     name: "browser", source: "piki:browser", title: "Browser", sessionTools: ["browser"],
-    description: "The browser tool: the agent drives a headless Chromium in the session's sandbox (open a page, click, type, run a script, take a screenshot), serving the web app it works on for the call, each call approved as a command is. Its screenshots show in the session panel's Browser tab. Runs only in the Linux sandbox, with Chromium on the host. Off until added here.",
+    description: "The browser tool: the agent drives a headless Chromium in the session's sandbox (open a page, click, type, run a script, take a screenshot), serving the web app it works on for the call, each call checked as a command is. Its screenshots show in the session panel's Browser tab. Runs only in the Linux sandbox, with Chromium on the host. Off until added here.",
     providers: [],
   },
   {
     name: "tunnel", source: "piki:tunnel", title: "Tunnel", sessionTools: ["tunnel"], optIn: true,
-    description: "The tunnel tool: the agent starts the web server it works on in the session's sandbox, as a service that outlives the call, and puts it online at a public https:// address through a Cloudflare quick tunnel, which cloudflared runs on the host. Each start is approved as a host command is, never automatically. The session panel shows the address with a Stop button. Runs only in the Linux sandbox, with cloudflared on the host. Off until added here.",
+    description: "The tunnel tool: the agent starts the web server it works on in the session's sandbox, as a service that outlives the call, and puts it online at a public https:// address through a Cloudflare quick tunnel, which cloudflared runs on the host. It starts only for the host's owner or a member they granted host commands. The session panel shows the address with a Stop button. Runs only in the Linux sandbox, with cloudflared on the host. Off until added here.",
     providers: [],
   },
   {

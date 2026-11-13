@@ -19,9 +19,9 @@ Your provider's credentials stay in Pi on this computer. Pikibun never receives 
 
 Open **Settings → This Mac** (**This Computer** on Windows and Linux). The page checks this computer, then shows what to do next.
 
-If **Install Pikibun's command** appears, choose **Install pikibun**. npm installs it into the app's own folder in about a minute: no `sudo` and no PATH change. Its progress appears under **Recent activity** at the bottom of the page. If that fails, the page shows a command to run in a terminal instead (`npm install -g pikibun@latest`); run it, then choose **Refresh**.
+If **Install Pikibun's command** appears, choose **Install pikibun**. npm installs the version of `pikibun` released with this version of the app into the app's own folder, in about a minute: no `sudo` and no PATH change. Its progress appears under **Recent activity** at the bottom of the page. If that fails, the page shows a command to run in a terminal instead (`npm install -g pikibun@latest`); run it, then choose **Refresh**.
 
-The app keeps that copy current: the first time it starts after an update of the app, it updates the command from npm before the host starts again, which takes about a minute. If that fails (no network, say), the host starts with the command it has, **Recent activity** says why, and the app tries again the next time it opens. A `pikibun` you installed in a terminal is yours to update (`npm install -g pikibun@latest`); when it is too old for the app, the same place offers **Update pikibun**.
+The app keeps that copy current: the first time it starts after an update of the app, it installs the `pikibun` released with the new version from npm before the host starts again, which takes about a minute. It installs that exact version, the latest `cli-v` release when the app was released, never whatever npm calls latest at the time, so nobody who could move npm's `latest` tag changes what runs on your computer without a release of the app. If that fails (no network, say), the host starts with the command it has, **Recent activity** says why, and the app tries again the next time it opens. A `pikibun` you installed in a terminal is yours to update (`npm install -g pikibun@latest`); when it is too old for the app, the same place offers **Update pikibun**.
 
 ## 2. Sign Pi in to a provider
 

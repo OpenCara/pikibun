@@ -7,6 +7,7 @@ import { Readable, type Duplex } from "node:stream";
 import { TLSSocket } from "node:tls";
 import { API_CREDENTIAL_CACHE_SECONDS, API_TOKEN_PLACEHOLDER, apiWriteLease, apiWriteToken, hostAllowed, type ApiAccessKind, type ApiCredential,
   type ApiCredentialGrant, type CredentialedApiProvider, type EgressGrant } from "../../../packages/shared/src/network.js";
+import { forgeWriteTools } from "../../../packages/shared/src/tool-groups.js";
 import { fakeIpAddress, publicAddress } from "./egress.js";
 import { interceptionAuthority, type InterceptionAuthority } from "./interception-ca.js";
 import { RunnerError } from "./protocol.js";
@@ -91,7 +92,7 @@ export function parseApiCredentialGrant(value: unknown): ApiCredentialGrant {
   return { available: true, credentials, cacheSeconds: cacheSeconds as number };
 }
 
-const READ_ONLY = "sandboxed commands only read through the GitHub API. Comments, issues, merges and pushes go through Pikibun's approved tools "
+const READ_ONLY = "sandboxed commands only read through the GitHub API. Comments, issues, merges and pushes go through Pikibun's own tools "
   + "(github_comment, github_issue, github_merge, git_push)";
 
 export function apiRule(rules: Pick<ApiRules, "graphql">, method: string, pathname: string): "read" | "graphql" | "write" {
@@ -101,9 +102,10 @@ export function apiRule(rules: Pick<ApiRules, "graphql">, method: string, pathna
 }
 
 function unleasedWrite(rules: ApiRules, what: string): string {
-  if (rules.provider === "github") return `${what}: ${READ_ONLY}, or the gh tool (piki:gh), on the session owner's own host`;
+  const where = `on the session owner's own host, in a message whose sender and owner both have ${forgeWriteTools.join(", ")} in their tool groups`;
+  if (rules.provider === "github") return `${what}: ${READ_ONLY}, or the gh tool (piki:gh), ${where}`;
   const tool = rules.provider === "gitlab" ? "the glab tool (piki:glab)" : "the az tool (piki:azure-cli)";
-  return `${what}: sandboxed commands only read through the ${rules.name} API; it writes only with ${tool}, on the session owner's own host`;
+  return `${what}: sandboxed commands only read through the ${rules.name} API; it writes only with ${tool}, ${where}`;
 }
 
 export function placeholderOf(headers: IncomingHttpHeaders): { placeholder: boolean; lease?: string; own: boolean } {

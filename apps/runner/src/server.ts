@@ -13,7 +13,7 @@ import { RunnerSession, WORK_MARKER, type RunnerConfig } from "./session.js";
 import { restoreSession } from "./restore.js";
 import { PACK_FILE, readPack, settlePack, unpackSandbox, writePack, type PackSummary } from "./pack.js";
 import { LocalViews } from "./local-view.js";
-import type { LocalPage, LocalView } from "./app-host-protocol.js";
+import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
 
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {

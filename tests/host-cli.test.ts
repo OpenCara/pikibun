@@ -8,7 +8,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { writeConnectorState } from "../apps/runner/src/connector.js";
 import { unsandboxedWarning } from "../apps/runner/src/connect-setup.js";
-import { STDIO_FRAME, type HostEvent } from "../apps/runner/src/app-host-protocol.js";
+import { STDIO_FRAME, type HostEvent } from "../packages/shared/src/app-host-protocol.js";
 import { acquireRunnerLease } from "../apps/runner/src/lease.js";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));

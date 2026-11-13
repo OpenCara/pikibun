@@ -39,7 +39,7 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       await calls.check(api, "list_files");
       return text({ ...attribution, files: await sandbox.listFiles(args.path, () => calls.recheck(attribution)) });
     } }),
-    defineTool({ name: "search", description: "Search the worktree's text files for a regular expression (or, with literal, exact text), line by line, as grep -rn does, without a shell or approval. path narrows it to a directory or one file; glob to file names (*.ts) or paths (apps/**/*.ts); context adds up to 5 lines around each match; ignore_case; max_results (100 by default, at most 500). It skips .git directories as it walks, and node_modules unless all is true; links, binary and non-UTF-8 files and files over 1 MB are skipped. Results give each match's path, line number and text; truncated says it stopped early. Then read_file with offset and limit reads around a match.",
+    defineTool({ name: "search", description: "Search the worktree's text files for a regular expression (or, with literal, exact text), line by line, as grep -rn does, without a shell. path narrows it to a directory or one file; glob to file names (*.ts) or paths (apps/**/*.ts); context adds up to 5 lines around each match; ignore_case; max_results (100 by default, at most 500). It skips .git directories as it walks, and node_modules unless all is true; links, binary and non-UTF-8 files and files over 1 MB are skipped. Results give each match's path, line number and text; truncated says it stopped early. Then read_file with offset and limit reads around a match.",
       parameters: obj({ pattern: str(), path: opt(str()), glob: opt(str()), literal: opt(bool()),
         ignore_case: opt(bool()), context: opt(int({ minimum: 0, maximum: searchLimits.context })),
         max_results: opt(int({ minimum: 1, maximum: searchLimits.maxResults })), all: opt(bool()) }, { open: true }),
@@ -50,14 +50,14 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
         await calls.check(api, "search");
         return text({ ...attribution, ...await sandbox.search(request, () => calls.recheck(attribution)) });
       } }),
-    defineTool({ name: "write_file", description: "Write a confined worktree file. In a read-only request it waits for the session owner to allow it.", executionMode: "sequential", parameters: obj({ path: str(), content: str() }, { open: true }), execute: async (args, api, _call) => {
+    defineTool({ name: "write_file", description: "Write a confined worktree file. A Read-only message's call is refused.", executionMode: "sequential", parameters: obj({ path: str(), content: str() }, { open: true }), execute: async (args, api, _call) => {
       const attribution = await calls.actor(api, true);
       await calls.check(api, "write_file", { write: true });
       await sandbox.writeFile(args.path, args.content, () => calls.recheck(attribution));
       return text({ ...attribution, written: args.path });
     } }),
     defineTool({ name: "edit_file", executionMode: "sequential",
-      description: "Edit a confined worktree text file by exact replacement, without rewriting it. Each edits[].oldText must occur exactly once in the file, including whitespace and line breaks; edits are matched against the file as it was, must not overlap, and apply together. In a read-only request it waits for the session owner to allow it.",
+      description: "Edit a confined worktree text file by exact replacement, without rewriting it. Each edits[].oldText must occur exactly once in the file, including whitespace and line breaks; edits are matched against the file as it was, must not overlap, and apply together. A Read-only message's call is refused.",
       parameters: obj({ path: str(), edits: arr(obj({ oldText: str(), newText: str() }, { open: true }), { minItems: 1 }) }, { open: true }),
       execute: async (args, api, _call) => {
         const attribution = await calls.actor(api, true);
@@ -68,8 +68,8 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       } }),
     ...(["move_file", "copy_file"] as const).map(name => defineTool({ name, executionMode: "sequential",
       description: name === "move_file"
-        ? "Move or rename a file, directory or link in the worktree, without a shell or approval (like write_file): from and to are worktree paths. A link is moved itself, never what it points to. The destination must not exist, its directories are made, and a directory can't go inside itself; nothing in .git is moved. In a read-only request it waits for the session owner to allow it."
-        : `Copy a file, or a directory with everything in it, in the worktree, without a shell or approval (like write_file): from and to are worktree paths. Links are copied as links. The destination must not exist and its directories are made; at most ${fileOperationLimits.entries} entries and ${fileOperationLimits.bytes / 1024 / 1024} MB of files, never a repository's .git (clone it again instead). In a read-only request it waits for the session owner to allow it.`,
+        ? "Move or rename a file, directory or link in the worktree, without a shell (like write_file): from and to are worktree paths. A link is moved itself, never what it points to. The destination must not exist, its directories are made, and a directory can't go inside itself; nothing in .git is moved. A Read-only message's call is refused."
+        : `Copy a file, or a directory with everything in it, in the worktree, without a shell (like write_file): from and to are worktree paths. Links are copied as links. The destination must not exist and its directories are made; at most ${fileOperationLimits.entries} entries and ${fileOperationLimits.bytes / 1024 / 1024} MB of files, never a repository's .git (clone it again instead). A Read-only message's call is refused.`,
       parameters: obj({ from: str(), to: str() }, { open: true }),
       execute: async (args, api, _call) => {
         let request: FileOperationRequest;
@@ -80,7 +80,7 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
         return text({ ...attribution, ...(name === "move_file" ? { moved: args.from, to: args.to } : { copied: args.from, to: args.to, ...result }) });
       } })),
     defineTool({ name: "delete_file", executionMode: "sequential",
-      description: "Delete a file, link or directory in the worktree, without a shell or approval (like write_file). A link is deleted itself, never what it points to. A directory with anything in it is deleted only with recursive: true, everything in it included. Never .git or the worktree itself. In a read-only request it waits for the session owner to allow it.",
+      description: "Delete a file, link or directory in the worktree, without a shell (like write_file). A link is deleted itself, never what it points to. A directory with anything in it is deleted only with recursive: true, everything in it included. Never .git or the worktree itself. A Read-only message's call is refused.",
       parameters: obj({ path: str(), recursive: opt(bool()) }, { open: true }),
       execute: async (args, api, _call) => {
         let request: FileOperationRequest;

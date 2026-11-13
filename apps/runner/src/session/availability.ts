@@ -4,7 +4,7 @@ import { documentKindsOff, extensionSwitchOn, sessionToolExtensions, sessionTool
 import { programInstallStep } from "../../../../packages/shared/src/program-install.js";
 import type { DocumentKind } from "../../../../packages/shared/src/sources.js";
 import type { ProgramToolDefinition, ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
-import { unknownToolGroup, type MemberToolGroup } from "../../../../packages/shared/src/tool-groups.js";
+import { forgeWriteTools, unknownToolGroup, type MemberToolGroup } from "../../../../packages/shared/src/tool-groups.js";
 import { tunnelUnavailableReason, type HostTunnelStatus, type TunnelUnavailableReason } from "../../../../packages/shared/src/tunnel.js";
 import type { RunnerBinding } from "../../../../packages/shared/src/types.js";
 import { sandboxMissingPrograms } from "../program-availability.js";
@@ -13,6 +13,10 @@ import { pythonPrograms } from "../python-command.js";
 import type { SandboxBackendConfig } from "../sandbox-backend.js";
 import { Sandbox } from "../sandbox.js";
 import type { SessionWorkspace } from "../workspace.js";
+
+function ownerGroupRefusal(tool: string, group: string): string {
+  return `${tool} isn't among the tools of this session's owner (${group}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`;
+}
 
 export interface ToolAvailabilityOptions {
   binding: RunnerBinding;
@@ -115,6 +119,19 @@ export class ToolAvailability {
     return last ? last.toolGroups?.[userId] : unknownToolGroup;
   }
 
+  async requireOwnerTool(tool: string): Promise<void> {
+    const group = await this.memberToolGroup(this.options.binding.owner.id);
+    if (group?.off.includes(tool)) throw new RunnerError(403, ownerGroupRefusal(tool, group.name));
+  }
+
+  async forgeWrites(senderId: string): Promise<boolean> {
+    for (const userId of new Set([this.options.binding.owner.id, senderId])) {
+      const group = await this.memberToolGroup(userId);
+      if (group && forgeWriteTools.some(tool => group.off.includes(tool))) return false;
+    }
+    return true;
+  }
+
   async requireSenderTool(tool: string, senderId: string): Promise<void> {
     if (senderId === this.options.binding.owner.id) return;
     const group = await this.memberToolGroup(senderId);
@@ -132,9 +149,7 @@ export class ToolAvailability {
   async requireSessionTool(tool: string): Promise<void> {
     if (!(await this.sessionToolsOff()).has(tool)) return;
     const group = await this.memberToolGroup(this.options.binding.owner.id);
-    if (group?.off.includes(tool)) {
-      throw new RunnerError(403, `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
-    }
+    if (group?.off.includes(tool)) throw new RunnerError(403, ownerGroupRefusal(tool, group.name));
     const defined = this.options.definitions().find(item => item.name === tool);
     const extensions = defined ? [...defined.extensions] : sessionToolExtensions(tool).map(item => item.source);
     throw new RunnerError(403, `${tool} is turned off in this workspace${extensions.length ? ` (${extensions.join(", ")})` : ""}. Its owners and admins add it under Settings → Workspaces → Extensions.`);

@@ -251,7 +251,7 @@ export class RunnerSession {
       definitions: () => this.#defined.definitions, toolNames: () => this.tools.map(tool => tool.name) });
     this.#calls = new ToolCalls({ ownerId: binding.owner.id, sandbox: this.sandbox, hostCommands: this.hostCommands,
       authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig(),
-      requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
+      requireOwnerTool: tool => this.#availability.requireOwnerTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
     this.#operations = new SessionOperations({
       binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, waits: this.#waits,
       requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
@@ -282,7 +282,7 @@ export class RunnerSession {
     });
     this.#piki = new SessionPiki({
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
-      waits: this.#waits, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), model: () => this.#currentModel ?? this.modelRef,
+      waits: this.#waits, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
       mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(),
     });

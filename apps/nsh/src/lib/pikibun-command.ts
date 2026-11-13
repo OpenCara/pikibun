@@ -1,9 +1,11 @@
 import { platform } from "nsh";
 import { homedir } from "os";
 import nshProcess from "process";
+import { STDIO_FRAME } from "../../../../packages/shared/src/app-host-protocol";
+import { CLI_VERSION } from "../app-version";
+import { isVersion } from "./version";
 import { CMD, cmdArgs, cmdRun, cmdRunOwn, lastLines } from "./windows-cmd";
 
-const STDIO_FRAME = "\u001epikibun ";
 const SHELLS = ["zsh", "bash", "sh"];
 const CLI_FOLDER = "cli";
 export const INSTALL_COMMAND = "npm install -g pikibun@latest";
@@ -30,8 +32,12 @@ export function pikibunCommand(os: string, shell: string | undefined, cli: strin
   return { command: loginShell(os, shell), args: ["-ilc", `${path}exec pikibun ${args.join(" ")}`] };
 }
 
-export function installCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[]; line: string } {
-  const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", "pikibun@latest"];
+export function ownCopyPackage(version: string = CLI_VERSION): string {
+  return `pikibun@${isVersion(version) ? version : "latest"}`;
+}
+
+export function installCommand(os: string, shell: string | undefined, cli?: string | null, version: string = CLI_VERSION): { command: string; args: string[]; line: string } {
+  const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", ownCopyPackage(version)];
   if (os === "windows") {
     const words = cli ? own : INSTALL_COMMAND.split(" ");
     return { command: CMD, args: cmdArgs(cmdRun(words[0], words.slice(1))), line: words.join(" ") };
