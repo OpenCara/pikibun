@@ -66,6 +66,13 @@ test("what a push says of its pull request, and an approval's outcome, are read 
   assert.equal(githubRepository("https://gitlab.com/g/p/-/merge_requests/3"), undefined);
 });
 
+test("the file tools change files by Pi's names and by their old ones, for connectors of either age", () => {
+  for (const tool of ["write", "edit", "write_file", "edit_file"]) {
+    assert.match(new PrFlowState().observe(call(tool, { path: "app/x.ts" }), settings(), "/w", isClone, 0) ?? "", /first change in app/, tool);
+  }
+  for (const tool of ["read", "ls", "grep", "read_file"]) assert.equal(new PrFlowState().observe(call(tool, { path: "app/x.ts" }), settings(), "/w", isClone, 0), undefined, tool);
+});
+
 test("the flow, step by step: a draft at the first change, ready once done, a review window and a new one after each push, then the merge", () => {
   const state = new PrFlowState();
   const at = Date.parse("2026-11-09T19:00:00Z");

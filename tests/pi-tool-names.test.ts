@@ -54,7 +54,7 @@ async function runner(t: TestContext, calls: Call[], options: { tools?: string[]
     }
     options.offered?.push([...available]);
     const next = queue.shift();
-    return next ? fauxAssistantMessage(fauxToolCall(next.tool, next.args), { stopReason: "toolUse" }) : fauxAssistantMessage("Done.");
+    return next ? fauxAssistantMessage(fauxToolCall(next.tool, next.args as Parameters<typeof fauxToolCall>[1]), { stopReason: "toolUse" }) : fauxAssistantMessage("Done.");
   };
   faux.setResponses([respond]);
   const models = createModels();

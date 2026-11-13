@@ -1,6 +1,6 @@
 # Pi's names and contracts for the file tools
 
-Status: phase 1 is built (see [Phase 1 as built](#phase-1-as-built)); phases 2 and 3 are planned. The phases at the end say what lands in which order.
+Status: phases 1 and 2 are built (see [Phase 1 as built](#phase-1-as-built) and [Phase 2 as built](#phase-2-as-built)); phase 3 is planned. The phases at the end say what lands in which order.
 
 ## Why
 
@@ -281,6 +281,41 @@ Phase 1 landed as decisions 1 to 5 describe, with these differences and details.
   `edit` over one directory and ours over each backend of the sandbox conformance suite, and compares `content` and
   `details`, sorting a directory search's lines. Pi's `grep` needs ripgrep: CI installs it, and elsewhere the suite
   skips `grep` with a note. The hooks test of decision 6 lands with phase 2, with the names it matches.
+
+## Phase 2 as built
+
+Phase 2 landed as decisions 6 to 13 describe, with these differences and details.
+
+- **A binding's `agent.tools` is mapped where it is read, not in `protocol.ts`.** The connector compares a session's
+  binding byte for byte with the one it stored (`session.ts`, "Persisted binding mismatch"; `server.ts` when a session
+  is provisioned again; restores), so rewriting it on the way in would refuse every session from before the rename. The
+  runner maps it where it uses it instead (`canonicalToolNames` for a side ask's read-only tools and for the
+  instructions), and backups and restores carry it as it was.
+- **Both spellings go out in the agent version, not at each send.** An agent version is immutable and its binding is
+  sent again when an errored session restarts, so the control plane writes `tools_json` with both spellings when it
+  makes the version (`chatAgentVersion`, `migratedAgentVersion`, `withLegacyToolNames`). For the same reason
+  `agentVersion` in `db.ts` passes the saved names through unchanged: a version from before holds only the old names,
+  which a newer connector maps and an older one knows. `migratedAgentVersion` maps the names it reads before it
+  chooses the tools a host carries.
+- **Tool groups.** `canonicalGroupTools` maps a saved group's tools before `isGroupTool` filters them, in `groupOf`,
+  `memberTools` and `parseGroupTools` (which takes either spelling). `toolsOff` adds each left-out tool's old name;
+  `retiredGroupTools` comes from `toolNames`, which no longer holds the old names, so they never join it.
+  `parseMemberToolGroups` maps an `off` list to the new names. `requireSessionTool` maps the name an older connector
+  asks about, and its refusal names the tool as the connector asked.
+- **The tool-groups API** answers `groups[].tools`, `roles` and `tools` in the old spellings
+  (`legacyGroupToolNames`) and takes either; a group is saved in the new names. On the wire these are now `string[]`,
+  and the app maps them with `canonicalGroupTools` before it ticks its boxes and summarizes a group.
+- **The old names refused at the harness.** Pikibun's own hook sees the harness's `tool_unavailable` result for a call
+  to a tool the request didn't offer, so `renamedToolsHook` (`apps/runner/src/session/renamed-tools.ts`, on the
+  `workspace-tools` extension) adds a note that names the tool to call instead.
+- **Extensions.** `pikibunOwn` in `apps/runner/src/extensions/load.ts` leaves out an extension's tool with a new or an
+  old name; `reservedToolNames` holds both. On the workspace's page, an extension's tool reported under an old name
+  shows as left out by `piki:files`. An extension's `find` is offered until phase 3. Pi's type guards
+  (`isToolCallEventType("write", event)`, `isReadToolResult`, `isEditToolResult`) match the tools in a real
+  extension's hooks, and a `tool_result` handler gets `details` as the tool returned them, `details.pikibun`
+  included (`tests/pi-tool-names.test.ts`).
+- **`piki:pr-flow`** matches both spellings and is version 0.2.0 in `extensions/pr-flow/package.json`; publishing
+  and pinning it is a release of its own. `piki:context-files` and `piki:prompt-audit` name none of the tools.
 
 ## Not chosen
 
