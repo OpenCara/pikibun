@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { savedPairing } from '../../../runner/src/connect-setup.js';
 import { createConnector, type ConnectorOptions, type LocalConnector } from '../../../runner/src/connector.js';
+import { serverEnvironment } from '../config.js';
 import { createPairing } from '../connectors.js';
 import type { LocalServer } from './launch.js';
 
@@ -45,7 +46,7 @@ export function startLocalHost(server: LocalServer, stateDir: string, options: L
     const pairing = saved === server.origin && sameOwner ? undefined : await createPairing(server.env, owner.id, hostname().slice(0, 120) || 'This computer');
     stopped.signal.throwIfAborted();
     connector = createConnector({
-      ...options, dataDir, server: server.origin, allowInsecureLoopback: true,
+      ...options, dataDir, server: server.origin, allowInsecureLoopback: true, privateEnvironment: serverEnvironment,
       ...(pairing ? { pairing: { id: pairing.id, code: pairing.code }, replacePairing: saved !== undefined } : {}),
       capabilities: options.capabilities ?? { platform: process.platform, sandbox: false, productionShell: false },
     });

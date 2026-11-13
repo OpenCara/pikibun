@@ -34,6 +34,7 @@ export interface RunnerConfigSource {
   secret: string;
   options: {
     allowFaux?: boolean; allowTestShell?: boolean; resources?: RunnerConfig["resources"]; unsandboxed?: boolean; sandboxBackend?: SandboxBackendConfig;
+    privateEnvironment?: readonly string[];
     localModels: LocalModels; fetch?: typeof fetch;
   };
   lifetime: AbortSignal;
@@ -66,6 +67,7 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
     sharedSecret: source.secret, connectorId: state.connectorId,
     allowFaux: options.allowFaux === true, allowTestShell: options.allowTestShell === true,
     resources: options.resources, unsandboxed: options.unsandboxed === true,
+    ...(options.privateEnvironment?.length ? { privateEnvironment: options.privateEnvironment } : {}),
     pikiHostSignIn: process.env.PIKIBUN_PIKI_HOST_SIGN_IN === "1",
     ...(options.sandboxBackend && !options.unsandboxed ? { sandboxBackend: options.sandboxBackend } : {}),
     resolveModels: model => {
