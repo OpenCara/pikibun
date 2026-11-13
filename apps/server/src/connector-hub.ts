@@ -8,6 +8,7 @@ import type { ConnectorHub } from './connector-hub-types.js';
 import { authorizeConnectorTicket } from './authority/index.js';
 import { connectorError, connectorRequestFrameBytes, currentConnector, requireConnectorGeneration, validateConnectorRpc, connectorUtf8Bytes, connectorJsonValid, type ConnectorRelayEnvelope } from './connector-transport.js';
 import { fail, id, now, randomToken } from './http.js';
+import { plainText, serverLog } from './log.js';
 import type { Env } from './types.js';
 
 type Generation = { connectorId: string; credentialHash: string; connectionHash: string; generation: string };
@@ -69,6 +70,7 @@ class ConnectorRelay {
       this.current = null;
       this.failPending(previous, 503, 'Connector connection replaced');
       this.close(previous.socket, 1012, 'Connection replaced');
+      serverLog(this.env)(`connector ${connectorId}: its previous connection was replaced by a new one`);
     }
     const attachment: Generation = { connectorId, credentialHash, connectionHash, generation };
     let accepted: WebSocket | undefined;
@@ -76,12 +78,18 @@ class ConnectorRelay {
     if (!accepted) { await this.clearConnection(attachment); return; }
     const connection: SocketGeneration = { ...attachment, socket: accepted };
     this.current = connection;
+    serverLog(this.env)(`connector ${connectorId} connected`);
     accepted.on('message', (data, isBinary) => { void this.message(connection, data, isBinary); });
-    accepted.on('close', () => { if (this.current === connection) void this.disconnect(connection, 503, 'Connector disconnected').catch(() => {}); });
+    accepted.on('close', (code: number, reason: Buffer) => {
+      if (this.current !== connection) return;
+      const said = plainText(reason.toString('utf8'), 120);
+      void this.disconnect(connection, 503, 'Connector disconnected', undefined, `close code ${code}${said ? `, ${said}` : ''}`).catch(() => {});
+    });
     accepted.on('error', (error: NodeJS.ErrnoException) => {
       if (this.current !== connection) return;
       const oversized = error.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH';
-      void this.disconnect(connection, oversized ? 502 : 503, oversized ? 'Connector buffer limit exceeded' : 'Connector disconnected').catch(() => {});
+      void this.disconnect(connection, oversized ? 502 : 503, oversized ? 'Connector buffer limit exceeded' : 'Connector disconnected', undefined,
+        plainText(`${error.code ?? 'socket error'}: ${error.message}`, 200)).catch(() => {});
     });
     try {
       accepted.send(JSON.stringify({ type: 'welcome', connectorId, connectionToken }));
@@ -237,9 +245,10 @@ class ConnectorRelay {
         charged = 0;
         this.finish(reply.id, new Response(stream, { status: reply.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }));
       }
-    } catch {
+    } catch (error) {
       this.failPending(connection, 403, 'Connector authorization or protocol validation failed');
-      await this.disconnect(connection, 403, 'Connector authorization or protocol validation failed');
+      await this.disconnect(connection, 403, 'Connector authorization or protocol validation failed', undefined,
+        plainText(error instanceof Error ? error.message : String(error), 200));
     } finally { this.bufferedBytes -= charged; }
   }
 
@@ -265,6 +274,8 @@ class ConnectorRelay {
     const pending = this.pending.get(requestId);
     if (!pending || pending.responding || pending.expired) return;
     pending.expired = true;
+    const ticket = pending.envelope.request.ticket;
+    serverLog(this.env)(`connector ${this.connectorId} didn't answer ${ticket.action} for session ${ticket.sessionId} in time`);
     pending.resolve(this.errorResponse(504, 'Connector timed out; inspect the session before retrying'));
   }
 
@@ -296,8 +307,10 @@ class ConnectorRelay {
       .bind(connection.connectorId, connection.credentialHash, connection.connectionHash).run();
   }
 
-  private async disconnect(connection: SocketGeneration, status: number, reason: string, code = 1008): Promise<void> {
+  private async disconnect(connection: SocketGeneration, status: number, reason: string, code = 1008, detail?: string): Promise<void> {
     if (this.current === connection) this.current = null;
+    const waiting = [...this.pending.values()].filter(pending => pending.connection === connection).length;
+    serverLog(this.env)(`connector ${connection.connectorId} disconnected: ${reason}${detail ? ` (${detail})` : ''}${waiting ? `; ${waiting} request${waiting === 1 ? '' : 's'} failed with it` : ''}`);
     this.failPending(connection, status, reason);
     this.close(connection.socket, code, reason);
     await this.clearConnection(connection);

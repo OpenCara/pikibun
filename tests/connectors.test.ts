@@ -1691,7 +1691,13 @@ test('owners pack an archived session\'s files on its host, and unarchiving unpa
   assert.match(reason.error, /too large to pack/);
   assert.equal(packedAt(), null);
   packReply = () => Response.json({ error: 'Runner operation failed' }, { status: 500 });
-  assert.equal((await s.owner.request('POST', `${path}/pack`)).status, 502);
+  const logged: string[] = [];
+  f.env.LOG = line => { logged.push(line); };
+  const failed = await json<{ code: string }>(await s.owner.request('POST', `${path}/pack`), 500);
+  assert.equal(failed.code, 'runner_error', 'a 500 Cloudflare passes through, with its JSON');
+  assert.ok(logged.some(line => line.includes(`answered 500 to pack for session ${s.session.id}: Runner operation failed`)), logged.join('\n'));
+  assert.ok(logged.some(line => /^POST \/api\/sessions\/:id\/pack 500 runner_error \d+ms session=/.test(line)), logged.join('\n'));
+  delete f.env.LOG;
   assert.ok(packedAt());
   unpackReply = () => Response.json({ error: 'Unavailable' }, { status: 503 });
   assert.equal((await s.owner.request('POST', `${path}/unarchive`)).status, 503);

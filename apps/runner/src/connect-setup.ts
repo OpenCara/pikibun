@@ -2,10 +2,10 @@ import { access, constants } from "node:fs/promises";
 import { homedir, release, userInfo } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readConnectorState } from "./connector.js";
 import { createFauxLocalModels, loadLocalPiModels, readPiSettings, type LocalModels } from "./local-pi.js";
-import type { Prerequisite } from "../../../packages/shared/src/app-host-protocol.js";
+import type { Prerequisite, PrerequisiteFix } from "../../../packages/shared/src/app-host-protocol.js";
 import { aptFix, fixes, linuxPackages } from "./prerequisite-fixes.js";
 import { ConnectorSetupError } from "./protocol.js";
 import { bashPath, gitForWindowsRoot, SANDBOX_SHELL_HINT, sandboxNodePath, sandboxShellPath } from "./platform.js";
@@ -70,8 +70,50 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
     if (unsandboxed && !result.at(-1)!.ok) missing.push("git");
     const fix = aptFix(missing, await executable("/usr/bin/apt-get"));
     for (const item of result) if (!item.ok) item.fix = fix;
+    if (!unsandboxed && result.every(item => item.ok)) result.push(bubblewrapPrerequisite());
   }
   return result;
+}
+
+export const BUBBLEWRAP_PROBE = ["--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
+  "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib", "--ro-bind-try", "/lib64", "/lib64", "--symlink", "usr/bin", "/bin",
+  "--proc", "/proc", "--dev", "/dev", "--", "/usr/bin/python3", "-I", "-c", ""] as const;
+
+export interface BubblewrapProbe {
+  run(): { status: number | null; stderr: string; error?: Error };
+  sysctl(name: string): string | undefined;
+}
+
+const hostProbe: BubblewrapProbe = {
+  run: () => {
+    const probe = spawnSync("/usr/bin/bwrap", BUBBLEWRAP_PROBE, { encoding: "utf8", timeout: 15_000, env: { PATH: "/usr/bin:/bin" } });
+    return { status: probe.status, stderr: probe.stderr ?? "", ...(probe.error ? { error: probe.error } : {}) };
+  },
+  sysctl: name => { try { return readFileSync(`/proc/sys/${name.replaceAll(".", "/")}`, "utf8").trim(); } catch { return undefined; } },
+};
+
+export function bubblewrapFix(sysctl: BubblewrapProbe["sysctl"]): PrerequisiteFix {
+  if (sysctl("kernel.apparmor_restrict_unprivileged_userns") === "1") return {
+    text: "AppArmor stops bubblewrap from making user namespaces (Ubuntu 23.10 and later). Allow them, then start again; to keep the setting after a restart, put kernel.apparmor_restrict_unprivileged_userns=0 in a file under /etc/sysctl.d.",
+    command: "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0" };
+  if (sysctl("kernel.unprivileged_userns_clone") === "0") return {
+    text: "This kernel doesn't let users make user namespaces. Allow them, then start again; to keep the setting after a restart, put kernel.unprivileged_userns_clone=1 in a file under /etc/sysctl.d.",
+    command: "sudo sysctl -w kernel.unprivileged_userns_clone=1" };
+  if (sysctl("user.max_user_namespaces") === "0") return {
+    text: "user.max_user_namespaces is 0, so no user namespace can be made. Raise it, then start again; to keep the setting after a restart, put it in a file under /etc/sysctl.d.",
+    command: "sudo sysctl -w user.max_user_namespaces=15000" };
+  return { text: "Let bubblewrap make user namespaces on this machine. In a container or a VM that forbids them, allow them there, or run the connector without the sandbox (--unsafe-no-sandbox) after reading its warning." };
+}
+
+export function bubblewrapPrerequisite(probe: BubblewrapProbe = hostProbe): Prerequisite {
+  const result = probe.run();
+  if (result.status === 0) return { name: "bubblewrap can make the sandbox", ok: true };
+  const said = (result.error?.message ?? result.stderr).replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 200)
+    || (result.status === null ? "it didn't finish" : `it exited with ${result.status}`);
+  const fix: PrerequisiteFix = /unknown option|unrecognized option/i.test(said)
+    ? { text: "This bubblewrap is too old for the sandbox: install bubblewrap 0.8 or newer." }
+    : bubblewrapFix(probe.sysctl);
+  return { name: `bubblewrap can make the sandbox (it can't here: ${said})`, ok: false, fix };
 }
 
 export function npmPrerequisite(platform: NodeJS.Platform = process.platform, path = process.env.PATH ?? ""): Prerequisite {
@@ -94,7 +136,9 @@ export function assertPrerequisites(prerequisites: readonly Prerequisite[], unsa
   const hint = process.platform === "darwin" ? " Install Git, e.g. xcode-select --install or brew install git."
     : process.platform === "win32" ? (missing.some(name => name.startsWith("Git for Windows")) ? " Install Git for Windows from https://git-scm.com/download/win." : "")
     : unsandboxed ? "" : sandboxHint;
-  throw new ConnectorSetupError(`Missing prerequisites: ${missing.join(", ")}.${hint}`);
+  const fixes = [...new Set(prerequisites.filter(item => !item.ok && !item.optional && item.fix)
+    .map(({ fix }) => `${fix!.text}${fix!.command ? ` (${fix!.command})` : ""}`))];
+  throw new ConnectorSetupError(`Missing prerequisites: ${missing.join(", ")}.${fixes.map(text => ` ${text}`).join("")}${hint}`);
 }
 
 export interface ModelChoice {

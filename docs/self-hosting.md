@@ -117,6 +117,19 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `SIGNUP` | GitHub `open`, passwords `invite` (`invite` in the Docker image) | Who can create an account, with GitHub and with a password: `open` (anyone who reaches the server), `invite` (only through a workspace's invite link) or `off` (only the operator's: `ADMIN_USER_IDS` and `--create-admin`); see [Who can create an account](accounts.md#who-can-create-an-account). Not for `LOCAL_MODE`, which admits only its owner |
 | `LOCAL_MODE`, `LOCAL_CLAIM_SECRET` | off | A server for one person on their own computer, as `pikibun serve` runs it: plain HTTP on loopback only, no GitHub sign-in, and one owner, who signs in with `/api/auth/local?token=LOCAL_CLAIM_SECRET` (a base64url 32-byte value; apps post it to `/api/auth/native/local`). The first sign-in makes their account, `password:` and `LOCAL_OWNER_NAME` (`owner` unset), with no password; `LOCAL_OWNER_ID` pins an existing account instead |
 
+## Logs
+
+The server writes to standard error (`docker logs` for the image), one line each, starting `pikibun:`:
+
+- every answer with a 5xx status: its method, route (`/api/sessions/:id/view`, not the path as sent), status, error code, time taken and session, and what it told the client, e.g. `pikibun: GET /api/sessions/:id/view 500 runner_error 41ms session=…: The connector could not complete the operation…`. An error the server didn't expect also gets its stack;
+- what a host's connector answered when it failed an operation (`connector … answered 500 to view for session …: Runner operation failed`), and when a connector didn't answer in time;
+- each connector's connection: when it connects, when it is replaced by a newer one, and when and why it disconnects, with the WebSocket close code and the requests that failed with it;
+- each failed automatic backup, with its session and why.
+
+Request bodies, query strings, cookies and tokens are never logged. The connector logs on its own machine what went wrong there: run it in a terminal, or read its service manager's log (see [Hosts](hosts.md#logs)).
+
+When a host fails an operation for a reason of its own, the server answers 500 with `runner_error` and a JSON explanation. It no longer answers 502 for that: proxies such as Cloudflare replace a 502's body with their own page, so neither the app nor a connector could read why.
+
 ## Administration
 
 The server's administrators see every account, workspace and host under **Settings → Administration** and can suspend accounts. List their user IDs in `ADMIN_USER_IDS`, separated by commas (`ADMIN_USER_IDS=github:12345,github:67890,password:alice`); each person finds theirs under **Settings → Profile**. A GitHub user ID is `github:` and the numeric ID GitHub gives the account, which `https://api.github.com/users/<login>` shows as `id` before anyone signs in. A password account's is `password:` and its username. Nobody can sign up in the app as an account `ADMIN_USER_IDS` lists, so listing one reserves the name; the operator creates it from the server's command line instead, with the password typed at a hidden prompt (or piped in on the first line of standard input, never as an argument):

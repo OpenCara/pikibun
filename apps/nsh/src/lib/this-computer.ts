@@ -646,7 +646,7 @@ export class ComputerHosts {
   load(): Promise<void> {
     this.loaded ??= Promise.all([this.computer.load(), Storage.getItem(SERVERS_KEY).catch(() => null)]).then(([, raw]) => {
       let saved: SavedServer[] = [];
-      try { saved = raw ? (JSON.parse(raw) as SavedServer[]).filter(item => typeof item?.server === "string" && typeof item?.stateDir === "string") : []; } catch { saved = []; }
+      try { saved = raw ? (JSON.parse(raw) as SavedServer[]).filter(item => typeof item?.server === "string" && typeof item?.stateDir === "string" && item.stateDir === serverStateDir(item.server)) : []; } catch { saved = []; }
       const known = untracked(this.added);
       const loaded = saved.filter(item => !known.some(entry => entry.server === item.server))
         .map(item => ({ server: item.server, host: this.candidates.get(item.server) ?? new ThisComputerHost(ask, { stateDir: item.stateDir, computer: this.computer }) }));

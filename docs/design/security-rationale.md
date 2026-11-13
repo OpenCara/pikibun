@@ -24,6 +24,11 @@ The source code has no comments (see [Comments](../development.md#comments)), so
 - **Helpers out of the session's reach.** The `git` shim, the browser tool's driver and the session service's driver are written afresh at every open, beside the session's mounts and read-only inside, so nothing the session runs can replace them for a later command.
 - **Resources.** Shell commands run under a resource supervisor that alone holds the root descriptor and a liveness pipe, which it closes before starting bubblewrap. It is never sent `SIGKILL`: it keeps its lock until the command's whole cgroup is killed and empty, and watches its parent and its own deadline. A command stopped while it waited for the sandbox never starts, and a permission revoked while it waited is checked again just before it runs.
 - **What it leaves to the host.** The host's GPU render device only where its owner lends it, and the connector's Node.js and the host's Chromium read-only where `/usr` doesn't already hold them.
+- **Checked before the connector starts.** `bubblewrapPrerequisite` (`apps/runner/src/connect-setup.ts`) runs the helper's Python under the same namespace flags and read-only mounts once, before a sandboxed connector pairs or connects. bubblewrap can be installed and still unable to make a user namespace (AppArmor's `apparmor_restrict_unprivileged_userns` on Ubuntu 23.10 and later, `unprivileged_userns_clone=0`, `max_user_namespaces=0`, or a container that forbids them). Without the check such a host started, took sandboxed sessions and failed every one of them later, so the connector now refuses to start there, as it does when bubblewrap is missing.
+
+## The app's command line
+
+The desktop app starts `pikibun` through the owner's login shell (`$SHELL -ilc '…'`), so that it finds the command where a terminal would. Every argument goes into that line as one shell word (`shellArg` in `apps/nsh/src/lib/pikibun-command.ts`, single-quoted unless it is plain), and a server saved in the app's storage is used only with the state directory `serverStateDir` makes for its origin. A value in storage, or a directory with a quote or a `;` in it, can therefore never become a second command. `~/` stays unexpanded inside the quotes on purpose: `pikibun host` expands it itself.
 
 ## macOS sandbox (Seatbelt)
 

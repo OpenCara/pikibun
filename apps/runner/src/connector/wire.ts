@@ -45,7 +45,12 @@ export class CallbackRefused extends Error {
 
 export const refusedReport = (error: unknown) => error instanceof CallbackRefused && error.status === 400;
 
-export function decodeJson(bytes: Uint8Array): unknown {
+export function responseSummary(response: Pick<Response, "status" | "headers">): string {
+  const type = response.headers.get("content-type")?.split(";")[0]?.trim().replace(/[^\w.+/-]/g, "").slice(0, 100);
+  return `${response.status}${type ? ` ${type}` : ""}`;
+}
+
+export function decodeJson(bytes: Uint8Array, response?: Pick<Response, "status" | "headers">): unknown {
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
-  catch { throw new Error("Invalid control-plane response"); }
+  catch { throw new Error(`Invalid control-plane response${response ? ` (${responseSummary(response)})` : ""}`); }
 }

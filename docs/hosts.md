@@ -2,7 +2,7 @@
 
 A host is a machine where you run the `pikibun` connector next to [Pi](https://github.com/earendil-works/pi). Sessions on it use the models and credentials configured in Pi there (by default in `~/.pi/agent`); provider credentials, Pi history and personal extensions are never uploaded.
 
-**Requirements:** Linux or WSL2 with Node.js 24 or newer, Pi configured with the providers and models to offer, and `bubblewrap`, Python 3, Git and `flock` (util-linux) for the sandbox. On Windows, run the connector inside WSL2 for that sandbox. macOS and native Windows can also try their own [experimental sandboxes](#experimental-sandboxes-on-macos-and-windows), and macOS, native Windows or Linux without bubblewrap can run [without the sandbox](#running-without-the-sandbox).
+**Requirements:** Linux or WSL2 with Node.js 24 or newer, Pi configured with the providers and models to offer, and `bubblewrap`, Python 3, Git and `flock` (util-linux) for the sandbox. bubblewrap must be able to make user namespaces: the connector tries it before it starts, and refuses to start a sandboxed host where it can't, with the setting to change (on Ubuntu 23.10 and later, `kernel.apparmor_restrict_unprivileged_userns`; elsewhere `kernel.unprivileged_userns_clone` or `user.max_user_namespaces`, or a container that forbids them). On Windows, run the connector inside WSL2 for that sandbox. macOS and native Windows can also try their own [experimental sandboxes](#experimental-sandboxes-on-macos-and-windows), and macOS, native Windows or Linux without bubblewrap can run [without the sandbox](#running-without-the-sandbox).
 
 On a Mac, Windows or Linux desktop, the [app](apps.md)'s **This Mac** (This Computer elsewhere) lists what is missing with the command that installs it, and signs Pi in to your provider in its own window.
 
@@ -256,3 +256,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 Everything else is the host's [configuration](#host-configuration), set in Pikibun: its command time limit, GPU, Git credentials and repository cache. `--git-credentials`, `--repo-cache` and `--repo-cache-scope` are still accepted, so existing service units keep starting, but ignored.
 
 The desktop apps' **This Mac** (This Computer elsewhere) runs the same connector; see [iPhone, iPad, Mac and Windows apps](apps.md). [`packages/cli/README.md`](../packages/cli/README.md) is the connector's own guide.
+
+## Logs
+
+The connector writes to its terminal (standard error) what went wrong on the host, which the server is never told: a session that couldn't open or reopen (`Session … couldn't open: …`, with the error's stack), an operation that failed unexpectedly (`Session …: view failed: …`), and a relayed request it couldn't complete. The same failure is written at most once a minute. The server only learns that the host failed (see [Logs](self-hosting.md#logs)), so look here first when a session shows **Unavailable** while other sessions on the same host work.
