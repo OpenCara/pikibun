@@ -25,6 +25,8 @@ export function OfflineHostBanner(props: { host: ConnectorInfo; server: string; 
   const here = () => ranHere(props.server, props.host.id);
   const paired = () => (checked() ? hosts.forServer(props.server) : undefined);
   const phase = () => paired()?.state() ?? "stopped";
+  const connectedId = () => (phase() === "connected" ? paired()?.running()?.connectorId : undefined);
+  const back = () => connectedId() === props.host.id;
   const start = () => {
     const host = paired();
     if (!host) return;
@@ -39,12 +41,20 @@ export function OfflineHostBanner(props: { host: ConnectorInfo; server: string; 
     const state = phase();
     if (paired() && state !== "stopped") {
       const own = `${computerTitle}'s host for ${server}`;
-      if (state === "starting" || state === "connecting") return `${own} is starting. If this private session runs on ${here() ? computerName : props.host.name}${here() ? "" : ` and that's ${computerName}`}, it continues once the host is online.`;
+      if (state === "starting" || state === "connecting") {
+        return here() ? `${own} is starting. This private session runs on ${computerName}, and continues once the host is online.`
+          : `${own} is starting. If this private session's host, ${props.host.name}, is ${computerName}, the session continues once the host is online; otherwise open Pikibun on ${props.host.name}.`;
+      }
       if (state === "disconnected") return `${own} lost its connection and is reconnecting by itself. This private session continues once ${here() ? "it" : `its host, ${props.host.name},`} is back online.`;
-      if (state === "stopping") return `${own} is stopping. Start it again once it has stopped to continue this private session.`;
+      if (state === "stopping") {
+        return here() ? `${own} is stopping. Start it again once it has stopped to continue this private session.`
+          : `${own} is stopping. If this private session's host, ${props.host.name}, is ${computerName}, start it again once it has stopped; otherwise open Pikibun on ${props.host.name}.`;
+      }
+      if (connectedId() === props.host.id) return `${own} is online again. This private session continues as soon as Pikibun sees it.`;
+      if (!connectedId()) return `${own} is online. If this private session's host, ${props.host.name}, is ${computerName}, the session continues as soon as Pikibun sees it.`;
       return here()
         ? `This private session ran on ${computerName} under an earlier pairing with ${server}, which ${computerName} no longer has. Its files stay on ${computerName}, but it can't run again here.`
-        : `This private session runs on ${props.host.name}, which is offline. ${own} is online, so it's another computer: open Pikibun on ${props.host.name} to continue the session.`;
+        : `This private session runs on ${props.host.name}, which is offline. ${own} is online as another host, so ${props.host.name} is another computer: open Pikibun there to continue the session.`;
     }
     if (here()) {
       if (paired()) return `This private session runs on ${computerName}, whose host for ${server} isn't running. Start it to continue the session.`;
@@ -57,7 +67,7 @@ export function OfflineHostBanner(props: { host: ConnectorInfo; server: string; 
   };
   return (
     <View style={{ gap: 8 }}>
-    <Banner testID="session-host-offline" tone="warning" title={here() ? `${computerTitle} isn't hosting this session` : `${props.host.name} is offline`}
+    <Banner testID="session-host-offline" tone={back() ? "info" : "warning"} title={back() ? `${computerTitle} is hosting this session again` : here() ? `${computerTitle} isn't hosting this session` : `${props.host.name} is offline`}
       actions={
         <View style={{ flexDirection: "row", gap: 8 }}>
           <If when={paired() && phase() === "stopped"}

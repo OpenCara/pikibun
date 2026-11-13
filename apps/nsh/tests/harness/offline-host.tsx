@@ -3,7 +3,7 @@ import { OfflineHostBanner } from "../../src/components/OfflineHost";
 import { computerHosts, setHostLauncher, setUnsandboxedConsent } from "../../src/lib/this-computer";
 import type { ConnectorInfo } from "../../src/shared";
 
-const params = (embedder.params ?? {}) as { paired?: unknown; state?: unknown; inspectMs?: unknown };
+const params = (embedder.params ?? {}) as { paired?: unknown; state?: unknown; inspectMs?: unknown; connectorId?: unknown };
 const SERVER = "https://pikibun.test";
 const paired = typeof params.paired === "string" ? params.paired : SERVER;
 const inspectMs = typeof params.inspectMs === "number" ? params.inspectMs : 1;
@@ -26,7 +26,7 @@ setHostLauncher(() => {
       } else if (request.type === "start") {
         emit({ type: "status", state: "starting", server: request.server });
         emit({ type: "result", id: request.id, ok: true });
-        emit({ type: "status", state: "connected", server: request.server, connectorId: "c1" });
+        emit({ type: "status", state: "connected", server: request.server, connectorId: typeof params.connectorId === "string" ? params.connectorId : "c1" });
       } else emit({ type: "result", id: request.id, ok: true });
     },
     onMessage: listener => { messages.push(listener); },

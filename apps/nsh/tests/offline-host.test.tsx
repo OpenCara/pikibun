@@ -52,6 +52,18 @@ describe("a private session whose host is offline", () => {
     await app.press("id:session-host-start");
     await app.waitUntil(() => app.texts().includes("hosts: https://pikibun.test=connected"));
     expect(app.texts().some(text => text.startsWith("sent: ") && text.includes("start"))).toBe(true);
+    await app.waitUntil(() => app.texts().some(text => text.includes("This Mac's host for pikibun.test is online again. This private session continues as soon as Pikibun sees it.")));
+    await app.wait(300);
+    expect(app.shows("text:This Mac is hosting this session again")).toBe(true);
+    expect(app.texts().some(text => text.includes("another computer") || text.includes("can't run again"))).toBe(false);
+  });
+
+  test("once this Mac's host for the server is online as another host, the session's host is another computer", async () => {
+    const app = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, host: { params: { connectorId: "c7" } } });
+    await app.waitFor("id:session-host-start");
+    await app.press("id:session-host-start");
+    await app.waitUntil(() => app.texts().some(text => text.includes("is online as another host, so ada-mac is another computer: open Pikibun there")));
+    expect(app.shows("id:session-host-start")).toBe(false);
   });
 
   test("offers nothing to press until it knows whether this Mac hosts for the server", async () => {
@@ -72,9 +84,15 @@ describe("a private session whose host is offline", () => {
     expect(app.shows("id:session-host-connect")).toBe(false);
   });
 
+  test("a host starting for the server doesn't claim the session's host is this Mac", async () => {
+    const app = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, host: { params: { state: "connecting" } } });
+    await app.waitUntil(() => app.texts().some(text => text.includes("This Mac's host for pikibun.test is starting. If this private session's host, ada-mac, is this Mac, the session continues once the host is online; otherwise open Pikibun on ada-mac.")));
+    expect(app.shows("id:session-host-start")).toBe(false);
+  });
+
   test("a host still stopping is started again once it has stopped", async () => {
     const app = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, host: { params: { state: "stopping" } } });
-    await app.waitUntil(() => app.texts().some(text => text.includes("This Mac's host for pikibun.test is stopping. Start it again once it has stopped")));
+    await app.waitUntil(() => app.texts().some(text => text.includes("This Mac's host for pikibun.test is stopping. If this private session's host, ada-mac, is this Mac, start it again once it has stopped; otherwise open Pikibun on ada-mac.")));
     expect(app.shows("id:session-host-start")).toBe(false);
   });
 
