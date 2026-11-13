@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { searchInWorker, searchRequest } from "../apps/runner/src/search.js";
+import { findInWorker, findRequest, searchInWorker, searchRequest } from "../apps/runner/src/search.js";
 
 test("search: Pi's grep arguments become a request, with Pi's defaults, lowered to Pikibun's limits, or say what is wrong", () => {
   assert.deepEqual(searchRequest({ pattern: "x" }), { kind: "search", path: ".", pattern: "x", literal: false, ignoreCase: false, context: 0, maxResults: 100, all: false });
@@ -18,6 +18,27 @@ test("search: Pi's grep arguments become a request, with Pi's defaults, lowered 
   assert.throws(() => searchRequest({ pattern: "x", limit: "5" }), /limit must be a number/);
   assert.throws(() => searchRequest({ pattern: "x", glob: "a\\b" }), /glob must be/);
   assert.throws(() => searchRequest({ pattern: "x", literal: "yes" }), /literal must be/);
+});
+
+test("find: Pi's find arguments become a request: fd's prefix for a path pattern, its smart case, Pi's default limit lowered to Pikibun's most", () => {
+  assert.deepEqual(findRequest({ pattern: "*.ts" }), { kind: "find", path: ".", pattern: "*.ts", ignoreCase: true, maxResults: 1000, all: false });
+  assert.deepEqual(findRequest({ pattern: "src/**/*.Spec.ts", path: "app/", limit: 9000, all: true }),
+    { kind: "find", path: "app", pattern: "**/src/**/*.Spec.ts", ignoreCase: false, maxResults: 5000, all: true });
+  assert.equal(findRequest({ pattern: "**/x/*.ts" }).pattern, "**/x/*.ts");
+  assert.equal(findRequest({ pattern: "/src/*.ts" }).pattern, "src/*.ts", "a leading / is the searched directory's top");
+  assert.equal(findRequest({ pattern: "x", limit: 0 }).maxResults, 1);
+  assert.throws(() => findRequest({ pattern: "" }), /pattern must be/);
+  assert.throws(() => findRequest({ pattern: "a\\b" }), /pattern must be/);
+  assert.throws(() => findRequest({ pattern: "x", limit: "9" }), /limit must be a number/);
+});
+
+test("find on an unsandboxed host walks in a worker: names at any depth, paths from where it starts, directories with /", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "pikibun-find-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, "A.TS"), "");
+  await writeFile(join(directory, "b.tsx"), "");
+  assert.deepEqual(await findInWorker(directory, findRequest({ pattern: "*.{ts,tsx}" })), { paths: ["A.TS", "b.tsx"], truncated: false });
+  assert.deepEqual(await findInWorker(directory, findRequest({ pattern: "*.TS" })), { paths: ["A.TS"], truncated: false });
 });
 
 test("search on an unsandboxed host: a pattern that backtracks without end stops its worker, never the connector", async t => {

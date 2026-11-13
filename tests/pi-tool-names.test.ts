@@ -104,11 +104,10 @@ test("the renamed tools: one map from the old names, which stay Pikibun's own an
   assert.deepEqual(legacyToolNames("git"), []);
   assert.deepEqual(canonicalToolNames(["read_file", "read", "list_files"]), ["read", "ls"]);
   assert.deepEqual(withLegacyToolNames(["read", "git"]), ["read", "read_file", "git"]);
-  for (const name of ["read", "write", "edit", "ls", "grep", "read_file", "write_file", "edit_file", "list_files", "search"]) {
+  for (const name of ["read", "write", "edit", "ls", "grep", "find", "read_file", "write_file", "edit_file", "list_files", "search"]) {
     assert.ok(pikibunOwn(name), `an extension's ${name} is left out, as Pikibun's own`);
     assert.ok(reservedToolNames.includes(name), `a tool definition can't take ${name}`);
   }
-  assert.ok(!pikibunOwn("find"), "an extension's find is offered until Pikibun has its own");
   assert.ok(!pikibunOwn("bash"), "a retired name is free for an extension");
   assert.ok(Object.keys(renamedToolNames).every(name => !(retiredToolNames as readonly string[]).includes(name) && !(toolNames as readonly string[]).includes(name)));
 });

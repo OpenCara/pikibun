@@ -1,6 +1,6 @@
 # Pi's names and contracts for the file tools
 
-Status: phases 1 and 2 are built (see [Phase 1 as built](#phase-1-as-built) and [Phase 2 as built](#phase-2-as-built)); phase 3 is planned. The phases at the end say what lands in which order.
+Status: phases 1 to 3 are built (see [Phase 1 as built](#phase-1-as-built), [Phase 2 as built](#phase-2-as-built) and [Phase 3 as built](#phase-3-as-built)); phase 4 is not scheduled. The phases at the end say what lands in which order.
 
 ## Why
 
@@ -316,6 +316,29 @@ Phase 2 landed as decisions 6 to 13 describe, with these differences and details
   included (`tests/pi-tool-names.test.ts`).
 - **`piki:pr-flow`** matches both spellings and is version 0.2.0 in `extensions/pr-flow/package.json`; publishing
   and pinning it is a release of its own. `piki:context-files` and `piki:prompt-audit` name none of the tools.
+
+## Phase 3 as built
+
+- **The walk.** `findTree` in `SEARCH_CORE` (the Windows Node helper, and a worker thread on unsandboxed hosts) and `find`
+  in the Python helper, behind `SessionWorkspace.find`, with `grep`'s walk order and time limit, 100,000 entries and
+  5,000 results at most (Pi's default of 1,000 stays the default). A pattern without `/` matches names at any depth; one
+  with `/` matches paths below `path`, after fd's `**/` prefix, so `lib/*.ts` finds `a/lib/x.ts` too. A leading
+  `/` anchors at the searched directory, where fd would match from the filesystem's root. An all-lowercase pattern
+  matches either case, as fd's smart case does. Directories end in `/`. Links are listed and never followed. It skips
+  `.git`, and `node_modules` unless `all` (as `grep` does; Pi's own `find` reads `.gitignore` instead). It walks one
+  result past the limit, as Pi's `find` asks fd to, to tell whether the limit cut anything off.
+- **Globs.** `grep`'s and `find`'s globs take `{a,b}` and `[ab]` or `[!ab]`, as ripgrep's and fd's do. A backslash
+  is refused, as for `grep`'s glob, rather than read as an escape.
+- **Tool groups.** `find` has no box of its own: it goes with `grep` (`groupedToolNames`, `toolGroupEntry`). A group
+  without `grep` sends `find` in its `off` list too; a connector adds `find` to an `off` list that turns off `grep`,
+  whichever control plane sent it; and the control plane checks `find` against `grep`'s entry. So no saved group
+  changes, and the tool-groups API answers as before. A binding with `grep` gives `find` (`sessionToolNames`), side
+  asks included.
+- **Extensions.** `find` is in `toolNames`, `reservedToolNames` and `piki:files`, so an extension's `find` is left out
+  from now on, as decision 7 planned.
+- **The conformance suite** runs Pi's own `find` where fd is installed (CI installs `fd-find`), comparing sorted lines
+  since fd's order varies, and for a limit the details, the count and the notice, since which results fd keeps first
+  varies too.
 
 ## Not chosen
 

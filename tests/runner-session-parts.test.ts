@@ -541,7 +541,7 @@ test("tools: the families keep their order, git_push comes last and only for a c
   const { context } = toolsFixture(toolState());
   const names = buildTools(context, false).map(tool => tool.name);
   const python = process.platform === "win32" ? [] : ["python"];
-  assert.deepEqual(names, ["identity", "read", "ls", "grep", "write", "edit", "move_file", "copy_file", "delete_file", "git", ...python, "browser",
+  assert.deepEqual(names, ["identity", "read", "ls", "grep", "find", "write", "edit", "move_file", "copy_file", "delete_file", "git", ...python, "browser",
     "tunnel", "github_read", "github_comment", "github_merge", "github_issue", "schedule", "sessions"]);
   assert.deepEqual(buildTools(context, true).map(tool => tool.name), [...names, "git_push"]);
 });

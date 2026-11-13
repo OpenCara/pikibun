@@ -1,7 +1,7 @@
 import {
   canonicalGroupTools, isGroupTool, memberTools, retiredGroupTools, roleGroupNames, toolGroupLimits, toolsLeftOut, toolsOff, type GroupTool, type MemberToolGroup,
 } from '../../../../packages/shared/src/tool-groups.js';
-import { canonicalToolName, type WorkspaceRole } from '../../../../packages/shared/src/types.js';
+import { toolGroupEntry, type WorkspaceRole } from '../../../../packages/shared/src/types.js';
 import { ConstraintError } from '../db/types.js';
 import { fail, id, now } from '../http.js';
 import type { Env, SessionRow } from '../types.js';
@@ -119,7 +119,7 @@ export async function setMemberToolGroup(env: Env, workspaceId: string, targetId
 }
 
 export async function requireSessionTool(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>, actorId: string, asked: string): Promise<void> {
-  const tool = canonicalToolName(asked);
+  const tool = toolGroupEntry(asked);
   if (!isGroupTool(tool) && !retiredGroupTools.includes(tool)) return;
   const owner = await memberToolGroup(env, row.workspace_id, row.owner_id);
   if (!groupHas(owner, tool)) {

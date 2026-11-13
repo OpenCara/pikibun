@@ -25,7 +25,7 @@ test('each role\'s sessions get their tools, and a group\'s own tools replace th
   assert.throws(() => parseGroupTools('git'), /list/);
   assert.deepEqual(parseMemberToolGroups(undefined), {});
   assert.deepEqual(parseMemberToolGroups({ u1: { name: 'Members', off: ['git_push'] } }), { u1: { name: 'Members', off: ['git_push'] } });
-  assert.deepEqual(parseMemberToolGroups({ u1: { name: 'Members', off: ['write', 'write_file', 'search'] } }), { u1: { name: 'Members', off: ['write', 'grep'] } },
+  assert.deepEqual(parseMemberToolGroups({ u1: { name: 'Members', off: ['write', 'write_file', 'search'] } }), { u1: { name: 'Members', off: ['write', 'grep', 'find'] } },
     'a host reads an off list in the new names, whichever spelling it came in');
   assert.throws(() => parseMemberToolGroups({ u1: { name: 'Members', off: 'git_push' } }), /Invalid tool groups/);
   assert.deepEqual(parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: false, toolGroups: { u1: { name: 'Members', off: ['sessions'] } } }).toolGroups,
@@ -49,6 +49,16 @@ test('the renamed file tools: a group\'s off list names each tool it leaves out 
     'leaving out only tunnel turns off none of the file tools in either spelling');
   assert.deepEqual(toolsOff(['identity', 'list_files', 'read_file', 'search']), toolsOff(roleTools.viewer), 'a saved group in the old names leaves out what the new names do');
   assert.deepEqual(memberTools('member', { tools: ['identity', 'read_file', 'list_files', 'search'] }), roleTools.viewer);
+});
+
+test('find goes with grep in tool groups: no tool of its own to tick, on wherever grep is and off wherever grep is off', () => {
+  assert.ok(!groupTools.includes('find' as never) && !retiredGroupTools.includes('find'), 'find is neither a group tool nor retired');
+  assert.ok(toolsOff(groupTools.filter(tool => tool !== 'grep')).includes('find'), 'a group without grep turns find off');
+  assert.ok(!toolsOff(groupTools.filter(tool => tool !== 'tunnel')).includes('find'));
+  assert.ok(!toolsOff(roleTools.viewer).includes('find'), 'viewers read, search and find');
+  assert.ok(!toolsOff(['identity', 'search']).includes('find'), 'a group saved with search finds too');
+  assert.deepEqual(parseMemberToolGroups({ u1: { name: 'Old', off: ['search'] } }), { u1: { name: 'Old', off: ['grep', 'find'] } },
+    'a host turns find off with grep, whatever control plane sent the list');
 });
 
 const origin = 'http://localhost:8787';
@@ -158,6 +168,7 @@ test('workspace owners and admins create tool groups and put members in them; th
   await requireSessionTool(f.env, row(f.member.user.id), f.member.user.id, 'github_merge');
   await refusedTool(f.member.user.id, 'write_file');
   await refusedTool(f.member.user.id, 'write');
+  await refusedTool(f.member.user.id, 'find');
   await requireSessionTool(f.env, row(f.member.user.id), f.member.user.id, 'read');
   await requireSessionTool(f.env, row(f.member.user.id), f.member.user.id, 'read_file');
   assert.deepEqual((await memberToolGroups(f.env, f.workspace.id))[f.member.user.id], { name: 'Releasers', off: toolsOff(['read_file', 'git', 'git_push', 'github_merge']) });
@@ -191,7 +202,7 @@ test('a tool group saved before the rename still lets its members read, and turn
     .run('old-readers', f.workspace.id, 'Old readers', JSON.stringify(['identity', 'list_files', 'read_file', 'search']), f.owner.user.id, at, f.owner.user.id, at);
   await body(await f.owner.request('PUT', `${f.path}/members/${f.member.user.id}/tool-group`, { groupId: 'old-readers' }));
   const row = { workspace_id: f.workspace.id, owner_id: f.member.user.id };
-  for (const tool of ['read', 'read_file', 'ls', 'list_files', 'grep', 'search']) await requireSessionTool(f.env, row, f.member.user.id, tool);
+  for (const tool of ['read', 'read_file', 'ls', 'list_files', 'grep', 'search', 'find']) await requireSessionTool(f.env, row, f.member.user.id, tool);
   for (const tool of ['write', 'write_file', 'edit', 'edit_file']) {
     await assert.rejects(requireSessionTool(f.env, row, f.member.user.id, tool), (error: { status?: number }) => error.status === 403, tool);
   }

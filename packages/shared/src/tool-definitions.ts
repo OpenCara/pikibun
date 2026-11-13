@@ -342,6 +342,6 @@ export function bundledToolDefinition(name: string): ToolDefinition | undefined 
   return bundledToolDefinitions.find(item => item.name === name);
 }
 
-export const reservedToolNames: readonly string[] = ["identity", "ls", "read", "grep", "write", "edit", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file",
+export const reservedToolNames: readonly string[] = ["identity", "ls", "read", "grep", "find", "write", "edit", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file",
   "delete_file", "git", "git_push", "python", "browser", "tunnel", "github_read", "github_comment", "github_issue", "github_merge", "schedule", "sessions",
   "codemode", "bash", "host_bash", "git_status", "git_commit", "git_repin", "web_fetch", "web_search"];

@@ -8,6 +8,7 @@ export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.
   ls: "Lists a directory of the session's files, as Pi's ls does.",
   read: "Reads a session file, or some of its lines, as Pi's read does; images go to the model as images.",
   grep: "Searches the worktree's text files for a regular expression or text, as Pi's grep does.",
+  find: "Finds the session's files and directories by glob, as Pi's find does.",
   write: "Writes a whole file, as Pi's write does.",
   edit: "Replaces text in a file, in place, with Pi's own edit.",
   move_file: "Moves or renames a file, directory or link in the worktree.",

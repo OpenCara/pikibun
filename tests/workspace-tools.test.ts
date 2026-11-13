@@ -92,16 +92,17 @@ test("names are settled as sessions settle them: Pikibun's own first, even turne
   assert.deepEqual(usable.shadowed, [
     { name: "read_file", source: "npm:first@1.0.0", by: "piki:files", kind: "own" },
     { name: "read", source: "npm:first@1.0.0", by: "piki:files", kind: "own" },
+    { name: "find", source: "npm:first@1.0.0", by: "piki:files", kind: "own" },
     { name: "node", source: "npm:first@1.0.0", by: "piki:node", kind: "own" },
     { name: "web_search", source: "npm:second@1.0.0", by: "npm:first@1.0.0", kind: "extension" },
     { name: "web_search", source: "npm:third@1.0.0", by: "npm:first@1.0.0", kind: "extension" },
     { name: "codemode", source: "pi:codemode", by: "npm:modes@1.0.0", kind: "builtin" },
   ]);
   assert.deepEqual(extensionOffer("npm:first@1.0.0", reports)?.tools, [
-    { name: "web_search", description: "web_search does things." }, { name: "find", description: "find does things." },
-    { name: "read_file", description: "", own: true }, { name: "read", description: "", own: true }, { name: "node", description: "", own: true }]);
+    { name: "web_search", description: "web_search does things." },
+    { name: "read_file", description: "", own: true }, { name: "read", description: "", own: true }, { name: "find", description: "", own: true }, { name: "node", description: "", own: true }]);
   assert.deepEqual(usable.tools.filter(tool => tool.origin !== "session").map(tool => `${tool.source} ${tool.name}`),
-    ["npm:first@1.0.0 web_search", "npm:first@1.0.0 find", "npm:second@1.0.0 fetch", "npm:modes@1.0.0 codemode"], "an extension's find is offered until Pikibun has its own");
+    ["npm:first@1.0.0 web_search", "npm:second@1.0.0 fetch", "npm:modes@1.0.0 codemode"], "an extension's find is left out: Pikibun has its own");
   assert.ok(!usable.tools.some(tool => tool.name === "node"));
   const settled = settleToolNames(reports.map(report => ({ source: report.source, tools: report.modules.flatMap(module => module.tools.map(tool => tool.name)) })), sessionTools);
   assert.deepEqual(settled.flatMap(item => item.kept.map(name => `${item.source} ${name}`)),
