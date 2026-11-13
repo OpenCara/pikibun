@@ -66,7 +66,8 @@ function toOutput(result: AgentToolResult<unknown>): ToolOutput {
   return { content, ...(result?.details !== undefined && isJsonValue(result.details) ? { details: result.details } : {}) };
 }
 
-const boundary = { contextEntries: [], contextMessages: [], llmMessages: [], pendingMessages: [], canContinue: true };
+const boundary = () => ({ contextEntries: [], contextMessages: [], llmMessages: [], pendingMessages: [], canContinue: true });
+const requestContext = new AsyncLocalStorage<RequestContext>();
 
 type Handlers = { [M in ExtensionMethod]: (params: ExtensionParams<M>, signal?: AbortSignal) => Promise<ExtensionRequests[M][1]> };
 
@@ -102,11 +103,11 @@ export class ExtensionWorker {
       messageEnd: async params => { await this.runner(params).emitMessageEnd({ type: "message_end", message: params.message } as never); return null; },
       turnEnd: async params => {
         await this.runner(params).emitBoundary({ type: "turn_end", turnIndex: params.turnIndex, message: undefined, toolResults: [], messageEntryId: "",
-          toolResultEntryIds: [], outcome: "completed" } as never, () => boundary as never);
+          toolResultEntryIds: [], outcome: "completed" } as never, () => boundary() as never);
         return null;
       },
       beforeSettle: async params => {
-        const result = await this.runner(params).emitBoundary({ type: "agent_before_settle", outcome: "completed" } as never, () => boundary as never);
+        const result = await this.runner(params).emitBoundary({ type: "agent_before_settle", outcome: "completed" } as never, () => boundary() as never);
         const text = result.entries.map(entry => "content" in entry ? textOf((entry as { content: unknown }).content) : "").filter(Boolean).join("\n\n");
         return { continue: result.continue === true, text };
       },
@@ -129,10 +130,10 @@ export class ExtensionWorker {
   }
 
   async handle<M extends ExtensionMethod>(method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>> {
-    const handler = this.#handlers[method] as ((params: ExtensionParams<M>, signal?: AbortSignal) => Promise<ExtensionRequests[M][1]>) | undefined;
-    if (!handler) throw new Error(`Unknown extension request ${String(method)}`);
+    if (!Object.hasOwn(this.#handlers, method)) throw new Error(`Unknown extension request ${String(method)}`);
+    const handler = this.#handlers[method] as (params: ExtensionParams<M>, signal?: AbortSignal) => Promise<ExtensionRequests[M][1]>;
     if (params.context) this.#context = params.context;
-    const value = await handler(params, signal);
+    const value = await requestContext.run(params.context ?? this.#context, () => handler(params, signal));
     const source = (params as { source?: unknown }).source;
     const runner = typeof source === "string" ? this.#runners.get(source) : undefined;
     return { value, ...(runner ? { handlers: [...supportedEvents].filter(event => runner.hasHandlers(event)) } : {}) };
@@ -146,11 +147,11 @@ export class ExtensionWorker {
   }
 
   private model(): Model<string> | undefined {
-    return this.options.live ? this.options.live.model() : this.#context.model;
+    return this.options.live ? this.options.live.model() : (requestContext.getStore() ?? this.#context).model;
   }
 
   private thinkingLevel(): string | undefined {
-    return this.options.live ? this.options.live.thinkingLevel() : this.#context.thinkingLevel;
+    return this.options.live ? this.options.live.thinkingLevel() : (requestContext.getStore() ?? this.#context).thinkingLevel;
   }
 
   private async open(params: ExtensionParams<"open">): Promise<ExtensionRequests["open"][1]> {

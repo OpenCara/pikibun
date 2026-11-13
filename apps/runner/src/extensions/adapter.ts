@@ -5,6 +5,7 @@ import { CompactionTask, defineDoc, defineExtension, defineTool, GenerationTask,
 import type { ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionFactory, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
+import { isJsonValue } from "./json.js";
 import type { LoadedSource } from "./load.js";
 import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
@@ -197,7 +198,8 @@ export class SessionExtensions {
     catch (error) { this.host.warn(extension.source, `${event}: ${describe(error)}`); }
   }
 
-  private emit(extension: OpenedSource, event: { type: string } & Record<string, unknown>): Promise<void> {
+  private async emit(extension: OpenedSource, event: { type: string } & Record<string, unknown>): Promise<void> {
+    if (!extension.handlers.has(event.type)) return;
     return this.one(extension, event.type, settings => request(this.host, extension, "emit", { source: extension.source, settings, event }));
   }
 
@@ -278,7 +280,7 @@ function build(link: Link, dev: boolean, described: ExtensionToolDescription[], 
       if (settings) await timed(event, () => work(settings));
     } catch (error) { host.warn(source, `${event}: ${describe(error)}`); }
   };
-  const emit = (event: { type: string } & Record<string, unknown>) => quiet(event.type, settings => ask("emit", { source, settings, event }));
+  const emit = async (event: { type: string } & Record<string, unknown>) => { if (link.handlers.has(event.type)) await quiet(event.type, settings => ask("emit", { source, settings, event })); };
   const has = (...events: string[]) => events.some(event => link.handlers.has(event));
   const tools = described.map(definition => wholeForScripts(defineTool({
     name: definition.name, description: definition.description, parameters: definition.parameters as never,
@@ -323,7 +325,7 @@ function build(link: Link, dev: boolean, described: ExtensionToolDescription[], 
         if (has("tool_result")) {
           try {
             const next = await timed("tool_result", () => ask("toolResult", { source, settings, event: { toolCallId: call.id, toolName: call.name,
-              input: call.arguments as Record<string, unknown>, content, isError: result.isError === true, ...(result.details !== undefined ? { details: result.details } : {}) } }));
+              input: call.arguments as Record<string, unknown>, content, isError: result.isError === true, ...(result.details !== undefined && isJsonValue(result.details) ? { details: result.details } : {}) } }));
             if (next) replaced = { ...result, ...(next.content ? { output: next.content } : {}), ...(next.isError !== undefined ? { isError: next.isError } : {}),
               ...(next.details !== undefined ? { details: next.details as never } : {}) };
           } catch (error) { host.warn(source, `tool_result: ${describe(error)}`); }

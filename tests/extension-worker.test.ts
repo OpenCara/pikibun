@@ -51,12 +51,14 @@ test("an installed extension sees the host's models without their headers, and c
   assert.deepEqual(warnings, []);
 });
 
-test("handlers an extension adds once it runs are seen, a call's abort reaches its tool, and a request for a source not open fails", async t => {
+test("handlers an extension adds once it runs are seen, overlapping requests keep their own context, a call's abort reaches its tool, and only known requests for open sources run", async t => {
   const root = await directory(t);
   const file = join(root, "later.ts");
   await writeFile(file, `import { Type } from "typebox";
     export default function (pi) {
       pi.on("session_start", () => { pi.on("input", event => event.text === "stop" ? { action: "handled" } : { action: "continue" }); });
+      pi.registerTool({ name: "level", label: "Level", description: "Name the reasoning level, a little later.", parameters: Type.Object({}),
+        async execute() { await new Promise(resolve => setTimeout(resolve, 20)); return { content: [{ type: "text", text: pi.getThinkingLevel() }], details: undefined }; } });
       pi.registerTool({ name: "wait", label: "Wait", description: "Wait to be stopped.", parameters: Type.Object({}),
         execute(_id, _params, signal) {
           return new Promise(resolve => {
@@ -78,6 +80,10 @@ test("handlers an extension adds once it runs are seen, a call's abort reaches i
   const running = channel.call("execute", { source: "local:later", settings: {}, tool: "wait", callId: "c2", args: {} }, controller.signal);
   controller.abort();
   assert.equal(((await running).value.content[0] as { text: string }).text, "aborted");
+  const levels = await Promise.all(["low", "high"].map((thinkingLevel, index) => channel.call("execute", { source: "local:later", settings: {}, tool: "level",
+    callId: `l${index}`, args: {}, context: { thinkingLevel } })));
+  assert.deepEqual(levels.map(answer => (answer.value.content[0] as { text: string }).text), ["low", "high"], "each request sees its own context");
+  await assert.rejects(channel.call("constructor" as never, { source: "local:later" } as never), /Unknown extension request constructor/);
   await assert.rejects(channel.call("emit", { source: "local:missing", settings: {}, event: { type: "agent_start" } }), /local:missing isn't open/);
   await assert.rejects(channel.call("open", { source: "local:later", files: [file], models: [] }), /already open/);
 });
