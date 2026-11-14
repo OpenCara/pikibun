@@ -118,6 +118,7 @@ export interface SessionRecord {
   id: string;
   workspaceId: string;
   ownerId: string;
+  ownerName?: string;
   agentVersionId: string;
   title: string;
   policyVersion: number;
