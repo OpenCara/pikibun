@@ -134,9 +134,14 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
 - **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
   through Pi's API now is what they will reach from their own process.
 
-What it doesn't protect against: an installed extension runs in a process of its own, but until that process runs in
-the session's sandbox it still runs as the host's user and can read Pi's `auth.json` and `models.json` itself. This
-closes the door Pi's API opened, not the file system's.
+What it doesn't protect against: in a sandboxed session on Linux the extension process runs in the session's sandbox,
+with only the connector's code and its extensions' installs mounted, read-only, and the workspace's network access.
+On macOS and Windows, in sessions on the host and on unsandboxed hosts, it still runs as the host's user and can read
+Pi's `auth.json` and `models.json` itself; there this closes the door Pi's API opened, not the file system's.
+
+The mounts are the host's own paths, so a mount names nothing the sandbox lacks: `serviceBindAllowed` refuses system
+directories, the home directory and its parents, `/tmp` and the other trees the sandbox makes itself, and the session's
+own files, and the connector reaches the process only through a socket it has checked and pinned.
 
 ## Password authentication
 

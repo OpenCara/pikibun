@@ -3,7 +3,8 @@
 Review 268, finding 14 (High): installed extensions run in the connector's own Node.js process, as the host owner's OS
 user, with the owner's files, credentials and network. The workspace's network policy doesn't confine them. This
 document says what is contained today, what isn't, and how extensions move into a per-session child process with the
-session's sandbox and egress proxy. Steps 1 and 2 are built (see "Step 1 as built" and "Step 2 as built"); the rest is the plan.
+session's sandbox and egress proxy. Steps 1 and 2 are built, and step 3 on Linux (see each "as built" section); step 3 on macOS
+and Windows is the plan.
 
 ## What is contained today
 
@@ -91,7 +92,7 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
    `host-extensions.test.ts` and `context-files.test.ts` hold it.
 2. **The child, unsandboxed** (done). Run the child half in a child process for every session. This already takes crashes,
    blocked event loops and leaks out of the connector, and makes timeouts kill.
-3. **The sandbox and the proxy.** Start the child in the session's sandbox per platform, with the mounts and egress
+3. **The sandbox and the proxy** (done on Linux). Start the child in the session's sandbox per platform, with the mounts and egress
    above; tests in `tests/sandbox-conformance.test.ts` check that an extension can't read a host path or reach a host
    the policy refuses.
 4. **The docs.** `docs/extensions.md` loses "Outside the sandbox" for sandboxed sessions; `host-extensions.md` moves
@@ -154,5 +155,38 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   directory, with the connector's environment, as extensions did in the connector. A promise an extension leaves
   failing is logged rather than ending the process.
 
-Until step 3 ships, the rule in `docs/extensions.md` stands: the host's owner installs only extensions they trust with
+## Step 3 as built, on Linux
+
+- **The process is a sandbox service.** A session whose workspace is a Linux `Sandbox` starts its extension process with
+  `Sandbox.startService`, as a server a session puts online is started (`session.ts`, `extensionProcess`): the same
+  `bwrap` mounts and environment as the session's commands, its egress proxy (`HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`,
+  the interception CA), the host's Node.js as the sandbox is given it, and the session's worktree, at the sandbox's
+  path, as its working directory. Its lifetime is a service's longest (24 hours); when it ends, the next request starts
+  another, as after a crash.
+- **A socket instead of the IPC channel.** The sandbox's helper doesn't pass an IPC channel on, so the child listens on
+  `extensions.sock` in the service socket directory and speaks newline-delimited JSON (`child.ts`, `lines.ts`). The
+  connector pins the socket the way it pins a service's (`pinServiceSocket`): it links it into a directory of its own
+  only once it is a socket owned by the connector's user, so the process can't point the connector at another socket
+  on the host. A message over 64 MiB ends the process.
+- **Mounted read-only, at the host's own paths:** the connector's code (the `node_modules` the release runs from, or a
+  source checkout's root, `workerCodeMounts`) and each installed extension's project (`installMount`: the package with
+  its dependencies, a local package's directory, or a local single-file extension alone). `Sandbox.startService`
+  refuses a mount that is a system directory, the home directory or one of its parents, anything under `/tmp`
+  (the sandbox's `/tmp` is a link into its home), `/run`, `/proc`, `/dev`, `/sys`, `/etc` or `/sessions`, and the
+  session's own files (`serviceBindAllowed`). A source opened later whose files aren't mounted yet restarts the process
+  with them; the adapter declares a session's mounts before opening its sources, so that is one restart at most.
+- **It fails closed.** A sandbox the host's Node.js can't be given to refuses every request (`refusedChannel`) rather
+  than run extensions outside it.
+- **Not yet on macOS and Windows.** Their sandboxes run commands through `HelperWorkspace`, which has no services; their
+  sessions' extension processes run as in step 2, as the host's user. So do those of sessions on the host and of
+  unsandboxed hosts, whose commands do too.
+- **What extensions lose there.** Files of the host outside the worktree and their own install (the npm copy of
+  `context-files` loses its `host:` files; the copy built into the connector keeps them), the connector's environment
+  (they get the sandbox's: the owner's `APP_` values and the proxy's), and any network the workspace's network access
+  doesn't allow: a web search extension needs its provider's host allowed there.
+- **Their tools are still host commands.** Calls stay limited to the host's owner and members granted host commands,
+  as the rule in `host-commands.ts` counts every `extension.tool` operation as running on the host. Loosening that for
+  sandboxed sessions is a separate decision.
+
+Until step 3 ships on every platform, the rule in `docs/extensions.md` stands: the host's owner installs only extensions they trust with
 their own account, as they would a program.
