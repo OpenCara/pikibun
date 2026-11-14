@@ -3,7 +3,7 @@
 Review 268, finding 14 (High): installed extensions run in the connector's own Node.js process, as the host owner's OS
 user, with the owner's files, credentials and network. The workspace's network policy doesn't confine them. This
 document says what is contained today, what isn't, and how extensions move into a per-session child process with the
-session's sandbox and egress proxy. Step 1 is built (see "Step 1 as built"); the rest is the plan.
+session's sandbox and egress proxy. Steps 1 and 2 are built (see "Step 1 as built" and "Step 2 as built"); the rest is the plan.
 
 ## What is contained today
 
@@ -89,7 +89,7 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
 1. **The protocol in-process** (done). Split `adapter.ts` into the connector half and the child half, joined by an
    in-memory transport. Behaviour is unchanged but for the model registry, and `tests/extensions.test.ts`,
    `host-extensions.test.ts` and `context-files.test.ts` hold it.
-2. **The child, unsandboxed.** Run the child half in a child process for every session. This already takes crashes,
+2. **The child, unsandboxed** (done). Run the child half in a child process for every session. This already takes crashes,
    blocked event loops and leaks out of the connector, and makes timeouts kill.
 3. **The sandbox and the proxy.** Start the child in the session's sandbox per platform, with the mounts and egress
    above; tests in `tests/sandbox-conformance.test.ts` check that an extension can't read a host path or reach a host
@@ -125,6 +125,34 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   stopped waiting for still runs in the worker until step 2 can end the child.
 - **Errors cross as their message.** A request that fails in the worker fails in the connector with the same message,
   as a tool's error or a hook's warning did before.
+
+## Step 2 as built
+
+- **One process per session, started when first needed.** `extensions/process.ts` (`ProcessChannel`) replaces step
+  1's JSON channel: the first request for an installed source starts `extensions/child.ts`, which answers with an
+  `ExtensionWorker`. A session whose extensions are all built in starts none.
+- **Node's IPC channel carries the protocol.** It frames JSON itself, and it leaves the process's stdout and stderr
+  free: an extension that prints doesn't break the protocol, and what it prints goes to the connector's log, a line at
+  a time. Requests carry an id; an abort sends `cancel` with it, and the child aborts that request's signal.
+- **Where the entry is.** The release build makes `dist/extension-worker.js` a second entry point of the CLI's
+  bundle (`packages/cli/scripts/build.mjs`), sharing its chunks and `node_modules`. From source (`pnpm connect`, the
+  tests), the connector starts `child.ts` with `--import tsx`. `workerEntry` finds whichever is there.
+- **A timeout ends the process.** A hook or input handler that outlives its timeout makes the connector kill the
+  process (`restart`), so a blocked event loop costs the session that much time and no more; the connector's own loop
+  never waited. Starting a process and opening its sources again doesn't count against a handler's time: its timer
+  starts once the process is ready, and starting has a minute of its own (`START_TIMEOUT_MS`), so a slow start isn't
+  killed over and over. A crash (an `exit`, an uncaught exception) ends it the same way. An abort settles its request at once;
+  if the process hasn't ended the request within `CANCEL_GRACE_MS` (5 seconds), its loop is taken to be stuck and it is
+  ended too. Ending the process fails every request it had, for every source of the session. Requests waiting on it fail with the
+  reason, and each open source gets a warning.
+- **The next request starts a new one.** It opens every source again and emits `session_start` again to those that had
+  it (with the settings it was first sent), before anything else, so the session goes on with what its extensions rebuild from that; what they kept in memory
+  is gone, as across a connector restart. A source that fails to open again is tried again at its own next request.
+- **Handles hold the connector only while it waits.** The process, its IPC channel and its pipes are unref'd while no
+  request is pending, so a connector (or a test) that is done isn't kept alive by a session that wasn't shut down.
+- **Its environment is the connector's.** Until step 3, the process runs as the host's user, in the session's
+  directory, with the connector's environment, as extensions did in the connector. A promise an extension leaves
+  failing is logged rather than ending the process.
 
 Until step 3 ships, the rule in `docs/extensions.md` stands: the host's owner installs only extensions they trust with
 their own account, as they would a program.
