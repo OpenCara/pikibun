@@ -36,7 +36,7 @@ test("failed release responses exhaust bounded retries", async t => {
 });
 
 test("each platform's Native Shell download is checked against the SHA-256 pinned beside its version, never the release's own", () => {
-  assert.equal(NSH_VERSION, "v0.5.0", "a new version pins new digests: update NSH_ASSET_SHA256 with it");
+  assert.equal(NSH_VERSION, "v0.5.1", "a new version pins new digests: update NSH_ASSET_SHA256 with it");
   assert.deepEqual(Object.keys(NSH_ASSET_SHA256).sort(), [
     "nsh-android.tar.gz", "nsh-ios-macos-arm64.tar.gz", "nsh-linux-x86_64.tar.gz", "nsh-macos-arm64.tar.gz", "nsh-web.tar.gz", "nsh-windows-x86_64.zip",
   ]);

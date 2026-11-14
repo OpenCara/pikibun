@@ -7,15 +7,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fixWebSite } from "./nsh-web-fixes.mjs";
 
-export const NSH_VERSION = "v0.5.0";
-export const NSH_COMMIT = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1";
+export const NSH_VERSION = "v0.5.1";
+export const NSH_COMMIT = "224d9a795c7ac9d10d75750de9351adac5549675";
 export const NSH_ASSET_SHA256 = Object.freeze({
-  "nsh-linux-x86_64.tar.gz": "a422bbe5dc2a7ae3ff308ee56e05d73d5becc81f57adf11447fc570dcee65e0f",
-  "nsh-macos-arm64.tar.gz": "e6722427b391b00cf7ec13137db9366e78d1e7a045f2933cf00b340365309d9d",
-  "nsh-windows-x86_64.zip": "63bacd122a5e41818513d232b2de82a5b3362b1199abcf0e9692fcb82ee74622",
-  "nsh-web.tar.gz": "17c4d8b690c1291ffeec59c6dcc6cb967bd03dbb4864ac9a61d3cd3d2192c477",
-  "nsh-android.tar.gz": "bd9f42c043c08f0c29c874d2a8247e389258f88778a5160d646f73fc2ccfbe73",
-  "nsh-ios-macos-arm64.tar.gz": "e0a5039702ad3c53fa938d8dfba488856e8be8632f5fac1538f241df6f6bb53d",
+  "nsh-linux-x86_64.tar.gz": "f34729e613196ca122d956deb543a92f319e053ff17dfc09ba04a6ec2fb79c74",
+  "nsh-macos-arm64.tar.gz": "2710affd59e6345b6f87dfa1f579c36b9a9d7a58992b8399d14f39290da048a3",
+  "nsh-windows-x86_64.zip": "9dc4b74037033c8ff50b1047b4702b36e6fd66beb9f5d61411d3497f4751df90",
+  "nsh-web.tar.gz": "050b7caeb11e0323367fd1a15eb49456abe0f6bd9648e21e264f2ecc2175e003",
+  "nsh-android.tar.gz": "2dc5184b388aac219660e0a8375d5382a173c5c623ff5b13760028b718b5af2a",
+  "nsh-ios-macos-arm64.tar.gz": "cc5ff3a57da0e47bce02390fb53a488ddb64fd35f4f8f1f108bea42c75683109",
 });
 
 export const NSH_COMPONENTS = Object.freeze({
