@@ -250,6 +250,18 @@ describe("on a phone", () => {
     await app.waitFor("text:Old spike");
   });
 
+  test("a search that matches only archived sessions keeps their workspace, to show them from", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn });
+    await app.waitFor("text:Fix the flaky login test");
+    await app.type("id:session-search", "Old spike");
+    await app.waitFor("id:workspace-options-w1");
+    expect(app.shows("id:session-row-s2")).toBe(false);
+    expect(app.shows("id:session-row-s1")).toBe(false);
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-archived-w1");
+    await app.waitFor("id:session-row-s2");
+  });
+
   test("opens a session with its transcript, and nothing in it waits for anyone to approve", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn });
     await app.press("id:session-row-s1");

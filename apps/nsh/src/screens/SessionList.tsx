@@ -54,16 +54,16 @@ export function SessionList(props: {
     const byWorkspace = new Map<string, SessionRecord[]>();
     const archived = new Map<string, number>();
     for (const item of data.sessions()) {
+      if (!matchesSession(item, needle)) continue;
       if (item.status === "archived") {
         archived.set(item.workspaceId, (archived.get(item.workspaceId) ?? 0) + 1);
         if (!showArchived().includes(item.workspaceId)) continue;
       }
-      if (!matchesSession(item, needle)) continue;
       const list = byWorkspace.get(item.workspaceId);
       if (list) list.push(item);
       else byWorkspace.set(item.workspaceId, [item]);
     }
-    if (!needle) for (const id of [...data.workspaces().map(workspace => workspace.id), ...archived.keys()]) if (!byWorkspace.has(id)) byWorkspace.set(id, []);
+    for (const id of [...(needle ? [] : data.workspaces().map(workspace => workspace.id)), ...archived.keys()]) if (!byWorkspace.has(id)) byWorkspace.set(id, []);
     const order = data.workspaces().map(workspace => workspace.id);
     const rank = (id: string) => { const index = order.indexOf(id); return index < 0 ? order.length : index; };
     return [...byWorkspace.entries()].sort(([a], [b]) => rank(a) - rank(b)).flatMap(([id, sessions]): Row[] => {
@@ -74,15 +74,16 @@ export function SessionList(props: {
         { kind: "workspace", key: `workspace:${id}`, id, count: sessions.length, archived: archived.get(id) ?? 0, showArchived: showArchived().includes(id), canCreate,
           title: workspace?.name ?? "Other workspace" },
         ...(folded ? [] : nestSessions(sessions).map(({ session: item, depth }): Row => ({ kind: "session", key: item.id, session: item, depth }))),
-        ...(!folded && !sessions.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
+        ...(!folded && !needle && !sessions.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
       ];
     });
   });
   const flip = (id: string) => (current: readonly string[]) => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
   const toggle = (id: string) => collapsed.update(flip(id));
   const toggleArchived = (id: string) => {
+    const showing = !untracked(showArchived).includes(id);
     showArchived.update(flip(id));
-    if (showArchived().includes(id)) collapsed.update(current => current.filter(item => item !== id));
+    if (showing) collapsed.update(current => current.filter(item => item !== id));
   };
   const refreshing = signal(false);
   let pulls = 0;
