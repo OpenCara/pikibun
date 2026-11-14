@@ -148,6 +148,32 @@ describe("settings", () => {
     await app.waitUntil(() => app.storage()["pikibun.origin"] === ORIGIN);
     await app.waitFor("id:session-row-s1");
     expect(saved().length).toBe(2);
+
+    await app.press("id:open-servers");
+    await app.waitFor("id:server-menu-team.example.com");
+    await app.press("id:server-menu-team.example.com");
+    await app.waitUntil(() => app.storage()["pikibun.origin"] === OTHER && app.storage()["pikibun.token"] === OTHER_TOKEN);
+    await app.waitFor("id:session-row-s1");
+    await app.press("id:open-servers");
+    await app.waitFor("id:server-menu-add");
+    await app.press("id:server-menu-add");
+    await app.waitFor("id:code-input");
+    expect(saved().length).toBe(2);
+  });
+
+  test("the sidebar's server switch says why it couldn't switch, and stays where it is", async () => {
+    const OTHER = "https://team.example.com";
+    const app = await open("../App.tsx", { platform: "macos", width: 1280, height: 820,
+      network: server({ [`GET ${OTHER}/api/me`]: { status: 401, body: { error: "Authentication is required.", code: "unauthorized" } } }),
+      storage: { ...signedIn, "pikibun.servers": JSON.stringify([{ origin: OTHER, token: "tok_revoked_0123456789abcdefghijklmn", expiresAt: null, account: "@grace" }]) } });
+    await app.waitFor("id:session-row-s1");
+    await app.press("id:open-servers");
+    await app.waitFor("id:server-menu-team.example.com");
+    await app.press("id:server-menu-team.example.com");
+    await app.waitFor("id:server-switch-problem");
+    expect(app.texts().join(" ")).toContain("Your sign-in to team.example.com expired or was revoked.");
+    expect(app.storage()["pikibun.origin"]).toBe(ORIGIN);
+    expect(app.shows("id:open-hosts")).toBe(false);
   });
 
   test("a server whose sign-in was revoked is forgotten when the app switches to it, and the app stays where it is", async () => {

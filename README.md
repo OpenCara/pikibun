@@ -44,7 +44,7 @@ Just for yourself, on one computer:
 npx pikibun@latest serve
 ```
 
-It runs the server, the web app and your computer as its host, at `http://127.0.0.1:7878`. See [Running Pikibun on your own computer](docs/local.md). The Mac, Windows and Linux app does the same under **Settings → Self host**, with no terminal: see [Self host](docs/desktop/self-host.md).
+It runs the server, the web app and your computer as its host, at `http://127.0.0.1:7878`. See [Running Pikibun on your own computer](docs/local.md). The Mac, Windows and Linux app does the same by default at its first launch (and under **Settings → Self host**), with no terminal: see [Self host](docs/desktop/self-host.md).
 
 For a team, [run the server](docs/self-hosting.md) with Docker, then pair each member's machine as a host:
 
@@ -106,7 +106,7 @@ Team roles:
 - Committers and reviewers: [members of OpenCara](https://github.com/orgs/OpenCara/people). Every change from anyone else is reviewed in a pull request.
 - Approvers, who approve each signing request: [owners of OpenCara](https://github.com/orgs/OpenCara/people?query=role%3Aowner).
 
-Privacy: the apps connect only to the Pikibun server you sign in to (`https://pikibun.com` unless you enter another address) and to the sites you choose to open from them. They send no telemetry, and transfer no information to any other networked system unless you ask them to. A server you sign in to keeps your account and sessions; one you run yourself keeps them on your own infrastructure.
+Privacy: the apps connect only to the Pikibun server you sign in to (the Mac, Windows and Linux app's own Pikibun on your computer by default, `https://pikibun.com` on a phone or tablet, unless you choose or enter another address) and to the sites you choose to open from them. They send no telemetry, and transfer no information to any other networked system unless you ask them to. A server you sign in to keeps your account and sessions; one you run yourself keeps them on your own infrastructure.
 
 ## License
 

@@ -24,7 +24,7 @@ export interface SignInMethods {
 
 export type AuthState =
   | { status: "loading" }
-  | { status: "signedOut"; origin: string; notice?: string }
+  | { status: "signedOut"; origin: string; notice?: string; fresh?: boolean }
   | { status: "unreachable"; origin: string; error: string }
   | { status: "signedIn"; origin: string; token: string | null; expiresAt: string | null; user: UserProfile; api: Api };
 
@@ -169,7 +169,7 @@ export async function restore(): Promise<void> {
   const [storedOrigin, token, expiresAt] = await Promise.all([Storage.getItem(ORIGIN_KEY), Storage.getItem(TOKEN_KEY), Storage.getItem(EXPIRES_KEY), loadServers()]);
   const origin = storedOrigin == null ? DEFAULT_ORIGIN : currentOrigin(storedOrigin);
   if (storedOrigin != null && origin !== storedOrigin) await Storage.setItem(ORIGIN_KEY, origin);
-  if (!token) return setAuth({ status: "signedOut", origin });
+  if (!token) return setAuth({ status: "signedOut", origin, ...(storedOrigin == null ? { fresh: true } : {}) });
   try {
     await establish(origin, token, expiresAt);
   } catch (reason) {
@@ -232,7 +232,19 @@ function parseLocalLink(input: string): { origin: string; token: string } | null
     const token = url.searchParams.get("token") ?? "";
     if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.pathname !== "/api/auth/local" || !LOCAL_TOKEN.test(token)) return null;
     const parsed = parseOrigin(url.origin);
-    return "origin" in parsed ? { origin: parsed.origin, token } : null;
+    return "origin" in parsed ? { origin: currentOrigin(parsed.origin), token } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function refusedLinkServer(input: string): string | null {
+  try {
+    const url = new URL(input.trim());
+    const server = isCodeLink(input) ? url.searchParams.get("server") : /^https?:$/.test(url.protocol) && url.pathname === "/api/auth/local" ? url.origin : null;
+    if (server === null) return null;
+    const parsed = parseOrigin(server);
+    return "error" in parsed ? parsed.error : null;
   } catch {
     return null;
   }

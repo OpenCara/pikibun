@@ -35,7 +35,7 @@ GitHub or password sign-in in the app (`POST /api/auth/native/code`, for a beare
 **Settings → Profile → Signed-in apps → Sign in an app** shows its `pikibun://auth/code` link as a QR code, drawn by
 the app's own encoder, `src/lib/qr.ts`, as NSH has none; the sign-in screen takes the link pasted or opened, and asks
 before it signs in). The screen asks for no server address: the link names its server (`server=`), and a code pasted
-without its link goes to the server the app was last on, `pikibun.com` at first. A Pikibun on its owner's computer
+without its link goes to the server the app was last on; an app that was on none yet asks for the whole link. A Pikibun on its owner's computer
 (`pikibun serve`) also takes the sign-in link it printed, pasted in the same box, whose address is its server, or the
 app's own token for the one it runs; a test-mode server the app was last on takes a developer token. Accounts are made
 on the web. The app keeps its sign-in to each server (`pikibun.servers` in its storage, beside the current one's
@@ -47,8 +47,8 @@ sign-in screen lists them.
 Quiet chrome in the manner of today's coding-agent apps (Codex, Claude Code, Lody, Paseo), so the conversation and what
 needs a decision stand out:
 
-- **Layout**: wider windows have a sidebar (a new session, every session by workspace, the signed-in person and
-  settings) beside the open session; with none open, the home asks "What should we work on?" with the chat box that
+- **Layout**: wider windows have a sidebar (a new session, every session by workspace, the signed-in person, the
+  server switch and settings) beside the open session; with none open, the home asks "What should we work on?" with the chat box that
   starts one: in the box what the first message runs with (model, reasoning, access), under it one quiet row of where
   the session lives (workspace, host, sandbox, visibility), and alerts only when something needs a decision. Phones
   stack the session list, then the session.
@@ -249,8 +249,11 @@ as an update, as one without `host` is.
 
 ## Self host
 
-In the macOS, Windows and Linux builds, **Settings → Self host** (`#/settings/self-host`), and **Run Pikibun on this
-Mac** on the sign-in screen while signed out, run Pikibun itself on this computer, as `pikibun serve` does in a
+The macOS, Windows and Linux builds self host by default: at its first launch (nothing in its storage) the app starts
+Pikibun on this computer and signs in to it, and its welcome screen offers **Sign in to another server** instead, which
+opens the sign-in screen for that server's sign-in link. The app keeps a server once signed in to
+(`pikibun.origin`), so that later launches open the sign-in screen instead. **Settings → Self host** (`#/settings/self-host`), **Pikibun on this Mac** in the sidebar's server switch,
+and **Run Pikibun on this Mac** on the sign-in screen while signed out, run Pikibun itself on this computer, as `pikibun serve` does in a
 terminal: the server and its web app on `http://127.0.0.1:7878`, for its owner alone, with this computer as the host
 that runs their sessions.
 
@@ -272,7 +275,11 @@ Pikibun set up in a terminal carries over, and only one of them runs at a time. 
 with the server's state, as `pikibun serve` pairs it), not This Mac's: This Mac stays a host of whichever server it is
 paired with.
 
-`tests/self-host.test.tsx` runs the page, the sign-in screen and Settings against a stand-in for the command
+The sidebar's server switch (in the apps; the web client, bound to the server that serves it, keeps **Hosts** there)
+lists the servers the app is signed in to, **Pikibun on this Mac** in the desktop builds, which starts it where it
+isn't running and signs in to it, and **Add a server**.
+
+`tests/self-host.test.tsx` runs the page, the first launch, the sign-in screen, the server switch and Settings against a stand-in for the command
 (`tests/harness/self-host.tsx`); `tests/serve-stdio.test.ts`, at the repository's root, runs the command itself.
 
 ## Known gaps, from NSH itself

@@ -57,7 +57,8 @@ describe("swiping a session's row on a phone", () => {
 
   test("an archived session's left swipe unarchives it", async () => {
     const app = await phone({ [`POST ${ORIGIN}/api/sessions/s2/unarchive`]: { body: { ok: true } } });
-    await app.press("id:toggle-archived");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-archived-w1");
     await app.waitFor("id:session-row-s2");
     await app.drag("id:session-row-s2", { x: -160 });
     await app.waitFor("id:swipe-unarchive-s2");
@@ -117,7 +118,8 @@ describe("swiping a session's row on a phone", () => {
   test("offers Unarchive on someone else's packed session to whoever manages it, as its host unpacks it as its owner", async () => {
     const packed = { ...sessionRecord, id: "s6", ownerId: "u2", title: "Packed spike", status: "archived", activity: "idle", packed: true };
     const app = await phone({ [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [sessionRecord, packed] } } });
-    await app.press("id:toggle-archived");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-archived-w1");
     await app.waitFor("id:session-row-s6");
     await app.drag("id:session-row-s6", { x: -160 });
     await app.waitFor("id:swipe-more-s6");

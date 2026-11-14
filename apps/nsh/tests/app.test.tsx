@@ -92,13 +92,17 @@ describe("signing in", () => {
     await app.waitFor("id:code-input");
     expect(app.shows("id:server-input")).toBe(false);
     expect(app.shows("id:server-change")).toBe(false);
+    await app.type("id:code-input", CODE);
+    await app.waitFor("text:A code alone doesn't say which server it is for. Copy the whole link Pikibun shows under Sign in an app.");
+    expect(app.enabled("id:code-sign-in")).toBe(false);
+    await app.clear("id:code-input");
     await app.type("id:code-input", codeLink());
     await app.waitFor("text:Signs in to pikibun.test.");
     await app.press("id:code-sign-in");
     await app.waitFor("text:Fix the flaky login test");
     expect(app.storage()["pikibun.origin"]).toBe(ORIGIN);
     expect(app.storage()["pikibun.token"]).toBe(TOKEN);
-    expect(app.requests().some(item => item.url === "https://pikibun.com/api/auth/native/code")).toBe(false);
+    expect(app.requests().some(item => item.url.startsWith("https://pikibun.com"))).toBe(false);
   });
 
   test("a sign-in link opened from a QR code asks first, naming its server, and signs in to that server", async () => {
@@ -259,8 +263,21 @@ describe("on a phone", () => {
     await app.waitFor("text:Fix the flaky login test");
     expect(app.texts()).toContain("Analytical Engine");
     expect(app.shows("text:Old spike")).toBe(false);
-    await app.press("id:toggle-archived");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-archived-w1");
     await app.waitFor("text:Old spike");
+  });
+
+  test("a search that matches only archived sessions keeps their workspace, to show them from", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn });
+    await app.waitFor("text:Fix the flaky login test");
+    await app.type("id:session-search", "Old spike");
+    await app.waitFor("id:workspace-options-w1");
+    expect(app.shows("id:session-row-s2")).toBe(false);
+    expect(app.shows("id:session-row-s1")).toBe(false);
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-archived-w1");
+    await app.waitFor("id:session-row-s2");
   });
 
   test("opens a session with its transcript, and nothing in it waits for anyone to approve", async () => {

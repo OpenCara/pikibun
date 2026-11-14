@@ -3,14 +3,14 @@ import { Dialog, Input } from "nsh/base";
 import { authorizeInPage, openServerPage, pageQuery } from "../lib/page";
 import { errorMessage } from "../shared";
 import {
-  auth, checkBrowserSession, isCodeLink, parseSignInCode, parseSignInLink, restore, servers, signInMethods, signInToLocalServer, signInWithCode, signInWithPassword,
+  auth, checkBrowserSession, isCodeLink, parseSignInCode, parseSignInLink, refusedLinkServer, restore, servers, signInMethods, signInToLocalServer, signInWithCode, signInWithPassword,
   signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, switchServer, type SignInMethods,
 } from "../lib/auth";
 import { createAction } from "../lib/resource";
 import { displayOrigin, usesBrowserSession } from "../lib/server";
 import { rememberInvite } from "../lib/sign-in-memory";
 import { computerName, hostsHere } from "../lib/this-computer";
-import { thisServer } from "../lib/this-server";
+import { signInToThisServer, thisServer } from "../lib/this-server";
 import { ThisServerPanel } from "../settings/SelfHost";
 import { palette, radius, text } from "../theme";
 import { Logo } from "../logo";
@@ -97,6 +97,12 @@ function SignInForm(props: { inviteToken?: string }) {
     const current = auth();
     return current.status === "signedOut" ? current.origin : "";
   });
+  const fresh = untracked(() => {
+    const current = auth();
+    return current.status === "signedOut" && current.fresh === true;
+  });
+  const lastServer = fresh ? null : origin;
+  const ownFirst = signal(selfHosting && fresh);
   const developerOpen = signal(false);
   const token = signal("");
   const username = signal("");
@@ -113,8 +119,11 @@ function SignInForm(props: { inviteToken?: string }) {
     if (usesBrowserSession && props.inviteToken) void rememberInvite(props.inviteToken);
   });
   if (usesBrowserSession) void pageQuery().then(query => callbackError.set(query.get("error")?.slice(0, 300) ?? ""));
-  (usesBrowserSession ? fetch("/api/health").then(response => response.json() as Promise<SignInMethods>) : signInMethods(origin))
-    .then(value => methods.set(value), () => undefined);
+  effect(() => {
+    if (ownFirst() || lastServer === null) return;
+    (usesBrowserSession ? fetch("/api/health").then(response => response.json() as Promise<SignInMethods>) : signInMethods(lastServer))
+      .then(value => methods.set(value), () => undefined);
+  });
   const notice = () => {
     const current = auth();
     return current.status === "signedOut" ? current.notice : undefined;
@@ -129,19 +138,24 @@ function SignInForm(props: { inviteToken?: string }) {
     selfHostOpen.set(false);
     void action.run(() => signInToLocalServer(address, thisServer().requireSignInToken(address)));
   };
+  const startOwnServer = () => { if (!action.busy()) void action.run(async () => { await signInToThisServer(); }); };
+  const signInElsewhere = () => { action.clear(); ownFirst.set(false); };
+  if (untracked(ownFirst)) startOwnServer();
   const signInLink = () => parseSignInLink(linkText());
-  const linkTarget = () => signInLink()?.origin ?? origin;
+  const linkTarget = () => signInLink()?.origin ?? lastServer;
   const linkHint = () => {
     if (!linkText().trim()) return null;
-    return signInLink() ? { tone: undefined, text: `Signs in to ${displayOrigin(linkTarget())}.` }
-      : { tone: "danger" as const, text: "That isn't a sign-in link or code. Copy the whole link Pikibun shows under Sign in an app." };
+    const target = linkTarget();
+    if (!signInLink()) return { tone: "danger" as const, text: refusedLinkServer(linkText()) ?? "That isn't a sign-in link or code. Copy the whole link Pikibun shows under Sign in an app." };
+    return target ? { tone: undefined, text: `Signs in to ${displayOrigin(target)}.` }
+      : { tone: "danger" as const, text: "A code alone doesn't say which server it is for. Copy the whole link Pikibun shows under Sign in an app." };
   };
   const closeLink = () => { linkText.set(""); linkOpened.set(false); };
 
   function submitLink() {
     const link = signInLink();
     const target = linkTarget();
-    if (action.busy() || !link) return;
+    if (action.busy() || !link || target === null) return;
     linkOpened.set(false);
     void action.run(() => (link.kind === "local" ? signInToLocalServer(target, link.token) : signInWithCode(target, link.code)));
   }
@@ -175,6 +189,7 @@ function SignInForm(props: { inviteToken?: string }) {
           return;
         }
         action.clear();
+        ownFirst.set(false);
         linkText.set(url);
         linkOpened.set(true);
       }
@@ -195,7 +210,7 @@ function SignInForm(props: { inviteToken?: string }) {
     <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1, justifyContent: "center", gap: 14, padding: 24, width: "100%", maxWidth: 420, alignSelf: "center" }}>
       <View style={{ gap: 10, alignItems: "center", paddingBottom: 8 }}>
         <Logo size={56} />
-        <Text style={{ fontSize: 26, fontWeight: "300", color: palette().text, textAlign: "center" }}>Sign in to Pikibun</Text>
+        <Text style={{ fontSize: 26, fontWeight: "300", color: palette().text, textAlign: "center" }}>{ownFirst() ? "Welcome to Pikibun" : "Sign in to Pikibun"}</Text>
         <Text style={{ fontSize: text.reading, lineHeight: 22, color: palette().muted, textAlign: "center" }}>Run Pi agents on your own machines, and work on them together with your team.</Text>
       </View>
       <If when={invited()}>
@@ -205,6 +220,23 @@ function SignInForm(props: { inviteToken?: string }) {
       <If when={action.error() || (callbackError() ? `GitHub sign-in did not complete: ${callbackError()}` : "")}>
         {text => <Banner testID="sign-in-problem" tone="danger" title="Sign-in problem">{text()}</Banner>}
       </If>
+      <If when={ownFirst()}>
+        <View testID="own-first" style={{ gap: 10 }}>
+          <Small center>{`Pikibun runs its own server on ${computerName}, for you alone: your sessions and data stay on this computer, and it needs no account.`}</Small>
+          <Button testID="own-first-start" variant="primary" large block icon="database" busy={action.busy()} disabled={action.busy()}
+            label={action.busy() ? `Starting Pikibun on ${computerName}` : `Start Pikibun on ${computerName}`} onPress={startOwnServer} />
+          <If when={!action.busy() && thisServer().problem()}>
+            <Button testID="own-first-setup" block variant="outline" icon="download" label={`Set up Pikibun on ${computerName}`} onPress={() => selfHostOpen.set(true)} />
+          </If>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: palette().border }} />
+            <Small>or</Small>
+            <View style={{ flex: 1, height: 1, backgroundColor: palette().border }} />
+          </View>
+          <Button testID="own-first-other" block variant="outline" icon="server" label="Sign in to another server" disabled={action.busy()} onPress={signInElsewhere} />
+        </View>
+      </If>
+      <If when={!ownFirst()}>
       <If when={usesBrowserSession && unconfigured() && !local()}>
         <Banner tone="warning" title="GitHub sign-in is not configured">The operator needs to configure the GitHub OAuth app, its callback URL and the server's GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and VAULT_KEY settings.</Banner>
       </If>
@@ -213,11 +245,13 @@ function SignInForm(props: { inviteToken?: string }) {
       </If>
       <If when={!usesBrowserSession}>
         <View testID="code-form" style={{ gap: 8 }}>
-          <If when={linkOpened()}>
-            <Banner testID="code-link-confirm" tone="info" title={`Sign in to ${displayOrigin(linkTarget())}?`}
-              actions={<Button testID="code-cancel" small variant="ghost" label="Cancel" disabled={action.busy()} onPress={closeLink} />}>
-              A sign-in link opened Pikibun. Sign in only if you made it yourself, in Pikibun on the web or in another of your apps.
-            </Banner>
+          <If when={linkOpened() ? linkTarget() : null}>
+            {target => (
+              <Banner testID="code-link-confirm" tone="info" title={`Sign in to ${displayOrigin(target())}?`}
+                actions={<Button testID="code-cancel" small variant="ghost" label="Cancel" disabled={action.busy()} onPress={closeLink} />}>
+                A sign-in link opened Pikibun. Sign in only if you made it yourself, in Pikibun on the web or in another of your apps.
+              </Banner>
+            )}
           </If>
           <Small>
             {`Sign in on the web or in another app, open Settings → Profile → Signed-in apps → Sign in an app there, then open its link on this device, scan its QR code with this device's camera, or paste the link here. The link says which server it signs in to.${selfHosting
@@ -227,7 +261,7 @@ function SignInForm(props: { inviteToken?: string }) {
             masked autoComplete="off" placeholder="Sign-in link" accessibilityLabel="Sign-in link" style={inputStyle()} onSubmit={submitLink} />
           <If when={linkHint()}>{hint => <Small tone={hint().tone} testID="code-hint">{hint().text}</Small>}</If>
           <Button testID="code-sign-in" variant="primary" large block icon="key" label={action.busy() ? "Signing in" : "Sign in"} busy={action.busy() && !developerOpen()}
-            disabled={action.busy() || !signInLink()} onPress={submitLink} />
+            disabled={action.busy() || !signInLink() || linkTarget() === null} onPress={submitLink} />
         </View>
         <If when={selfHosting}>
           <View style={{ gap: 8 }}>
@@ -291,7 +325,7 @@ function SignInForm(props: { inviteToken?: string }) {
         {`Model credentials stay on your host. GitHub tokens stay on the server, or go only to your own hosts when you push with your account.${passwords() && !githubUnconfigured()
           ? " Repositories on github.com need the GitHub sign-in; a password account reaches other Git providers with their tokens." : ""}`}
       </Small>
-      <If when={!usesBrowserSession && methods()?.testMode}>
+      <If when={!usesBrowserSession && lastServer !== null && methods()?.testMode}>
         <View style={{ gap: 8, borderTopWidth: 1, paddingTop: 12, borderColor: palette().border }}>
           <View style={{ flexDirection: "row" }}>
             <Button testID="developer-toggle" small variant="ghost" icon={developerOpen() ? "chevron-down" : "chevron-right"} label="Developer sign-in" onPress={() => developerOpen.update(value => !value)} />
@@ -316,6 +350,7 @@ function SignInForm(props: { inviteToken?: string }) {
           ? "On the web this app uses the server's own browser sign-in."
           : "Your sign-in is kept in this app's storage on this device, not yet in the Keychain or Keystore."}
       </Small>
+      </If>
       <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={signInToOwnServer} />
     </Scroll>
   );
