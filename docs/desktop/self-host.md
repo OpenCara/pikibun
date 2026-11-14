@@ -29,7 +29,7 @@ The badge turns **Running**, and the page shows your Pikibun's address, `http://
 
 Choose **Sign in to it**:
 
-- From the sign-in screen, the app switches its **Server** to your Pikibun and signs you in.
+- From the sign-in screen, the app signs you in to your Pikibun.
 - From Settings, the app asks first, then switches to your Pikibun and stays signed in to the server you were using. Nothing moves: your sessions and workspaces there stay where they are, and **Settings → Profile → Servers** switches back.
 
 There is nothing to type: each time your Pikibun starts, it makes a private sign-in token and tells only the app, which signs you in with it as your Pikibun's owner, the only account that can ever sign in to it. Your first sign-in makes that account, named after your user on this computer (`password:ada` for the user `ada`). Signed out later, the sign-in screen's **Sign in to Pikibun on this Mac** signs you back in.

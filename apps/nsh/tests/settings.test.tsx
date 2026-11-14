@@ -141,7 +141,8 @@ describe("settings", () => {
     await app.press("id:settings-section-profile");
     await app.waitFor("id:server-switch-pikibun.test");
     await app.press("id:server-add");
-    await app.waitFor("id:server-input");
+    await app.waitFor("id:code-input");
+    expect(app.shows("id:server-input")).toBe(false);
     expect(app.shows("id:switch-server-team.example.com")).toBe(true);
     await app.press("id:switch-server-pikibun.test");
     await app.waitUntil(() => app.storage()["pikibun.origin"] === ORIGIN);

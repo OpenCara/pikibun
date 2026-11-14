@@ -160,64 +160,48 @@ describe("Self host in the app", () => {
     await app.waitFor("id:sign-in-self-host-sign-in");
     expect(app.shows("text:Sign in to Pikibun on this Mac")).toBe(true);
     expect(app.shows("id:github-sign-in")).toBe(false);
-    expect(app.shows("id:local-link")).toBe(false);
-    expect(app.shows("id:code-form")).toBe(false);
+    expect(app.shows("id:server-input")).toBe(false);
     await app.press("id:sign-in-self-host-sign-in");
     await app.waitFor("id:session-row-s1");
     expect(app.storage()["pikibun.token"]).toBe(TOKEN);
   });
 
-  test("a Pikibun on this Mac that the app didn't start signs in with the link pikibun serve printed", async () => {
+  test("a Pikibun on this Mac that the app didn't start signs in with the link pikibun serve printed, which names its server", async () => {
     const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
-      network: servedLocally(true), storage: { "pikibun.origin": LOCAL } });
-    await app.waitFor("id:local-link");
+      network: servedLocally(true), storage: {} });
+    await app.waitFor("id:code-input");
     expect(app.shows("id:github-sign-in")).toBe(false);
-    expect(app.shows("id:code-form")).toBe(false);
+    expect(app.shows("id:server-input")).toBe(false);
     expect(app.shows("id:sign-in-self-host-sign-in")).toBe(false);
-    await app.type("id:local-link", `${LOCAL}/api/auth/local?token=${SIGN_IN_TOKEN}`);
-    await app.press("id:local-link-sign-in");
+    await app.type("id:code-input", `${LOCAL}/api/auth/local?token=${SIGN_IN_TOKEN}`);
+    await app.waitFor(`text:Signs in to ${LOCAL}.`);
+    await app.press("id:code-sign-in");
     await app.waitFor("id:session-row-s1");
     expect(bodyOf(app, "POST", `${LOCAL}/api/auth/native/local`)).toMatchObject({ token: SIGN_IN_TOKEN });
+    expect(app.storage()["pikibun.origin"]).toBe(LOCAL);
     expect(app.storage()["pikibun.token"]).toBe(TOKEN);
   });
 
-  test("a sign-in link for another server isn't sent anywhere, and a wrong one says so", async () => {
-    const elsewhere = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
-      network: servedLocally(true), storage: { "pikibun.origin": LOCAL } });
-    await elsewhere.waitFor("id:local-link");
-    await elsewhere.type("id:local-link", `https://pikibun.example.com/api/auth/local?token=${SIGN_IN_TOKEN}`);
-    await elsewhere.press("id:local-link-sign-in");
-    await elsewhere.waitFor("id:sign-in-problem");
-    expect(elsewhere.texts().some(text => text.startsWith("That isn't this Pikibun's sign-in link."))).toBe(true);
-    expect(elsewhere.requests().some(item => item.url.endsWith("/api/auth/native/local"))).toBe(false);
+  test("a link that isn't a sign-in link, or one to a server the app wouldn't talk to, isn't sent anywhere, and one with a wrong token says so", async () => {
+    const other = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
+      network: servedLocally(true), storage: {} });
+    await other.waitFor("id:code-input");
+    for (const link of [`${LOCAL}/api/auth/elsewhere?token=${SIGN_IN_TOKEN}`, `http://pikibun.example.com/api/auth/local?token=${SIGN_IN_TOKEN}`, `${LOCAL}/api/auth/local?token=short`]) {
+      await other.clear("id:code-input");
+      await other.type("id:code-input", link);
+      await other.waitFor("id:code-hint");
+      expect(other.texts().join(" ")).toContain("isn't a sign-in link or code");
+      expect(other.enabled("id:code-sign-in")).toBe(false);
+    }
+    expect(other.requests().some(item => item.url.endsWith("/api/auth/native/local"))).toBe(false);
 
     const wrong = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
-      network: servedLocally(true), storage: { "pikibun.origin": LOCAL } });
-    await wrong.waitFor("id:local-link");
-    await wrong.type("id:local-link", "x".repeat(43));
-    await wrong.press("id:local-link-sign-in");
+      network: servedLocally(true), storage: {} });
+    await wrong.waitFor("id:code-input");
+    await wrong.type("id:code-input", `${LOCAL}/api/auth/local?token=${"x".repeat(43)}`);
+    await wrong.press("id:code-sign-in");
     await wrong.waitUntil(() => wrong.texts().some(text => text.includes("This sign-in link is not valid for this Pikibun.")));
     expect(wrong.storage()["pikibun.token"]).toBe(undefined);
-  });
-
-  test("a code link opened while the app points at a Pikibun on this Mac keeps its form open as it is edited, until it is cancelled", async () => {
-    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
-      network: servedLocally(true), storage: { "pikibun.origin": LOCAL } });
-    await app.waitFor("id:local-link");
-    expect(app.shows("id:code-form")).toBe(false);
-    await app.openWithUrl(`pikibun://auth/code?${new URLSearchParams({ server: ORIGIN, code: "d".repeat(43) }).toString()}`);
-    await app.waitFor("id:code-link-confirm");
-    await app.type("id:code-input", "x");
-    await app.waitUntil(() => !app.shows("id:code-link-confirm"));
-    expect(app.shows("id:code-form")).toBe(true);
-    await app.clear("id:code-input");
-    await app.wait(100);
-    expect(app.shows("id:code-form")).toBe(true);
-    await app.openWithUrl(`pikibun://auth/code?${new URLSearchParams({ server: ORIGIN, code: "d".repeat(43) }).toString()}`);
-    await app.waitFor("id:code-link-confirm");
-    await app.press("id:code-cancel");
-    await app.waitUntil(() => !app.shows("id:code-form"));
-    expect(app.storage()["pikibun.token"]).toBeUndefined();
   });
 
   test("signed in elsewhere, Settings › Self host switches the app to Pikibun on this Mac after asking, and stays signed in to the server it was on", async () => {
@@ -246,14 +230,14 @@ describe("Self host in the app", () => {
     await app.waitUntil(() => app.storage()["pikibun.origin"] === ORIGIN);
   });
 
-  test("a Pikibun on this Mac that the app didn't start takes a sign-in code as well as its link", async () => {
+  test("a code without its link signs in to the server the app was last on", async () => {
     const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
       network: { ...servedLocally(true), [`GET ${LOCAL}/api/health`]: { body: { ok: true, githubConfigured: false, passwordAuth: false, codeSignIn: true, localServer: { claimed: true } } },
         [`POST ${LOCAL}/api/auth/native/code`]: { body: { token: TOKEN, expiresAt: "2099-01-01T00:00:00.000Z", user } } },
       storage: { "pikibun.origin": LOCAL } });
-    await app.waitFor("id:local-link");
     await app.waitFor("id:code-form");
     await app.type("id:code-input", "d".repeat(43));
+    await app.waitFor(`text:Signs in to ${LOCAL}.`);
     await app.press("id:code-sign-in");
     await app.waitFor("id:session-row-s1");
     expect(bodyOf(app, "POST", `${LOCAL}/api/auth/native/code`)).toMatchObject({ code: "d".repeat(43) });

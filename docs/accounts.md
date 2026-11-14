@@ -49,7 +49,7 @@ A **GitHub account** can sign in with its username and a password too, once it s
 
 ## Signing in an app with a code
 
-The Pikibun app on a phone, tablet or computer signs in with a code made where you are already signed in: Pikibun on the web, or another of your apps. It offers no GitHub or password sign-in of its own (a Pikibun on your own computer also takes its own sign-in link).
+The Pikibun app on a phone, tablet or computer signs in with a code made where you are already signed in: Pikibun on the web, or another of your apps. It offers no GitHub or password sign-in of its own (a Pikibun on your own computer also takes its own sign-in link), and asks for no server address: the link names the server it signs in to.
 
 1. There, open **Settings → Profile → Signed-in apps → Sign in an app**. It shows a QR code of the sign-in link (`pikibun://auth/code?server=…&code=…`), **Open in Pikibun** (on the web) and **Copy link**.
 2. On a phone or tablet, scan the QR code with the camera and open the link in Pikibun. On a computer, choose **Open in Pikibun** where the app is installed, or copy the link and paste it on the app's sign-in screen.

@@ -30,12 +30,14 @@ workspace and is remembered across GitHub's redirect, as the web app does. The p
 can't: the browser's own file chooser for any file, an image too large for a message drawn again smaller, the query
 GitHub's sign-in comes back with, and GitHub's authorization page for an invite's sign-in.
 
-Native builds sign in to a server you enter with a code made in a browser or app already signed in, and only so: no
+Native builds sign in with a code made in a browser or app already signed in, and only so: no
 GitHub or password sign-in in the app (`POST /api/auth/native/code`, for a bearer token listed under Signed-in apps;
 **Settings → Profile → Signed-in apps → Sign in an app** shows its `pikibun://auth/code` link as a QR code, drawn by
 the app's own encoder, `src/lib/qr.ts`, as NSH has none; the sign-in screen takes the link pasted or opened, and asks
-before it signs in). A Pikibun on its owner's computer (`pikibun serve`) also takes the sign-in link
-it printed, or the app's own token for the one it runs; a test-mode server takes a developer token. Accounts are made
+before it signs in). The screen asks for no server address: the link names its server (`server=`), and a code pasted
+without its link goes to the server the app was last on, `pikibun.com` at first. A Pikibun on its owner's computer
+(`pikibun serve`) also takes the sign-in link it printed, pasted in the same box, whose address is its server, or the
+app's own token for the one it runs; a test-mode server the app was last on takes a developer token. Accounts are made
 on the web. The app keeps its sign-in to each server (`pikibun.servers` in its storage, beside the current one's
 `pikibun.origin` and `pikibun.token`): **Settings → Profile → Servers** switches between them and adds another, and the
 sign-in screen lists them.
@@ -257,8 +259,8 @@ that runs their sessions.
 - **Sign in to it**: the app switches its server to the running Pikibun (from Settings, after signing out of the one it
   is signed in to) and signs in as its owner with the server's sign-in token, which the command's status carries
   while it runs (`POST /api/auth/native/local`). The first sign-in makes the owner's account. Signed out of it, the
-  sign-in screen's **Sign in to Pikibun on this Mac** does the same; for a local Pikibun the app doesn't run, it takes
-  the link `pikibun serve` printed (`/api/auth/local?token=…`) pasted instead.
+  sign-in screen's **Sign in to Pikibun on this Mac** does the same while the app runs it; for a local Pikibun the app
+  doesn't run, it takes the link `pikibun serve` printed (`/api/auth/local?token=…`) pasted instead.
 - It runs while the app is open, and starts again at the next launch if it was running when the app quit, after which
   the app tries its sign-in again.
 
