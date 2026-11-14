@@ -239,8 +239,18 @@ export function localSignInToken(origin: string, link: string): string | null {
 export async function signInToLocalServer(origin: string, token: string, options: { switching?: boolean } = {}): Promise<void> {
   const signIn = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
     "/api/auth/native/local", { method: "POST", body: { token, deviceName: deviceName() } });
-  if (options.switching) setAuth({ status: "loading" });
-  await establish(origin, signIn.token, signIn.expiresAt, signIn.user);
+  if (options.switching) await establishInstead(origin, signIn.token, signIn.expiresAt, signIn.user);
+  else await establish(origin, signIn.token, signIn.expiresAt, signIn.user);
+}
+
+async function establishInstead(origin: string, token: string, expiresAt: string | null, user: UserProfile): Promise<void> {
+  setAuth({ status: "loading" });
+  try {
+    await establish(origin, token, expiresAt, user);
+  } catch (reason) {
+    await restore();
+    throw reason;
+  }
 }
 
 export async function switchServer(origin: string): Promise<void> {
@@ -256,8 +266,7 @@ export async function switchServer(origin: string): Promise<void> {
     }
     throw new Error(`Can't reach ${displayOrigin(origin)}: ${errorMessage(reason)}`);
   }
-  setAuth({ status: "loading" });
-  await establish(origin, saved.token, saved.expiresAt, user);
+  await establishInstead(origin, saved.token, saved.expiresAt, user);
 }
 
 export function addServer(): void {

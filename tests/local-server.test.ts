@@ -293,6 +293,9 @@ test("a local server's owner connects github.com with a personal access token, r
   assert.deepEqual(calls, [], "a personal access token is GitHub's to revoke, not Pikibun's");
   assert.deepEqual(await profile(), { ...await profile(), githubConnected: false, githubLogin: null, githubId: null });
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM github_tokens").get()!.n, 0);
+  f.sqlite.prepare("UPDATE users SET github_id = '9000', github_login = 'other' WHERE id = 'password:ada'").run();
+  assert.equal((await owner.send("DELETE", "/api/git/accounts/github")).status, 404);
+  assert.equal((await profile()).githubId, "9000", "a disconnect that found no token changes nothing");
   assert.deepEqual(f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'git.account.%' ORDER BY created_at, rowid").all().map(row => row.action),
     ["git.account.connected", "git.account.connected", "git.account.removed"]);
 });

@@ -300,7 +300,7 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
       requireOwnHost(target, row.kind);
       const minted = { kind: row.kind, identityId: row.id, authorization: ownerGitAuthorization(target.owner), expiresAt: expiresAt(undefined, 3600) };
       if (target.owner.provider !== 'github' || target.relay) return minted;
-      if ((!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) && !localMode(env)) {
+      if ((!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) && !ownerTokenOutlivesPush(env)) {
         fail(409, 'owner_token_reset_unavailable', 'Pushes with the session owner\'s GitHub account need Pikibun\'s GitHub sign-in app to reset the token afterwards, and it is not configured.');
       }
       const { userId, token, ciphertext } = target.owner.github;
@@ -424,10 +424,14 @@ export function forgetRepositoryReadTokens(): void {
   apiTokens.clear();
 }
 
+function ownerTokenOutlivesPush(env: Env): boolean {
+  return localMode(env) && (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET);
+}
+
 export async function revokePushToken(env: Env, revocation: PushRevocation): Promise<boolean> {
   try {
     if (revocation.kind === 'github-owner') {
-      if (localMode(env) && (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET)) return true;
+      if (ownerTokenOutlivesPush(env)) return true;
       return await resetGitHubToken(env, revocation.userId, revocation.token, revocation.ciphertext);
     }
     const response = await fetch(`${revocation.apiBase}/installation/token`, { method: 'DELETE', headers: { ...githubHeaders(revocation.token), 'User-Agent': userAgent },

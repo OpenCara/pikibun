@@ -243,7 +243,7 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
           AND EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind IN ('github', 'password')) RETURNING ciphertext`).bind(userId, userId),
         auditAfterChange(c.env, userId, 'git.account.removed', null, { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }),
         c.env.DB.query<{ ciphertext: string }>(`UPDATE users SET github_id = NULL, github_login = NULL WHERE id = ? AND auth_kind = 'password'
-          AND NOT EXISTS (SELECT 1 FROM github_tokens WHERE user_id = ?)`).bind(userId, userId),
+          AND changes() = 1 AND NOT EXISTS (SELECT 1 FROM github_tokens WHERE user_id = ?)`).bind(userId, userId),
       ]);
       const ciphertext = deleted.results[0]?.ciphertext;
       if (!ciphertext) fail(404, 'not_found', 'Git account not found.');
