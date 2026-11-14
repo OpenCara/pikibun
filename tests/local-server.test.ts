@@ -300,6 +300,91 @@ test("a local server's owner connects github.com with a personal access token, r
     ["git.account.connected", "git.account.connected", "git.account.removed"]);
 });
 
+test("a local server's owner signs in to GitHub with a code entered there: the device code stays on the server, polls keep GitHub's interval, and the token connects the account", async t => {
+  const f = await localFixture(t);
+  const owner = await browser(f);
+  const calls: { url: string; body: Record<string, string> }[] = [];
+  let grant: () => Response = () => Response.json({ error: "authorization_pending" });
+  let identityDown = false;
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, body: Object.fromEntries(new URLSearchParams(String(init?.body ?? ""))) });
+    if (url === "https://github.com/login/device/code") return Response.json({ device_code: "device-secret", user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5 });
+    if (url === "https://github.com/login/oauth/access_token") return grant();
+    if (url === "https://api.github.com/user") return identityDown ? new Response(null, { status: 503 }) : Response.json({ id: 4242, login: "octo" });
+    return new Response("unexpected", { status: 500 });
+  });
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const start = async () => {
+    const response = await owner.send("POST", "/api/git/accounts/github/device", {});
+    assert.equal(response.status, 201);
+    return (await response.json() as { signIn: { id: string; userCode: string; verificationUri: string; interval: number } }).signIn;
+  };
+  const poll = async (id: string) => owner.send("POST", `/api/git/accounts/github/device/${id}`, {});
+
+  const first = await start();
+  assert.deepEqual([first.userCode, first.verificationUri, first.interval], ["WDJB-MJHT", "https://github.com/login/device", 5]);
+  assert.ok(!JSON.stringify(first).includes("device-secret"));
+  assert.deepEqual(calls[0]!.body, { client_id: "Ov23liyoi7u2Ff6853PM", scope: "read:user user:email repo workflow" });
+
+  assert.deepEqual(await (await poll(first.id)).json(), { status: "pending", interval: 5 });
+  assert.equal(calls.length, 1, "a poll before GitHub's interval asks GitHub nothing");
+  t.mock.timers.tick(5000);
+  assert.deepEqual(await (await poll(first.id)).json(), { status: "pending", interval: 5 });
+  assert.deepEqual(calls[1]!.body, { client_id: "Ov23liyoi7u2Ff6853PM", device_code: "device-secret", grant_type: "urn:ietf:params:oauth:grant-type:device_code" });
+  grant = () => Response.json({ error: "slow_down" });
+  t.mock.timers.tick(5000);
+  assert.deepEqual(await (await poll(first.id)).json(), { status: "pending", interval: 10 });
+  t.mock.timers.tick(5000);
+  await poll(first.id);
+  assert.equal(calls.length, 3, "slowed down, it waits longer");
+
+  grant = () => Response.json({ access_token: "gho_device_token", token_type: "bearer", scope: "repo" });
+  identityDown = true;
+  t.mock.timers.tick(5000);
+  assert.equal((await poll(first.id)).status, 502, "GitHub granted the token, then couldn't say whose it is");
+  identityDown = false;
+  const granted = calls.filter(call => call.url.endsWith("/access_token")).length;
+  t.mock.timers.tick(10_000);
+  const done = await poll(first.id);
+  assert.equal(calls.filter(call => call.url.endsWith("/access_token")).length, granted, "the granted token is kept for the next poll: a device code is spent once");
+  assert.equal(done.status, 200);
+  assert.deepEqual(await done.json(), { status: "connected", account: { id: "github", provider: "github", host: "github.com", organization: "", login: "octo", createdAt: null } });
+  const { user } = await (await f.request("/api/me", { Cookie: owner.cookie })).json() as { user: { githubConnected: boolean; githubLogin: string; githubId: string } };
+  assert.deepEqual([user.githubConnected, user.githubLogin, user.githubId], [true, "octo", "4242"]);
+  const stored = f.sqlite.prepare("SELECT ciphertext FROM github_tokens WHERE user_id = 'password:ada'").get()!.ciphertext as string;
+  assert.ok(!stored.includes("gho_device_token"));
+  assert.equal((await poll(first.id)).status, 404, "a sign-in is used once");
+
+  const denied = await start();
+  grant = () => Response.json({ error: "access_denied" });
+  t.mock.timers.tick(5000);
+  const refused = await poll(denied.id);
+  assert.equal(refused.status, 403);
+  assert.equal(await errorCode(refused), "github_sign_in_denied");
+
+  const disabled = await start();
+  grant = () => Response.json({ error: "device_flow_disabled" });
+  t.mock.timers.tick(5000);
+  const unavailable = await poll(disabled.id);
+  assert.equal(unavailable.status, 409, "a final refusal isn't a 502, which the page retries");
+  assert.equal(await errorCode(unavailable), "github_sign_in_unavailable");
+
+  const replaced = await start();
+  const current = await start();
+  assert.equal((await poll(replaced.id)).status, 404, "starting again replaces the sign-in that was waiting");
+  t.mock.timers.tick(901_000);
+  const late = await poll(current.id);
+  assert.equal(late.status, 410);
+  assert.equal(await errorCode(late), "github_sign_in_expired");
+
+  delete f.env.LOCAL_MODE;
+  f.env.PASSWORD_AUTH = "true";
+  const before = calls.length;
+  assert.notEqual((await owner.send("POST", "/api/git/accounts/github/device", {})).status, 201);
+  assert.equal(calls.length, before, "a server people sign in to starts no device sign-in");
+});
+
 test("a local owner who signed in with GitHub before reconnects only their own GitHub account", async t => {
   const f = await localFixture(t);
   f.sqlite.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)

@@ -82,10 +82,17 @@ describe("settings", () => {
     expect(app.shows("id:sign-in-app")).toBe(false);
   });
 
-  test("on a Pikibun that runs on its owner's computer, Profile connects github.com with a pasted token and makes a sign-in code with nothing to type", async () => {
+  test("on a Pikibun that runs on its owner's computer, Profile signs in to GitHub with a code entered there, or a pasted token, and makes a sign-in code with nothing to type", async () => {
     const owner = { ...user, id: "password:ada", username: "ada", githubId: null, githubLogin: null, githubConnected: false, passwordSignIn: true, localOwner: true };
     let connected = false;
+    let polls = 0;
     const app = await openSettings("profile", {
+      [`POST ${ORIGIN}/api/git/accounts/github/device`]: { status: 201, body: { signIn: { id: "d1", userCode: "WDJB-MJHT", verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00.000Z", interval: 1 } } },
+      [`POST ${ORIGIN}/api/git/accounts/github/device/d1`]: () => {
+        if (++polls < 2) return { body: { status: "pending", interval: 1 } };
+        connected = true;
+        return { body: { status: "connected", account: { id: "github", provider: "github", host: "github.com", organization: "", login: "octo", createdAt: null } } };
+      },
       [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: false, passwordAuth: false, codeSignIn: true, localServer: { claimed: true } } },
       [`GET ${ORIGIN}/api/me`]: () => ({ body: { user: connected ? { ...owner, githubId: "4242", githubLogin: "octo", githubConnected: true } : owner } }),
       [`PUT ${ORIGIN}/api/git/accounts/github`]: () => {
@@ -100,12 +107,26 @@ describe("settings", () => {
     expect(app.texts().join(" ")).toContain("github.com · Not connected");
     expect(app.shows("id:disconnect-github")).toBe(false);
     await app.press("id:connect-github");
+    await app.waitFor("id:github-sign-in-open");
+    expect(app.texts().join(" ")).toContain("WDJB-MJHT");
+    await app.press("id:github-sign-in-open");
+    expect(app.openedUrls()).toEqual(["https://github.com/login/device"]);
+    await app.waitFor("id:disconnect-github", { timeout: 10_000 });
+    expect(polls).toBe(2);
+    expect(app.shows("id:github-sign-in-open")).toBe(false);
+    expect(app.texts().join(" ")).toContain("@octo · connected");
+
+    connected = false;
+    await app.press("id:connect-github");
+    await app.waitFor("id:github-sign-in-use-token");
+    await app.press("id:github-sign-in-use-token");
     await app.waitFor("id:github-token");
     await app.type("id:github-token", "ghp_secret");
     await app.press("id:github-token-connect");
-    await app.waitFor("id:disconnect-github");
+    await app.waitUntil(() => Boolean(bodyOf(app, "PUT", `${ORIGIN}/api/git/accounts/github`)));
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/git/accounts/github`)).toEqual({ token: "ghp_secret" });
-    expect(app.texts().join(" ")).toContain("@octo · personal access token");
+    await app.waitUntil(() => !app.shows("id:github-token"));
+    expect(polls).toBe(2);
 
     await app.press("id:sign-in-app-start");
     await app.waitFor("id:sign-in-app-local");
