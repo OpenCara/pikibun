@@ -36,7 +36,7 @@ export type ToolResultEvent = {
 export type ToolOutput = { content: (TextContent | ImageContent)[]; details?: unknown };
 
 export interface ExtensionRequests {
-  open: [{ source: string; files: string[]; models: Model<string>[] }, { errors: string[]; tools: ExtensionToolDescription[] }];
+  open: [{ source: string; files: string[]; models: Model<string>[]; mount?: string }, { errors: string[]; tools: ExtensionToolDescription[] }];
   emit: [Scoped & { event: { type: string } & Record<string, unknown> }, null];
   input: [Scoped & { text: string; images: ImageContent[]; inputSource: "interactive" | "rpc" }, InputAnswer];
   beforeAgentStart: [Scoped & { prompt: string; images?: ImageContent[] }, string];
@@ -58,6 +58,7 @@ export interface ExtensionAnswer<M extends ExtensionMethod> { value: ExtensionRe
 export interface ExtensionChannel {
   call<M extends ExtensionMethod>(method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>>;
   ready?(): Promise<void>;
+  mount?(paths: readonly (string | undefined)[]): void;
   restart?(reason: string): void;
   close(): Promise<void>;
 }

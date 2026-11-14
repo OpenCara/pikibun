@@ -3,6 +3,7 @@ import type { Readable, Writable } from "node:stream";
 import { createHash } from "node:crypto";
 import { accessSync, constants } from "node:fs";
 import { chmod, mkdir, open, realpath, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { validateUserEnv } from "../../../packages/shared/src/policy.js";
 import { validCloneDirectory } from "../../../packages/shared/src/repositories.js";
@@ -49,7 +50,7 @@ export interface SandboxExecutionOptions {
   signal?: AbortSignal;
 }
 
-interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; service?: { socketDirectory: string } }
+interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; service?: { socketDirectory: string; binds?: readonly string[] } }
 
 export interface SandboxOptions {
   node?: NodeToolchain | null;
@@ -313,6 +314,17 @@ export async function pinOwnerConfig(path: string, configText: string): Promise<
   }
 }
 
+const SERVICE_BIND_REFUSED = ["/", "/root", "/home", "/var", "/usr", "/lib", "/lib64", "/opt"];
+const SERVICE_BIND_REFUSED_TREES = ["/etc", "/proc", "/dev", "/sys", "/run", SANDBOX_TMP, "/sessions"];
+
+export function serviceBindAllowed(path: string, sessionRoot: string): boolean {
+  if (!isAbsolute(path) || resolve(path) !== path || /[\x00-\x1f\x7f]/.test(path)) return false;
+  if (SERVICE_BIND_REFUSED.includes(path) || path === homedir() || homedir().startsWith(`${path}/`)) return false;
+  if (SERVICE_BIND_REFUSED_TREES.some(tree => path === tree || path.startsWith(`${tree}/`))) return false;
+  const root = resolve(sessionRoot);
+  return path !== root && !root.startsWith(`${path}/`) && !path.startsWith(`${root}/`);
+}
+
 export class Sandbox implements IsolatedWorkspace {
   readonly isolated = true;
   readonly #root: string;
@@ -564,9 +576,10 @@ export class Sandbox implements IsolatedWorkspace {
   }
 
   async startService(command: string, authorize: SandboxAuthorize, options: { limits: CommandLimits; unbounded: boolean; gpu?: boolean; socketDirectory: string;
-    onOutput: (chunk: Buffer) => void; signal?: AbortSignal }): Promise<ServiceProcess> {
+    onOutput: (chunk: Buffer) => void; signal?: AbortSignal; binds?: readonly string[] }): Promise<ServiceProcess> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
     if (!isAbsolute(options.socketDirectory)) throw new Error("Invalid service socket directory");
+    for (const bind of options.binds ?? []) if (!serviceBindAllowed(bind, this.#root)) throw new Error(`A service can't be given ${bind}`);
     const bounded = !!this.#resources || !options.unbounded;
     if (bounded && !this.#resources) throw new Error("Production bash unavailable: explicitly provisioned cgroup and bounded filesystem resources are required");
     await this.initialize();
@@ -581,7 +594,7 @@ export class Sandbox implements IsolatedWorkspace {
       this.#services.add(kill);
       const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
         { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
-        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory } })
+        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}) } })
         .then((): ServiceExit => ({ code: 0, signal: null }), (error: unknown): ServiceExit => error instanceof SandboxProcessError
           ? { code: error.exitCode, signal: error.signal as NodeJS.Signals | null, ...(error.exitCode === null && !error.signal ? { failure: error.message.slice(0, 500) } : {}) }
           : { code: null, signal: null, failure: error instanceof Error ? error.message.slice(0, 500) : "The service failed" })
@@ -721,6 +734,7 @@ export class Sandbox implements IsolatedWorkspace {
       ...(browser ? ["--ro-bind-try", join(this.#root, "browser", "pikibun-browser"), SANDBOX_BROWSER_DRIVER] : []),
       ...(browser?.mount ? ["--ro-bind-try", browser.mount.source, browser.mount.target] : []),
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
+      ...(service?.binds ?? []).flatMap(bind => ["--ro-bind-try", bind, bind]),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
         ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),
       ...(gpu?.args ?? []),

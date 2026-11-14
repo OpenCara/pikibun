@@ -21,12 +21,12 @@ export function serviceSocketDirectory(sessionId: string, dataDir: string): stri
   return path;
 }
 
-export function pinServiceSocket(directory: string): string {
+export function pinServiceSocket(directory: string, name = SERVICE_SOCKET): string {
   const pinned = `${directory}.connector`;
   mkdirSync(pinned, { recursive: true, mode: 0o700 });
-  const target = join(pinned, SERVICE_SOCKET);
+  const target = join(pinned, name);
   rmSync(target, { force: true });
-  try { linkSync(join(directory, SERVICE_SOCKET), target); }
+  try { linkSync(join(directory, name), target); }
   catch { throw new Error("The server's socket isn't there"); }
   const info = lstatSync(target);
   if (!info.isSocket() || (process.getuid && info.uid !== process.getuid())) {
