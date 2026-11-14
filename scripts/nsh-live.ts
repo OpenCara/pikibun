@@ -95,7 +95,7 @@ test("a stored sign-in comes back, and signing out revokes it on the server", as
   await app.press("id:open-settings");
   app.onDialog(() => "Sign out");
   await app.press("id:sign-out");
-  await app.waitFor("id:github-sign-in", { timeout: 15000 });
+  await app.waitFor("id:code-input", { timeout: 15000 });
   expect(app.storage()["pikibun.token"]).toBeUndefined();
 });
 `);

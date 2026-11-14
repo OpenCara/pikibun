@@ -30,13 +30,13 @@ workspace and is remembered across GitHub's redirect, as the web app does. The p
 can't: the browser's own file chooser for any file, an image too large for a message drawn again smaller, the query
 GitHub's sign-in comes back with, and GitHub's authorization page for an invite's sign-in.
 
-Native builds sign in to a server you enter: GitHub in the system browser, handed back as a `pikibun://auth` link
-([GitHub sign-in](#known-gaps-from-nsh-itself)), a username and password where the
-server allows them (`POST /api/auth/native/password`, for a bearer token listed under Signed-in apps, as GitHub's), a
-code made in a browser or app already signed in (`POST /api/auth/native/code`; **Settings → Profile → Signed-in apps →
-Sign in an app** shows its `pikibun://auth/code` link as a QR code, drawn by the app's own encoder, `src/lib/qr.ts`,
-as NSH has none; the sign-in screen takes the link pasted or opened, and asks before it signs in), or a test-mode
-server's token. New password accounts are made on the web, whose sign-up starts a browser session.
+Native builds sign in to a server you enter with a code made in a browser or app already signed in, and only so: no
+GitHub or password sign-in in the app (`POST /api/auth/native/code`, for a bearer token listed under Signed-in apps;
+**Settings → Profile → Signed-in apps → Sign in an app** shows its `pikibun://auth/code` link as a QR code, drawn by
+the app's own encoder, `src/lib/qr.ts`, as NSH has none; the sign-in screen takes the link pasted or opened, and asks
+before it signs in). A Pikibun on its owner's computer (`pikibun serve`), which makes no codes, takes the sign-in link
+it printed, or the app's own token for the one it runs; a test-mode server takes a developer token. Accounts are made
+on the web.
 
 ## Design
 
@@ -75,12 +75,13 @@ pnpm test:client              # the headless tests: NSH's own engine against a s
 pnpm test:client-live         # against a real test-mode server: serving, sign-in, the session list, sign-out
 pnpm test:client-web          # the web build in headless Chrome (CHROME_BIN, or the first on PATH) against one
 pnpm test:client-macos        # on macOS: the app tests and screenshots in real AppKit windows (apps/nsh/.nsh/screenshots)
-pnpm test:client-macos --github --display 1  # also a live GitHub sign-in, which you complete yourself
+pnpm test:client-macos --live --display 1  # also a live sign-in with a code, which you complete yourself
 ```
 
-`pnpm test:client-macos` runs the stubbed app and screenshot tests in native macOS windows. `--github` adds an opt-in,
-interactive OAuth smoke test against `https://pikibun.com` (or `--server https://your-server.example`): it takes no
-live screenshots, redacts URL queries from runtime output, and passes only when sign-in returns to the session list.
+`pnpm test:client-macos` runs the stubbed app and screenshot tests in native macOS windows. `--live` adds an opt-in,
+interactive sign-in against `https://pikibun.com` (or `--server https://your-server.example`) with a code you make on
+the web and paste in the app: it takes no live screenshots, redacts URL queries from runtime output, and passes only
+when sign-in reaches the session list.
 Its storage is isolated and discarded when it ends. `--timeout-ms 600000` sets the interactive wait. See
 [Mac test results](MACOS-TESTING.md) for what was observed on a Mac.
 
@@ -278,13 +279,6 @@ Each workaround below is on the [list of upstream workarounds](../../docs/design
   the built runtime to measure such a font as the page draws it; drop the patch once NSH measures so itself.
 - **Secure storage**: native sign-ins are kept in NSH's `Storage`, a plain file in the app's data, not the Keychain or
   Keystore ([nsh#1061](https://github.com/longbridge/nsh/issues/1061)).
-- **GitHub sign-in**: NSH has no system authentication session
-  ([nsh#1065](https://github.com/longbridge/nsh/issues/1065), closed as not planned). The app claims `pikibun://`
-  (`nsh.json` `schemes`), so it opens GitHub's page in the system browser, where the app sees nothing typed, and the
-  server hands the sign-in back as `pikibun://auth?code=…&state=…` (`src/screens/SignIn.tsx`). Anyone can open such a
-  link: the app takes only one whose state is the attempt's, and its code is worth nothing without the PKCE verifier,
-  which never leaves the app. **Sign in here instead** runs the page in the app's own web view, handed back on a page of
-  the server's (`/api/auth/native/done`, asked for with `callback=page`), where the browser can't open the app.
 - **Types**: NSH (0.4 and 0.5) declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared
   code names.
 - **Tests**: screenshots need `--target`. Since NSH 0.5 an app imports only files inside its directory, the nearest one

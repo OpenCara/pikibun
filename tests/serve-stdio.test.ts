@@ -112,7 +112,7 @@ test("pikibun serve --stdio runs the local server for the app: no GitHub app, it
 
   assert.ok(server.output.some(line => line.includes("This computer can't run sessions yet")), "this sandbox has no Pi models, so the server runs without its host");
   const signedIn = await fetch(`${origin}/api/auth/native/local`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: running.signInToken, deviceName: "Pikibun NSH (macos)" }) });
+    body: JSON.stringify({ token: running.signInToken, deviceName: "Pikibun (macos)" }) });
   assert.equal(signedIn.status, 200);
   const { token, user } = await signedIn.json() as { token: string; user: { id: string } };
   assert.match(user.id, /^password:[a-z0-9][a-z0-9_-]{2,38}$/);

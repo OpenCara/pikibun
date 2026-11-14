@@ -1,6 +1,6 @@
 # Signing in and your profile
 
-Pikibun signs people in with GitHub, and asks GitHub for the `read:user user:email repo workflow` scopes. That token is kept encrypted on the server and used to read your repositories, open your pull requests and act on GitHub for your sessions; it reaches a host only when a push uses your own account. A browser sign-in lasts 7 days, an app's sign-in 30 days. Where the operator allows it, people can also sign in with a [username and password](#username-and-password). An app can also [sign in with a code](#signing-in-an-app-with-a-code) made where you are already signed in.
+Pikibun signs people in with GitHub, and asks GitHub for the `read:user user:email repo workflow` scopes. That token is kept encrypted on the server and used to read your repositories, open your pull requests and act on GitHub for your sessions; it reaches a host only when a push uses your own account. A browser sign-in lasts 7 days, an app's sign-in 30 days. Where the operator allows it, people can also sign in with a [username and password](#username-and-password). The apps sign in only [with a code](#signing-in-an-app-with-a-code) made where you are already signed in.
 
 ## Who can create an account
 
@@ -35,7 +35,7 @@ A **GitHub account** can sign in with its username and a password too, once it s
 - Changing it with the current password signs out every other browser and app signed in as you. **Remove password** takes you back to GitHub only, and signs out the browsers and apps that signed in with the password.
 - Turning `PASSWORD_AUTH` off ends the sign-ins made with a password at once; your GitHub sign-ins go on, and **Settings → Password** still lets you remove the password you set. The operator's `--reset-password` works for your username as well.
 - A password account holds no GitHub token, so it can't bind or clone **github.com** repositories (not even ones a teammate bound: a session reads repositories with its owner's own access), push with its own GitHub account, or use the GitHub tools. It works with every other Git provider, GitHub Enterprise Server included, through personal access tokens under **Git accounts**. Its Git author email starts as `<username>@users.pikibun.invalid`; set your own under **Identity**.
-- The apps sign in with your username and password too, and are then listed under **Signed-in apps** as a GitHub sign-in is. Create a new password account on the web first: the apps only sign in to one.
+- The apps don't take your username and password: sign in on the web, then sign an app in [with a code](#signing-in-an-app-with-a-code).
 - Turning `PASSWORD_AUTH` off signs every password account out at once and refuses their sign-ins; turning it on again lets them back in.
 
 **Settings → Profile** holds:
@@ -48,10 +48,10 @@ A **GitHub account** can sign in with its username and a password too, once it s
 
 ## Signing in an app with a code
 
-The Pikibun app on a phone, tablet or computer can sign in without GitHub or a password there, with a code made where you are already signed in: Pikibun on the web, or another of your apps.
+The Pikibun app on a phone, tablet or computer signs in with a code made where you are already signed in: Pikibun on the web, or another of your apps. It offers no GitHub or password sign-in of its own (a Pikibun on your own computer, which makes no codes, takes its own sign-in link instead).
 
 1. There, open **Settings → Profile → Signed-in apps → Sign in an app**. It shows a QR code of the sign-in link (`pikibun://auth/code?server=…&code=…`), **Open in Pikibun** (on the web) and **Copy link**.
-2. On a phone or tablet, scan the QR code with the camera and open the link in Pikibun. On a computer, choose **Open in Pikibun** where the app is installed, or copy the link and paste it under **Sign in with a code** on the app's sign-in screen.
+2. On a phone or tablet, scan the QR code with the camera and open the link in Pikibun. On a computer, choose **Open in Pikibun** where the app is installed, or copy the link and paste it on the app's sign-in screen.
 3. The app shows the server the link is for and asks first; choose **Sign in**. The page that made the code says which app used it, and the app is listed under **Signed-in apps** as signed in "with a code", for 30 days like any other app.
 
 What keeps a code safe:

@@ -1,10 +1,10 @@
-import { cleanup, effect, openUrl, safeArea, Scroll, signal, Text, untracked, UrlScheme, View, WebView } from "nsh";
+import { cleanup, effect, openUrl, safeArea, Scroll, signal, Text, untracked, UrlScheme, View } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { authorizeInPage, openServerPage, pageQuery } from "../lib/page";
 import { errorMessage } from "../shared";
 import {
-  auth, checkBrowserSession, isCodeLink, isSignInLink, localSignInToken, parseSignInCode, restore, signInMethods, signInToLocalServer, signInWithCode, signInWithPassword,
-  signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, startGitHubSignIn, type GitHubSignIn, type SignInMethods,
+  auth, checkBrowserSession, isCodeLink, localSignInToken, parseSignInCode, restore, signInMethods, signInToLocalServer, signInWithCode, signInWithPassword,
+  signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, type SignInMethods,
 } from "../lib/auth";
 import { createAction } from "../lib/resource";
 import { displayOrigin, parseOrigin, usesBrowserSession } from "../lib/server";
@@ -89,11 +89,10 @@ function SignInForm(props: { inviteToken?: string }) {
   const passwordMode = signal<"signin" | "signup">("signin");
   const action = createAction();
   const methods = signal<SignInMethods | null>(null);
-  const github = signal<GitHubSignIn | null>(null);
   const callbackError = signal("");
   const selfHostOpen = signal(false);
-  const codeOpen = signal(false);
   const codeText = signal("");
+  const codeOpened = signal(false);
   const codeFromLink = signal(false);
   const parsed = () => parseOrigin(server());
   const origin = () => {
@@ -118,7 +117,7 @@ function SignInForm(props: { inviteToken?: string }) {
   };
   const invited = () => usesBrowserSession && props.inviteToken !== undefined;
   const githubUnconfigured = () => methods()?.githubConfigured === false;
-  const passwords = () => methods()?.passwordAuth === true;
+  const passwords = () => usesBrowserSession && methods()?.passwordAuth === true;
   const unconfigured = () => githubUnconfigured() && !passwords();
   const local = () => methods()?.localServer;
   const ownToken = () => {
@@ -139,7 +138,8 @@ function SignInForm(props: { inviteToken?: string }) {
     if (!signInCode()) return { tone: "danger" as const, text: "That isn't a sign-in link or code. Copy the whole link Pikibun shows under Sign in an app." };
     return target ? { tone: undefined, text: `Signs in to ${displayOrigin(target)}.` } : { tone: "danger" as const, text: "Enter this server's address above first." };
   };
-  const closeCode = () => { codeOpen.set(false); codeText.set(""); codeFromLink.set(false); };
+  const closeCode = () => { codeText.set(""); codeFromLink.set(false); codeOpened.set(false); };
+  const codeShown = () => !usesBrowserSession && (!local() || codeOpened());
 
   function submitCode() {
     const code = signInCode();
@@ -164,25 +164,13 @@ function SignInForm(props: { inviteToken?: string }) {
     const target = origin();
     if (target === null) return;
     void action.run(async () => {
-      if (usesBrowserSession) {
-        if (props.inviteToken !== undefined) {
-          const url = await startGitHubInviteSignIn(props.inviteToken);
-          if (!authorizeInPage(url)) await openUrl(url);
-          return;
-        }
-        if (!openServerPage("/api/auth/github")) await openUrl(`${target}/api/auth/github`);
+      if (props.inviteToken !== undefined) {
+        const url = await startGitHubInviteSignIn(props.inviteToken);
+        if (!authorizeInPage(url)) await openUrl(url);
         return;
       }
-      const attempt = await startGitHubSignIn(target);
-      github.set(attempt);
-      await openUrl(attempt.url);
+      if (!openServerPage("/api/auth/github")) await openUrl(`${target}/api/auth/github`);
     });
-  }
-
-  function signInInApp() {
-    const target = origin();
-    if (target === null) return;
-    void action.run(async () => { github.set(await startGitHubSignIn(target, { inApp: true })); });
   }
 
   function signInLocally() {
@@ -205,26 +193,9 @@ function SignInForm(props: { inviteToken?: string }) {
         }
         action.clear();
         codeText.set(url);
-        codeOpen.set(true);
         codeFromLink.set(true);
-        return;
+        codeOpened.set(true);
       }
-      if (!isSignInLink(url)) return;
-      const attempt = untracked(github);
-      if (attempt?.inApp) {
-        void action.run(async () => { throw new Error("That sign-in link is from the browser you left. Finish signing in on GitHub's page here, or cancel it and continue with GitHub again."); });
-        return;
-      }
-      if (!attempt) {
-        void action.run(async () => { throw new Error("That sign-in link isn't from a sign-in this app started. Continue with GitHub again."); });
-        return;
-      }
-      if (!attempt.owns(url)) {
-        void action.run(async () => { throw new Error("That sign-in link did not match this attempt. Finish signing in in the browser this app opened."); });
-        return;
-      }
-      github.set(null);
-      void action.run(() => attempt.finish(url));
     }));
   }
 
@@ -236,14 +207,7 @@ function SignInForm(props: { inviteToken?: string }) {
       void action.run(() => signUpWithPassword(username(), password(), props.inviteToken));
       return;
     }
-    void action.run(() => signInWithPassword(target, username(), password()));
-  }
-
-  function navigated(url: string) {
-    const attempt = github();
-    if (!attempt || !attempt.isCallback(url)) return;
-    github.set(null);
-    void action.run(() => attempt.finish(url));
+    void action.run(() => signInWithPassword(username(), password()));
   }
 
   return (
@@ -341,44 +305,27 @@ function SignInForm(props: { inviteToken?: string }) {
             disabled={origin() === null || action.busy()} onPress={signInLocally} />
         </If>
       </If>
-      <If when={!local() && !(githubUnconfigured() && (usesBrowserSession || passwords()))}>
-        <Button testID="github-sign-in" variant="primary" large block icon="github" label="Continue with GitHub" busy={action.busy() && !developerOpen()}
-          disabled={origin() === null || action.busy() || githubUnconfigured()} onPress={continueWithGitHub} />
+      <If when={usesBrowserSession && !local() && !githubUnconfigured()}>
+        <Button testID="github-sign-in" variant="primary" large block icon="github" label="Continue with GitHub" busy={action.busy()}
+          disabled={origin() === null || action.busy()} onPress={continueWithGitHub} />
       </If>
-      <If when={github() && !github()!.inApp ? github() : null}>
-        {attempt => (
-          <Banner testID="github-browser-wait" tone="info" title="Finish signing in in your browser"
-            actions={<>
-              <Button small variant="ghost" label="Open it again" onPress={() => void openUrl(attempt().url)} />
-              <Button testID="github-in-app" small variant="ghost" label="Sign in here instead" disabled={action.busy()} onPress={signInInApp} />
-              <Button small variant="ghost" label="Cancel" onPress={() => github.set(null)} />
-            </>}>
-            GitHub's page opened in your browser. Pikibun comes back here once you've signed in there.
-          </Banner>
-        )}
-      </If>
-      <If when={!usesBrowserSession && (methods()?.codeSignIn === true || codeOpen())}>
-        <If when={codeOpen()}
-          else={<Button testID="code-sign-in-open" block variant="ghost" icon="key" label="Sign in with a code" disabled={action.busy()} onPress={() => codeOpen.set(true)} />}>
-          <View testID="code-form" style={{ gap: 8, borderTopWidth: 1, paddingTop: 12, borderColor: palette().border }}>
-            <If when={codeFromLink() && codeTarget() ? codeTarget() : null}>
-              {target => (
-                <Banner testID="code-link-confirm" tone="info" title={`Sign in to ${displayOrigin(target())}?`}>
-                  A sign-in link opened Pikibun. Sign in only if you made it yourself, in Pikibun on the web or in another of your apps.
-                </Banner>
-              )}
-            </If>
-            <Small>Signed in on the web or in another app? Open Settings → Profile → Signed-in apps → Sign in an app there, then open its link on this device, scan its QR code with this device's camera, or paste the link here.</Small>
-            <Input testID="code-input" value={codeText()} onChange={event => { codeText.set(event.value); codeFromLink.set(false); }} autoCapitalize="none" autoCorrect={false}
-              autoComplete="off" placeholder="Sign-in link or code" accessibilityLabel="Sign-in link or code" style={inputStyle()} onSubmit={submitCode} />
-            <If when={codeHint()}>{hint => <Small tone={hint().tone} testID="code-hint">{hint().text}</Small>}</If>
-            <View style={{ flexDirection: "row", gap: 8, justifyContent: "flex-end" }}>
-              <Button testID="code-cancel" variant="ghost" label="Cancel" disabled={action.busy()} onPress={closeCode} />
-              <Button testID="code-sign-in" variant="primary" icon="key" label={action.busy() ? "Signing in" : "Sign in"} busy={action.busy() && codeOpen()}
-                disabled={action.busy() || !signInCode() || codeTarget() === null} onPress={submitCode} />
-            </View>
-          </View>
-        </If>
+      <If when={codeShown()}>
+        <View testID="code-form" style={{ gap: 8 }}>
+          <If when={codeFromLink() && codeTarget() ? codeTarget() : null}>
+            {target => (
+              <Banner testID="code-link-confirm" tone="info" title={`Sign in to ${displayOrigin(target())}?`}
+                actions={<Button testID="code-cancel" small variant="ghost" label="Cancel" disabled={action.busy()} onPress={closeCode} />}>
+                A sign-in link opened Pikibun. Sign in only if you made it yourself, in Pikibun on the web or in another of your apps.
+              </Banner>
+            )}
+          </If>
+          <Small>Sign in on the web or in another app, open Settings → Profile → Signed-in apps → Sign in an app there, then open its link on this device, scan its QR code with this device's camera, or paste the link here.</Small>
+          <Input testID="code-input" value={codeText()} onChange={event => { codeText.set(event.value); codeFromLink.set(false); }} autoCapitalize="none" autoCorrect={false}
+            autoComplete="off" placeholder="Sign-in link or code" accessibilityLabel="Sign-in link or code" style={inputStyle()} onSubmit={submitCode} />
+          <If when={codeHint()}>{hint => <Small tone={hint().tone} testID="code-hint">{hint().text}</Small>}</If>
+          <Button testID="code-sign-in" variant="primary" large block icon="key" label={action.busy() ? "Signing in" : "Sign in"} busy={action.busy() && !developerOpen()}
+            disabled={action.busy() || !signInCode() || codeTarget() === null} onPress={submitCode} />
+        </View>
       </If>
       <If when={usesBrowserSession && !githubUnconfigured()}>
         <Button testID="browser-session-check" block label="I've signed in" disabled={action.busy()}
@@ -415,21 +362,9 @@ function SignInForm(props: { inviteToken?: string }) {
       <Small center>
         {usesBrowserSession
           ? "On the web this app uses the server's own browser sign-in."
-          : "Your sign-in is kept in this app's storage on this device (NSH has no Keychain or Keystore storage yet)."}
+          : "Your sign-in is kept in this app's storage on this device, not yet in the Keychain or Keystore."}
       </Small>
       <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={signInToOwnServer} />
-      <Dialog open={github()?.inApp === true} onOpenChange={event => { if (!event.open) github.set(null); }}
-        style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
-        <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
-            <Text style={{ flex: 1, fontSize: 14, fontWeight: "500", color: palette().text }}>Sign in with GitHub</Text>
-            <Button small variant="ghost" label="Cancel" onPress={() => github.set(null)} />
-          </View>
-          <If when={github()?.inApp ? github() : null}>
-            {attempt => <WebView src={attempt().url} style={{ flex: 1 }} onNavigationStateChange={event => navigated(event.url)} />}
-          </If>
-        </View>
-      </Dialog>
     </Scroll>
   );
 }
