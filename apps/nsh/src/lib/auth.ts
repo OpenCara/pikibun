@@ -24,7 +24,7 @@ export interface SignInMethods {
 
 export type AuthState =
   | { status: "loading" }
-  | { status: "signedOut"; origin: string; notice?: string; adding?: boolean }
+  | { status: "signedOut"; origin: string; notice?: string; adding?: boolean; fresh?: boolean }
   | { status: "unreachable"; origin: string; error: string }
   | { status: "signedIn"; origin: string; token: string | null; expiresAt: string | null; user: UserProfile; api: Api };
 
@@ -169,7 +169,7 @@ export async function restore(): Promise<void> {
   const [storedOrigin, token, expiresAt] = await Promise.all([Storage.getItem(ORIGIN_KEY), Storage.getItem(TOKEN_KEY), Storage.getItem(EXPIRES_KEY), loadServers()]);
   const origin = storedOrigin == null ? DEFAULT_ORIGIN : currentOrigin(storedOrigin);
   if (storedOrigin != null && origin !== storedOrigin) await Storage.setItem(ORIGIN_KEY, origin);
-  if (!token) return setAuth({ status: "signedOut", origin });
+  if (!token) return setAuth({ status: "signedOut", origin, ...(storedOrigin == null ? { fresh: true } : {}) });
   try {
     await establish(origin, token, expiresAt);
   } catch (reason) {
@@ -180,6 +180,10 @@ export async function restore(): Promise<void> {
       setAuth({ status: "unreachable", origin, error: errorMessage(reason) });
     }
   }
+}
+
+export async function rememberServer(origin: string): Promise<void> {
+  await Storage.setItem(ORIGIN_KEY, origin);
 }
 
 export async function signInMethods(origin: string): Promise<SignInMethods> {

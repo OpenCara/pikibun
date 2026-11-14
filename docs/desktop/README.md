@@ -8,6 +8,8 @@ The Pikibun app for Mac, Windows and Linux can play three roles. Pick the one th
 | **Host** | You also want this computer to run sessions, with the models Pi is signed in to here, for you or for teammates you share it with | The app, and the `pikibun` host it starts | [Host](host.md) |
 | **Self host** | You want all of Pikibun on this computer, with no server to sign up for or deploy: just for yourself, or later shared with a team | Your own Pikibun server, and this computer as its host | [Self host](self-host.md) |
 
+A fresh install starts in **Self host**: at its first launch the app runs your own Pikibun on this computer and signs you in, and offers **Connect to pikibun.com** or **Connect to another server** for the other two.
+
 The modes build on each other. A host is a client that also runs sessions. A self-hosted Pikibun is a server on this computer, and the app is its client.
 
 <p align="center">
@@ -38,8 +40,8 @@ Nothing has to be reinstalled. You switch with one setting, or by signing in to 
 | --- | --- |
 | Client → Host | **Settings → This Mac** (**This Computer** on Windows and Linux) → **Pair This Mac**. After that, use **Start host**. See [Host](host.md). |
 | Host → Client | **Settings → This Mac → Stop host**. The pairing is kept, so **Start host** brings it back later without a new code. |
-| Any → Self host | **Settings → Self host → Start Pikibun**, then **Sign in to it**. Signed out, the sign-in screen's **Run Pikibun on this Mac** opens the same page. See [Self host](self-host.md). |
-| Self host → Client or Host | **Settings → Profile → Servers → Switch** to a server you're signed in to, or **Add a server** (for example `https://pikibun.com`); see [Switching between servers](client.md#switching-between-servers). Choose **Stop** under **Settings → Self host** when you no longer need your own Pikibun. |
+| Any → Self host | **Pikibun on this Mac** in the sidebar's server switch, or **Settings → Self host → Start Pikibun**, then **Sign in to it**. Signed out, the sign-in screen's **Run Pikibun on this Mac** opens the same page. See [Self host](self-host.md). |
+| Self host → Client or Host | The sidebar's server switch, or **Settings → Profile → Servers → Switch**, changes to a server you're signed in to, or **Add a server** (for example `https://pikibun.com`); see [Switching between servers](client.md#switching-between-servers). Choose **Stop** under **Settings → Self host** when you no longer need your own Pikibun. |
 
 Keep in mind:
 

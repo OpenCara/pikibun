@@ -1,6 +1,6 @@
 import { signal, Storage, untracked } from "nsh";
 import type { ServerEvent, ServerInspection, ServerRequest, ServerStatus } from "../../../../packages/shared/src/app-server-protocol";
-import { auth, restore } from "./auth";
+import { auth, restore, servers, signInToLocalServer, switchServer } from "./auth";
 import { CommandChannel, commandProblem, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine } from "./pikibun-command";
 import { computerName, computerTitle, hostsHere, thisComputer } from "./this-computer";
 
@@ -163,6 +163,29 @@ export function setServerConsent(ask: typeof consent): void { consent = ask; }
 export function thisServer(): ThisServer {
   shared ??= new ThisServer(warning => consent(warning));
   return shared;
+}
+
+export function thisServerOrigin(): string | undefined {
+  if (!hostsHere) return undefined;
+  const server = thisServer();
+  return server.running() ?? `http://127.0.0.1:${server.inspection()?.port ?? 7878}`;
+}
+
+export async function signInToThisServer(options: { switching?: boolean } = {}): Promise<string> {
+  const server = thisServer();
+  await server.load();
+  for (let tries = 0; tries < 120 && untracked(server.status).state === "stopping"; tries++) await new Promise(resolve => setTimeout(resolve, 250));
+  if (untracked(server.status).state === "stopped") {
+    const outcome = await server.start();
+    if (!outcome.ok) throw new Error(outcome.error ?? `Pikibun's command on ${computerName} has to be installed or updated before Pikibun can start.`);
+  }
+  for (let tries = 0; tries < 120 && untracked(server.status).state === "starting"; tries++) await new Promise(resolve => setTimeout(resolve, 250));
+  const origin = untracked(() => server.running());
+  if (!origin) throw new Error(untracked(server.error) || `Pikibun on ${computerName} didn't start: see its Recent activity.`);
+  const savedSignIn = options.switching === true && untracked(servers).some(item => item.origin === origin);
+  if (savedSignIn && await switchServer(origin).then(() => true, () => false)) return origin;
+  await signInToLocalServer(origin, server.requireSignInToken(origin), options);
+  return origin;
 }
 
 export function resumeThisServer(): void {
