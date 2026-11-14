@@ -142,12 +142,13 @@ test("a binding from before the rename still gives the new tools, side asks incl
 });
 
 test("an extension's hooks match Pikibun's file tools by Pi's names: a write blocked by path, a read rewritten, read's and edit's results read with Pi's type guards", unix, async t => {
-  const log: string[] = [];
-  (globalThis as { __piToolNames?: string[] }).__piToolNames = log;
-  t.after(() => { delete (globalThis as { __piToolNames?: string[] }).__piToolNames; });
-  const extension = `import { isEditToolResult, isReadToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
+  const logs = await mkdtemp(join(tmpdir(), "pi-tool-names-log-"));
+  t.after(() => rm(logs, { recursive: true, force: true }));
+  const logged = join(logs, "events.log");
+  const extension = `import { appendFileSync } from "node:fs";
+    import { isEditToolResult, isReadToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
     export default function (pi) {
-      const log = line => globalThis.__piToolNames.push(line);
+      const log = line => appendFileSync(${JSON.stringify(logged)}, line + "\\n");
       pi.on("tool_call", event => {
         if (isToolCallEventType("write", event) && event.input.path === "secret.txt") return { block: true, reason: "No secrets." };
         if (isToolCallEventType("read", event) && event.input.path === "alias.txt") event.input.path = "real.txt";
@@ -168,6 +169,7 @@ test("an extension's hooks match Pikibun's file tools by Pi's names: a write blo
   assert.match(results[0]!, /No secrets\./, "the guard for write fires on Pikibun's write");
   await assert.rejects(readFile(join(root, "runner", "sessions", session.binding.session.id, "sandbox", "worktree", "secret.txt")), { code: "ENOENT" });
   assert.equal(await session.sandbox.readFile("real.txt", async () => {}), "bye\n");
+  const log = (await readFile(logged, "utf8").catch(() => "")).split("\n").filter(Boolean);
   assert.deepEqual(log, ['read "hello\\n" "test:alice"', 'edit "-1 hello\\n+1 bye" 1 true'],
     "the read was rewritten to real.txt, and the results reached the handlers with Pi's content and details, and Pikibun's");
 });
