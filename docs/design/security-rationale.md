@@ -134,9 +134,9 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
 - **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
   through Pi's API now is what they will reach from their own process.
 
-What it doesn't protect against: until extensions run in a process of their own, an installed extension still runs as
-the host's user and can read Pi's `auth.json` and `models.json` itself. This closes the door Pi's API opened, not the
-process's.
+What it doesn't protect against: an installed extension runs in a process of its own, but until that process runs in
+the session's sandbox it still runs as the host's user and can read Pi's `auth.json` and `models.json` itself. This
+closes the door Pi's API opened, not the file system's.
 
 ## Password authentication
 

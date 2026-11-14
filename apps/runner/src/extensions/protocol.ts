@@ -57,5 +57,7 @@ export interface ExtensionAnswer<M extends ExtensionMethod> { value: ExtensionRe
 
 export interface ExtensionChannel {
   call<M extends ExtensionMethod>(method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>>;
+  ready?(): Promise<void>;
+  restart?(reason: string): void;
   close(): Promise<void>;
 }

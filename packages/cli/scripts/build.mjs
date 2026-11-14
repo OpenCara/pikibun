@@ -11,7 +11,7 @@ const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).ver
 
 await Promise.all([
   build({
-    entryPoints: { cli: join(root, "src/cli.ts") }, outdir: out, chunkNames: "chunks/[name]-[hash]",
+    entryPoints: { cli: join(root, "src/cli.ts"), "extension-worker": join(repository, "apps/runner/src/extensions/child.ts") }, outdir: out, chunkNames: "chunks/[name]-[hash]",
     bundle: true, splitting: true, platform: "node", format: "esm", target: "node24", packages: "external", logLevel: "warning",
     define: { __PIKIBUN_VERSION__: JSON.stringify(version) },
   }),
