@@ -101,11 +101,12 @@ function GitAccountsGroup() {
               </If>
             </>} />
         </If>
-        <If when={!local()}>
-        <If when={!user().passwordSignIn}
-          else={<Row leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
+        <If when={!local() && user().passwordSignIn && !user().githubConnected}>
+          <Row leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
             hint={`${gitProviderHosts.github.default} · Repositories on github.com need an account that signs in with GitHub, which this one doesn't`}
-            trailing={<Badge tone="warning">Not available</Badge>} />}>
+            trailing={<Badge tone="warning">Not available</Badge>} />
+        </If>
+        <If when={!local() && (!user().passwordSignIn || user().githubConnected)}>
           <Row leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
             hint={user().githubConnected ? `${gitProviderHosts.github.default} · ${user().githubLogin ? `@${user().githubLogin} · ` : ""}signed in` : `${gitProviderHosts.github.default} · Not connected`}
             trailing={user().githubConnected ? <>
@@ -113,7 +114,6 @@ function GitAccountsGroup() {
                 <Button small variant="ghost" label="Disconnect" testID="disconnect-github" disabled={action.busy()} onPress={() => void disconnectGitHub()} />
               </>
               : opensServerPages ? <Button small variant="outline" label="Sign in" onPress={() => openServerLink("/api/auth/github")} /> : "Sign in on the web"} />
-        </If>
         </If>
         <ResourceState inline loading={accounts.loading() && !accounts.data()} error={accounts.error()} retry={accounts.refresh}>
           <Each of={tokenProviders} key={provider => provider}>

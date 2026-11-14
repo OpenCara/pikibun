@@ -34,9 +34,11 @@ Native builds sign in to a server you enter with a code made in a browser or app
 GitHub or password sign-in in the app (`POST /api/auth/native/code`, for a bearer token listed under Signed-in apps;
 **Settings → Profile → Signed-in apps → Sign in an app** shows its `pikibun://auth/code` link as a QR code, drawn by
 the app's own encoder, `src/lib/qr.ts`, as NSH has none; the sign-in screen takes the link pasted or opened, and asks
-before it signs in). A Pikibun on its owner's computer (`pikibun serve`), which makes no codes, takes the sign-in link
+before it signs in). A Pikibun on its owner's computer (`pikibun serve`) also takes the sign-in link
 it printed, or the app's own token for the one it runs; a test-mode server takes a developer token. Accounts are made
-on the web.
+on the web. The app keeps its sign-in to each server (`pikibun.servers` in its storage, beside the current one's
+`pikibun.origin` and `pikibun.token`): **Settings → Profile → Servers** switches between them and adds another, and the
+sign-in screen lists them.
 
 ## Design
 

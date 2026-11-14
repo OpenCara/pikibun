@@ -30,7 +30,7 @@ The badge turns **Running**, and the page shows your Pikibun's address, `http://
 Choose **Sign in to it**:
 
 - From the sign-in screen, the app switches its **Server** to your Pikibun and signs you in.
-- From Settings, the app asks first, then signs out of the server you were using and signs in to your Pikibun. Nothing moves: your sessions and workspaces there stay where they are.
+- From Settings, the app asks first, then switches to your Pikibun and stays signed in to the server you were using. Nothing moves: your sessions and workspaces there stay where they are, and **Settings → Profile → Servers** switches back.
 
 There is nothing to type: each time your Pikibun starts, it makes a private sign-in token and tells only the app, which signs you in with it as your Pikibun's owner, the only account that can ever sign in to it. Your first sign-in makes that account, named after your user on this computer (`password:ada` for the user `ada`). Signed out later, the sign-in screen's **Sign in to Pikibun on this Mac** signs you back in.
 
@@ -40,13 +40,14 @@ Your Pikibun runs its own host for this computer. **Settings → This Mac** stay
 
 ### Repositories
 
-Your account has no GitHub sign-in, so it can't bind or clone **github.com** repositories, or use the GitHub tools. It works with every other Git provider, GitHub Enterprise Server included, through the personal access tokens you add under **Settings → Profile → Git accounts** (see [Repositories and Git accounts](../repositories.md)). If you set up your Pikibun before it signed in without GitHub, you keep the GitHub account you signed in with then, and its repositories, for as long as GitHub keeps its token.
+Your Pikibun has no GitHub sign-in of its own (that takes a GitHub OAuth app), so your account reaches **github.com** with a personal access token: under **Settings → Profile → Connected accounts**, choose **Connect** on the GitHub row and paste one (classic with the `repo`, `workflow` and `read:user` scopes, or fine-grained with Metadata read and Contents, Pull requests, Issues and Workflows read and write on the repositories your sessions work on). Pikibun checks it with GitHub and keeps it encrypted on this computer; your sessions then bind and clone github.com repositories, open pull requests and use the GitHub tools as that account. Unlike a GitHub sign-in, the token isn't reset after a push with your account: it stays valid until it expires or you revoke it on GitHub, and **Disconnect** only removes it from your Pikibun. Every other Git provider, GitHub Enterprise Server included, connects with its own token on the same page (see [Repositories and Git accounts](../repositories.md)). If you set up your Pikibun before it signed in without GitHub, you keep the GitHub account you signed in with then, and its repositories, for as long as GitHub keeps its token; after that, **Replace token** takes a personal access token of the same GitHub account.
 
 ## Day to day
 
 - **It runs while the app is open.** Quitting the app stops it. If it was running when you quit, it starts again at the next launch, and the app signs back in to it.
 - **Stop** on the Self host page stops it. It won't start again at the next launch until you start it.
-- **Switch to another server:** **Settings → Profile → Sign out**, then **Change** the server on the sign-in screen (see [Switching between modes](README.md#switching-between-modes)). Your Pikibun keeps running, and keeps its data, until you stop it.
+- **Switch to another server:** **Settings → Profile → Servers** lists the servers this app is signed in to: **Switch** changes to one, and **Add a server** signs in to another, without signing out of your Pikibun (see [Switching between servers](client.md#switching-between-servers)). Your Pikibun keeps running, and keeps its data, until you stop it.
+- **Sign in another app on this computer:** **Settings → Profile → Signed-in apps → Sign in an app** makes a [sign-in code](../accounts.md#signing-in-an-app-with-a-code), with nothing to type. Your Pikibun is reachable from this computer only, so the code works for apps here, not on your phone; for other devices, [share it](#sharing-it-with-your-team).
 - **Your data** (the database, session backups, the server's secrets and this computer's pairing with it) is in `~/.local/share/pikibun/server`, shown under **State directory**. It is the same state `pikibun serve` uses in a terminal, so a Pikibun you set up there carries over. Only one of the two runs at a time.
 - **Recent activity** at the bottom of the page shows what the server did, and why it couldn't start.
 
