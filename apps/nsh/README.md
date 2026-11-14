@@ -275,7 +275,7 @@ Pikibun set up in a terminal carries over, and only one of them runs at a time. 
 with the server's state, as `pikibun serve` pairs it), not This Mac's: This Mac stays a host of whichever server it is
 paired with.
 
-The sidebar's server switch (in the apps; the web client, bound to the server that serves it, keeps **Hosts** there)
+The sidebar's server switch (in the apps; the web client, bound to the server that serves it, has none, and reaches Hosts under Settings)
 lists the servers the app is signed in to, **Pikibun on this Mac** in the desktop builds, which starts it where it
 isn't running and signs in to it, and **Add a server**.
 
