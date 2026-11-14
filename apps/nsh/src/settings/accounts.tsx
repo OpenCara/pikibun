@@ -58,6 +58,12 @@ function GitAccountsGroup() {
   const accounts = createResource<{ accounts: GitAccount[] }>(() => "/api/git/accounts");
   const action = createAction();
   const connecting = signal<TokenGitProvider | null>(null);
+  const pastingGitHub = signal(false);
+  const local = () => Boolean(user().localOwner);
+  async function gitHubConnected() {
+    updateUser((await session().api<{ user: UserProfile }>("/api/me")).user);
+    accounts.refresh();
+  }
   async function remove(account: GitAccount) {
     if (action.busy()) return;
     if (!await confirm({ title: "Remove Git account", destructive: true, confirmLabel: "Remove",
@@ -70,7 +76,9 @@ function GitAccountsGroup() {
   async function disconnectGitHub() {
     if (action.busy()) return;
     if (!await confirm({ title: "Disconnect GitHub", destructive: true, confirmLabel: "Disconnect",
-      message: `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from the server and revoked with GitHub. You stay signed in, but sessions you own can't read github.com repositories, open pull requests or push with your account until you sign in with GitHub again.` })) return;
+      message: local()
+        ? `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from this Pikibun; revoke it on GitHub too if nothing else uses it. Sessions you own can't read github.com repositories, open pull requests or push with your account until you connect a token again.`
+        : `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from the server and revoked with GitHub. You stay signed in, but sessions you own can't read github.com repositories, open pull requests or push with your account until you sign in with GitHub again.` })) return;
     void action.run(async () => {
       await session().api("/api/git/accounts/github", { method: "DELETE" });
       updateUser(await session().api<{ user: UserProfile }>("/api/me").then(result => result.user, () => ({ ...user(), githubConnected: false })));
@@ -81,6 +89,19 @@ function GitAccountsGroup() {
     <View testID="git-accounts" style={{ gap: 8 }}>
       <GroupTitle>Git</GroupTitle>
       <Card>
+        <If when={local()}>
+          <Row testID="github-token-account" leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
+            hint={user().githubConnected ? `${gitProviderHosts.github.default} · ${user().githubLogin ? `@${user().githubLogin} · ` : ""}personal access token` : `${gitProviderHosts.github.default} · Not connected`}
+            trailing={<>
+              <If when={user().githubConnected}><Badge tone="success">Connected</Badge></If>
+              <Button small variant={user().githubConnected ? "ghost" : "outline"} label={user().githubConnected ? "Replace token" : "Connect"} testID="connect-github"
+                disabled={action.busy()} onPress={() => pastingGitHub.set(true)} />
+              <If when={user().githubConnected}>
+                <Button small variant="ghost" label="Disconnect" testID="disconnect-github" disabled={action.busy()} onPress={() => void disconnectGitHub()} />
+              </If>
+            </>} />
+        </If>
+        <If when={!local()}>
         <If when={!user().passwordSignIn}
           else={<Row leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
             hint={`${gitProviderHosts.github.default} · Repositories on github.com need an account that signs in with GitHub, which this one doesn't`}
@@ -92,6 +113,7 @@ function GitAccountsGroup() {
                 <Button small variant="ghost" label="Disconnect" testID="disconnect-github" disabled={action.busy()} onPress={() => void disconnectGitHub()} />
               </>
               : opensServerPages ? <Button small variant="outline" label="Sign in" onPress={() => openServerLink("/api/auth/github")} /> : "Sign in on the web"} />
+        </If>
         </If>
         <ResourceState inline loading={accounts.loading() && !accounts.data()} error={accounts.error()} retry={accounts.refresh}>
           <Each of={tokenProviders} key={provider => provider}>
@@ -120,7 +142,47 @@ function GitAccountsGroup() {
         <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
       </Card>
       <ConnectGitAccountSheet provider={connecting()} close={() => connecting.set(null)} added={accounts.refresh} />
+      <ConnectGitHubTokenSheet open={pastingGitHub()} close={() => pastingGitHub.set(false)} connected={gitHubConnected} />
     </View>
+  );
+}
+
+function ConnectGitHubTokenSheet(props: { open: boolean; close: () => void; connected: () => Promise<void> }) {
+  const token = signal("");
+  const action = createAction();
+  effect(() => {
+    if (props.open) untracked(() => { token.set(""); action.clear(); });
+  });
+  function dismiss() {
+    if (action.busy()) return;
+    token.set("");
+    props.close();
+  }
+  function submit() {
+    if (!token().trim() || action.busy()) return;
+    void action.run(async () => {
+      try {
+        await session().api("/api/git/accounts/github", { method: "PUT", body: { token: token().trim() } });
+      } finally {
+        token.set("");
+      }
+      await props.connected();
+      props.close();
+    });
+  }
+  return (
+    <FormSheet open={props.open} title="Connect GitHub" onClose={dismiss} testID="github-token-sheet"
+      footer={<>
+        <Button label="Cancel" disabled={action.busy()} onPress={dismiss} />
+        <Button testID="github-token-connect" variant="primary" label={action.busy() ? "Verifying…" : "Connect"} disabled={!token().trim() || action.busy()} onPress={submit} />
+      </>}>
+      <Note>This Pikibun runs on your computer and has no GitHub sign-in of its own, so it reaches github.com with a personal access token of your account. Make one at github.com/settings/tokens.</Note>
+      <Field label="Personal access token"
+        hint="Classic: the repo, workflow and read:user scopes. Fine-grained: Metadata read, and Contents, Pull requests, Issues and Workflows read and write, on the repositories your sessions work on. Verified with GitHub, then encrypted on this computer. Pikibun can't reset it after a push as it does a GitHub sign-in, so it stays valid until it expires or you revoke it">
+        <TextField testID="github-token" value={token()} onChange={value => token.set(value)} disabled={action.busy()} masked onSubmit={submit} />
+      </Field>
+      <Feedback error={action.error()} />
+    </FormSheet>
   );
 }
 

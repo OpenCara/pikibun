@@ -220,7 +220,7 @@ describe("Self host in the app", () => {
     expect(app.storage()["pikibun.token"]).toBeUndefined();
   });
 
-  test("signed in elsewhere, Settings › Self host switches the app to Pikibun on this Mac after asking, and signs in to it", async () => {
+  test("signed in elsewhere, Settings › Self host switches the app to Pikibun on this Mac after asking, and stays signed in to the server it was on", async () => {
     const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
       network: { ...remote(), ...servedLocally(true) }, storage: signedIn });
     await app.waitFor("id:session-row-s1");
@@ -235,7 +235,28 @@ describe("Self host in the app", () => {
     await app.waitUntil(() => app.storage()["pikibun.origin"] === LOCAL && app.storage()["pikibun.token"] === TOKEN);
     expect(app.dialogs()[0]).toMatchObject({ title: "Sign in to Pikibun on this Mac?" });
     expect(bodyOf(app, "POST", `${LOCAL}/api/auth/native/local`)).toMatchObject({ token: SIGN_IN_TOKEN });
-    expect(app.requests().some(item => item.method === "POST" && item.url === `${ORIGIN}/api/auth/logout`)).toBe(true);
+    expect(app.requests().some(item => item.url.endsWith("/api/auth/logout"))).toBe(false);
+    await app.waitUntil(() => (JSON.parse(app.storage()["pikibun.servers"] ?? "[]") as unknown[]).length === 2);
+    expect((JSON.parse(app.storage()["pikibun.servers"]!) as { origin: string }[]).map(item => item.origin)).toEqual([LOCAL, ORIGIN]);
+    await app.waitFor("id:session-row-s1");
+    await app.press("id:open-settings");
+    await app.press("id:settings-section-profile");
+    await app.waitFor("id:server-switch-pikibun.test");
+    await app.press("id:server-switch-pikibun.test");
+    await app.waitUntil(() => app.storage()["pikibun.origin"] === ORIGIN);
+  });
+
+  test("a Pikibun on this Mac that the app didn't start takes a sign-in code as well as its link", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
+      network: { ...servedLocally(true), [`GET ${LOCAL}/api/health`]: { body: { ok: true, githubConfigured: false, passwordAuth: false, codeSignIn: true, localServer: { claimed: true } } },
+        [`POST ${LOCAL}/api/auth/native/code`]: { body: { token: TOKEN, expiresAt: "2099-01-01T00:00:00.000Z", user } } },
+      storage: { "pikibun.origin": LOCAL } });
+    await app.waitFor("id:local-link");
+    await app.waitFor("id:code-form");
+    await app.type("id:code-input", "d".repeat(43));
+    await app.press("id:code-sign-in");
+    await app.waitFor("id:session-row-s1");
+    expect(bodyOf(app, "POST", `${LOCAL}/api/auth/native/code`)).toMatchObject({ code: "d".repeat(43) });
   });
 
   test("Settings › Self host leaves the app signed in where it is, and says why, when it can't sign in to Pikibun on this Mac", async () => {

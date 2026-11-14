@@ -1,11 +1,12 @@
 import { platform, signal, Storage, untracked, type Accessor } from "nsh";
 import { ApiError, createApi, errorMessage, type Api, type RequestOptions, type UserProfile } from "../shared";
 import { clearDrafts } from "./drafts";
-import { currentOrigin, DEFAULT_ORIGIN, parseOrigin, usesBrowserSession } from "./server";
+import { currentOrigin, DEFAULT_ORIGIN, displayOrigin, parseOrigin, usesBrowserSession } from "./server";
 
 const TOKEN_KEY = "pikibun.token";
 const EXPIRES_KEY = "pikibun.tokenExpires";
 const ORIGIN_KEY = "pikibun.origin";
+const SERVERS_KEY = "pikibun.servers";
 export const SIGN_IN_SCHEME = "pikibun";
 const deviceName = () => `Pikibun (${platform.os})`;
 
@@ -23,7 +24,7 @@ export interface SignInMethods {
 
 export type AuthState =
   | { status: "loading" }
-  | { status: "signedOut"; origin: string; notice?: string }
+  | { status: "signedOut"; origin: string; notice?: string; adding?: boolean }
   | { status: "unreachable"; origin: string; error: string }
   | { status: "signedIn"; origin: string; token: string | null; expiresAt: string | null; user: UserProfile; api: Api };
 
@@ -51,6 +52,38 @@ export function updateUser(user: UserProfile): void {
   if (current.status === "signedIn" && current.user.id === user.id) authState.set({ ...current, user });
 }
 
+export interface SavedServer { origin: string; token: string; expiresAt: string | null; account: string }
+
+const savedServers = signal<SavedServer[]>([]);
+export const servers: Accessor<SavedServer[]> = savedServers;
+
+function validServer(value: unknown): value is SavedServer {
+  const item = value as Partial<SavedServer> | null;
+  return !!item && typeof item === "object" && typeof item.origin === "string" && "origin" in parseOrigin(item.origin) && typeof item.token === "string" && !!item.token
+    && (item.expiresAt === null || typeof item.expiresAt === "string") && typeof item.account === "string";
+}
+
+async function loadServers(): Promise<void> {
+  let list: SavedServer[] = [];
+  try {
+    const parsed: unknown = JSON.parse(await Storage.getItem(SERVERS_KEY) ?? "[]");
+    if (Array.isArray(parsed)) list = parsed.filter(validServer).filter(item => !item.expiresAt || !(Date.parse(item.expiresAt) <= Date.now()));
+  } catch {
+    list = [];
+  }
+  savedServers.set(list.filter((item, index) => list.findIndex(other => other.origin === item.origin) === index));
+}
+
+async function storeServers(list: SavedServer[]): Promise<void> {
+  savedServers.set(list);
+  if (list.length) await Storage.setItem(SERVERS_KEY, JSON.stringify(list));
+  else await Storage.removeItem(SERVERS_KEY);
+}
+
+const forgetServers = (drop: (item: SavedServer) => boolean) => storeServers(untracked(savedServers).filter(item => !drop(item)));
+
+const accountName = (user: UserProfile) => (user.username || user.githubLogin ? `@${user.username || user.githubLogin}` : user.displayName);
+
 let liveToken: string | null = null;
 const EXPIRED = "Your sign-in expired or was revoked. Sign in again to continue.";
 
@@ -62,6 +95,7 @@ function expire(token: string | null) {
   if (liveToken !== token) return;
   liveToken = null;
   void clearCredentials();
+  if (token) void forgetServers(item => item.token === token);
   const current = auth();
   if (current.status === "signedIn" && current.token === token) setAuth({ status: "signedOut", origin: current.origin, notice: EXPIRED });
 }
@@ -102,6 +136,8 @@ async function establish(origin: string, token: string, expiresAt: string | null
     Storage.setItem(TOKEN_KEY, token),
     Storage.setItem(ORIGIN_KEY, origin),
     expiresAt ? Storage.setItem(EXPIRES_KEY, expiresAt) : Storage.removeItem(EXPIRES_KEY),
+    storeServers([...untracked(savedServers).filter(item => item.origin !== origin), { origin, token, expiresAt, account: accountName(profile) }]
+      .sort((a, b) => a.origin.localeCompare(b.origin))),
   ]);
   setAuth({ status: "signedIn", origin, token, expiresAt, user: profile, api });
 }
@@ -130,7 +166,7 @@ export async function restore(): Promise<void> {
     await establishBrowserSession();
     return;
   }
-  const [storedOrigin, token, expiresAt] = await Promise.all([Storage.getItem(ORIGIN_KEY), Storage.getItem(TOKEN_KEY), Storage.getItem(EXPIRES_KEY)]);
+  const [storedOrigin, token, expiresAt] = await Promise.all([Storage.getItem(ORIGIN_KEY), Storage.getItem(TOKEN_KEY), Storage.getItem(EXPIRES_KEY), loadServers()]);
   const origin = storedOrigin == null ? DEFAULT_ORIGIN : currentOrigin(storedOrigin);
   if (storedOrigin != null && origin !== storedOrigin) await Storage.setItem(ORIGIN_KEY, origin);
   if (!token) return setAuth({ status: "signedOut", origin });
@@ -138,7 +174,7 @@ export async function restore(): Promise<void> {
     await establish(origin, token, expiresAt);
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
-      await clearCredentials();
+      await Promise.all([clearCredentials(), forgetServers(item => item.origin === origin)]);
       setAuth({ status: "signedOut", origin, notice: EXPIRED });
     } else {
       setAuth({ status: "unreachable", origin, error: errorMessage(reason) });
@@ -203,8 +239,31 @@ export function localSignInToken(origin: string, link: string): string | null {
 export async function signInToLocalServer(origin: string, token: string, options: { switching?: boolean } = {}): Promise<void> {
   const signIn = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
     "/api/auth/native/local", { method: "POST", body: { token, deviceName: deviceName() } });
-  if (options.switching) await signOut({ origin });
+  if (options.switching) setAuth({ status: "loading" });
   await establish(origin, signIn.token, signIn.expiresAt, signIn.user);
+}
+
+export async function switchServer(origin: string): Promise<void> {
+  const saved = untracked(savedServers).find(item => item.origin === origin);
+  if (!saved) throw new Error(`This app isn't signed in to ${displayOrigin(origin)} any more. Add it again.`);
+  let user: UserProfile;
+  try {
+    user = (await createApi({ baseUrl: origin, auth: () => saved.token })<{ user: UserProfile }>("/api/me")).user;
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 401) {
+      await forgetServers(item => item.origin === origin);
+      throw new Error(`Your sign-in to ${displayOrigin(origin)} expired or was revoked. Add it again to sign in.`);
+    }
+    throw new Error(`Can't reach ${displayOrigin(origin)}: ${errorMessage(reason)}`);
+  }
+  setAuth({ status: "loading" });
+  await establish(origin, saved.token, saved.expiresAt, user);
+}
+
+export function addServer(): void {
+  const state = untracked(authState);
+  if (state.status !== "signedIn" || usesBrowserSession) return;
+  setAuth({ status: "signedOut", origin: state.origin, adding: true });
 }
 
 async function signedOutRequest<T>(path: string, body: Record<string, string>, failed: string): Promise<T> {
@@ -269,6 +328,6 @@ export async function signOut(next: { origin?: string } = {}): Promise<void> {
       clearTimeout(timer);
     }
   }
-  await clearCredentials();
+  await Promise.all([clearCredentials(), forgetServers(item => item.origin === origin)]);
   setAuth({ status: "signedOut", origin: next.origin ?? origin, notice });
 }

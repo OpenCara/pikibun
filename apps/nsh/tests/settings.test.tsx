@@ -82,6 +82,88 @@ describe("settings", () => {
     expect(app.shows("id:sign-in-app")).toBe(false);
   });
 
+  test("on a Pikibun that runs on its owner's computer, Profile connects github.com with a pasted token and makes a sign-in code with nothing to type", async () => {
+    const owner = { ...user, id: "password:ada", username: "ada", githubId: null, githubLogin: null, githubConnected: false, passwordSignIn: true, localOwner: true };
+    let connected = false;
+    const app = await openSettings("profile", {
+      [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: false, passwordAuth: false, codeSignIn: true, localServer: { claimed: true } } },
+      [`GET ${ORIGIN}/api/me`]: () => ({ body: { user: connected ? { ...owner, githubId: "4242", githubLogin: "octo", githubConnected: true } : owner } }),
+      [`PUT ${ORIGIN}/api/git/accounts/github`]: () => {
+        connected = true;
+        return { status: 201, body: { account: { id: "github", provider: "github", host: "github.com", organization: "", login: "octo", createdAt: null } } };
+      },
+      [`POST ${ORIGIN}/api/me/app-codes`]: { status: 201, body: appCode },
+      [`GET ${ORIGIN}/api/me/app-codes/k1`]: { body: { id: "k1", status: "pending", expiresAt: appCode.expiresAt, deviceName: null } },
+      [`DELETE ${ORIGIN}/api/me/app-codes/k1`]: { body: { ok: true } },
+    });
+    await app.waitFor("id:connect-github");
+    expect(app.texts().join(" ")).toContain("github.com · Not connected");
+    expect(app.shows("id:disconnect-github")).toBe(false);
+    await app.press("id:connect-github");
+    await app.waitFor("id:github-token");
+    await app.type("id:github-token", "ghp_secret");
+    await app.press("id:github-token-connect");
+    await app.waitFor("id:disconnect-github");
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/git/accounts/github`)).toEqual({ token: "ghp_secret" });
+    expect(app.texts().join(" ")).toContain("@octo · personal access token");
+
+    await app.press("id:sign-in-app-start");
+    await app.waitFor("id:sign-in-app-local");
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/me/app-codes`)).toEqual({});
+    expect(app.shows("id:sign-in-app-qr")).toBe(false);
+    expect(app.shows("id:sign-in-app-password")).toBe(false);
+    expect(app.shows("id:sign-in-app-copy")).toBe(true);
+  });
+
+  test("Profile lists the servers the app is signed in to, switches between them without signing out, and adds another", async () => {
+    const OTHER = "https://team.example.com";
+    const OTHER_TOKEN = "tok_other_0123456789abcdefghijklmnop";
+    const there = Object.fromEntries(Object.entries(server({ [`GET ${ORIGIN}/api/me`]: { body: { user: { ...user, id: "u1", githubLogin: "grace", displayName: "Grace Hopper" } } } }))
+      .map(([key, value]) => [key.replace(ORIGIN, OTHER), value]));
+    const app = await open("../App.tsx", { network: { ...there, ...server() }, platform: "macos", width: 1280, height: 820,
+      storage: { ...signedIn, "pikibun.servers": JSON.stringify([{ origin: OTHER, token: OTHER_TOKEN, expiresAt: null, account: "@grace" }]) } });
+    const saved = () => (JSON.parse(app.storage()["pikibun.servers"] ?? "[]") as { origin: string; token: string }[]).map(item => [item.origin, item.token]);
+    await app.waitFor("id:session-row-s1");
+    await app.waitUntil(() => saved().length === 2);
+    await app.press("id:open-settings");
+    await app.press("id:settings-section-profile");
+    await app.waitFor("id:server-switch-team.example.com");
+    expect(app.shows("id:server-switch-pikibun.test")).toBe(false);
+    expect(app.texts().join(" ")).toContain("This server");
+
+    await app.press("id:server-switch-team.example.com");
+    await app.waitUntil(() => app.storage()["pikibun.origin"] === OTHER && app.storage()["pikibun.token"] === OTHER_TOKEN);
+    await app.waitFor("id:session-row-s1");
+    expect(app.requests().some(item => item.url.endsWith("/api/auth/logout"))).toBe(false);
+    expect(saved()).toEqual([[ORIGIN, signedIn["pikibun.token"]], [OTHER, OTHER_TOKEN]]);
+
+    await app.press("id:open-settings");
+    await app.press("id:settings-section-profile");
+    await app.waitFor("id:server-switch-pikibun.test");
+    await app.press("id:server-add");
+    await app.waitFor("id:server-input");
+    expect(app.shows("id:switch-server-team.example.com")).toBe(true);
+    await app.press("id:switch-server-pikibun.test");
+    await app.waitUntil(() => app.storage()["pikibun.origin"] === ORIGIN);
+    await app.waitFor("id:session-row-s1");
+    expect(saved().length).toBe(2);
+  });
+
+  test("a server whose sign-in was revoked is forgotten when the app switches to it, and the app stays where it is", async () => {
+    const OTHER = "https://team.example.com";
+    const app = await open("../App.tsx", { platform: "macos", width: 1280, height: 820,
+      network: server({ [`GET ${OTHER}/api/me`]: { status: 401, body: { error: "Authentication is required.", code: "unauthorized" } } }),
+      storage: { ...signedIn, "pikibun.servers": JSON.stringify([{ origin: OTHER, token: "tok_revoked_0123456789abcdefghijklmn", expiresAt: null, account: "@grace" }]) } });
+    await app.waitFor("id:session-row-s1");
+    await app.press("id:open-settings");
+    await app.press("id:settings-section-profile");
+    await app.waitFor("id:server-switch-team.example.com");
+    await app.press("id:server-switch-team.example.com");
+    await app.waitFor("text:Your sign-in to team.example.com expired or was revoked. Add it again to sign in.");
+    expect(app.shows("id:server-switch-team.example.com")).toBe(false);
+    expect([app.storage()["pikibun.origin"], app.storage()["pikibun.token"]]).toEqual([ORIGIN, signedIn["pikibun.token"]]);
+  });
+
   test("Password is listed only where the server takes passwords or the account has one", async () => {
     const app = await openSettings("profile");
     await app.waitFor("id:settings-profile");
