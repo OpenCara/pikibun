@@ -33,7 +33,7 @@ async function actorRequest(c: AppContext, actorId: string, row: SessionRow, act
   const paths: Record<RunnerAction, string> = {
     create: '/v1/sessions', view: `/v1/sessions/${row.id}/view${suffix ? `/${encodeURIComponent(suffix)}` : ''}`, events: `/v1/sessions/${row.id}/events`,
     submit: `/v1/sessions/${row.id}/submit`, ask: `/v1/sessions/${row.id}/ask`, backup: `/v1/sessions/${row.id}/backup`, restart: `/v1/sessions/${row.id}/restart`,
-    restore: `/v1/sessions/${row.id}/restore`, stop: `/v1/sessions/${row.id}/stop`, files: `/v1/sessions/${row.id}/files`,
+    restore: `/v1/sessions/${row.id}/restore`, stop: `/v1/sessions/${row.id}/stop`, files: `/v1/sessions/${row.id}/files`, changes: `/v1/sessions/${row.id}/changes`,
     revert: `/v1/sessions/${row.id}/revert`, fork: `/v1/sessions/${row.id}/fork`, pack: `/v1/sessions/${row.id}/pack`, unpack: `/v1/sessions/${row.id}/unpack`,
     withdraw: `/v1/sessions/${row.id}/withdraw`, upload: `/v1/sessions/${row.id}/upload`, tunnel: `/v1/sessions/${row.id}/tunnel`,
     image: `/v1/sessions/${row.id}/image`, sudo: `/v1/sessions/${row.id}/sudo`,

@@ -106,6 +106,11 @@ test("a worktree without a repository answers with none, and a patch is cut wher
   assert.deepEqual(none, { repositories: [], directory: null, commit: null, files: [], commits: [], additions: 0, deletions: 0 });
   assert.throws(() => parseLocalChanges(`${marker}\n\n${marker}\n`, marker, { directory: "app" }), NotARepository);
   assert.throws(() => parseLocalChanges(`app\twork\t\n${marker}\nother\n${marker}\n\n${marker}\n\n${marker}\n`, marker, { directory: "app" }), NotARepository);
+  const sha = "b".repeat(40);
+  const listed = (rows: string, selected: string) => parseLocalChanges(`${rows}${marker}\n${selected}\n${marker}\n\n${marker}\n\n${marker}\n`, marker, {}).repositories.map(item => item.directory);
+  assert.deepEqual(listed(`app\twork\t${sha}\n.\tmain\t\n`, "app"), ["app"], "the worktree's own empty repository is left out beside a clone");
+  assert.deepEqual(listed(`app\twork\t${sha}\n.\tmain\t${sha}\n`, "app"), ["app", "."]);
+  assert.deepEqual(listed(".\tmain\t\n", "."), ["."]);
   const two = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-c\n+d";
   assert.deepEqual(parsePatchFiles(two).files.map(file => file.patch), ["@@ -1 +1 @@\n-a\n+b", "@@ -1 +1 @@\n-c\n+d"]);
   assert.deepEqual(parsePatchFiles(two, false).files.map(file => [file.patch, file.truncated]), [["@@ -1 +1 @@\n-a\n+b", undefined], [undefined, true]]);

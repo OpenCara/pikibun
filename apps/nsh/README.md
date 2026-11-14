@@ -62,7 +62,9 @@ needs a decision stand out:
   added lines, grey for deleted ones) with its toolbar: previous and next change, side-by-side or unified viewer, the
   number of differences, previous and next file. Its **Expand to the full window** widens the panel's sheet to the
   window, the tree beside the diff in a `ResizablePanelGroup`; the tree and the patch it draws from are
-  `packages/shared/src/pull-request-review.ts`.
+  `packages/shared/src/pull-request-review.ts`. The **Changes** tab (`src/session-panel/Changes.tsx`) is the same tree
+  and diff over what Git sees in a clone of the session's worktree, as IDEA's Commit and Git windows: the uncommitted
+  changes, the branch's commits, and one commit's changes, read from the session's host.
 - **Kit**: first drawn as the React web client's. `src/tokens.ts` has its three themes (light, dark and Pikibun's night
   theme) under its CSS variables' names; `src/theme.ts` builds the palettes from
   them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget was drawn from

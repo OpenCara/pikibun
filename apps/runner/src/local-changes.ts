@@ -99,12 +99,13 @@ export class NotARepository extends Error {
 export function parseLocalChanges(output: string, marker: string, request: LocalChangesRequest): LocalChanges {
   const complete = encoder.encode(output).length < localChangesLimits.outputBytes;
   const sections = `\n${output}`.split(`\n${marker}\n`);
-  const repositories = (sections[0] ?? "").split("\n").flatMap((line): LocalRepository[] => {
+  const selected = (sections[1] ?? "").trim();
+  const found = (sections[0] ?? "").split("\n").flatMap((line): LocalRepository[] => {
     const [directory, branch, head] = line.split("\t");
     if (!validChangesDirectory(directory)) return [];
     return [{ directory, branch: branch ? branch.slice(0, 255) : null, head: validChangesCommit(head) ? head : null }];
   }).slice(0, localChangesLimits.repositories);
-  const selected = (sections[1] ?? "").trim();
+  const repositories = found.filter(item => item.directory !== "." || item.head !== null || selected === "." || found.length === 1);
   const empty: LocalChanges = { repositories, directory: null, commit: null, files: [], commits: [], additions: 0, deletions: 0 };
   if (sections.length < 3 || !selected) {
     if (request.directory !== undefined) throw new NotARepository();
