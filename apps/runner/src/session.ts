@@ -15,7 +15,7 @@ import { bindingRemote } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { ExtensionPrompts, SessionExtensions, type SessionExtension } from "./extensions/adapter.js";
+import { ExtensionPrompts, SessionExtensions, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
 import { SessionBuiltins } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
@@ -24,12 +24,13 @@ import { requestKey, RunnerError, stableJson } from "./protocol.js";
 import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
 import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
-import type { HostTunnelStatus, SessionTunnelReport, TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
+import { serviceLifetimeLimits, type HostTunnelStatus, type SessionTunnelReport, type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
 import { SessionTunnel } from "./session/tunnel.js";
 import { SudoPrompts } from "./sudo-prompts.js";
 import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
+import { ProcessChannel, refusedChannel, sandboxLaunch } from "./extensions/process.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace, hostOwnersSession } from "./host-workspace.js";
@@ -48,7 +49,7 @@ import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
-import { holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
+import { comparableOptions, holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
 import { activityEntry, contextView, extensionView, sessionView } from "./session/view.js";
 import { SessionOperations, type OperationConsent } from "./session/operations.js";
 import { ToolCalls } from "./session/tools/calls.js";
@@ -59,6 +60,9 @@ import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
 import { requeue, RunQueue, submissionRequestId } from "./session/run-queue.js";
+import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
+import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
+import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
 import {
   Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
@@ -67,6 +71,7 @@ import type { GitRemote } from "./git-remote.js";
 import type { RepositoryCache } from "./repo-cache.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
+import { backupRefusal, boundedBackup } from "./backup.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { configuredCompaction, hostCompaction } from "./compaction.js";
 import { ActivityReporter, sessionActivity } from "./activity.js";
@@ -296,7 +301,7 @@ export class RunnerSession {
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
       wholeResults: this.#wholeResults, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
-      mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(),
+      mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(), extensionProcess: this.extensionProcess(),
     });
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
@@ -705,7 +710,12 @@ export class RunnerSession {
   }
 
   private async applyOptions(conversation: Conversation, run: Run, content?: string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]): Promise<void> {
-    const options = run.options ?? {};
+    let options = run.options ?? {};
+    if (options.auto) {
+      const chosen = run.auto ?? await this.chooseAutoModel(conversation, run, options.auto, content);
+      const { auto: _, ...rest } = options;
+      options = { ...rest, ...(chosen ? { model: { provider: chosen.provider, modelId: chosen.modelId }, ...(chosen.thinkingLevel ? { thinkingLevel: chosen.thinkingLevel } : {}) } : {}) };
+    }
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
@@ -739,6 +749,27 @@ export class RunnerSession {
     await conversation.commit(async tx => { (await tx.doc(ExtensionPrompts, conversation.id)).prompts = prompts; }, context);
   }
 
+  private async chooseAutoModel(conversation: Conversation, run: Run, request: true | AutoModelRequest,
+    content?: string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]): Promise<AutoRunChoice | undefined> {
+    if (request === true) return undefined;
+    const active = await conversation.context(context).catch(() => undefined);
+    const previous = [...(active?.messages ?? [])].reverse().find(message => message.role === "user");
+    const agent = await conversation.agent(context).catch(() => undefined);
+    const named = agent?.model && request.candidates.find(item => item.provider === agent.model!.provider && item.modelId === agent.model!.modelId);
+    const level = agent?.thinkingLevel && thinkingLevels.includes(agent.thinkingLevel as ThinkingLevel) ? agent.thinkingLevel as ThinkingLevel : undefined;
+    const current = agent?.model ? { provider: agent.model.provider, modelId: agent.model.modelId, ...(named ? { name: named.name } : {}), ...(level ? { thinkingLevel: level } : {}) } : undefined;
+    const task = typeof content === "string" ? content : (content ?? []).flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
+    const chosen = await chooseAutoModel(this.models, request, { task, ...(previous ? { previous: messageText(previous.content) } : {}), ...(current ? { current } : {}) })
+      .catch(() => undefined);
+    await this.mutate(meta => {
+      const saved = meta.runs[run.key];
+      if (!saved) return;
+      if (chosen) saved.auto = chosen;
+      if (saved.options?.auto) saved.options = { ...saved.options, auto: true };
+    });
+    return chosen;
+  }
+
   private async noteCurrentModel(conversation: Conversation): Promise<void> {
     const agent = await conversation.agent(context).catch(error => {
       process.stderr.write(`Session ${this.binding.session.id}: cannot read the conversation's model for its extensions: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`);
@@ -758,6 +789,20 @@ export class RunnerSession {
     const installed = config.installed().map(item => item.summary);
     return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
       automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
+  }
+
+  private extensionProcess(): ExtensionHost["extensionProcess"] {
+    const sandbox = this.sandbox;
+    if (!(sandbox instanceof Sandbox)) return undefined;
+    const nodeBin = sandbox.nodeBin;
+    if (!nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
+    return warn => new ProcessChannel({ directory: sandbox.worktree, warn, mountAllowed: path => sandbox.bindAllowed(path), launch: sandboxLaunch({
+      socketDirectory: serviceSocketDirectory(`${this.binding.session.id}\0extensions`, this.directory), nodeBin, worktree: sandbox.worktree,
+      start: async (command, binds, onOutput, signal) => {
+        const config = await this.hostConfig();
+        return sandbox.startService(command, async () => {}, { limits: serviceLimits(serviceLifetimeLimits.max, availableParallelism()), unbounded: true, gpu: config.gpu,
+          socketDirectory: serviceSocketDirectory(`${this.binding.session.id}\0extensions`, this.directory), onOutput, signal, binds });
+      } }) });
   }
 
   private sessionTunnel(): SessionTunnel {
@@ -821,8 +866,12 @@ export class RunnerSession {
     const invalid = (message = "Invalid chat options") => new RunnerError(422, message);
     if (!input || typeof input !== "object" || Array.isArray(input)) throw invalid();
     const value = input as Record<string, unknown>;
-    if (Object.keys(value).some(key => !["model", "thinkingLevel", "access", "autoMerge"].includes(key))) throw invalid();
+    if (Object.keys(value).some(key => !["model", "thinkingLevel", "access", "autoMerge", "auto"].includes(key))) throw invalid();
     const options: ChatOptions = {};
+    if (value.auto !== undefined) {
+      if (value.model !== undefined || value.thinkingLevel !== undefined) throw invalid("Auto chooses the model and reasoning");
+      options.auto = autoModelRequest(value.auto, invalid);
+    }
     if (value.model !== undefined) {
       const model = value.model as Record<string, unknown>;
       if (!model || typeof model !== "object" || Object.keys(model).some(key => key !== "provider" && key !== "modelId")
@@ -938,7 +987,7 @@ export class RunnerSession {
       if (existing) {
         if (existing.contentHash !== hash) throw new RunnerError(409, "requestId reused with different content");
         if (existing.admissionId !== input.admissionId) throw new RunnerError(409, "requestId reused with a different Worker admission");
-        if (stableJson(existing.options ?? null) !== stableJson(options ?? null)) throw new RunnerError(409, "requestId reused with different chat options");
+        if (stableJson(comparableOptions(existing.options)) !== stableJson(comparableOptions(options))) throw new RunnerError(409, "requestId reused with different chat options");
         return { submissionId: key, conversationId: String(existing.conversationId), status: existing.status };
       }
       if (Object.values(state.runs).filter(run => ["queued", "running", "admitting"].includes(run.status)).length >= 64)
@@ -1195,16 +1244,16 @@ export class RunnerSession {
       try {
         const sqlite = await readFile(this.sqlitePath, "base64");
         if (conversationOnly) {
-          return { format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files: [], conversationOnly: true,
-            createdAt: new Date().toISOString() };
+          return boundedBackup<RunnerBackup>({ format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files: [], conversationOnly: true,
+            createdAt: new Date().toISOString() });
         }
         const authorize = async () => { await this.authorize(ticket.actorId, "manage"); };
         const sandboxed = this.#clone && this.#egress;
         const { clones, found } = sandboxed ? await isolatedWorkspace(this.sandbox).cloneBackup(authorize) : { clones: [], found: [] };
         const files = sandboxed ? await isolatedWorkspace(this.sandbox).snapshot(authorize, found) : await this.sandbox.snapshot(authorize);
-        return { format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files, ...(clones.length ? { clones } : {}),
-          createdAt: new Date().toISOString() };
-      } finally { await this.open(); }
+        return boundedBackup<RunnerBackup>({ format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files, ...(clones.length ? { clones } : {}),
+          createdAt: new Date().toISOString() });
+      } catch (error) { throw backupRefusal(error); } finally { await this.open(); }
     });
   }
 
@@ -1230,7 +1279,7 @@ export class RunnerSession {
       const authorize = async () => { await this.authorize(ticket.actorId, "manage", ticket.policyVersion, false, false, true); };
       try {
         const { clones, found } = this.#clone ? await sandbox.cloneBackup(authorize, { pack: true }) : { clones: [], found: [] };
-        const files = await sandbox.snapshot(authorize, found, { skipCaches: true });
+        const files = await sandbox.snapshot(authorize, found);
         return { bytes: packBytes(this.binding, { files, ...(clones.length ? { clones } : {}) }), files: files.length, clones: clones.length };
       } catch (error) { throw packRefusal(error); }
     });

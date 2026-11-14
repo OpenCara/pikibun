@@ -1,5 +1,6 @@
 import { SEARCH_CORE } from "./search.js";
 import { FILE_OPERATIONS_CORE, FILE_OPERATIONS_FS, fileOperationLimits } from "./file-operations.js";
+import { SNAPSHOT_SKIPPED_HOME } from "./sandbox.js";
 export const NODE_HELPER = String.raw`
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeSync } from "node:fs";
@@ -22,6 +23,7 @@ delete process.env.SANDBOX_EGRESS_NO_PROXY;
 const MAX_FILE = 1024 * 1024;
 const MAX_IMAGE = 16 * 1024 * 1024;
 const MAX_SNAPSHOT = 32 * 1024 * 1024;
+const SNAPSHOT_SKIPPED_HOME = ${JSON.stringify(SNAPSHOT_SKIPPED_HOME)};
 const MAX_IMPORT = 50 * 1024 * 1024;
 const MAX_REQUEST = Math.ceil(MAX_IMPORT / 3) * 4 + 64 * 1024;
 const MAX_ENTRIES = 10000;
@@ -291,7 +293,7 @@ function snapshot(request) {
   let total = 0;
   const clones = request.clones ?? [];
   if (!Array.isArray(clones) || !clones.every(path => typeof path === "string" && /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+){0,63}$/.test(path))) refuse("invalid snapshot request");
-  const skipped = new Set(clones.map(path => "worktree/" + path));
+  const skipped = new Set([...clones.map(path => "worktree/" + path), ...SNAPSHOT_SKIPPED_HOME.map(path => "home/" + path)]);
   const add = (path, archivePath) => {
     if (files.length >= MAX_ENTRIES) refuse("snapshot has too many files");
     const { data, mode } = readAt(path, MAX_SNAPSHOT - total);

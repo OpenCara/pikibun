@@ -891,6 +891,49 @@ test("a conversation starts at the host's level for its model, and a model switc
   assert.deepEqual((await session.view()).agent, { provider: "faux", modelId: "faux-1", thinkingLevel: "medium" });
 });
 
+test("a message sent with Auto runs on the model the host's evaluator chose for it, and says so in the conversation", hostMode, async t => {
+  const faux = fauxProvider({ models: [{ id: "faux-1", reasoning: true }, { id: "claude-haiku-5-5", reasoning: true }, { id: "claude-opus-5-5", reasoning: true }] });
+  faux.setResponses([
+    fauxAssistantMessage('{"kind": "everyday-engineering", "harder": false, "reason": "debugging a deploy"}'),
+    fauxAssistantMessage("done"),
+    fauxAssistantMessage("not JSON"),
+    fauxAssistantMessage("done again"),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const { service } = await hostFixture(t, { resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }) });
+  const id = "auto-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const levels = ["off", "low", "medium", "high"] as const;
+  const candidates = [
+    { provider: "faux", modelId: "claude-haiku-5-5", name: "Claude Haiku 5.5", thinkingLevels: [...levels] },
+    { provider: "faux", modelId: "claude-opus-5-5", name: "Claude Opus 5.5", thinkingLevels: [...levels] },
+    { provider: "faux", modelId: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", thinkingLevels: [...levels] },
+  ];
+  const status = (code: number) => (error: unknown) => error instanceof RunnerError && error.status === code;
+  await assert.rejects(session.submit(await ticket(id, "submit"), { content: "x", requestId: "both", options: { auto: { candidates }, model: { provider: "faux", modelId: "faux-1" } } }, "write"), status(422));
+  await assert.rejects(session.submit(await ticket(id, "submit"), { content: "x", requestId: "bare", options: { auto: true } }, "write"), status(422));
+  const first = await session.submit(await ticket(id, "submit"), { content: "Debug the failing deploy", requestId: "auto", options: { auto: { candidates } } }, "write");
+  await idle(session);
+  const view = await session.view();
+  assert.deepEqual(view.agent, { provider: "faux", modelId: "claude-opus-5-5", thinkingLevel: "medium" });
+  assert.deepEqual(view.entries.filter(entry => entry.role !== "system" || entry.text.trim()).map(entry => entry.text), [
+    "Debug the failing deploy",
+    "Auto: Claude Opus 5.5, medium reasoning, for everyday engineering: debugging a deploy. Judged by Claude Haiku 5.5.",
+    "done",
+  ]);
+  assert.deepEqual([view.entries[1]!.kind, view.entries[1]!.role, view.entries[1]!.actorId], ["workspace.run-auto", "system", "test:alice"]);
+  const retried = await session.submit(await ticket(id, "submit"), { content: "Debug the failing deploy", requestId: "auto", options: { auto: { candidates: candidates.slice(0, 2) } } }, "write");
+  assert.deepEqual([retried.submissionId, retried.status], [first.submissionId, "settled"], "a retry after the choice gets the same receipt, though its list may differ");
+  await assert.rejects(session.submit(await ticket(id, "submit"), { content: "Debug the failing deploy", requestId: "auto", options: { access: "read" } }, "write"), status(409));
+
+  await session.submit(await ticket(id, "submit"), { content: "Explain what the deploy script does", requestId: "rules", options: { auto: { candidates } } }, "write");
+  await idle(session);
+  const after = await session.view();
+  assert.deepEqual(after.agent, { provider: "faux", modelId: "claude-opus-5-5", thinkingLevel: "low" }, "no Sonnet class on this host: the next one up, at lower effort");
+  assert.match(after.entries.filter(entry => entry.kind === "workspace.run-auto").at(-1)!.text, /^Auto: Claude Opus 5\.5, low reasoning, for chat: a question\. Chosen by rules; the evaluator's answer wasn't valid; no Sonnet class model here/);
+});
+
 test("edit_file runs Pi's edit: replaces text in place, keeps a CRLF file CRLF, and refuses an ambiguous edit without writing", hostMode, async t => {
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
@@ -969,6 +1012,44 @@ test("a backup fails instead of copying a database that did not close cleanly", 
   await assert.rejects(session.backup(await ticket(id, "backup")), /disk I\/O error/);
   fault.close = false;
   assert.equal(await service.get(id), session);
+  assert.ok((await session.view()).entries.length > 0);
+});
+
+test("a backup leaves out the package caches in the session's home, and keeps the rest of it", hostMode, async t => {
+  const { service } = await hostFixture(t);
+  const id = "backup-caches-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const home = session.sandbox.home;
+  for (const cache of [".npm/_cacache", ".cache/pip", ".local/share/pnpm/store"]) {
+    await mkdir(join(home, cache), { recursive: true });
+    await writeFile(join(home, cache, "blob"), Buffer.alloc(12 * 1024 * 1024, 1));
+  }
+  await mkdir(join(home, ".local", "bin"), { recursive: true });
+  await writeFile(join(home, ".local", "bin", "tool"), "kept");
+  await writeFile(join(home, ".npmrc"), "kept");
+  const paths = (await session.backup(await ticket(id, "backup"))).files.map(file => file.path);
+  assert.ok(paths.includes("home/.local/bin/tool") && paths.includes("home/.npmrc"), paths.join(" "));
+  assert.ok(!paths.some(path => /^home\/(\.npm|\.cache|\.local\/share\/pnpm)\//.test(path)), paths.join(" "));
+});
+
+test("a backup too large to keep is refused with a reason its owner can act on, and the session goes on", hostMode, async t => {
+  const { service } = await hostFixture(t);
+  const id = "backup-large-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const tooLarge = (error: unknown) => error instanceof RunnerError && error.status === 422 && /too large to back up/.test(error.message);
+  const large = join(session.sandbox.worktree, "large.bin");
+  const larger = join(session.sandbox.worktree, "larger.bin");
+  await writeFile(large, Buffer.alloc(20 * 1024 * 1024, 1));
+  await assert.rejects(session.backup(await ticket(id, "backup")), tooLarge, "files the snapshot takes, but a backup can't hold");
+  await writeFile(larger, Buffer.alloc(16 * 1024 * 1024, 1));
+  await assert.rejects(session.backup(await ticket(id, "backup")), tooLarge, "files the snapshot itself refuses");
+  const conversation = await session.backup(await ticket(id, "backup"), { conversationOnly: true });
+  assert.equal(conversation.conversationOnly, true);
+  await rm(large);
+  await rm(larger);
+  assert.equal((await session.backup(await ticket(id, "backup"))).format, "pi-runner-backup-v1");
+  await session.submit(await ticket(id, "submit"), { content: "TEST_IDENTITY", requestId: "after" }, "write");
+  await idle(session);
   assert.ok((await session.view()).entries.length > 0);
 });
 

@@ -12,6 +12,7 @@ import { Browser } from "./Browser";
 import { Details } from "./Details";
 import { Files } from "./Files";
 import type { PanelTabProps } from "./parts";
+import { Review } from "./Review";
 import { Schedules } from "./Schedules";
 import { TabPage } from "./parts";
 import { createWorkspacePeople } from "../lib/people";
@@ -70,6 +71,7 @@ function DetailsTab(props: PanelProps) {
 export const panelTabs: readonly PanelTab[] = [
   { id: "details", label: "Details", Component: DetailsTab },
   { id: "files", label: "Files", Component: Files },
+  { id: "review", label: "Review", Component: Review },
   { id: "browser", label: "Browser", Component: Browser },
   { id: "schedules", label: "Schedules", Component: Schedules },
   { id: "activity", label: "Activity", Component: Activity },
@@ -80,7 +82,10 @@ const nativeSheet = platform.os === "ios";
 export function SessionPanel(props: PanelProps & { open: boolean; onClose: () => void }) {
   const tab = signal(panelTabs[0]!.id);
   const sideways = () => windowSize().width >= 700;
-  const wide = () => tab() === "files" || tab() === "browser";
+  const wide = () => tab() === "files" || tab() === "browser" || tab() === "review";
+  const expanded = signal(false);
+  const expandable = () => sideways() && !nativeSheet;
+  const full = () => expandable() && expanded() && tab() === "review";
   const body = () => (
     <View testID="session-panel" accessibilityLabel="Session details" style={{ flex: 1 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, paddingHorizontal: 12, borderBottomWidth: 1, borderColor: palette().border }}>
@@ -93,7 +98,7 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
       <Each of={[tab()]} key={id => id}>
         {id => {
           const Tab = panelTabs.find(item => item.id === id())!.Component;
-          return <Tab {...props} />;
+          return <Tab {...props} expanded={full} setExpanded={expandable() ? value => expanded.set(value) : undefined} />;
         }}
       </Each>
     </View>
@@ -110,7 +115,7 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
     <Sheet open={props.open} side={sideways() ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
       backdropStyle={{ backgroundColor: palette().backdrop }}
       popupStyle={sideways()
-        ? { width: wide() ? 720 : 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background, borderLeftWidth: 1, borderColor: palette().border }
+        ? { width: full() ? "100%" : wide() ? 720 : 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background, borderLeftWidth: full() ? 0 : 1, borderColor: palette().border }
         : { height: "92%", borderTopLeftRadius: radius.large, borderTopRightRadius: radius.large, backgroundColor: palette().background }}>
       {body()}
     </Sheet>

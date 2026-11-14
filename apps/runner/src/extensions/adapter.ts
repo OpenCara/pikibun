@@ -11,7 +11,8 @@ import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
 import { wholeForScripts } from "../script-output.js";
 import type { ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription } from "./protocol.js";
-import { addedPrompt, directChannel, ExtensionWorker, jsonChannel, modelDescription } from "./worker.js";
+import { addedPrompt, directChannel, ExtensionWorker, modelDescription } from "./worker.js";
+import { ProcessChannel } from "./process.js";
 
 export { addedPrompt };
 
@@ -27,6 +28,7 @@ export interface ExtensionHost {
   readonly inputTimeoutMs?: number;
   warn(source: string, message: string): void;
   readonly piki?: PikiSession;
+  extensionProcess?(warn: (source: string, message: string) => void): ExtensionChannel;
 }
 
 export const ExtensionPrompts = defineDoc<{ prompts: Record<string, string> }>({ kind: "pikibun.extension-prompts", version: 1, scope: "conversation",
@@ -43,11 +45,19 @@ export interface SessionExtension {
 
 export type InputOutcome = { action: "continue"; text: string; images: ImageContent[] } | { action: "refused"; by: string; notice?: string };
 
-function withTimeout<T>(work: () => T | Promise<T>, ms: number, what: string): Promise<T> {
+async function withTimeout<T>(work: () => T | Promise<T>, ms: number, what: string, channel?: ExtensionChannel): Promise<T> {
+  await channel?.ready?.();
   let timer: NodeJS.Timeout | undefined;
   return Promise.race([
     Promise.resolve().then(work),
-    new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} took longer than ${Math.round(ms / 1000)} seconds`)), ms); timer.unref(); }),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const reason = `${what} took longer than ${Math.round(ms / 1000)} seconds`;
+        channel?.restart?.(reason);
+        reject(new Error(reason));
+      }, ms);
+      timer.unref();
+    }),
   ]).finally(() => clearTimeout(timer));
 }
 
@@ -134,11 +144,14 @@ export class SessionExtensions {
       return this.#connector ??= directChannel(new ExtensionWorker({ directory: host.directory, warn, factories: source => this.#factories.get(source),
         live: { model: () => host.model(), thinkingLevel: () => host.thinkingLevel?.(), ...(host.modelRegistry ? { modelRegistry: host.modelRegistry } : {}) } }));
     }
-    return this.#isolated ??= jsonChannel(new ExtensionWorker({ directory: host.directory, warn }));
+    return this.#isolated ??= host.extensionProcess?.(warn) ?? new ProcessChannel({ directory: host.directory, warn });
   }
 
   async ensure(sources: readonly LoadedSource[]): Promise<void> {
     const opened: OpenedSource[] = [];
+    const mounts = sources.filter(loaded => !loaded.factories && !loaded.summary.error && !this.#opened.some(item => item.source === loaded.summary.source))
+      .map(loaded => loaded.mount);
+    if (mounts.length) this.channel(false).mount?.(mounts);
     for (const loaded of sources) {
       const source = loaded.summary.source;
       if (this.#opened.some(item => item.source === source) || loaded.summary.error) continue;
@@ -148,7 +161,7 @@ export class SessionExtensions {
         if (factories) this.#factories.set(source, factories);
         const models = factories ? [] : listedModels(this.host);
         const link: Link = { source, channel: this.channel(factories !== undefined), handlers: new Set() };
-        const result = await request(this.host, link, "open", { source, files: loaded.files, models });
+        const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
@@ -194,7 +207,7 @@ export class SessionExtensions {
   private async one(extension: OpenedSource, event: string, work: (settings: ExtensionSettings) => Promise<unknown>): Promise<void> {
     const settings = await activeSettings(this.host, extension.source);
     if (!settings) return;
-    try { await withTimeout(() => work(settings), this.host.hookTimeoutMs, `${event}`); }
+    try { await withTimeout(() => work(settings), this.host.hookTimeoutMs, `${event}`, extension.channel); }
     catch (error) { this.host.warn(extension.source, `${event}: ${describe(error)}`); }
   }
 
@@ -217,7 +230,7 @@ export class SessionExtensions {
       try {
         const { text, images } = current;
         const answer = await withTimeout(() => request(this.host, opened, "input", { source, settings, text, images, inputSource }),
-          this.host.inputTimeoutMs ?? this.host.hookTimeoutMs, `${source}'s input handlers`);
+          this.host.inputTimeoutMs ?? this.host.hookTimeoutMs, `${source}'s input handlers`, opened.channel);
         if (answer.errors.length) return { action: "refused", by: source };
         const { result } = answer;
         if (result.action === "handled") return { action: "refused", by: source, ...(answer.notices.length ? { notice: answer.notices.at(-1)! } : {}) };
@@ -273,7 +286,7 @@ function build(link: Link, dev: boolean, described: ExtensionToolDescription[], 
   const key = extensionKey(source);
   const ask = <M extends ExtensionMethod>(method: M, params: ExtensionRequests[M][0], signal?: AbortSignal) => request(host, link, method, params, signal);
   const settingsNow = () => activeSettings(host, source);
-  const timed = <T>(event: string, work: () => Promise<T>) => withTimeout(work, host.hookTimeoutMs, `${source}'s ${event} handlers`);
+  const timed = <T>(event: string, work: () => Promise<T>) => withTimeout(work, host.hookTimeoutMs, `${source}'s ${event} handlers`, link.channel);
   const quiet = async (event: string, work: (settings: ExtensionSettings) => Promise<unknown>) => {
     try {
       const settings = await settingsNow();

@@ -71,7 +71,7 @@ function callItems(entry: EntryView, results: readonly (EntryView | undefined)[]
 function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string, shared = false, sees = false, results: readonly (EntryView | undefined)[] = []): Shown {
   const actor = entry.actorId ? name(entry.actorId, true) : "";
   const other = actor && actor !== "you" ? actor : "";
-  if (entry.kind === "workspace.run-stopped" || entry.kind === "workspace.run-crashed" || entry.kind === "workspace.run-refused") {
+  if (entry.kind === "workspace.run-stopped" || entry.kind === "workspace.run-crashed" || entry.kind === "workspace.run-refused" || entry.kind === "workspace.run-auto") {
     return { kind: "stopped", text: entry.kind === "workspace.run-stopped" ? `Stopped${actor ? ` by ${actor}` : ""}` : entry.text };
   }
   if (entry.role === "toolResult") {

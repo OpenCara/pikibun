@@ -3,8 +3,8 @@ import { Dialog, Input } from "nsh/base";
 import { authorizeInPage, openServerPage, pageQuery } from "../lib/page";
 import { errorMessage } from "../shared";
 import {
-  auth, checkBrowserSession, isCodeLink, localSignInToken, parseSignInCode, restore, signInMethods, signInToLocalServer, signInWithCode, signInWithPassword,
-  signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, type SignInMethods,
+  auth, checkBrowserSession, isCodeLink, localSignInToken, parseSignInCode, restore, servers, signInMethods, signInToLocalServer, signInWithCode, signInWithPassword,
+  signInWithToken, signOut, signUpWithPassword, startGitHubInviteSignIn, switchServer, type SignInMethods,
 } from "../lib/auth";
 import { createAction } from "../lib/resource";
 import { displayOrigin, parseOrigin, usesBrowserSession } from "../lib/server";
@@ -44,6 +44,8 @@ export function SignIn(props: { inviteToken?: string }) {
               <Button testID="unreachable-self-host" variant="outline" icon="database" label={`Pikibun on ${computerName}`} onPress={() => selfHostOpen.set(true)} />
             </If>
             <Button variant="ghost" label={action.busy() ? "Signing out…" : "Sign out"} disabled={action.busy()} onPress={() => void action.run(signOut)} />
+            <SignedInServers except={origin()} busy={action.busy()} onSwitch={target => void action.run(() => switchServer(target))} />
+            <If when={action.error()}>{text => <Banner testID="switch-problem" tone="danger">{text()}</Banner>}</If>
             <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={() => { selfHostOpen.set(false); void restore(); }} />
           </View>
         )}
@@ -53,6 +55,23 @@ export function SignIn(props: { inviteToken?: string }) {
 }
 
 const selfHosting = !usesBrowserSession && hostsHere;
+
+function SignedInServers(props: { except?: string; busy: boolean; onSwitch: (origin: string) => void }) {
+  const others = () => (usesBrowserSession ? [] : servers().filter(item => item.origin !== props.except));
+  return (
+    <If when={others().length > 0}>
+      <View testID="signed-in-servers" style={{ gap: 6 }}>
+        <Small>Servers this app is signed in to</Small>
+        <Each of={others()} key={item => item.origin}>
+          {item => (
+            <Button testID={`switch-server-${displayOrigin(item().origin)}`} block variant="outline" icon="server" disabled={props.busy}
+              label={`${displayOrigin(item().origin)} · ${item().account}`} onPress={() => props.onSwitch(item().origin)} />
+          )}
+        </Each>
+      </View>
+    </If>
+  );
+}
 
 function SelfHostSheet(props: { open: boolean; onClose: () => void; onUse: (origin: string) => void }) {
   return (
@@ -78,8 +97,12 @@ function SignInForm(props: { inviteToken?: string }) {
     const current = auth();
     return current.status === "signedOut" ? current.origin : "";
   });
-  const server = signal(stored);
-  const editingServer = signal(false);
+  const adding = untracked(() => {
+    const current = auth();
+    return current.status === "signedOut" && current.adding === true;
+  });
+  const server = signal(adding ? "" : stored);
+  const editingServer = signal(adding);
   const developerOpen = signal(false);
   const token = signal("");
   const localLink = signal("");
@@ -139,7 +162,7 @@ function SignInForm(props: { inviteToken?: string }) {
     return target ? { tone: undefined, text: `Signs in to ${displayOrigin(target)}.` } : { tone: "danger" as const, text: "Enter this server's address above first." };
   };
   const closeCode = () => { codeText.set(""); codeFromLink.set(false); codeOpened.set(false); };
-  const codeShown = () => !usesBrowserSession && (!local() || codeOpened());
+  const codeShown = () => !usesBrowserSession && (!local() || codeOpened() || (methods()?.codeSignIn === true && !ownToken()));
 
   function submitCode() {
     const code = signInCode();
@@ -242,7 +265,7 @@ function SignInForm(props: { inviteToken?: string }) {
             }>
             <Input testID="server-input" value={server()} onChange={event => server.set(event.value)} autoCapitalize="none" autoCorrect={false} keyboardType="url"
               placeholder="https://pikibun.com" accessibilityLabel="Server address" style={inputStyle()} />
-            <If when={"error" in parsed() ? (parsed() as { error: string }).error : null}>
+            <If when={server().trim() && "error" in parsed() ? (parsed() as { error: string }).error : null}>
               {error => <Small tone="danger">{error()}</Small>}
             </If>
             <Small>For a self-hosted Pikibun, enter its address.</Small>
@@ -258,6 +281,7 @@ function SignInForm(props: { inviteToken?: string }) {
           </If>
         </View>
       </If>
+      <SignedInServers busy={action.busy()} onSwitch={target => void action.run(() => switchServer(target))} />
       <If when={passwords()}>
         <View testID="password-form" style={{ gap: 8 }}>
           <Input testID="password-username" value={username()} onChange={event => username.set(event.value)} autoCapitalize="none" autoCorrect={false}

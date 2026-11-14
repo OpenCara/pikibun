@@ -27,7 +27,7 @@ export function SelfHost(_props: SectionProps) {
   return (
     <ThisServerPanel server={thisServer()} signedInTo={origin} onUse={async local => {
       if (!await confirm({ title: `Sign in to Pikibun on ${computerName}?`, confirmLabel: "Switch",
-        message: `This app signs out of ${displayOrigin(origin)} and signs in to Pikibun on ${computerName} instead. Nothing moves: your sessions and workspaces on ${displayOrigin(origin)} stay there, and you can switch back by signing in to it again.` })) return;
+        message: `This app switches to Pikibun on ${computerName} and stays signed in to ${displayOrigin(origin)}. Nothing moves: your sessions and workspaces on ${displayOrigin(origin)} stay there, and you switch back under Settings → Profile → Servers.` })) return;
       const token = thisServer().requireSignInToken(local);
       await signInToLocalServer(local, token, { switching: true });
     }} />

@@ -1,5 +1,4 @@
-import { segment, type AutoChoiceAnswer, type AutoChoiceRequest } from "../shared";
-import { session } from "./auth";
+import { segment } from "../shared";
 import { createResource } from "./resource";
 
 export const AUTO = "\u0000auto";
@@ -9,12 +8,6 @@ export function createAutoMode(workspaceId: () => string | null) {
   const status = createResource<{ enabled: boolean }>(path);
   return {
     enabled: () => status.data()?.enabled === true,
-    async choose(request: AutoChoiceRequest, signal?: AbortSignal): Promise<AutoChoiceAnswer> {
-      const target = path();
-      if (!target) throw new Error("Choose a workspace first.");
-      const { choice } = await session().api<{ choice: AutoChoiceAnswer }>(target, { method: "POST", body: request, ...(signal ? { signal } : {}) });
-      return choice;
-    },
   };
 }
 

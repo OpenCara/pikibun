@@ -45,6 +45,7 @@ export { publicIdentity, registerPushIdentities } from './push/identities.js';
 export { registerOidc } from './push/oidc.js';
 export { githubComment, githubIssue, githubMerge, githubRead } from './github-broker.js';
 export { refreshPullRequestStates } from './pull-request-states.js';
+export { sessionPullRequestReview } from './pull-request-review.js';
 export { registerSources, sourceRead } from './sources/sources.js';
 export { registerSourceOAuth } from './sources/source-oauth.js';
 

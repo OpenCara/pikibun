@@ -42,13 +42,14 @@ A **GitHub account** can sign in with its username and a password too, once it s
 
 - **Identity**: **Display name**, **Git author name** and **Git author email**. Commits in sessions you own use this identity; new sessions pick up saved changes.
 - **Environment**: up to 32 non-secret `APP_` variables (for example `APP_PROJECT=web`) sent to the host of every session you own. Values are at most 2,048 characters, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE_KEY` or `API_KEY` are refused: credentials belong in Git accounts or in Pi on the host.
-- **Git accounts**: your GitHub sign-in plus personal access tokens for other Git providers (see [Repositories and Git accounts](repositories.md)).
+- **Git accounts**: your GitHub sign-in plus personal access tokens for other Git providers (see [Repositories and Git accounts](repositories.md)). On a [Pikibun on your own computer](local.md), which has no GitHub sign-in, github.com connects with a personal access token too.
 - **Signed-in apps**: the apps signed in as you, each of which you can sign out, and **Sign in an app**, which [signs in another with a code](#signing-in-an-app-with-a-code).
+- **Servers** (in the apps): the servers this app is signed in to, with **Switch** and **Add a server** (see [Switching between servers](desktop/client.md#switching-between-servers)).
 - **Account**: your **Username**, your **User ID** (owners add you to workspaces with it) and **Sign out**.
 
 ## Signing in an app with a code
 
-The Pikibun app on a phone, tablet or computer signs in with a code made where you are already signed in: Pikibun on the web, or another of your apps. It offers no GitHub or password sign-in of its own (a Pikibun on your own computer, which makes no codes, takes its own sign-in link instead).
+The Pikibun app on a phone, tablet or computer signs in with a code made where you are already signed in: Pikibun on the web, or another of your apps. It offers no GitHub or password sign-in of its own (a Pikibun on your own computer also takes its own sign-in link).
 
 1. There, open **Settings → Profile → Signed-in apps → Sign in an app**. It shows a QR code of the sign-in link (`pikibun://auth/code?server=…&code=…`), **Open in Pikibun** (on the web) and **Copy link**.
 2. On a phone or tablet, scan the QR code with the camera and open the link in Pikibun. On a computer, choose **Open in Pikibun** where the app is installed, or copy the link and paste it on the app's sign-in screen.
@@ -58,6 +59,7 @@ What keeps a code safe:
 
 - It works once and for 10 minutes. The server keeps only its hash, and you can have at most 5 waiting; **Cancel** ends one sooner.
 - Making one takes your password, or a GitHub sign-in from the last 15 minutes (**Sign in with GitHub again** brings you back), so a browser left signed in, or a stolen sign-in, can't turn itself into a 30-day app.
+- On a [Pikibun on your own computer](local.md), whose owner has neither, it takes a browser or app that signed in with the sign-in link itself: an app signed in with a code can't make the next one. Such a Pikibun is reachable from that computer only, so its codes sign in apps there, and the page shows no QR code.
 - It ends with the browser or app that made it: signing that out, changing your password or a suspension makes it worthless. An app signed in with a password-made code ends, as the password's sign-ins do, when the operator turns `PASSWORD_AUTH` off.
 - Anyone who has the link or the QR code can sign in as you until it is used or expires, so show it to nobody. The app always asks before a link signs it in, so a link someone sends you can't sign your app in to their account or their server unnoticed.
 

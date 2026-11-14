@@ -107,6 +107,7 @@ export interface SessionRow {
   pull_request_state?: string | null;
   branch_pull_request_url?: string | null;
   branch_pull_request_state?: string | null;
+  owner_name?: string | null;
 }
 export interface RepositoryRow {
   id: string; workspace_id: string; provider: GitProvider; host: string; repository_id: string; full_name: string;

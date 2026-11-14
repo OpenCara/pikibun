@@ -27,6 +27,17 @@ export function shortAge(value: string, now = Date.now()): string {
   return `${date.getDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][date.getMonth()]}`;
 }
 
+export function sessionOwnerLabel(item: Pick<SessionRecord, "ownerId" | "ownerName" | "permissions">, userId: string): string {
+  if (item.ownerId === userId) return "";
+  const viewer = Boolean(item.permissions?.length) && item.permissions!.every(permission => permission === "read");
+  const owner = item.ownerName?.trim();
+  return owner ? `${owner}${viewer ? " · Viewer" : ""}` : viewer ? "Viewer" : "Shared";
+}
+
+export function matchesSession(item: Pick<SessionRecord, "title" | "ownerName">, needle: string): boolean {
+  return !needle || item.title.toLowerCase().includes(needle) || Boolean(item.ownerName?.toLowerCase().includes(needle));
+}
+
 export function SessionList(props: {
   selectedId?: string | null; onOpen: (id: string) => void; onNew: () => void; compact?: boolean;
   onNewIn?: (workspaceId: string) => void; onWorkspaceSettings?: (workspaceId: string) => void; onNewWorkspace?: () => void;
@@ -44,7 +55,7 @@ export function SessionList(props: {
     const byWorkspace = new Map<string, SessionRecord[]>();
     for (const item of data.sessions()) {
       if (item.status === "archived" && !showArchived()) continue;
-      if (needle && !item.title.toLowerCase().includes(needle)) continue;
+      if (!matchesSession(item, needle)) continue;
       const list = byWorkspace.get(item.workspaceId);
       if (list) list.push(item);
       else byWorkspace.set(item.workspaceId, [item]);
@@ -82,7 +93,7 @@ export function SessionList(props: {
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8, borderRadius: radius.medium, paddingHorizontal: 10, height: props.compact ? 32 : 40,
               backgroundColor: palette().surface, borderWidth: 1, borderColor: palette().border }}>
               <Icon name="search" size={14} color={palette().muted} />
-              <Input value={query()} onChange={event => query.set(event.value)} placeholder="Search sessions" accessibilityLabel="Search sessions by title" autoCorrect={false}
+              <Input value={query()} onChange={event => query.set(event.value)} placeholder="Search sessions" accessibilityLabel="Search sessions by title or owner" autoCorrect={false}
                 autoCapitalize="none" testID="session-search"
                 style={{ flex: 1, fontSize: props.compact ? text.body : text.large, color: palette().text, placeholderColor: palette().muted }} />
             </View>
@@ -210,7 +221,7 @@ function SessionRow(props: {
     const live = data.liveActivity();
     return sessionStatus(props.item, live?.sessionId === props.item.id ? live.activity : undefined);
   };
-  const relation = () => (props.item.ownerId === user.id ? "" : props.item.permissions?.every(permission => permission === "read") ? "Viewer" : "Shared");
+  const relation = () => sessionOwnerLabel(props.item, user.id);
   const pullColor = () => (props.item.pullRequest ? pullRequestColor(props.item.pullRequest) : palette().muted);
   const statusColor = () => {
     const tone = statusColors[status().tone];
@@ -258,7 +269,9 @@ function SessionRow(props: {
               )}
             </If>
             <If when={relation()}>
-              <Text>{`${status().label || props.item.pullRequest || props.item.tunnel ? " · " : ""}${relation()}`}</Text>
+              <If when={status().label || props.item.pullRequest || props.item.tunnel}><Text>{" · "}</Text></If>
+              <Text testID={`session-owner-${props.item.id}`}
+                accessibilityLabel={props.item.ownerName?.trim() ? `Owned by ${props.item.ownerName.trim()}` : undefined}>{relation()}</Text>
             </If>
           </Text>
         </If>

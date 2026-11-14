@@ -275,12 +275,14 @@ test("in a session, a Pi extension's tool, flags, prompt and hooks run while it 
 });
 
 test("an extension hears tool_result only of calls that ran, and tool_execution_end only after its tool_execution_start", async t => {
-  const events: string[] = [];
-  (globalThis as { __toolEvents?: string[] }).__toolEvents = events;
-  t.after(() => { delete (globalThis as { __toolEvents?: string[] }).__toolEvents; });
+  const root = await directory(t);
+  const logged = join(root, "events.log");
+  await writeFile(logged, "");
+  const events = { async splice() { const lines = (await readFile(logged, "utf8")).split("\n").filter(Boolean); await writeFile(logged, ""); return lines; } };
   const listener = (tool: string) => `import { Type } from "typebox";
+    import { appendFileSync } from "node:fs";
     export default function (pi) {
-      const log = (event) => globalThis.__toolEvents.push(event);
+      const log = (event) => appendFileSync(${JSON.stringify(logged)}, event + "\\n");
       pi.registerTool({ name: "${tool}", label: "Echo", description: "Echo text.", parameters: Type.Object({ text: Type.String() }),
         async execute(_id, params) { return { content: [{ type: "text", text: params.text }], details: undefined }; } });
       pi.on("tool_call", (event) => { log("call " + event.input.text); if (event.input.text === "forbidden") return { block: true, reason: "Not that." }; });
@@ -288,19 +290,18 @@ test("an extension hears tool_result only of calls that ran, and tool_execution_
       pi.on("tool_result", (event) => log("result " + event.content[0].text));
       pi.on("tool_execution_end", (event) => log("end " + event.isError + " " + JSON.stringify(event.result)));
     }`;
-  const root = await directory(t);
   await writeFile(join(root, "echo.ts"), listener("echo"));
   const s = await session(t, join(root, "echo.ts"), root, { tool: "echo" });
   await s.answer("hello");
-  assert.deepEqual(events.splice(0), ["start hello", "call hello", "result hello", 'end false [{"type":"text","text":"hello"}]']);
+  assert.deepEqual(await events.splice(), ["start hello", "call hello", "result hello", 'end false [{"type":"text","text":"hello"}]']);
   assert.match(JSON.stringify(await s.answer("forbidden")), /Not that\./);
-  assert.deepEqual(events.splice(0), ["start forbidden", "call forbidden", 'end true [{"type":"text","text":"Tool call blocked: Not that."}]'],
+  assert.deepEqual(await events.splice(), ["start forbidden", "call forbidden", 'end true [{"type":"text","text":"Tool call blocked: Not that."}]'],
     "a blocked call never ran: its end says why, and no tool_result handler sees it");
   const other = await directory(t);
   await writeFile(join(other, "echo.ts"), listener("echo"));
   const missing = await session(t, join(other, "echo.ts"), other, { tool: "missing" });
   assert.match(JSON.stringify(await missing.answer("lost")), /not available/);
-  assert.deepEqual(events, []);
+  assert.deepEqual(await events.splice(), []);
 });
 
 test("an extension's handler that fails is skipped, except a tool_call guard, which blocks the call", async t => {

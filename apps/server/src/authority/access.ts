@@ -29,7 +29,7 @@ export function sessionManagerSQL(session: string): string {
 }
 type SessionPolicyRow = SessionRow & { grants_json: string | null; actor_role: WorkspaceRole };
 
-const SESSION_ACCESS_SQL = `SELECT s.*, g.permissions_json AS grants_json, actor.role AS actor_role,
+const SESSION_ACCESS_SQL = `SELECT s.*, g.permissions_json AS grants_json, actor.role AS actor_role, owner_user.display_name AS owner_name,
   (SELECT pr.pull_request_url FROM push_credentials pr WHERE pr.session_id = s.id AND pr.pull_request_url IS NOT NULL
     ORDER BY pr.completed_at DESC, pr.created_at DESC, pr.id DESC LIMIT 1) AS pull_request_url,
   (SELECT pr.pull_request_state FROM push_credentials pr WHERE pr.session_id = s.id AND pr.pull_request_url IS NOT NULL

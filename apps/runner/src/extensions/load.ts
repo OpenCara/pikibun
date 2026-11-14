@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { glob } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createEventBus, createExtensionRuntime, type Extension as PiExtension, type ExtensionFactory, type ExtensionRuntime,
   type LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
 import type { EventBus } from "@earendil-works/pi-coding-agent";
@@ -81,7 +81,13 @@ export interface LoadedSource {
   files: string[];
   factories?: { path: string; factory: ExtensionFactory }[];
   managed?: ManagedInstall;
+  mount?: string;
   summary: InstalledExtension;
+}
+
+export function installMount(location: string): string {
+  const at = location.lastIndexOf(`${sep}node_modules${sep}`);
+  return at > 0 ? location.slice(0, at) : location;
 }
 
 export async function loadSource(loaded: Pick<LoadedSource, "files" | "factories">, cwd: string, eventBus: EventBus = createEventBus(),
@@ -168,7 +174,7 @@ export async function loadManaged(store: ExtensionStore, installed: ManagedInsta
   } finally {
     await rm(cwd, { recursive: true, force: true }).catch(() => {});
   }
-  return { installed: { source: installed.source }, root, files, managed: installed, summary };
+  return { installed: { source: installed.source }, root, files, managed: installed, ...(root ? { mount: installMount(root) } : {}), summary };
 }
 
 export async function loadInstalled(store: ExtensionStore, pikiExtensions: readonly PikiExtension[] = connectorPikiExtensions,
@@ -203,7 +209,7 @@ export async function loadInstalled(store: ExtensionStore, pikiExtensions: reado
       } catch (error) {
         summary.error = message(error);
       }
-      loaded.push({ installed: source, root, files, summary });
+      loaded.push({ installed: source, root, files, mount: installMount(location), summary });
     }
   } finally {
     await rm(cwd, { recursive: true, force: true }).catch(() => {});

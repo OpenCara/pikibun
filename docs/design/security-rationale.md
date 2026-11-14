@@ -83,6 +83,19 @@ A session's tools run as its owner (their Git accounts, their GitHub token), for
 
 What it doesn't protect against: the conversation is shared. A sender can leave instructions in it, or in the files, that the agent follows on the owner's next message, with the owner's tools. That is the same as any text the agent reads (see [Sessions on the host](#sessions-on-the-host)); where it matters, keep sessions that hold tools others lack private, or give people a session role of Member (side asks only).
 
+## The pull request reviewer
+
+The session panel's **Review** tab shows the session's pull request: its description, commits, checks, reviews and each changed file's diff (`GET /api/sessions/:id/pull-request`, `sessionPullRequestReview` in `apps/server/src/authority/pull-request-review.ts`). The Pikibun server reads it from GitHub with the session owner's stored sign-in, for whoever opened the tab, so the route is held to what the agent's `github_read` already gives the same people:
+
+- **Collaborators only.** It takes the session's `write` permission, as the Files tab does. Whoever may send the session a message can already have the agent read the pull request, or any file of the repository, with the owner's access; a viewer or a share link can't, and gets nothing here either. Unlike a message it runs no tool, so neither person's tool group is asked: it reads, and changes nothing on GitHub.
+- **The session's own pull request, never one the reader names.** The route takes no repository, number or address. It reads the pull request the server recorded for the session: the one a push through Pikibun opened, or the one found on a branch the session's host reported. So it can't be turned into a reader of the owner's other repositories.
+- **Only in a repository of the workspace.** The pull request's repository must be one the workspace binds, and GitHub must still answer with the bound repository's numeric identity under that name before anything is read (`pinnedGitHubRepository`, `verifyPin`), as for `github_read`: a repository renamed or replaced under the same name is refused.
+- **Checked again before it answers.** After the reads, the server checks that the owner's GitHub sign-in is still the one it read with and that the reader still has the session's `write` permission under the same policy version, so a grant withdrawn while GitHub answered returns nothing.
+- **Bounded, and with secrets hidden.** At most 300 files and 250 commits, a file's diff up to 256 KB and 2 MB of diffs in all; the rest is left to GitHub and counted. The description, comments, reviews and commit messages pass through the transcript's redaction, as a file in the Files tab does, before they are cut to length (`readIssue`'s `prepare`), so a token across a cut isn't left as a first half the patterns no longer match. The diff hunk GitHub attaches to each review comment is left out (`diffHunks: false`): the tab doesn't draw it, and it is a second copy of lines the files' diffs already carry. A diff is redacted line by line, under its `+`, `-` or space (`redactPatch` in `packages/shared/src/pull-request-review.ts`): run over the whole patch, the redaction took a deleted line's `-` for the end of a private key and left the key in, and joined the lines of an added one, so the hunk no longer had the lines its header counts. A private key is followed down its own side of the hunk, each of its lines replaced by one redacted line, so a key a commit removes is hidden like one it adds and every line keeps its number. Names (branches, logins, checks, paths) are shown as GitHub gives them: they identify what is reviewed.
+- **Not in the audit log.** `github_read` is recorded because the agent makes it, unseen, on someone's behalf. A person opening a tab is not, as browsing the Files tab isn't; recording each refresh would fill the session's 200 newest entries.
+
+It stays available on archived sessions, and on a session being restored or moved, which the Files tab refuses: nothing runs, and the host isn't asked. So the route asks for the session's `read` permission, which those sessions keep, and then checks `write` itself. What it doesn't protect against: a collaborator sees the owner's view of the pull request, which may be of a private repository the collaborator can't open on GitHub themselves. That is the workspace's sharing model (a session's tools run as its owner), not something this route adds.
+
 ## Pikibun's extensions from npm (managed packages)
 
 `apps/runner/src/extensions/host.ts` (`applyManaged`), `store.ts` (`addManaged`), `packages/shared/src/managed-extensions.ts`; the plan is
@@ -134,9 +147,14 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
 - **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
   through Pi's API now is what they will reach from their own process.
 
-What it doesn't protect against: until extensions run in a process of their own, an installed extension still runs as
-the host's user and can read Pi's `auth.json` and `models.json` itself. This closes the door Pi's API opened, not the
-process's.
+What it doesn't protect against: in a sandboxed session on Linux the extension process runs in the session's sandbox,
+with only the connector's code and its extensions' installs mounted, read-only, and the workspace's network access.
+On macOS and Windows, in sessions on the host and on unsandboxed hosts, it still runs as the host's user and can read
+Pi's `auth.json` and `models.json` itself; there this closes the door Pi's API opened, not the file system's.
+
+The mounts are the host's own paths, so a mount names nothing the sandbox lacks: `serviceBindAllowed` refuses system
+directories, the home directory and its parents, `/tmp` and the other trees the sandbox makes itself, and the session's
+own files, and the connector reaches the process only through a socket it has checked and pinned.
 
 ## Password authentication
 
@@ -157,6 +175,8 @@ process's.
 - **What a restart doesn't end.** Sessions already signed in are kept: they are rows of their own, which signing out or a suspension ends as for any account. Retiring a leaked link is a restart; ending what someone already did with it is signing out the other browsers and apps.
 - **`claimSecret` stays in the state file, unused,** so an older `pikibun` that opens the same state directory still reads it. It signs nobody in.
 - **What stays as it was.** The server listens on loopback only, the comparison is constant-time, a cross-site request is refused (`requireOrigin`), and the token reaches the app only in its status, never in the server's output (`tests/serve-stdio.test.ts`).
+- **Sign-in codes there.** The owner has no password and no GitHub sign-in to prove themselves with again, so a code is made by a session that signed in with the link or the app's token itself (`via IS NULL`), and never by one made from a code: one leaked code can't make the next. The session a code makes is the owner's, as the link's are (`method` null), so it goes on when the same data is later shared with `PASSWORD_AUTH` off. The server is on loopback, so a code reaches only apps on the same computer.
+- **github.com with a pasted token.** With no OAuth app there is no GitHub sign-in, so the owner connects github.com with a personal access token (`PUT /api/git/accounts/github`, refused outside `LOCAL_MODE`): checked with GitHub's `/user`, kept in `github_tokens` like a sign-in's, and the account takes that GitHub id and login (a GitHub account that owned the server before takes only a token of its own GitHub account). The reads, pull requests and pushes that needed `auth_kind = 'github'` now take a `password` account that has a GitHub id too, which only this route gives. A push with the owner's account can't reset such a token afterwards (that is the OAuth app's call), and here it needn't: the only host is the owner's own computer, where the vault and its key already are. Elsewhere that push is still refused without the app.
 
 ## Signing in an app with a code
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,10 +92,16 @@ for (const helper of ["python", "node"] as const) {
     const chunks: Uint8Array[] = [];
     for await (const chunk of await sandbox.clonePushPack("app", { commit: head.commit, exclude: [] }, allow)) chunks.push(chunk);
     assert.equal(Buffer.concat(chunks).subarray(0, 4).toString(), "PACK");
+    for (const cache of [".npm/_cacache", ".cache/pip", ".local/share/pnpm", ".local/bin"]) {
+      await mkdir(join(sandbox.layout.home, cache), { recursive: true });
+      await writeFile(join(sandbox.layout.home, cache, "file"), "x");
+    }
     const files = await sandbox.snapshot(allow, ["app"]);
     const paths = files.map(file => file.path);
     assert.ok(paths.includes("owner.gitconfig") && paths.includes("git/HEAD"));
     assert.ok(!paths.some(path => path.startsWith("worktree/app/")), "clones are left out of the snapshot");
+    assert.ok(paths.includes("home/.local/bin/file"), "the rest of the home is kept");
+    assert.ok(!paths.some(path => /^home\/(\.npm|\.cache|\.local\/share\/pnpm)\//.test(path)), "package caches are left out of the snapshot");
     await assert.rejects(sandbox.execute({ kind: "bash", command: "exit 3" }, false, allow), /exit 3/);
   });
 }

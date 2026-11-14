@@ -1,7 +1,7 @@
 import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
 import { Button as BaseButton, NavPage } from "nsh/base";
 import {
-  activeStatuses, browserUnavailableText, chatOptionsBody, copyText,
+  activeStatuses, autoChatOptionsBody, browserUnavailableText, chatOptionsBody, copyText,
   initialSelection, managesSession, messageCut, modelUnavailable, pairToolResults, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
@@ -16,7 +16,6 @@ import { RepositoryPreparationCard } from "../components/RepositoryPreparation";
 import { TranscriptEntry, type MessageActions } from "../components/TranscriptEntry";
 import { createAttachments, createFileOptions, encodeImages, imageBlobs, imagesUnavailable, restoreImages, withFilesNote } from "../lib/attachments";
 import type { ChatImage } from "../../../../packages/shared/src/chat-images";
-import type { AutoChoiceAnswer } from "../../../../packages/shared/src/auto-mode";
 import { createAutoMode } from "../lib/auto-mode";
 import type { WithdrawResult } from "../../../../packages/shared/src/types";
 import { useAppData } from "../lib/app-data";
@@ -298,11 +297,14 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const content = createDraft(props.id);
   const conversationId = signal("");
   const queueOpen = signal(false);
-  let request: { key: string; id: string; images?: ChatImage[]; choice?: AutoChoiceAnswer } | null = null;
+  let request: { key: string; id: string; images?: ChatImage[] } | null = null;
   const autoMode = createAutoMode(() => current().workspaceId);
   const autoChat = signal(false);
-  const autoChosen = signal<string | undefined>(undefined);
   const autoChatOn = () => autoMode.enabled() && autoChat();
+  const autoChosen = () => {
+    const agent = view().agent;
+    return agent ? props.host()?.models.find(item => item.provider === agent.provider && item.modelId === agent.modelId)?.name : undefined;
+  };
   const submission = createAction();
   const stopping = createAction();
   const rewinding = createAction();
@@ -363,7 +365,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
     const auto = autoChatOn() && host?.capabilities.chatOptions === true;
-    const options = chatOptionsBody(host, selection(), kind);
+    const options = auto ? autoChatOptionsBody(host, selection(), kind) : chatOptionsBody(host, selection(), kind);
     const unavailable = auto ? undefined : modelUnavailable(host, selection());
     receipt.set(null);
     withdrawNotice.set("");
@@ -373,14 +375,8 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     const pending = request;
     void submission.run(async () => {
       if (unavailable) throw new Error(unavailable);
-      let chosen = selection();
-      let sending = options;
-      if (auto && host) {
-        const choice = pending.choice ??= await autoMode.choose({ task: sent, connectorId: host.id });
-        chosen = { ...chosen, model: { provider: choice.provider, modelId: choice.modelId }, thinkingLevel: choice.thinkingLevel };
-        sending = chatOptionsBody(host, chosen, kind);
-        autoChosen.set(host.models.find(item => item.provider === choice.provider && item.modelId === choice.modelId)?.name);
-      }
+      const chosen = selection();
+      const sending = options;
       const images = pending.images ??= await encodeImages(pasted);
       const note = await attachments.upload(props.id, attached);
       const result = await session().api<SubmitResult>(`/api/sessions/${segment(props.id)}/${kind}`, { method: "POST",
@@ -607,7 +603,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                 <If when={permitted()}>
                   <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)}
                     auto={autoMode.enabled() ? { selected: autoChat(), chosen: autoChosen(), perMessage: true,
-                      hint: "Chooses the model and reasoning for each message from how complex it looks, on this session's host",
+                      hint: "A model on this session's host judges each message and picks the model and reasoning for it, as Anthropic's model guide suggests",
                       onSelect: () => autoChat.set(true), onLeave: () => autoChat.set(false) } : undefined} />
                 </If>
               </If>

@@ -172,7 +172,7 @@ MIT
 npx pikibun@latest serve
 ```
 
-runs the Pikibun server and its web app on `http://127.0.0.1:7878`, reachable from this computer only, with this computer as the host that runs your sessions. There is nothing to set up and no GitHub sign-in: every run prints a private sign-in link that signs you in as the owner, the only account that can sign in, made at your first sign-in and named after your user on this computer (`password:ada`). It reaches Git providers other than github.com through the personal access tokens under **Settings → Profile → Git accounts**. Once you have signed in, this computer pairs itself as your host, sandboxed as with `connect` (or with `--unsafe-no-sandbox`; `--no-host` serves without it).
+runs the Pikibun server and its web app on `http://127.0.0.1:7878`, reachable from this computer only, with this computer as the host that runs your sessions. There is nothing to set up and no GitHub sign-in: every run prints a private sign-in link that signs you in as the owner, the only account that can sign in, made at your first sign-in and named after your user on this computer (`password:ada`). It reaches Git providers, github.com included, through the personal access tokens under **Settings → Profile → Connected accounts**. Once you have signed in, this computer pairs itself as your host, sandboxed as with `connect` (or with `--unsafe-no-sandbox`; `--no-host` serves without it).
 
 Everything is kept in `~/.local/share/pikibun/server` (`--state-dir`), apart from `connect`'s own state, so later runs need no options. Run `npx pikibun serve --help` for the rest.
 

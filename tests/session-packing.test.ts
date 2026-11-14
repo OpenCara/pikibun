@@ -12,7 +12,7 @@ import type { AuthorizationRequest, Permission, RunnerAction, RunnerBinding, Run
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import { PACK_FILE, packBytes, packRefusal, readPack, settlePack, writePack } from "../apps/runner/src/pack.js";
 import { writePrivate } from "../apps/runner/src/restore.js";
-import { PACK_SKIPPED_HOME } from "../apps/runner/src/sandbox.js";
+import { SNAPSHOT_SKIPPED_HOME } from "../apps/runner/src/sandbox.js";
 import { RunnerService, createRunnerApp } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
 
@@ -155,11 +155,15 @@ test("sandbox errors become reasons the session's owner can act on", () => {
   assert.equal(packRefusal(refusal), refusal);
 });
 
-test("the home's package caches a pack leaves out stay in step with the sandbox helper", async () => {
+test("the home's package caches a snapshot leaves out stay in step with the sandbox helpers", async () => {
   const { HELPER } = await import("../apps/runner/src/sandbox.js");
-  const declared = /PACK_SKIPPED_HOME = \(([^)]*)\)/.exec(HELPER)?.[1];
+  const { NODE_HELPER } = await import("../apps/runner/src/node-helper.js");
+  const declared = /SNAPSHOT_SKIPPED_HOME = \(([^)]*)\)/.exec(HELPER)?.[1];
   assert.ok(declared);
-  assert.deepEqual([...declared.matchAll(/'([^']+)'/g)].map(match => match[1]), [...PACK_SKIPPED_HOME]);
+  assert.deepEqual([...declared.matchAll(/'([^']+)'/g)].map(match => match[1]), [...SNAPSHOT_SKIPPED_HOME]);
+  const node = /const SNAPSHOT_SKIPPED_HOME = (\[[^\]]*\]);/.exec(NODE_HELPER)?.[1];
+  assert.ok(node);
+  assert.deepEqual(JSON.parse(node), [...SNAPSHOT_SKIPPED_HOME]);
 });
 
 test("a clone a pack can't keep in full is refused: stashes, other refs, tags its origin lacks, an unreadable cache", { skip: spawnSync("git", ["--version"]).status !== 0 }, async t => {

@@ -12,7 +12,7 @@ export async function getUser(env: Env, userId: string): Promise<UserRow | null>
 export function userProfile(row: UserRow): UserProfile {
   const username = row.username ?? (row.auth_kind === 'password' && row.id.startsWith('password:') ? row.id.slice('password:'.length) : null);
   return { id: row.id, username, githubId: row.github_id, githubLogin: row.github_login, displayName: row.display_name,
-    gitName: row.git_name, gitEmail: row.git_email, env: JSON.parse(row.env_json), githubConnected: row.auth_kind === 'github' && !!row.github_connected };
+    gitName: row.git_name, gitEmail: row.git_email, env: JSON.parse(row.env_json), githubConnected: row.auth_kind !== 'test' && !!row.github_id && !!row.github_connected };
 }
 export function modelDefinition(row: ModelRow): ModelDefinition {
   return { id: row.id, workspaceId: row.workspace_id, name: row.name, provider: row.provider, modelId: row.model_id,
@@ -52,7 +52,7 @@ export function successorBranch(row: Pick<SessionRow, 'id' | 'title' | 'reposito
 export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRecord {
   const pullRequest = row.pull_request_url ? sessionPullRequest(row.pull_request_url, row.pull_request_state)
     : sessionPullRequest(row.branch_pull_request_url, row.branch_pull_request_state);
-  return { id: row.id, workspaceId: row.workspace_id, ownerId: row.owner_id, agentVersionId: row.agent_version_id,
+  return { id: row.id, workspaceId: row.workspace_id, ownerId: row.owner_id, ...(row.owner_name ? { ownerName: row.owner_name } : {}), agentVersionId: row.agent_version_id,
     title: row.title, visibility: row.visibility ?? 'private', policyVersion: row.policy_version, status: row.status, createdAt: row.created_at,
     repositories: JSON.parse(row.repositories_json ?? '[]'),
     ...(row.repository_mode === 'clone' ? { repositoryMode: 'clone' as const } : {}),
@@ -69,8 +69,8 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
     ...(pullRequest ? { pullRequest } : {}),
     ...(row.tunnel_url && row.tunnel_expires_at && row.status !== 'archived' && Date.parse(row.tunnel_expires_at) > Date.now() ? { tunnel: { url: row.tunnel_url, expiresAt: row.tunnel_expires_at } } : {}) };
 }
-export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed' | 'tunnel'> {
-  const { visibility: _visibility, permissions: _permissions, activity: _activity, frozen: _frozen, pullRequest: _pullRequest,
+export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'ownerName' | 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed' | 'tunnel'> {
+  const { ownerName: _ownerName, visibility: _visibility, permissions: _permissions, activity: _activity, frozen: _frozen, pullRequest: _pullRequest,
     toolOutput: _toolOutput, nextScheduledAt: _nextScheduledAt, parentSessionId: _parentSessionId, packed: _packed, tunnel: _tunnel, ...record } = sessionRecord(row);
   return record;
 }
