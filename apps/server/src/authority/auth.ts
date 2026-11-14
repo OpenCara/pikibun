@@ -122,6 +122,16 @@ export function safeText(value: unknown, field: string, max: number): string {
   return result;
 }
 
+const OLD_APP_NAME = /^Pikibun NSH \(/;
+
+export function appName(name: string | null): string | null {
+  return name === null ? null : name.replace(OLD_APP_NAME, 'Pikibun (');
+}
+
+export function deviceNameFrom(value: unknown): string | null {
+  return value === undefined || value === null ? null : appName(safeText(value, 'deviceName', 100));
+}
+
 function profileInput(body: Record<string, unknown>, allowId = false) {
   for (const key of Object.keys(body)) {
     if (!Object.hasOwn(PROFILE_FIELDS, key) && !(allowId && key === 'id')) {
@@ -501,7 +511,7 @@ async function localSignIn(c: AppContext) {
 async function nativeLocalSignIn(c: AppContext) {
   const input = await requestBody(c, nativeLocalBody, { maxBytes: 4096 });
   requireLocalToken(c.env, input.token);
-  const deviceName = input.deviceName === undefined || input.deviceName === null ? null : safeText(input.deviceName, 'deviceName', 100);
+  const deviceName = deviceNameFrom(input.deviceName);
   const user = await localOwnerAccount(c.env);
   const session = await newSession(c.env, user.id, 'local', { deviceName });
   await dbResult(session.statement.run());
@@ -571,7 +581,7 @@ async function nativeToken(c: AppContext) {
   if (typeof code !== 'string' || !OPAQUE_TOKEN.test(code) || typeof verifier !== 'string' || !VERIFIER.test(verifier)) {
     fail(400, 'invalid_grant', 'The sign-in has expired or was already used. Sign in again.');
   }
-  const deviceName = body.deviceName === undefined || body.deviceName === null ? null : safeText(body.deviceName, 'deviceName', 100);
+  const deviceName = deviceNameFrom(body.deviceName);
   const saved = await dbResult(c.env.DB.query<{ user_id: string; challenge: string; expires_at: number }>(
     'DELETE FROM native_auth_codes WHERE code_hash = ? RETURNING user_id, challenge, expires_at').bind(await sha256(code)).first());
   if (!saved || !Number.isSafeInteger(saved.expires_at) || saved.expires_at <= Date.now() || !constantTimeEqual(await sha256(verifier), saved.challenge)) {
@@ -591,7 +601,7 @@ async function testLogin(c: AppContext) {
   const { githubLogin: requestedGithubLogin, client, deviceName, ...profileBody } = body;
   if (client !== undefined && client !== 'browser' && client !== 'native') fail(400, 'invalid_input', 'Invalid test client.');
   if (client !== 'native' && deviceName !== undefined && deviceName !== null) fail(400, 'invalid_input', 'Only native test sessions have a device name.');
-  const native = client === 'native' ? { deviceName: deviceName === undefined || deviceName === null ? null : safeText(deviceName, 'deviceName', 100) } : undefined;
+  const native = client === 'native' ? { deviceName: deviceNameFrom(deviceName) } : undefined;
   const profile = profileInput(profileBody, true);
   if (requestedGithubLogin !== undefined &&
       (typeof requestedGithubLogin !== 'string' ||
@@ -670,7 +680,7 @@ export function registerAuth(app: Hono<AppEnv>): void {
       `SELECT device_id, device_name, created_at, expires_at, token_hash, via FROM auth_sessions
       WHERE user_id = ? AND client = 'native' AND device_id IS NOT NULL AND expires_at > ? ORDER BY created_at DESC`)
       .bind(auth.userId, Date.now()).all());
-    const devices: SignedInDevice[] = rows.map(row => ({ id: row.device_id, name: row.device_name, createdAt: row.created_at,
+    const devices: SignedInDevice[] = rows.map(row => ({ id: row.device_id, name: appName(row.device_name), createdAt: row.created_at,
       expiresAt: new Date(Number(row.expires_at)).toISOString(), current: row.token_hash === auth.tokenHash, ...(row.via === 'code' ? { viaCode: true as const } : {}) }));
     return c.json({ devices });
   });
