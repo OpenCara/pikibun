@@ -130,7 +130,7 @@ export function sandboxLaunch(worker: SandboxWorker): WorkerLaunch {
   return async (handlers, mounts) => {
     const listening = join(worker.socketDirectory, EXTENSION_SOCKET);
     rmSync(listening, { force: true });
-    const command = [worker.nodeBin, ...workerEntry(), "--socket", `${SANDBOX_SERVICE_SOCKETS}/${EXTENSION_SOCKET}`, worker.worktree].map(shellQuote).join(" ");
+    const command = [`${worker.nodeBin}/node`, ...workerEntry(), "--socket", `${SANDBOX_SERVICE_SOCKETS}/${EXTENSION_SOCKET}`, worker.worktree].map(shellQuote).join(" ");
     const output = lineReader(handlers.log, () => {}, 64 * 1024);
     const service = await worker.start(command, [...new Set([...workerCodeMounts(), ...mounts])], output, new AbortController().signal);
     let stopped: string | undefined;

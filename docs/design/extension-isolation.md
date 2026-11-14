@@ -160,7 +160,7 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
 - **The process is a sandbox service.** A session whose workspace is a Linux `Sandbox` starts its extension process with
   `Sandbox.startService`, as a server a session puts online is started (`session.ts`, `extensionProcess`): the same
   `bwrap` mounts and environment as the session's commands, its egress proxy (`HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`,
-  the interception CA), the host's Node.js as the sandbox is given it, and the session's worktree, at the sandbox's
+  the interception CA), the host's Node.js as the sandbox is given it (`nodeBin` is its `bin` directory), and the session's worktree, at the sandbox's
   path, as its working directory. Its lifetime is a service's longest (24 hours); when it ends, the next request starts
   another, as after a crash.
 - **A socket instead of the IPC channel.** The sandbox's helper doesn't pass an IPC channel on, so the child listens on
