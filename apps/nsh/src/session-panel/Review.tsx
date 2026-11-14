@@ -23,7 +23,7 @@ const faded = (color: string) => `${color}80`;
 const githubPull = (url: string) => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(url);
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const directoryName = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
-const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+export const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
 export function reviewUnavailable(current: SessionRecord): string | null {
   if (!(current.permissions ?? []).includes("write")) {
@@ -105,7 +105,9 @@ function Reviewer(props: PanelTabProps & { url: string }) {
   const diff = (current: () => PullRequestReview, open: () => PullRequestFileView, back: boolean) => (
     <Each of={[open().path]} key={path => path}>
       {() => (
-        <DiffPane review={current()} file={open()} layout={layout()} onLayout={value => chosenLayout.set(value)} onBack={back ? () => selected.set(null) : undefined}
+        <DiffPane file={open()} layout={layout()}
+          oldTitle={revision(current().pull.pullRequest?.base.ref, current().pull.pullRequest?.base.sha)} newTitle={revision(current().pull.pullRequest?.head.ref, current().pull.pullRequest?.head.sha)}
+          external={{ label: "Open on GitHub", url: `${current().pull.url}/files` }} onLayout={value => chosenLayout.set(value)} onBack={back ? () => selected.set(null) : undefined}
           index={order().indexOf(open().path)} count={order().length} onStep={step} expanded={expanded()} setExpanded={props.setExpanded} />
       )}
     </Each>
@@ -138,7 +140,9 @@ function Reviewer(props: PanelTabProps & { url: string }) {
   );
 }
 
-function Counts(props: { additions: number; deletions: number }) {
+export const revision = (ref: string | undefined | null, sha: string | undefined | null) => `${ref ?? ""}${sha ? `${ref ? " " : ""}(${sha.slice(0, 7)})` : ""}`;
+
+export function Counts(props: { additions: number; deletions: number }) {
   const style = { fontFamily: monospace, fontSize: text.caption } as const;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 }}>
@@ -148,7 +152,7 @@ function Counts(props: { additions: number; deletions: number }) {
   );
 }
 
-function Pill(props: { label: string; color: string; testID?: string }) {
+export function Pill(props: { label: string; color: string; testID?: string }) {
   return (
     <View testID={props.testID} style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 22, paddingHorizontal: 8, borderRadius: radius.pill, borderWidth: 1,
       borderColor: palette().border, backgroundColor: palette().control }}>
@@ -158,7 +162,7 @@ function Pill(props: { label: string; color: string; testID?: string }) {
   );
 }
 
-function Branch(props: { name: string }) {
+export function Branch(props: { name: string }) {
   return (
     <View style={{ flexShrink: 1, height: 22, justifyContent: "center", paddingHorizontal: 8, borderRadius: radius.small, backgroundColor: palette().control }}>
       <Text style={{ fontFamily: monospace, fontSize: text.caption, color: palette().text, numberOfLines: 1 }}>{props.name}</Text>
@@ -207,6 +211,11 @@ function Sidebar(props: SidebarProps) {
   const pull = () => props.review.pull;
   const state = () => pullState(props.review);
   const checks = () => checkSummary(props.review);
+  const comments = computed(() => {
+    const counts = new Map<string, number>();
+    for (const comment of props.review.pull.pullRequest?.reviewComments ?? []) counts.set(comment.path, (counts.get(comment.path) ?? 0) + 1);
+    return counts;
+  });
   return (
     <View testID="review-sidebar" style={{ flex: 1, backgroundColor: palette().background }}>
       <View style={{ gap: 8, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 10, borderBottomWidth: 1, borderColor: palette().border }}>
@@ -248,14 +257,36 @@ function Sidebar(props: SidebarProps) {
           { value: "info", label: "Info" },
         ]} />
       </View>
-      <If when={props.tab === "files"}><FilesTree {...props} /></If>
+      <If when={props.tab === "files"}>
+        <FilesTree files={props.review.files} total={props.review.changedFiles} additions={props.review.additions} deletions={props.review.deletions}
+          omitted={props.review.omitted?.files} elsewhere="on GitHub" comments={comments()} grouped={props.grouped} onGrouped={props.onGrouped} tree={props.tree}
+          collapsed={props.collapsed} onCollapsed={props.onCollapsed} selected={props.selected} onSelect={props.onSelect} />
+      </If>
       <If when={props.tab === "commits"}><Commits review={props.review} /></If>
       <If when={props.tab === "info"}><Info review={props.review} onSelect={props.onSelect} /></If>
     </View>
   );
 }
 
-function FilesTree(props: SidebarProps) {
+export interface FilesTreeProps {
+  files: PullRequestFileView[];
+  total: number;
+  additions: number;
+  deletions: number;
+  omitted?: number;
+  elsewhere: string;
+  empty?: string;
+  comments?: Map<string, number>;
+  grouped: boolean;
+  onGrouped: (grouped: boolean) => void;
+  tree: ReviewTreeNode[];
+  collapsed: string[];
+  onCollapsed: (ids: string[]) => void;
+  selected: string | null;
+  onSelect: (path: string) => void;
+}
+
+export function FilesTree(props: FilesTreeProps) {
   const toItems = (nodes: ReviewTreeNode[]): TreeItem[] => nodes.map(node => ({ id: node.id, label: node.label, ...(node.children ? { children: toItems(node.children) } : {}) }));
   const items = computed(() => toItems(props.tree));
   const nodes = computed(() => {
@@ -266,11 +297,6 @@ function FilesTree(props: SidebarProps) {
   });
   const directories = computed(() => reviewDirectoryIds(props.tree));
   const expandedIds = () => directories().filter(id => !props.collapsed.includes(id));
-  const comments = computed(() => {
-    const counts = new Map<string, number>();
-    for (const comment of props.review.pull.pullRequest?.reviewComments ?? []) counts.set(comment.path, (counts.get(comment.path) ?? 0) + 1);
-    return counts;
-  });
   const row = (entry: TreeEntry): JSX.Element => {
     const node = () => nodes().get(entry.id);
     const current = () => node()?.file;
@@ -294,7 +320,7 @@ function FilesTree(props: SidebarProps) {
           <Text style={{ flexShrink: 2, numberOfLines: 1, fontSize: text.caption, color: palette().faint }}>{directoryName(node()?.path ?? "")}</Text>
         </If>
         <View style={{ flex: 1 }} />
-        <If when={!entry.folder ? comments().get(node()?.path ?? "") : undefined}>
+        <If when={!entry.folder ? props.comments?.get(node()?.path ?? "") : undefined}>
           {count => (
             <View accessibilityLabel={plural(count(), "review comment")} style={{ flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 0 }}>
               <Icon name="message" size={12} color={palette().muted} />
@@ -309,8 +335,8 @@ function FilesTree(props: SidebarProps) {
   return (
     <View style={{ flex: 1 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 36, paddingLeft: 12, paddingRight: 6 }}>
-        <Text testID="review-file-count" style={{ fontSize: text.caption, color: palette().muted, numberOfLines: 1 }}>{plural(props.review.changedFiles, "file")}</Text>
-        <Counts additions={props.review.additions} deletions={props.review.deletions} />
+        <Text testID="review-file-count" style={{ fontSize: text.caption, color: palette().muted, numberOfLines: 1 }}>{plural(props.total, "file")}</Text>
+        <Counts additions={props.additions} deletions={props.deletions} />
         <View style={{ flex: 1 }} />
         <IconButton testID="review-group" icon="folder" label={props.grouped ? "Show the files as a list" : "Group the files by directory"} size={28} active={props.grouped}
           onPress={() => props.onGrouped(!props.grouped)} />
@@ -318,10 +344,10 @@ function FilesTree(props: SidebarProps) {
         <IconButton testID="review-collapse-all" icon="fold" label="Collapse all" size={28} disabled={!props.grouped || !expandedIds().length}
           onPress={() => props.onCollapsed(directories())} />
       </View>
-      <If when={props.review.omitted?.files}>
-        {omitted => <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}><Small>{`Showing the first ${props.review.files.length} files; ${plural(omitted(), "more is", "more are")} on GitHub.`}</Small></View>}
+      <If when={props.omitted}>
+        {omitted => <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}><Small>{`Showing the first ${props.files.length} files; ${plural(omitted(), "more is", "more are")} ${props.elsewhere}.`}</Small></View>}
       </If>
-      <If when={props.review.files.length} else={<EmptyState title="No changed files" />}>
+      <If when={props.files.length} else={<EmptyState title={props.empty ?? "No changed files"} />}>
         <Tree testID="review-tree" accessibilityLabel="Changed files" style={{ flex: 1 }} listStyle={{ paddingBottom: 16 }} items={items()} expanded={expandedIds()}
           selected={props.selected === null ? null : reviewFileId(props.selected)} renderItem={row}
           onExpandedChange={event => props.onCollapsed(directories().filter(id => !event.expanded.includes(id)))}
@@ -478,15 +504,14 @@ function Separator(props: { value: DiffSeparator }) {
   );
 }
 
-function DiffPane(props: {
-  review: PullRequestReview; file: PullRequestFileView; layout: DiffLayout; onLayout: (layout: DiffLayout) => void; onBack?: () => void;
+export function DiffPane(props: {
+  file: PullRequestFileView; layout: DiffLayout; onLayout: (layout: DiffLayout) => void; onBack?: () => void; oldTitle: string; newTitle: string;
+  external?: { label: string; url: string };
   index: number; count: number; onStep: (by: number) => void; expanded: boolean; setExpanded?: (expanded: boolean) => void;
 }) {
   let view: DiffViewRef | undefined;
   const stats = signal<DiffStats | null>(null);
   const patch = () => filePatch(props.file);
-  const details = () => props.review.pull.pullRequest;
-  const title = (ref: string | undefined, sha: string | undefined, absent: boolean) => (absent ? "—" : `${ref ?? ""}${sha ? ` (${sha.slice(0, 7)})` : ""}`);
   const heading = { flex: 1, paddingHorizontal: 12, paddingVertical: 4, fontFamily: monospace, fontSize: text.caption, numberOfLines: 1 } as const;
   return (
     <View testID="review-diff" style={{ flex: 1, backgroundColor: palette().background }}>
@@ -522,7 +547,7 @@ function DiffPane(props: {
       <If when={patch()}
         else={
           <EmptyState title={props.file.truncated ? "Too large to show here" : "No text changes to show"}
-            action={<Button small variant="outline" icon="external-link" label="Open on GitHub" onPress={() => openExternal(`${props.review.pull.url}/files`)} />}>
+            action={<If when={props.external}>{external => <Button small variant="outline" icon="external-link" label={external().label} onPress={() => openExternal(external().url)} />}</If>}>
             {props.file.truncated ? "This file's diff is too large for the reviewer." : props.file.status === "renamed" ? "The file was renamed without changes."
               : "The file is binary, or its contents didn't change."}
           </EmptyState>
@@ -531,9 +556,9 @@ function DiffPane(props: {
           <>
             <If when={props.layout === "split"}>
               <View testID="review-revisions" style={{ flexDirection: "row", borderBottomWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
-                <Text style={{ ...heading, color: palette().muted }}>{title(details()?.base.ref, details()?.base.sha, props.file.status === "added")}</Text>
+                <Text style={{ ...heading, color: palette().muted }}>{props.file.status === "added" ? "—" : props.oldTitle}</Text>
                 <Divider vertical />
-                <Text style={{ ...heading, color: palette().muted }}>{title(details()?.head.ref, details()?.head.sha, props.file.status === "removed")}</Text>
+                <Text style={{ ...heading, color: palette().muted }}>{props.file.status === "removed" ? "—" : props.newTitle}</Text>
               </View>
             </If>
             <DiffView ref={ref => { view = ref; }} testID="review-diff-view" style={{ flex: 1 }}

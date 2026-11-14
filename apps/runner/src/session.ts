@@ -21,6 +21,8 @@ import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson } from "./protocol.js";
+import { localChangesRequest, type LocalChanges, type LocalChangesRequest } from "../../../packages/shared/src/local-changes.js";
+import { LOCAL_CHANGES_SECONDS, localChangesCommand, NotARepository, parseLocalChanges } from "./local-changes.js";
 import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
 import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
@@ -1324,6 +1326,36 @@ export class RunnerSession {
       if (/invalid relative path|absolute paths|path traversal|path component is not a real directory/.test(message)) throw new RunnerError(422, "Invalid worktree path");
       if (/too many entries/.test(message)) throw new RunnerError(422, "That directory has too many entries to list");
       if (code === "EACCES" || code === "ELOOP" || /permission denied|symlinks are not followed|too many levels of symbolic links/.test(message)) throw new RunnerError(422, "That path can't be read");
+      throw error;
+    }
+  }
+
+  async changes(ticket: RunnerTicket, input: unknown): Promise<LocalChanges> {
+    this.assertTicket(ticket);
+    await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    let request: LocalChangesRequest;
+    try { request = localChangesRequest(input); } catch { throw new RunnerError(400, "Invalid local changes request"); }
+    const marker = randomBytes(16).toString("hex");
+    const operation: Operation = { kind: "program", tool: "git", command: localChangesCommand(request, marker) };
+    const unbounded = !this.hostCommands.shellAllowed();
+    const onHost = this.hostCommands.runsOnHost(operation, unbounded);
+    const authorize = async () => {
+      await this.hostCommands.requireHostEnvironment();
+      if (onHost) await this.hostCommands.require(ticket.actorId, "Reading the worktree's Git changes");
+      await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    };
+    await authorize();
+    let output: string;
+    try {
+      output = await this.sandbox.execute(operation, this.sandbox.isolated, authorize, { allowTestShell: this.testShell(), unbounded,
+        ...await this.#calls.commandOptions(LOCAL_CHANGES_SECONDS), signal: AbortSignal.timeout(LOCAL_CHANGES_SECONDS * 1000) });
+    } catch (error) {
+      if (error instanceof RunnerError) throw error;
+      throw new RunnerError(422, "The worktree's Git changes couldn't be read. Is git installed on the host, and the session idle?");
+    }
+    try { return parseLocalChanges(output, marker, request); }
+    catch (error) {
+      if (error instanceof NotARepository) throw new RunnerError(422, error.message);
       throw error;
     }
   }

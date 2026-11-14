@@ -330,7 +330,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (!url.pathname.startsWith(prefix) || url.search) throw new RunnerError(400, "Invalid path");
     const route = url.pathname.slice(prefix.length);
     const since = /^view\/([0-9a-f]{32})$/.exec(route)?.[1];
-    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image", sudo: "sudo" };
+    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", changes: "changes", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image", sudo: "sudo" };
     const action = since ? "view" : actions[route];
     if (!action) throw new RunnerError(404, "Unknown runner endpoint");
     if (c.req.method !== (action === "view" || action === "events" ? "GET" : "POST")) throw new RunnerError(405, "Method not allowed");
@@ -395,6 +395,7 @@ export function createRunnerApp(service: RunnerService): Hono {
         || typeof input.path !== "string" || !input.path || input.path.length > 1024) throw new RunnerError(400, "Invalid file browser request");
       return c.json({ files: await session.browse(ticket, input.path) });
     }
+    if (action === "changes") return c.json({ changes: await session.changes(ticket, input) });
     if (action === "upload") return c.json(await session.upload(ticket, input));
     if (action === "image") return c.json(await session.entryImage(ticket, input));
     if (action === "restart") {

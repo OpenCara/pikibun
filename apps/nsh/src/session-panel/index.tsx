@@ -9,6 +9,7 @@ import { withUsernames, type Person } from "../../../../packages/client/src/user
 import { palette, radius } from "../theme";
 import { CollapsibleRow, EmptyState, IconButton, ResourceState, Section, Segmented, Value } from "../ui";
 import { Browser } from "./Browser";
+import { Changes } from "./Changes";
 import { Details } from "./Details";
 import { Files } from "./Files";
 import type { PanelTabProps } from "./parts";
@@ -71,6 +72,7 @@ function DetailsTab(props: PanelProps) {
 export const panelTabs: readonly PanelTab[] = [
   { id: "details", label: "Details", Component: DetailsTab },
   { id: "files", label: "Files", Component: Files },
+  { id: "changes", label: "Changes", Component: Changes },
   { id: "review", label: "Review", Component: Review },
   { id: "browser", label: "Browser", Component: Browser },
   { id: "schedules", label: "Schedules", Component: Schedules },
@@ -82,10 +84,10 @@ const nativeSheet = platform.os === "ios";
 export function SessionPanel(props: PanelProps & { open: boolean; onClose: () => void }) {
   const tab = signal(panelTabs[0]!.id);
   const sideways = () => windowSize().width >= 700;
-  const wide = () => tab() === "files" || tab() === "browser" || tab() === "review";
+  const wide = () => tab() === "files" || tab() === "browser" || tab() === "review" || tab() === "changes";
   const expanded = signal(false);
   const expandable = () => sideways() && !nativeSheet;
-  const full = () => expandable() && expanded() && tab() === "review";
+  const full = () => expandable() && expanded() && (tab() === "review" || tab() === "changes");
   const body = () => (
     <View testID="session-panel" accessibilityLabel="Session details" style={{ flex: 1 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, paddingHorizontal: 12, borderBottomWidth: 1, borderColor: palette().border }}>

@@ -186,7 +186,7 @@ export interface RunnerBinding {
   agent: AgentVersion;
   model: ModelDefinition;
 }
-export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "backup" | "restart" | "restore" | "stop" | "files"
+export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "backup" | "restart" | "restore" | "stop" | "files" | "changes"
   | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel" | "image" | "sudo";
 
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
