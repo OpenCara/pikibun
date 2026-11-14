@@ -15,7 +15,7 @@ import { Files } from "./Files";
 import type { PanelTabProps } from "./parts";
 import { Review } from "./Review";
 import { Schedules } from "./Schedules";
-import { TabPage } from "./parts";
+import { createPanelBacks, TabPage } from "./parts";
 import { createWorkspacePeople } from "../lib/people";
 
 export interface PanelProps extends PanelTabProps {
@@ -88,6 +88,12 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
   const expanded = signal(false);
   const expandable = () => sideways() && !nativeSheet;
   const full = () => expandable() && expanded() && (tab() === "review" || tab() === "changes");
+  const backs = createPanelBacks();
+  const closed = (event: { open: boolean; reason?: string }) => {
+    if (event.open) return;
+    if (event.reason === "cancel" && backs.back()) return;
+    props.onClose();
+  };
   const body = () => (
     <View testID="session-panel" accessibilityLabel="Session details" style={{ flex: 1 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, paddingHorizontal: 12, borderBottomWidth: 1, borderColor: palette().border }}>
@@ -100,21 +106,21 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
       <Each of={[tab()]} key={id => id}>
         {id => {
           const Tab = panelTabs.find(item => item.id === id())!.Component;
-          return <Tab {...props} expanded={full} setExpanded={expandable() ? value => expanded.set(value) : undefined} />;
+          return <Tab {...props} backs={backs} expanded={full} setExpanded={expandable() ? value => expanded.set(value) : undefined} />;
         }}
       </Each>
     </View>
   );
   if (nativeSheet) {
     return (
-      <Dialog open={props.open} presentation="pageSheet" onOpenChange={event => { if (!event.open) props.onClose(); }}
+      <Dialog open={props.open} presentation="pageSheet" onOpenChange={closed}
         style={{ flex: 1, backgroundColor: palette().background }}>
         {body()}
       </Dialog>
     );
   }
   return (
-    <Sheet open={props.open} side={sideways() ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
+    <Sheet open={props.open} side={sideways() ? "right" : "bottom"} closeOnSwipe onOpenChange={closed}
       backdropStyle={{ backgroundColor: palette().backdrop }}
       popupStyle={sideways()
         ? { width: full() ? "100%" : wide() ? 720 : 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background, borderLeftWidth: full() ? 0 : 1, borderColor: palette().border }

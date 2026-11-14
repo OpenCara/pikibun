@@ -7,7 +7,7 @@ import { Icon, type IconName } from "../icons";
 import { monospace, palette, radius, text } from "../theme";
 import { Banner, EmptyState, IconButton, ResourceState, Row, Segmented, Small } from "../ui";
 import { Card } from "../settings/accounts";
-import { TabPage, type PanelTabProps } from "./parts";
+import { SwipeBack, TabPage, type PanelTabProps } from "./parts";
 
 const childPath = (directory: string, name: string) => (directory === "." ? name : `${directory}/${name}`);
 const parentPath = (path: string) => { const index = path.lastIndexOf("/"); return index < 0 ? "." : path.slice(0, index); };
@@ -34,7 +34,14 @@ export function Files(props: PanelTabProps) {
   const directory = signal(".");
   const file = signal<string | null>(null);
   const open = (path: string) => { directory.set(path); file.set(null); };
+  const back = () => {
+    if (file() !== null) { file.set(null); return true; }
+    if (directory() !== ".") { directory.set(parentPath(directory())); return true; }
+    return false;
+  };
+  props.backs?.add(back);
   return (
+    <SwipeBack testID="files-swipe" onBack={file() !== null || directory() !== "." ? () => { back(); } : undefined}>
     <TabPage testID="panel-files">
       <If when={props.session()} else={<Small>Loading…</Small>}>
         {current => (
@@ -47,6 +54,7 @@ export function Files(props: PanelTabProps) {
         )}
       </If>
     </TabPage>
+    </SwipeBack>
   );
 }
 

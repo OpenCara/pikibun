@@ -10,7 +10,7 @@ import { Icon } from "../icons";
 import { monospace, palette, radius, text, weight } from "../theme";
 import { Banner, Button, EmptyState, IconButton, Loading, Picker, Segmented, Small } from "../ui";
 import { filesUnavailable } from "./Files";
-import type { PanelTabProps } from "./parts";
+import { SwipeBack, type PanelTabProps } from "./parts";
 import { Branch, DiffPane, FilesTree, plural, revision } from "./Review";
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : "");
@@ -70,6 +70,12 @@ function LocalChangesView(props: PanelTabProps) {
     const first = order()[0];
     if (expanded() && first !== undefined && !untracked(file)) selected.set(first);
   });
+  props.backs?.add(() => {
+    if (expanded()) return false;
+    if (selected() !== null) { selected.set(null); return true; }
+    if (commit() !== null) { scope(directory(), null); return true; }
+    return false;
+  });
   let seen: string | undefined;
   effect(() => {
     const watched = `${props.session()?.activity ?? ""}|${props.view()?.busy ? "busy" : "idle"}`;
@@ -80,23 +86,27 @@ function LocalChangesView(props: PanelTabProps) {
   });
 
   const sidebar = (current: () => LocalChanges) => (
+    <SwipeBack testID="changes-swipe" onBack={!expanded() && current().commit ? () => scope(current().directory, null) : undefined}>
     <Sidebar changes={current()} tab={tab()} onTab={value => tab.set(value)} grouped={grouped()} onGrouped={value => grouped.set(value)} tree={tree()}
       collapsed={collapsed()} onCollapsed={value => collapsed.set(value)} selected={selected()} onSelect={path => selected.set(path)}
       onRepository={value => scope(value, null)} onCommit={value => scope(current().directory, value)}
       loading={resource.loading()} error={resource.error()} onRefresh={() => void resource.refresh()} expanded={expanded()} setExpanded={props.setExpanded} />
+    </SwipeBack>
   );
   const titles = (current: LocalChanges) => {
     const head = current.repositories.find(item => item.directory === current.directory)?.head;
     return current.commit ? { old: `${short(current.commit)}^`, new: short(current.commit) } : { old: revision("HEAD", head), new: "Working tree" };
   };
   const diff = (current: () => LocalChanges, open: () => PullRequestFileView, back: boolean) => (
-    <Each of={[open().path]} key={path => path}>
-      {() => (
-        <DiffPane file={open()} layout={layout()} onLayout={value => chosenLayout.set(value)} onBack={back ? () => selected.set(null) : undefined}
-          oldTitle={titles(current()).old} newTitle={titles(current()).new}
-          index={order().indexOf(open().path)} count={order().length} onStep={step} expanded={expanded()} setExpanded={props.setExpanded} />
-      )}
-    </Each>
+    <SwipeBack testID="review-swipe" edge onBack={back ? () => selected.set(null) : undefined}>
+      <Each of={[open().path]} key={path => path}>
+        {() => (
+          <DiffPane file={open()} layout={layout()} onLayout={value => chosenLayout.set(value)} onBack={back ? () => selected.set(null) : undefined}
+            oldTitle={titles(current()).old} newTitle={titles(current()).new}
+            index={order().indexOf(open().path)} count={order().length} onStep={step} expanded={expanded()} setExpanded={props.setExpanded} />
+        )}
+      </Each>
+    </SwipeBack>
   );
   return (
     <If when={shown()}

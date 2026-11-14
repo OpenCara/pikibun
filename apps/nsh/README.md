@@ -66,7 +66,12 @@ needs a decision stand out:
   window, the tree beside the diff in a `ResizablePanelGroup`; the tree and the patch it draws from are
   `packages/shared/src/pull-request-review.ts`. The **Changes** tab (`src/session-panel/Changes.tsx`) is the same tree
   and diff over what Git sees in a clone of the session's worktree, as IDEA's Commit and Git windows: the uncommitted
-  changes, the branch's commits, and one commit's changes, read from the session's host.
+  changes, the branch's commits, and one commit's changes, read from the session's host. Under 700 points of width
+  (`compactPanel` in `src/session-panel/parts.tsx`) both tabs are a phone's: a list of 44-point rows by directory for
+  the tree, and a one-column diff with its controls in a bar at the bottom. `SwipeBack` there is the swipe that goes
+  back on touch platforms (a `pan` on the page, and a strip at a diff's left edge for when its lines scroll sideways),
+  and `createPanelBacks` the steps Android's back button and Escape take before the panel closes: each tab adds its
+  own, and the panel asks them when its sheet is cancelled.
 - **Kit**: first drawn as the React web client's. `src/tokens.ts` has its three themes (light, dark and Pikibun's night
   theme) under its CSS variables' names; `src/theme.ts` builds the palettes from
   them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget was drawn from
