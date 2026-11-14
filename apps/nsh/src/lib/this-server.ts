@@ -178,14 +178,8 @@ export async function signInToThisServer(options: { switching?: boolean } = {}):
   for (let tries = 0; tries < 120 && untracked(server.status).state === "starting"; tries++) await new Promise(resolve => setTimeout(resolve, 250));
   const origin = untracked(() => server.running());
   if (!origin) throw new Error(untracked(server.error) || `Pikibun on ${computerName} didn't start: see its Recent activity.`);
-  if (options.switching && untracked(servers).some(item => item.origin === origin)) {
-    try {
-      await switchServer(origin);
-      return origin;
-    } catch {
-      // The saved sign-in no longer works: sign in again with the server's own token.
-    }
-  }
+  const savedSignIn = options.switching === true && untracked(servers).some(item => item.origin === origin);
+  if (savedSignIn && await switchServer(origin).then(() => true, () => false)) return origin;
   await signInToLocalServer(origin, server.requireSignInToken(origin), options);
   return origin;
 }
