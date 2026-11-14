@@ -149,6 +149,9 @@ export class SessionExtensions {
 
   async ensure(sources: readonly LoadedSource[]): Promise<void> {
     const opened: OpenedSource[] = [];
+    const mounts = sources.filter(loaded => !loaded.factories && !loaded.summary.error && !this.#opened.some(item => item.source === loaded.summary.source))
+      .map(loaded => loaded.mount);
+    if (mounts.length) this.channel(false).mount?.(mounts);
     for (const loaded of sources) {
       const source = loaded.summary.source;
       if (this.#opened.some(item => item.source === source) || loaded.summary.error) continue;
@@ -158,7 +161,7 @@ export class SessionExtensions {
         if (factories) this.#factories.set(source, factories);
         const models = factories ? [] : listedModels(this.host);
         const link: Link = { source, channel: this.channel(factories !== undefined), handlers: new Set() };
-        const result = await request(this.host, link, "open", { source, files: loaded.files, models });
+        const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));

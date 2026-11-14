@@ -21,8 +21,10 @@ its host has.
 3. **Hosts install, the host owner clicks.** Only the host's owner installs, updates or removes an extension on the host:
    from its page in Pikibun, where extensions a workspace uses but the host lacks show an **Install** button, or with
    `pikibun extensions` on the machine. Every install is pinned, runs no npm scripts, and is audited.
-4. **In the connector process.** Extensions run in the connector, as the host's OS user, outside the sandbox, with its
-   files, credentials and network. A buggy one can slow or crash the connector. Isolation is later work. Modules are
+4. **In a process of their own.** Each session's installed extensions run in a process of their own, which a timeout or
+   a crash ends without the connector; on Linux, in a sandboxed session, inside the session's sandbox and behind its
+   egress proxy ([extension-isolation.md](extension-isolation.md)). Pikibun's own extensions built into the connector
+   run in it. Modules are
    found as Pi finds them: a directory a package's `pi.extensions` names loads its `index.ts`/`index.js` alone when it
    has one, so CLIs bundled next to it (which may exit the process) never load.
 5. **Approval by default.** An extension tool call is decided like `host_bash`, by the host's owner or a member granted
@@ -236,8 +238,8 @@ a private network address. See its [README](../../extensions/context-files/READM
 
 ## Later
 
-- Isolation in a per-session child process, in the session's sandbox and behind its egress proxy: planned in
-  [extension-isolation.md](extension-isolation.md).
+- Isolation in the session's sandbox on macOS and Windows, whose sandboxes have no services yet: the rest of
+  [extension-isolation.md](extension-isolation.md)'s step 3.
 - Pikibun's own hook packages (`piki:pr-flow`, `piki:context-files`, `piki:prompt-audit`) installed by the store at a
   version the control plane pins, instead of compiled into the connector: planned in
   [extension-loading.md](extension-loading.md).

@@ -38,6 +38,7 @@ export interface SessionPikiOptions {
   metadata(): Promise<Metadata>;
   mutate(change: (state: Metadata) => void): Promise<void>;
   hostConfig(): Promise<HostConfig>;
+  extensionProcess?: ExtensionHost["extensionProcess"];
 }
 
 export class SessionPiki {
@@ -64,6 +65,7 @@ export class SessionPiki {
       hookTimeoutMs: 30_000,
       inputTimeoutMs: 60_000,
       warn: (source, message) => { process.stderr.write(`Session ${binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
+      ...(this.options.extensionProcess ? { extensionProcess: this.options.extensionProcess } : {}),
     };
   }
 
