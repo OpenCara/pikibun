@@ -698,8 +698,9 @@ that kind of task on, among the models that host offers. The member still choose
     model. The answer must be one JSON object, `{ "kind", "harder", "reason" }` (`parseEvaluation`), the reason cut to
     200 characters; then `dispatchModel` chooses and the runner configures the conversation as for a model picked by
     hand. The run keeps the choice (`run.auto`), and its candidate list is dropped from the run once chosen, so a
-    retry of the message and the check whether a message steers the run compare options with `auto` as `true`
-    (`comparableOptions`): the list a retry carries is the host's at that moment, which may differ; the
+    retry of the message compares options with `auto` as `true` (`comparableOptions`): the list a retry carries is
+    the host's at that moment, which may differ. Whether a message steers the run compares the options as they are,
+    so an Auto message never steers a run whose choice is made: it waits, and is judged on its own turn; the
     conversation shows it as a system entry after the message (`workspace.run-auto`, `autoChoiceText`: "Auto: Claude
     Sonnet 5.5, medium reasoning, for well-scoped coding: a bug fix in one module. Judged by Claude Haiku 5.5."). A
     new session is created on the member's last model, which its first message's choice replaces; the form shows no

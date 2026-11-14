@@ -889,6 +889,9 @@ test("run queue: only the running sender's next shared message, with the same op
   assert.equal(steers({ conversationId: 2 }), undefined, "another conversation waits");
   assert.equal(steers({ images: { count: 1, bytes: 4 } }), undefined, "a message with images waits");
   assert.equal(steers({ screening: true }), undefined, "a message still screened waits");
+  const auto = runs({ options: { auto: { candidates: [{ provider: "p", modelId: "m", name: "M" }] } } });
+  auto.r1!.options = { auto: true };
+  assert.equal(steersInto(auto, auto.q0!), undefined, "an Auto message waits to be judged on its own turn, not steering a run whose choice is made");
   const stopping = runs({});
   stopping.r1!.stopped = { by: "github:2", pending: true };
   assert.equal(steersInto(stopping, stopping.q0!), undefined, "nothing steers a stopping run");
