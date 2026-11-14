@@ -4,13 +4,14 @@ import { HomeUpdate } from "./components/AppUpdate";
 import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
 import { startUpdateChecks } from "./lib/app-update";
-import { auth, restore, session } from "./lib/auth";
+import { addServer, auth, restore, servers, session, switchServer } from "./lib/auth";
+import { createAction, type Action } from "./lib/resource";
 import { createNotificationDelivery } from "./lib/notifications";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
-import { usesBrowserSession } from "./lib/server";
+import { displayOrigin, usesBrowserSession } from "./lib/server";
 import { takeRememberedInvite, takeReturn } from "./lib/sign-in-memory";
-import { resumeThisComputer } from "./lib/this-computer";
-import { resumeThisServer } from "./lib/this-server";
+import { computerName, hostsHere, resumeThisComputer } from "./lib/this-computer";
+import { onThisComputer, resumeThisServer, signInToThisServer, thisServer } from "./lib/this-server";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
@@ -25,7 +26,7 @@ import { applyStoredAppearance } from "./settings/Appearance";
 import { findSection, SectionList } from "./settings";
 import { layout, palette } from "./theme";
 import { Logo } from "./logo";
-import { IconButton, IdentityBadge, Loading, NavItem } from "./ui";
+import { DropdownMenu, IconButton, IdentityBadge, Loading, NavItem, Small, type MenuAction } from "./ui";
 
 type Route =
   | { name: "sessions" }
@@ -285,6 +286,7 @@ function Sidebar(props: {
   onNewIn: (workspaceId: string) => void; onWorkspaceSettings: (workspaceId: string) => void; onNewWorkspace: () => void;
 }) {
   const user = () => session().user;
+  const switching = createAction();
   return (
     <View testID="sidebar" style={{ width: layout.sidebar, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
       <View desktop={{ windowDrag: true }} style={{ gap: 2, paddingTop: 12, paddingHorizontal: 8, paddingBottom: 8 }}>
@@ -295,13 +297,45 @@ function Sidebar(props: {
       </View>
       <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} onNewIn={props.onNewIn} onWorkspaceSettings={props.onWorkspaceSettings}
         onNewWorkspace={props.onNewWorkspace} />
+      <If when={switching.error()}>
+        {problem => <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}><Small tone="danger" testID="server-switch-problem">{problem()}</Small></View>}
+      </If>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>
         <NavItem testID="open-profile" style={{ flex: 1 }} label={user().username || user().githubLogin ? `@${user().username || user().githubLogin}` : user().displayName}
           leading={<IdentityBadge name={user().displayName || user().githubLogin || "?"} id={user().id} />} onPress={() => props.onSettings("profile")} />
-        <IconButton testID="open-hosts" icon="server" label="Hosts" onPress={() => props.onSettings("hosts")} />
+        <If when={!usesBrowserSession} else={<IconButton testID="open-hosts" icon="server" label="Hosts" onPress={() => props.onSettings("hosts")} />}>
+          <ServerSwitch action={switching} />
+        </If>
         <IconButton testID="open-settings" icon="settings" label="Settings" onPress={() => props.onSettings()} />
       </View>
     </View>
+  );
+}
+
+function ServerSwitch(props: { action: Action }) {
+  const current = () => session().origin;
+  const own = () => (hostsHere ? thisServer().running() : undefined);
+  const run = (work: () => Promise<unknown>) => { if (!props.action.busy()) void props.action.run(async () => { await work(); }); };
+  const items = (): (MenuAction | "separator")[] => {
+    const saved = servers();
+    const list = saved.some(item => item.origin === current()) ? saved : [{ origin: current(), account: "" }, ...saved];
+    const mine = (origin: string) => (own() ? origin === own() : onThisComputer(origin));
+    const rows = list.filter(item => !mine(item.origin)).map((item): MenuAction => ({
+      label: displayOrigin(item.origin), icon: item.origin === current() ? "check" : "server", testID: `server-menu-${displayOrigin(item.origin)}`,
+      hint: item.origin === current() ? [item.account, "This server"].filter(Boolean).join(" · ") : item.account || undefined,
+      onSelect: () => { if (item.origin !== untracked(current)) run(() => switchServer(item.origin)); },
+    }));
+    const here = mine(current());
+    const local: MenuAction[] = hostsHere ? [{
+      label: `Pikibun on ${computerName}`, icon: here ? "check" : "database", testID: "server-menu-own",
+      hint: here ? "This server" : own() ? "Running on this computer" : "Starts your own Pikibun on this computer",
+      onSelect: () => { if (!mine(untracked(current))) run(() => signInToThisServer({ switching: true })); },
+    }] : [];
+    return [...local, ...rows, "separator", { label: "Add a server", icon: "plus", testID: "server-menu-add", onSelect: addServer }];
+  };
+  return (
+    <DropdownMenu label="Switch server" placement="top" items={items()}
+      trigger={<IconButton testID="open-servers" icon="server" label="Switch server" onPress={() => undefined} />} />
   );
 }
 

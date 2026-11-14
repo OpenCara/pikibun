@@ -1,6 +1,6 @@
 import { signal, Storage, untracked } from "nsh";
 import type { ServerEvent, ServerInspection, ServerRequest, ServerStatus } from "../../../../packages/shared/src/app-server-protocol";
-import { auth, restore } from "./auth";
+import { auth, restore, servers, signInToLocalServer, switchServer } from "./auth";
 import { CommandChannel, commandProblem, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine } from "./pikibun-command";
 import { computerName, computerTitle, hostsHere, thisComputer } from "./this-computer";
 
@@ -163,6 +163,31 @@ export function setServerConsent(ask: typeof consent): void { consent = ask; }
 export function thisServer(): ThisServer {
   shared ??= new ThisServer(warning => consent(warning));
   return shared;
+}
+
+const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
+export const onThisComputer = (origin: string): boolean => hostsHere && LOOPBACK.test(origin);
+
+export async function signInToThisServer(options: { switching?: boolean } = {}): Promise<string> {
+  const server = thisServer();
+  await server.load();
+  if (untracked(server.status).state === "stopped") {
+    const outcome = await server.start();
+    if (!outcome.ok) throw new Error(outcome.error ?? `Pikibun's command on ${computerName} has to be installed or updated before Pikibun can start.`);
+  }
+  for (let tries = 0; tries < 120 && untracked(server.status).state === "starting"; tries++) await new Promise(resolve => setTimeout(resolve, 250));
+  const origin = untracked(() => server.running());
+  if (!origin) throw new Error(untracked(server.error) || `Pikibun on ${computerName} didn't start: see its Recent activity.`);
+  if (options.switching && untracked(servers).some(item => item.origin === origin)) {
+    try {
+      await switchServer(origin);
+      return origin;
+    } catch {
+      // The saved sign-in no longer works: sign in again with the server's own token.
+    }
+  }
+  await signInToLocalServer(origin, server.requireSignInToken(origin), options);
+  return origin;
 }
 
 export function resumeThisServer(): void {
