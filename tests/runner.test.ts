@@ -1015,6 +1015,27 @@ test("a backup fails instead of copying a database that did not close cleanly", 
   assert.ok((await session.view()).entries.length > 0);
 });
 
+test("a backup too large to keep is refused with a reason its owner can act on, and the session goes on", hostMode, async t => {
+  const { service } = await hostFixture(t);
+  const id = "backup-large-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const tooLarge = (error: unknown) => error instanceof RunnerError && error.status === 422 && /too large to back up/.test(error.message);
+  const large = join(session.sandbox.worktree, "large.bin");
+  const larger = join(session.sandbox.worktree, "larger.bin");
+  await writeFile(large, Buffer.alloc(20 * 1024 * 1024, 1));
+  await assert.rejects(session.backup(await ticket(id, "backup")), tooLarge, "files the snapshot takes, but a backup can't hold");
+  await writeFile(larger, Buffer.alloc(16 * 1024 * 1024, 1));
+  await assert.rejects(session.backup(await ticket(id, "backup")), tooLarge, "files the snapshot itself refuses");
+  const conversation = await session.backup(await ticket(id, "backup"), { conversationOnly: true });
+  assert.equal(conversation.conversationOnly, true);
+  await rm(large);
+  await rm(larger);
+  assert.equal((await session.backup(await ticket(id, "backup"))).format, "pi-runner-backup-v1");
+  await session.submit(await ticket(id, "submit"), { content: "TEST_IDENTITY", requestId: "after" }, "write");
+  await idle(session);
+  assert.ok((await session.view()).entries.length > 0);
+});
+
 test("entries carry how long each reply took and each tool ran", hostMode, async t => {
   const { service } = await hostFixture(t);
   const id = "duration-session";

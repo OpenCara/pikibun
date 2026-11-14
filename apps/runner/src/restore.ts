@@ -9,10 +9,11 @@ import { validCloneDirectory, validPushBranch } from "../../../packages/shared/s
 import { chatImageLimits } from "../../../packages/shared/src/chat-images.js";
 import { assertId, RunnerError, stableJson, validateBinding, validateOperation } from "./protocol.js";
 import { Sandbox } from "./sandbox.js";
+import { MAX_BACKUP_BYTES } from "./backup.js";
 import { rememberToolDefinitions } from "./defined-tools.js";
 import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 
-const MAX_BYTES = 24 * 1024 * 1024;
+const MAX_BYTES = MAX_BACKUP_BYTES;
 const MAX_FILES = 10_000;
 const DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
 const FILE_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;

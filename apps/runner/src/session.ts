@@ -70,6 +70,7 @@ import type { GitRemote } from "./git-remote.js";
 import type { RepositoryCache } from "./repo-cache.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
+import { backupRefusal, boundedBackup } from "./backup.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { configuredCompaction, hostCompaction } from "./compaction.js";
 import { ActivityReporter, sessionActivity } from "./activity.js";
@@ -1228,16 +1229,16 @@ export class RunnerSession {
       try {
         const sqlite = await readFile(this.sqlitePath, "base64");
         if (conversationOnly) {
-          return { format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files: [], conversationOnly: true,
-            createdAt: new Date().toISOString() };
+          return boundedBackup<RunnerBackup>({ format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files: [], conversationOnly: true,
+            createdAt: new Date().toISOString() });
         }
         const authorize = async () => { await this.authorize(ticket.actorId, "manage"); };
         const sandboxed = this.#clone && this.#egress;
         const { clones, found } = sandboxed ? await isolatedWorkspace(this.sandbox).cloneBackup(authorize) : { clones: [], found: [] };
         const files = sandboxed ? await isolatedWorkspace(this.sandbox).snapshot(authorize, found) : await this.sandbox.snapshot(authorize);
-        return { format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files, ...(clones.length ? { clones } : {}),
-          createdAt: new Date().toISOString() };
-      } finally { await this.open(); }
+        return boundedBackup<RunnerBackup>({ format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files, ...(clones.length ? { clones } : {}),
+          createdAt: new Date().toISOString() });
+      } catch (error) { throw backupRefusal(error); } finally { await this.open(); }
     });
   }
 
