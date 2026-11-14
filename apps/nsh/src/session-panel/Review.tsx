@@ -12,7 +12,7 @@ import { Icon } from "../icons";
 import { monospace, palette, radius, text, weight, type Tone } from "../theme";
 import { Banner, Button, Divider, EmptyState, IconButton, Loading, Segmented, Small } from "../ui";
 import { languageFor } from "./Files";
-import type { PanelTabProps } from "./parts";
+import { compactPanel, SwipeBack, type PanelTabProps } from "./parts";
 
 const ideaLight = { added: "#0a7700", modified: "#0032a0", removed: "#616161", renamed: "#007c7c", copied: "#0a7700", inserted: "#bee6be", deleted: "#d6d6d6", insertedBar: "#62b543", deletedBar: "#a9a9a9" };
 const ideaDark = { added: "#73a866", modified: "#6897bb", removed: "#7d7d7d", renamed: "#4aa3a3", copied: "#73a866", inserted: "#294436", deleted: "#484a4a", insertedBar: "#549159", deletedBar: "#6c6c6c" };
@@ -88,6 +88,11 @@ function Reviewer(props: PanelTabProps & { url: string }) {
     const first = order()[0];
     if (expanded() && first !== undefined && !untracked(file)) selected.set(first);
   });
+  props.backs?.add(() => {
+    if (expanded() || selected() === null) return false;
+    selected.set(null);
+    return true;
+  });
   let seen: string | undefined;
   effect(() => {
     const state = props.session()?.pullRequest?.state ?? "";
@@ -103,14 +108,16 @@ function Reviewer(props: PanelTabProps & { url: string }) {
       loading={resource.loading()} onRefresh={() => void resource.refresh()} expanded={expanded()} setExpanded={props.setExpanded} />
   );
   const diff = (current: () => PullRequestReview, open: () => PullRequestFileView, back: boolean) => (
-    <Each of={[open().path]} key={path => path}>
-      {() => (
-        <DiffPane file={open()} layout={layout()}
-          oldTitle={revision(current().pull.pullRequest?.base.ref, current().pull.pullRequest?.base.sha)} newTitle={revision(current().pull.pullRequest?.head.ref, current().pull.pullRequest?.head.sha)}
-          external={{ label: "Open on GitHub", url: `${current().pull.url}/files` }} onLayout={value => chosenLayout.set(value)} onBack={back ? () => selected.set(null) : undefined}
-          index={order().indexOf(open().path)} count={order().length} onStep={step} expanded={expanded()} setExpanded={props.setExpanded} />
-      )}
-    </Each>
+    <SwipeBack testID="review-swipe" edge onBack={back ? () => selected.set(null) : undefined}>
+      <Each of={[open().path]} key={path => path}>
+        {() => (
+          <DiffPane file={open()} layout={layout()}
+            oldTitle={revision(current().pull.pullRequest?.base.ref, current().pull.pullRequest?.base.sha)} newTitle={revision(current().pull.pullRequest?.head.ref, current().pull.pullRequest?.head.sha)}
+            external={{ label: "Open on GitHub", url: `${current().pull.url}/files` }} onLayout={value => chosenLayout.set(value)} onBack={back ? () => selected.set(null) : undefined}
+            index={order().indexOf(open().path)} count={order().length} onStep={step} expanded={expanded()} setExpanded={props.setExpanded} />
+        )}
+      </Each>
+    </SwipeBack>
   );
   return (
     <If when={review()}
@@ -297,6 +304,44 @@ export function FilesTree(props: FilesTreeProps) {
   });
   const directories = computed(() => reviewDirectoryIds(props.tree));
   const expandedIds = () => directories().filter(id => !props.collapsed.includes(id));
+  const sections = computed(() => {
+    const byPath = new Map(props.files.map(item => [item.path, item]));
+    const found: { directory: string; files: PullRequestFileView[] }[] = [];
+    for (const path of reviewFileOrder(props.tree)) {
+      const item = byPath.get(path);
+      if (!item) continue;
+      const directory = props.grouped ? directoryName(path) : "";
+      const last = found.at(-1);
+      if (last && last.directory === directory) last.files.push(item);
+      else found.push({ directory, files: [item] });
+    }
+    return found;
+  });
+  const touchRow = (item: () => PullRequestFileView) => (
+    <BaseButton testID={`review-${reviewFileId(item().path)}`} accessibilityLabel={`${item().path}, ${pullRequestFileStatusLabels[item().status]}`}
+      onPress={() => props.onSelect(item().path)}
+      style={{ flexDirection: "row", alignItems: "center", gap: 10, minHeight: props.grouped ? 44 : 52, paddingLeft: 16, paddingRight: 10,
+        backgroundColor: props.selected === item().path ? palette().selection : "transparent" }}
+      activeStyle={{ backgroundColor: palette().hover }}>
+      <Icon name="file" size={16} color={statusColor(item().status)} />
+      <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+        <Text style={{ numberOfLines: 1, fontSize: text.body, color: statusColor(item().status) }}>{baseName(item().path)}</Text>
+        <If when={!props.grouped && directoryName(item().path)}>
+          <Text style={{ numberOfLines: 1, fontSize: text.caption, color: palette().faint }}>{directoryName(item().path)}</Text>
+        </If>
+      </View>
+      <If when={props.comments?.get(item().path)}>
+        {count => (
+          <View accessibilityLabel={plural(count(), "review comment")} style={{ flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 0 }}>
+            <Icon name="message" size={12} color={palette().muted} />
+            <Text style={{ fontSize: text.caption, color: palette().muted }}>{String(count())}</Text>
+          </View>
+        )}
+      </If>
+      <Counts additions={item().additions} deletions={item().deletions} />
+      <Icon name="chevron-right" size={14} color={palette().faint} />
+    </BaseButton>
+  );
   const row = (entry: TreeEntry): JSX.Element => {
     const node = () => nodes().get(entry.id);
     const current = () => node()?.file;
@@ -340,14 +385,34 @@ export function FilesTree(props: FilesTreeProps) {
         <View style={{ flex: 1 }} />
         <IconButton testID="review-group" icon="folder" label={props.grouped ? "Show the files as a list" : "Group the files by directory"} size={28} active={props.grouped}
           onPress={() => props.onGrouped(!props.grouped)} />
-        <IconButton testID="review-expand-all" icon="unfold" label="Expand all" size={28} disabled={!props.grouped || !props.collapsed.length} onPress={() => props.onCollapsed([])} />
-        <IconButton testID="review-collapse-all" icon="fold" label="Collapse all" size={28} disabled={!props.grouped || !expandedIds().length}
-          onPress={() => props.onCollapsed(directories())} />
+        <If when={!compactPanel()}>
+          <IconButton testID="review-expand-all" icon="unfold" label="Expand all" size={28} disabled={!props.grouped || !props.collapsed.length} onPress={() => props.onCollapsed([])} />
+          <IconButton testID="review-collapse-all" icon="fold" label="Collapse all" size={28} disabled={!props.grouped || !expandedIds().length}
+            onPress={() => props.onCollapsed(directories())} />
+        </If>
       </View>
       <If when={props.omitted}>
         {omitted => <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}><Small>{`Showing the first ${props.files.length} files; ${plural(omitted(), "more is", "more are")} ${props.elsewhere}.`}</Small></View>}
       </If>
-      <If when={props.files.length} else={<EmptyState title={props.empty ?? "No changed files"} />}>
+      <If when={props.files.length && compactPanel()}>
+        <Scroll testID="review-list" accessibilityLabel="Changed files" style={{ flex: 1 }} contentStyle={{ paddingBottom: 24 }}>
+          <Each of={sections()} key="index">
+            {section => (
+              <>
+                <If when={props.grouped}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 30, paddingHorizontal: 16, backgroundColor: palette().surface }}>
+                    <Icon name="folder" size={12} color={palette().muted} />
+                    <Text style={{ flex: 1, numberOfLines: 1, fontFamily: monospace, fontSize: text.caption, color: palette().muted }}>{section().directory || "/"}</Text>
+                  </View>
+                </If>
+                <Each of={section().files} key={item => item.path}>{touchRow}</Each>
+              </>
+            )}
+          </Each>
+        </Scroll>
+      </If>
+      <If when={!props.files.length}><EmptyState title={props.empty ?? "No changed files"} /></If>
+      <If when={props.files.length && !compactPanel()}>
         <Tree testID="review-tree" accessibilityLabel="Changed files" style={{ flex: 1 }} listStyle={{ paddingBottom: 16 }} items={items()} expanded={expandedIds()}
           selected={props.selected === null ? null : reviewFileId(props.selected)} renderItem={row}
           onExpandedChange={event => props.onCollapsed(directories().filter(id => !event.expanded.includes(id)))}
@@ -475,6 +540,8 @@ function Info(props: { review: PullRequestReview; onSelect: (path: string) => vo
   );
 }
 
+const wrapLines = signal(true);
+
 function diffStyles(): DiffViewStyles {
   const colors = idea();
   return {
@@ -513,8 +580,25 @@ export function DiffPane(props: {
   const stats = signal<DiffStats | null>(null);
   const patch = () => filePatch(props.file);
   const heading = { flex: 1, paddingHorizontal: 12, paddingVertical: 4, fontFamily: monospace, fontSize: text.caption, numberOfLines: 1 } as const;
+  const compact = () => compactPanel() && !props.expanded;
+  const layout = (): DiffLayout => (compact() ? "unified" : props.layout);
+  const origin = () => (props.file.previousPath ? `${directoryName(props.file.path)} · from ${props.file.previousPath}` : directoryName(props.file.path));
   return (
     <View testID="review-diff" style={{ flex: 1, backgroundColor: palette().background }}>
+      <If when={compact()}>
+        <View testID="review-diff-header" style={{ flexDirection: "row", alignItems: "center", gap: 4, minHeight: 52, paddingLeft: 4, paddingRight: 12, borderBottomWidth: 1, borderColor: palette().border }}>
+          <If when={props.onBack} else={<View style={{ width: 8 }} />}>
+            {back => <IconButton testID="review-back" icon="chevron-left" label="Back to the files" size={40} onPress={() => back()()} />}
+          </If>
+          <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+            <Text testID="review-diff-path" accessibilityLabel={`${props.file.path}, ${pullRequestFileStatusLabels[props.file.status]}`}
+              style={{ numberOfLines: 1, fontSize: text.body, fontWeight: weight.medium, color: statusColor(props.file.status) }}>{baseName(props.file.path)}</Text>
+            <If when={origin()}><Text style={{ numberOfLines: 1, fontSize: text.caption, color: palette().faint }}>{origin()}</Text></If>
+          </View>
+          <Text testID="review-file-position" style={{ flexShrink: 0, fontSize: text.caption, color: palette().muted }}>{`${props.index + 1} of ${props.count}`}</Text>
+        </View>
+      </If>
+      <If when={!compact()}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, minHeight: 40, paddingHorizontal: 6, borderBottomWidth: 1, borderColor: palette().border }}>
         <If when={props.onBack}>{back => <IconButton testID="review-back" icon="chevron-left" label="Back to the files" size={28} onPress={() => back()()} />}</If>
         <IconButton testID="review-previous-change" icon="arrow-up" label="Previous change" size={28} disabled={!stats()?.hunks} onPress={() => void view?.previousHunk()} />
@@ -541,6 +625,7 @@ export function DiffPane(props: {
             label={props.expanded ? "Back to the side panel" : "Expand to the full window"} onPress={() => set()(!props.expanded)} />}
         </If>
       </View>
+      </If>
       <If when={props.file.redacted}>
         <View style={{ paddingHorizontal: 12, paddingTop: 8 }}><Banner title="Secret hidden">{`Something that looks like a secret is shown as ${REDACTED}, as in the conversation.`}</Banner></View>
       </If>
@@ -554,7 +639,7 @@ export function DiffPane(props: {
         }>
         {unified => (
           <>
-            <If when={props.layout === "split"}>
+            <If when={layout() === "split"}>
               <View testID="review-revisions" style={{ flexDirection: "row", borderBottomWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
                 <Text style={{ ...heading, color: palette().muted }}>{props.file.status === "added" ? "—" : props.oldTitle}</Text>
                 <Divider vertical />
@@ -562,10 +647,25 @@ export function DiffPane(props: {
               </View>
             </If>
             <DiffView ref={ref => { view = ref; }} testID="review-diff-view" style={{ flex: 1 }}
-              patch={unified()} language={languageFor(props.file.path)} layout={props.layout} inline="word" indicators="bars" background={false} fontSize={text.small} lineHeight={20}
+              patch={unified()} language={languageFor(props.file.path)} layout={layout()} inline="word" indicators="bars" background={false}
+              softWrap={compact() && wrapLines()} fontSize={compact() ? text.caption : text.small} lineHeight={compact() ? 18 : 20}
               styles={diffStyles()} renderSeparator={value => <Separator value={value} />} onStatsChange={event => stats.set(event.stats)} />
           </>
         )}
+      </If>
+      <If when={compact()}>
+        <View testID="review-diff-bar" style={{ flexDirection: "row", alignItems: "center", gap: 2, minHeight: 52, paddingHorizontal: 6, borderTopWidth: 1, borderColor: palette().border,
+          backgroundColor: palette().surface }}>
+          <IconButton testID="review-previous-file" icon="chevron-left" label="Previous file" size={40} disabled={props.index <= 0} onPress={() => props.onStep(-1)} />
+          <IconButton testID="review-next-file" icon="chevron-right" label="Next file" size={40} disabled={props.index < 0 || props.index >= props.count - 1} onPress={() => props.onStep(1)} />
+          <Text testID="review-differences" style={{ flex: 1, textAlign: "center", numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>
+            {stats() ? plural(stats()!.hunks, "difference") : ""}
+          </Text>
+          <IconButton testID="review-wrap" icon="wrap" label={wrapLines() ? "Scroll long lines sideways" : "Wrap long lines"} size={40} active={wrapLines()}
+            onPress={() => wrapLines.update(value => !value)} />
+          <IconButton testID="review-previous-change" icon="arrow-up" label="Previous change" size={40} disabled={!stats()?.hunks} onPress={() => void view?.previousHunk()} />
+          <IconButton testID="review-next-change" icon="arrow-down" label="Next change" size={40} disabled={!stats()?.hunks} onPress={() => void view?.nextHunk()} />
+        </View>
       </If>
     </View>
   );

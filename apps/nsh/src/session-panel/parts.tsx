@@ -19,10 +19,11 @@ export const compactPanel = () => windowSize().width > 0 && windowSize().width <
 
 export const swipesBack = !platform.desktop;
 const swipeBackDistance = 96;
-const swipeBackFling = 500;
+const swipeBackFling = 800;
+const swipeBackFlingDistance = 32;
 
 export function swipedBack(event: Pick<PanEvent, "cancelled" | "translation" | "velocity">): boolean {
-  return !event.cancelled && event.translation.x > 0 && (event.translation.x >= swipeBackDistance || event.velocity.x >= swipeBackFling);
+  return !event.cancelled && event.translation.x > 0 && (event.translation.x >= swipeBackDistance || (event.translation.x >= swipeBackFlingDistance && event.velocity.x >= swipeBackFling));
 }
 
 export interface PanelBacks {
@@ -44,7 +45,7 @@ export function createPanelBacks(): PanelBacks {
   };
 }
 
-export function SwipeBack(props: { onBack?: () => void; edgeTop?: number; testID?: string; children?: JSX.Element }) {
+export function SwipeBack(props: { onBack?: () => void; edge?: boolean; testID?: string; children?: JSX.Element }) {
   const x = createAnimatedValue(0);
   const shift = x.interpolate({ inputRange: [0, 1200], outputRange: [0, 1200], extrapolate: "clamp" });
   const active = () => swipesBack && Boolean(props.onBack);
@@ -61,9 +62,9 @@ export function SwipeBack(props: { onBack?: () => void; edgeTop?: number; testID
       <View pan={active() ? { x } : undefined} panActivation={activation} onPanEnd={end} style={{ flex: 1, transform: [{ translateX: active() ? shift : 0 }] }}>
         {props.children}
       </View>
-      <If when={active()}>
+      <If when={active() && props.edge}>
         <View accessible={false} pan={{ x }} panActivation={activation} onPanEnd={end}
-          style={{ position: "absolute", left: 0, top: props.edgeTop ?? 0, bottom: 0, width: 16 }} />
+          style={{ position: "absolute", left: 0, top: 56, bottom: 56, width: 16 }} />
       </If>
     </View>
   );
