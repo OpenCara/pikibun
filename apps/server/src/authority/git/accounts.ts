@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import type { GitAccount, GitHubDeviceSignIn, GitHubDeviceSignInState, GitProvider, ProviderRepository, ProviderRepositoryList, TokenGitProvider } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviderHosts, gitProviderNames, gitProviders, plainRepositoryPath, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../../packages/shared/src/repositories.js';
 import type { Env, GitCredentialRow, AppEnv } from '../../types.js';
@@ -187,7 +188,7 @@ const DEVICE_SCOPE = 'read:user user:email repo workflow';
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 const DEVICE_UNAVAILABLE = 'GitHub could not be reached to sign in. Try again.';
 
-interface DeviceSignIn { id: string; userId: string; deviceCode: string; expiresAt: number; intervalMs: number; nextPollAt: number; polling: boolean }
+interface DeviceSignIn { id: string; userId: string; deviceCode: string; expiresAt: number; intervalMs: number; nextPollAt: number; polling: boolean; token?: string }
 const deviceSignIns = new Map<string, DeviceSignIn>();
 
 async function githubDevice(path: string, body: Record<string, string>): Promise<Record<string, unknown>> {
@@ -233,22 +234,33 @@ async function pollDeviceSignIn(env: Env, userId: string, signInId: string): Pro
   if (entry.polling || Date.now() < entry.nextPollAt) return pending();
   entry.polling = true;
   try {
-    const answer = await githubDevice('oauth/access_token', { client_id: LOCAL_GITHUB_CLIENT_ID, device_code: entry.deviceCode, grant_type: DEVICE_GRANT });
-    if (answer.error === 'slow_down') entry.intervalMs = Math.min(entry.intervalMs + 5000, 120_000);
-    entry.nextPollAt = Date.now() + entry.intervalMs;
-    if (answer.error === 'authorization_pending' || answer.error === 'slow_down') return pending();
-    deviceSignIns.delete(entry.id);
-    if (answer.error === 'expired_token') fail(410, 'github_sign_in_expired', expired);
-    if (answer.error === 'access_denied') fail(403, 'github_sign_in_denied', 'The sign-in was cancelled on GitHub. Start it again to connect.');
-    const token = answer.access_token;
-    if (answer.error !== undefined || typeof token !== 'string' || !/^[\x21-\x7e]{1,4096}$/.test(token) ||
-        typeof answer.token_type !== 'string' || answer.token_type.toLowerCase() !== 'bearer') {
-      fail(502, 'invalid_git_response', answer.error === 'device_flow_disabled'
-        ? 'GitHub sign-in isn\'t available for this Pikibun now. Connect with a personal access token instead.' : DEVICE_UNAVAILABLE);
+    if (entry.token === undefined) {
+      const answer = await githubDevice('oauth/access_token', { client_id: LOCAL_GITHUB_CLIENT_ID, device_code: entry.deviceCode, grant_type: DEVICE_GRANT });
+      if (answer.error === 'slow_down') entry.intervalMs = Math.min(entry.intervalMs + 5000, 120_000);
+      entry.nextPollAt = Date.now() + entry.intervalMs;
+      if (answer.error === 'authorization_pending' || answer.error === 'slow_down') return pending();
+      const token = answer.access_token;
+      if (answer.error !== undefined || typeof token !== 'string' || !/^[\x21-\x7e]{1,4096}$/.test(token) ||
+          typeof answer.token_type !== 'string' || answer.token_type.toLowerCase() !== 'bearer') {
+        deviceSignIns.delete(entry.id);
+        if (answer.error === 'expired_token') fail(410, 'github_sign_in_expired', expired);
+        if (answer.error === 'access_denied') fail(403, 'github_sign_in_denied', 'The sign-in was cancelled on GitHub. Start it again to connect.');
+        fail(409, 'github_sign_in_unavailable', answer.error === 'device_flow_disabled'
+          ? 'GitHub sign-in isn\'t available for this Pikibun now. Connect with a personal access token instead.'
+          : 'GitHub didn\'t complete the sign-in. Start it again, or connect with a personal access token instead.');
+      }
+      entry.token = token;
     }
-    const account = await connectGitHubToken(env, userId, token, (owner, login) =>
-      `You signed in to GitHub as @${owner.login}. This Pikibun's owner signed in with ${login ? `@${login}` : 'another GitHub account'}: sign in to GitHub as that account.`);
-    return { status: 'connected', account };
+    entry.nextPollAt = Date.now() + entry.intervalMs;
+    try {
+      const account = await connectGitHubToken(env, userId, entry.token, (owner, login) =>
+        `You signed in to GitHub as @${owner.login}. This Pikibun's owner signed in with ${login ? `@${login}` : 'another GitHub account'}: sign in to GitHub as that account.`);
+      deviceSignIns.delete(entry.id);
+      return { status: 'connected', account };
+    } catch (error) {
+      if (!(error instanceof HTTPException && error.status === 502)) deviceSignIns.delete(entry.id);
+      throw error;
+    }
   } finally {
     entry.polling = false;
   }

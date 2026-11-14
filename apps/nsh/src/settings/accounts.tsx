@@ -156,6 +156,7 @@ function GitHubSignInSheet(props: { open: boolean; close: () => void; connected:
   const starting = signal(false);
   const error = signal("");
   let run = 0;
+  let interval = 5;
   let timer: ReturnType<typeof setTimeout> | undefined;
   function stop() {
     run++;
@@ -169,13 +170,16 @@ function GitHubSignInSheet(props: { open: boolean; close: () => void; connected:
     try {
       const answer = await session().api<GitHubDeviceSignInState>(`/api/git/accounts/github/device/${segment(current.id)}`, { method: "POST" });
       if (mine !== run) return;
-      if (answer.status === "pending") return wait(current, mine, answer.interval);
+      if (answer.status === "pending") return wait(current, mine, interval = answer.interval);
       stop();
-      await props.connected();
-      props.close();
+      try {
+        await props.connected();
+      } finally {
+        props.close();
+      }
     } catch (reason) {
       if (mine !== run) return;
-      if (reason instanceof ApiError && reason.status === 502) return wait(current, mine, current.interval);
+      if (reason instanceof ApiError && reason.status === 502) return wait(current, mine, interval);
       signIn.set(null);
       error.set(errorMessage(reason));
     }
@@ -190,7 +194,7 @@ function GitHubSignInSheet(props: { open: boolean; close: () => void; connected:
       if (mine !== run) return;
       starting.set(false);
       signIn.set(answer.signIn);
-      wait(answer.signIn, mine, answer.signIn.interval);
+      wait(answer.signIn, mine, interval = answer.signIn.interval);
     }, reason => {
       if (mine !== run) return;
       starting.set(false);
@@ -216,7 +220,7 @@ function GitHubSignInSheet(props: { open: boolean; close: () => void; connected:
       <If when={signIn()}>
         {current => (
           <>
-            <Field label="Your code" hint={`Enter it at ${current().verificationUri.replace(/^https:\/\//, "")}. It signs in only this Pikibun, and stops working after 15 minutes`}>
+            <Field label="Your code" hint={`Enter it at ${current().verificationUri.replace(/^https:\/\//, "")}. It signs in only this Pikibun, and stops working after ${Math.max(1, Math.round((Date.parse(current().expiresAt) - Date.now()) / 60_000))} minutes`}>
               <CopyField value={current().userCode} label="Copy code" />
             </Field>
             <Note testID="github-sign-in-waiting">Waiting for GitHub…</Note>

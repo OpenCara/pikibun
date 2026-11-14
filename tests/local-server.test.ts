@@ -339,8 +339,17 @@ test("a local server's owner signs in to GitHub with a code entered there: the d
   assert.equal(calls.length, 3, "slowed down, it waits longer");
 
   grant = () => Response.json({ access_token: "gho_device_token", token_type: "bearer", scope: "repo" });
+  let identityDown = true;
+  const fetched = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+    (identityDown && String(input) === "https://api.github.com/user" ? new Response(null, { status: 503 }) : fetched(input, init)));
   t.mock.timers.tick(5000);
+  assert.equal((await poll(first.id)).status, 502, "GitHub granted the token, then couldn't say whose it is");
+  identityDown = false;
+  const granted = calls.filter(call => call.url.endsWith("/access_token")).length;
+  t.mock.timers.tick(10_000);
   const done = await poll(first.id);
+  assert.equal(calls.filter(call => call.url.endsWith("/access_token")).length, granted, "the granted token is kept for the next poll: a device code is spent once");
   assert.equal(done.status, 200);
   assert.deepEqual(await done.json(), { status: "connected", account: { id: "github", provider: "github", host: "github.com", organization: "", login: "octo", createdAt: null } });
   const { user } = await (await f.request("/api/me", { Cookie: owner.cookie })).json() as { user: { githubConnected: boolean; githubLogin: string; githubId: string } };
@@ -355,6 +364,13 @@ test("a local server's owner signs in to GitHub with a code entered there: the d
   const refused = await poll(denied.id);
   assert.equal(refused.status, 403);
   assert.equal(await errorCode(refused), "github_sign_in_denied");
+
+  const disabled = await start();
+  grant = () => Response.json({ error: "device_flow_disabled" });
+  t.mock.timers.tick(5000);
+  const unavailable = await poll(disabled.id);
+  assert.equal(unavailable.status, 409, "a final refusal isn't a 502, which the page retries");
+  assert.equal(await errorCode(unavailable), "github_sign_in_unavailable");
 
   const replaced = await start();
   const current = await start();
