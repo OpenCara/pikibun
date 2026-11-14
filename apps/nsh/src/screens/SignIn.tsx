@@ -92,6 +92,7 @@ function SignInForm(props: { inviteToken?: string }) {
   const callbackError = signal("");
   const selfHostOpen = signal(false);
   const codeText = signal("");
+  const codeOpened = signal(false);
   const codeFromLink = signal(false);
   const parsed = () => parseOrigin(server());
   const origin = () => {
@@ -137,8 +138,8 @@ function SignInForm(props: { inviteToken?: string }) {
     if (!signInCode()) return { tone: "danger" as const, text: "That isn't a sign-in link or code. Copy the whole link Pikibun shows under Sign in an app." };
     return target ? { tone: undefined, text: `Signs in to ${displayOrigin(target)}.` } : { tone: "danger" as const, text: "Enter this server's address above first." };
   };
-  const closeCode = () => { codeText.set(""); codeFromLink.set(false); };
-  const codeShown = () => !usesBrowserSession && (!local() || codeFromLink());
+  const closeCode = () => { codeText.set(""); codeFromLink.set(false); codeOpened.set(false); };
+  const codeShown = () => !usesBrowserSession && (!local() || codeOpened());
 
   function submitCode() {
     const code = signInCode();
@@ -193,6 +194,7 @@ function SignInForm(props: { inviteToken?: string }) {
         action.clear();
         codeText.set(url);
         codeFromLink.set(true);
+        codeOpened.set(true);
       }
     }));
   }

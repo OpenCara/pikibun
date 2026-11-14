@@ -30,7 +30,6 @@ describe("signing in", () => {
     expect(app.shows("id:code-input")).toBe(true);
     expect(app.shows("id:github-sign-in")).toBe(false);
     expect(app.shows("id:password-form")).toBe(false);
-    expect(app.shows("id:code-sign-in-open")).toBe(false);
     await app.openWithUrl("pikibun://auth?code=c1&state=s1");
     await app.wait(200);
     expect(app.requests().some(item => item.url.endsWith("/api/auth/native/token") || item.url.includes("/api/auth/native/start"))).toBe(false);

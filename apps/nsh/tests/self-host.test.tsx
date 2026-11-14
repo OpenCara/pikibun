@@ -200,6 +200,26 @@ describe("Self host in the app", () => {
     expect(wrong.storage()["pikibun.token"]).toBe(undefined);
   });
 
+  test("a code link opened while the app points at a Pikibun on this Mac keeps its form open as it is edited, until it is cancelled", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
+      network: servedLocally(true), storage: { "pikibun.origin": LOCAL } });
+    await app.waitFor("id:local-link");
+    expect(app.shows("id:code-form")).toBe(false);
+    await app.openWithUrl(`pikibun://auth/code?${new URLSearchParams({ server: ORIGIN, code: "d".repeat(43) }).toString()}`);
+    await app.waitFor("id:code-link-confirm");
+    await app.type("id:code-input", "x");
+    await app.waitUntil(() => !app.shows("id:code-link-confirm"));
+    expect(app.shows("id:code-form")).toBe(true);
+    await app.clear("id:code-input");
+    await app.wait(100);
+    expect(app.shows("id:code-form")).toBe(true);
+    await app.openWithUrl(`pikibun://auth/code?${new URLSearchParams({ server: ORIGIN, code: "d".repeat(43) }).toString()}`);
+    await app.waitFor("id:code-link-confirm");
+    await app.press("id:code-cancel");
+    await app.waitUntil(() => !app.shows("id:code-form"));
+    expect(app.storage()["pikibun.token"]).toBeUndefined();
+  });
+
   test("signed in elsewhere, Settings › Self host switches the app to Pikibun on this Mac after asking, and signs in to it", async () => {
     const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
       network: { ...remote(), ...servedLocally(true) }, storage: signedIn });
