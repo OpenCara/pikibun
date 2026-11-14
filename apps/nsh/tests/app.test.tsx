@@ -245,7 +245,8 @@ describe("on a phone", () => {
     await app.waitFor("text:Fix the flaky login test");
     expect(app.texts()).toContain("Analytical Engine");
     expect(app.shows("text:Old spike")).toBe(false);
-    await app.press("id:toggle-archived");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-archived-w1");
     await app.waitFor("text:Old spike");
   });
 

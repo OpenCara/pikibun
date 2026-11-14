@@ -74,7 +74,8 @@ describe("a session's right-click menu", () => {
 
   test("unarchives an archived session", async () => {
     const app = await desktop({ [`POST ${ORIGIN}/api/sessions/s2/unarchive`]: { body: { ok: true } } });
-    await app.press("id:toggle-archived");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-archived-w1");
     await app.waitFor("id:session-row-s2");
     await app.rightClick("id:session-row-s2");
     await app.waitFor("id:menu-unarchive");

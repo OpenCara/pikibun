@@ -11,7 +11,7 @@ import { palette, radius, text, type Tone } from "../theme";
 import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, StatusDot, SwipeRow, swipesRows, type MenuAction } from "../ui";
 
 type Row =
-  | { kind: "workspace"; key: string; id: string; title: string; count: number; canCreate: boolean }
+  | { kind: "workspace"; key: string; id: string; title: string; count: number; archived: number; showArchived: boolean; canCreate: boolean }
   | { kind: "session"; key: string; session: SessionRecord; depth: number }
   | { kind: "start"; key: string; workspaceId: string };
 
@@ -45,22 +45,25 @@ export function SessionList(props: {
   const data = useAppData();
   const menu = createSessionMenu();
   const query = signal("");
-  const showArchived = signal(false);
+  const showArchived = signal<readonly string[]>([]);
   const collapsed = signal<readonly string[]>([]);
   const swiped = signal<string | null>(null);
   const swipe = (id: string, open: boolean) => swiped.update(current => (open ? id : current === id ? null : current));
-  const archivedCount = () => data.sessions().filter(item => item.status === "archived").length;
   const rows = computed<Row[]>(() => {
     const needle = query().trim().toLowerCase();
     const byWorkspace = new Map<string, SessionRecord[]>();
+    const archived = new Map<string, number>();
     for (const item of data.sessions()) {
-      if (item.status === "archived" && !showArchived()) continue;
+      if (item.status === "archived") {
+        archived.set(item.workspaceId, (archived.get(item.workspaceId) ?? 0) + 1);
+        if (!showArchived().includes(item.workspaceId)) continue;
+      }
       if (!matchesSession(item, needle)) continue;
       const list = byWorkspace.get(item.workspaceId);
       if (list) list.push(item);
       else byWorkspace.set(item.workspaceId, [item]);
     }
-    if (!needle) for (const workspace of data.workspaces()) if (!byWorkspace.has(workspace.id)) byWorkspace.set(workspace.id, []);
+    if (!needle) for (const id of [...data.workspaces().map(workspace => workspace.id), ...archived.keys()]) if (!byWorkspace.has(id)) byWorkspace.set(id, []);
     const order = data.workspaces().map(workspace => workspace.id);
     const rank = (id: string) => { const index = order.indexOf(id); return index < 0 ? order.length : index; };
     return [...byWorkspace.entries()].sort(([a], [b]) => rank(a) - rank(b)).flatMap(([id, sessions]): Row[] => {
@@ -68,13 +71,19 @@ export function SessionList(props: {
       const canCreate = Boolean(workspace && canCreateSessions(workspace.role));
       const folded = collapsed().includes(id) && !needle;
       return [
-        { kind: "workspace", key: `workspace:${id}`, id, count: sessions.length, canCreate, title: workspace?.name ?? "Other workspace" },
+        { kind: "workspace", key: `workspace:${id}`, id, count: sessions.length, archived: archived.get(id) ?? 0, showArchived: showArchived().includes(id), canCreate,
+          title: workspace?.name ?? "Other workspace" },
         ...(folded ? [] : nestSessions(sessions).map(({ session: item, depth }): Row => ({ kind: "session", key: item.id, session: item, depth }))),
         ...(!folded && !sessions.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
       ];
     });
   });
-  const toggle = (id: string) => collapsed.update(current => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]));
+  const flip = (id: string) => (current: readonly string[]) => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  const toggle = (id: string) => collapsed.update(flip(id));
+  const toggleArchived = (id: string) => {
+    showArchived.update(flip(id));
+    if (showArchived().includes(id)) collapsed.update(current => current.filter(item => item !== id));
+  };
   const refreshing = signal(false);
   let pulls = 0;
   function pullToRefresh() {
@@ -107,15 +116,6 @@ export function SessionList(props: {
         )}
         footer={() => (
           <View style={{ paddingHorizontal: inset(), paddingTop: 12, gap: 2 }}>
-            <If when={archivedCount() > 0}>
-              <BaseButton testID="toggle-archived" accessibilityLabel={showArchived() ? "Hide archived" : `Show archived (${archivedCount()})`}
-                onPress={() => showArchived.update(value => !value)}
-                style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, minHeight: 34, borderRadius: radius.medium }}
-                hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
-                <Icon name="archive" size={14} color={palette().muted} />
-                <Text style={{ fontSize: text.body, color: palette().muted }}>{showArchived() ? "Hide archived" : `Show archived (${archivedCount()})`}</Text>
-              </BaseButton>
-            </If>
             <If when={props.onNewWorkspace && data.workspaces().length > 0}>
               <BaseButton testID="sidebar-new-workspace" accessibilityLabel="New workspace" onPress={() => props.onNewWorkspace?.()}
                 style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, minHeight: 34, borderRadius: radius.medium }}
@@ -138,7 +138,7 @@ export function SessionList(props: {
                 <EmptyState title="No sessions yet" action={<Button label="New session" icon="plus" variant="primary" onPress={props.onNew} />}>Start one to put an agent to work on your workspace's repositories.</EmptyState>
               </If>
             }>
-            <EmptyState title={!query().trim() && !showArchived() ? "All sessions are archived" : "No matching sessions"} />
+            <EmptyState title="No matching sessions" />
           </If>
         )}>
         {row => (
@@ -148,7 +148,7 @@ export function SessionList(props: {
                 <If when={row().kind === "start" ? row() as Extract<Row, { kind: "start" }> : null}
                   else={
                     <WorkspaceRow row={row() as Extract<Row, { kind: "workspace" }>} collapsed={collapsed().includes((row() as Extract<Row, { kind: "workspace" }>).id)}
-                      onToggle={toggle} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} action={menu.action} />
+                      onToggle={toggle} onToggleArchived={toggleArchived} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} action={menu.action} />
                   }>
                   {start => (
                     <BaseButton testID={`workspace-start-${start().workspaceId}`} accessibilityLabel="Start a session" onPress={() => props.onNewIn?.(start().workspaceId)}
@@ -174,12 +174,14 @@ export function SessionList(props: {
 }
 
 function WorkspaceRow(props: {
-  row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; compact?: boolean;
+  row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; onToggleArchived: (id: string) => void; compact?: boolean;
   onNewIn?: (workspaceId: string) => void; onSettings?: (workspaceId: string) => void; action: Action;
 }) {
   const options = (): (MenuAction | "separator")[] => [
     ...(props.row.canCreate && props.onNewIn ? [{ label: "New session", icon: "plus" as const, testID: `workspace-menu-new-${props.row.id}`, onSelect: () => props.onNewIn!(props.row.id) }] : []),
     { label: props.collapsed ? "Expand" : "Collapse", icon: props.collapsed ? "chevron-down" : "chevron-up", testID: `workspace-fold-${props.row.id}`, onSelect: () => props.onToggle(props.row.id) },
+    ...(props.row.archived > 0 ? [{ label: props.row.showArchived ? "Hide archived" : `Show archived (${props.row.archived})`, icon: "archive" as const,
+      testID: `workspace-archived-${props.row.id}`, onSelect: () => props.onToggleArchived(props.row.id) }] : []),
     "separator",
     { label: "Copy workspace ID", icon: "copy", testID: `workspace-copy-id-${props.row.id}`, onSelect: () => void props.action.run(() => Clipboard.writeText(props.row.id), "Workspace ID copied") },
     ...(props.onSettings ? [{ label: "Workspace settings", icon: "settings" as const, testID: `workspace-settings-${props.row.id}`, onSelect: () => props.onSettings!(props.row.id) }] : []),
