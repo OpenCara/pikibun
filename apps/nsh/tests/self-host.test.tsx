@@ -138,10 +138,72 @@ describe("Self host", () => {
 });
 
 describe("Self host in the app", () => {
-  test("signed out, the sign-in screen runs Pikibun on this Mac and signs in to it with its token, no GitHub needed", async () => {
+  test("at its first launch the app starts Pikibun on this Mac and signs in to it with its token, asking no other server anything", async () => {
     const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
       network: servedLocally(false), storage: {} });
+    await app.waitFor("id:session-row-s1");
+    expect(bodyOf(app, "POST", `${LOCAL}/api/auth/native/local`)).toMatchObject({ token: SIGN_IN_TOKEN, deviceName: "Pikibun (macos)" });
+    expect(app.storage()["pikibun.origin"]).toBe(LOCAL);
+    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
+    expect(app.storage()["pikibun.thisServer"]).toBe(JSON.stringify({ resume: { unsandboxedConsent: false } }));
+    expect(app.requests().some(item => !item.url.startsWith(LOCAL))).toBe(false);
+  });
+
+  test("at its first launch, where Pikibun can't start, the app says why and connects to pikibun.com instead, which it remembers", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true, command: "missing" } },
+      network: servedLocally(false), storage: {} });
+    await app.waitFor("id:sign-in-problem");
+    expect(app.texts().some(text => text.includes("has to be installed or updated before Pikibun can start"))).toBe(true);
+    expect(app.shows("id:own-first-start")).toBe(true);
+    expect(app.requests().length).toBe(0);
+    expect(app.shows("id:code-form")).toBe(false);
+    await app.press("id:own-first-default");
+    await app.waitFor("id:server-change");
+    expect(app.shows("text:pikibun.com")).toBe(true);
+    expect(app.shows("id:own-first")).toBe(false);
+    await app.waitUntil(() => app.storage()["pikibun.origin"] === "https://pikibun.com");
+    expect(app.storage()["pikibun.token"]).toBeUndefined();
+  });
+
+  test("at its first launch without Pikibun's command, the app offers to set it up, then signs in", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true, command: "missing" } },
+      network: servedLocally(false), storage: {} });
+    await app.waitFor("id:own-first-setup");
+    await app.press("id:own-first-setup");
+    await app.waitFor("id:self-host-install");
+    await app.press("id:self-host-install");
+    await app.waitUntil(() => !app.shows("id:self-host-command"));
+    await app.press("id:self-host-start");
+    await app.waitFor("id:self-host-use");
+    await app.press("id:self-host-use");
+    await app.waitFor("id:session-row-s1");
+    expect(app.storage()["pikibun.origin"]).toBe(LOCAL);
+  });
+
+  test("signed in elsewhere, the sidebar's server switch starts Pikibun on this Mac, signs in to it and switches back", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
+      network: { ...remote(), ...servedLocally(true) }, storage: signedIn });
+    await app.waitFor("id:session-row-s1");
+    expect(app.shows("id:open-hosts")).toBe(false);
+    await app.press("id:open-servers");
+    await app.waitFor("id:server-menu-own");
+    expect(app.shows("id:server-menu-pikibun.test")).toBe(true);
+    await app.press("id:server-menu-own");
+    await app.waitUntil(() => app.storage()["pikibun.origin"] === LOCAL && app.storage()["pikibun.token"] === TOKEN);
+    expect(bodyOf(app, "POST", `${LOCAL}/api/auth/native/local`)).toMatchObject({ token: SIGN_IN_TOKEN });
+    expect(app.requests().some(item => item.url.endsWith("/api/auth/logout"))).toBe(false);
+    await app.waitFor("id:session-row-s1");
+    await app.press("id:open-servers");
+    await app.waitFor("id:server-menu-pikibun.test");
+    await app.press("id:server-menu-pikibun.test");
+    await app.waitUntil(() => app.storage()["pikibun.origin"] === ORIGIN);
+  });
+
+  test("a signed-out app that chose another server keeps its sign-in screen, which still runs Pikibun on this Mac", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
+      network: servedLocally(false), storage: { "pikibun.origin": "https://pikibun.com" } });
     await app.waitFor("id:sign-in-self-host");
+    expect(app.shows("id:own-first")).toBe(false);
     expect(app.shows("text:Run Pikibun on this Mac")).toBe(true);
     await app.press("id:sign-in-self-host");
     await app.waitFor("id:self-host-start");
