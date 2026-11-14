@@ -1423,9 +1423,11 @@ test('owner runs a session on an unshared host and the default session is listed
   assert.equal(binding.model.id, s.model.id);
   assert.equal(binding.session.visibility, undefined);
   assert.equal(binding.session.permissions, undefined);
+  assert.equal((binding.session as { ownerName?: string }).ownerName, undefined);
   assert.equal(s.hub.requests[0].request.ticket.actorId, s.owner.user.id);
   const { session } = await json<{ session: SessionRecord }>(await s.member.request('GET', `/api/sessions/${s.session.id}`));
   assert.deepEqual(session.permissions, ['read']);
+  assert.equal(session.ownerName, 'private-owner', 'a member sees who owns the session');
   assert.equal(session.visibility, 'workspace');
   assert.equal(session.cloneUnavailable, undefined);
   const { viewable, ...record } = session;

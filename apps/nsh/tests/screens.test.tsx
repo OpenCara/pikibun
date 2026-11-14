@@ -41,6 +41,34 @@ describe("an invite link", () => {
   });
 });
 
+describe("the session list", () => {
+  const teammates = { ...sessionRecord, id: "s5", ownerId: "u2", ownerName: "Grace Hopper", title: "Babbage's notes", permissions: ["read"] };
+  const helped = { ...sessionRecord, id: "s6", ownerId: "u3", ownerName: "Charles Babbage", title: "Engine drawings", permissions: ["read", "ask", "write"] };
+  const network = () => server({ [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [{ ...sessionRecord, ownerName: "Ada Lovelace" }, teammates, helped] } } });
+
+  test("names the owner beside someone else's session, and finds sessions by it", async () => {
+    const app = await open("../App.tsx", { network: network(), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.waitFor("id:session-row-s5");
+    expect(app.texts()).toContain("Needs you · Grace Hopper · Viewer");
+    expect(app.texts()).toContain("Needs you · Charles Babbage");
+    expect(app.texts().join("\n")).not.toContain("Ada Lovelace");
+    await app.type("id:session-search", "grace");
+    await app.waitUntil(() => !app.shows("id:session-row-s6"));
+    expect(app.shows("id:session-row-s5")).toBe(true);
+    expect(app.shows("id:session-row-s1")).toBe(false);
+  });
+
+  test("every session's page names the owner too", async () => {
+    const app = await open("../App.tsx", { network: network(), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.waitFor("id:all-sessions");
+    await app.press("id:all-sessions");
+    await app.waitFor("id:sessions-row-s5");
+    const texts = app.texts().join("\n");
+    expect(texts).toContain("Grace Hopper · Viewer · Workspace-visible");
+    expect(texts).toContain("Yours · Workspace-visible");
+  });
+});
+
 describe("every session", () => {
   test("lists them by workspace, searchable, and opens one", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1280, height: 820 });

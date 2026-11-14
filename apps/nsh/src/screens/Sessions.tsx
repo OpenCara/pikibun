@@ -9,6 +9,7 @@ import { layout, palette, text, weight } from "../theme";
 import { TextField } from "../form";
 import { Button, EmptyState, Feedback, IdentityBadge, InfoTip, Loading, Note, Row, RowMenu, rowPress, StatusDot } from "../ui";
 import { Card } from "../settings/accounts";
+import { matchesSession, sessionOwnerLabel } from "./SessionList";
 
 const PAGE_SIZE = 50;
 
@@ -25,7 +26,7 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
     const byWorkspace = new Map<string, SessionRecord[]>();
     for (const item of data.sessions()) {
       if (item.status === "archived" && !showArchived()) continue;
-      if (needle && !item.title.toLowerCase().includes(needle)) continue;
+      if (!matchesSession(item, needle)) continue;
       const list = byWorkspace.get(item.workspaceId);
       if (list) list.push(item); else byWorkspace.set(item.workspaceId, [item]);
     }
@@ -54,7 +55,7 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
       <If when={!data.sessionsLoading()} else={<Loading />}>
         <If when={data.sessions().length} else={<EmptyState title="No sessions yet" action={<Button variant="ghost" label="Start a session" onPress={props.onNew} />} />}>
           <Scroll style={{ flex: 1 }} contentStyle={{ gap: 32, width: "100%", maxWidth: layout.content, alignSelf: "center", paddingHorizontal: 24, paddingTop: 16, paddingBottom: 48 }}>
-            <TextField testID="sessions-search" value={query()} onChange={value => query.set(value)} placeholder="Search sessions" accessibilityLabel="Search sessions by title" />
+            <TextField testID="sessions-search" value={query()} onChange={value => query.set(value)} placeholder="Search sessions" accessibilityLabel="Search sessions by title or owner" />
             <If when={!menu.renaming() && (menu.action.error() || menu.action.notice())}>
               <View testID="sessions-feedback"><Feedback error={menu.action.error()} notice={menu.action.notice()} /></View>
             </If>
@@ -73,15 +74,14 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
                           {item => {
                             const record = () => item().session;
                             const status = () => sessionStatus(record());
-                            const owner = () => record().ownerId === user.id;
-                            const viewerOnly = () => !owner() && record().permissions?.includes("read") && record().permissions!.every(permission => permission === "read");
+                            const owner = () => sessionOwnerLabel(record(), user.id) || "Yours";
                             return (
                               <RowMenu items={() => menu.items(record())} testID={`sessions-menu-${record().id}`}>
                                 <Row testID={`sessions-row-${record().id}`} chevron onPress={rowPress(() => props.onOpen(record().id))}
                                   leading={<StatusDot tone={status().tone} label={status().label ?? record().status} />}
                                   title={`${item().depth > 0 ? `${"  ".repeat(item().depth - 1)}↳ ` : ""}${record().title}`}
                                   hint={`${status().label ? `${status().label} · ` : ""}${record().tunnel ? "Online · " : ""}${record().pullRequest
-                                    ? `${pullRequestLabel(record().pullRequest!)}${record().pullRequest!.state ? ` ${pullRequestStateLabels[record().pullRequest!.state!]}` : ""} · ` : ""}${owner() ? "Yours" : viewerOnly() ? "Viewer" : "Shared"} · ${record().visibility === "workspace" ? "Workspace-visible" : "Private"} · ${relativeTime(record().createdAt)}`} />
+                                    ? `${pullRequestLabel(record().pullRequest!)}${record().pullRequest!.state ? ` ${pullRequestStateLabels[record().pullRequest!.state!]}` : ""} · ` : ""}${owner()} · ${record().visibility === "workspace" ? "Workspace-visible" : "Private"} · ${relativeTime(record().createdAt)}`} />
                               </RowMenu>
                             );
                           }}
