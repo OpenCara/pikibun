@@ -305,12 +305,13 @@ test("a local server's owner signs in to GitHub with a code entered there: the d
   const owner = await browser(f);
   const calls: { url: string; body: Record<string, string> }[] = [];
   let grant: () => Response = () => Response.json({ error: "authorization_pending" });
+  let identityDown = false;
   t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, body: Object.fromEntries(new URLSearchParams(String(init?.body ?? ""))) });
     if (url === "https://github.com/login/device/code") return Response.json({ device_code: "device-secret", user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5 });
     if (url === "https://github.com/login/oauth/access_token") return grant();
-    if (url === "https://api.github.com/user") return Response.json({ id: 4242, login: "octo" });
+    if (url === "https://api.github.com/user") return identityDown ? new Response(null, { status: 503 }) : Response.json({ id: 4242, login: "octo" });
     return new Response("unexpected", { status: 500 });
   });
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
@@ -339,10 +340,7 @@ test("a local server's owner signs in to GitHub with a code entered there: the d
   assert.equal(calls.length, 3, "slowed down, it waits longer");
 
   grant = () => Response.json({ access_token: "gho_device_token", token_type: "bearer", scope: "repo" });
-  let identityDown = true;
-  const fetched = globalThis.fetch;
-  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
-    (identityDown && String(input) === "https://api.github.com/user" ? new Response(null, { status: 503 }) : fetched(input, init)));
+  identityDown = true;
   t.mock.timers.tick(5000);
   assert.equal((await poll(first.id)).status, 502, "GitHub granted the token, then couldn't say whose it is");
   identityDown = false;
