@@ -18,6 +18,9 @@ export function backupRefusal(error: unknown): unknown {
   if (/too many files|too many entries|nesting limit/.test(message)) {
     return new RunnerError(422, `This session has too many files to back up: a backup holds at most 10,000 files outside its clones. Remove the ones you don't need, ${OR_CONVERSATION}`);
   }
+  if (/local work exceeds the backup size limit/.test(message)) {
+    return new RunnerError(422, `The work in this session's clones that their origins don't have is too large to back up: a backup holds at most 24 MiB. Push it, ${OR_CONVERSATION}`);
+  }
   if (/size limit|byte output limit/.test(message)) return new RunnerError(422, BACKUP_TOO_LARGE);
   if (/need a host with the sandbox/.test(message)) {
     return new RunnerError(422, `This session has a clone in its worktree, which only a host with the sandbox can back up. Push the clone's work, ${OR_CONVERSATION}`);
@@ -25,6 +28,7 @@ export function backupRefusal(error: unknown): unknown {
   if (/borrows objects from the host cache/.test(message)) {
     return new RunnerError(422, "One of this session's clones borrows from the host's repository cache, which it can't read now, so the session can't be backed up yet");
   }
+  if (/too many clones/.test(message)) return new RunnerError(422, `This session has too many clones in its worktree to back up. Remove the ones you don't need, ${OR_CONVERSATION}`);
   if (/too many branches|branch whose name/.test(message)) {
     return new RunnerError(422, "One of this session's clones has too many branches, or a branch whose name a backup can't keep");
   }
