@@ -1,4 +1,5 @@
 import { hasPermission } from '../../../../packages/shared/src/policy.js';
+import { redactPatch } from '../../../../packages/shared/src/pull-request-review.js';
 import { redactSecrets } from '../../../../packages/shared/src/redaction.js';
 import {
   pullRequestReviewLimits, type GitHubIssueView, type PullRequestCommitView, type PullRequestFileStatus, type PullRequestFileView, type PullRequestReview,
@@ -11,7 +12,8 @@ import { githubPullRequest } from './pull-request-states.js';
 import { recheckAccess, type GitHubAccess } from './repositories.js';
 
 const perPage = 100;
-const filePageBytes = 8 * 1024 * 1024;
+const filesPerPage = 30;
+const filePageBytes = 12 * 1024 * 1024;
 const messageCharacters = 4000;
 const encoder = new TextEncoder();
 
@@ -26,13 +28,13 @@ function record(value: unknown): Record<string, unknown> {
 const string = (value: unknown): string => typeof value === 'string' ? value : '';
 const count = (value: unknown): number => Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : 0;
 
-async function listing(github: GitHubAccess, path: string, limit: number, bytes?: number): Promise<Record<string, unknown>[]> {
+async function listing(github: GitHubAccess, path: string, limit: number, size = perPage, bytes?: number): Promise<Record<string, unknown>[]> {
   const items: Record<string, unknown>[] = [];
   for (let page = 1; items.length < limit; page++) {
-    const { value } = await githubGet(github, `${path}?per_page=${perPage}&page=${page}`, bytes);
+    const { value } = await githubGet(github, `${path}?per_page=${size}&page=${page}`, bytes);
     if (!Array.isArray(value)) fail(502, 'invalid_github_response', 'GitHub returned an unexpected response.');
     items.push(...value.map(record));
-    if (value.length < perPage) break;
+    if (value.length < size) break;
   }
   return items.slice(0, limit);
 }
@@ -50,7 +52,7 @@ function fileViews(items: Record<string, unknown>[]): PullRequestFileView[] {
     const size = encoder.encode(patch).length;
     if (size > pullRequestReviewLimits.patchBytes || held + size > pullRequestReviewLimits.totalPatchBytes) return [{ ...view, truncated: true }];
     held += size;
-    const shown = redactSecrets(patch);
+    const shown = redactPatch(patch);
     return [{ ...view, patch: shown, ...(shown !== patch ? { redacted: true as const } : {}) }];
   });
 }
@@ -62,7 +64,7 @@ function commitViews(items: Record<string, unknown>[]): PullRequestCommitView[] 
     const commit = item.commit && typeof item.commit === 'object' ? item.commit as Record<string, unknown> : {};
     const author = commit.author && typeof commit.author === 'object' ? commit.author as Record<string, unknown> : {};
     const account = item.author && typeof item.author === 'object' ? string((item.author as Record<string, unknown>).login) : '';
-    return [{ sha, message: redactSecrets(string(commit.message).slice(0, messageCharacters)), author: account || string(author.name) || null, date: string(author.date) }];
+    return [{ sha, message: redactSecrets(string(commit.message)).slice(0, messageCharacters), author: account || string(author.name) || null, date: string(author.date) }];
   });
 }
 
@@ -93,7 +95,7 @@ export async function sessionPullRequestReview(c: AppContext): Promise<Response>
   let details: Record<string, unknown> | undefined;
   const [view, files, commits] = await Promise.all([
     readIssue(github, pin.fullName, pull.number, value => { details = value; }),
-    listing(github, `${base}/files`, pullRequestReviewLimits.files, filePageBytes),
+    listing(github, `${base}/files`, pullRequestReviewLimits.files, filesPerPage, filePageBytes),
     listing(github, `${base}/commits`, pullRequestReviewLimits.commits),
   ]);
   if (!view.pullRequest || !details) fail(404, 'no_pull_request', 'GitHub has no such pull request in this repository.');

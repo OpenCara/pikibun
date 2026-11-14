@@ -1,4 +1,33 @@
+import { REDACTED, redactSecrets } from "./redaction.js";
 import type { PullRequestFileStatus, PullRequestFileView } from "./types.js";
+
+const keyStart = /-----BEGIN (?:[A-Z0-9]{1,16} ){0,4}PRIVATE KEY(?: BLOCK)?-----/;
+const keyEnd = /-----END (?:[A-Z0-9]{1,16} ){0,4}PRIVATE KEY(?: BLOCK)?-----/;
+
+export function redactPatch(patch: string): string {
+  const inKey = { old: false, new: false };
+  return patch.split("\n").map(line => {
+    if (line.startsWith("@@")) {
+      inKey.old = false;
+      inKey.new = false;
+      const end = line.indexOf("@@", 2);
+      return end < 0 ? line : `${line.slice(0, end + 2)}${redactSecrets(line.slice(end + 2))}`;
+    }
+    if (line.startsWith("\\")) return line;
+    const prefix = /^[-+ ]/.test(line) ? line[0]! : "";
+    const content = line.slice(prefix.length);
+    const sides: ("old" | "new")[] = prefix === "-" ? ["old"] : prefix === "+" ? ["new"] : ["old", "new"];
+    if (sides.some(side => inKey[side])) {
+      if (keyEnd.test(content)) for (const side of sides) inKey[side] = false;
+      return `${prefix}${REDACTED}`;
+    }
+    const start = keyStart.exec(content);
+    if (!start || keyEnd.test(content.slice(start.index))) return `${prefix}${redactSecrets(content)}`;
+    for (const side of sides) inKey[side] = true;
+    const marker = start.index + start[0].length;
+    return `${prefix}${redactSecrets(content.slice(0, start.index))}${start[0]}${content.length > marker ? REDACTED : ""}`;
+  }).join("\n");
+}
 
 export const pullRequestFileStatusLabels: Record<PullRequestFileStatus, string> = {
   added: "Added",
