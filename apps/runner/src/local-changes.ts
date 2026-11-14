@@ -24,23 +24,49 @@ export function localChangesCommand(request: LocalChangesRequest, marker: string
     `M=${marker}`,
     "g() { GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false -c core.quotepath=false -c core.hooksPath=/dev/null -c color.ui=false \"$@\"; }",
     "d() { g diff --no-ext-diff --no-textconv --no-color -M \"$@\"; }",
-    "{ first=; n=0",
-    `for r in */ */*/ .; do r="\${r%/}"; [ -e "$r/.git" ] || continue; n=$((n+1)); [ "$n" -le ${localChangesLimits.repositories} ] || break; [ -n "$first" ] || first="$r"`,
-    "printf '%s\\t%s\\t%s\\n' \"$r\" \"$(g -C \"$r\" symbolic-ref --quiet --short HEAD 2>/dev/null)\" \"$(g -C \"$r\" rev-parse --quiet --verify HEAD 2>/dev/null)\"; done",
+    "{ first=; root=; n=0; top=$(pwd -P)",
+    `for r in . */ */*/; do r="\${r%/}"; [ -e "$r/.git" ] || continue; if [ -L "$r" ] || [ -L "\${r%%/*}" ]; then continue; fi; n=$((n+1)); [ "$n" -le ${localChangesLimits.repositories} ] || break`,
+    "h=$(g -C \"$r\" rev-parse --quiet --verify HEAD 2>/dev/null)",
+    "if [ \"$r\" = . ] && [ -z \"$h\" ]; then root=.; elif [ -z \"$first\" ]; then first=\"$r\"; fi",
+    "printf '%s\\t%s\\t%s\\n' \"$r\" \"$(g -C \"$r\" symbolic-ref --quiet --short HEAD 2>/dev/null)\" \"$h\"; done",
+    "[ -n \"$first\" ] || first=\"$root\"",
     `sel=${request.directory === undefined ? "\"$first\"" : shellQuote(request.directory)}`,
     "printf '%s\\n%s\\n%s\\n' \"$M\" \"$sel\" \"$M\"",
-    "if [ -n \"$sel\" ] && [ -e \"$sel/.git\" ] && cd -- \"./$sel\"; then",
+    "if [ -n \"$sel\" ] && [ -e \"$sel/.git\" ] && cd -- \"./$sel\" && case \"$(pwd -P)/\" in \"$top\"/*) true;; *) false;; esac; then",
     `g log -n ${localChangesLimits.commits} --format='%H%x09%an%x09%aI%x09%s' HEAD 2>/dev/null; printf '%s\\n' "$M"`,
     `g rev-list -n ${localChangesLimits.commits} HEAD --not --remotes 2>/dev/null; printf '%s\\n' "$M"`,
     diff,
-    `fi; } </dev/null | head -c ${localChangesLimits.outputBytes}`,
+    `fi; printf '%s\\n' "$M"; } </dev/null | head -c ${localChangesLimits.outputBytes}`,
   ].join("\n");
 }
 
 interface Parsed { path: string; previousPath?: string; status: PullRequestFileStatus; additions: number; deletions: number; lines: string[]; tooLarge: boolean }
 
+const escapes: Record<string, string> = { n: "\n", t: "\t", r: "\r", a: "\x07", b: "\b", f: "\f", v: "\v" };
+
+export function unquoteGitPath(name: string): string {
+  if (name.length < 2 || !name.startsWith('"') || !name.endsWith('"')) return name;
+  const bytes: number[] = [];
+  const chars = Array.from(name.slice(1, -1));
+  for (let index = 0; index < chars.length; index++) {
+    const char = chars[index]!;
+    if (char !== "\\") { bytes.push(...encoder.encode(char)); continue; }
+    const next = chars[++index] ?? "";
+    if (/[0-7]/.test(next)) {
+      let octal = next;
+      while (octal.length < 3 && /[0-7]/.test(chars[index + 1] ?? "")) octal += chars[++index];
+      bytes.push(parseInt(octal, 8) & 0xff);
+    } else bytes.push(...encoder.encode(escapes[next] ?? next));
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
 function headerPath(line: string): string {
   const rest = line.slice("diff --git ".length);
+  const quoted = / ("(?:[^"\\]|\\.)*")$/.exec(rest);
+  if (quoted) return unquoteGitPath(quoted[1]!).slice(2);
+  const afterQuoted = /^"(?:[^"\\]|\\.)*" b\/(.*)$/.exec(rest);
+  if (afterQuoted) return afterQuoted[1]!;
   const half = (rest.length - 1) / 2;
   if (Number.isInteger(half) && rest.startsWith("a/") && rest[half] === " " && rest.slice(half + 1).startsWith("b/") && rest.slice(2, half) === rest.slice(half + 3)) return rest.slice(2, half);
   const at = rest.lastIndexOf(" b/");
@@ -69,10 +95,11 @@ export function parsePatchFiles(text: string, complete = true): { files: PullReq
     if (line.startsWith("@@")) { hunks = true; current.lines.push(line); }
     else if (line.startsWith("new file mode")) current.status = "added";
     else if (line.startsWith("deleted file mode")) current.status = "removed";
-    else if (line.startsWith("rename from ")) { current.status = "renamed"; current.previousPath = line.slice("rename from ".length); }
-    else if (line.startsWith("copy from ")) { current.status = "copied"; current.previousPath = line.slice("copy from ".length); }
-    else if (line.startsWith("rename to ")) current.path = line.slice("rename to ".length);
-    else if (line.startsWith("copy to ")) current.path = line.slice("copy to ".length);
+    else if (line.startsWith("rename from ")) { current.status = "renamed"; current.previousPath = unquoteGitPath(line.slice("rename from ".length)); }
+    else if (line.startsWith("copy from ")) { current.status = "copied"; current.previousPath = unquoteGitPath(line.slice("copy from ".length)); }
+    else if (line.startsWith("rename to ")) current.path = unquoteGitPath(line.slice("rename to ".length));
+    else if (line.startsWith("copy to ")) current.path = unquoteGitPath(line.slice("copy to ".length));
+    else if (line.startsWith('+++ "b/')) current.path = unquoteGitPath(line.slice("+++ ".length).replace(/\t$/, "")).slice(2);
     else if (line.startsWith("+++ b/")) current.path = line.slice("+++ b/".length).replace(/\t$/, "");
     else if (line === TOO_LARGE) current.tooLarge = true;
   }
@@ -97,10 +124,17 @@ export class NotARepository extends Error {
 }
 
 export function parseLocalChanges(output: string, marker: string, request: LocalChangesRequest): LocalChanges {
-  const complete = encoder.encode(output).length < localChangesLimits.outputBytes;
-  const sections = `\n${output}`.split(`\n${marker}\n`);
-  const selected = (sections[1] ?? "").trim();
-  const found = (sections[0] ?? "").split("\n").flatMap((line): LocalRepository[] => {
+  const lines = output.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const complete = lines.at(-1) === marker;
+  if (complete) lines.pop();
+  const sections: string[][] = [[]];
+  for (const line of lines) {
+    if (line === marker && sections.length < 5) sections.push([]);
+    else sections.at(-1)!.push(line);
+  }
+  const selected = sections[1]?.[0] ?? "";
+  const found = sections[0]!.flatMap((line): LocalRepository[] => {
     const [directory, branch, head] = line.split("\t");
     if (!validChangesDirectory(directory)) return [];
     return [{ directory, branch: branch ? branch.slice(0, 255) : null, head: validChangesCommit(head) ? head : null }];
@@ -116,13 +150,13 @@ export function parseLocalChanges(output: string, marker: string, request: Local
     if (complete) throw new NotARepository();
     return { ...empty, directory: selected, commit: request.commit ?? null, truncated: true };
   }
-  const unpushed = new Set((sections[3] ?? "").split("\n").filter(validChangesCommit));
-  const commits = (sections[2] ?? "").split("\n").flatMap((line): LocalCommit[] => {
+  const unpushed = new Set((sections[3] ?? []).filter(validChangesCommit));
+  const commits = (sections[2] ?? []).flatMap((line): LocalCommit[] => {
     const [sha, author, date, ...subject] = line.split("\t");
     if (!validChangesCommit(sha)) return [];
     return [{ sha, message: subject.join("\t").slice(0, 1000), author: author ? author.slice(0, 255) : null, date: (date ?? "").slice(0, 64), ...(unpushed.has(sha) ? { unpushed: true as const } : {}) }];
   }).slice(0, localChangesLimits.commits);
-  const { files, additions, deletions, omitted } = parsePatchFiles(sections.slice(4).join(`\n${marker}\n`), complete);
+  const { files, additions, deletions, omitted } = parsePatchFiles((sections[4] ?? []).join("\n"), complete);
   return { repositories, directory: selected, commit: request.commit ?? null, files, commits, additions, deletions,
     ...(omitted ? { omitted: { files: omitted } } : {}), ...(complete ? {} : { truncated: true as const }) };
 }

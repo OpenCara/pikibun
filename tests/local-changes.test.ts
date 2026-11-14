@@ -5,7 +5,7 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HostWorkspace } from "../apps/runner/src/host-workspace.js";
-import { localChangesCommand, NotARepository, parseLocalChanges, parsePatchFiles } from "../apps/runner/src/local-changes.js";
+import { localChangesCommand, NotARepository, parseLocalChanges, parsePatchFiles, unquoteGitPath } from "../apps/runner/src/local-changes.js";
 import { Sandbox, type SandboxAuthorize } from "../apps/runner/src/sandbox.js";
 import {
   checkLocalChanges, InvalidLocalChanges, localChangesLimits, localChangesRequest, redactLocalChanges, validChangesDirectory, type LocalChanges, type LocalChangesRequest,
@@ -32,24 +32,28 @@ const setup = [
   "printf 'one\\ntwo\\n' > a.txt && printf 'x\\n' > gone.txt && printf 'r\\n1\\n2\\n3\\n' > old.txt && git add -A && git commit -q -m 'First commit'",
   "printf 'b\\n' > b.txt && git add b.txt && git commit -q -m 'Second\tcommit'",
   "printf 'one\\nTWO\\n' > a.txt && git rm -q gone.txt && git mv old.txt new.txt && printf 'fresh\\n' > untracked.txt && printf 'ignored\\n' > skip.log",
-  "printf '*.log\\n' > .gitignore && git add .gitignore && mkdir 'dir with space' && printf 's\\n' > 'dir with space/f.txt'",
+  "printf '*.log\\n' > .gitignore && git add .gitignore && mkdir 'dir with space' && printf 's\\n' > 'dir with space/f.txt' && printf 'q\\n' > 'quo\"te.txt'",
+  "git update-ref refs/remotes/origin/work HEAD~1 && ln -s app ../linked",
   `head -c ${localChangesLimits.patchBytes + 10} /dev/zero | tr '\\0' 'x' > huge.txt && ln -s a.txt link`,
   "git config diff.external 'touch ../ran-external' && git config core.fsmonitor 'touch ../ran-fsmonitor' && printf 'a.txt diff=conv\\n' > .git/info/attributes && git config diff.conv.textconv 'touch ../ran-textconv; cat'",
 ].join(" && ");
 
 type Run = (command: string, readOnly: boolean) => Promise<string>;
 
-async function exercise(run: Run): Promise<void> {
+async function exercise(run: Run, outside?: string): Promise<void> {
   await run(setup, false);
+  if (outside) await run(`git init -q '${outside}/repo' && ln -s '${outside}/repo' escape`, false);
   const read = async (request: LocalChangesRequest): Promise<LocalChanges> => checkLocalChanges(parseLocalChanges(await run(localChangesCommand(request, marker), true), marker, request));
 
   const first = await read({});
   assert.equal(first.directory, "app");
+  assert.deepEqual(first.repositories.map(repository => repository.directory).filter(name => name !== "."), ["app"], "a link to a repository isn't listed as another");
+  if (outside) await assert.rejects(read({ directory: "escape" }), NotARepository, "a link that leads out of the worktree isn't read");
   const app = first.repositories.find(repository => repository.directory === "app");
   assert.equal(app?.branch, "work");
   assert.match(app?.head ?? "", /^[0-9a-f]{40}$/);
   assert.equal(first.commit, null);
-  assert.deepEqual(first.commits.map(commit => [commit.message, commit.author, commit.unpushed]), [["Second\tcommit", "Alice Owner", true], ["First commit", "Alice Owner", true]]);
+  assert.deepEqual(first.commits.map(commit => [commit.message, commit.author, commit.unpushed]), [["Second\tcommit", "Alice Owner", true], ["First commit", "Alice Owner", undefined]]);
   assert.ok(!Number.isNaN(Date.parse(first.commits[0]!.date)));
   assert.deepEqual(first.files.map(file => [file.path, file.status, file.additions, file.deletions, file.previousPath, file.truncated]), [
     [".gitignore", "added", 1, 0, undefined, undefined],
@@ -59,12 +63,13 @@ async function exercise(run: Run): Promise<void> {
     ["dir with space/f.txt", "added", 1, 0, undefined, undefined],
     ["huge.txt", "added", 0, 0, undefined, true],
     ["link", "added", 0, 0, undefined, undefined],
+    ["quo\"te.txt", "added", 1, 0, undefined, undefined],
     ["untracked.txt", "added", 1, 0, undefined, undefined],
   ]);
   assert.equal(first.files[1]!.patch, "@@ -1,2 +1,2 @@\n one\n-two\n+TWO");
   assert.equal(first.files[4]!.patch, "@@ -0,0 +1 @@\n+s");
   assert.equal(first.files[3]!.patch, undefined);
-  assert.deepEqual([first.additions, first.deletions], [4, 2]);
+  assert.deepEqual([first.additions, first.deletions], [5, 2]);
   assert.deepEqual(await read({ directory: "app" }), first);
 
   const second = await read({ directory: "app", commit: first.commits[0]!.sha });
@@ -90,7 +95,7 @@ test("a host's shell reads a clone's uncommitted changes, its commits and one co
   const workspace = new HostWorkspace(binding("changes-host"), join(base, "session"));
   t.after(() => workspace.close());
   await workspace.initialize();
-  await exercise(command => workspace.execute({ kind: "program", tool: "git", command }, false, authorize));
+  await exercise(command => workspace.execute({ kind: "program", tool: "git", command }, false, authorize), await directory(t));
 });
 
 test("the sandbox reads the same changes, with the worktree read-only", { skip: !sandboxed }, async t => {
@@ -102,12 +107,20 @@ test("the sandbox reads the same changes, with the worktree read-only", { skip: 
 });
 
 test("a worktree without a repository answers with none, and a patch is cut where the output was", () => {
-  const none = parseLocalChanges(`${marker}\n\n${marker}\n`, marker, {});
+  const none = parseLocalChanges(`${marker}\n\n${marker}\n${marker}\n`, marker, {});
   assert.deepEqual(none, { repositories: [], directory: null, commit: null, files: [], commits: [], additions: 0, deletions: 0 });
-  assert.throws(() => parseLocalChanges(`${marker}\n\n${marker}\n`, marker, { directory: "app" }), NotARepository);
+  assert.throws(() => parseLocalChanges(`${marker}\n\n${marker}\n${marker}\n`, marker, { directory: "app" }), NotARepository);
+  assert.throws(() => parseLocalChanges(`${marker}\napp\n${marker}\n${marker}\n`, marker, { directory: "app" }), NotARepository);
+  const pushed = parseLocalChanges(`app\twork\t${"b".repeat(40)}\n${marker}\napp\n${marker}\n${marker}\n${marker}\ndiff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n${marker}\n`, marker, {});
+  assert.deepEqual([pushed.commits, pushed.files.map(file => file.path), pushed.truncated], [[], ["a.txt"], undefined], "empty sections stay sections");
+  const cutShort = parseLocalChanges(`app\twork\t\n${marker}\napp\n${marker}\n${marker}\n${marker}\ndiff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+\xe9`, marker, {});
+  assert.deepEqual([cutShort.truncated, cutShort.files], [true, [{ path: "a.txt", status: "modified", additions: 1, deletions: 1, truncated: true }]], "output without its last line was cut");
+  assert.equal(unquoteGitPath('"b/caf\\303\\251 \\"x\\"\\ty"'), 'b/café "x"\ty');
+  assert.deepEqual(parsePatchFiles('diff --git "a/x\\ty" "b/x\\ty"\n--- "a/x\\ty"\n+++ "b/x\\ty"\n@@ -1 +1 @@\n-a\n+b\ndiff --git "a/o\\"ld" b/new\nrename from "o\\"ld"\nrename to new').files.map(file => [file.path, file.previousPath]),
+    [["x\ty", undefined], ["new", 'o"ld']]);
   assert.throws(() => parseLocalChanges(`app\twork\t\n${marker}\nother\n${marker}\n\n${marker}\n\n${marker}\n`, marker, { directory: "app" }), NotARepository);
   const sha = "b".repeat(40);
-  const listed = (rows: string, selected: string) => parseLocalChanges(`${rows}${marker}\n${selected}\n${marker}\n\n${marker}\n\n${marker}\n`, marker, {}).repositories.map(item => item.directory);
+  const listed = (rows: string, selected: string) => parseLocalChanges(`${rows}${marker}\n${selected}\n${marker}\n${marker}\n${marker}\n${marker}\n`, marker, {}).repositories.map(item => item.directory);
   assert.deepEqual(listed(`app\twork\t${sha}\n.\tmain\t\n`, "app"), ["app"], "the worktree's own empty repository is left out beside a clone");
   assert.deepEqual(listed(`app\twork\t${sha}\n.\tmain\t${sha}\n`, "app"), ["app", "."]);
   assert.deepEqual(listed(".\tmain\t\n", "."), ["."]);
