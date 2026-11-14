@@ -50,7 +50,8 @@ export interface SandboxExecutionOptions {
   signal?: AbortSignal;
 }
 
-interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; service?: { socketDirectory: string; binds?: readonly string[] } }
+interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; service?: { socketDirectory: string; binds?: readonly string[] };
+  onSpawn?: (hold: (held: boolean) => void) => void }
 
 export interface SandboxOptions {
   node?: NodeToolchain | null;
@@ -314,7 +315,7 @@ export async function pinOwnerConfig(path: string, configText: string): Promise<
   }
 }
 
-const SERVICE_BIND_REFUSED = ["/", "/root", "/home", "/var", "/usr", "/lib", "/lib64", "/opt"];
+const SERVICE_BIND_REFUSED = ["/", "/root", "/home", "/var", "/usr", "/lib", "/lib64", "/opt", "/bin", "/sbin", "/boot", "/mnt", "/media", "/snap", "/srv", "/nix"];
 const SERVICE_BIND_REFUSED_TREES = ["/etc", "/proc", "/dev", "/sys", "/run", SANDBOX_TMP, "/sessions"];
 
 export function serviceBindAllowed(path: string, sessionRoot: string): boolean {
@@ -390,6 +391,8 @@ export class Sandbox implements IsolatedWorkspace {
   get home(): string { return this.#identity.home; }
   get worktree(): string { return this.#identity.worktree; }
   get hostWorktree(): string { return resolve(this.#root, "worktree"); }
+
+  bindAllowed(path: string): boolean { return serviceBindAllowed(path, this.#root); }
 
   async identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
@@ -592,14 +595,16 @@ export class Sandbox implements IsolatedWorkspace {
       const kill = () => controller.abort();
       options.signal?.addEventListener("abort", kill, { once: true });
       this.#services.add(kill);
+      let holder: ((held: boolean) => void) | undefined;
       const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
         { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
-        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}) } })
+        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}) },
+          onSpawn: hold => { holder = hold; } })
         .then((): ServiceExit => ({ code: 0, signal: null }), (error: unknown): ServiceExit => error instanceof SandboxProcessError
           ? { code: error.exitCode, signal: error.signal as NodeJS.Signals | null, ...(error.exitCode === null && !error.signal ? { failure: error.message.slice(0, 500) } : {}) }
           : { code: null, signal: null, failure: error instanceof Error ? error.message.slice(0, 500) : "The service failed" })
         .finally(() => { this.#services.delete(kill); options.signal?.removeEventListener("abort", kill); });
-      return { exited, kill };
+      return { exited, kill, hold: held => holder?.(held) };
     });
   }
 
@@ -795,6 +800,12 @@ export class Sandbox implements IsolatedWorkspace {
         failure ??= `Sandbox exceeded ${deadline}ms time limit`;
         kill();
       }, deadline);
+      command.onSpawn?.(held => {
+        for (const handle of [child, child.stdin, child.stdout, child.stderr, timer] as ({ ref?(): unknown; unref?(): unknown } | null)[]) {
+          if (held) handle?.ref?.();
+          else handle?.unref?.();
+        }
+      });
       const capture = (target: Buffer[], chunk: Buffer) => {
         const remaining = Math.max(0, limit - bytes);
         if (remaining) target.push(chunk.subarray(0, remaining));

@@ -42,6 +42,10 @@ function serve(handle: (message: Incoming) => void, connected: (write: (message:
     connected(message => { socket.write(`${JSON.stringify(message)}\n`); });
   });
   const waiting = setTimeout(() => process.exit(3), CONNECT_TIMEOUT_MS);
+  server.on("error", error => {
+    process.stderr.write(`The extension process couldn't listen on its socket: ${describe(error)}\n`);
+    process.exit(4);
+  });
   server.listen(socketPath);
 }
 

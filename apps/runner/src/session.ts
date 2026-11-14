@@ -766,7 +766,7 @@ export class RunnerSession {
     if (!(sandbox instanceof Sandbox)) return undefined;
     const nodeBin = sandbox.nodeBin;
     if (!nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
-    return warn => new ProcessChannel({ directory: sandbox.worktree, warn, launch: sandboxLaunch({
+    return warn => new ProcessChannel({ directory: sandbox.worktree, warn, mountAllowed: path => sandbox.bindAllowed(path), launch: sandboxLaunch({
       socketDirectory: serviceSocketDirectory(`${this.binding.session.id}\0extensions`, this.directory), nodeBin, worktree: sandbox.worktree,
       start: async (command, binds, onOutput, signal) => {
         const config = await this.hostConfig();

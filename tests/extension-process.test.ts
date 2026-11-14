@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProcessChannel } from "../apps/runner/src/extensions/process.js";
+import { ipcLaunch, ProcessChannel, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import type { LoadedSource } from "../apps/runner/src/extensions/load.js";
 
@@ -99,4 +99,32 @@ test("a handler that blocks its process is ended at its timeout, the connector g
   const after = await notice("hello");
   assert.match(after ?? "", /^ready with hi \d+$/, "session_start ran again in the new process, with the source's settings");
   assert.notEqual(after, before, "in another process");
+});
+
+test("a source whose files can't be mounted is refused alone, and a close while the process starts ends what it started", async t => {
+  const root = await directory(t);
+  const file = join(root, "plain.ts");
+  await writeFile(file, `export default function (pi) { pi.on("session_start", () => {}); }`);
+  const launched: (readonly string[])[] = [];
+  const killed: number[] = [];
+  const recording = (delay = 0): WorkerLaunch => async (handlers, mounts) => {
+    launched.push(mounts);
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+    const link = await ipcLaunch(root)(handlers, mounts);
+    return { ...link, kill: () => { killed.push(launched.length); link.kill(); } };
+  };
+  const channel = new ProcessChannel({ directory: root, warn: () => {}, log: () => {}, launch: recording(), mountAllowed: path => !path.startsWith("/refused/") });
+  t.after(() => channel.close());
+  await assert.rejects(channel.call("open", { source: "local:bad", files: [file], models: [], mount: "/refused/bad" }), /can't be given to the session's sandbox/);
+  await channel.call("open", { source: "local:plain", files: [file], models: [], mount: root });
+  assert.deepEqual(launched, [[root]], "the refused path never joined the mounts");
+  await channel.close();
+
+  const slow = new ProcessChannel({ directory: root, warn: () => {}, log: () => {}, launch: recording(300) });
+  const starting = slow.ready().catch((error: unknown) => error);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  await slow.close();
+  assert.match(String(await starting), /closed/);
+  assert.equal(slow.running, false);
+  assert.equal(killed.at(-1), launched.length, "the process that started after the close was ended");
 });

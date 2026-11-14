@@ -39,6 +39,7 @@ export interface ProcessChannelOptions {
   warn(source: string, message: string): void;
   command?: (directory: string) => WorkerCommand;
   launch?: WorkerLaunch;
+  mountAllowed?(path: string): boolean;
   log?(line: string): void;
 }
 
@@ -130,7 +131,7 @@ export function sandboxLaunch(worker: SandboxWorker): WorkerLaunch {
   return async (handlers, mounts) => {
     const listening = join(worker.socketDirectory, EXTENSION_SOCKET);
     rmSync(listening, { force: true });
-    const command = [`${worker.nodeBin}/node`, ...workerEntry(), "--socket", `${SANDBOX_SERVICE_SOCKETS}/${EXTENSION_SOCKET}`, worker.worktree].map(shellQuote).join(" ");
+    const command = `exec ${[`${worker.nodeBin}/node`, ...workerEntry(), "--socket", `${SANDBOX_SERVICE_SOCKETS}/${EXTENSION_SOCKET}`, worker.worktree].map(shellQuote).join(" ")} 2>&1`;
     const output = lineReader(handlers.log, () => {}, 64 * 1024);
     const service = await worker.start(command, [...new Set([...workerCodeMounts(), ...mounts])], output, new AbortController().signal);
     let stopped: string | undefined;
@@ -153,6 +154,7 @@ export function sandboxLaunch(worker: SandboxWorker): WorkerLaunch {
       socket.once("connect", () => resolve());
       socket.once("error", reject);
     }).catch(error => {
+      socket.destroy();
       service.kill();
       throw error;
     });
@@ -175,7 +177,11 @@ export function sandboxLaunch(worker: SandboxWorker): WorkerLaunch {
         if (socket.destroyed) failed(new Error("its connection is closed"));
         else socket.write(`${JSON.stringify(message)}\n`, error => { if (error) failed(error); });
       },
-      hold: held => { if (held) socket.ref(); else socket.unref(); },
+      hold: held => {
+        if (held) socket.ref();
+        else socket.unref();
+        service.hold?.(held);
+      },
       kill: () => {
         socket.destroy();
         service.kill();
@@ -192,7 +198,7 @@ export function refusedChannel(reason: string): ExtensionChannel {
 }
 
 type Pending = { method: ExtensionMethod; resolve(answer: ExtensionAnswer<ExtensionMethod>): void; reject(error: Error): void };
-type Run = { link?: WorkerLink };
+type Run = { link?: WorkerLink; opened: Set<string> };
 
 export class ProcessChannel implements ExtensionChannel {
   #live?: Run;
@@ -201,6 +207,7 @@ export class ProcessChannel implements ExtensionChannel {
   #next = 1;
   #starts = 0;
   #closed = false;
+  #stale = false;
   readonly #mounted: boolean;
   readonly #launch: WorkerLaunch;
   readonly #mounts = new Set<string>();
@@ -219,19 +226,32 @@ export class ProcessChannel implements ExtensionChannel {
 
   mount(paths: readonly (string | undefined)[]): void {
     if (!this.#mounted) return;
-    const added = paths.filter((path): path is string => !!path && !this.#mounts.has(path));
+    const added = paths.filter((path): path is string => !!path && !this.#mounts.has(path) && this.#mountAllowed(path));
     for (const path of added) this.#mounts.add(path);
-    if (added.length && this.#live) this.restart("it starts again to mount new extensions' files");
+    if (!added.length || !this.#live) return;
+    if (this.#live.link) this.restart("it starts again to mount new extensions' files");
+    else this.#stale = true;
+  }
+
+  #mountAllowed(path: string): boolean {
+    return this.options.mountAllowed?.(path) ?? true;
   }
 
   async call<M extends ExtensionMethod>(method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>> {
     if (this.#closed) throw new Error("The extension process is closed");
-    if (method === "open") this.mount([(params as ExtensionParams<"open">).mount]);
+    if (method === "open") {
+      const { mount } = params as ExtensionParams<"open">;
+      if (this.#mounted && mount && !this.#mountAllowed(mount)) throw new Error(`Its files, in ${mount}, can't be given to the session's sandbox`);
+      this.mount([mount]);
+    }
     const run = await this.#ensure();
     const source = (params as { source?: unknown }).source;
     if (method !== "open" && typeof source === "string" && this.#unopened.has(source)) await this.#reopen(run, source);
     const answer = await this.#send(run, method, params, signal);
-    if (method === "open" && typeof source === "string") this.#opened.set(source, params as ExtensionParams<"open">);
+    if (method === "open" && typeof source === "string") {
+      this.#opened.set(source, params as ExtensionParams<"open">);
+      run.opened.add(source);
+    }
     if (method === "emit" && typeof source === "string" && (params as ExtensionParams<"emit">).event.type === "session_start") this.#started.set(source, params as ExtensionParams<"emit">);
     return answer;
   }
@@ -250,7 +270,7 @@ export class ProcessChannel implements ExtensionChannel {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    const run = this.#live ?? await this.#starting?.catch(() => undefined);
+    const run = this.#live?.link ? this.#live : await this.#starting?.catch(() => undefined);
     const link = run?.link;
     if (!run || !link) return;
     link.hold(true);
@@ -268,8 +288,9 @@ export class ProcessChannel implements ExtensionChannel {
   }
 
   async #start(): Promise<Run> {
-    const run: Run = {};
+    const run: Run = { opened: new Set() };
     this.#live = run;
+    this.#stale = false;
     const log = this.options.log ?? (line => { process.stderr.write(`Extension process: ${line.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 1000)}\n`); });
     try {
       run.link = await this.#launch({ reply: reply => this.#reply(reply), log, ended: reason => this.#ended(run, reason) }, [...this.#mounts]);
@@ -277,9 +298,15 @@ export class ProcessChannel implements ExtensionChannel {
       if (this.#live === run) this.#live = undefined;
       throw new Error(`The extension process couldn't start: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (this.#live !== run) {
+    if (this.#live !== run || this.#closed) {
+      if (this.#live === run) this.#live = undefined;
       run.link.kill();
-      throw new Error("The extension process stopped as it started");
+      throw new Error(this.#closed ? "The extension process is closed" : "The extension process stopped as it started");
+    }
+    if (this.#stale) {
+      run.link.kill();
+      this.#live = undefined;
+      return this.#start();
     }
     if (this.#starts++ > 0) {
       const timer = setTimeout(() => this.restart(`it took longer than ${START_TIMEOUT_MS / 1000} seconds to open its extensions again`), START_TIMEOUT_MS);
@@ -302,7 +329,10 @@ export class ProcessChannel implements ExtensionChannel {
 
   async #reopen(run: Run, source: string): Promise<void> {
     this.#unopened.add(source);
-    await this.#send(run, "open", this.#opened.get(source)!);
+    if (!run.opened.has(source)) {
+      await this.#send(run, "open", this.#opened.get(source)!);
+      run.opened.add(source);
+    }
     const started = this.#started.get(source);
     if (started) await this.#send(run, "emit", started);
     this.#unopened.delete(source);

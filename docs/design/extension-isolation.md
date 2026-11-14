@@ -173,7 +173,10 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   its dependencies, a local package's directory, or a local single-file extension alone). `Sandbox.startService`
   refuses a mount that is a system directory, the home directory or one of its parents, anything under `/tmp`
   (the sandbox's `/tmp` is a link into its home), `/run`, `/proc`, `/dev`, `/sys`, `/etc` or `/sessions`, and the
-  session's own files (`serviceBindAllowed`). A source opened later whose files aren't mounted yet restarts the process
+  session's own files (`serviceBindAllowed`). A source whose files are somewhere refused is refused alone, before its path
+  joins the mounts, so it can't keep the session's other extensions from starting. Run from a source checkout
+  (`pnpm connect`), the connector's code is the checkout's root, which is mounted whole, `.env` files included; a
+  release mounts only the `node_modules` it runs from. A source opened later whose files aren't mounted yet restarts the process
   with them; the adapter declares a session's mounts before opening its sources, so that is one restart at most.
 - **It fails closed.** A sandbox the host's Node.js can't be given to refuses every request (`refusedChannel`) rather
   than run extensions outside it.

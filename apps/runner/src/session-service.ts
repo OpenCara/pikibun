@@ -52,6 +52,7 @@ export interface ServiceExit { code: number | null; signal: NodeJS.Signals | nul
 export interface ServiceProcess {
   exited: Promise<ServiceExit>;
   kill(): void;
+  hold?(held: boolean): void;
 }
 
 export type ServiceStopReason = string;
