@@ -90,6 +90,16 @@ export interface ProviderRepositoryList {
   truncated: boolean;
 }
 
+export interface GitHubDeviceSignIn {
+  id: string;
+  userCode: string;
+  verificationUri: string;
+  expiresAt: string;
+  interval: number;
+}
+
+export type GitHubDeviceSignInState = { status: "pending"; interval: number } | { status: "connected"; account: GitAccount };
+
 export interface GitAccount {
   id: string;
   provider: GitProvider;

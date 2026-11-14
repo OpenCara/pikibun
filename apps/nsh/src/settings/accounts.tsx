@@ -1,9 +1,10 @@
-import { effect, signal, Text, untracked, View, type JSX } from "nsh";
+import { cleanup, effect, openUrl, signal, Text, untracked, View, type JSX } from "nsh";
 import {
+  type GitHubDeviceSignIn, type GitHubDeviceSignInState,
   gitProviderHosts, gitProviderNames, gitProviders, type GitAccount, type TokenGitProvider,
 } from "../../../../packages/shared/src/repositories";
 import { documentKindNames, documentKinds, secretKinds, type DocumentKind, type FeishuDomain, type SourceAccountList } from "../../../../packages/shared/src/sources";
-import { segment } from "../shared";
+import { ApiError, errorMessage, segment } from "../shared";
 import type { UserProfile } from "../../../../packages/shared/src/types";
 import { session, updateUser } from "../lib/auth";
 import { openServerLink, opensServerPages } from "../lib/links";
@@ -11,7 +12,7 @@ import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, text, weight } from "../theme";
 import { Field, Select, TextField } from "../form";
-import { Badge, Button, CardBody, confirm, Feedback, FormSheet, Note, ResourceState, Row, Section } from "../ui";
+import { Badge, Button, CardBody, confirm, CopyField, Feedback, FormSheet, Note, ResourceState, Row, Section } from "../ui";
 
 const tokenProviders = gitProviders.filter((provider): provider is TokenGitProvider => provider !== "github");
 
@@ -59,6 +60,7 @@ function GitAccountsGroup() {
   const action = createAction();
   const connecting = signal<TokenGitProvider | null>(null);
   const pastingGitHub = signal(false);
+  const signingInToGitHub = signal(false);
   const local = () => Boolean(user().localOwner);
   async function gitHubConnected() {
     updateUser((await session().api<{ user: UserProfile }>("/api/me")).user);
@@ -77,7 +79,7 @@ function GitAccountsGroup() {
     if (action.busy()) return;
     if (!await confirm({ title: "Disconnect GitHub", destructive: true, confirmLabel: "Disconnect",
       message: local()
-        ? `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from this Pikibun; revoke it on GitHub too if nothing else uses it. Sessions you own can't read github.com repositories, open pull requests or push with your account until you connect a token again.`
+        ? `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from this Pikibun, which can't revoke it with GitHub: do that under github.com/settings/applications, or github.com/settings/tokens for a token you pasted. Sessions you own can't read github.com repositories, open pull requests or push with your account until you sign in with GitHub again.`
         : `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from the server and revoked with GitHub. You stay signed in, but sessions you own can't read github.com repositories, open pull requests or push with your account until you sign in with GitHub again.` })) return;
     void action.run(async () => {
       await session().api("/api/git/accounts/github", { method: "DELETE" });
@@ -91,11 +93,11 @@ function GitAccountsGroup() {
       <Card>
         <If when={local()}>
           <Row testID="github-token-account" leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
-            hint={user().githubConnected ? `${gitProviderHosts.github.default} · ${user().githubLogin ? `@${user().githubLogin} · ` : ""}personal access token` : `${gitProviderHosts.github.default} · Not connected`}
+            hint={user().githubConnected ? `${gitProviderHosts.github.default} · ${user().githubLogin ? `@${user().githubLogin} · ` : ""}connected` : `${gitProviderHosts.github.default} · Not connected`}
             trailing={<>
               <If when={user().githubConnected}><Badge tone="success">Connected</Badge></If>
-              <Button small variant={user().githubConnected ? "ghost" : "outline"} label={user().githubConnected ? "Replace token" : "Connect"} testID="connect-github"
-                disabled={action.busy()} onPress={() => pastingGitHub.set(true)} />
+              <Button small variant={user().githubConnected ? "ghost" : "outline"} label={user().githubConnected ? "Sign in again" : "Sign in with GitHub"} testID="connect-github"
+                disabled={action.busy()} onPress={() => signingInToGitHub.set(true)} />
               <If when={user().githubConnected}>
                 <Button small variant="ghost" label="Disconnect" testID="disconnect-github" disabled={action.busy()} onPress={() => void disconnectGitHub()} />
               </If>
@@ -143,7 +145,87 @@ function GitAccountsGroup() {
       </Card>
       <ConnectGitAccountSheet provider={connecting()} close={() => connecting.set(null)} added={accounts.refresh} />
       <ConnectGitHubTokenSheet open={pastingGitHub()} close={() => pastingGitHub.set(false)} connected={gitHubConnected} />
+      <GitHubSignInSheet open={signingInToGitHub()} close={() => signingInToGitHub.set(false)} connected={gitHubConnected}
+        useToken={() => { signingInToGitHub.set(false); pastingGitHub.set(true); }} />
     </View>
+  );
+}
+
+function GitHubSignInSheet(props: { open: boolean; close: () => void; connected: () => Promise<void>; useToken: () => void }) {
+  const signIn = signal<GitHubDeviceSignIn | null>(null);
+  const starting = signal(false);
+  const error = signal("");
+  let run = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  function stop() {
+    run++;
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  }
+  function wait(current: GitHubDeviceSignIn, mine: number, seconds: number) {
+    timer = setTimeout(() => void check(current, mine), Math.max(1, seconds) * 1000 + 250);
+  }
+  async function check(current: GitHubDeviceSignIn, mine: number) {
+    try {
+      const answer = await session().api<GitHubDeviceSignInState>(`/api/git/accounts/github/device/${segment(current.id)}`, { method: "POST" });
+      if (mine !== run) return;
+      if (answer.status === "pending") return wait(current, mine, answer.interval);
+      stop();
+      await props.connected();
+      props.close();
+    } catch (reason) {
+      if (mine !== run) return;
+      if (reason instanceof ApiError && reason.status === 502) return wait(current, mine, current.interval);
+      signIn.set(null);
+      error.set(errorMessage(reason));
+    }
+  }
+  function start() {
+    stop();
+    const mine = run;
+    error.set("");
+    signIn.set(null);
+    starting.set(true);
+    session().api<{ signIn: GitHubDeviceSignIn }>("/api/git/accounts/github/device", { method: "POST" }).then(answer => {
+      if (mine !== run) return;
+      starting.set(false);
+      signIn.set(answer.signIn);
+      wait(answer.signIn, mine, answer.signIn.interval);
+    }, reason => {
+      if (mine !== run) return;
+      starting.set(false);
+      error.set(errorMessage(reason));
+    });
+  }
+  effect(() => {
+    const open = props.open;
+    untracked(() => (open ? start() : stop()));
+  });
+  cleanup(stop);
+  return (
+    <FormSheet open={props.open} title="Sign in with GitHub" onClose={props.close} testID="github-sign-in-sheet"
+      footer={<>
+        <Button testID="github-sign-in-use-token" variant="ghost" label="Use a token instead" onPress={props.useToken} />
+        <Button label="Cancel" onPress={props.close} />
+        <If when={signIn()} else={<Button testID="github-sign-in-retry" variant="primary" label={starting() ? "Starting…" : "Try again"} disabled={starting()} onPress={start} />}>
+          {current => <Button testID="github-sign-in-open" variant="primary" icon="external-link" label="Open GitHub"
+            onPress={() => void openUrl(current().verificationUri).catch(() => undefined)} />}
+        </If>
+      </>}>
+      <Note>Connect your GitHub account so your sessions can read github.com repositories, open pull requests and push as you. Open GitHub, enter this code there and authorize Pikibun; this page finishes by itself.</Note>
+      <If when={signIn()}>
+        {current => (
+          <>
+            <Field label="Your code" hint={`Enter it at ${current().verificationUri.replace(/^https:\/\//, "")}. It signs in only this Pikibun, and stops working after 15 minutes`}>
+              <CopyField value={current().userCode} label="Copy code" />
+            </Field>
+            <Note testID="github-sign-in-waiting">Waiting for GitHub…</Note>
+          </>
+        )}
+      </If>
+      <Note>The token GitHub gives is kept encrypted on this computer. Pikibun can't reset it after a push as it does on a server, so it stays valid until you revoke Pikibun under github.com/settings/applications.</Note>
+      <Feedback error={error()} />
+    </FormSheet>
   );
 }
 
@@ -176,7 +258,7 @@ function ConnectGitHubTokenSheet(props: { open: boolean; close: () => void; conn
         <Button label="Cancel" disabled={action.busy()} onPress={dismiss} />
         <Button testID="github-token-connect" variant="primary" label={action.busy() ? "Verifying…" : "Connect"} disabled={!token().trim() || action.busy()} onPress={submit} />
       </>}>
-      <Note>This Pikibun runs on your computer and has no GitHub sign-in of its own, so it reaches github.com with a personal access token of your account. Make one at github.com/settings/tokens.</Note>
+      <Note>Instead of signing in with GitHub, this Pikibun can reach github.com with a personal access token of your account. Make one at github.com/settings/tokens.</Note>
       <Field label="Personal access token"
         hint="Classic: the repo, workflow and read:user scopes. Fine-grained: Metadata read, and Contents, Pull requests, Issues and Workflows read and write, on the repositories your sessions work on. Verified with GitHub, then encrypted on this computer. Pikibun can't reset it after a push as it does a GitHub sign-in, so it stays valid until it expires or you revoke it">
         <TextField testID="github-token" value={token()} onChange={value => token.set(value)} disabled={action.busy()} masked onSubmit={submit} />

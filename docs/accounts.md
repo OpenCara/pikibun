@@ -42,7 +42,7 @@ A **GitHub account** can sign in with its username and a password too, once it s
 
 - **Identity**: **Display name**, **Git author name** and **Git author email**. Commits in sessions you own use this identity; new sessions pick up saved changes.
 - **Environment**: up to 32 non-secret `APP_` variables (for example `APP_PROJECT=web`) sent to the host of every session you own. Values are at most 2,048 characters, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE_KEY` or `API_KEY` are refused: credentials belong in Git accounts or in Pi on the host.
-- **Git accounts**: your GitHub sign-in plus personal access tokens for other Git providers (see [Repositories and Git accounts](repositories.md)). On a [Pikibun on your own computer](local.md), which has no GitHub sign-in, github.com connects with a personal access token too.
+- **Git accounts**: your GitHub sign-in plus personal access tokens for other Git providers (see [Repositories and Git accounts](repositories.md)). On a [Pikibun on your own computer](local.md), which you sign in to without GitHub, **Sign in with GitHub** there connects github.com with a code you enter on GitHub, or with a personal access token.
 - **Signed-in apps**: the apps signed in as you, each of which you can sign out, and **Sign in an app**, which [signs in another with a code](#signing-in-an-app-with-a-code).
 - **Servers** (in the apps): the servers this app is signed in to, with **Switch** and **Add a server** (see [Switching between servers](desktop/client.md#switching-between-servers)).
 - **Account**: your **Username**, your **User ID** (owners add you to workspaces with it) and **Sign out**.

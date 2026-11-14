@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import type { GitAccount, GitProvider, ProviderRepository, ProviderRepositoryList, TokenGitProvider } from '../../../../../packages/shared/src/repositories.js';
+import type { GitAccount, GitHubDeviceSignIn, GitHubDeviceSignInState, GitProvider, ProviderRepository, ProviderRepositoryList, TokenGitProvider } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviderHosts, gitProviderNames, gitProviders, plainRepositoryPath, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../../packages/shared/src/repositories.js';
 import type { Env, GitCredentialRow, AppEnv } from '../../types.js';
 import { auditAfterChange, auditStatement } from '../audit.js';
@@ -158,6 +158,102 @@ async function githubTokenOwner(token: string): Promise<{ id: string; login: str
   return { id: String(githubId), login };
 }
 
+async function connectGitHubToken(env: Env, userId: string, token: string, mismatch: (owner: { login: string }, login: string | null) => string): Promise<GitAccount> {
+  const user = await getUser(env, userId);
+  if (!user || (user.auth_kind !== 'password' && user.auth_kind !== 'github')) fail(403, 'github_not_connected', 'Synthetic users cannot connect GitHub.');
+  const owner = await githubTokenOwner(token);
+  if (user.auth_kind === 'github' && user.github_id !== owner.id) fail(409, 'github_account_mismatch', mismatch(owner, user.github_login));
+  const ciphertext = await encryptToken(env, userId, token);
+  let stored = false;
+  try {
+    const [claimed] = await env.DB.batch([
+      env.DB.query(`UPDATE users SET github_id = ?, github_login = ? WHERE id = ? AND (auth_kind = 'password' OR (auth_kind = 'github' AND github_id = ?))`)
+        .bind(owner.id, owner.login, userId, owner.id),
+      env.DB.query(`INSERT INTO github_tokens (user_id, ciphertext, updated_at) SELECT ?, ?, ? WHERE changes() = 1
+        ON CONFLICT(user_id) DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at`).bind(userId, ciphertext, now()),
+      auditAfterChange(env, userId, 'git.account.connected', null, { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }),
+    ]);
+    stored = claimed!.changes === 1;
+  } catch (error) {
+    if (!(error instanceof ConstraintError)) throw error;
+    fail(409, 'github_account_taken', `Another account on this Pikibun is @${owner.login} on GitHub already.`);
+  }
+  if (!stored) fail(409, 'github_account_mismatch', 'Your account changed meanwhile. Reload and try again.');
+  return { id: 'github', provider: 'github', host: 'github.com', organization: '', login: owner.login, createdAt: null };
+}
+
+export const LOCAL_GITHUB_CLIENT_ID = 'Ov23liyoi7u2Ff6853PM';
+const DEVICE_SCOPE = 'read:user user:email repo workflow';
+const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
+const DEVICE_UNAVAILABLE = 'GitHub could not be reached to sign in. Try again.';
+
+interface DeviceSignIn { id: string; userId: string; deviceCode: string; expiresAt: number; intervalMs: number; nextPollAt: number; polling: boolean }
+const deviceSignIns = new Map<string, DeviceSignIn>();
+
+async function githubDevice(path: string, body: Record<string, string>): Promise<Record<string, unknown>> {
+  try {
+    const response = await fetch(`https://github.com/login/${path}`, {
+      method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'pikibun' },
+      body: new URLSearchParams(body), redirect: 'manual', signal: AbortSignal.timeout(15_000),
+    });
+    const text = await response.text();
+    if (text.length > 16_384) throw new Error('GitHub response too large.');
+    const answer: unknown = JSON.parse(text);
+    if (!answer || typeof answer !== 'object' || Array.isArray(answer)) throw new Error('Invalid GitHub response.');
+    return answer as Record<string, unknown>;
+  } catch {
+    fail(502, 'git_provider_unavailable', DEVICE_UNAVAILABLE);
+  }
+}
+
+async function startDeviceSignIn(userId: string): Promise<GitHubDeviceSignIn> {
+  const answer = await githubDevice('device/code', { client_id: LOCAL_GITHUB_CLIENT_ID, scope: DEVICE_SCOPE });
+  const { device_code: deviceCode, user_code: userCode, verification_uri: verificationUri, expires_in: expiresIn, interval } = answer;
+  if (typeof deviceCode !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(deviceCode) || typeof userCode !== 'string' || !/^[A-Z0-9-]{4,32}$/.test(userCode) ||
+      typeof verificationUri !== 'string' || !verificationUri.startsWith('https://github.com/') || /\s/.test(verificationUri) || verificationUri.length > 300 ||
+      typeof expiresIn !== 'number' || !(expiresIn > 0 && expiresIn <= 3600) || typeof interval !== 'number' || !(interval >= 1 && interval <= 120)) {
+    fail(502, 'invalid_git_response', DEVICE_UNAVAILABLE);
+  }
+  const at = Date.now();
+  for (const [key, entry] of deviceSignIns) if (entry.userId === userId || entry.expiresAt <= at) deviceSignIns.delete(key);
+  const entry: DeviceSignIn = { id: id(), userId, deviceCode, expiresAt: at + expiresIn * 1000, intervalMs: interval * 1000, nextPollAt: at + interval * 1000, polling: false };
+  deviceSignIns.set(entry.id, entry);
+  return { id: entry.id, userCode, verificationUri, expiresAt: new Date(entry.expiresAt).toISOString(), interval };
+}
+
+async function pollDeviceSignIn(env: Env, userId: string, signInId: string): Promise<GitHubDeviceSignInState> {
+  const entry = deviceSignIns.get(signInId);
+  const expired = 'This GitHub sign-in has expired or was replaced. Start it again.';
+  if (!entry || entry.userId !== userId) fail(404, 'not_found', expired);
+  if (entry.expiresAt <= Date.now()) {
+    deviceSignIns.delete(entry.id);
+    fail(410, 'github_sign_in_expired', expired);
+  }
+  const pending = () => ({ status: 'pending' as const, interval: Math.ceil(entry.intervalMs / 1000) });
+  if (entry.polling || Date.now() < entry.nextPollAt) return pending();
+  entry.polling = true;
+  try {
+    const answer = await githubDevice('oauth/access_token', { client_id: LOCAL_GITHUB_CLIENT_ID, device_code: entry.deviceCode, grant_type: DEVICE_GRANT });
+    if (answer.error === 'slow_down') entry.intervalMs = Math.min(entry.intervalMs + 5000, 120_000);
+    entry.nextPollAt = Date.now() + entry.intervalMs;
+    if (answer.error === 'authorization_pending' || answer.error === 'slow_down') return pending();
+    deviceSignIns.delete(entry.id);
+    if (answer.error === 'expired_token') fail(410, 'github_sign_in_expired', expired);
+    if (answer.error === 'access_denied') fail(403, 'github_sign_in_denied', 'The sign-in was cancelled on GitHub. Start it again to connect.');
+    const token = answer.access_token;
+    if (answer.error !== undefined || typeof token !== 'string' || !/^[\x21-\x7e]{1,4096}$/.test(token) ||
+        typeof answer.token_type !== 'string' || answer.token_type.toLowerCase() !== 'bearer') {
+      fail(502, 'invalid_git_response', answer.error === 'device_flow_disabled'
+        ? 'GitHub sign-in isn\'t available for this Pikibun now. Connect with a personal access token instead.' : DEVICE_UNAVAILABLE);
+    }
+    const account = await connectGitHubToken(env, userId, token, (owner, login) =>
+      `You signed in to GitHub as @${owner.login}. This Pikibun's owner signed in with ${login ? `@${login}` : 'another GitHub account'}: sign in to GitHub as that account.`);
+    return { status: 'connected', account };
+  } finally {
+    entry.polling = false;
+  }
+}
+
 export function registerGitAccounts(app: Hono<AppEnv>): void {
   app.get('/api/git/accounts', async c => {
     const userId = c.get('auth').userId;
@@ -209,30 +305,22 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
     if (Object.keys(input).some(key => key !== 'token')) fail(400, 'invalid_git_account', 'Only token is accepted.');
     const token = typeof input.token === 'string' ? input.token.trim() : '';
     if (!/^[\x21-\x7e]{1,4096}$/.test(token)) fail(400, 'invalid_git_token', 'Paste a GitHub personal access token.');
+    const account = await connectGitHubToken(c.env, userId, token, (owner, login) =>
+      `This token is @${owner.login}'s. This Pikibun's owner signed in with ${login ? `@${login}` : 'another GitHub account'}: paste a token of that account.`);
+    return c.json({ account }, 201);
+  });
+
+  app.post('/api/git/accounts/github/device', async c => {
+    const userId = c.get('auth').userId;
+    if (!localMode(c.env)) fail(400, 'invalid_git_provider', 'GitHub.com uses the sign-in connection here: sign in with GitHub.');
     const user = await getUser(c.env, userId);
     if (!user || (user.auth_kind !== 'password' && user.auth_kind !== 'github')) fail(403, 'github_not_connected', 'Synthetic users cannot connect GitHub.');
-    const owner = await githubTokenOwner(token);
-    if (user.auth_kind === 'github' && user.github_id !== owner.id) {
-      fail(409, 'github_account_mismatch', `This token is @${owner.login}'s. This Pikibun's owner signed in with ${user.github_login ? `@${user.github_login}` : 'another GitHub account'}: paste a token of that account.`);
-    }
-    const ciphertext = await encryptToken(c.env, userId, token);
-    const timestamp = now();
-    let stored = false;
-    try {
-      const [claimed] = await c.env.DB.batch([
-        c.env.DB.query(`UPDATE users SET github_id = ?, github_login = ? WHERE id = ? AND (auth_kind = 'password' OR (auth_kind = 'github' AND github_id = ?))`)
-          .bind(owner.id, owner.login, userId, owner.id),
-        c.env.DB.query(`INSERT INTO github_tokens (user_id, ciphertext, updated_at) SELECT ?, ?, ? WHERE changes() = 1
-          ON CONFLICT(user_id) DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at`).bind(userId, ciphertext, timestamp),
-        auditAfterChange(c.env, userId, 'git.account.connected', null, { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }),
-      ]);
-      stored = claimed!.changes === 1;
-    } catch (error) {
-      if (!(error instanceof ConstraintError)) throw error;
-      fail(409, 'github_account_taken', `Another account on this Pikibun is @${owner.login} on GitHub already.`);
-    }
-    if (!stored) fail(409, 'github_account_mismatch', 'Your account changed meanwhile. Reload and try again.');
-    return c.json({ account: { id: 'github', provider: 'github', host: 'github.com', organization: '', login: owner.login, createdAt: null } satisfies GitAccount }, 201);
+    return c.json({ signIn: await startDeviceSignIn(userId) }, 201);
+  });
+
+  app.post('/api/git/accounts/github/device/:id', async c => {
+    if (!localMode(c.env)) fail(400, 'invalid_git_provider', 'GitHub.com uses the sign-in connection here: sign in with GitHub.');
+    return c.json(await pollDeviceSignIn(c.env, c.get('auth').userId, identifier(c.req.param('id'), 'signInId')));
   });
 
   app.delete('/api/git/accounts/:id', async c => {
