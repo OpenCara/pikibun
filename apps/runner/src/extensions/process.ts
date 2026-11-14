@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { holdHandles } from "../hold.js";
 import { shellQuote } from "../program-command.js";
 import { pinServiceSocket, SANDBOX_SERVICE_SOCKETS, type ServiceProcess } from "../session-service.js";
 import { lineReader } from "./lines.js";
@@ -106,12 +107,7 @@ export function ipcLaunch(directory: string, command: (directory: string) => Wor
         if (!child.connected) failed(new Error("its channel is closed"));
         else child.send(message as never, error => { if (error) failed(error); });
       },
-      hold: held => {
-        for (const handle of [child, child.channel, child.stdout, child.stderr] as ({ ref?(): unknown; unref?(): unknown } | null | undefined)[]) {
-          if (held) handle?.ref?.();
-          else handle?.unref?.();
-        }
-      },
+      hold: held => holdHandles([child, child.channel, child.stdout, child.stderr], held),
       kill: () => { child.kill("SIGKILL"); },
       exited,
     };
@@ -178,8 +174,7 @@ export function sandboxLaunch(worker: SandboxWorker): WorkerLaunch {
         else socket.write(`${JSON.stringify(message)}\n`, error => { if (error) failed(error); });
       },
       hold: held => {
-        if (held) socket.ref();
-        else socket.unref();
+        holdHandles([socket], held);
         service.hold?.(held);
       },
       kill: () => {
