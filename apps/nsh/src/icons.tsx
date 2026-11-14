@@ -76,6 +76,7 @@ const outlines = {
   unfold: "M7 15l5 5 5-5M7 9l5-5 5 5",
   fold: "M7 20l5-5 5 5M7 4l5 5 5-5",
   commit: `${circle(12, 12, 3)}M3 12h6M15 12h6`,
+  wrap: "M3 6h18M3 12h15a3 3 0 1 1 0 6h-4M16 16l-2 2 2 2M3 18h7",
 } as const;
 
 const fills = {
