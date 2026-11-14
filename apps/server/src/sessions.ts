@@ -1,4 +1,4 @@
-import { hostCapabilities } from './authority/index.js';
+import { hostCapabilities, sessionPullRequestReview } from './authority/index.js';
 import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -648,4 +648,6 @@ export function registerSessions(app: Hono<AppEnv>): void {
       .bind(row.id).all();
     return c.json({ events: rows.map(event => ({ id: event.id, actorId: event.actor_id, action: event.action, detail: JSON.parse(event.detail_json), createdAt: event.created_at })) });
   });
+
+  app.get('/api/sessions/:id/pull-request', sessionPullRequestReview);
 }

@@ -32,7 +32,7 @@ function githubHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'OpenCara-Agent-Workspace' };
 }
 
-async function ownerGitHub(env: Env, ownerId: string): Promise<GitHubAccess> {
+export async function ownerGitHub(env: Env, ownerId: string): Promise<GitHubAccess> {
   const owner = await getUser(env, ownerId);
   if (!owner || owner.auth_kind !== 'github' || !owner.github_id) fail(409, 'github_not_connected', 'The session owner has no real GitHub connection.');
   const vault = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM github_tokens WHERE user_id = ?').bind(owner.id).first();
@@ -41,7 +41,7 @@ async function ownerGitHub(env: Env, ownerId: string): Promise<GitHubAccess> {
     expired: reason => forgetDeadGitHubToken(env, owner.id, vault.ciphertext, reason) };
 }
 
-async function pinnedGitHubRepository(c: AppContext, row: SessionRow, name: string): Promise<GitHubSessionRepository> {
+export async function pinnedGitHubRepository(c: AppContext, row: SessionRow, name: string): Promise<GitHubSessionRepository> {
   const repository = row.repository_mode === 'clone'
     ? await cloneSessionRepository(c.env, row, binding => binding.provider === 'github' && binding.full_name.toLowerCase() === name.toLowerCase()) : null;
   if (!repository || 'provider' in repository) fail(403, 'repository_not_pinned', `${name} is not a github.com repository of this workspace.`);
@@ -49,7 +49,7 @@ async function pinnedGitHubRepository(c: AppContext, row: SessionRow, name: stri
   return repository;
 }
 
-async function verifyPin(env: Env, github: GitHubAccess, pin: GitHubSessionRepository): Promise<void> {
+export async function verifyPin(env: Env, github: GitHubAccess, pin: GitHubSessionRepository): Promise<void> {
   await verifyRepository({ provider: 'github', github }, { repositoryId: String(pin.repositoryId), fullName: pin.fullName });
   await recheckAccess(env, { provider: 'github', github });
 }
@@ -260,7 +260,7 @@ export async function githubIssue(c: AppContext, connectorId: string | null): Pr
   return fail(422, 'github_issue_refused', `GitHub did not open an issue in ${pin.fullName}: ${reason || `HTTP ${response.status}`}.`);
 }
 
-async function githubGet(github: GitHubAccess, path: string): Promise<{ value: unknown; last: number | null }> {
+export async function githubGet(github: GitHubAccess, path: string, limit = pageBytes): Promise<{ value: unknown; last: number | null }> {
   const url = `${githubApi}${path}`;
   const remembered = recallRead(github.token, url);
   let response: Response;
@@ -288,7 +288,7 @@ async function githubGet(github: GitHubAccess, path: string): Promise<{ value: u
   }
   let value: unknown;
   let bytes: Uint8Array;
-  try { bytes = await boundedBytes(response, pageBytes); value = parseJson(bytes); }
+  try { bytes = await boundedBytes(response, limit); value = parseJson(bytes); }
   catch { return fail(502, 'invalid_github_response', 'GitHub returned a response too large or malformed to read.'); }
   rememberRead(github.token, url, response, bytes);
   return { value, last: lastPage(response.headers.get('link')) };
@@ -397,7 +397,7 @@ function fit(view: GitHubIssueView): GitHubIssueView {
   return result;
 }
 
-async function readIssue(github: GitHubAccess, fullName: string, number: number): Promise<GitHubIssueView> {
+export async function readIssue(github: GitHubAccess, fullName: string, number: number, pullDetails?: (details: Record<string, unknown>) => void): Promise<GitHubIssueView> {
   const base = `/repos/${fullName}`;
   const issue = record((await githubGet(github, `${base}/issues/${number}`)).value);
   const isPull = issue.pull_request !== undefined && issue.pull_request !== null;
@@ -410,6 +410,7 @@ async function readIssue(github: GitHubAccess, fullName: string, number: number)
   let pullRequest: GitHubPullRequestView | undefined;
   let checksOmitted = 0;
   if (details && reviews && reviewComments) {
+    pullDetails?.(details);
     const head = record(details.head);
     const target = record(details.base);
     const sha = string(head.sha);
