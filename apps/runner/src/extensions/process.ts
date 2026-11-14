@@ -136,9 +136,9 @@ export class ProcessChannel implements ExtensionChannel {
   async #reopen(child: ChildProcess, source: string): Promise<void> {
     this.#unopened.add(source);
     await this.#send(child, "open", this.#opened.get(source)!);
-    this.#unopened.delete(source);
     const started = this.#started.get(source);
     if (started) await this.#send(child, "emit", started);
+    this.#unopened.delete(source);
   }
 
   #send<M extends ExtensionMethod>(child: ChildProcess, method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>> {
