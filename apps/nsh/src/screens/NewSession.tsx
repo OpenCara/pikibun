@@ -166,7 +166,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     const message = typed.trim();
     const pasted = untracked(attachments.images);
     const attached = untracked(attachments.files);
-    const chosenByAuto = autoModel();
+    const chosenByAuto = autoModel() && current.capabilities.chatOptions === true;
     const options = chosenByAuto ? autoChatOptionsBody(current, selection(), "submit") : chatOptionsBody(current, selection(), "submit");
     const hostEnvironment = runOnHost();
     void action.run(async () => {

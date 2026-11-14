@@ -32,6 +32,11 @@ export type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Recor
   forkedFrom?: { sessionId: string; entryId: string } };
 export const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", version: 1, scope: "session", initial: () => ({ json: "" }), checkpointWhen: () => true });
 
+export function comparableOptions(options: ChatOptions | undefined): ChatOptions | null {
+  if (!options) return null;
+  return options.auto ? { ...options, auto: true } : options;
+}
+
 export function tellsActivity(run: Run): boolean {
   return !run.reverted && !run.withdrawn;
 }

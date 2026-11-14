@@ -183,6 +183,8 @@ test('the runner has the evaluator judge the message and dispatches on its answe
   assert.match(String(followUp.calls[0]!.context.messages[0]!.content), /Model the conversation uses now: Claude Fable 5\.2, xhigh reasoning/);
   const first = await chooseAutoModel(fakeModels(() => said('{"kind": "follow-up"}')), request, { task: 'go ahead', current });
   assert.deepEqual([first?.by, first?.kind], ['rules', 'unsure'], 'a first message is no follow-up');
+  const imageOnly = await chooseAutoModel(fakeModels(() => said('{"kind": "follow-up"}')), request, { task: 'go ahead', previous: '', current });
+  assert.deepEqual([imageOnly?.by, imageOnly?.kind], ['rules', 'unsure'], 'a previous message without text, as one of images only, is none to follow up');
 });
 
 test('the runner takes only a well-formed list of models with an auto message', () => {

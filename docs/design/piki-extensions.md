@@ -697,7 +697,9 @@ that kind of task on, among the models that host offers. The member still choose
     message as data (its first 8,000 characters), the previous user message (its first 2,000) and the conversation's
     model. The answer must be one JSON object, `{ "kind", "harder", "reason" }` (`parseEvaluation`), the reason cut to
     200 characters; then `dispatchModel` chooses and the runner configures the conversation as for a model picked by
-    hand. The run keeps the choice (`run.auto`), and its candidate list is dropped from the run once chosen; the
+    hand. The run keeps the choice (`run.auto`), and its candidate list is dropped from the run once chosen, so a
+    retry of the message and the check whether a message steers the run compare options with `auto` as `true`
+    (`comparableOptions`): the list a retry carries is the host's at that moment, which may differ; the
     conversation shows it as a system entry after the message (`workspace.run-auto`, `autoChoiceText`: "Auto: Claude
     Sonnet 5.5, medium reasoning, for well-scoped coding: a bug fix in one module. Judged by Claude Haiku 5.5."). A
     new session is created on the member's last model, which its first message's choice replaces; the form shows no
@@ -707,7 +709,8 @@ that kind of task on, among the models that host offers. The member still choose
     debug, review, summarize, classify, screenshots, spreadsheet, fix, a question...), with `assessTask`'s complexity
     choosing between a contained and a major refactor and marking a task harder; the entry says "Chosen by rules" and
     why. A message is never refused for Auto's sake. A connector reports `capabilities.autoModel` when its runner
-    evaluates; to one without it, the control plane sends the rules' dispatch as a plain `model` and `thinkingLevel`.
+    evaluates; to one without it, the control plane sends the rules' dispatch as a plain `model` and `thinkingLevel`,
+    keeping the conversation's model (from the session's view) for a follow-up there too.
     `POST /api/workspaces/:id/auto-mode` stays for clients from before this, answering with the old rules' host and
     model (`autoChoice`); new clients no longer call it.
 

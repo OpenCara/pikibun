@@ -48,7 +48,7 @@ export async function chooseAutoModel(models: AutoModels, request: AutoModelRequ
   options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<AutoRunChoice | undefined> {
   const candidates = request.candidates.filter(model => models.getModel(model.provider, model.modelId));
   if (!candidates.length) return undefined;
-  const followUpAllowed = input.previous !== undefined && input.current !== undefined;
+  const followUpAllowed = Boolean(input.previous?.trim()) && input.current !== undefined;
   const current = followUpAllowed ? input.current : undefined;
   const judge = pickEvaluator(candidates)!;
   let evaluation: AutoEvaluation | undefined;

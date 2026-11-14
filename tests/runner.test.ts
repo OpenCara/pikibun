@@ -913,7 +913,7 @@ test("a message sent with Auto runs on the model the host's evaluator chose for 
   const status = (code: number) => (error: unknown) => error instanceof RunnerError && error.status === code;
   await assert.rejects(session.submit(await ticket(id, "submit"), { content: "x", requestId: "both", options: { auto: { candidates }, model: { provider: "faux", modelId: "faux-1" } } }, "write"), status(422));
   await assert.rejects(session.submit(await ticket(id, "submit"), { content: "x", requestId: "bare", options: { auto: true } }, "write"), status(422));
-  await session.submit(await ticket(id, "submit"), { content: "Debug the failing deploy", requestId: "auto", options: { auto: { candidates } } }, "write");
+  const first = await session.submit(await ticket(id, "submit"), { content: "Debug the failing deploy", requestId: "auto", options: { auto: { candidates } } }, "write");
   await idle(session);
   const view = await session.view();
   assert.deepEqual(view.agent, { provider: "faux", modelId: "claude-opus-5-5", thinkingLevel: "medium" });
@@ -923,6 +923,9 @@ test("a message sent with Auto runs on the model the host's evaluator chose for 
     "done",
   ]);
   assert.deepEqual([view.entries[1]!.kind, view.entries[1]!.role, view.entries[1]!.actorId], ["workspace.run-auto", "system", "test:alice"]);
+  const retried = await session.submit(await ticket(id, "submit"), { content: "Debug the failing deploy", requestId: "auto", options: { auto: { candidates: candidates.slice(0, 2) } } }, "write");
+  assert.deepEqual([retried.submissionId, retried.status], [first.submissionId, "settled"], "a retry after the choice gets the same receipt, though its list may differ");
+  await assert.rejects(session.submit(await ticket(id, "submit"), { content: "Debug the failing deploy", requestId: "auto", options: { access: "read" } }, "write"), status(409));
 
   await session.submit(await ticket(id, "submit"), { content: "Explain what the deploy script does", requestId: "rules", options: { auto: { candidates } } }, "write");
   await idle(session);

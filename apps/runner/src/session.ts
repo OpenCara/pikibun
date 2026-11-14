@@ -48,7 +48,7 @@ import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
-import { holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
+import { comparableOptions, holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
 import { activityEntry, contextView, extensionView, sessionView } from "./session/view.js";
 import { SessionOperations, type OperationConsent } from "./session/operations.js";
 import { ToolCalls } from "./session/tools/calls.js";
@@ -971,7 +971,7 @@ export class RunnerSession {
       if (existing) {
         if (existing.contentHash !== hash) throw new RunnerError(409, "requestId reused with different content");
         if (existing.admissionId !== input.admissionId) throw new RunnerError(409, "requestId reused with a different Worker admission");
-        if (stableJson(existing.options ?? null) !== stableJson(options ?? null)) throw new RunnerError(409, "requestId reused with different chat options");
+        if (stableJson(comparableOptions(existing.options)) !== stableJson(comparableOptions(options))) throw new RunnerError(409, "requestId reused with different chat options");
         return { submissionId: key, conversationId: String(existing.conversationId), status: existing.status };
       }
       if (Object.values(state.runs).filter(run => ["queued", "running", "admitting"].includes(run.status)).length >= 64)

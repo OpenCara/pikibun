@@ -60,7 +60,16 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
     if (!candidates.length) fail(409, 'auto_mode_unavailable', 'The session\'s host offers no model you can use.');
     if (capabilities.autoModel === true) options.auto = { candidates };
     else {
-      const chosen = dispatchModel(candidates, ruleEvaluation(content))!;
+      let evaluation = ruleEvaluation(content, { followUpAllowed: true });
+      let current: Parameters<typeof dispatchModel>[2];
+      if (evaluation.kind === 'follow-up') {
+        const { view } = await sessionView(c, row, { latest: true });
+        if (view.agent && view.entries.some(entry => entry.role === 'user')) {
+          current = { provider: view.agent.provider, modelId: view.agent.modelId,
+            ...(thinkingLevels.includes(view.agent.thinkingLevel as never) ? { thinkingLevel: view.agent.thinkingLevel as ChatOptions['thinkingLevel'] } : {}) };
+        } else evaluation = ruleEvaluation(content);
+      }
+      const chosen = dispatchModel(candidates, evaluation, current)!;
       options.model = { provider: chosen.model.provider, modelId: chosen.model.modelId };
       if (chosen.thinkingLevel) options.thinkingLevel = chosen.thinkingLevel;
     }

@@ -11,7 +11,7 @@ import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCau
 import { stableJson } from "../protocol.js";
 import { prepareMessageImages, type InputImage, type MessageInputs } from "./inputs.js";
 import type { RepositoryPreparation } from "./repositories.js";
-import type { Metadata, Run } from "./state.js";
+import { comparableOptions, type Metadata, type Run } from "./state.js";
 
 export const REFUSED = "An extension on this host refused this message.";
 export const INPUT_FAILED = "This host couldn't check this message with its extensions, so it was not sent. Try again shortly.";
@@ -35,7 +35,7 @@ export function steersInto(runs: Record<string, Run>, run: Run): string | undefi
   const running = all.filter(other => other.mode === "write" && other.status === "running").sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
   if (!running.length || running.some(other => other.submissionId === undefined || other.stopped
     || other.conversationId !== run.conversationId || other.initiatedBy !== run.initiatedBy
-    || stableJson(other.options ?? null) !== stableJson(run.options ?? null))) return undefined;
+    || stableJson(comparableOptions(other.options)) !== stableJson(comparableOptions(run.options)))) return undefined;
   return running[0]!.steered ?? running[0]!.key;
 }
 
@@ -172,7 +172,8 @@ export class RunQueue {
     if (!conversation) throw new Error("Persisted branch is missing");
     const transcript = await conversation.context(context);
     await this.options.mutate(meta => {
-      Object.assign(meta.runs[run.key]!, { status: "admitting", started: true, steered: root, startEntry: transcript.entries.at(-1)?.id ?? 0 });
+      Object.assign(meta.runs[run.key]!, { status: "admitting", started: true, steered: root, startEntry: transcript.entries.at(-1)?.id ?? 0,
+        ...(run.options?.auto ? { options: comparableOptions(run.options)! } : {}) });
     });
     let submission: Submission;
     try {

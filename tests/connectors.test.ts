@@ -1008,7 +1008,14 @@ test('per-message chat options are checked against the session host, mode and ow
 test('a message sent with Auto gives the runner the host\'s usable models to choose among, or an older connector the rules\' choice', async t => {
   const f = await fixture(t); const s = await sharedSession(f);
   const receipt = { submissionId: 'submission', conversationId: 'conversation', status: 'queued' };
-  const requests = rpcHub(f, s.connector, () => Response.json(receipt, { status: 202 }));
+  const view: SessionView = {
+    sessionId: s.session.id,
+    owner: { id: s.creator.user.id, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
+    entries: [{ id: '0:1', kind: 'message', role: 'user', text: 'Rewrite the scheduler' }], approvals: [], conversations: [], busy: false,
+    agent: { provider: 'anthropic', modelId: 'claude-opus-4-1', thinkingLevel: 'high' },
+  };
+  const requests = rpcHub(f, s.connector, envelope => envelope.request.path.includes('/view')
+    ? Response.json({ view, revision: 'c'.repeat(32) }) : Response.json(receipt, { status: 202 }));
   const path = `/api/sessions/${s.session.id}`;
   const levels = ['off', 'low', 'medium', 'high'];
   const haiku = { provider: 'anthropic', modelId: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', thinkingLevels: levels };
@@ -1030,6 +1037,9 @@ test('a message sent with Auto gives the runner the host\'s usable models to cho
   await json(await send('rules', { auto: true }), 202);
   assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { model: { provider: 'anthropic', modelId: sonnet.modelId }, thinkingLevel: 'medium' },
     'a connector that can\'t evaluate gets the rules\' choice: well-scoped coding starts on the Sonnet class');
+  await json(await send('follow-up', { auto: true }, 'go ahead'), 202);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { model: { provider: 'anthropic', modelId: opus.modelId }, thinkingLevel: 'high' },
+    'a follow-up keeps the conversation\'s model there too');
 
   await json(await self(f, s.connector, 'manifest', { models, capabilities: { ...manifest.capabilities, chatOptions: true, autoModel: true } }));
   await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/models`, { provider: opus.provider, modelId: opus.modelId, enabled: false }));
