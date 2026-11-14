@@ -24,7 +24,7 @@ export interface SignInMethods {
 
 export type AuthState =
   | { status: "loading" }
-  | { status: "signedOut"; origin: string; notice?: string; adding?: boolean }
+  | { status: "signedOut"; origin: string; notice?: string; fresh?: boolean }
   | { status: "unreachable"; origin: string; error: string }
   | { status: "signedIn"; origin: string; token: string | null; expiresAt: string | null; user: UserProfile; api: Api };
 
@@ -169,7 +169,7 @@ export async function restore(): Promise<void> {
   const [storedOrigin, token, expiresAt] = await Promise.all([Storage.getItem(ORIGIN_KEY), Storage.getItem(TOKEN_KEY), Storage.getItem(EXPIRES_KEY), loadServers()]);
   const origin = storedOrigin == null ? DEFAULT_ORIGIN : currentOrigin(storedOrigin);
   if (storedOrigin != null && origin !== storedOrigin) await Storage.setItem(ORIGIN_KEY, origin);
-  if (!token) return setAuth({ status: "signedOut", origin });
+  if (!token) return setAuth({ status: "signedOut", origin, ...(storedOrigin == null ? { fresh: true } : {}) });
   try {
     await establish(origin, token, expiresAt);
   } catch (reason) {
@@ -224,16 +224,37 @@ export async function signInWithToken(origin: string, token: string): Promise<vo
 
 const LOCAL_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
-export function localSignInToken(origin: string, link: string): string | null {
-  const typed = link.trim();
-  if (LOCAL_TOKEN.test(typed)) return typed;
+export type SignInLink = ({ kind: "code" } & SignInCode) | { kind: "local"; origin: string; token: string };
+
+function parseLocalLink(input: string): { origin: string; token: string } | null {
   try {
-    const url = new URL(typed);
+    const url = new URL(input.trim());
     const token = url.searchParams.get("token") ?? "";
-    return url.origin === new URL(origin).origin && url.pathname === "/api/auth/local" && LOCAL_TOKEN.test(token) ? token : null;
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.pathname !== "/api/auth/local" || !LOCAL_TOKEN.test(token)) return null;
+    const parsed = parseOrigin(url.origin);
+    return "origin" in parsed ? { origin: currentOrigin(parsed.origin), token } : null;
   } catch {
     return null;
   }
+}
+
+export function refusedLinkServer(input: string): string | null {
+  try {
+    const url = new URL(input.trim());
+    const server = isCodeLink(input) ? url.searchParams.get("server") : /^https?:$/.test(url.protocol) && url.pathname === "/api/auth/local" ? url.origin : null;
+    if (server === null) return null;
+    const parsed = parseOrigin(server);
+    return "error" in parsed ? parsed.error : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseSignInLink(input: string): SignInLink | null {
+  const code = parseSignInCode(input);
+  if (code) return { kind: "code", ...code };
+  const local = parseLocalLink(input);
+  return local ? { kind: "local", ...local } : null;
 }
 
 export async function signInToLocalServer(origin: string, token: string, options: { switching?: boolean } = {}): Promise<void> {
@@ -272,7 +293,7 @@ export async function switchServer(origin: string): Promise<void> {
 export function addServer(): void {
   const state = untracked(authState);
   if (state.status !== "signedIn" || usesBrowserSession) return;
-  setAuth({ status: "signedOut", origin: state.origin, adding: true });
+  setAuth({ status: "signedOut", origin: state.origin });
 }
 
 async function signedOutRequest<T>(path: string, body: Record<string, string>, failed: string): Promise<T> {
