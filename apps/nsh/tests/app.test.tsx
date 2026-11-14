@@ -87,6 +87,24 @@ describe("signing in", () => {
     expect(app.requests().some(item => item.url.includes("/api/auth/native/start"))).toBe(false);
   });
 
+  test("a new app asks for no server: a pasted sign-in link signs in to the server it names", async () => {
+    const app = await open("../App.tsx", { network: codeServer(), storage: {} });
+    await app.waitFor("id:code-input");
+    expect(app.shows("id:server-input")).toBe(false);
+    expect(app.shows("id:server-change")).toBe(false);
+    await app.type("id:code-input", CODE);
+    await app.waitFor("text:A code alone doesn't say which server it is for. Copy the whole link Pikibun shows under Sign in an app.");
+    expect(app.enabled("id:code-sign-in")).toBe(false);
+    await app.clear("id:code-input");
+    await app.type("id:code-input", codeLink());
+    await app.waitFor("text:Signs in to pikibun.test.");
+    await app.press("id:code-sign-in");
+    await app.waitFor("text:Fix the flaky login test");
+    expect(app.storage()["pikibun.origin"]).toBe(ORIGIN);
+    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
+    expect(app.requests().some(item => item.url.startsWith("https://pikibun.com"))).toBe(false);
+  });
+
   test("a sign-in link opened from a QR code asks first, naming its server, and signs in to that server", async () => {
     const app = await open("../App.tsx", { network: codeServer(), storage: { "pikibun.origin": "https://elsewhere.test" } });
     await app.waitFor("id:code-input");

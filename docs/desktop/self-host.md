@@ -14,7 +14,7 @@ Choose this mode when:
 
 ## A fresh install does this for you
 
-The first time the app opens, it starts your own Pikibun on this computer and signs you in to it: steps 1 to 3 below happen on their own. It asks about [running unsandboxed](#2-start-pikibun) first where this computer has no sandbox, and where Pikibun's command isn't installed yet, **Set up Pikibun on this Mac** opens the Self host page to install it. To use a server someone else runs instead, choose **Connect to pikibun.com** or **Connect to another server** on that first screen: the app remembers pikibun.com once you choose it, and any other server once you sign in to it, and opens that server's sign-in screen from then on (see [Client](client.md)).
+The first time the app opens, it starts your own Pikibun on this computer and signs you in to it: steps 1 to 3 below happen on their own. It asks about [running unsandboxed](#2-start-pikibun) first where this computer has no sandbox, and where Pikibun's command isn't installed yet, **Set up Pikibun on this Mac** opens the Self host page to install it. To use a server someone else runs instead, choose **Sign in to another server** on that first screen and open or paste that server's sign-in link: the app remembers a server once you sign in to it, and opens its sign-in screen from then on (see [Client](client.md)).
 
 Once signed in, the server button at the bottom of the sidebar switches between your Pikibun and the other servers the app is signed in to: **Pikibun on this Mac** there starts it if it isn't running.
 
@@ -35,7 +35,7 @@ The badge turns **Running**, and the page shows your Pikibun's address, `http://
 
 Choose **Sign in to it**:
 
-- From the sign-in screen, the app switches its **Server** to your Pikibun and signs you in.
+- From the sign-in screen, the app signs you in to your Pikibun.
 - From Settings, the app asks first, then switches to your Pikibun and stays signed in to the server you were using. Nothing moves: your sessions and workspaces there stay where they are, and **Settings → Profile → Servers** switches back.
 
 There is nothing to type: each time your Pikibun starts, it makes a private sign-in token and tells only the app, which signs you in with it as your Pikibun's owner, the only account that can ever sign in to it. Your first sign-in makes that account, named after your user on this computer (`password:ada` for the user `ada`). Signed out later, the sign-in screen's **Sign in to Pikibun on this Mac** signs you back in.

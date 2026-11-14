@@ -8,7 +8,7 @@ The Pikibun app for Mac, Windows and Linux can play three roles. Pick the one th
 | **Host** | You also want this computer to run sessions, with the models Pi is signed in to here, for you or for teammates you share it with | The app, and the `pikibun` host it starts | [Host](host.md) |
 | **Self host** | You want all of Pikibun on this computer, with no server to sign up for or deploy: just for yourself, or later shared with a team | Your own Pikibun server, and this computer as its host | [Self host](self-host.md) |
 
-A fresh install starts in **Self host**: at its first launch the app runs your own Pikibun on this computer and signs you in, and offers **Connect to pikibun.com** or **Connect to another server** for the other two.
+A fresh install starts in **Self host**: at its first launch the app runs your own Pikibun on this computer and signs you in, and offers **Sign in to another server** for the other two.
 
 The modes build on each other. A host is a client that also runs sessions. A self-hosted Pikibun is a server on this computer, and the app is its client.
 
