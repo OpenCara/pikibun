@@ -3,7 +3,7 @@ import type { GitProvider } from '../../../../../packages/shared/src/repositorie
 import { gitProviderNames } from '../../../../../packages/shared/src/repositories.js';
 import type { PushIdentityKind } from '../../../../../packages/shared/src/types.js';
 import type { Env, PushIdentityRow } from '../../types.js';
-import { appOrigin, fail, now } from '../../http.js';
+import { appOrigin, fail, localMode, now } from '../../http.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { resetGitHubToken } from '../auth.js';
 import type { RepositoryAccess } from '../repositories.js';
@@ -300,7 +300,7 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
       requireOwnHost(target, row.kind);
       const minted = { kind: row.kind, identityId: row.id, authorization: ownerGitAuthorization(target.owner), expiresAt: expiresAt(undefined, 3600) };
       if (target.owner.provider !== 'github' || target.relay) return minted;
-      if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
+      if ((!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) && !localMode(env)) {
         fail(409, 'owner_token_reset_unavailable', 'Pushes with the session owner\'s GitHub account need Pikibun\'s GitHub sign-in app to reset the token afterwards, and it is not configured.');
       }
       const { userId, token, ciphertext } = target.owner.github;
@@ -426,7 +426,10 @@ export function forgetRepositoryReadTokens(): void {
 
 export async function revokePushToken(env: Env, revocation: PushRevocation): Promise<boolean> {
   try {
-    if (revocation.kind === 'github-owner') return await resetGitHubToken(env, revocation.userId, revocation.token, revocation.ciphertext);
+    if (revocation.kind === 'github-owner') {
+      if (localMode(env) && (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET)) return true;
+      return await resetGitHubToken(env, revocation.userId, revocation.token, revocation.ciphertext);
+    }
     const response = await fetch(`${revocation.apiBase}/installation/token`, { method: 'DELETE', headers: { ...githubHeaders(revocation.token), 'User-Agent': userAgent },
       redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout) });
     await response.body?.cancel().catch(() => {});

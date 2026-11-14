@@ -120,7 +120,7 @@ test("a local server signs its owner in with its sign-in link, without GitHub: t
   const f = await localFixture(t);
   assert.deepEqual(await f.health(), { claimed: false });
   const health = await (await f.request("/api/health")).json() as { githubConfigured: boolean; passwordAuth: boolean; codeSignIn: boolean };
-  assert.deepEqual([health.githubConfigured, health.passwordAuth, health.codeSignIn], [false, false, false]);
+  assert.deepEqual([health.githubConfigured, health.passwordAuth, health.codeSignIn], [false, false, true]);
   for (const path of ["/api/auth/github", `/api/auth/native/start?challenge=${"c".repeat(43)}&state=app-state-0123456789`]) {
     const github = await f.request(path);
     assert.equal(github.status, 503, path);
@@ -202,9 +202,117 @@ test("without a username of its own a local owner is 'owner', and one who signed
   const { user } = await (await f.request("/api/me", { Cookie: session })).json() as { user: { id: string; githubConnected: boolean; usernameRequired?: true } };
   assert.deepEqual([user.id, user.githubConnected, user.usernameRequired], ["github:4242", true, undefined]);
   assert.deepEqual(f.sqlite.prepare("SELECT id FROM users").all().map(row => row.id), ["github:4242"]);
-  const post = (path: string) => app.request(path, { method: "POST", headers: { Cookie: session, "Content-Type": "application/json" }, body: "{}" }, f.env);
-  for (const path of ["/api/me/app-codes", "/api/auth/native/code"]) assert.equal((await post(path)).status, 404, `${path}: a link sign-in isn't a recent GitHub sign-in, and codes aren't offered`);
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM app_sign_in_codes").get()!.n, 0);
+});
+
+async function browser(f: Awaited<ReturnType<typeof localFixture>>) {
+  const signedIn = await f.request(`/api/auth/local?token=${claimSecret}`);
+  const cookie = f.cookies(signedIn).find(value => value.startsWith("test-auth="))!;
+  const { csrfToken } = await (await f.request("/api/auth/csrf", { Cookie: cookie })).json() as { csrfToken: string };
+  const headers = { Cookie: cookie, Origin: origin, "X-CSRF-Token": csrfToken, "Content-Type": "application/json" };
+  const send = (method: string, path: string, body?: unknown, extra: Record<string, string> = headers) =>
+    app.request(path, { method, headers: extra, body: body === undefined ? undefined : JSON.stringify(body) }, f.env);
+  return { cookie, send };
+}
+
+test("a local server's owner signs an app in with a code, with nothing to type; an app signed in with one makes no further code", async t => {
+  const f = await localFixture(t);
+  const owner = await browser(f);
+  const made = await owner.send("POST", "/api/me/app-codes", {});
+  assert.equal(made.status, 201);
+  const code = await made.json() as { id: string; code: string; link: string };
+  assert.equal(new URL(code.link).searchParams.get("server"), origin);
+
+  const redeem = (value: string) => app.request("/api/auth/native/code", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: value, deviceName: "Pikibun (ios)" }) }, f.env);
+  const signedIn = await redeem(code.code);
+  assert.equal(signedIn.status, 200);
+  const answer = await signedIn.json() as { token: string; user: { id: string } };
+  assert.equal(answer.user.id, "password:ada");
+  const bearer = { Authorization: `Bearer ${answer.token}`, "Content-Type": "application/json" };
+  assert.equal((await f.request("/api/me", bearer)).status, 200);
+  assert.deepEqual(f.sqlite.prepare("SELECT method, via FROM auth_sessions WHERE client = 'native'").all().map(row => [row.method, row.via]), [[null, "code"]]);
+  assert.equal((await redeem(code.code)).status, 400, "a code works once");
+
+  const chained = await owner.send("POST", "/api/me/app-codes", {}, bearer);
+  assert.equal(chained.status, 403);
+  assert.equal(await errorCode(chained), "sign_in_link_required");
+  const fromApp = await f.native({ token: claimSecret });
+  const app2 = { Authorization: `Bearer ${(await fromApp.json() as { token: string }).token}`, "Content-Type": "application/json" };
+  assert.equal((await owner.send("POST", "/api/me/app-codes", {}, app2)).status, 201, "the app that signed in with the sign-in token makes codes too");
+
+  f.env.LOCAL_OWNER_ID = "password:someone-else";
+  const other = await owner.send("POST", "/api/me/app-codes", {});
+  assert.equal(other.status, 401, "only the owner's sessions are admitted");
+});
+
+test("a local server's owner connects github.com with a personal access token, reads repositories with it, and disconnects it", async t => {
+  const f = await localFixture(t);
+  const owner = await browser(f);
+  const calls: { url: string; authorization: string | null }[] = [];
+  let identity: () => Response = () => Response.json({ id: 4242, login: "octo" });
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+    if (url === "https://api.github.com/user") return identity();
+    if (url.startsWith("https://api.github.com/user/repos?")) return Response.json([{ id: 7, full_name: "octo/app", default_branch: "main", private: true }]);
+    return new Response("unexpected", { status: 500 });
+  });
+  const profile = async () => (await (await f.request("/api/me", { Cookie: owner.cookie })).json() as { user: { githubConnected: boolean; githubLogin: string | null; githubId: string | null } }).user;
+
+  const before = await f.request("/api/git/accounts/github/repositories", { Cookie: owner.cookie });
+  assert.equal(before.status, 409);
+  assert.match((await before.json() as { error: string }).error, /personal access token/);
+  for (const body of [{}, { token: "has space" }, { token: "ghp_ok", host: "github.com" }]) assert.equal((await owner.send("PUT", "/api/git/accounts/github", body)).status, 400);
+  identity = () => new Response(null, { status: 401 });
+  const refused = await owner.send("PUT", "/api/git/accounts/github", { token: "ghp_dead" });
+  assert.equal(refused.status, 400);
+  assert.equal(await errorCode(refused), "invalid_git_token");
+  assert.equal((await profile()).githubConnected, false);
+
+  identity = () => Response.json({ id: 4242, login: "octo" });
+  const connected = await owner.send("PUT", "/api/git/accounts/github", { token: "ghp_secret_token" });
+  assert.equal(connected.status, 201);
+  assert.deepEqual(await profile(), { ...await profile(), githubConnected: true, githubLogin: "octo", githubId: "4242" });
+  const stored = f.sqlite.prepare("SELECT ciphertext FROM github_tokens WHERE user_id = 'password:ada'").get()!.ciphertext as string;
+  assert.ok(!stored.includes("ghp_secret_token"), "the token is kept encrypted");
+  const accounts = await (await f.request("/api/git/accounts", { Cookie: owner.cookie })).json() as { accounts: { id: string; login: string }[] };
+  assert.deepEqual(accounts.accounts.map(account => [account.id, account.login]), [["github", "octo"]]);
+
+  calls.length = 0;
+  const picker = await f.request("/api/git/accounts/github/repositories", { Cookie: owner.cookie });
+  assert.equal(picker.status, 200);
+  assert.deepEqual((await picker.json() as { repositories: { fullName: string }[] }).repositories.map(item => item.fullName), ["octo/app"]);
+  assert.deepEqual([...new Set(calls.map(call => call.authorization))], ["Bearer ghp_secret_token"]);
+
+  identity = () => Response.json({ id: 9000, login: "other" });
+  assert.equal((await owner.send("PUT", "/api/git/accounts/github", { token: "ghp_other_account" })).status, 201, "a token of another GitHub account replaces the first");
+  assert.equal((await profile()).githubLogin, "other");
+
+  calls.length = 0;
+  assert.equal((await owner.send("DELETE", "/api/git/accounts/github")).status, 204);
+  assert.deepEqual(calls, [], "a personal access token is GitHub's to revoke, not Pikibun's");
+  assert.deepEqual(await profile(), { ...await profile(), githubConnected: false, githubLogin: null, githubId: null });
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM github_tokens").get()!.n, 0);
+  assert.deepEqual(f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'git.account.%' ORDER BY created_at, rowid").all().map(row => row.action),
+    ["git.account.connected", "git.account.connected", "git.account.removed"]);
+});
+
+test("a local owner who signed in with GitHub before reconnects only their own GitHub account", async t => {
+  const f = await localFixture(t);
+  f.sqlite.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES ('github:4242', '4242', 'octo', 'Octo', 'Octo', 'octo@example.test', '{}', 'github', '2000-01-01T00:00:00.000Z')`).run();
+  const owner = await browser(f);
+  let identity = { id: 9000, login: "other" };
+  t.mock.method(globalThis, "fetch", async () => Response.json(identity));
+  const mismatch = await owner.send("PUT", "/api/git/accounts/github", { token: "ghp_other" });
+  assert.equal(mismatch.status, 409);
+  assert.equal(await errorCode(mismatch), "github_account_mismatch");
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM github_tokens").get()!.n, 0);
+  identity = { id: 4242, login: "octo-renamed" };
+  assert.equal((await owner.send("PUT", "/api/git/accounts/github", { token: "ghp_mine" })).status, 201);
+  assert.deepEqual(f.sqlite.prepare("SELECT github_id, github_login FROM users").all().map(row => [row.github_id, row.github_login]), [["4242", "octo-renamed"]]);
+  assert.equal((await owner.send("DELETE", "/api/git/accounts/github")).status, 204);
+  assert.deepEqual(f.sqlite.prepare("SELECT github_id FROM users").all().map(row => row.github_id), ["4242"], "a GitHub account keeps its identity");
 });
 
 test("a local server whose pinned owner is a password account signs only them in, and a suspended owner not at all", async t => {

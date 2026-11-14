@@ -145,7 +145,7 @@ export async function refreshPullRequestStates(env: Env, limit = sweepLimit): Pr
     INNER JOIN sessions s ON s.id = pc.session_id
     INNER JOIN users u ON u.id = s.owner_id
     INNER JOIN github_tokens t ON t.user_id = s.owner_id
-    WHERE pc.pull_request_url LIKE 'https://github.com/%' AND u.auth_kind = 'github' AND u.suspended_at IS NULL
+    WHERE pc.pull_request_url LIKE 'https://github.com/%' AND u.auth_kind IN ('github', 'password') AND u.suspended_at IS NULL
       AND pc.id = (SELECT pr.id FROM push_credentials pr WHERE pr.session_id = pc.session_id AND pr.pull_request_url IS NOT NULL
         ORDER BY pr.completed_at DESC, pr.created_at DESC, pr.id DESC LIMIT 1)
       AND (pc.pull_request_state IS NULL OR pc.pull_request_state NOT IN ('merged', 'closed'))
@@ -174,7 +174,7 @@ async function refreshBranchPullRequests(env: Env, at: number, limit: number): P
     INNER JOIN sessions s ON s.id = b.session_id
     INNER JOIN users u ON u.id = s.owner_id
     INNER JOIN github_tokens t ON t.user_id = s.owner_id
-    WHERE u.auth_kind = 'github' AND u.suspended_at IS NULL
+    WHERE u.auth_kind IN ('github', 'password') AND u.suspended_at IS NULL
       AND (b.pull_request_state IS NULL OR b.pull_request_state NOT IN ('merged', 'closed'))
       AND (b.pull_request_url IS NOT NULL OR s.status <> 'archived')
       AND (b.pull_request_checked_at IS NULL OR b.pull_request_checked_at < CASE WHEN s.status = 'archived' THEN ? ELSE ? END)

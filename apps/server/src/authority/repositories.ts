@@ -7,7 +7,7 @@ import { auditStatement } from './audit.js';
 import { getUser } from '../db.js';
 import { requireMember } from './access.js';
 import { isPersonalWorkspace } from './personal-workspaces.js';
-import { fail, id, identifier, jsonObject, now, testMode } from '../http.js';
+import { fail, id, identifier, jsonObject, localMode, now, testMode } from '../http.js';
 import { decryptToken } from './vault.js';
 import {
   credentialOrganization, gitAccountRequired, gitHost, loadCredential, providerRepository, recheckCredential,
@@ -96,8 +96,12 @@ function conflictingPaths(paths: string[]): boolean {
 async function githubAccess(env: Env, userId: string): Promise<GitHubAccess> {
   const user = await getUser(env, userId);
   if (user?.auth_kind === 'test') fail(403, 'github_not_connected', 'Synthetic users cannot access GitHub repositories.');
-  if (user?.auth_kind === 'password') fail(409, 'github_not_connected', 'github.com repositories need an account that signs in with GitHub, which this one doesn\'t; its Git accounts reach other providers.');
-  if (!user || user.auth_kind !== 'github' || !user.github_id) fail(409, 'github_not_connected', 'The acting user must connect GitHub. Workspace sharing does not grant repository access.');
+  if (user?.auth_kind === 'password' && !user.github_id) {
+    fail(409, 'github_not_connected', localMode(env)
+      ? 'Connect GitHub first: add a github.com personal access token under Settings → Profile → Connected accounts.'
+      : 'github.com repositories need an account that signs in with GitHub, which this one doesn\'t; its Git accounts reach other providers.');
+  }
+  if (!user || !user.github_id) fail(409, 'github_not_connected', 'The acting user must connect GitHub. Workspace sharing does not grant repository access.');
   const vault = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM github_tokens WHERE user_id = ?').bind(userId).first();
   if (!vault) fail(409, 'github_not_connected', 'The acting user must connect GitHub.');
   return { token: await decryptToken(env, userId, vault.ciphertext), ciphertext: vault.ciphertext, userId, githubId: user.github_id,
@@ -105,7 +109,7 @@ async function githubAccess(env: Env, userId: string): Promise<GitHubAccess> {
 }
 async function recheckGitHubAccess(env: Env, access: GitHubAccess): Promise<void> {
   const row = await env.DB.query<{ ciphertext: string }>(`SELECT t.ciphertext FROM github_tokens t JOIN users u ON u.id = t.user_id
-    WHERE t.user_id = ? AND u.auth_kind = 'github' AND u.github_id = ?`).bind(access.userId, access.githubId).first();
+    WHERE t.user_id = ? AND u.auth_kind IN ('github', 'password') AND u.github_id = ?`).bind(access.userId, access.githubId).first();
   if (row?.ciphertext !== access.ciphertext) fail(403, 'github_access_changed', 'GitHub access changed; retry with the current connection.');
 }
 export async function repositoryAccess(env: Env, userId: string, provider: GitProvider, host: string, fullName: string): Promise<RepositoryAccess> {
@@ -262,7 +266,7 @@ export function registerRepositories(app: Hono<AppEnv>): void {
       ref, private: metadata.private ? 1 : 0, created_at: now() };
     const authority = access.provider === 'github'
       ? { sql: `EXISTS (SELECT 1 FROM github_tokens t JOIN users u ON u.id = t.user_id
-          WHERE t.user_id = ? AND t.ciphertext = ? AND u.auth_kind = 'github' AND u.github_id = ?)`,
+          WHERE t.user_id = ? AND t.ciphertext = ? AND u.auth_kind IN ('github', 'password') AND u.github_id = ?)`,
         values: [actor, access.github.ciphertext, access.github.githubId] }
       : access.account.workspaceId !== undefined
       ? { sql: 'EXISTS (SELECT 1 FROM workspace_connections WHERE id = ? AND workspace_id = ? AND ciphertext = ?)',

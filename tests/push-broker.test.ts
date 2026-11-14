@@ -758,6 +758,14 @@ test('owner-token resets that fail or whose push goes unreported are settled lat
   const refused = await f.post(credential, { sessionId: 'session', approvalId: 'tool-reset-4', actorId: owner, operation: f.operation(), admissionId: f.admit('auto') });
   assert.equal(refused.status, 409);
   assert.equal(await code(refused), 'owner_token_reset_unavailable');
+
+  Object.assign(f.env, { LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: 'c'.repeat(43) });
+  const before = resets().length;
+  const local = await f.post(credential, { sessionId: 'session', approvalId: 'tool-reset-5', actorId: owner, operation: f.operation(), admissionId: f.admit('auto') });
+  assert.equal(local.status, 200, 'a Pikibun that runs for its owner alone has no sign-in app to reset the token with, and pushes with the token they pasted');
+  const kept = await local.json() as { credentialId: string };
+  assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-reset-5', credentialId: kept.credentialId, outcome: 'pushed', tip })).status, 200);
+  assert.deepEqual([resets().length, row(kept.credentialId).revocation_ciphertext, await stored()], [before, null, 'owner-signed-in-again']);
 });
 
 test('an owner-token reset GitHub went through with unanswered, or whose token GitHub no longer knows, forgets the dead token', async t => {
