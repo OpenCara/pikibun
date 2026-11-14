@@ -23,6 +23,7 @@ import type { IsolatedWorkspace } from "./workspace.js";
 import { CREATE_FILE, OPEN_FILE, privateEntry } from "./platform.js";
 import { BROWSER_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER, SERVICE_DRIVER } from "./sandbox-python.generated.js";
 import { SANDBOX_SERVICE_DRIVER, SANDBOX_SERVICE_SOCKETS, type ServiceExit, type ServiceProcess } from "./session-service.js";
+import { holdHandles } from "./hold.js";
 import { connectorNode, sandboxNodeMount, type NodeToolchain, type SandboxNodeMount } from "./node-toolchain.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
 import { browserEnvironment, connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBrowserMount, type BrowserToolchain } from "./browser-toolchain.js";
@@ -799,12 +800,7 @@ export class Sandbox implements IsolatedWorkspace {
         failure ??= `Sandbox exceeded ${deadline}ms time limit`;
         kill();
       }, deadline);
-      command.onSpawn?.(held => {
-        for (const handle of [child, child.stdin, child.stdout, child.stderr, timer] as ({ ref?(): unknown; unref?(): unknown } | null)[]) {
-          if (held) handle?.ref?.();
-          else handle?.unref?.();
-        }
-      });
+      command.onSpawn?.(held => holdHandles([child, child.stdin, child.stdout, child.stderr, timer], held));
       const capture = (target: Buffer[], chunk: Buffer) => {
         const remaining = Math.max(0, limit - bytes);
         if (remaining) target.push(chunk.subarray(0, remaining));

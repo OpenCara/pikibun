@@ -73,4 +73,11 @@ test("in the Linux sandbox, an installed extension sees the session's worktree a
   assert.equal(seen.own, "true", "its own files are there");
   assert.match(seen.writeOwn, /^refused: (EROFS|EACCES)$/, "and read-only");
   assert.equal(seen.network, "unreachable", "without the session's egress proxy there is no network at all");
+  const warnings: Error[] = [];
+  const warned = (warning: Error) => { warnings.push(warning); };
+  process.on("warning", warned);
+  t.after(() => { process.off("warning", warned); });
+  for (let request = 0; request < 12; request++) await channel.call("emit", { source: "local:probe", settings: {}, event: { type: "session_start", reason: "startup" } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(warnings.filter(warning => warning.name === "MaxListenersExceededWarning"), [], "holding its process for each request leaves nothing on the process's closed pipes");
 });

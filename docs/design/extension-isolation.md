@@ -151,6 +151,11 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   is gone, as across a connector restart. A source that fails to open again is tried again at its own next request.
 - **Handles hold the connector only while it waits.** The process, its IPC channel and its pipes are unref'd while no
   request is pending, so a connector (or a test) that is done isn't kept alive by a session that wasn't shut down.
+  A pipe or socket that has closed is skipped (`holdHandles`, `hold.ts`): it holds nothing open, and Node's
+  `net.Socket` answers `ref()` and `unref()` on a socket without a handle by waiting for a `connect` that never comes,
+  leaving one more listener on it at each call. A sandbox service's stdin closes once its request line is written, so
+  each request to a sandboxed extension process left two there, and Node warned of a leak at the eleventh
+  (`MaxListenersExceededWarning`).
 - **Its environment is the connector's.** Until step 3, the process runs as the host's user, in the session's
   directory, with the connector's environment, as extensions did in the connector. A promise an extension leaves
   failing is logged rather than ending the process.
