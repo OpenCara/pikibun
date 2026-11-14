@@ -37,8 +37,17 @@ Sessions need a host that's online. Under **Settings → Hosts**:
 
 A few things work only in a browser, at the server's web address: downloading backups and exports, and signing in to document sources (Notion, Google Drive and the like). The app shows notifications while it's open, once you turn them on under **Settings → Notifications**; to be told while it's closed, turn them on in a browser too.
 
-## Signing out, or changing servers
+## Switching between servers
 
-**Settings → Profile → Sign out** signs this app out and forgets its sign-in. The next sign-in screen keeps the same server address, and **Change** switches to another server. Your sessions and workspaces stay on the server you left; nothing is moved or deleted.
+The app can stay signed in to several servers (`pikibun.com`, your team's, your own [self-hosted](self-host.md) one) and shows one at a time. **Settings → Profile → Servers** lists them:
 
-If the app can't reach its server, it shows **Can't reach Pikibun** with **Try again** and **Sign out**. The app shows it for your [self-hosted](self-host.md) Pikibun too, whenever that isn't running: start it under **Settings → Self host**, or choose **Sign out** to reach the sign-in screen's **Run Pikibun on this Mac**.
+- **Switch** changes to another server you're signed in to. Nothing is signed out, and nothing moves between servers.
+- **Add a server** opens the sign-in screen for another server: enter its address and sign in with a code. The servers you're already signed in to are listed there too, so choosing one takes you back.
+
+If a server signed this app out meanwhile (its sign-in expired, or you signed the app out under **Signed-in apps**), switching to it says so and drops it from the list; add it again.
+
+## Signing out
+
+**Settings → Profile → Sign out** signs this app out of the server it shows and forgets that sign-in; the other servers stay signed in, and the sign-in screen lists them. The sign-in screen keeps the same server address, and **Change** enters another. Your sessions and workspaces stay on the server you left; nothing is moved or deleted.
+
+If the app can't reach its server, it shows **Can't reach Pikibun** with **Try again**, **Sign out** and the other servers it is signed in to. The app shows it for your [self-hosted](self-host.md) Pikibun too, whenever that isn't running: start it under **Settings → Self host**, or choose **Sign out** to reach the sign-in screen's **Run Pikibun on this Mac**.

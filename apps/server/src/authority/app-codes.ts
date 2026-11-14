@@ -1,4 +1,4 @@
-import type { Hono, MiddlewareHandler } from 'hono';
+import type { Hono } from 'hono';
 import { z } from 'zod';
 import { sha256 } from '../../../../packages/shared/src/crypto.js';
 import type { AppSignInCode, AppSignInCodeState, NativeSignIn } from '../../../../packages/shared/src/types.js';
@@ -15,6 +15,7 @@ const MAX_WAITING = 5;
 const CODE = /^[A-Za-z0-9_-]{43}$/;
 export const APP_CODE_LINK = 'pikibun://auth/code';
 const EXPIRED = 'This sign-in code has expired or was already used. Make a new one under Settings → Profile → Signed-in apps.';
+const LOCAL_CODE_FROM_CODE = 'An app that signed in with a code can\'t make the next one. Make it where you signed in with this Pikibun\'s sign-in link, or in the app that runs it.';
 
 const makeCodeBody = fields({ currentPassword: z.unknown().optional() }, 'Only currentPassword is accepted.');
 const signInBody = fields({
@@ -25,11 +26,13 @@ const signInBody = fields({
 async function makeCode(c: AppContext) {
   const auth = c.get('auth');
   const input = await body(c, makeCodeBody, { maxBytes: 4096 });
-  const proof = await requireRecentOwner(c, input.currentPassword);
-  const source = await dbResult(c.env.DB.query<{ method: string | null }>('SELECT method FROM auth_sessions WHERE token_hash = ? AND user_id = ?')
+  const local = localMode(c.env);
+  const proof = local ? null : await requireRecentOwner(c, input.currentPassword);
+  const source = await dbResult(c.env.DB.query<{ method: string | null; via: string | null }>('SELECT method, via FROM auth_sessions WHERE token_hash = ? AND user_id = ?')
     .bind(auth.tokenHash, auth.userId).first());
   if (!source) fail(401, 'unauthorized', 'Authentication is required.');
-  const method = proof === 'password' || source.method === 'password' ? 'password' : null;
+  if (local && source.via !== null) fail(403, 'sign_in_link_required', LOCAL_CODE_FROM_CODE);
+  const method = !local && (proof === 'password' || source.method === 'password') ? 'password' : null;
   const code = randomToken();
   const codeId = id();
   const expiresAt = Date.now() + CODE_TTL;
@@ -76,10 +79,11 @@ async function signInWithCode(c: AppContext) {
   const user = await dbResult(getUser(c.env, found.user_id));
   if (!user || !['github', 'password', 'test'].includes(user.auth_kind)) fail(400, 'invalid_grant', EXPIRED);
   if (user.suspended_at) fail(403, 'account_suspended', SUSPENDED);
-  const method = found.method === 'password' || user.auth_kind === 'password' ? 'password' : null;
+  const local = localMode(c.env);
+  const method = !local && (found.method === 'password' || user.auth_kind === 'password') ? 'password' : null;
   if (method === 'password' && !passwordAuthEnabled(c.env)) fail(400, 'invalid_grant', EXPIRED);
-  if (localMode(c.env) && user.auth_kind !== 'test' && (await localOwner(c.env))?.id !== user.id) fail(400, 'invalid_grant', EXPIRED);
-  const kind = user.auth_kind === 'test' ? 'test' : method === 'password' ? 'password' : 'github';
+  if (local && user.auth_kind !== 'test' && (await localOwner(c.env))?.id !== user.id) fail(400, 'invalid_grant', EXPIRED);
+  const kind = user.auth_kind === 'test' ? 'test' : local ? 'local' : method === 'password' ? 'password' : 'github';
   const session = await newSession(c.env, user.id, kind, { deviceName }, { via: 'code', method });
   const at = Date.now();
   const [claimed, created] = await dbResult(c.env.DB.batch([
@@ -93,14 +97,9 @@ async function signInWithCode(c: AppContext) {
   return c.json({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), user: ownProfile(c.env, user) } satisfies NativeSignIn);
 }
 
-const notLocal: MiddlewareHandler<AppEnv> = async (c, next) => {
-  if (localMode(c.env)) fail(404, 'not_found', 'A Pikibun on its owner\'s computer signs apps in with its sign-in link, not with codes.');
-  await next();
-};
-
 export function registerAppCodes(app: Hono<AppEnv>): void {
-  app.post('/api/auth/native/code', privateResponse, notLocal, signInWithCode);
-  app.post('/api/me/app-codes', privateResponse, notLocal, authenticate, csrfGuard, makeCode);
-  app.get('/api/me/app-codes/:id', privateResponse, notLocal, authenticate, codeState);
-  app.delete('/api/me/app-codes/:id', privateResponse, notLocal, authenticate, csrfGuard, cancelCode);
+  app.post('/api/auth/native/code', privateResponse, signInWithCode);
+  app.post('/api/me/app-codes', privateResponse, authenticate, csrfGuard, makeCode);
+  app.get('/api/me/app-codes/:id', privateResponse, authenticate, codeState);
+  app.delete('/api/me/app-codes/:id', privateResponse, authenticate, csrfGuard, cancelCode);
 }

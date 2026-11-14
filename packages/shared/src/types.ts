@@ -54,6 +54,7 @@ export interface UserProfile {
   githubConnected: boolean;
   instanceAdmin?: true;
   passwordSignIn?: true;
+  localOwner?: true;
   hasPassword?: true;
   usernameRequired?: true;
 }

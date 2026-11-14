@@ -39,7 +39,7 @@ Nothing has to be reinstalled. You switch with one setting, or by signing in to 
 | Client → Host | **Settings → This Mac** (**This Computer** on Windows and Linux) → **Pair This Mac**. After that, use **Start host**. See [Host](host.md). |
 | Host → Client | **Settings → This Mac → Stop host**. The pairing is kept, so **Start host** brings it back later without a new code. |
 | Any → Self host | **Settings → Self host → Start Pikibun**, then **Sign in to it**. Signed out, the sign-in screen's **Run Pikibun on this Mac** opens the same page. See [Self host](self-host.md). |
-| Self host → Client or Host | **Settings → Profile → Sign out**, then **Change** the server back on the sign-in screen (for example to `https://pikibun.com`). Choose **Stop** under **Settings → Self host** when you no longer need your own Pikibun. |
+| Self host → Client or Host | **Settings → Profile → Servers → Switch** to a server you're signed in to, or **Add a server** (for example `https://pikibun.com`); see [Switching between servers](client.md#switching-between-servers). Choose **Stop** under **Settings → Self host** when you no longer need your own Pikibun. |
 
 Keep in mind:
 

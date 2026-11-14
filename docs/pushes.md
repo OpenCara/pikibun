@@ -30,7 +30,7 @@ OAuth app identities show a **Redirect URI** to register and need **Authorize** 
 
 Instead of an app or bot, an identity can be one of these. Both push only from sessions on the session owner's own hosts, so nobody's credentials reach anyone else's machine; elsewhere the push is refused:
 
-- **Session owner's account**: the account the owner connected (their GitHub sign-in, or a token under **Git accounts** with write scopes). Their own host receives that token for each push; Pikibun resets a GitHub token when the push ends, but tokens of other providers stay valid.
+- **Session owner's account**: the account the owner connected (their GitHub sign-in, or a token under **Git accounts** with write scopes). Their own host receives that token for each push; Pikibun resets a GitHub sign-in's token when the push ends, but tokens of other providers, and a github.com personal access token on a [Pikibun on your own computer](local.md), stay valid.
 - **Host's Git credentials** (connector 0.6.0 or newer): the connector reads the HTTPS credentials Git on the host would use, through its credential helpers (for example after `gh auth setup-git`, or from the macOS keychain or Git Credential Manager), without prompting. The host's owner turns on **Git credentials** in its [configuration](hosts.md#host-configuration) (connectors 0.9.0 and older: `npx pikibun@latest connect --git-credentials`).
 
 Pull requests are opened as the session owner with their connected account either way. [`packages/cli/README.md`](../packages/cli/README.md#pushing-commits) has the full details of each identity.

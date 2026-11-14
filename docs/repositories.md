@@ -6,7 +6,7 @@ Connect the accounts that can read your repositories under **Settings → Profil
 
 | Provider | How to connect | Token scopes |
 |---|---|---|
-| GitHub (github.com) | Your GitHub sign-in | Granted at sign-in |
+| GitHub (github.com) | Your GitHub sign-in; on a [Pikibun on your own computer](local.md), which has none, a personal access token | Granted at sign-in; for a token, classic `repo`, `workflow` and `read:user`, or fine-grained Metadata read and Contents, Pull requests, Issues and Workflows read and write |
 | GitHub Enterprise Server | Personal access token and host | Fine-grained Contents and Metadata read (or classic `repo`); opening pull requests needs Pull requests write, pushing with your account Contents write |
 | GitLab (gitlab.com or self-managed) | Personal access token (and host if self-managed) | `read_api` and `read_repository`; opening merge requests needs `api`, pushing with your account `write_repository` (or `api`) |
 | Bitbucket Cloud | API token with your Atlassian account email | `read:repository:bitbucket` and `read:user:bitbucket`; opening pull requests needs `write:pullrequest:bitbucket`, pushing with your account `write:repository:bitbucket`. Workspace or repository access tokens (no email) can browse but not push. |

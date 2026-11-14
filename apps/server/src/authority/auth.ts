@@ -155,6 +155,7 @@ export function usernameRequired(env: Env, user: UserRow): boolean {
 export function ownProfile(env: Env, user: UserRow) {
   return { ...userProfile(user), ...(isInstanceAdmin(env, user.id) ? { instanceAdmin: true as const } : {}),
     ...(user.auth_kind === 'password' ? { passwordSignIn: true as const } : {}),
+    ...(localMode(env) && user.auth_kind !== 'test' ? { localOwner: true as const } : {}),
     ...(user.has_password ? { hasPassword: true as const } : {}),
     ...(usernameRequired(env, user) ? { usernameRequired: true as const } : {}) };
 }

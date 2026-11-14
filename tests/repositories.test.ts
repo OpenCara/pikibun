@@ -283,6 +283,12 @@ test('picker uses the acting GitHub token, projects safe metadata and lists ever
   await denied(await alice.request('GET', githubPicker), 502, 'invalid_github_response');
 });
 
+test('a server people sign in to takes no pasted github.com token: only one that runs for its owner alone does', async t => {
+  const f = await fixture(t); const remote = github(t); const alice = await f.client('alice');
+  await denied(await alice.request('PUT', '/api/git/accounts/github', { token: 'ghp_pasted' }), 400, 'invalid_git_provider');
+  assert.equal(remote.calls.length, 0);
+});
+
 test('shared repository configuration never lends another member a GitHub token', async t => {
   const f = await fixture(t); const remote = github(t); const owner = await f.client('owner'); const admin = await f.client('admin');
   const synthetic = await f.client('synthetic', false); const team = await workspace(owner);

@@ -20,7 +20,8 @@ export function SignInApp(props: { onClose: () => void; onSignedIn: (deviceName:
   const user = () => session().user;
   const code = signal<AppSignInCode | null>(null);
   const password = signal("");
-  const needsPassword = signal(Boolean(untracked(session).user.passwordSignIn));
+  const local = () => Boolean(user().localOwner);
+  const needsPassword = signal(Boolean(untracked(session).user.passwordSignIn && !untracked(session).user.localOwner));
   const signInAgain = signal(false);
   const ended = signal("");
   const copied = signal(false);
@@ -90,7 +91,8 @@ export function SignInApp(props: { onClose: () => void; onSignedIn: (deviceName:
       <If when={code()}
         else={
           <View style={{ gap: 12 }}>
-            <Small>Make a code that signs in the Pikibun app on your phone, tablet or computer as you, without GitHub or your password there.</Small>
+            <Small>{local() ? "Make a code that signs in the Pikibun app on this computer as you."
+              : "Make a code that signs in the Pikibun app on your phone, tablet or computer as you, without GitHub or your password there."}</Small>
             <If when={ended()}>{text => <Banner tone="warning">{text()}</Banner>}</If>
             <If when={needsPassword()}>
               <Field label="Your password" hint={user().passwordSignIn ? "A code signs an app in as you, so it takes your password." : "Or sign in with GitHub again."}>
@@ -114,10 +116,15 @@ export function SignInApp(props: { onClose: () => void; onSignedIn: (deviceName:
         }>
         {current => (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 16, alignItems: "center" }}>
-            <QrCode value={current().link} testID="sign-in-app-qr" label="QR code of the sign-in link" />
+            <If when={!local()}><QrCode value={current().link} testID="sign-in-app-qr" label="QR code of the sign-in link" /></If>
             <View style={{ flex: 1, minWidth: 220, gap: 10 }}>
-              <Small>On a phone or tablet: scan this with its camera, and open the link in Pikibun.</Small>
-              <Small>{usesBrowserSession
+              <If when={!local()}
+                else={<Small testID="sign-in-app-local">This Pikibun is reachable from this computer only, so the code signs in the Pikibun app on this computer.</Small>}>
+                <Small>On a phone or tablet: scan this with its camera, and open the link in Pikibun.</Small>
+              </If>
+              <Small>{local()
+                ? usesBrowserSession ? "Choose Open in Pikibun, or copy the link and paste it on the app's sign-in screen." : "Copy the link, then paste it on the app's sign-in screen."
+                : usesBrowserSession
                 ? "On this computer: choose Open in Pikibun. On another: copy the link, then paste it under Sign in with a code on the app's sign-in screen."
                 : "On a computer: copy the link, then paste it under Sign in with a code on the app's sign-in screen."}</Small>
               <Small tone="warning" testID="sign-in-app-expiry">{`Works once, for ${remaining(current().expiresAt, now())} more. Anyone who has it can sign in as you until then, so show it to nobody.`}</Small>

@@ -5,7 +5,8 @@ import type { Env, GitCredentialRow, AppEnv } from '../../types.js';
 import { auditAfterChange, auditStatement } from '../audit.js';
 import { revokeGitHubToken } from '../auth.js';
 import { getUser } from '../../db.js';
-import { fail, id, identifier, jsonObject, now, testMode } from '../../http.js';
+import { ConstraintError } from '../../db/types.js';
+import { fail, id, identifier, jsonObject, localMode, now, testMode } from '../../http.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { githubRepositories, validRepositoryRef } from '../repositories.js';
 import { gitProviderAdapters, plainRepositoryId } from './providers.js';
@@ -130,6 +131,33 @@ export function accountInput(input: Record<string, unknown>) {
   return { provider, host, organization, username, token };
 }
 
+async function githubTokenOwner(token: string): Promise<{ id: string; login: string }> {
+  let response: Response;
+  try {
+    response = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'pikibun' },
+      redirect: 'manual', signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    fail(502, 'git_provider_unavailable', 'GitHub could not be reached to check the token. Try again.');
+  }
+  if (response.status === 401) {
+    await response.body?.cancel().catch(() => {});
+    fail(400, 'invalid_git_token', 'GitHub didn\'t accept this token. Paste a personal access token that hasn\'t expired or been revoked.');
+  }
+  let identity: unknown = null;
+  if (response.ok) {
+    try { identity = await response.json(); } catch { }
+  } else {
+    await response.body?.cancel().catch(() => {});
+  }
+  const { id: githubId, login } = (identity && typeof identity === 'object' ? identity : {}) as { id?: unknown; login?: unknown };
+  if (typeof githubId !== 'number' || !Number.isSafeInteger(githubId) || githubId <= 0 || typeof login !== 'string' || !/^[A-Za-z0-9-]{1,39}$/.test(login)) {
+    fail(502, 'invalid_git_response', 'GitHub could not check the token. Try again.');
+  }
+  return { id: String(githubId), login };
+}
+
 export function registerGitAccounts(app: Hono<AppEnv>): void {
   app.get('/api/git/accounts', async c => {
     const userId = c.get('auth').userId;
@@ -138,7 +166,7 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
     const rows = await c.env.DB.query<Pick<GitCredentialRow, 'id' | 'provider' | 'host' | 'organization' | 'login' | 'created_at'>>(`SELECT id, provider, host, organization, login, created_at FROM git_credentials
       WHERE user_id = ? ORDER BY provider, host, organization, id`).bind(userId)
       .all();
-    const github: GitAccount[] = user.auth_kind === 'github' && user.github_connected
+    const github: GitAccount[] = user.auth_kind !== 'test' && user.github_id && user.github_connected
       ? [{ id: 'github', provider: 'github', host: 'github.com', organization: '', login: user.github_login ?? '', createdAt: null }] : [];
     return c.json({ accounts: [...github, ...rows.map(publicAccount)] });
   });
@@ -174,16 +202,52 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
     return c.json({ account: publicAccount(row) }, 201);
   });
 
+  app.put('/api/git/accounts/github', async c => {
+    const userId = c.get('auth').userId;
+    if (!localMode(c.env)) fail(400, 'invalid_git_provider', 'GitHub.com uses the sign-in connection here: sign in with GitHub.');
+    const input = await jsonObject(c, 32768);
+    if (Object.keys(input).some(key => key !== 'token')) fail(400, 'invalid_git_account', 'Only token is accepted.');
+    const token = typeof input.token === 'string' ? input.token.trim() : '';
+    if (!/^[\x21-\x7e]{1,4096}$/.test(token)) fail(400, 'invalid_git_token', 'Paste a GitHub personal access token.');
+    const user = await getUser(c.env, userId);
+    if (!user || (user.auth_kind !== 'password' && user.auth_kind !== 'github')) fail(403, 'github_not_connected', 'Synthetic users cannot connect GitHub.');
+    const owner = await githubTokenOwner(token);
+    if (user.auth_kind === 'github' && user.github_id !== owner.id) {
+      fail(409, 'github_account_mismatch', `This token is @${owner.login}'s. This Pikibun's owner signed in with ${user.github_login ? `@${user.github_login}` : 'another GitHub account'}: paste a token of that account.`);
+    }
+    const ciphertext = await encryptToken(c.env, userId, token);
+    const timestamp = now();
+    let stored = false;
+    try {
+      const [claimed] = await c.env.DB.batch([
+        c.env.DB.query(`UPDATE users SET github_id = ?, github_login = ? WHERE id = ? AND (auth_kind = 'password' OR (auth_kind = 'github' AND github_id = ?))`)
+          .bind(owner.id, owner.login, userId, owner.id),
+        c.env.DB.query(`INSERT INTO github_tokens (user_id, ciphertext, updated_at) SELECT ?, ?, ? WHERE changes() = 1
+          ON CONFLICT(user_id) DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at`).bind(userId, ciphertext, timestamp),
+        auditAfterChange(c.env, userId, 'git.account.connected', null, { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }),
+      ]);
+      stored = claimed!.changes === 1;
+    } catch (error) {
+      if (!(error instanceof ConstraintError)) throw error;
+      fail(409, 'github_account_taken', `Another account on this Pikibun is @${owner.login} on GitHub already.`);
+    }
+    if (!stored) fail(409, 'github_account_mismatch', 'Your account changed meanwhile. Reload and try again.');
+    return c.json({ account: { id: 'github', provider: 'github', host: 'github.com', organization: '', login: owner.login, createdAt: null } satisfies GitAccount }, 201);
+  });
+
   app.delete('/api/git/accounts/:id', async c => {
     const userId = c.get('auth').userId;
     if (c.req.param('id') === 'github') {
       const [deleted] = await c.env.DB.batch<{ ciphertext: string }>([
         c.env.DB.query<{ ciphertext: string }>(`DELETE FROM github_tokens WHERE user_id = ?
-          AND EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind = 'github') RETURNING ciphertext`).bind(userId, userId),
+          AND EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind IN ('github', 'password')) RETURNING ciphertext`).bind(userId, userId),
         auditAfterChange(c.env, userId, 'git.account.removed', null, { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }),
+        c.env.DB.query<{ ciphertext: string }>(`UPDATE users SET github_id = NULL, github_login = NULL WHERE id = ? AND auth_kind = 'password'
+          AND changes() = 1 AND NOT EXISTS (SELECT 1 FROM github_tokens WHERE user_id = ?)`).bind(userId, userId),
       ]);
       const ciphertext = deleted.results[0]?.ciphertext;
       if (!ciphertext) fail(404, 'not_found', 'Git account not found.');
+      if (localMode(c.env)) return c.body(null, 204);
       let revoked = false;
       try { revoked = await revokeGitHubToken(c.env, await decryptToken(c.env, userId, ciphertext)); } catch { }
       if (!revoked) console.error(`pikibun: the GitHub sign-in token of ${userId} left the vault, but GitHub could not be asked to revoke it`);

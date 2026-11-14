@@ -34,7 +34,7 @@ function githubHeaders(token: string): Record<string, string> {
 
 export async function ownerGitHub(env: Env, ownerId: string): Promise<GitHubAccess> {
   const owner = await getUser(env, ownerId);
-  if (!owner || owner.auth_kind !== 'github' || !owner.github_id) fail(409, 'github_not_connected', 'The session owner has no real GitHub connection.');
+  if (!owner || owner.auth_kind === 'test' || !owner.github_id) fail(409, 'github_not_connected', 'The session owner has no real GitHub connection.');
   const vault = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM github_tokens WHERE user_id = ?').bind(owner.id).first();
   if (!vault) fail(409, 'github_not_connected', 'The session owner has no GitHub connection.');
   return { token: await decryptToken(env, owner.id, vault.ciphertext), ciphertext: vault.ciphertext, userId: owner.id, githubId: owner.github_id,

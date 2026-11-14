@@ -12,7 +12,7 @@ export async function getUser(env: Env, userId: string): Promise<UserRow | null>
 export function userProfile(row: UserRow): UserProfile {
   const username = row.username ?? (row.auth_kind === 'password' && row.id.startsWith('password:') ? row.id.slice('password:'.length) : null);
   return { id: row.id, username, githubId: row.github_id, githubLogin: row.github_login, displayName: row.display_name,
-    gitName: row.git_name, gitEmail: row.git_email, env: JSON.parse(row.env_json), githubConnected: row.auth_kind === 'github' && !!row.github_connected };
+    gitName: row.git_name, gitEmail: row.git_email, env: JSON.parse(row.env_json), githubConnected: row.auth_kind !== 'test' && !!row.github_id && !!row.github_connected };
 }
 export function modelDefinition(row: ModelRow): ModelDefinition {
   return { id: row.id, workspaceId: row.workspace_id, name: row.name, provider: row.provider, modelId: row.model_id,

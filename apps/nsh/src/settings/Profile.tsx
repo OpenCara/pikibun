@@ -1,13 +1,13 @@
 import { platform, signal, View } from "nsh";
 import type { SignedInDevice, UserProfile } from "../../../../packages/shared/src/types";
 import { segment, usernameWithId } from "../shared";
-import { session, signOut, updateUser } from "../lib/auth";
+import { addServer, servers, session, signOut, switchServer, updateUser } from "../lib/auth";
 import { timestamp } from "../lib/format";
 import { createAction, createResource } from "../lib/resource";
 import { displayOrigin, usesBrowserSession } from "../lib/server";
 import { palette } from "../theme";
 import { Field, TextField } from "../form";
-import { Button, CardBody, confirm, CopyButton, Feedback, IconButton, ResourceState, Row, Section } from "../ui";
+import { Badge, Button, CardBody, confirm, CopyButton, Feedback, IconButton, ResourceState, Row, Section } from "../ui";
 import { ConnectedAccountsSection } from "./accounts";
 import { OwnJoinRequests } from "./join-requests";
 import { SectionPage, SettingsActions, type SectionProps } from "./parts";
@@ -27,6 +27,7 @@ function SignedInAppsSection() {
     signedInNotice.set(`${name ?? "An app"} signed in with the code.`);
     void devices.refresh();
   }
+  const madeWithCode = () => Boolean(session().user.localOwner && devices.data()?.devices.some(device => device.current && device.viaCode));
   async function revoke(device: SignedInDevice) {
     if (action.busy()) return;
     if (!await confirm({ title: "Sign out this app?", destructive: true, confirmLabel: "Sign out app",
@@ -39,7 +40,7 @@ function SignedInAppsSection() {
   return (
     <Section title="Signed-in apps" testID="signed-in-apps"
       info="The Pikibun apps on your phone, tablet or computer that signed in as you. Each stays signed in for 30 days unless you sign it out here or in the app."
-      action={adding() || !codeSignInOffered() ? undefined : <Button testID="sign-in-app-start" small variant="outline" icon="key" label="Sign in an app"
+      action={adding() || !codeSignInOffered() || madeWithCode() ? undefined : <Button testID="sign-in-app-start" small variant="outline" icon="key" label="Sign in an app"
         onPress={() => { signedInNotice.set(""); adding.set(true); }} />}>
       <If when={adding()}><SignInApp onClose={() => adding.set(false)} onSignedIn={signedIn} /></If>
       <If when={signedInNotice()}>{text => <CardBody><Feedback notice={text()} /></CardBody>}</If>
@@ -54,6 +55,30 @@ function SignedInAppsSection() {
         </If>
       </ResourceState>
       <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+    </Section>
+  );
+}
+
+function ServersSection() {
+  const action = createAction();
+  const current = () => session().origin;
+  const list = () => {
+    const saved = servers();
+    return saved.some(item => item.origin === current()) ? saved : [{ origin: current(), account: "" }, ...saved];
+  };
+  return (
+    <Section title="Servers" testID="servers"
+      info="The Pikibun servers this app is signed in to. Switching keeps every sign-in: your sessions and workspaces stay on their own server, and nothing moves between them."
+      action={<Button testID="server-add" small variant="outline" icon="plus" label="Add a server" disabled={action.busy()} onPress={addServer} />}>
+      <Each of={list()} key={item => item.origin}>
+        {item => (
+          <Row title={displayOrigin(item().origin)} hint={item().account || undefined} testID={`server-${displayOrigin(item().origin)}`}
+            trailing={item().origin === current() ? <Badge tone="success">This server</Badge>
+              : <Button testID={`server-switch-${displayOrigin(item().origin)}`} small variant="outline" label="Switch" disabled={action.busy()}
+                onPress={() => void action.run(() => switchServer(item().origin))} />} />
+        )}
+      </Each>
+      <If when={action.error()}><CardBody><Feedback error={action.error()} /></CardBody></If>
     </Section>
   );
 }
@@ -118,6 +143,7 @@ export function Profile(_props: SectionProps) {
       <ConnectedAccountsSection />
       <SignedInAppsSection />
       <OwnJoinRequests />
+      <If when={!usesBrowserSession}><ServersSection /></If>
       <Section title="Account">
         <If when={user().username}>
           {name => <Row title="Username" hint={name()} selectableHint trailing={<CopyButton value={name()} label="Copy username" />} />}
