@@ -27,8 +27,8 @@ export function ChatOptionsBar(props: {
   const model = () => (props.host ? findModel(props.host, props.value.model) : undefined);
   const autoSelected = () => props.auto?.selected === true;
   const modelLabel = () => {
-    const name = props.auto?.chosen ?? model()?.name;
-    return autoSelected() ? (name ? `Auto · ${name}` : "Auto") : model()?.name ?? "Model";
+    if (!autoSelected()) return model()?.name ?? "Model";
+    return props.auto?.chosen ? `Auto · ${props.auto.chosen}` : "Auto";
   };
   const modelOptions = (host: ConnectorInfo) => [
     ...(props.auto ? [{ value: AUTO, label: "Auto", hint: props.auto.hint, icon: "sparkles" as const }] : []),

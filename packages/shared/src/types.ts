@@ -610,6 +610,10 @@ export interface ChatOptions {
   thinkingLevel?: ThinkingLevel;
   access?: AccessMode;
   autoMerge?: boolean;
+  auto?: true | AutoModelRequest;
+}
+export interface AutoModelRequest {
+  candidates: { provider: string; modelId: string; name: string; thinkingLevels?: ThinkingLevel[]; thinkingLevel?: ThinkingLevel }[];
 }
 export interface SubmitInput {
   content: string;

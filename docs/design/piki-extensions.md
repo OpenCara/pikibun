@@ -646,43 +646,74 @@ kept by the session rather than the agent, so a long one survives the session cl
 
 ## Auto mode: piki:auto-mode
 
-Choosing a host and a model is a decision made before a session exists, from what the control plane knows: which hosts
-the member may use, which are online, what each offers and how busy it is. `piki:auto-mode` adds **Auto** to the new
-session's host and model menus, and to a session's model menu, and makes that decision for the task.
+Choosing a model and its reasoning for a message is a judgement about the task, which a model makes better than rules.
+`piki:auto-mode` adds **Auto** to the model menu, of a new session and of a session: for each message, a model on the
+session's own host judges what kind of task it is, and the message runs on the model and effort Anthropic's guide
+[Which Claude model should you build with?](https://claude.dev/blog/which-claude-model-should-you-build-with/) starts
+that kind of task on, among the models that host offers. The member still chooses the host.
 
 41. **A control-plane extension.** It is in the catalogue (`controlPlane: true`, `optIn: true`), so a workspace chooses
     it like the others, but no connector loads it: `connectorPikiExtensions` builds factories only for what has one, the
     server leaves it out of the list a connector gets (`connectorWorkspaceExtensions`) and of a host page's workspaces,
     and a host can't require it (`invalid_host_config`). A connector never learning of it means no host shows it
-    missing and older connectors are unaffected. It is off until added, and a workspace that removes or turns it off
-    has no Auto: `GET /api/workspaces/:id/auto-mode` answers `{ enabled }`, which the client reads before offering it,
-    and `POST` refuses with `auto_mode_off`. It isn't among the default extensions, so no migration adds it; the add
-    sheet offers it under **Pikibun features**, and it has no settings.
-42. **Deterministic, not a model call.** The control plane has no model of its own, and a host's model would need a
-    host chosen first, cost a request per keystroke, and send the task to whichever host answers. So the choice is a
-    pure function in `packages/shared/src/auto-mode.ts`, the same in tests as in the server: `assessTask` scores the
-    task (length, listed points, several requirements, code, file names, words that ask for depth such as
-    refactor, migration, concurrency, security, performance, and ones that ask for little such as a typo, explain,
-    small) into simple, moderate or complex, and notes a GPU where it names one; an empty task is moderate.
-    `modelTier` puts each model in a light, standard or frontier tier by its id and name (mini, haiku, lite, small
-    parameter counts; opus, pro, o3, gpt-5, large ones). A task gets the model whose tier is closest to its own,
-    falling short costing three times what going over does, so a complex task takes the strongest there is rather
-    than nothing; the reasoning level is low, medium or high, clamped to what the model offers.
-43. **The host from its details.** Only online hosts the member may start a session on (theirs, or shared with the
-    workspace) and only models the member may use there (`usableModels`) count. Each scores by its best model's fit,
-    then: the member's own host first (no trust to give), the sandboxed before an unverified sandbox before an
-    unsandboxed host, a GPU where the task needs one, and fewer sessions working on it now (sessions with activity
-    `working`, all workspaces, capped). The answer says why in three sentences (the task, the host, the model), which
-    the new session shows under its menus; how busy a host is shows only as busy or idle.
-44. **What the member keeps.** Auto host and Auto model are separate: a host the member picked is sent as
-    `connectorId` and only the model is chosen; a model picked while the host is Auto is sent as `model` and the host is
-    chosen among those offering it; changing only the access or reasoning keeps nothing. The new session asks at once
-    the first time, then 600 ms after the last change, a failed answer included, and once more on Start if the task
-    changed, so it starts with the choice for what was sent; a shared host it picks
-    still needs the member's trust, as when picked by hand. The client remembers Auto per menu
-    (`pikibun.lastAuto`), and never what Auto chose as the member's last host and model (`pikibun.lastChat`), which
-    manual choices start from. In a session, Auto in the model menu is per message, on the session's host, and never
-    remembered: a short follow-up ("go ahead") would otherwise drop a complex task to a light model.
+    missing and older connectors are unaffected; the runner's evaluation (note 45) is its own code, asked for by a
+    message's options, not a Pi extension a host loads. It is off until added, and a workspace that removes or turns it
+    off has no Auto: `GET /api/workspaces/:id/auto-mode` answers `{ enabled }`, which the client reads before offering
+    it, and a message sent with Auto is refused with `auto_mode_off`. It isn't among the default extensions, so no
+    migration adds it; the add sheet offers it under **Pikibun features**, and it has no settings.
+42. **The host is the member's; only the model is Auto.** The host menu has no Auto: choosing where work runs is
+    choosing whom to trust with the task and the code, and that stays the member's, as does a shared host's trust.
+    Auto in the model menu leaves the model and the reasoning to the evaluation for each message; the access stays the
+    member's. The client remembers Auto as the member's model choice (`pikibun.lastAuto`, whose `host` is always false
+    now), and never what Auto chose as their last model (`pikibun.lastChat`), which manual choices start from. In a
+    session the model chip reads `Auto · ` and the model the conversation runs on now.
+43. **The guide as data: task kinds, model classes, efforts.** `packages/shared/src/auto-dispatch.ts` holds the guide's
+    "Pick a model by task" table as `taskKindGuide`: each kind (everyday engineering, well-scoped coding, chat, side
+    tasks, classification, documents, routine agent tasks, computer use, major refactors, deep research, and `unsure`
+    for none) has a starting model class and effort, and one for a task harder than most of its kind. A class is a
+    rung of the guide's ladder, Haiku, Sonnet, Opus, Fable (`modelRung`: by family name, Mythos with Fable; another
+    provider's model by its tier, `modelTier`, so a frontier one counts as the Opus class). Efforts are Claude Code's
+    where the guide gives both (documents at medium), as sessions are agents like it; `side-task` takes the model's own
+    default, as the guide says. Following the guide's "adjust effort before you switch models", a harder task raises
+    the effort one level and changes the class only where the guide says so (a side task goes to the Sonnet class, a
+    complex document to the Opus class). `follow-up` is a kind of its own: a short reply to the previous message
+    ("go ahead") keeps the conversation's model and reasoning, so a complex task isn't dropped to a light model
+    mid-way; it needs a previous message.
+44. **Dispatch among what the host offers.** `dispatchModel` takes the newest model of the kind's class among the
+    candidates, at the kind's effort clamped to the levels the model offers (`clampEffort`: the nearest, the lower on a
+    tie). A host without that class gets the next class up at one effort lower, the guide's "test the next model up at
+    a lower effort", or, with none above, the next class down at one effort higher; the choice's note says so. The
+    task can't widen the choice: candidates are the models the control plane listed, and the task's text only picks a
+    kind.
+45. **The evaluator: the lightest candidate, on the session's host, when the run starts.** The guide puts routing and
+    classification on the Haiku class at medium effort, so the evaluator is the lowest-class, newest candidate the
+    host can call (`pickEvaluator`), at medium clamped to it. It runs where the message is going anyway, so the task
+    reaches no host it wasn't sent to and uses that host's sign-ins. The client sends `options: { auto: true }` (with
+    `access` as before, never `model` or `thinkingLevel`), `submit` and `ask` alike; the control plane checks auto
+    mode is on and sends the runner `auto: { candidates }`, the models the host advertises and hasn't disabled, as for
+    a model picked by hand. In `applyOptions`, when the run starts (so a queued message is judged when it runs and
+    submitting stays as fast), the runner (`session/auto-model.ts`) makes one call with no tools
+    (`Models.completeSimple`, no retries, 20 seconds) with `evaluatorPrompt`: the kinds and their descriptions, the
+    message as data (its first 8,000 characters), the previous user message (its first 2,000) and the conversation's
+    model. The answer must be one JSON object, `{ "kind", "harder", "reason" }` (`parseEvaluation`), the reason cut to
+    200 characters; then `dispatchModel` chooses and the runner configures the conversation as for a model picked by
+    hand. The run keeps the choice (`run.auto`), and its candidate list is dropped from the run once chosen, so a
+    retry of the message compares options with `auto` as `true` (`comparableOptions`): the list a retry carries is
+    the host's at that moment, which may differ. Whether a message steers the run compares the options as they are,
+    so an Auto message never steers a run whose choice is made: it waits, and is judged on its own turn; the
+    conversation shows it as a system entry after the message (`workspace.run-auto`, `autoChoiceText`: "Auto: Claude
+    Sonnet 5.5, medium reasoning, for well-scoped coding: a bug fix in one module. Judged by Claude Haiku 5.5."). A
+    new session is created on the member's last model, which its first message's choice replaces; the form shows no
+    choice before Start, as there is none until the message runs.
+46. **Rules where the evaluator fails; older connectors.** A timeout, an error, an answer that isn't valid JSON with a
+    known kind: `ruleEvaluation` reads the same kinds from words in the task (migration, refactor across the codebase,
+    debug, review, summarize, classify, screenshots, spreadsheet, fix, a question...), with `assessTask`'s complexity
+    choosing between a contained and a major refactor and marking a task harder; the entry says "Chosen by rules" and
+    why. A message is never refused for Auto's sake. A connector reports `capabilities.autoModel` when its runner
+    evaluates; to one without it, the control plane sends the rules' dispatch as a plain `model` and `thinkingLevel`,
+    keeping the conversation's model (from the session's view) for a follow-up there too.
+    `POST /api/workspaces/:id/auto-mode` stays for clients from before this, answering with the old rules' host and
+    model (`autoChoice`); new clients no longer call it.
 
 ## Where things are
 
@@ -709,7 +740,7 @@ session's host and model menus, and to a session's model menu, and makes that de
 | Added on binding; a connector's list; install requests refused | `apps/server/src/authority/extension-policy.ts` (`addPikiExtensions`), called from `authority/repositories.ts`; `apps/server/src/extensions.ts`; migrations `0048`/`0041` |
 | Session tools added with a source or by hand, listed off until then (note 38) | `packages/shared/src/host-extensions.ts` (`withSessionToolsListed`); `extension-policy.ts` (`workspaceExtensions`, `addPikiExtensions`, `addDocumentSourceExtension`, called from `authority/sources/sources.ts`); migrations `0058`/`0051`; tests in `tests/extensions.test.ts`, `tests/session-tool-extensions-migration.test.ts` |
 | Workspace and host pages | `apps/nsh/src/settings/workspace-extensions.tsx`, `host-extensions.tsx` |
-| Auto mode: the task, the tiers, the choice | `packages/shared/src/auto-mode.ts`; `apps/server/src/auto-mode.ts` (the API, `workspaceConnectorInfos` in `connectors.ts`); `apps/nsh/src/lib/auto-mode.ts`, `screens/NewSession.tsx`, `components/ChatOptionsBar.tsx`, `screens/SessionView.tsx`; tests in `tests/auto-mode.test.ts`, `apps/nsh/tests/parity.test.tsx` |
+| Auto mode: the rules, the evaluator, the choice | `packages/shared/src/auto-mode.ts` (rules, the evaluator's prompt and answer); `apps/server/src/auto-mode.ts` (the API, the candidates, evaluator and fallback for a message), `sessions.ts` (`chatOptions`); `apps/runner/src/session/auto-model.ts` (the call), `session.ts` (`chatOptions`, `applyOptions`), `session/entries.ts` (the entry); `apps/nsh/src/lib/auto-mode.ts`, `screens/NewSession.tsx`, `components/ChatOptionsBar.tsx`, `screens/SessionView.tsx`; tests in `tests/auto-mode.test.ts`, `apps/nsh/tests/parity.test.tsx` |
 | Tests | `tests/piki-extensions.test.ts`, `api-access.test.ts`, and in `push-broker`, `host-extensions`, `extensions`, `repositories`, `local-connector` |
 
 ## Later
@@ -729,4 +760,5 @@ session's host and model menus, and to a session's model menu, and makes that de
 - Report on the host's page whether each command is installed where its sandboxes find it.
 - `tea` for Gitea and Forgejo; Bitbucket has no official CLI.
 - Auto mode: learn from what members switch away from, take a model's price and context window from Pi's model
-  registry once connectors report them, and let a workspace weigh speed against strength in settings.
+  registry once connectors report them and give them to the evaluator, and let a workspace weigh speed against
+  strength in settings.

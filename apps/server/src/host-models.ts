@@ -31,7 +31,7 @@ export function isModelDisabled(disabled: ReadonlySet<string>, model: { provider
 }
 
 export async function requireEnabledModel(c: AppContext, row: SessionRow, options: ChatOptions | undefined): Promise<void> {
-  if (!row.connector_id || options?.model) return;
+  if (!row.connector_id || options?.model || options?.auto) return;
   const host = await hostDisabledModels(c.env, row);
   if (!host) return;
   const { disabled } = host;

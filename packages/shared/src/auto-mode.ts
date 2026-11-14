@@ -109,7 +109,7 @@ export function modelTier(model: Pick<LocalModelSummary, "modelId" | "name">): M
   return FRONTIER.test(text) ? 3 : 2;
 }
 
-function modelVersion(model: Pick<LocalModelSummary, "modelId">): number {
+export function modelVersion(model: Pick<LocalModelSummary, "modelId">): number {
   const match = /(\d+(?:\.\d+)?)/.exec(model.modelId);
   return match ? Math.min(Number(match[1]), 100) : 0;
 }

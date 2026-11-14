@@ -16,6 +16,7 @@ export interface ConnectorCapabilities {
   unsandboxed?: boolean;
   chatOptions?: boolean;
   chatImages?: boolean;
+  autoModel?: boolean;
   gitProviders?: boolean;
   gitPush?: boolean;
   gitServers?: boolean;

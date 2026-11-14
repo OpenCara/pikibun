@@ -1,6 +1,5 @@
 export * from "../../../packages/client/src/index";
 export type { ConnectorInfo } from "../../../packages/shared/src/connector";
-export { AUTO_TASK_LIMIT, type AutoChoiceAnswer, type AutoChoiceRequest } from "../../../packages/shared/src/auto-mode";
 export type { WorkspaceRepositoryList } from "../../../packages/shared/src/repositories";
 export type {
   AccessMode, OperationRecord, EntryView, ModelDefinition, SessionActivity, SessionPullRequest, SessionRecord, SessionView, SubmitResult,

@@ -102,6 +102,11 @@ export function modelUnavailable(host: ConnectorInfo | undefined, selection: Cha
   return undefined;
 }
 
+export function autoChatOptionsBody(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): ChatOptions | undefined {
+  if (!host?.capabilities.chatOptions) return undefined;
+  return { auto: true, ...(mode === "submit" && selection.access === "read" ? { access: "read" as const } : {}) };
+}
+
 export function chatOptionsBody(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): ChatOptions | undefined {
   if (!host?.capabilities.chatOptions) return undefined;
   const model = findModel(host, selection.model);

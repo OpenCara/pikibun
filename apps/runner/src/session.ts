@@ -48,7 +48,7 @@ import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
-import { holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
+import { comparableOptions, holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
 import { activityEntry, contextView, extensionView, sessionView } from "./session/view.js";
 import { SessionOperations, type OperationConsent } from "./session/operations.js";
 import { ToolCalls } from "./session/tools/calls.js";
@@ -59,6 +59,9 @@ import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
 import { requeue, RunQueue, submissionRequestId } from "./session/run-queue.js";
+import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
+import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
+import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
 import {
   Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
@@ -705,7 +708,12 @@ export class RunnerSession {
   }
 
   private async applyOptions(conversation: Conversation, run: Run, content?: string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]): Promise<void> {
-    const options = run.options ?? {};
+    let options = run.options ?? {};
+    if (options.auto) {
+      const chosen = run.auto ?? await this.chooseAutoModel(conversation, run, options.auto, content);
+      const { auto: _, ...rest } = options;
+      options = { ...rest, ...(chosen ? { model: { provider: chosen.provider, modelId: chosen.modelId }, ...(chosen.thinkingLevel ? { thinkingLevel: chosen.thinkingLevel } : {}) } : {}) };
+    }
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
@@ -737,6 +745,27 @@ export class RunnerSession {
     const images = typeof content === "string" ? [] : (content ?? []).flatMap(part => part.type === "image" ? [{ type: "image" as const, data: part.data, mimeType: part.mimeType }] : []);
     const prompts = extensions.length ? await this.#hostExtensions.beforeAgentStart(text, images.length ? images : undefined).catch(() => ({})) : {};
     await conversation.commit(async tx => { (await tx.doc(ExtensionPrompts, conversation.id)).prompts = prompts; }, context);
+  }
+
+  private async chooseAutoModel(conversation: Conversation, run: Run, request: true | AutoModelRequest,
+    content?: string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]): Promise<AutoRunChoice | undefined> {
+    if (request === true) return undefined;
+    const active = await conversation.context(context).catch(() => undefined);
+    const previous = [...(active?.messages ?? [])].reverse().find(message => message.role === "user");
+    const agent = await conversation.agent(context).catch(() => undefined);
+    const named = agent?.model && request.candidates.find(item => item.provider === agent.model!.provider && item.modelId === agent.model!.modelId);
+    const level = agent?.thinkingLevel && thinkingLevels.includes(agent.thinkingLevel as ThinkingLevel) ? agent.thinkingLevel as ThinkingLevel : undefined;
+    const current = agent?.model ? { provider: agent.model.provider, modelId: agent.model.modelId, ...(named ? { name: named.name } : {}), ...(level ? { thinkingLevel: level } : {}) } : undefined;
+    const task = typeof content === "string" ? content : (content ?? []).flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
+    const chosen = await chooseAutoModel(this.models, request, { task, ...(previous ? { previous: messageText(previous.content) } : {}), ...(current ? { current } : {}) })
+      .catch(() => undefined);
+    await this.mutate(meta => {
+      const saved = meta.runs[run.key];
+      if (!saved) return;
+      if (chosen) saved.auto = chosen;
+      if (saved.options?.auto) saved.options = { ...saved.options, auto: true };
+    });
+    return chosen;
   }
 
   private async noteCurrentModel(conversation: Conversation): Promise<void> {
@@ -821,8 +850,12 @@ export class RunnerSession {
     const invalid = (message = "Invalid chat options") => new RunnerError(422, message);
     if (!input || typeof input !== "object" || Array.isArray(input)) throw invalid();
     const value = input as Record<string, unknown>;
-    if (Object.keys(value).some(key => !["model", "thinkingLevel", "access", "autoMerge"].includes(key))) throw invalid();
+    if (Object.keys(value).some(key => !["model", "thinkingLevel", "access", "autoMerge", "auto"].includes(key))) throw invalid();
     const options: ChatOptions = {};
+    if (value.auto !== undefined) {
+      if (value.model !== undefined || value.thinkingLevel !== undefined) throw invalid("Auto chooses the model and reasoning");
+      options.auto = autoModelRequest(value.auto, invalid);
+    }
     if (value.model !== undefined) {
       const model = value.model as Record<string, unknown>;
       if (!model || typeof model !== "object" || Object.keys(model).some(key => key !== "provider" && key !== "modelId")
@@ -938,7 +971,7 @@ export class RunnerSession {
       if (existing) {
         if (existing.contentHash !== hash) throw new RunnerError(409, "requestId reused with different content");
         if (existing.admissionId !== input.admissionId) throw new RunnerError(409, "requestId reused with a different Worker admission");
-        if (stableJson(existing.options ?? null) !== stableJson(options ?? null)) throw new RunnerError(409, "requestId reused with different chat options");
+        if (stableJson(comparableOptions(existing.options)) !== stableJson(comparableOptions(options))) throw new RunnerError(409, "requestId reused with different chat options");
         return { submissionId: key, conversationId: String(existing.conversationId), status: existing.status };
       }
       if (Object.values(state.runs).filter(run => ["queued", "running", "admitting"].includes(run.status)).length >= 64)

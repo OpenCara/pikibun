@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { ConnectorInfo } from "../packages/shared/src/connector.js";
 import type { SessionView } from "../packages/shared/src/types.js";
 import {
-  chatOptionsBody, chatPreference, initialSelection, modelUnavailable, parseChatPreference, preferredSelection, type ChatSelection,
+  autoChatOptionsBody, chatOptionsBody, chatPreference, initialSelection, modelUnavailable, parseChatPreference, preferredSelection, type ChatSelection,
 } from "../packages/client/src/chat-options.js";
 
 const host = { capabilities: { chatOptions: true }, models: [] } as unknown as ConnectorInfo;
@@ -14,6 +14,13 @@ test("a message acts or, with Read only, only reads: Read only goes with it", ()
   assert.deepEqual(chatOptionsBody(host, { access: "read" }, "submit"), { access: "read" });
   assert.deepEqual(chatOptionsBody(host, { access: "read" }, "ask"), {}, "a side ask is read-only anyway");
   assert.equal(chatOptionsBody(undefined, auto, "submit"), undefined);
+});
+
+test("a message sent with Auto names neither model nor reasoning, only Read only where it was chosen", () => {
+  const picked: ChatSelection = { model: { provider: "p", modelId: "fast" }, thinkingLevel: "high", access: "read" };
+  assert.deepEqual(autoChatOptionsBody(host, picked, "submit"), { auto: true, access: "read" });
+  assert.deepEqual(autoChatOptionsBody(host, picked, "ask"), { auto: true });
+  assert.equal(autoChatOptionsBody({ ...host, capabilities: {} } as ConnectorInfo, picked, "submit"), undefined);
 });
 
 test("a message waits for a model its host offers, once the conversation's own one is disabled there", () => {
