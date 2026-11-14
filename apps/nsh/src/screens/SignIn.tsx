@@ -116,8 +116,6 @@ function SignInForm(props: { inviteToken?: string }) {
   };
   const invited = () => usesBrowserSession && props.inviteToken !== undefined;
   const githubUnconfigured = () => methods()?.githubConfigured === false;
-  // The apps sign in with a code made where someone is already signed in (or, to a Pikibun on its owner's computer, with
-  // its own sign-in link); GitHub and passwords are the web's.
   const passwords = () => usesBrowserSession && methods()?.passwordAuth === true;
   const unconfigured = () => githubUnconfigured() && !passwords();
   const local = () => methods()?.localServer;
