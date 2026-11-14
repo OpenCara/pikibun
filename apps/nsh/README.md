@@ -249,8 +249,8 @@ as an update, as one without `host` is.
 
 The macOS, Windows and Linux builds self host by default: at its first launch (nothing in its storage) the app starts
 Pikibun on this computer and signs in to it, and its welcome screen offers **Connect to pikibun.com** or **Connect to
-another server** instead, a choice the app keeps (`pikibun.origin`) so that later launches open the sign-in screen for
-that server. **Settings → Self host** (`#/settings/self-host`), **Pikibun on this Mac** in the sidebar's server switch,
+another server** instead. The app keeps pikibun.com once chosen, and another server once signed in to
+(`pikibun.origin`), so that later launches open the sign-in screen for that server. **Settings → Self host** (`#/settings/self-host`), **Pikibun on this Mac** in the sidebar's server switch,
 and **Run Pikibun on this Mac** on the sign-in screen while signed out, run Pikibun itself on this computer, as `pikibun serve` does in a
 terminal: the server and its web app on `http://127.0.0.1:7878`, for its owner alone, with this computer as the host
 that runs their sessions.

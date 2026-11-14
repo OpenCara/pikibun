@@ -164,7 +164,7 @@ function SignInForm(props: { inviteToken?: string }) {
     server.set(address ?? "");
     editingServer.set(address === null);
     ownFirst.set(false);
-    void rememberServer(address ?? DEFAULT_ORIGIN).catch(() => undefined);
+    if (address !== null) void rememberServer(address).catch(() => undefined);
   };
   if (untracked(ownFirst)) startOwnServer();
   const signInCode = () => parseSignInCode(codeText());

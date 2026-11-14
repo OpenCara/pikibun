@@ -165,12 +165,16 @@ export function thisServer(): ThisServer {
   return shared;
 }
 
-const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
-export const onThisComputer = (origin: string): boolean => hostsHere && LOOPBACK.test(origin);
+export function thisServerOrigin(): string | undefined {
+  if (!hostsHere) return undefined;
+  const server = thisServer();
+  return server.running() ?? `http://127.0.0.1:${server.inspection()?.port ?? 7878}`;
+}
 
 export async function signInToThisServer(options: { switching?: boolean } = {}): Promise<string> {
   const server = thisServer();
   await server.load();
+  for (let tries = 0; tries < 120 && untracked(server.status).state === "stopping"; tries++) await new Promise(resolve => setTimeout(resolve, 250));
   if (untracked(server.status).state === "stopped") {
     const outcome = await server.start();
     if (!outcome.ok) throw new Error(outcome.error ?? `Pikibun's command on ${computerName} has to be installed or updated before Pikibun can start.`);

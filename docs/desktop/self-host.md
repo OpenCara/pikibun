@@ -14,7 +14,7 @@ Choose this mode when:
 
 ## A fresh install does this for you
 
-The first time the app opens, it starts your own Pikibun on this computer and signs you in to it: steps 1 to 3 below happen on their own. It asks about [running unsandboxed](#2-start-pikibun) first where this computer has no sandbox, and where Pikibun's command isn't installed yet, **Set up Pikibun on this Mac** opens the Self host page to install it. To use a server someone else runs instead, choose **Connect to pikibun.com** or **Connect to another server** on that first screen: the app remembers the choice and opens that server's sign-in screen from then on (see [Client](client.md)).
+The first time the app opens, it starts your own Pikibun on this computer and signs you in to it: steps 1 to 3 below happen on their own. It asks about [running unsandboxed](#2-start-pikibun) first where this computer has no sandbox, and where Pikibun's command isn't installed yet, **Set up Pikibun on this Mac** opens the Self host page to install it. To use a server someone else runs instead, choose **Connect to pikibun.com** or **Connect to another server** on that first screen: the app remembers pikibun.com once you choose it, and any other server once you sign in to it, and opens that server's sign-in screen from then on (see [Client](client.md)).
 
 Once signed in, the server button at the bottom of the sidebar switches between your Pikibun and the other servers the app is signed in to: **Pikibun on this Mac** there starts it if it isn't running.
 

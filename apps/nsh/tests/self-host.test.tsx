@@ -165,6 +165,35 @@ describe("Self host in the app", () => {
     expect(app.storage()["pikibun.token"]).toBeUndefined();
   });
 
+  test("at its first launch, choosing another server saves nothing until one is signed in to, so the next launch starts Pikibun here again", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true, command: "missing" } },
+      network: servedLocally(false), storage: {} });
+    await app.waitFor("id:own-first-setup");
+    await app.press("id:own-first-other");
+    await app.waitFor("id:server-input");
+    await app.wait(100);
+    expect(app.storage()["pikibun.origin"]).toBeUndefined();
+    expect(app.requests().length).toBe(0);
+  });
+
+  test("signed in to a Pikibun on this Mac that the app isn't running, the sidebar's server switch starts it", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true } },
+      network: servedLocally(true), storage: { "pikibun.token": TOKEN, "pikibun.origin": LOCAL } });
+    await app.waitFor("id:session-row-s1");
+    expect(app.storage()["pikibun.thisServer"]).toBeUndefined();
+    await app.press("id:open-servers");
+    await app.waitFor("id:server-menu-own");
+    expect(app.shows("id:server-menu-127.0.0.1:7878")).toBe(false);
+    expect(app.texts().some(text => text.includes("not running in this app"))).toBe(true);
+    await app.press("id:server-menu-own");
+    await app.waitUntil(() => app.storage()["pikibun.thisServer"] === JSON.stringify({ resume: { unsandboxedConsent: false } }));
+    await app.waitFor("id:session-row-s1");
+    expect(app.storage()["pikibun.origin"]).toBe(LOCAL);
+    await app.press("id:open-servers");
+    await app.waitFor("id:server-menu-own");
+    expect(app.texts().some(text => text.includes("not running in this app"))).toBe(false);
+  });
+
   test("at its first launch without Pikibun's command, the app offers to set it up, then signs in", async () => {
     const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, sandboxed: true, command: "missing" } },
       network: servedLocally(false), storage: {} });

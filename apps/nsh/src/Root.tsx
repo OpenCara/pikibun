@@ -11,7 +11,7 @@ import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
 import { displayOrigin, usesBrowserSession } from "./lib/server";
 import { takeRememberedInvite, takeReturn } from "./lib/sign-in-memory";
 import { computerName, hostsHere, resumeThisComputer } from "./lib/this-computer";
-import { onThisComputer, resumeThisServer, signInToThisServer, thisServer } from "./lib/this-server";
+import { resumeThisServer, signInToThisServer, thisServer, thisServerOrigin } from "./lib/this-server";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
@@ -319,7 +319,7 @@ function ServerSwitch(props: { action: Action }) {
   const items = (): (MenuAction | "separator")[] => {
     const saved = servers();
     const list = saved.some(item => item.origin === current()) ? saved : [{ origin: current(), account: "" }, ...saved];
-    const mine = (origin: string) => (own() ? origin === own() : onThisComputer(origin));
+    const mine = (origin: string) => origin === thisServerOrigin();
     const rows = list.filter(item => !mine(item.origin)).map((item): MenuAction => ({
       label: displayOrigin(item.origin), icon: item.origin === current() ? "check" : "server", testID: `server-menu-${displayOrigin(item.origin)}`,
       hint: item.origin === current() ? [item.account, "This server"].filter(Boolean).join(" · ") : item.account || undefined,
@@ -328,8 +328,8 @@ function ServerSwitch(props: { action: Action }) {
     const here = mine(current());
     const local: MenuAction[] = hostsHere ? [{
       label: `Pikibun on ${computerName}`, icon: here ? "check" : "database", testID: "server-menu-own",
-      hint: here ? "This server" : own() ? "Running on this computer" : "Starts your own Pikibun on this computer",
-      onSelect: () => { if (!mine(untracked(current))) run(() => signInToThisServer({ switching: true })); },
+      hint: here ? (own() ? "This server" : "This server · not running in this app: choose it to start it") : own() ? "Running on this computer" : "Starts your own Pikibun on this computer",
+      onSelect: () => { if (untracked(own) !== untracked(current)) run(() => signInToThisServer({ switching: true })); },
     }] : [];
     return [...local, ...rows, "separator", { label: "Add a server", icon: "plus", testID: "server-menu-add", onSelect: addServer }];
   };
