@@ -12,7 +12,7 @@ import { runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
 import { runAutomaticPacking } from '../apps/server/src/automatic-packing.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase, type FakeHub } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommandGrant, HostModelSettings } from '../packages/shared/src/connector.js';
-import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
+import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, PullRequestReview, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
 import { retiredToolNames, toolNames } from '../packages/shared/src/types.js';
 import { MINIMUM_CONNECTOR_VERSION } from '../packages/shared/src/version.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
@@ -2866,6 +2866,104 @@ for (const enabled of [false, true]) {
     assert.equal(f.sqlite.prepare(`SELECT COUNT(*) AS n FROM audit WHERE actor_id = ? AND action LIKE 'connector.model.%'`).get(s.creator.user.id)!.n, 0);
   });
 }
+
+test('the Review tab reads the session\'s pull request from GitHub as its owner, for collaborators, with patches bounded and secrets hidden', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  const review = (client = s.creator) => client.request('GET', `/api/sessions/${s.session.id}/pull-request`);
+  const api = 'https://api.github.com/repos/owner/repo';
+  const createdAt = '2026-10-01T00:00:00Z';
+  const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+  const patch = '@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;';
+  const keyLine = 'MIIEowIBAAKCAQEAx123abcDEFghiJKLmnoPQRstuVWXyz0123456789abcDEFghiJKL';
+  const longMessage = `${'m'.repeat(3985)} ${secret}`;
+  const longBody = `${'b'.repeat(15985)} ${secret}`;
+  const routes: Record<string, () => Response> = {
+    [api]: () => Response.json({ id: 7, full_name: 'owner/repo', default_branch: 'main', private: true }),
+    [`${api}/issues/5`]: () => Response.json({ html_url: 'https://github.com/owner/repo/pull/5', title: 'Fix it', state: 'open', user: { login: 'author' },
+      created_at: createdAt, body: longBody, labels: [], pull_request: { url: `${api}/pulls/5` } }),
+    [`${api}/issues/5/comments?per_page=100&page=1`]: () => Response.json([]),
+    [`${api}/pulls/5`]: () => Response.json({ draft: false, merged: false, mergeable: true, mergeable_state: 'clean', additions: 12, deletions: 3, changed_files: 7, commits: 2,
+      head: { ref: 'feature', sha: headSha, repo: { full_name: 'owner/repo' } }, base: { ref: 'main', sha: 'a'.repeat(40) } }),
+    [`${api}/pulls/5/reviews?per_page=100&page=1`]: () => Response.json([]),
+    [`${api}/pulls/5/comments?per_page=100&page=1`]: () => Response.json([{ id: 21, user: { login: 'reviewer' }, created_at: createdAt, path: 'deploy.pem', line: null, original_line: 2,
+      commit_id: headSha, body: 'Rotate this key', diff_hunk: `@@ -1,4 +0,0 @@\n------BEGIN RSA PRIVATE KEY-----\n-${keyLine}`, html_url: 'https://github.com/owner/repo/pull/5#discussion_r21' }]),
+    [`${api}/commits/${headSha}/check-runs?per_page=100&page=1`]: () => Response.json({ total_count: 1, check_runs: [{ name: 'test', status: 'completed', conclusion: 'success' }] }),
+    [`${api}/commits/${headSha}/status?per_page=100&page=1`]: () => Response.json({ state: 'success', total_count: 0, statuses: [] }),
+    [`${api}/pulls/5/files?per_page=30&page=1`]: () => Response.json([
+      { filename: 'src/a.ts', status: 'modified', additions: 1, deletions: 1, patch },
+      { filename: 'deploy.pem', status: 'removed', additions: 0, deletions: 4, patch: `@@ -1,4 +0,0 @@\n------BEGIN RSA PRIVATE KEY-----\n-${keyLine}\n-${keyLine}\n------END RSA PRIVATE KEY-----` },
+      { filename: 'src/new.ts', previous_filename: 'src/old.ts', status: 'renamed', additions: 0, deletions: 0 },
+      { filename: '.env', status: 'added', additions: 1, deletions: 0, patch: `@@ -0,0 +1 @@\n+API_KEY=${secret}` },
+      { filename: 'big.txt', status: 'changed', additions: 9, deletions: 0, patch: `@@ -0,0 +1 @@\n+${'x'.repeat(256 * 1024)}` },
+      { filename: 'logo.png', status: 'removed', additions: 0, deletions: 0 },
+    ]),
+    [`${api}/pulls/5/commits?per_page=100&page=1`]: () => Response.json([
+      { sha: 'e'.repeat(40), author: { login: 'author' }, commit: { message: 'First\n\nBody', author: { name: 'Author', date: createdAt } } },
+      { sha: headSha, author: null, commit: { message: longMessage, author: { name: 'Someone', date: createdAt } } },
+      { sha: 'short', commit: { message: 'Dropped' } },
+    ]),
+  };
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(url);
+    assert.equal(init?.method ?? 'GET', 'GET');
+    assert.equal(init?.redirect, 'manual');
+    assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${githubToken}`);
+    const route = routes[url];
+    assert.ok(route, `unexpected GitHub call ${url}`);
+    return route();
+  });
+
+  await denied(await review(), 404, 'no_pull_request');
+  const found = new Date().toISOString();
+  f.sqlite.prepare('INSERT INTO session_branches (session_id, repository, branch, reported_at, pull_request_url, pull_request_found_at) VALUES (?,?,?,?,?,?)')
+    .run(s.session.id, 'owner/repo', 'feature', found, 'https://github.com/owner/repo/pulls', found);
+  await denied(await review(), 409, 'pull_request_unsupported');
+  f.sqlite.prepare('UPDATE session_branches SET pull_request_url = ? WHERE session_id = ?').run('https://github.com/owner/other/pull/5', s.session.id);
+  await denied(await review(), 403, 'repository_not_pinned');
+  assert.equal(calls.length, 0);
+  f.sqlite.prepare('UPDATE session_branches SET pull_request_url = ? WHERE session_id = ?').run('https://github.com/owner/repo/pull/5', s.session.id);
+
+  const { review: view } = await json<{ review: PullRequestReview }>(await review());
+  assert.equal(calls[0], api, 'the repository\'s identity is checked before any read');
+  assert.deepEqual(calls.toSorted(), Object.keys(routes).toSorted());
+  assert.deepEqual([view.pull.repository, view.pull.number, view.pull.title, view.pull.pullRequest?.head.ref, view.pull.pullRequest?.base.ref],
+    ['owner/repo', 5, 'Fix it', 'feature', 'main']);
+  assert.deepEqual([view.additions, view.deletions, view.changedFiles, view.omitted], [12, 3, 7, { files: 1 }]);
+  assert.deepEqual(view.commits, [
+    { sha: 'e'.repeat(40), message: 'First\n\nBody', author: 'author', date: createdAt },
+    { sha: headSha, message: view.commits[1]!.message, author: 'Someone', date: createdAt },
+  ]);
+  assert.ok(view.commits[1]!.message.length <= 4000 && view.commits[1]!.message.startsWith('m'.repeat(3985)));
+  assert.ok(view.pull.body.startsWith('b'.repeat(15985)));
+  assert.ok(!JSON.stringify(view).includes('sk-ant-api03-a'), 'a token across a cut leaves no first half');
+  assert.deepEqual(view.pull.pullRequest?.reviewComments.map(item => [item.path, item.body, item.diffHunk]), [['deploy.pem', 'Rotate this key', '']]);
+  assert.deepEqual(view.files.map(file => [file.path, file.status]),
+    [['src/a.ts', 'modified'], ['deploy.pem', 'removed'], ['src/new.ts', 'renamed'], ['.env', 'added'], ['big.txt', 'modified'], ['logo.png', 'removed']]);
+  assert.deepEqual(view.files[0], { path: 'src/a.ts', status: 'modified', additions: 1, deletions: 1, patch });
+  assert.deepEqual(view.files[1], { path: 'deploy.pem', status: 'removed', additions: 0, deletions: 4, redacted: true,
+    patch: '@@ -1,4 +0,0 @@\n------BEGIN RSA PRIVATE KEY-----\n-[redacted]\n-[redacted]\n-[redacted]' });
+  assert.ok(!JSON.stringify(view).includes(keyLine));
+  assert.deepEqual(view.files[2], { path: 'src/new.ts', previousPath: 'src/old.ts', status: 'renamed', additions: 0, deletions: 0 });
+  assert.equal(view.files[3]!.redacted, true);
+  assert.deepEqual(view.files[4], { path: 'big.txt', status: 'modified', additions: 9, deletions: 0, truncated: true });
+  assert.ok(!JSON.stringify(view).includes(secret));
+  assert.ok(!JSON.stringify(view).includes(githubToken));
+
+  const before = calls.length;
+  await denied(await review(s.host), 403, 'forbidden');
+  await json(await s.creator.request('PATCH', `/api/sessions/${s.session.id}`, { visibility: 'private' }));
+  await denied(await review(s.host), 404, 'not_found');
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'viewer' }));
+  await denied(await review(s.host), 403, 'forbidden');
+  assert.equal(calls.length, before);
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
+  assert.equal((await json<{ review: PullRequestReview }>(await review(s.host))).review.files.length, 6);
+
+  routes[`${api}/pulls/5/files?per_page=30&page=1`] = () => Response.json({ message: 'Not Found' }, { status: 404 });
+  await denied(await review(), 404, 'github_not_found');
+});
 
 test('the Files tab reads the session worktree through its host, for collaborators, with secrets hidden', async t => {
   const f = await fixture(t); const s = await sharedSession(f);

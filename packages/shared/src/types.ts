@@ -436,6 +436,33 @@ export interface GitHubIssueView {
   pullRequest?: GitHubPullRequestView;
   omitted?: { comments?: number; reviews?: number; reviewComments?: number; checks?: number };
 }
+export const pullRequestReviewLimits = { files: 300, commits: 250, patchBytes: 256 * 1024, totalPatchBytes: 2 * 1024 * 1024 } as const;
+export type PullRequestFileStatus = "added" | "modified" | "removed" | "renamed" | "copied";
+export interface PullRequestFileView {
+  path: string;
+  previousPath?: string;
+  status: PullRequestFileStatus;
+  additions: number;
+  deletions: number;
+  patch?: string;
+  truncated?: true;
+  redacted?: true;
+}
+export interface PullRequestCommitView {
+  sha: string;
+  message: string;
+  author: string | null;
+  date: string;
+}
+export interface PullRequestReview {
+  pull: GitHubIssueView;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  commits: PullRequestCommitView[];
+  files: PullRequestFileView[];
+  omitted?: { files?: number; commits?: number };
+}
 export interface PushCredential {
   credentialId: string;
   remote: string;

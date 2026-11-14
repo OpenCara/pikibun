@@ -9,6 +9,8 @@ export interface PanelTabProps {
   view: Accessor<SessionView | null>;
   refresh: () => void;
   go: (route: PageRoute) => void;
+  expanded?: Accessor<boolean>;
+  setExpanded?: (expanded: boolean) => void;
 }
 
 export function TabPage(props: { children?: JSX.Element; testID?: string }) {

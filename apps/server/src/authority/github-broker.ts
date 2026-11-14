@@ -32,7 +32,7 @@ function githubHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'OpenCara-Agent-Workspace' };
 }
 
-async function ownerGitHub(env: Env, ownerId: string): Promise<GitHubAccess> {
+export async function ownerGitHub(env: Env, ownerId: string): Promise<GitHubAccess> {
   const owner = await getUser(env, ownerId);
   if (!owner || owner.auth_kind !== 'github' || !owner.github_id) fail(409, 'github_not_connected', 'The session owner has no real GitHub connection.');
   const vault = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM github_tokens WHERE user_id = ?').bind(owner.id).first();
@@ -41,7 +41,7 @@ async function ownerGitHub(env: Env, ownerId: string): Promise<GitHubAccess> {
     expired: reason => forgetDeadGitHubToken(env, owner.id, vault.ciphertext, reason) };
 }
 
-async function pinnedGitHubRepository(c: AppContext, row: SessionRow, name: string): Promise<GitHubSessionRepository> {
+export async function pinnedGitHubRepository(c: AppContext, row: SessionRow, name: string): Promise<GitHubSessionRepository> {
   const repository = row.repository_mode === 'clone'
     ? await cloneSessionRepository(c.env, row, binding => binding.provider === 'github' && binding.full_name.toLowerCase() === name.toLowerCase()) : null;
   if (!repository || 'provider' in repository) fail(403, 'repository_not_pinned', `${name} is not a github.com repository of this workspace.`);
@@ -49,7 +49,7 @@ async function pinnedGitHubRepository(c: AppContext, row: SessionRow, name: stri
   return repository;
 }
 
-async function verifyPin(env: Env, github: GitHubAccess, pin: GitHubSessionRepository): Promise<void> {
+export async function verifyPin(env: Env, github: GitHubAccess, pin: GitHubSessionRepository): Promise<void> {
   await verifyRepository({ provider: 'github', github }, { repositoryId: String(pin.repositoryId), fullName: pin.fullName });
   await recheckAccess(env, { provider: 'github', github });
 }
@@ -260,7 +260,7 @@ export async function githubIssue(c: AppContext, connectorId: string | null): Pr
   return fail(422, 'github_issue_refused', `GitHub did not open an issue in ${pin.fullName}: ${reason || `HTTP ${response.status}`}.`);
 }
 
-async function githubGet(github: GitHubAccess, path: string): Promise<{ value: unknown; last: number | null }> {
+export async function githubGet(github: GitHubAccess, path: string, limit = pageBytes): Promise<{ value: unknown; last: number | null }> {
   const url = `${githubApi}${path}`;
   const remembered = recallRead(github.token, url);
   let response: Response;
@@ -288,7 +288,7 @@ async function githubGet(github: GitHubAccess, path: string): Promise<{ value: u
   }
   let value: unknown;
   let bytes: Uint8Array;
-  try { bytes = await boundedBytes(response, pageBytes); value = parseJson(bytes); }
+  try { bytes = await boundedBytes(response, limit); value = parseJson(bytes); }
   catch { return fail(502, 'invalid_github_response', 'GitHub returned a response too large or malformed to read.'); }
   rememberRead(github.token, url, response, bytes);
   return { value, last: lastPage(response.headers.get('link')) };
@@ -321,8 +321,8 @@ const string = (value: unknown): string => typeof value === 'string' ? value : '
 const nullableString = (value: unknown): string | null => typeof value === 'string' ? value : null;
 const integer = (value: unknown): number | null => Number.isSafeInteger(value) ? value as number : null;
 const login = (user: unknown): string | null => user && typeof user === 'object' ? nullableString((user as Record<string, unknown>).login) : null;
-function clip(value: unknown): string {
-  const body = string(value);
+function clip(value: unknown, prepare: (text: string) => string = text => text): string {
+  const body = prepare(string(value));
   return body.length <= bodyCharacters ? body : `${body.slice(0, bodyCharacters)}\n… ${body.length - bodyCharacters} more characters`;
 }
 
@@ -397,7 +397,10 @@ function fit(view: GitHubIssueView): GitHubIssueView {
   return result;
 }
 
-async function readIssue(github: GitHubAccess, fullName: string, number: number): Promise<GitHubIssueView> {
+export interface ReadIssueOptions { pullDetails?: (details: Record<string, unknown>) => void; prepare?: (text: string) => string; diffHunks?: boolean }
+
+export async function readIssue(github: GitHubAccess, fullName: string, number: number, options: ReadIssueOptions = {}): Promise<GitHubIssueView> {
+  const { pullDetails, prepare, diffHunks = true } = options;
   const base = `/repos/${fullName}`;
   const issue = record((await githubGet(github, `${base}/issues/${number}`)).value);
   const isPull = issue.pull_request !== undefined && issue.pull_request !== null;
@@ -410,6 +413,7 @@ async function readIssue(github: GitHubAccess, fullName: string, number: number)
   let pullRequest: GitHubPullRequestView | undefined;
   let checksOmitted = 0;
   if (details && reviews && reviewComments) {
+    pullDetails?.(details);
     const head = record(details.head);
     const target = record(details.base);
     const sha = string(head.sha);
@@ -422,11 +426,11 @@ async function readIssue(github: GitHubAccess, fullName: string, number: number)
       mergeableState: string(details.mergeable_state),
       head: { ref: string(head.ref), sha, repository: headRepository }, base: { ref: string(target.ref), sha: string(target.sha) },
       reviews: reviews.items.map((item): GitHubReviewView => ({ id: integer(item.id) ?? 0, author: login(item.user), state: string(item.state),
-        submittedAt: nullableString(item.submitted_at), commit: nullableString(item.commit_id), body: clip(item.body), url: string(item.html_url) })),
+        submittedAt: nullableString(item.submitted_at), commit: nullableString(item.commit_id), body: clip(item.body, prepare), url: string(item.html_url) })),
       reviewComments: reviewComments.items.map((item): GitHubReviewCommentView => {
-        const hunk = string(item.diff_hunk);
+        const hunk = diffHunks ? string(item.diff_hunk) : '';
         return { id: integer(item.id) ?? 0, inReplyTo: integer(item.in_reply_to_id), author: login(item.user), createdAt: string(item.created_at),
-          path: string(item.path), line: integer(item.line), originalLine: integer(item.original_line), commit: string(item.commit_id), body: clip(item.body),
+          path: string(item.path), line: integer(item.line), originalLine: integer(item.original_line), commit: string(item.commit_id), body: clip(item.body, prepare),
           diffHunk: hunk.length <= hunkCharacters ? hunk : `… ${hunk.length - hunkCharacters} earlier characters\n${hunk.slice(-hunkCharacters)}`,
           url: string(item.html_url) };
       }),
@@ -438,9 +442,9 @@ async function readIssue(github: GitHubAccess, fullName: string, number: number)
   const labels = Array.isArray(issue.labels) ? issue.labels.map(label => typeof label === 'string' ? label : string(record(label).name)) : [];
   return fit({
     repository: fullName, number, url: string(issue.html_url), title: string(issue.title), state: string(issue.state), author: login(issue.user),
-    createdAt: string(issue.created_at), body: clip(issue.body), labels,
+    createdAt: string(issue.created_at), body: clip(issue.body, prepare), labels,
     comments: comments.items.map((item): GitHubCommentView => ({ id: integer(item.id) ?? 0, author: login(item.user), createdAt: string(item.created_at),
-      body: clip(item.body), url: string(item.html_url) })),
+      body: clip(item.body, prepare), url: string(item.html_url) })),
     ...(pullRequest ? { pullRequest } : {}), ...(Object.keys(omitted).length ? { omitted } : {}),
   });
 }
