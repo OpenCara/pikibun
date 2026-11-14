@@ -1,7 +1,7 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 import type { Hono } from 'hono';
 import { isInstanceAdmin } from './admin.js';
-import { authenticate, csrfGuard, dbResult, newSession, ownProfile, privateResponse, safeText, sessionCookie, SUSPENDED } from './auth.js';
+import { authenticate, csrfGuard, dbResult, deviceNameFrom, newSession, ownProfile, privateResponse, safeText, sessionCookie, SUSPENDED } from './auth.js';
 import { sha256 } from '../../../../packages/shared/src/crypto.js';
 import { auditAfterChange } from './audit.js';
 import { getUser } from '../db.js';
@@ -257,7 +257,7 @@ async function nativeSignIn(c: AppContext) {
   requireEnabled(c.env);
   const body = await jsonObject(c, 4096);
   input(body, ['username', 'password', 'deviceName']);
-  const deviceName = body.deviceName === undefined || body.deviceName === null ? null : safeText(body.deviceName, 'deviceName', 100);
+  const deviceName = deviceNameFrom(body.deviceName);
   const { session, user } = await passwordSignIn(c, body, { deviceName });
   return c.json({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), user: ownProfile(c.env, user) } satisfies NativeSignIn);
 }

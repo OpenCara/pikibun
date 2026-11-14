@@ -7,7 +7,7 @@ import { appOrigin, fail, id, identifier, localMode, now, passwordAuthEnabled, r
 import { body, fields } from '../schemas.js';
 import type { AppContext, AppEnv } from '../types.js';
 import { auditAfterChange } from './audit.js';
-import { authenticate, csrfGuard, dbResult, localOwner, newSession, ownProfile, privateResponse, safeText, SUSPENDED } from './auth.js';
+import { appName, authenticate, csrfGuard, dbResult, deviceNameFrom, localOwner, newSession, ownProfile, privateResponse, SUSPENDED } from './auth.js';
 import { requireRecentOwner } from './password-auth.js';
 
 const CODE_TTL = 10 * 60 * 1000;
@@ -58,7 +58,7 @@ async function codeState(c: AppContext) {
     .bind(identifier(c.req.param('id'), 'codeId'), auth.userId, Date.now()).first());
   if (!row) fail(404, 'not_found', 'This sign-in code has expired or was cancelled.');
   return c.json({ id: row.id, status: row.used_at === null ? 'pending' : 'used', expiresAt: new Date(Number(row.expires_at)).toISOString(),
-    deviceName: row.device_name } satisfies AppSignInCodeState);
+    deviceName: appName(row.device_name) } satisfies AppSignInCodeState);
 }
 
 async function cancelCode(c: AppContext) {
@@ -71,7 +71,7 @@ async function cancelCode(c: AppContext) {
 
 async function signInWithCode(c: AppContext) {
   const input = await body(c, signInBody, { maxBytes: 4096 });
-  const deviceName = input.deviceName === undefined || input.deviceName === null ? null : safeText(input.deviceName, 'deviceName', 100);
+  const deviceName = deviceNameFrom(input.deviceName);
   const found = await dbResult(c.env.DB.query<{ id: string; user_id: string; session_hash: string; method: string | null }>(
     'SELECT id, user_id, session_hash, method FROM app_sign_in_codes WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?')
     .bind(await sha256(input.code), Date.now()).first());
