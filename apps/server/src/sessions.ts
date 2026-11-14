@@ -31,15 +31,20 @@ import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 import { packDueAfterArchiving } from './automatic-packing.js';
+import { autoModeEnabled } from './auto-mode.js';
+import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
 
-async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown): Promise<ChatOptions | undefined> {
+async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown, content = ''): Promise<ChatOptions | undefined> {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(400, 'invalid_options', 'Invalid chat options.');
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some(key => !['model', 'thinkingLevel', 'access', 'autoMerge'].includes(key))) fail(400, 'invalid_options', 'Invalid chat options.');
+  if (Object.keys(input).some(key => !['model', 'thinkingLevel', 'access', 'autoMerge', 'auto'].includes(key))) fail(400, 'invalid_options', 'Invalid chat options.');
   if (input.access !== undefined && (mode !== 'submit' || !accessModes.includes(input.access as never))) fail(400, 'invalid_options', 'Side asks are always read-only.');
   if (input.autoMerge !== undefined && typeof input.autoMerge !== 'boolean') fail(400, 'invalid_options', 'Invalid auto-merge choice.');
-  if (input.model === undefined && input.thinkingLevel === undefined && input.access !== 'read') return undefined;
+  if (input.auto !== undefined && input.auto !== true) fail(400, 'invalid_options', 'Invalid Auto choice.');
+  if (input.auto && (input.model !== undefined || input.thinkingLevel !== undefined)) fail(400, 'invalid_options', 'Auto chooses the model and reasoning: send neither with it.');
+  if (input.auto && !await autoModeEnabled(c.env, row.workspace_id)) fail(409, 'auto_mode_off', 'Auto mode is off in this workspace: its owners and admins add it under Extensions.');
+  if (input.model === undefined && input.thinkingLevel === undefined && input.access !== 'read' && !input.auto) return undefined;
   if (!row.connector_id) fail(400, 'options_unsupported', 'This session\'s runner cannot change model, reasoning or access.');
   const host = await c.env.DB.query<{ models_json: string; capabilities_json: string }>('SELECT models_json, capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
     .bind(row.connector_id).first();
@@ -49,6 +54,17 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
     fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to choose model, reasoning or access.');
   }
   const options: ChatOptions = {};
+  if (input.auto) {
+    const disabled = await disabledModelKeys(c.env, row.connector_id);
+    const candidates = (JSON.parse(host.models_json) as LocalModelSummary[]).filter(model => !isModelDisabled(disabled, model));
+    if (!candidates.length) fail(409, 'auto_mode_unavailable', 'The session\'s host offers no model you can use.');
+    if (capabilities.autoModel === true) options.auto = { candidates };
+    else {
+      const chosen = dispatchModel(candidates, ruleEvaluation(content))!;
+      options.model = { provider: chosen.model.provider, modelId: chosen.model.modelId };
+      if (chosen.thinkingLevel) options.thinkingLevel = chosen.thinkingLevel;
+    }
+  }
   if (input.model !== undefined) {
     const model = input.model as Record<string, unknown>;
     if (!model || typeof model !== 'object' || Array.isArray(model) || Object.keys(model).some(key => key !== 'provider' && key !== 'modelId')) fail(400, 'invalid_options', 'Invalid model choice.');
@@ -94,7 +110,7 @@ export async function submitMessage(c: AppContext, row: SessionRow, mode: 'submi
   const content = text(input.content, 'content', 60000, images ? 0 : 1);
   const requestId = text(input.requestId, 'requestId', 128);
   const requested = currentModel ? await withCurrentModel(c, row, input.options as Record<string, unknown> | undefined) : input.options;
-  const options = await chatOptions(c, row, mode, requested);
+  const options = await chatOptions(c, row, mode, requested, content);
   await requireEnabledModel(c, row, options);
   if (images && connectorUtf8Bytes(JSON.stringify({ content, requestId, admissionId: 'x'.repeat(43), options, images })) > connectorLimits.requestBytes) {
     fail(413, 'message_too_large', 'This message and its images are too large to send together. Remove an image or shorten the message.');
@@ -108,13 +124,14 @@ export async function submitMessage(c: AppContext, row: SessionRow, mode: 'submi
     await c.env.DB.query('UPDATE sessions SET one_shot = 0 WHERE id = ? AND one_shot = 1').bind(row.id).run();
     row.one_shot = 0;
   }
-  await auditStatement(c.env, c.get('auth').userId, `session.${mode}`, row.workspace_id, row.id, { submissionId: result.submissionId, ...(options ? { options } : {}),
+  const audited = options?.auto ? { ...options, auto: true as const } : options;
+  await auditStatement(c.env, c.get('auth').userId, `session.${mode}`, row.workspace_id, row.id, { submissionId: result.submissionId, ...(audited ? { options: audited } : {}),
     ...(images ? { images: images.length } : {}), ...audit }).run();
   return result;
 }
 
 async function withCurrentModel(c: AppContext, row: SessionRow, options: Record<string, unknown> | undefined): Promise<Record<string, unknown> | undefined> {
-  if (options?.model !== undefined || !await messageNeedsModel(c.env, row)) return options;
+  if (options?.model !== undefined || options?.auto !== undefined || !await messageNeedsModel(c.env, row)) return options;
   const { agent } = (await sessionView(c, row, { latest: true })).view;
   if (agent) {
     return { ...options, model: { provider: agent.provider, modelId: agent.modelId }, ...(options?.thinkingLevel === undefined && agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) };

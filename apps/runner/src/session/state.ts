@@ -1,6 +1,7 @@
 import { defineDoc } from "@earendil-works/pi-durable";
 import type { ChatOptions, CompactionFailure, ModelFailureCause, RunnerBinding } from "../../../../packages/shared/src/types.js";
 import type { StoredOperation } from "../operation-record.js";
+import type { AutoRunChoice } from "../../../../packages/shared/src/auto-dispatch.js";
 
 export type Run = {
   key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
@@ -11,6 +12,7 @@ export type Run = {
   admissionId?: string;
   submittedAt?: number;
   options?: ChatOptions;
+  auto?: AutoRunChoice;
   images?: { count: number; bytes: number };
   inputsLost?: true;
   failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure;

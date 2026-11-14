@@ -16,6 +16,8 @@ export interface ConnectorCapabilities {
   unsandboxed?: boolean;
   chatOptions?: boolean;
   chatImages?: boolean;
+  /** The runner chooses a message's model with Auto mode's evaluator (ChatOptions.auto). */
+  autoModel?: boolean;
   gitProviders?: boolean;
   gitPush?: boolean;
   gitServers?: boolean;

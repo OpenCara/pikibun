@@ -609,6 +609,11 @@ export interface ChatOptions {
   thinkingLevel?: ThinkingLevel;
   access?: AccessMode;
   autoMerge?: boolean;
+  /** Auto mode: true from a client; to a runner, the models it may choose among, which the control plane lists. */
+  auto?: true | AutoModelRequest;
+}
+export interface AutoModelRequest {
+  candidates: { provider: string; modelId: string; name: string; thinkingLevels?: ThinkingLevel[]; thinkingLevel?: ThinkingLevel }[];
 }
 export interface SubmitInput {
   content: string;

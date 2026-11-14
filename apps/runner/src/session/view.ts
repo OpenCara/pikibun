@@ -13,7 +13,7 @@ import { settleToolNames } from "../extensions/adapter.js";
 import type { SessionBuiltins } from "../extensions/builtin.js";
 import type { LoadedSource } from "../extensions/load.js";
 import { contextTokens } from "../model-failure.js";
-import { endView, entryView, refusedView } from "./entries.js";
+import { autoView, endView, entryView, refusedView } from "./entries.js";
 import { holdsQueue, tellsActivity, type Branch, type Metadata, type Run } from "./state.js";
 
 function modelFailed(entry: EntryRecord): boolean {
@@ -62,8 +62,10 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
       const joins = run !== undefined && previous !== undefined && run.steered !== undefined && run.steered === (previous.steered ?? previous.key);
       const ending = run !== previous && previous && !joins && endView(previous, snapshot.branch.id);
       if (ending) entries.push(ending);
+      const starts = run !== undefined && run !== previous && !joins;
       previous = run;
       entries.push(entryView(entry, snapshot.branch.id, run?.initiatedBy));
+      if (starts && run.auto) entries.push(autoView(run, snapshot.branch.id));
       const next = snapshot.entries[snapshot.entries.indexOf(entry) + 1];
       refusedAt(run => run.startEntry >= entry.id && (!next || run.startEntry < next.id));
     }

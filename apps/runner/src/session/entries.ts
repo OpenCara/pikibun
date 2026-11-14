@@ -3,6 +3,7 @@ import { entryImageLimits } from "../../../../packages/shared/src/entry-images.j
 import type { SessionView } from "../../../../packages/shared/src/types.js";
 import { modelFailureCause } from "../model-failure.js";
 import type { Run } from "./state.js";
+import { autoChoiceText } from "../../../../packages/shared/src/auto-dispatch.js";
 
 export const CRASHED_TEXT = "Stopped: the host crashed repeatedly while working on this message. Send it again to retry.";
 
@@ -56,6 +57,10 @@ export function endView(run: Run, branch: number): SessionView["entries"][number
   if (run.stopped) return { id: `${branch}:stopped:${run.key}`, kind: "workspace.run-stopped", role: "system", text: "Stopped", actorId: run.stopped.by, conversationId: String(branch) };
   if (run.crashed) return { id: `${branch}:crashed:${run.key}`, kind: "workspace.run-crashed", role: "system", text: CRASHED_TEXT, conversationId: String(branch) };
   return undefined;
+}
+
+export function autoView(run: Run, branch: number): SessionView["entries"][number] {
+  return { id: `${branch}:auto:${run.key}`, kind: "workspace.run-auto", role: "system", text: autoChoiceText(run.auto!), actorId: run.initiatedBy, conversationId: String(branch) };
 }
 
 export function refusedView(run: Run, branch: number): SessionView["entries"][number] {
