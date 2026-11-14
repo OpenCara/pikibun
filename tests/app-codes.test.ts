@@ -83,6 +83,22 @@ test("a signed-in browser makes a one-use code, and an app exchanges it for a 30
   assert.equal((await f.request("GET", `/api/me/app-codes/${code.id}`, { headers: { Cookie: other } })).status, 404);
 });
 
+test("an app is listed as Pikibun, not Pikibun NSH, whether it signs in now from an older build or signed in before", async t => {
+  const f = await fixture(t);
+  const cookie = await f.testUser("erin");
+  const code = await (await f.makeCode(await f.browser(cookie))).json() as AppSignInCode;
+  assert.equal((await f.redeem({ code: code.code, deviceName: "Pikibun NSH (windows)" })).status, 200);
+  const used = await (await f.request("GET", `/api/me/app-codes/${code.id}`, { headers: { Cookie: cookie } })).json() as AppSignInCodeState;
+  assert.equal(used.deviceName, "Pikibun (windows)");
+  assert.equal(f.sqlite.prepare("SELECT device_name FROM auth_sessions WHERE client = 'native'").get()!.device_name, "Pikibun (windows)");
+
+  const second = await (await f.makeCode(await f.browser(cookie))).json() as AppSignInCode;
+  assert.equal((await f.redeem({ code: second.code, deviceName: "Erin's Pikibun NSH (test)" })).status, 200);
+  f.sqlite.prepare("UPDATE auth_sessions SET device_name = 'Pikibun NSH (macos)' WHERE client = 'native' AND device_name = 'Pikibun (windows)'").run();
+  const devices = await (await f.request("GET", "/api/me/devices", { headers: { Cookie: cookie } })).json() as { devices: SignedInDevice[] };
+  assert.deepEqual(devices.devices.map(device => device.name).sort(), ["Erin's Pikibun NSH (test)", "Pikibun (macos)"]);
+});
+
 test("making a code needs a recent sign-in, which a session made from a code never is", async t => {
   const f = await fixture(t);
   const cookie = await f.testUser("carol");
