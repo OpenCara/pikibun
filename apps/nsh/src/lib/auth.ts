@@ -1,19 +1,11 @@
 import { platform, signal, Storage, untracked, type Accessor } from "nsh";
 import { ApiError, createApi, errorMessage, type Api, type RequestOptions, type UserProfile } from "../shared";
 import { clearDrafts } from "./drafts";
-import { createPkce } from "./pkce";
 import { currentOrigin, DEFAULT_ORIGIN, parseOrigin, usesBrowserSession } from "./server";
-
-const signInRefusals: Record<string, string> = {
-  invite_required: "This server takes new accounts only through a workspace's invite link. Open the link in a browser to create your account, then sign in here.",
-  signup_closed: "This server doesn't take new accounts. Ask its operator to add you.",
-  too_many_pending: "The workspace that invited you has too many people waiting to join. Ask an owner or admin.",
-};
 
 const TOKEN_KEY = "pikibun.token";
 const EXPIRES_KEY = "pikibun.tokenExpires";
 const ORIGIN_KEY = "pikibun.origin";
-const CALLBACK_PATH = "/api/auth/native/done";
 export const SIGN_IN_SCHEME = "pikibun";
 const deviceName = () => `Pikibun (${platform.os})`;
 
@@ -158,59 +150,6 @@ export async function signInMethods(origin: string): Promise<SignInMethods> {
   return createApi({ baseUrl: origin, auth: () => null })<SignInMethods>("/api/health");
 }
 
-export interface GitHubSignIn {
-  url: string;
-  inApp: boolean;
-  isCallback(url: string): boolean;
-  owns(url: string): boolean;
-  finish(callbackUrl: string): Promise<void>;
-}
-
-export async function startGitHubSignIn(origin: string, options: { inApp?: boolean } = {}): Promise<GitHubSignIn> {
-  const inApp = options.inApp === true;
-  const health = await signInMethods(origin);
-  if (health.githubConfigured === false) {
-    throw new Error("GitHub sign-in is not configured on this server. The operator needs to configure the GitHub OAuth app and the server's GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and VAULT_KEY settings.");
-  }
-  const { verifier, challenge, state } = await createPkce();
-  return {
-    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}${inApp ? "&callback=page" : ""}`,
-    inApp,
-    isCallback: url => (inApp ? isCallbackPage(origin, url) : isSignInLink(url)),
-    owns: url => (inApp ? isCallbackPage(origin, url) : isSignInLink(url)) && new URL(url).searchParams.get("state") === state,
-    async finish(callbackUrl: string) {
-      if (!(inApp ? isCallbackPage(origin, callbackUrl) : isSignInLink(callbackUrl))) throw new Error("The sign-in ended somewhere unexpected. Try again.");
-      const params = new URL(callbackUrl).searchParams;
-      if (params.get("state") !== state) throw new Error("The sign-in response did not match this attempt. Try again.");
-      const error = params.get("error");
-      if (error) throw new Error(signInRefusals[error] ?? `GitHub sign-in did not complete: ${error.slice(0, 300)}`);
-      const code = params.get("code");
-      if (!code) throw new Error("The server did not return a sign-in code. Try again.");
-      const exchange = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
-        "/api/auth/native/token", { method: "POST", body: { code, verifier, deviceName: deviceName() } });
-      await establish(origin, exchange.token, exchange.expiresAt, exchange.user);
-    },
-  };
-}
-
-export function isSignInLink(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === `${SIGN_IN_SCHEME}:` && parsed.host === "auth" && (parsed.pathname === "" || parsed.pathname === "/");
-  } catch {
-    return false;
-  }
-}
-
-function isCallbackPage(origin: string, url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.origin === new URL(origin).origin && parsed.pathname === CALLBACK_PATH;
-  } catch {
-    return false;
-  }
-}
-
 const SIGN_IN_CODE = /^[A-Za-z0-9_-]{43}$/;
 
 export interface SignInCode { origin: string | null; code: string }
@@ -283,13 +222,7 @@ async function signedOutRequest<T>(path: string, body: Record<string, string>, f
   return answer as T;
 }
 
-export async function signInWithPassword(origin: string, username: string, password: string): Promise<void> {
-  if (!usesBrowserSession) {
-    const signIn = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
-      "/api/auth/native/password", { method: "POST", body: { username, password, deviceName: deviceName() } });
-    await establish(origin, signIn.token, signIn.expiresAt, signIn.user);
-    return;
-  }
+export async function signInWithPassword(username: string, password: string): Promise<void> {
   await signedOutRequest("/api/auth/password/login", { username, password }, "Sign-in failed");
   if (!await establishBrowserSession()) throw new Error("Signed in, but the server did not keep the session. Check that cookies are allowed.");
 }

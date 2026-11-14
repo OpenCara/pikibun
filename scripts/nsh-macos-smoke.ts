@@ -44,17 +44,18 @@ async function run(args: string[]) {
 
 export async function main(args = process.argv.slice(2)) {
   const { values } = parseArgs({ args, options: {
-    help: { type: 'boolean' }, github: { type: 'boolean' },
+    help: { type: 'boolean' }, live: { type: 'boolean' },
     server: { type: 'string', default: 'https://pikibun.com' },
     display: { type: 'string' }, 'timeout-ms': { type: 'string', default: '600000' },
   } });
   if (values.help) {
-    console.log(`Usage: pnpm test:client-macos [--github] [--server https://pikibun.com] [--display 1] [--timeout-ms 600000]
+    console.log(`Usage: pnpm test:client-macos [--live] [--server https://pikibun.com] [--display 1] [--timeout-ms 600000]
 
 Runs the stubbed app and screenshot tests on real AppKit windows.
---github additionally opens a live GitHub sign-in for you to complete manually.
-The OAuth test passes only when the authenticated session list appears, not merely
-when the web view opens. It takes no live screenshots and redacts URL queries.
+--live additionally opens the app against a live server for you to sign in with a code:
+make one on the web under Settings > Profile > Signed-in apps > Sign in an app, and
+paste its link. The test passes only when the authenticated session list appears.
+It takes no live screenshots and redacts URL queries.
 Its isolated app storage is discarded when the test ends. The Native Shell CLI is the one
 scripts/nsh.mjs pins (NSH_BIN overrides it).`);
     return;
@@ -73,30 +74,26 @@ scripts/nsh.mjs pins (NSH_BIN overrides it).`);
   await run(['test', ...target, 'tests/app.test.tsx']);
   await run(['test', ...target, 'tests/screenshots.test.tsx']);
   console.log('Stubbed screenshots: apps/nsh/.nsh/screenshots');
-  if (!values.github) return;
+  if (!values.live) return;
 
   const directory = `${app}/.nsh/smoke`;
-  const file = `${directory}/github-${process.pid}.test.tsx`;
+  const file = `${directory}/live-${process.pid}.test.tsx`;
   await mkdir(directory, { recursive: true });
   try {
     await writeFile(file, `import { open, test } from 'nsh/test';
-test('manual GitHub OAuth returns to the authenticated native app', async () => {
+test('a code made on the web signs the native app in', async () => {
   const app = await open('../../App.tsx', {
     network: 'live', platform: 'macos', width: 1100, height: 900,
     storage: { 'pikibun.origin': ${JSON.stringify(origin)} },
   });
-  await app.waitFor('id:github-sign-in', { timeout: 20000 });
-  await app.press('id:github-sign-in');
-  await app.waitFor('id:github-in-app', { timeout: 20000 });
-  await app.press('id:github-in-app');
-  await app.waitFor('text:Sign in with GitHub', { timeout: 20000 });
-  console.log('Complete GitHub sign-in in the native window, not the browser tab it opened first. Waiting for the authenticated session list.');
+  await app.waitFor('id:code-input', { timeout: 20000 });
+  console.log('Make a code on the web (Settings > Profile > Signed-in apps > Sign in an app), paste its link in the native window and sign in. Waiting for the authenticated session list.');
   await app.waitFor('id:open-settings', { timeout: ${timeout} });
-  console.log('GitHub sign-in returned successfully to the authenticated native app.');
+  console.log('The code signed the native app in.');
 }, ${timeout + 60000});
 `, { mode: 0o600, flag: 'wx' });
-    console.log(`Live OAuth smoke test: ${origin}. No credentials are supplied by this script.`);
-    await run(['test', ...target, `.nsh/smoke/github-${process.pid}.test.tsx`]);
+    console.log(`Live sign-in smoke test: ${origin}. No credentials are supplied by this script.`);
+    await run(['test', ...target, `.nsh/smoke/live-${process.pid}.test.tsx`]);
   } finally {
     await rm(file, { force: true });
   }

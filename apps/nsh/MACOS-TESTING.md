@@ -7,9 +7,9 @@
 >   threw as the signed-in screens were made (`src/lib/lifecycle.ts` stands in for it). `pnpm test:client-web` runs the
 >   web build in headless Chrome in CI: signed out, signed in, a settings address, signing out, with no page errors or
 >   policy violations.
-> - **Native GitHub sign-in**: the server now hands it back on its own `https` page (`/api/auth/native/done`), which
->   the web view may load, not `pikibun://auth`, which it may not. This has not been retried on a Mac yet:
->   `pnpm test:client-macos --github` is the check.
+> - **Native GitHub sign-in**: the app no longer signs in with GitHub (nor with a password); it signs in with a code
+>   made on the web or in another signed-in app. `pnpm test:client-macos --live` checks that on a Mac. The GitHub
+>   OAuth findings below are kept as they were observed.
 
 Tested PR #206 at `063868b8a0650db2afbb3dc0fecc1684e26544d5` on an Apple Silicon Mac running macOS 26.6.2,
 Node 26.13.0, pnpm 10.32.1 and Native Shell 0.4.0 (`e626a8d`). The macOS release archive's SHA-256 was verified.
@@ -80,9 +80,9 @@ Install the repository dependencies (scripts/nsh.mjs fetches the pinned NSH), th
 
 ```sh
 pnpm test:client-macos
-pnpm test:client-macos --github --display 1
+pnpm test:client-macos --live --display 1
 # For another server or a shorter interactive wait:
-pnpm test:client-macos --github --server https://your-server.example --timeout-ms 120000
+pnpm test:client-macos --live --server https://your-server.example --timeout-ms 120000
 ```
 
 The default run uses stubbed API fixtures and requires no account. It creates `apps/nsh/.nsh/screenshots` and writes
@@ -90,9 +90,9 @@ only fixture screenshots there. This fixes the earlier workflow's missing output
 the app's ignored `.nsh` directory. When invoking the screenshot tests directly from `apps/nsh`, create
 `.nsh/screenshots` first.
 
-The opt-in OAuth test opens the actual app on AppKit with a live network and isolated storage. It records no live
-screenshots and supplies no credentials. It waits for the authenticated session list, so a blank web view or a blocked
-callback cannot pass just because the sheet opened. Its isolated app closes when the test ends. `NSH_BIN` overrides
+The opt-in live test opens the actual app on AppKit with a live network and isolated storage, for you to sign in with
+a code made on the web. It records no live screenshots and supplies no credentials. It waits for the authenticated
+session list. Its isolated app closes when the test ends. `NSH_BIN` overrides
 the pinned `nsh`; `--help` lists the runner's options.
 
 No credentials, raw authentication logs, screenshots, SDK binaries, local proxy or machine-specific launchers are

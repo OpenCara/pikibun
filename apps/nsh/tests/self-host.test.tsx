@@ -161,6 +161,7 @@ describe("Self host in the app", () => {
     expect(app.shows("text:Sign in to Pikibun on this Mac")).toBe(true);
     expect(app.shows("id:github-sign-in")).toBe(false);
     expect(app.shows("id:local-link")).toBe(false);
+    expect(app.shows("id:code-form")).toBe(false);
     await app.press("id:sign-in-self-host-sign-in");
     await app.waitFor("id:session-row-s1");
     expect(app.storage()["pikibun.token"]).toBe(TOKEN);
@@ -171,6 +172,7 @@ describe("Self host in the app", () => {
       network: servedLocally(true), storage: { "pikibun.origin": LOCAL } });
     await app.waitFor("id:local-link");
     expect(app.shows("id:github-sign-in")).toBe(false);
+    expect(app.shows("id:code-form")).toBe(false);
     expect(app.shows("id:sign-in-self-host-sign-in")).toBe(false);
     await app.type("id:local-link", `${LOCAL}/api/auth/local?token=${SIGN_IN_TOKEN}`);
     await app.press("id:local-link-sign-in");

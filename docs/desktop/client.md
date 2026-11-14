@@ -13,12 +13,9 @@ If you'd rather run sessions on this computer, set up the client first, then add
 
 1. Open Pikibun. The sign-in screen shows the **Server** it will use, `pikibun.com` at first.
 2. To use another server (your team's, for example), choose **Change** and enter its address, such as `https://pikibun.example.com`. Addresses must use `https://`. Plain `http://` works only for `localhost` and `127.0.0.1`, which is what [Self host](self-host.md) uses.
-3. Sign in:
-   - **Continue with GitHub** opens GitHub's sign-in page in your browser. When it finishes, the browser asks to open Pikibun, and you're back in the app, signed in. If the browser can't hand you back (no browser, or it won't open Pikibun), choose **Sign in here instead** to sign in on GitHub's page inside the app.
-   - Or, where the server offers passwords, enter your **Username** and **Password** and choose **Sign in**.
-   - Or, signed in already in a browser, choose **Settings → Profile → Signed-in apps → Sign in an app** there, then **Open in Pikibun**; or copy the link and paste it under **Sign in with a code** here. The app asks before it signs in, naming the server. See [Signing in an app with a code](../accounts.md#signing-in-an-app-with-a-code).
+3. Sign in with a code: sign in to the server in a browser (with GitHub, or a username and password where it offers them), choose **Settings → Profile → Signed-in apps → Sign in an app** there, then **Open in Pikibun**; or copy the link and paste it on the app's sign-in screen. The app asks before it signs in, naming the server. See [Signing in an app with a code](../accounts.md#signing-in-an-app-with-a-code).
 
-New password accounts can't be created in the app. Create one on the server's web page first, from the invite link you were given, then sign in here.
+The app has no GitHub or password sign-in of its own, and accounts can't be created in it. Create yours on the server's web page first, from the invite link you were given, then sign the app in with a code.
 
 **Joining a team with an invite link:** open the link in your browser and sign in there. This creates your account and asks to join the workspace. An owner or admin then accepts you under **Pending members**. After that, sign in to the same server in the app, and the workspace appears in the sidebar.
 

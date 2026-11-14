@@ -9,7 +9,7 @@ const bodyOf = (app: { requests(): { method: string; url: string; body?: string 
 describe("signing in", () => {
   test("a test-mode server takes a developer token", async () => {
     const app = await open("../App.tsx", { network: server(), storage: { "pikibun.origin": ORIGIN } });
-    await app.waitFor("id:github-sign-in");
+    await app.waitFor("id:code-input");
     await app.waitFor("id:developer-toggle");
     await app.press("id:developer-toggle");
     await app.type("id:developer-token", TOKEN);
@@ -20,93 +20,20 @@ describe("signing in", () => {
     expect(me?.headers?.authorization ?? me?.headers?.Authorization).toBe(`Bearer ${TOKEN}`);
   });
 
-  test("GitHub's sign-in runs in the system browser and comes back as a pikibun:// link, which only this attempt's state finishes", async () => {
+  test("the app signs in only with a code: no GitHub or password, even where the server offers them", async () => {
     const app = await open("../App.tsx", {
-      network: server({
-        [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true } },
-        [`POST ${ORIGIN}/api/auth/native/token`]: { body: { token: TOKEN, expiresAt: "2099-01-01T00:00:00.000Z", user } },
-      }),
+      network: server({ [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, codeSignIn: true, passwordAuth: true, passwordSignup: "open" } } }),
       storage: { "pikibun.origin": ORIGIN },
     });
-    await app.waitFor("id:github-sign-in");
-    await app.press("id:github-sign-in");
-    await app.waitFor("id:github-browser-wait");
-    const started = new URL(app.openedUrls().at(-1)!);
-    expect(`${started.origin}${started.pathname}`).toBe(`${ORIGIN}/api/auth/native/start`);
-    expect(started.searchParams.has("callback")).toBe(false);
-    const state = started.searchParams.get("state")!;
-
-    await app.openWithUrl("pikibun://auth?code=forged&state=someone-elses");
-    await app.waitFor("id:sign-in-problem");
-    expect(app.texts().join(" ")).toContain("did not match this attempt");
-    expect(app.storage()["pikibun.token"]).toBeUndefined();
-    expect(app.shows("id:github-browser-wait")).toBe(true);
-
-    await app.openWithUrl(`pikibun://auth?code=c1&state=${encodeURIComponent(state)}`);
-    await app.waitFor("text:Fix the flaky login test");
-    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/token`)).toMatchObject({ code: "c1" });
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/token`).verifier).toMatch(/^[A-Za-z0-9_-]{43,}$/);
-  });
-
-  test("a pikibun:// sign-in link the app didn't ask for signs nobody in", async () => {
-    const app = await open("../App.tsx", { network: server({ [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true } } }), storage: { "pikibun.origin": ORIGIN } });
-    await app.waitFor("id:github-sign-in");
-    await app.openWithUrl("pikibun://auth?code=c1&state=s1");
-    await app.waitFor("id:sign-in-problem");
-    expect(app.texts().join(" ")).toContain("isn't from a sign-in this app started");
-    expect(app.requests().some(item => item.url.endsWith("/api/auth/native/token"))).toBe(false);
-  });
-
-  test("GitHub's page can still run inside the app", async () => {
-    const app = await open("../App.tsx", { network: server({ [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true } } }), storage: { "pikibun.origin": ORIGIN } });
-    await app.waitFor("id:github-sign-in");
-    await app.press("id:github-sign-in");
-    await app.waitFor("id:github-in-app");
-    await app.press("id:github-in-app");
-    await app.waitFor("text:Sign in with GitHub");
-    expect(app.shows("id:github-browser-wait")).toBe(false);
-    await app.openWithUrl("pikibun://auth?code=c1&state=s1");
-    await app.waitFor("id:sign-in-problem");
-    expect(app.texts().join(" ")).toContain("from the browser you left");
-    expect(app.requests().some(item => item.url.endsWith("/api/auth/native/token"))).toBe(false);
-  });
-
-  test("a server that takes passwords signs in with a username and password, for a bearer token", async () => {
-    const app = await open("../App.tsx", {
-      network: server({
-        [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, passwordAuth: true, passwordSignup: "open" } },
-        [`POST ${ORIGIN}/api/auth/native/password`]: { body: { token: TOKEN, expiresAt: "2099-01-01T00:00:00.000Z", user } },
-      }),
-      storage: { "pikibun.origin": ORIGIN },
-    });
-    await app.waitFor("id:password-form");
-    expect(app.shows("id:github-sign-in")).toBe(true);
-    expect(app.shows("id:password-mode")).toBe(false);
-    await app.type("id:password-username", "ada");
-    await app.type("id:password-password", "four unrelated words here");
-    await app.press("id:password-sign-in");
-    await app.waitFor("text:Fix the flaky login test");
-    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/password`)).toMatchObject({ username: "ada", password: "four unrelated words here" });
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/password`).deviceName).toContain("Pikibun NSH");
-  });
-
-  test("a server with passwords and no GitHub shows only the password form, and says why a sign-in failed", async () => {
-    const app = await open("../App.tsx", {
-      network: server({
-        [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: false, passwordAuth: true } },
-        [`POST ${ORIGIN}/api/auth/native/password`]: { status: 401, body: { error: "The username or password is incorrect.", code: "invalid_credentials" } },
-      }),
-      storage: { "pikibun.origin": ORIGIN },
-    });
-    await app.waitFor("id:password-form");
+    await app.waitFor("id:code-form");
+    await app.wait(200);
+    expect(app.shows("id:code-input")).toBe(true);
     expect(app.shows("id:github-sign-in")).toBe(false);
-    await app.type("id:password-username", "ada");
-    await app.type("id:password-password", "not the password");
-    await app.press("id:password-sign-in");
-    await app.waitFor("id:sign-in-problem");
-    expect(app.texts().join(" ")).toContain("The username or password is incorrect.");
+    expect(app.shows("id:password-form")).toBe(false);
+    expect(app.shows("id:code-sign-in-open")).toBe(false);
+    await app.openWithUrl("pikibun://auth?code=c1&state=s1");
+    await app.wait(200);
+    expect(app.requests().some(item => item.url.endsWith("/api/auth/native/token") || item.url.includes("/api/auth/native/start"))).toBe(false);
     expect(app.storage()["pikibun.token"]).toBeUndefined();
   });
 
@@ -144,10 +71,8 @@ describe("signing in", () => {
     [`POST ${ORIGIN}/api/auth/native/code`]: { body: { token: TOKEN, expiresAt: "2099-01-01T00:00:00.000Z", user } },
   });
 
-  test("a code made in another signed-in app signs in when its link is pasted, without GitHub or a password", async () => {
+  test("a code made in another signed-in app signs in when its link is pasted", async () => {
     const app = await open("../App.tsx", { network: codeServer(), storage: { "pikibun.origin": ORIGIN } });
-    await app.waitFor("id:code-sign-in-open");
-    await app.press("id:code-sign-in-open");
     await app.waitFor("id:code-input");
     await app.type("id:code-input", "not a code");
     await app.waitFor("id:code-hint");
@@ -165,7 +90,7 @@ describe("signing in", () => {
 
   test("a sign-in link opened from a QR code asks first, naming its server, and signs in to that server", async () => {
     const app = await open("../App.tsx", { network: codeServer(), storage: { "pikibun.origin": "https://elsewhere.test" } });
-    await app.waitFor("id:github-sign-in");
+    await app.waitFor("id:code-input");
     await app.openWithUrl(codeLink());
     await app.waitFor("id:code-link-confirm");
     expect(app.texts().join(" ")).toContain("Sign in to pikibun.test?");
@@ -178,11 +103,12 @@ describe("signing in", () => {
 
   test("a sign-in link opened and then cancelled signs nobody in, and a broken one says so", async () => {
     const app = await open("../App.tsx", { network: codeServer(), storage: { "pikibun.origin": ORIGIN } });
-    await app.waitFor("id:github-sign-in");
+    await app.waitFor("id:code-input");
     await app.openWithUrl(codeLink());
     await app.waitFor("id:code-link-confirm");
     await app.press("id:code-cancel");
-    expect(app.shows("id:code-form")).toBe(false);
+    await app.waitUntil(() => !app.shows("id:code-link-confirm"));
+    expect(app.value("id:code-input")).toBe("");
     await app.openWithUrl("pikibun://auth/code?code=short");
     await app.waitFor("id:sign-in-problem");
     expect(app.texts().join(" ")).toContain("isn't complete");
@@ -252,7 +178,7 @@ describe("signing out", () => {
     await app.press("id:open-settings");
     await app.press("id:settings-section-profile");
     await app.press("id:sign-out");
-    await app.waitFor("id:github-sign-in", { timeout: 15_000 });
+    await app.waitFor("id:code-input", { timeout: 15_000 });
     expect(app.texts().join(" ")).toContain("the server could not revoke the sign-in (it didn't answer)");
     expect(app.storage()["pikibun.token"]).toBeUndefined();
   }, 30_000);
