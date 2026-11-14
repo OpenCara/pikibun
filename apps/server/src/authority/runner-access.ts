@@ -8,13 +8,13 @@ import { requireConnectorSession } from './hosts.js';
 
 const actionPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
-  backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write',
+  backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write', changes: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write', sudo: 'write',
 };
 
 export const connectorPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
-  backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write',
+  backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write', changes: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write', sudo: 'write',
 };
 export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack', 'sudo'];
@@ -35,7 +35,7 @@ export async function requireRunnerAccess(c: AppContext, actorId: string, row: S
     fail(403, 'permission_revoked', 'Session access is no longer authorized.');
   }
   requireArchivedAction(access.row, action);
-  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'image', 'unpack'].includes(action)) requireUnfrozen(access.row);
+  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'changes', 'image', 'unpack'].includes(action)) requireUnfrozen(access.row);
   if (ownerActions.includes(action) && actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
   if (action !== 'restore' && await c.env.DB.query("SELECT 1 FROM restore_jobs WHERE target_session_id = ? AND status <> 'completed'").bind(row.id).first()) {
     fail(409, 'restore_pending', 'Session restoration is not complete.');

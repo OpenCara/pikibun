@@ -15,6 +15,7 @@ import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommand
 import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, PullRequestReview, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
 import { retiredToolNames, toolNames } from '../packages/shared/src/types.js';
 import { MINIMUM_CONNECTOR_VERSION } from '../packages/shared/src/version.js';
+import type { LocalChanges } from '../packages/shared/src/local-changes.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
@@ -2963,6 +2964,46 @@ test('the Review tab reads the session\'s pull request from GitHub as its owner,
 
   routes[`${api}/pulls/5/files?per_page=30&page=1`] = () => Response.json({ message: 'Not Found' }, { status: 404 });
   await denied(await review(), 404, 'github_not_found');
+});
+
+test('the Changes tab reads a clone\'s Git changes through its host, for collaborators, checked and with secrets hidden', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  const changes = (query = '', client = s.creator) => client.request('GET', `/api/sessions/${s.session.id}/changes${query}`);
+  const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
+  const sha = 'a'.repeat(40);
+  const answer = { repositories: [{ directory: 'app', branch: 'work', head: sha }], directory: 'app', commit: null as string | null, additions: 1, deletions: 0,
+    files: [{ path: '.env', status: 'added', additions: 1, deletions: 0, patch: `@@ -0,0 +1 @@\n+API_KEY=${secret}` }],
+    commits: [{ sha, message: 'First', author: 'Tester', date: '2026-01-01T00:00:00Z', unpushed: true }] };
+  let reply: unknown = answer;
+  const requests = rpcHub(f, s.connector, () => Response.json({ changes: reply }));
+  await denied(await changes(), 409, 'changes_unsupported');
+  assert.equal(requests.length, 0);
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, localChanges: true } }));
+
+  const shown = await json<{ changes: LocalChanges }>(await changes());
+  const request = requests.at(-1)!.request;
+  assert.deepEqual([request.method, request.path, request.ticket.action, JSON.parse(request.body)], ['POST', `/v1/sessions/${s.session.id}/changes`, 'changes', {}]);
+  assert.equal(shown.changes.files[0]!.redacted, true);
+  assert.ok(!JSON.stringify(shown).includes(secret));
+  assert.deepEqual(shown.changes.commits, answer.commits);
+
+  reply = { ...answer, commit: sha };
+  await json(await changes(`?directory=app&commit=${sha}`));
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body), { directory: 'app', commit: sha });
+  await denied(await changes('?directory=other'), 502, 'invalid_runner_response');
+  reply = answer;
+  await denied(await changes(`?directory=app&commit=${sha}`), 502, 'invalid_runner_response');
+  reply = { ...answer, files: [{ ...answer.files[0], patch: 'not hunks' }] };
+  await denied(await changes(), 502, 'invalid_runner_response');
+  reply = answer;
+
+  const before = requests.length;
+  for (const query of ['?directory=../x', '?directory=/etc', `?commit=${sha}`, '?directory=app&commit=HEAD']) await denied(await changes(query), 400, 'invalid_changes');
+  await denied(await changes('', s.host), 403, 'forbidden');
+  assert.equal(requests.length, before);
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
+  await json(await changes('', s.host));
+  assert.equal(requests.at(-1)!.request.ticket.actorId, s.host.user.id);
 });
 
 test('the Files tab reads the session worktree through its host, for collaborators, with secrets hidden', async t => {

@@ -3,6 +3,7 @@ import { hostCapabilities } from './authority/index.js';
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
 import { checkBrowseResult, InvalidBrowseResult, type BrowseResult } from '../../../packages/shared/src/file-browser.js';
 import type { SessionFiles } from '../../../packages/shared/src/types.js';
+import { checkLocalChanges, InvalidLocalChanges, redactLocalChanges, validChangesCommit, validChangesDirectory, type LocalChanges } from '../../../packages/shared/src/local-changes.js';
 import { checkEntryImage, entryImageRequest } from '../../../packages/shared/src/entry-images.js';
 import { requireSession } from './authority/index.js';
 import { fail, identifier } from './http.js';
@@ -50,6 +51,30 @@ export function registerSessionFiles(app: Hono<AppEnv>): void {
     const result = await runnerJSON<{ files?: unknown }>(await runnerRequest(c, row, 'files', '', { path }));
     c.header('Cache-Control', 'no-store');
     return c.json({ files: checkedFiles(result?.files, path) });
+  });
+
+  app.get('/api/sessions/:id/changes', async c => {
+    const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
+    const directory = c.req.query('directory');
+    const commit = c.req.query('commit');
+    if ((directory !== undefined && !validChangesDirectory(directory)) || (commit !== undefined && (!validChangesCommit(commit) || directory === undefined))) {
+      fail(400, 'invalid_changes', 'Expected a repository\'s directory in the session worktree and, with it, a commit\'s full hash.');
+    }
+    if (row.connector_id && (await hostCapabilities(c.env, row.connector_id))?.localChanges !== true) {
+      fail(409, 'changes_unsupported', 'This session\'s host can\'t show its Git changes yet. Its owner can update the pikibun connector there.');
+    }
+    const result = await runnerJSON<{ changes?: unknown }>(await runnerRequest(c, row, 'changes', '',
+      { ...(directory !== undefined ? { directory } : {}), ...(commit !== undefined ? { commit } : {}) }));
+    let changes: LocalChanges;
+    try {
+      changes = checkLocalChanges(result?.changes);
+      if ((directory !== undefined && changes.directory !== directory) || (changes.commit ?? undefined) !== commit) throw new InvalidLocalChanges();
+    } catch (error) {
+      if (error instanceof InvalidLocalChanges) fail(502, 'invalid_runner_response', 'The runner returned invalid Git changes.');
+      throw error;
+    }
+    c.header('Cache-Control', 'no-store');
+    return c.json({ changes: redactLocalChanges(changes) });
   });
 
   app.get('/api/sessions/:id/images', async c => {

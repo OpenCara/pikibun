@@ -31,7 +31,7 @@ export function connectorPath(action: RunnerAction, sessionId: string, suffix = 
       if (!suffix) return `${base}/view`;
       if (!isRevision(suffix)) fail(400, 'invalid_revision', 'Invalid view revision.');
       return `${base}/view/${suffix}`;
-    case 'events': case 'submit': case 'ask': case 'backup': case 'restart': case 'restore': case 'stop': case 'files': case 'revert': case 'fork':
+    case 'events': case 'submit': case 'ask': case 'backup': case 'restart': case 'restore': case 'stop': case 'files': case 'changes': case 'revert': case 'fork':
     case 'pack': case 'unpack': case 'withdraw': case 'upload': case 'tunnel': case 'image': case 'sudo':
       return `${base}/${action}`;
     default: return fail(400, 'invalid_action', 'Invalid connector action.');
