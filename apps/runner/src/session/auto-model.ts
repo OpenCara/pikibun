@@ -8,7 +8,6 @@ import { connectorLimits } from "../../../../packages/shared/src/connector.js";
 
 const isLevel = (value: unknown): value is ThinkingLevel => typeof value === "string" && thinkingLevels.includes(value as ThinkingLevel);
 
-/** A message's auto option as the control plane sends it: the models it may run on, as the host advertised them. */
 export function autoModelRequest(value: unknown, invalid: (message?: string) => Error): AutoModelRequest {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => key !== "candidates")) throw invalid("Invalid Auto choice");
   const { candidates } = value as { candidates?: unknown };
@@ -45,11 +44,6 @@ function answerText(message: AssistantMessage): string {
   return message.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n");
 }
 
-/**
- * Auto mode for one message: the evaluator (the lightest candidate) classifies it by the guide's task kinds, and the
- * dispatch takes the guide's model and effort for that kind among the candidates. Where the evaluator fails, the rules
- * classify it instead; a message is never held back for Auto's sake. Undefined only where no candidate is on this host.
- */
 export async function chooseAutoModel(models: AutoModels, request: AutoModelRequest, input: AutoInput,
   options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<AutoRunChoice | undefined> {
   const candidates = request.candidates.filter(model => models.getModel(model.provider, model.modelId));

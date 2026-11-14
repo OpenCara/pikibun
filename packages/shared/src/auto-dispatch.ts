@@ -2,12 +2,7 @@ import { AUTO_TASK_LIMIT, assessTask, modelTier, modelVersion } from "./auto-mod
 import type { LocalModelSummary } from "./connector.js";
 import { thinkingLevels, type ThinkingLevel } from "./types.js";
 
-// Auto mode's evaluation and dispatch follow Anthropic's guide "Which Claude model should you build with?"
-// (https://claude.dev/blog/which-claude-model-should-you-build-with/): a task's kind gives a starting model class and
-// effort; a harder task of its kind raises the effort before it changes the model; a missing class is replaced by the
-// next one up at a lower effort, or else the next one down at a higher effort.
 
-/** The guide's model classes, from the fastest and cheapest to the most capable. */
 export type ModelRung = 1 | 2 | 3 | 4;
 export const rungLabels: Record<ModelRung, string> = { 1: "Haiku class", 2: "Sonnet class", 3: "Opus class", 4: "Fable class" };
 
@@ -18,11 +13,9 @@ export const taskKinds = [
 export type TaskKind = (typeof taskKinds)[number];
 type GuideKind = Exclude<TaskKind, "follow-up">;
 
-/** effort undefined is the model's own default, as the guide's "the model's default". */
 interface Start { rung: ModelRung; effort?: ThinkingLevel }
 export interface TaskKindInfo { label: string; description: string; start: Start; harder: Start }
 
-/** The guide's "Pick a model by task" table. Efforts are Claude Code's where the guide gives them, as sessions are agents like it. */
 export const taskKindGuide: Readonly<Record<GuideKind, TaskKindInfo>> = Object.freeze({
   "everyday-engineering": { label: "everyday engineering",
     description: "Everyday engineering and debugging, multi-PR feature work, work across several modules, a hard but contained migration or performance fix",
@@ -81,7 +74,6 @@ function shiftEffort(level: ThinkingLevel, by: number): ThinkingLevel {
   return efforts[Math.max(0, Math.min(efforts.length - 1, (index < 0 ? efforts.indexOf("medium") : index) + by))]!;
 }
 
-/** The level a model offers nearest the one wanted (the lower on a tie); undefined wanted is the model's default. */
 export function clampEffort(model: LocalModelSummary, wanted: ThinkingLevel | undefined): ThinkingLevel | undefined {
   const levels = model.thinkingLevels;
   if (!levels?.length) return undefined;
@@ -99,7 +91,6 @@ export interface AutoEvaluation { kind: TaskKind; harder: boolean; reason: strin
 export interface AutoDispatch {
   model: LocalModelSummary;
   thinkingLevel?: ThinkingLevel;
-  /** Why the model isn't the guide's class for the task, where it isn't. */
   note?: string;
   kept?: true;
 }
@@ -112,11 +103,6 @@ function bestOfRung(models: readonly LocalModelSummary[], rung: ModelRung): Loca
     .sort((a, b) => modelVersion(b.model) - modelVersion(a.model) || Number(reasons(b.model)) - Number(reasons(a.model)) || a.index - b.index)[0]?.model;
 }
 
-/**
- * The model and effort for an evaluated task among the candidates: the guide's class for its kind; or, where the host has
- * none of it, the next class up at one effort lower ("test the next model up at a lower effort"), or else the next one
- * down at one effort higher ("adjust your effort before you move models"). A follow-up keeps the current model.
- */
 export function dispatchModel(candidates: readonly LocalModelSummary[], evaluation: AutoEvaluation,
   current?: { provider: string; modelId: string; thinkingLevel?: ThinkingLevel }): AutoDispatch | undefined {
   if (!candidates.length) return undefined;
@@ -145,7 +131,6 @@ export function dispatchModel(candidates: readonly LocalModelSummary[], evaluati
   return { model, ...(level ? { thinkingLevel: level } : {}), note };
 }
 
-/** The evaluator: the lightest model the member may use on the host, as the guide puts routing on the Haiku class. */
 export function pickEvaluator(candidates: readonly LocalModelSummary[]): { model: LocalModelSummary; thinkingLevel?: ThinkingLevel } | undefined {
   const model = ([1, 2, 3, 4] as const).map(rung => bestOfRung(candidates, rung)).find(Boolean);
   if (!model) return undefined;
@@ -180,7 +165,6 @@ Answer with one JSON object and nothing else: {"kind": "<one kind from the table
   return { systemPrompt, message: parts.join("\n\n") };
 }
 
-/** The evaluator's answer, or undefined where it isn't one JSON object with a known kind. */
 export function parseEvaluation(text: string, followUpAllowed = true): AutoEvaluation | undefined {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -215,7 +199,6 @@ const QUESTION = /^\s*(what|why|how|where|who|when|which|is|are|does|do|can|coul
 const ASKS = /\b(explain|describe|what is|what does|how does|why does|tell me|show me)\b/i;
 const FOLLOW_UP = /^\s*(go ahead|yes|yep|ok(ay)?|sure|do it|continue|proceed|try again|retry|sounds good|lgtm|please do|go on|next)\b/i;
 
-/** The rules' evaluation, where the evaluator gives none: the same kinds, read from words in the task. */
 export function ruleEvaluation(task: string, options: { followUpAllowed?: boolean } = {}): AutoEvaluation {
   const text = task.slice(0, AUTO_TASK_LIMIT).trim();
   if (!text) return { kind: "unsure", harder: false, reason: "no task yet" };
@@ -239,7 +222,6 @@ export function ruleEvaluation(task: string, options: { followUpAllowed?: boolea
   return { kind: "unsure", harder: complex, reason: looks };
 }
 
-/** What Auto chose for a run, kept with it and shown in its conversation. */
 export interface AutoRunChoice {
   provider: string;
   modelId: string;
