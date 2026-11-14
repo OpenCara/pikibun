@@ -25,6 +25,10 @@ building bring back: anything in a directory named in `PACK_REBUILDABLE_DIRS`, a
 - **Git repositories among ignored files.** Clones are looked for only so deep (`find_clones`). A repository deeper
   than that in an ignored directory would be added as a bare gitlink, its contents lost, so it is refused instead.
 - **Backups don't keep ignored files.** A backup deletes nothing, so it keeps what it did, and stays as small as before.
+- **No snapshot keeps the home's package caches.** Packs left them out from the start; backups and moves, which take
+  the same snapshot, kept them until a session's `~/.npm` or `~/.cache` alone ran past the snapshot's 32 MiB, so a
+  session that had installed dependencies once often couldn't be backed up at all. Installing again brings them back,
+  so every snapshot (the Python and Node helpers' and an unsandboxed host's) now skips `SNAPSHOT_SKIPPED_HOME`.
 - **Older connectors.** A connector without the `packIgnoredFiles` capability drops every ignored file. Packing by hand
   still works there, as its confirmation says; automatic packing asks again a day later, until the host is updated. A
   host without the sandbox, or a session that runs directly on its host, can never pack, and isn't asked again.

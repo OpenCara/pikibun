@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
 import {
-  importRequest, MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
+  importRequest, MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, SNAPSHOT_SKIPPED_HOME, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
   type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SnapshotFile,
 } from "./sandbox.js";
 import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
@@ -290,6 +290,7 @@ export class HostWorkspace implements SessionWorkspace {
   snapshot(authorize: SandboxAuthorize): Promise<SnapshotFile[]> {
     return this.#operation(authorize, async () => {
       const files: SnapshotFile[] = [];
+      const skipped = new Set(SNAPSHOT_SKIPPED_HOME.map(path => `home/${path}`));
       let total = 0;
       const add = async (parent: string, name: string, archivePath: string) => {
         if (files.length >= MAX_ENTRIES) throw hostError("snapshot has too many files");
@@ -302,7 +303,7 @@ export class HostWorkspace implements SessionWorkspace {
         const names = await readdir(directory);
         if (names.length > MAX_ENTRIES) throw hostError("directory has too many entries");
         for (const name of names.sort()) {
-          if (skip.includes(name)) continue;
+          if (skip.includes(name) || skipped.has(`${prefix}/${name}`)) continue;
           if (name === ".git" && prefix.startsWith("worktree/")) {
             throw hostError("backups of sessions with a clone in the worktree need a host with the sandbox; push the clone's work instead");
           }

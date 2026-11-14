@@ -577,8 +577,8 @@ def run(argv, data=None):
         sys.exit(child.returncode if child.returncode > 0 else 128 - child.returncode)
 
 
-PACK_SKIPPED_HOME = ('.tmp', '.cache', '.npm', '.pnpm-store', '.yarn', '.bun', '.local/share/pnpm', '.cargo/registry',
-                     '.cargo/git', 'go/pkg/mod', '.m2/repository', '.gradle/caches', '.nuget/packages')
+SNAPSHOT_SKIPPED_HOME = ('.tmp', '.cache', '.npm', '.pnpm-store', '.yarn', '.bun', '.local/share/pnpm', '.cargo/registry',
+                         '.cargo/git', 'go/pkg/mod', '.m2/repository', '.gradle/caches', '.nuget/packages')
 
 
 def snapshot(request):
@@ -586,12 +586,7 @@ def snapshot(request):
     clones = request.get('clones', [])
     if not isinstance(clones, list) or not all(clone_path(path) for path in clones):
         raise ValueError('invalid snapshot request')
-    skip_caches = request.get('skipCaches', False)
-    if not isinstance(skip_caches, bool):
-        raise ValueError('invalid snapshot request')
-    skipped = {'worktree/' + path for path in clones}
-    if skip_caches:
-        skipped |= {'home/' + path for path in PACK_SKIPPED_HOME}
+    skipped = {'worktree/' + path for path in clones} | {'home/' + path for path in SNAPSHOT_SKIPPED_HOME}
 
     def add(parent, name, archive_path):
         nonlocal total
