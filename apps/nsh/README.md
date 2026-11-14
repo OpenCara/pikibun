@@ -53,6 +53,14 @@ needs a decision stand out:
   the chat box's pickers (shared or side ask, model, reasoning, access)
   along its bottom edge: on a phone one line of them, tighter, that scrolls sideways where it doesn't fit, and any hint
   but "Runs as … (you)" on a line under it. Details (owner, host, visibility, ID) are in the session's panel.
+- **Review**: the panel's Review tab (`src/session-panel/Review.tsx`) is drawn after JetBrains IDEA's pull request
+  window, which the React client had no counterpart of: the title, branches and state, then the changed files in NSH's
+  `Tree`, grouped by directory and coloured as IDEA colours file statuses (blue modified, green added, grey deleted,
+  teal renamed), and a file's diff in NSH's `DiffView`, from the hunks GitHub gives, in IDEA's diff colours (green for
+  added lines, grey for deleted ones) with its toolbar: previous and next change, side-by-side or unified viewer, the
+  number of differences, previous and next file. Its **Expand to the full window** widens the panel's sheet to the
+  window, the tree beside the diff in a `ResizablePanelGroup`; the tree and the patch it draws from are
+  `packages/shared/src/pull-request-review.ts`.
 - **Kit**: first drawn as the React web client's. `src/tokens.ts` has its three themes (light, dark and Pikibun's night
   theme) under its CSS variables' names; `src/theme.ts` builds the palettes from
   them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget was drawn from

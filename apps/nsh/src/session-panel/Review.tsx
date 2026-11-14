@@ -1,5 +1,5 @@
 import { computed, effect, Scroll, signal, Text, untracked, View, type JSX } from "nsh";
-import { Button as BaseButton, DiffView, ResizablePanel, ResizablePanelGroup, TextView, Tree, type DiffLayout, type DiffStats, type DiffViewRef, type DiffViewStyles, type TreeEntry, type TreeItem } from "nsh/base";
+import { Button as BaseButton, DiffView, ResizablePanel, ResizablePanelGroup, TextView, Tree, type DiffLayout, type DiffSeparator, type DiffStats, type DiffViewRef, type DiffViewStyles, type TreeEntry, type TreeItem } from "nsh/base";
 import type { GitHubReviewCommentView, PullRequestFileStatus, PullRequestFileView, PullRequestReview, SessionRecord } from "../../../../packages/shared/src/types";
 import {
   filePatch, pullRequestFileStatusLabels, reviewDirectoryIds, reviewFileId, reviewFileOrder, reviewTree, type ReviewTreeNode,
@@ -230,7 +230,7 @@ function Sidebar(props: SidebarProps) {
           {details => (
             <View testID="review-branches" accessibilityLabel={`${details().head.ref} into ${details().base.ref}`} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Branch name={details().base.ref} />
-              <Text style={{ fontSize: text.small, color: palette().muted }}>←</Text>
+              <Icon name="arrow-left" size={12} color={palette().muted} />
               <Branch name={details().head.ref} />
             </View>
           )}
@@ -413,7 +413,7 @@ function Info(props: { review: PullRequestReview; onSelect: (path: string) => vo
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: palette().dots[check().status === "completed" ? "danger" : "warning"] }} />
                   <Text style={{ flex: 1, fontSize: text.small, color: palette().text, numberOfLines: 1 }}>{check().name}</Text>
-                  <Text style={{ fontSize: text.caption, color: palette().muted }}>{check().status === "completed" ? check().conclusion ?? "failed" : check().status}</Text>
+                  <Text style={{ fontSize: text.caption, color: palette().muted }}>{(check().status === "completed" ? check().conclusion ?? "failed" : check().status).replace(/_/g, " ")}</Text>
                 </View>
               )}
             </Each>
@@ -455,6 +455,8 @@ function diffStyles(): DiffViewStyles {
     side: { backgroundColor: palette().background },
     gutter: { backgroundColor: palette().background },
     lineNumber: { color: palette().faint },
+    lineNumberAdded: { color: palette().muted, backgroundColor: faded(colors.inserted) },
+    lineNumberDeleted: { color: palette().muted, backgroundColor: faded(colors.deleted) },
     lineAdded: { backgroundColor: faded(colors.inserted) },
     lineDeleted: { backgroundColor: faded(colors.deleted) },
     wordAdded: { backgroundColor: colors.inserted },
@@ -462,8 +464,18 @@ function diffStyles(): DiffViewStyles {
     indicatorAdded: { backgroundColor: colors.insertedBar },
     indicatorDeleted: { backgroundColor: colors.deletedBar },
     filler: { backgroundColor: palette().surface },
-    separator: { backgroundColor: palette().surface, color: palette().muted },
+    separator: { backgroundColor: palette().surfaceRaised },
   };
+}
+
+function Separator(props: { value: DiffSeparator }) {
+  const label = () => (props.value.header?.trim() ? props.value.header.trim() : props.value.lines ? plural(props.value.lines, "unchanged line") : "");
+  return (
+    <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, backgroundColor: palette().surfaceRaised }}>
+      <Text style={{ fontSize: text.caption, color: palette().faint }}>⋯</Text>
+      <Text style={{ flex: 1, numberOfLines: 1, fontFamily: monospace, fontSize: text.caption, color: palette().muted }}>{label()}</Text>
+    </View>
+  );
 }
 
 function DiffPane(props: {
@@ -525,8 +537,8 @@ function DiffPane(props: {
               </View>
             </If>
             <DiffView ref={ref => { view = ref; }} testID="review-diff-view" style={{ flex: 1 }}
-              patch={unified()} language={languageFor(props.file.path)} layout={props.layout} inline="word" indicators="bars" fontSize={text.small} lineHeight={20}
-              styles={diffStyles()} onStatsChange={event => stats.set(event.stats)} />
+              patch={unified()} language={languageFor(props.file.path)} layout={props.layout} inline="word" indicators="bars" background={false} fontSize={text.small} lineHeight={20}
+              styles={diffStyles()} renderSeparator={value => <Separator value={value} />} onStatsChange={event => stats.set(event.stats)} />
           </>
         )}
       </If>

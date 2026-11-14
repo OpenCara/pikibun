@@ -83,6 +83,19 @@ A session's tools run as its owner (their Git accounts, their GitHub token), for
 
 What it doesn't protect against: the conversation is shared. A sender can leave instructions in it, or in the files, that the agent follows on the owner's next message, with the owner's tools. That is the same as any text the agent reads (see [Sessions on the host](#sessions-on-the-host)); where it matters, keep sessions that hold tools others lack private, or give people a session role of Member (side asks only).
 
+## The pull request reviewer
+
+The session panel's **Review** tab shows the session's pull request: its description, commits, checks, reviews and each changed file's diff (`GET /api/sessions/:id/pull-request`, `sessionPullRequestReview` in `apps/server/src/authority/pull-request-review.ts`). The Pikibun server reads it from GitHub with the session owner's stored sign-in, for whoever opened the tab, so the route is held to what the agent's `github_read` already gives the same people:
+
+- **Collaborators only.** It takes the session's `write` permission, as the Files tab does. Whoever may send the session a message can already have the agent read the pull request, or any file of the repository, with the owner's access; a viewer or a share link can't, and gets nothing here either. Unlike a message it runs no tool, so neither person's tool group is asked: it reads, and changes nothing on GitHub.
+- **The session's own pull request, never one the reader names.** The route takes no repository, number or address. It reads the pull request the server recorded for the session: the one a push through Pikibun opened, or the one found on a branch the session's host reported. So it can't be turned into a reader of the owner's other repositories.
+- **Only in a repository of the workspace.** The pull request's repository must be one the workspace binds, and GitHub must still answer with the bound repository's numeric identity under that name before anything is read (`pinnedGitHubRepository`, `verifyPin`), as for `github_read`: a repository renamed or replaced under the same name is refused.
+- **Checked again before it answers.** After the reads, the server checks that the owner's GitHub sign-in is still the one it read with and that the reader still has the session's `write` permission under the same policy version, so a grant withdrawn while GitHub answered returns nothing.
+- **Bounded, and with secrets hidden.** At most 300 files and 250 commits, a file's diff up to 256 KB and 2 MB of diffs in all; the rest is left to GitHub and counted. Diffs, the description, comments, reviews and commit messages pass through the transcript's redaction, as a file in the Files tab does.
+- **Not in the audit log.** `github_read` is recorded because the agent makes it, unseen, on someone's behalf. A person opening a tab is not, as browsing the Files tab isn't; recording each refresh would fill the session's 200 newest entries.
+
+It stays available on archived sessions: nothing runs, and the host isn't asked. What it doesn't protect against: a collaborator sees the owner's view of the pull request, which may be of a private repository the collaborator can't open on GitHub themselves. That is the workspace's sharing model (a session's tools run as its owner), not something this route adds.
+
 ## Pikibun's extensions from npm (managed packages)
 
 `apps/runner/src/extensions/host.ts` (`applyManaged`), `store.ts` (`addManaged`), `packages/shared/src/managed-extensions.ts`; the plan is
