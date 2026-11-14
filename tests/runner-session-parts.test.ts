@@ -688,6 +688,7 @@ test("piki: an extension's tool runs for a message that may act, while its exten
   await assert.rejects(refused.host.runTool({ ...call(), api: toolApi(ungranted) }, async () => ({ output: [] })), (error: unknown) =>
     error instanceof RunnerError && error.message === `ext_tool comes from an extension, which ${HOST_COMMANDS_RULE}`);
   const limited = { limitedSandbox: true };
+  ungranted.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;
   const inSandbox = pikiFixture(ungranted, { hostCommands: hostPolicy(limited, { "github:2": {} }).policy }, { "github:2": {} });
   assert.deepEqual((await inSandbox.host.runTool({ ...call(), api: toolApi(ungranted), sandboxed: true }, async () => ({ output: [{ type: "text", text: "in the sandbox" }] }))).output,
     [{ type: "text", text: "in the sandbox" }], "a tool of an extension that runs in the session's sandbox needs no host commands");

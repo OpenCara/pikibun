@@ -192,9 +192,13 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   `context-files` loses its `host:` files; the copy built into the connector keeps them), the connector's environment
   (they get the sandbox's: the owner's `APP_` values and the proxy's), and any network the workspace's network access
   doesn't allow: a web search extension needs its provider's host allowed there.
-- **Their tools are still host commands.** Calls stay limited to the host's owner and members granted host commands,
-  as the rule in `host-commands.ts` counts every `extension.tool` operation as running on the host. Loosening that for
-  sandboxed sessions is a separate decision.
+- **Their tools are the sandbox's, not host commands.** A call to a tool of an extension that runs in the session's
+  sandbox needs no host command grant and no "let every session run extension tools" (`session/piki.ts`, `#runTool`): it
+  can do what the session's shell commands can. It is a host command exactly where a shell command would be: on a host
+  without resource limits, in a session that isn't the host owner's, where the process runs unbounded
+  (`runsOnHost` for a `bash` operation). The adapter says which calls these are (`sandboxed`: the source runs behind
+  the process channel, and the session's process is sandboxed), so built-in extensions and unsandboxed platforms keep the
+  rule. A Read-only message still runs none: a tool may change the worktree.
 
 Until step 3 ships on every platform, the rule in `docs/extensions.md` stands: the host's owner installs only extensions they trust with
 their own account, as they would a program.
