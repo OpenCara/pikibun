@@ -2830,16 +2830,18 @@ test('the Review tab reads the session\'s pull request from GitHub as its owner,
   const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
   const patch = '@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;';
   const keyLine = 'MIIEowIBAAKCAQEAx123abcDEFghiJKLmnoPQRstuVWXyz0123456789abcDEFghiJKL';
-  const longMessage = `${'m'.repeat(3990)} API_KEY=${secret}`;
+  const longMessage = `${'m'.repeat(3985)} ${secret}`;
+  const longBody = `${'b'.repeat(15985)} ${secret}`;
   const routes: Record<string, () => Response> = {
     [api]: () => Response.json({ id: 7, full_name: 'owner/repo', default_branch: 'main', private: true }),
     [`${api}/issues/5`]: () => Response.json({ html_url: 'https://github.com/owner/repo/pull/5', title: 'Fix it', state: 'open', user: { login: 'author' },
-      created_at: createdAt, body: `Uses API_KEY=${secret}`, labels: [], pull_request: { url: `${api}/pulls/5` } }),
+      created_at: createdAt, body: longBody, labels: [], pull_request: { url: `${api}/pulls/5` } }),
     [`${api}/issues/5/comments?per_page=100&page=1`]: () => Response.json([]),
     [`${api}/pulls/5`]: () => Response.json({ draft: false, merged: false, mergeable: true, mergeable_state: 'clean', additions: 12, deletions: 3, changed_files: 7, commits: 2,
       head: { ref: 'feature', sha: headSha, repo: { full_name: 'owner/repo' } }, base: { ref: 'main', sha: 'a'.repeat(40) } }),
     [`${api}/pulls/5/reviews?per_page=100&page=1`]: () => Response.json([]),
-    [`${api}/pulls/5/comments?per_page=100&page=1`]: () => Response.json([]),
+    [`${api}/pulls/5/comments?per_page=100&page=1`]: () => Response.json([{ id: 21, user: { login: 'reviewer' }, created_at: createdAt, path: 'deploy.pem', line: null, original_line: 2,
+      commit_id: headSha, body: 'Rotate this key', diff_hunk: `@@ -1,4 +0,0 @@\n------BEGIN RSA PRIVATE KEY-----\n-${keyLine}`, html_url: 'https://github.com/owner/repo/pull/5#discussion_r21' }]),
     [`${api}/commits/${headSha}/check-runs?per_page=100&page=1`]: () => Response.json({ total_count: 1, check_runs: [{ name: 'test', status: 'completed', conclusion: 'success' }] }),
     [`${api}/commits/${headSha}/status?per_page=100&page=1`]: () => Response.json({ state: 'success', total_count: 0, statuses: [] }),
     [`${api}/pulls/5/files?per_page=30&page=1`]: () => Response.json([
@@ -2888,7 +2890,10 @@ test('the Review tab reads the session\'s pull request from GitHub as its owner,
     { sha: 'e'.repeat(40), message: 'First\n\nBody', author: 'author', date: createdAt },
     { sha: headSha, message: view.commits[1]!.message, author: 'Someone', date: createdAt },
   ]);
-  assert.ok(view.commits[1]!.message.length <= 4000 && view.commits[1]!.message.startsWith('m'.repeat(3990)));
+  assert.ok(view.commits[1]!.message.length <= 4000 && view.commits[1]!.message.startsWith('m'.repeat(3985)));
+  assert.ok(view.pull.body.startsWith('b'.repeat(15985)));
+  assert.ok(!JSON.stringify(view).includes('sk-ant-api03-a'), 'a token across a cut leaves no first half');
+  assert.deepEqual(view.pull.pullRequest?.reviewComments.map(item => [item.path, item.body, item.diffHunk]), [['deploy.pem', 'Rotate this key', '']]);
   assert.deepEqual(view.files.map(file => [file.path, file.status]),
     [['src/a.ts', 'modified'], ['deploy.pem', 'removed'], ['src/new.ts', 'renamed'], ['.env', 'added'], ['big.txt', 'modified'], ['logo.png', 'removed']]);
   assert.deepEqual(view.files[0], { path: 'src/a.ts', status: 'modified', additions: 1, deletions: 1, patch });

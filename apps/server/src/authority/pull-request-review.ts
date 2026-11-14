@@ -2,7 +2,7 @@ import { hasPermission } from '../../../../packages/shared/src/policy.js';
 import { redactPatch } from '../../../../packages/shared/src/pull-request-review.js';
 import { redactSecrets } from '../../../../packages/shared/src/redaction.js';
 import {
-  pullRequestReviewLimits, type GitHubIssueView, type PullRequestCommitView, type PullRequestFileStatus, type PullRequestFileView, type PullRequestReview,
+  pullRequestReviewLimits, type PullRequestCommitView, type PullRequestFileStatus, type PullRequestFileView, type PullRequestReview,
 } from '../../../../packages/shared/src/types.js';
 import type { AppContext, SessionRow } from '../types.js';
 import { fail, identifier } from '../http.js';
@@ -68,13 +68,6 @@ function commitViews(items: Record<string, unknown>[]): PullRequestCommitView[] 
   });
 }
 
-function redactedView(view: GitHubIssueView): GitHubIssueView {
-  const pull = view.pullRequest;
-  return { ...view, title: redactSecrets(view.title), body: redactSecrets(view.body),
-    comments: view.comments.map(item => ({ ...item, body: redactSecrets(item.body) })),
-    ...(pull ? { pullRequest: { ...pull, reviews: pull.reviews.map(item => ({ ...item, body: redactSecrets(item.body) })),
-      reviewComments: pull.reviewComments.map(item => ({ ...item, body: redactSecrets(item.body), diffHunk: redactSecrets(item.diffHunk) })) } } : {}) };
-}
 
 export async function sessionPullRequestReview(c: AppContext): Promise<Response> {
   const sessionId = identifier(c.req.param('id'));
@@ -94,7 +87,7 @@ export async function sessionPullRequestReview(c: AppContext): Promise<Response>
   const base = `/repos/${pin.fullName}/pulls/${pull.number}`;
   let details: Record<string, unknown> | undefined;
   const [view, files, commits] = await Promise.all([
-    readIssue(github, pin.fullName, pull.number, value => { details = value; }),
+    readIssue(github, pin.fullName, pull.number, { pullDetails: value => { details = value; }, prepare: redactSecrets, diffHunks: false }),
     listing(github, `${base}/files`, pullRequestReviewLimits.files, filesPerPage, filePageBytes),
     listing(github, `${base}/commits`, pullRequestReviewLimits.commits),
   ]);
@@ -106,7 +99,7 @@ export async function sessionPullRequestReview(c: AppContext): Promise<Response>
   const commitCount = Math.max(count(details.commits), commits.length);
   const omitted = { ...(changedFiles > files.length ? { files: changedFiles - files.length } : {}), ...(commitCount > commits.length ? { commits: commitCount - commits.length } : {}) };
   const review: PullRequestReview = {
-    pull: redactedView(view), additions: count(details.additions), deletions: count(details.deletions), changedFiles,
+    pull: { ...view, title: redactSecrets(view.title) }, additions: count(details.additions), deletions: count(details.deletions), changedFiles,
     commits: commitViews(commits), files: fileViews(files), ...(Object.keys(omitted).length ? { omitted } : {}),
   };
   c.header('Cache-Control', 'no-store');

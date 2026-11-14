@@ -321,8 +321,8 @@ const string = (value: unknown): string => typeof value === 'string' ? value : '
 const nullableString = (value: unknown): string | null => typeof value === 'string' ? value : null;
 const integer = (value: unknown): number | null => Number.isSafeInteger(value) ? value as number : null;
 const login = (user: unknown): string | null => user && typeof user === 'object' ? nullableString((user as Record<string, unknown>).login) : null;
-function clip(value: unknown): string {
-  const body = string(value);
+function clip(value: unknown, prepare: (text: string) => string = text => text): string {
+  const body = prepare(string(value));
   return body.length <= bodyCharacters ? body : `${body.slice(0, bodyCharacters)}\n… ${body.length - bodyCharacters} more characters`;
 }
 
@@ -397,7 +397,10 @@ function fit(view: GitHubIssueView): GitHubIssueView {
   return result;
 }
 
-export async function readIssue(github: GitHubAccess, fullName: string, number: number, pullDetails?: (details: Record<string, unknown>) => void): Promise<GitHubIssueView> {
+export interface ReadIssueOptions { pullDetails?: (details: Record<string, unknown>) => void; prepare?: (text: string) => string; diffHunks?: boolean }
+
+export async function readIssue(github: GitHubAccess, fullName: string, number: number, options: ReadIssueOptions = {}): Promise<GitHubIssueView> {
+  const { pullDetails, prepare, diffHunks = true } = options;
   const base = `/repos/${fullName}`;
   const issue = record((await githubGet(github, `${base}/issues/${number}`)).value);
   const isPull = issue.pull_request !== undefined && issue.pull_request !== null;
@@ -423,11 +426,11 @@ export async function readIssue(github: GitHubAccess, fullName: string, number: 
       mergeableState: string(details.mergeable_state),
       head: { ref: string(head.ref), sha, repository: headRepository }, base: { ref: string(target.ref), sha: string(target.sha) },
       reviews: reviews.items.map((item): GitHubReviewView => ({ id: integer(item.id) ?? 0, author: login(item.user), state: string(item.state),
-        submittedAt: nullableString(item.submitted_at), commit: nullableString(item.commit_id), body: clip(item.body), url: string(item.html_url) })),
+        submittedAt: nullableString(item.submitted_at), commit: nullableString(item.commit_id), body: clip(item.body, prepare), url: string(item.html_url) })),
       reviewComments: reviewComments.items.map((item): GitHubReviewCommentView => {
-        const hunk = string(item.diff_hunk);
+        const hunk = diffHunks ? string(item.diff_hunk) : '';
         return { id: integer(item.id) ?? 0, inReplyTo: integer(item.in_reply_to_id), author: login(item.user), createdAt: string(item.created_at),
-          path: string(item.path), line: integer(item.line), originalLine: integer(item.original_line), commit: string(item.commit_id), body: clip(item.body),
+          path: string(item.path), line: integer(item.line), originalLine: integer(item.original_line), commit: string(item.commit_id), body: clip(item.body, prepare),
           diffHunk: hunk.length <= hunkCharacters ? hunk : `… ${hunk.length - hunkCharacters} earlier characters\n${hunk.slice(-hunkCharacters)}`,
           url: string(item.html_url) };
       }),
@@ -439,9 +442,9 @@ export async function readIssue(github: GitHubAccess, fullName: string, number: 
   const labels = Array.isArray(issue.labels) ? issue.labels.map(label => typeof label === 'string' ? label : string(record(label).name)) : [];
   return fit({
     repository: fullName, number, url: string(issue.html_url), title: string(issue.title), state: string(issue.state), author: login(issue.user),
-    createdAt: string(issue.created_at), body: clip(issue.body), labels,
+    createdAt: string(issue.created_at), body: clip(issue.body, prepare), labels,
     comments: comments.items.map((item): GitHubCommentView => ({ id: integer(item.id) ?? 0, author: login(item.user), createdAt: string(item.created_at),
-      body: clip(item.body), url: string(item.html_url) })),
+      body: clip(item.body, prepare), url: string(item.html_url) })),
     ...(pullRequest ? { pullRequest } : {}), ...(Object.keys(omitted).length ? { omitted } : {}),
   });
 }
