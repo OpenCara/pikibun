@@ -46,6 +46,7 @@ export function createPanelBacks(): PanelBacks {
 }
 
 export function SwipeBack(props: { onBack?: () => void; edge?: boolean; testID?: string; children?: JSX.Element }) {
+  if (!swipesBack) return props.children;
   const x = createAnimatedValue(0);
   const shift = x.interpolate({ inputRange: [0, 1200], outputRange: [0, 1200], extrapolate: "clamp" });
   const active = () => swipesBack && Boolean(props.onBack);
