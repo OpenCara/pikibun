@@ -141,11 +141,13 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   process (`restart`), so a blocked event loop costs the session that much time and no more; the connector's own loop
   never waited. Starting a process and opening its sources again doesn't count against a handler's time: its timer
   starts once the process is ready, and starting has a minute of its own (`START_TIMEOUT_MS`), so a slow start isn't
-  killed over and over. A crash (an `exit`, an uncaught exception) ends it the same way. Requests waiting on it fail with the
+  killed over and over. A crash (an `exit`, an uncaught exception) ends it the same way. An abort settles its request at once;
+  if the process hasn't ended the request within `CANCEL_GRACE_MS` (5 seconds), its loop is taken to be stuck and it is
+  ended too. Ending the process fails every request it had, for every source of the session. Requests waiting on it fail with the
   reason, and each open source gets a warning.
 - **The next request starts a new one.** It opens every source again and emits `session_start` again to those that had
-  it, before anything else, so the session goes on with what its extensions rebuild from that; what they kept in memory
-  is gone, as across a connector restart.
+  it (with the settings it was first sent), before anything else, so the session goes on with what its extensions rebuild from that; what they kept in memory
+  is gone, as across a connector restart. A source that fails to open again is tried again at its own next request.
 - **Handles hold the connector only while it waits.** The process, its IPC channel and its pipes are unref'd while no
   request is pending, so a connector (or a test) that is done isn't kept alive by a session that wasn't shut down.
 - **Its environment is the connector's.** Until step 3, the process runs as the host's user, in the session's

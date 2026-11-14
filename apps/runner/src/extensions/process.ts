@@ -20,6 +20,7 @@ export interface ProcessChannelOptions {
 
 const SHUTDOWN_GRACE_MS = 2000;
 export const START_TIMEOUT_MS = 60_000;
+export const CANCEL_GRACE_MS = 5000;
 
 export function workerEntry(): string[] {
   for (const name of ["./extension-worker.js", "../extension-worker.js"]) {
@@ -47,7 +48,9 @@ export class ProcessChannel implements ExtensionChannel {
   #closed = false;
   readonly #pending = new Map<number, Pending>();
   readonly #opened = new Map<string, ExtensionParams<"open">>();
-  readonly #started = new Set<string>();
+  readonly #started = new Map<string, ExtensionParams<"emit">>();
+  readonly #unopened = new Set<string>();
+  readonly #cancelled = new Set<number>();
 
   constructor(private readonly options: ProcessChannelOptions) {}
 
@@ -56,10 +59,11 @@ export class ProcessChannel implements ExtensionChannel {
   async call<M extends ExtensionMethod>(method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>> {
     if (this.#closed) throw new Error("The extension process is closed");
     const child = await this.#ensure();
-    const answer = await this.#send(child, method, params, signal);
     const source = (params as { source?: unknown }).source;
+    if (method !== "open" && typeof source === "string" && this.#unopened.has(source)) await this.#reopen(child, source);
+    const answer = await this.#send(child, method, params, signal);
     if (method === "open" && typeof source === "string") this.#opened.set(source, params as ExtensionParams<"open">);
-    if (method === "emit" && typeof source === "string" && (params as ExtensionParams<"emit">).event.type === "session_start") this.#started.add(source);
+    if (method === "emit" && typeof source === "string" && (params as ExtensionParams<"emit">).event.type === "session_start") this.#started.set(source, params as ExtensionParams<"emit">);
     return answer;
   }
 
@@ -79,8 +83,9 @@ export class ProcessChannel implements ExtensionChannel {
     this.#closed = true;
     const child = this.#live ?? await this.#starting?.catch(() => undefined);
     if (!child) return;
+    this.#hold(child, true);
     const exited = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("exit", () => resolve()); });
-    const grace = new Promise<void>(resolve => { setTimeout(resolve, SHUTDOWN_GRACE_MS).unref(); });
+    const grace = new Promise<void>(resolve => { setTimeout(resolve, SHUTDOWN_GRACE_MS); });
     await Promise.race([this.#send(child, "shutdown", {}).catch(() => undefined), grace]);
     child.kill("SIGKILL");
     this.#ended(child, "it was closed");
@@ -120,14 +125,20 @@ export class ProcessChannel implements ExtensionChannel {
   }
 
   async #replay(child: ChildProcess): Promise<void> {
-    for (const [source, params] of this.#opened) {
-      try {
-        await this.#send(child, "open", params);
-        if (this.#started.has(source)) await this.#send(child, "emit", { source, settings: {}, event: { type: "session_start", reason: "startup" } });
-      } catch (error) {
-        this.options.warn(source, `didn't open again in the new extension process: ${error instanceof Error ? error.message : String(error)}`);
+    for (const source of this.#opened.keys()) {
+      try { await this.#reopen(child, source); }
+      catch (error) {
+        this.options.warn(source, `didn't open again in the new extension process, and is tried again at its next request: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+  }
+
+  async #reopen(child: ChildProcess, source: string): Promise<void> {
+    this.#unopened.add(source);
+    await this.#send(child, "open", this.#opened.get(source)!);
+    this.#unopened.delete(source);
+    const started = this.#started.get(source);
+    if (started) await this.#send(child, "emit", started);
   }
 
   #send<M extends ExtensionMethod>(child: ChildProcess, method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>> {
@@ -137,8 +148,16 @@ export class ProcessChannel implements ExtensionChannel {
         return;
       }
       const id = this.#next++;
-      const cancel = () => { if (this.#pending.has(id) && child.connected) child.send({ cancel: id }, () => {}); };
-      const done = () => { this.#pending.delete(id); signal?.removeEventListener("abort", cancel); if (!this.#pending.size) this.#hold(child, false); };
+      const cancel = () => {
+        if (!this.#pending.has(id)) return;
+        if (child.connected) child.send({ cancel: id }, () => {});
+        this.#cancelled.add(id);
+        setTimeout(() => {
+          if (this.#cancelled.delete(id) && this.#live === child) this.restart(`a request it was asked to cancel didn't end within ${CANCEL_GRACE_MS / 1000} seconds`);
+        }, CANCEL_GRACE_MS).unref();
+        this.#pending.get(id)?.reject(new Error("The request was aborted"));
+      };
+      const done = () => { this.#pending.delete(id); signal?.removeEventListener("abort", cancel); if (!this.#pending.size && !this.#closed) this.#hold(child, false); };
       this.#pending.set(id, {
         method,
         resolve: answer => { done(); resolve(answer as ExtensionAnswer<M>); },
@@ -171,6 +190,7 @@ export class ProcessChannel implements ExtensionChannel {
       else for (const opened of this.#opened.keys()) this.options.warn(opened, message);
       return;
     }
+    this.#cancelled.delete(reply.id);
     const pending = this.#pending.get(reply.id);
     if (!pending) return;
     if (reply.error !== undefined) pending.reject(new Error(reply.error));

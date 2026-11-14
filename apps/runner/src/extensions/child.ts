@@ -10,9 +10,12 @@ if (!directory || !process.send) {
   process.exit(2);
 }
 
-const send = (message: unknown) => {
+const send = (message: { id?: number } & Record<string, unknown>) => {
   try { process.send?.(message); }
-  catch (error) { process.send?.({ warn: { source: "", message: `an answer couldn't be sent: ${describe(error)}` } }); }
+  catch (error) {
+    const reason = `its answer couldn't be sent: ${describe(error)}`;
+    process.send?.(message.id !== undefined ? { id: message.id, error: reason } : { warn: { source: "", message: reason } });
+  }
 };
 const worker = new ExtensionWorker({ directory, warn: (source, message) => send({ warn: { source, message } }) });
 const running = new Map<number, AbortController>();
