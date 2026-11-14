@@ -1015,6 +1015,23 @@ test("a backup fails instead of copying a database that did not close cleanly", 
   assert.ok((await session.view()).entries.length > 0);
 });
 
+test("a backup leaves out the package caches in the session's home, and keeps the rest of it", hostMode, async t => {
+  const { service } = await hostFixture(t);
+  const id = "backup-caches-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const home = session.sandbox.home;
+  for (const cache of [".npm/_cacache", ".cache/pip", ".local/share/pnpm/store"]) {
+    await mkdir(join(home, cache), { recursive: true });
+    await writeFile(join(home, cache, "blob"), Buffer.alloc(12 * 1024 * 1024, 1));
+  }
+  await mkdir(join(home, ".local", "bin"), { recursive: true });
+  await writeFile(join(home, ".local", "bin", "tool"), "kept");
+  await writeFile(join(home, ".npmrc"), "kept");
+  const paths = (await session.backup(await ticket(id, "backup"))).files.map(file => file.path);
+  assert.ok(paths.includes("home/.local/bin/tool") && paths.includes("home/.npmrc"), paths.join(" "));
+  assert.ok(!paths.some(path => /^home\/(\.npm|\.cache|\.local\/share\/pnpm)\//.test(path)), paths.join(" "));
+});
+
 test("a backup too large to keep is refused with a reason its owner can act on, and the session goes on", hostMode, async t => {
   const { service } = await hostFixture(t);
   const id = "backup-large-session";

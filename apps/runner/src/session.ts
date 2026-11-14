@@ -1264,7 +1264,7 @@ export class RunnerSession {
       const authorize = async () => { await this.authorize(ticket.actorId, "manage", ticket.policyVersion, false, false, true); };
       try {
         const { clones, found } = this.#clone ? await sandbox.cloneBackup(authorize, { pack: true }) : { clones: [], found: [] };
-        const files = await sandbox.snapshot(authorize, found, { skipCaches: true });
+        const files = await sandbox.snapshot(authorize, found);
         return { bytes: packBytes(this.binding, { files, ...(clones.length ? { clones } : {}) }), files: files.length, clones: clones.length };
       } catch (error) { throw packRefusal(error); }
     });

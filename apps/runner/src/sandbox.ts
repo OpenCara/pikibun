@@ -77,7 +77,7 @@ export function sandboxEtc(home: string, uid: number, gid: number): Readonly<Rec
     "nsswitch.conf": "passwd: files\ngroup: files\nshadow: files\nhosts: files dns\n",
   });
 }
-export const PACK_SKIPPED_HOME: readonly string[] = Object.freeze([".tmp", ".cache", ".npm", ".pnpm-store", ".yarn", ".bun", ".local/share/pnpm",
+export const SNAPSHOT_SKIPPED_HOME: readonly string[] = Object.freeze([".tmp", ".cache", ".npm", ".pnpm-store", ".yarn", ".bun", ".local/share/pnpm",
   ".cargo/registry", ".cargo/git", "go/pkg/mod", ".m2/repository", ".gradle/caches", ".nuget/packages"]);
 
 const MIRROR_KINDS: ReadonlySet<Request["kind"]> = new Set(["bash", "clone-head", "clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"]);
@@ -143,7 +143,7 @@ type Request =
   | { kind: "write"; path: string; content: string }
   | FileOperationRequest
   | { kind: "import"; directory: string; name: string; data: string }
-  | { kind: "snapshot"; clones?: string[]; skipCaches?: true }
+  | { kind: "snapshot"; clones?: string[] }
   | { kind: "bash"; command: string }
   | { kind: "clone-head"; path: string }
   | { kind: "clone-push-prepare"; path: string; commit: string; old: string | null; tips: string[] }
@@ -590,9 +590,8 @@ export class Sandbox implements IsolatedWorkspace {
     });
   }
 
-  async snapshot(authorize: SandboxAuthorize, clones: readonly string[] = [], { skipCaches = false }: { skipCaches?: boolean } = {}): Promise<SnapshotFile[]> {
-    return JSON.parse(await this.#operation({ kind: "snapshot", ...(clones.length ? { clones: [...clones] } : {}), ...(skipCaches ? { skipCaches: true as const } : {}) },
-      true, authorize)) as SnapshotFile[];
+  async snapshot(authorize: SandboxAuthorize, clones: readonly string[] = []): Promise<SnapshotFile[]> {
+    return JSON.parse(await this.#operation({ kind: "snapshot", ...(clones.length ? { clones: [...clones] } : {}) }, true, authorize)) as SnapshotFile[];
   }
 
   async cloneBackup(authorize: SandboxAuthorize, { pack = false }: { pack?: boolean } = {}): Promise<{ clones: CloneBackup[]; found: string[] }> {
