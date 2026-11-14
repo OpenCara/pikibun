@@ -22,13 +22,14 @@ export interface ExtensionHost {
   model(): Model<string> | undefined;
   thinkingLevel?(): string | undefined;
   state(source: string): Promise<{ active: boolean; settings: ExtensionSettings }>;
-  runTool(call: { source: string; tool: string; arguments: Record<string, unknown>; api: ToolExecutionApi; signal: AbortSignal; context: Context },
+  runTool(call: { source: string; tool: string; arguments: Record<string, unknown>; api: ToolExecutionApi; signal: AbortSignal; context: Context; sandboxed?: boolean },
     execute: (signal: AbortSignal) => Promise<ToolExecutionResult>): Promise<ToolExecutionResult>;
   readonly hookTimeoutMs: number;
   readonly inputTimeoutMs?: number;
   warn(source: string, message: string): void;
   readonly piki?: PikiSession;
   extensionProcess?(warn: (source: string, message: string) => void): ExtensionChannel;
+  readonly sandboxedProcess?: boolean;
 }
 
 export const ExtensionPrompts = defineDoc<{ prompts: Record<string, string> }>({ kind: "pikibun.extension-prompts", version: 1, scope: "conversation",
@@ -74,6 +75,7 @@ export function settleToolNames(sources: readonly { source: string; tools: reado
 
 interface Link {
   source: string;
+  isolated: boolean;
   channel: ExtensionChannel;
   handlers: Set<string>;
 }
@@ -160,7 +162,7 @@ export class SessionExtensions {
         const factories = piki ? loaded.factories!.map(item => ({ path: item.path, factory: piki.forSession(this.host.piki ?? noPikiSession) })) : loaded.factories;
         if (factories) this.#factories.set(source, factories);
         const models = factories ? [] : listedModels(this.host);
-        const link: Link = { source, channel: this.channel(factories !== undefined), handlers: new Set() };
+        const link: Link = { source, isolated: factories === undefined, channel: this.channel(factories !== undefined), handlers: new Set() };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
@@ -302,7 +304,8 @@ function build(link: Link, dev: boolean, described: ExtensionToolDescription[], 
       const settings = await settingsNow();
       if (!settings) throw new Error(`This extension (${source}) no longer applies to this session; ${definition.name} didn't run.`);
       const input = args as Record<string, unknown>;
-      return host.runTool({ source, tool: definition.name, arguments: input, api, signal: info.abortSignal ?? new AbortController().signal, context: info },
+      return host.runTool({ source, tool: definition.name, arguments: input, api, signal: info.abortSignal ?? new AbortController().signal, context: info,
+        sandboxed: link.isolated && host.sandboxedProcess === true },
         async signal => {
           const output = await ask("execute", { source, settings, tool: definition.name, callId: api.callId, args: input }, signal);
           return { output: output.content, ...(output.details !== undefined ? { details: output.details as never } : {}) };
