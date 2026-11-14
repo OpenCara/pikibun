@@ -303,7 +303,7 @@ function Sidebar(props: {
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>
         <NavItem testID="open-profile" style={{ flex: 1 }} label={user().username || user().githubLogin ? `@${user().username || user().githubLogin}` : user().displayName}
           leading={<IdentityBadge name={user().displayName || user().githubLogin || "?"} id={user().id} />} onPress={() => props.onSettings("profile")} />
-        <If when={!usesBrowserSession} else={<IconButton testID="open-hosts" icon="server" label="Hosts" onPress={() => props.onSettings("hosts")} />}>
+        <If when={!usesBrowserSession}>
           <ServerSwitch action={switching} />
         </If>
         <IconButton testID="open-settings" icon="settings" label="Settings" onPress={() => props.onSettings()} />
