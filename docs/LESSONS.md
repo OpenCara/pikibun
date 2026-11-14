@@ -11,6 +11,8 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - Code that the server and the client both need goes in `packages/shared`.
 - `apps/nsh` is the only client. The Electron, React and Expo apps are gone, so check that a file still exists before citing or editing it.
 - A rendering or runtime bug in the client may be in NSH (Native Shell) itself. Check its source before changing ours; if it is upstream, add a small workaround, a row for it in `docs/design/upstream-workarounds.md` (a test checks that list) and a tracking issue for removing it.
+- Native Shell is pinned in `scripts/nsh.mjs` by version, commit and a SHA-256 per asset, and `tests/nsh-download.test.ts` expects that version. Only stable releases are pinned, so an upstream fix that is only in a nightly can't be picked up yet: say so on the issue and leave it open.
+- The server stores what a client sent at sign-in (such as the app's name) as it arrived. Changing it in the client alone leaves the stored rows and older app builds as they were: when everyone should see the change, map the old value on the server too.
 - Sources carry no comments, tests included, and `tests/no-comments.test.ts` fails on one: run it before pushing, as this is the most common CI failure. Put the reason for a change in a design note under `docs/design` (security decisions in `security-rationale.md`), and update the user docs in the same pull request as the behaviour.
 - The file tools carry Pi's names: `read`, `write`, `edit`, `ls`, `grep` and `find`. The older `read_file`, `write_file`, `edit_file`, `list_files` and `search` are gone.
 - A schema change needs a migration for both SQLite and Postgres, under `apps/server/migrations`.
@@ -19,6 +21,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 
 - For one test, run `node --import tsx --test --test-name-pattern "<words>" tests/<file>.test.ts` instead of the whole suite. For the client's tests, run `node scripts/nsh.mjs test tests/<file>.test.tsx --filter "<words>"` from the repository's root; it takes one path, and without one runs the whole client suite in about two minutes.
 - The client's first typecheck or test run downloads Native Shell, and that download fails now and then in the sandbox. Run it again before treating it as an error.
+- Give the node and python tools `directory: "<the clone>"`: run from the worktree's top, they fail for want of a `package.json`.
 - Give `timeout_seconds` to any run that could hang, such as a test suite or a server: without it a hung test holds the session until the host's command time limit.
 - The whole suite can't pass inside a session's sandbox: dozens of tests fail there on nested sandboxes and temporary paths. Run the files around your change, and when you do run everything, compare the set of failing tests with unmodified `main`'s rather than their number. CI is the full run.
 - When CI is green, check in the job's log that a new test which needs a real sandbox or a real dependency ran there, and wasn't skipped.
@@ -27,13 +30,15 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - Tests that start a Linux sandbox skip themselves where bubblewrap can't make one (`linuxSandboxMissing()` in `tests/helpers/workspaces.ts`), as inside a session's own sandbox. Gate new ones on that probe, not on `bwrap --version`.
 - A sandbox may not reach the npm registry. If dependencies can't be installed, say so in the pull request and treat its CI as the only typecheck and full test run.
 - `node --check` finds syntax errors only. A duplicate declaration or a type error shows up first in CI's typecheck, so reread new code for names already used in the same block.
+- A test that runs a shell snippet must not depend on a shell's own error wording: `sh` on Ubuntu and on macOS report a missing program differently, and only CI shows it.
+- Commands in the Linux and macOS sandboxes run with a low limit on open files. Code that walks directories there must not keep a handle open per level or recurse without bound, and must say when a walk was cut short.
 - To show that a new test covers a fix, run it once with the fix removed and see it fail.
 - Chromium needs `--no-sandbox` inside a session's sandbox. Python Playwright downloads its own browser unless it is given the system Chromium's path.
 - The node tool can't set environment variables. When a script needs one, start it from a `node -e` wrapper that sets the variable and spawns it, or from Python where the host has the python tool.
 - A codemode script that chains edits stops at the first one that fails (text not found, or found twice), so the later ones never land. Check what was applied before rerunning the tests.
 - Hosts differ in their tools: one may have no python tool, or a sandbox that can't reach the network. When handing a task to a session on another host, don't assume a tool is there.
 - When a clone fails, the repository can still be read through `gh api` (trees and raw file contents). This also works for public repositories outside the workspace; git can clone those on GitHub, GitLab, Bitbucket and Codeberg too, where the network access allows their host.
-- On a host whose DNS answers with placeholder addresses (a local proxy in fake-IP mode), `fetch_content` refuses even public sites such as GitHub. Read GitHub files through `gh api` instead.
+- On a host whose DNS answers with placeholder addresses (a local proxy in fake-IP mode), `fetch_content` refuses even public sites such as GitHub, and the browser tool can't open them either. Read GitHub files through `gh api`, and other pages through a web search that returns the page's content; say that you read a copy.
 
 ## CI and logs
 
@@ -82,6 +87,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - Don't say something succeeded when it was only started: "compaction started" is not "compacted".
 - Don't report what you only inferred, such as from a job's name. Read what the step printed, or say it is an assumption.
 - Say plainly what you couldn't check: not seen on screen, not tried on a real device, full suite not run.
+- When a request's wording could name two places in the product (a menu or a settings page), say which one you took it to mean.
 - Explain what a suggested term means when it can be misread. "Summary" was taken to mean a model-written one when it meant a formatting rule.
 - Before proposing new code, check whether an existing mechanism (a schedule, a setting, an extension that already exists) does the job.
 - When a problem can't be reproduced, report what was checked and ask what the person saw, rather than change code on a guess.
