@@ -167,14 +167,14 @@ test("the app that runs a local server signs its owner in with its sign-in token
   assert.equal((await f.native({ token: claimSecret, deviceName: "bad\u0000name" })).status, 400);
   assert.deepEqual(await f.health(), { claimed: false });
 
-  const signedIn = await f.native({ token: claimSecret, deviceName: "Pikibun NSH (macos)" });
+  const signedIn = await f.native({ token: claimSecret, deviceName: "Pikibun (macos)" });
   assert.equal(signedIn.status, 200);
   const { token, expiresAt, user } = await signedIn.json() as { token: string; expiresAt: string; user: { id: string } };
   assert.equal(user.id, "password:ada");
   assert.ok(Date.parse(expiresAt) > Date.now() + 29 * 24 * 3600_000);
   assert.equal((await f.request("/api/me", { Authorization: `Bearer ${token}` })).status, 200);
   const devices = await (await f.request("/api/me/devices", { Authorization: `Bearer ${token}` })).json() as { devices: { name: string; current: boolean }[] };
-  assert.deepEqual(devices.devices.map(device => [device.name, device.current]), [["Pikibun NSH (macos)", true]]);
+  assert.deepEqual(devices.devices.map(device => [device.name, device.current]), [["Pikibun (macos)", true]]);
   assert.deepEqual(f.sqlite.prepare("SELECT method, client FROM auth_sessions").all().map(row => [row.method, row.client]), [[null, "native"]]);
 });
 

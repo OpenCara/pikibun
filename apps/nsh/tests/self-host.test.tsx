@@ -149,7 +149,7 @@ describe("Self host in the app", () => {
     await app.waitFor("id:self-host-use");
     await app.press("id:self-host-use");
     await app.waitFor("id:session-row-s1");
-    expect(bodyOf(app, "POST", `${LOCAL}/api/auth/native/local`)).toMatchObject({ token: SIGN_IN_TOKEN, deviceName: "Pikibun NSH (macos)" });
+    expect(bodyOf(app, "POST", `${LOCAL}/api/auth/native/local`)).toMatchObject({ token: SIGN_IN_TOKEN, deviceName: "Pikibun (macos)" });
     expect(app.storage()["pikibun.origin"]).toBe(LOCAL);
     expect(app.storage()["pikibun.token"]).toBe(TOKEN);
   });

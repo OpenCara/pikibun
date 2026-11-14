@@ -159,7 +159,7 @@ describe("signing in", () => {
     await app.waitFor("text:Fix the flaky login test");
     expect(app.storage()["pikibun.token"]).toBe(TOKEN);
     expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/code`)).toMatchObject({ code: CODE });
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/code`).deviceName).toContain("Pikibun NSH");
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/code`).deviceName).toMatch(/^Pikibun \(/);
     expect(app.requests().some(item => item.url.includes("/api/auth/native/start"))).toBe(false);
   });
 

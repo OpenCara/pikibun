@@ -15,7 +15,7 @@ const EXPIRES_KEY = "pikibun.tokenExpires";
 const ORIGIN_KEY = "pikibun.origin";
 const CALLBACK_PATH = "/api/auth/native/done";
 export const SIGN_IN_SCHEME = "pikibun";
-const deviceName = () => `Pikibun NSH (${platform.os})`;
+const deviceName = () => `Pikibun (${platform.os})`;
 
 export type SignupMode = "open" | "invite" | "off";
 

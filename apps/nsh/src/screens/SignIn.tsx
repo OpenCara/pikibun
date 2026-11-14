@@ -415,7 +415,7 @@ function SignInForm(props: { inviteToken?: string }) {
       <Small center>
         {usesBrowserSession
           ? "On the web this app uses the server's own browser sign-in."
-          : "Your sign-in is kept in this app's storage on this device (NSH has no Keychain or Keystore storage yet)."}
+          : "Your sign-in is kept in this app's storage on this device, not yet in the Keychain or Keystore."}
       </Small>
       <SelfHostSheet open={selfHostOpen()} onClose={() => selfHostOpen.set(false)} onUse={signInToOwnServer} />
       <Dialog open={github()?.inApp === true} onOpenChange={event => { if (!event.open) github.set(null); }}
