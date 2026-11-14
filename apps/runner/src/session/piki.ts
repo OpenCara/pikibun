@@ -39,6 +39,7 @@ export interface SessionPikiOptions {
   mutate(change: (state: Metadata) => void): Promise<void>;
   hostConfig(): Promise<HostConfig>;
   extensionProcess?: ExtensionHost["extensionProcess"];
+  extensionsSandboxed?: boolean;
 }
 
 export class SessionPiki {
@@ -66,6 +67,7 @@ export class SessionPiki {
       inputTimeoutMs: 60_000,
       warn: (source, message) => { process.stderr.write(`Session ${binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
       ...(this.options.extensionProcess ? { extensionProcess: this.options.extensionProcess } : {}),
+      sandboxedProcess: this.options.extensionsSandboxed === true,
     };
   }
 
@@ -116,7 +118,9 @@ export class SessionPiki {
     const state = await this.options.metadata();
     const run = state.runs[state.toolActors[String(call.api.taskId)]!.runKey]!;
     if (run.options?.access === "read") {
-      throw new RunnerError(403, `${call.tool} comes from an extension, which runs outside the sandbox: a Read-only message doesn't run it. Nothing ran.`);
+      throw new RunnerError(403, call.sandboxed
+        ? `${call.tool} comes from an extension, whose tools may change things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.`
+        : `${call.tool} comes from an extension, which runs outside the sandbox: a Read-only message doesn't run it. Nothing ran.`);
     }
     const { chosen, automaticTools } = await this.options.extensionChoice();
     const item = chosen.find(candidate => candidate.source === call.source);
@@ -126,7 +130,13 @@ export class SessionPiki {
       arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
       digest: createHash("sha256").update(json).digest("hex") };
     const trusted = await this.options.hostCommands.allowed(attribution.initiatedBy);
-    if (!trusted && !automaticTools) throw new RunnerError(403, `${call.tool} comes from an extension, which ${HOST_COMMANDS_RULE}`);
+    const inSandbox = call.sandboxed === true && !this.options.hostCommands.runsOnHost({ kind: "bash", command: "" }, !this.options.hostCommands.shellAllowed());
+    if (!inSandbox && !trusted && !automaticTools) {
+      throw new RunnerError(403, call.sandboxed
+        ? `${call.tool} comes from an extension, which runs in the sandbox but, on this host, without resource limits, as shell commands do here: only in sessions of the `
+          + "host's owner and of members they granted host commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran."
+        : `${call.tool} comes from an extension, which ${HOST_COMMANDS_RULE}`);
+    }
     const approval = await this.options.operations.run(attribution.initiatedBy, operation, String(call.api.taskId), { hostChecked: true });
     if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
     const id = approval.id;

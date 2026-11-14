@@ -687,6 +687,16 @@ test("piki: an extension's tool runs for a message that may act, while its exten
   const refused = pikiFixture(ungranted, {}, { "github:2": {} });
   await assert.rejects(refused.host.runTool({ ...call(), api: toolApi(ungranted) }, async () => ({ output: [] })), (error: unknown) =>
     error instanceof RunnerError && error.message === `ext_tool comes from an extension, which ${HOST_COMMANDS_RULE}`);
+  const limited = { limitedSandbox: true };
+  ungranted.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;
+  const inSandbox = pikiFixture(ungranted, { hostCommands: hostPolicy(limited, { "github:2": {} }).policy }, { "github:2": {} });
+  assert.deepEqual((await inSandbox.host.runTool({ ...call(), api: toolApi(ungranted), sandboxed: true }, async () => ({ output: [{ type: "text", text: "in the sandbox" }] }))).output,
+    [{ type: "text", text: "in the sandbox" }], "a tool of an extension that runs in the session's sandbox needs no host commands");
+  await assert.rejects(inSandbox.host.runTool({ ...call(), api: toolApi(ungranted) }, async () => ({ output: [] })), /outside the sandbox/, "one in the connector still does");
+  const unlimited = pikiFixture(ungranted, { hostCommands: hostPolicy({}, { "github:2": {} }).policy }, { "github:2": {} });
+  await assert.rejects(unlimited.host.runTool({ ...call(), api: toolApi(ungranted), sandboxed: true }, async () => ({ output: [] })), /in the sandbox but, on this host, without resource limits/,
+    "on a host without resource limits, in someone else's session, it is a host command as a shell command is");
+  await assert.rejects(pikiFixture(readOnly).host.runTool({ ...call(), api: toolApi(readOnly), sandboxed: true }, async () => ({ output: [] })), /may change things, which a Read-only message doesn't do/);
   assert.ok(!refused.events.some(event => event.startsWith("run")));
 });
 
