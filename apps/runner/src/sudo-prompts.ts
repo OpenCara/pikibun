@@ -124,17 +124,29 @@ export class SudoPrompts {
     return true;
   }
 
-  track(): (text: string) => string {
+  track(): { redact(text: string, cut?: boolean): string; end(): void } {
     this.#commands++;
     let ended = false;
-    const redact = (text: string) => [...this.#answered].sort((a, b) => b.length - a.length).reduce((shown, password) => shown.split(password).join(SUDO_PASSWORD_SHOWN), text);
-    return text => {
-      const shown = redact(text);
-      if (!ended) {
+    return {
+      redact: (text, cut = false) => {
+        const passwords = [...this.#answered].sort((a, b) => b.length - a.length);
+        let shown = passwords.reduce((result, password) => result.split(password).join(SUDO_PASSWORD_SHOWN), text);
+        if (cut) {
+          for (const password of passwords) {
+            for (let length = password.length - 1; length > 0; length--) {
+              if (!shown.endsWith(password.slice(0, length))) continue;
+              shown = `${shown.slice(0, -length)}${SUDO_PASSWORD_SHOWN}`;
+              break;
+            }
+          }
+        }
+        return shown;
+      },
+      end: () => {
+        if (ended) return;
         ended = true;
         if (--this.#commands === 0) this.#answered.clear();
-      }
-      return shown;
+      },
     };
   }
 

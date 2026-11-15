@@ -69,6 +69,10 @@ who reads the session. So the host takes an answered password out of the output 
 answered, before the result is recorded (`SudoPrompts.track`, `HostWorkspace.#spawn`), replacing it with
 `[sudo password]`. It keeps the password in memory only until the session's last running command ends.
 
+Each of the command's two streams is searched on its own. Where the output limit cut the output, the start of a
+password left at the very end is taken out too. A password of a character or two is replaced wherever those characters
+appear, which makes that command's output hard to read, and is still the right way round.
+
 It takes out the password as it was typed. A command that encodes it first (base64, reversed, one character a line)
 still shows it, and so can a command that writes it to a file and reads it back later: the owner's judgment of the
 command the box shows is still what protects it (review 355, finding 44).

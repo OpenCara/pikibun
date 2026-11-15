@@ -34,7 +34,7 @@ export interface HostSudo {
   readonly helper: string | undefined;
   waiting(): boolean;
   waitedSince(start: number): number;
-  track?(): (text: string) => string;
+  track?(): { redact(text: string, cut?: boolean): string; end(): void };
 }
 export type HostWorkspaceOptions = { ownerEnvironment?: boolean; privateEnvironment?: readonly string[]; sudo?: HostSudo };
 const SUDO_RECHECK_MS = 1000;
@@ -459,11 +459,6 @@ export class HostWorkspace implements SessionWorkspace {
     const started = Date.now();
     const sudo = options.isolated ? undefined : this.#sudo;
     const tracked = sudo?.track?.();
-    const shown = (first: string, second: string): [string, string] => {
-      if (!tracked) return [first, second];
-      const [out, err] = tracked(`${first}\0${second}`).split("\0");
-      return [out ?? "", err ?? ""];
-    };
     if (options.hostCommand !== undefined) this.#activeCommand = options.hostCommand;
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -499,7 +494,7 @@ export class HostWorkspace implements SessionWorkspace {
       clearTimeout(timer);
       if (options.hostCommand !== undefined && this.#activeCommand === options.hostCommand) this.#activeCommand = undefined;
       options.signal?.removeEventListener("abort", stop);
-      shown("", "");
+      tracked?.end();
       reject(new SandboxProcessError(`Cannot start ${command}: ${errorCode(error) ?? "launch failed"}`, null, null, "", ""));
     });
     child.once("close", (code, signal) => {
@@ -507,7 +502,10 @@ export class HostWorkspace implements SessionWorkspace {
       options.signal?.removeEventListener("abort", stop);
       if (this.#cancelActive === cancel) this.#cancelActive = undefined;
       if (options.hostCommand !== undefined && this.#activeCommand === options.hostCommand) this.#activeCommand = undefined;
-      const [out, err] = shown(Buffer.concat(stdout).toString("utf8"), Buffer.concat(stderr).toString("utf8"));
+      const cut = bytes > MAX_OUTPUT_BYTES;
+      const out = tracked ? tracked.redact(Buffer.concat(stdout).toString("utf8"), cut) : Buffer.concat(stdout).toString("utf8");
+      const err = tracked ? tracked.redact(Buffer.concat(stderr).toString("utf8"), cut) : Buffer.concat(stderr).toString("utf8");
+      tracked?.end();
       if (failure || signal) reject(new SandboxProcessError(`${failure ?? `Command killed by ${signal}`}${err ? `: ${err.slice(0, 4096).trim()}` : ""}`, code, signal, out, err));
       else resolveResult({ code, stdout: out, stderr: err });
     });

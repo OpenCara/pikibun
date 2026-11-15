@@ -76,19 +76,24 @@ test("sudo -A's helper asks Pikibun, shows the prompt and command, and hands the
   assert.equal(sudo.answer(view.id, "again"), false, "a prompt takes one answer");
 });
 
-test("a password answered while a command runs is taken out of that command's output, and forgotten when the command ends", unix, async t => {
+test("a password answered while a command runs is taken out of that command's output, each stream on its own, and forgotten when the command ends", unix, async t => {
   const sudo = prompts(t);
   await sudo.prepare();
-  const shown = sudo.track();
+  const first = sudo.track();
   const other = sudo.track();
   const { exited } = ask(sudo.helper!);
   const view = await waitFor(() => sudo.view());
   assert.equal(sudo.answer(view.id, "s3cret pass"), true);
   const printed = (await exited).stdout;
-  assert.equal(shown(`before ${printed}after s3cret pass`), "before [sudo password]\nafter [sudo password]");
-  assert.equal(shown("s3cret pass"), "[sudo password]", "while another command of the session still runs, it is still taken out");
-  assert.equal(other("s3cret pass again"), "[sudo password] again");
-  assert.equal(sudo.track()("s3cret pass"), "s3cret pass", "once no command runs, the password is forgotten");
+  assert.equal(first.redact(`a\0b ${printed}after s3cret pass`), "a\0b [sudo password]\nafter [sudo password]", "a NUL byte in the output stays where it was");
+  assert.equal(first.redact("stderr s3cret pass"), "stderr [sudo password]", "the second stream is redacted as the first");
+  assert.equal(first.redact("output cut at s3cret pa", true), "output cut at [sudo password]", "the start of a password that the output limit cut is taken out too");
+  assert.equal(first.redact("ends with s3cret pa"), "ends with s3cret pa", "but only where the output was cut");
+  first.end();
+  first.end();
+  assert.equal(other.redact("s3cret pass again"), "[sudo password] again", "while another command of the session still runs, it is still taken out");
+  other.end();
+  assert.equal(sudo.track().redact("s3cret pass"), "s3cret pass", "once no command runs, the password is forgotten");
 });
 
 test("a declined, unanswered or abandoned prompt gives sudo nothing", unix, async t => {
