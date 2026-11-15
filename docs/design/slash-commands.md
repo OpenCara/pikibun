@@ -62,6 +62,58 @@ starts as the first, so `/model`'s list puts a model named exactly (by its refer
 ones that only contain what was typed: `/model openai/gpt-4` and Return sets that model, not a longer name the host
 lists first, and the list agrees with what the typed text alone would name.
 
+## Commands the host runs
+
+`/compact`, the commands of the workspace's Pi extensions, prompt templates and skills can't be done by the client:
+they need the conversation, the extensions' processes and the session's files, which are on the host. They travel as
+messages.
+
+- **A message, not a new request.** The client sends `/name arguments` as it sends any message: the same route,
+  permission, receipt and audit. The host looks at a message's first word before the model sees it, where it already
+  lets extensions screen a message (`RunQueue.screen`), in the order Pi's own `prompt()` takes them: `/compact`, an
+  extension's command, the extensions' `input` handlers, `/skill:name`, then a prompt template. Anything else goes to
+  the model as typed. So there is no new server route, relay action or permission to keep in step across the server,
+  the connector and the apps, and a scheduled prompt or a message from another session can be a command too. A host
+  from before this passes the text to the model, as it always did, which is why the client offers only what the host
+  lists.
+- **The host lists them.** A session's view carries `commands`: each one's name, description, argument hint and kind
+  (`host`, `extension`, `prompt`, `skill`). The client adds them to its list after its own commands, and a name the
+  client has itself (`/model`, `/new`) stays the client's. The list is the host's word, so the client keeps only
+  entries of the expected shape and length (`hostCommands` in `packages/client/src/slash-commands.ts`).
+- **What it leaves in the transcript.** A command the host ran itself leaves one line, who ran what and what it said
+  (`workspace.run-command`), and no message of the person's, as nothing went to the model. It doesn't change the
+  session's status. A template or a skill becomes the message, so the transcript shows the text the model got.
+- **`/compact [instructions]`** asks Pi for a manual compaction (`Conversation.compact`): it summarizes the older
+  messages while the agent keeps working and places the summary at the next boundary, whatever the host's automatic
+  compaction is set to. The line says compaction started, not that it finished: the summary shows when it has. It
+  needs write permission, as going back does, since it changes the conversation for everyone. The client knows
+  `/compact` by name, so on a host that doesn't list it the client says to update the connector rather than send the
+  word to the model.
+- **Extension commands** (`pi.registerCommand`) run their handler in the extension's process, with Pi's command
+  context. What a handler shows with `ctx.ui.notify` is the command's line in the transcript. What it sends with
+  `pi.sendUserMessage` goes to the model in the command's place, as the person's message. The rest stays as it is for
+  every extension on a host: dialogs answer as in print mode, and `newSession`, `fork`, `navigateTree` and
+  `switchSession` do nothing. A handler is the extension's code acting for whoever typed the command, so it runs under
+  the rule of the extension's tools: for anyone who may send messages where extensions run in the sandbox, and
+  otherwise for the host's owner and members they granted host commands, or where the host's owner lets extension
+  tools run for every session ([security rationale](security-rationale.md)).
+- **Prompt templates** are Pi's: `.pi/prompts/*.md` in the worktree and in each repository cloned into it, with
+  `description` and `argument-hint` in the front matter and `$1`, `$@`, `$ARGUMENTS` and `${1:-default}` in the text.
+  `/name arguments` sends the template with the arguments filled in.
+- **Skills** are `SKILL.md` files under `.pi/skills` and `.agents/skills` in the same places. `/skill:name arguments`
+  sends the skill's text in Pi's `<skill>` block, with its location as a worktree path, so the agent opens the skill's
+  other files with `read`. Skills aren't listed in the system prompt for the model to pick by itself: that is #323.
+- **Read as the session reads files.** Templates and skills are found and read through the session's own file access
+  (the sandbox's helper), never by the connector opening paths under the worktree, so a link that leaves the worktree
+  is refused there as for the `read` tool. They come from whoever can push to the repository, and do nothing until
+  someone types their name.
+- **A side ask or a Read-only message** takes templates and skills, which are only text, and refuses `/compact` and
+  extension commands, which act.
+
+Not read: the host owner's own `~/.pi/agent/prompts` and `~/.pi/agent/skills`, which are their files, not the
+workspace's, and would be shown to other members' sessions; and the prompts and skills a Pi package ships (`pi.prompts`,
+`pi.skills`), which the agent couldn't open from the sandbox.
+
 ## Left out
 
 - **No meaning here**: `/quit`, `/login`, `/logout`, `/hotkeys`, `/changelog`, `/reload`, `/trust`, `/scoped-models`,
@@ -70,11 +122,3 @@ lists first, and the list agrees with what the typed text alone would name.
 - **Done elsewhere, with a choice a command line can't make**: `/fork` and `/tree` pick an earlier message, which a
   message's own **Fork** and **Go back** do; `/resume` is the session list; `/export` and `/share` are in the session's
   panel, where what they include is explained.
-- **`/compact`**: Pikibun compacts a conversation by itself, as the host's owner set it, and has no request that asks
-  a host to compact one now. Adding it means a new host action (`conversation.compact`), a server route, who may ask
-  for it, and what it does while work runs: a change to the server and the connector, with hosts updating to offer it.
-  It is the next step if people want it.
-- **Commands of extensions, prompt templates and skills**: extensions' `registerCommand` is a no-op on hosts
-  ([host extensions](host-extensions.md)), since a command's handler runs with Pi's interactive context. Skills are
-  #323. When either arrives, the list has a place for them: the host would report the names, and the client would add
-  them to the ones it offers.
