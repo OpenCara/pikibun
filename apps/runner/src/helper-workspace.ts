@@ -15,7 +15,7 @@ import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import type { ClonePushPreparation } from "./push.js";
 import {
   CA_BUNDLE_FILE, importedPath, importRequest, MAX_CONTENT_OUTPUT_BYTES, MAX_FILE_BYTES, MAX_SNAPSHOT_OUTPUT_BYTES, OID, PUSH_TIMEOUT_MS, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig,
-  sessionEnvironment, text, type CloneBackup, type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SandboxRequest,
+  serviceBindAllowed, sessionEnvironment, text, type CloneBackup, type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SandboxRequest,
   type SnapshotFile,
 } from "./sandbox.js";
 import { sandboxCertificates } from "./trust-store.js";
@@ -58,6 +58,7 @@ export interface HelperBackend {
   readonly nodeBin?: string | undefined;
   prepare(layout: HelperLayout): Promise<void>;
   launch(request: SandboxRequest, context: HelperContext, layout: HelperLayout): Promise<HelperLaunch>;
+  process?(command: { program: string; args: readonly string[] }, context: HelperContext, layout: HelperLayout, readRoots: readonly string[]): HelperLaunch;
 }
 
 export interface HelperWorkspaceOptions {
@@ -105,6 +106,18 @@ export class HelperWorkspace implements IsolatedWorkspace {
   get hostWorktree(): string { return this.worktree; }
   get nodeBin(): string | undefined { return this.#backend.nodeBin; }
   get layout(): Readonly<HelperLayout> { return this.#layout; }
+  get runsProcesses(): boolean { return this.#backend.process !== undefined; }
+
+  bindAllowed(path: string): boolean { return serviceBindAllowed(path, this.#layout.root); }
+
+  processCommand(program: string, args: readonly string[], readRoots: readonly string[]): HelperLaunch {
+    if (this.#closed) throw new Error("Sandbox is closed");
+    if (!this.#backend.process) throw new Error(`The ${this.#backend.name} sandbox runs no long-lived processes`);
+    for (const root of readRoots) if (!this.bindAllowed(root)) throw new Error(`A process can't be given ${root}`);
+    const egress = this.#options.egressEnvironment?.();
+    const environment = Object.freeze({ ...this.#environment, ...(egress ?? {}) });
+    return this.#backend.process({ program, args }, { readOnly: false, gitWritable: false, egress: egress !== undefined, deadlineMs: 0, environment }, this.#layout, readRoots);
+  }
 
   async #exclusive<T>(operation: () => Promise<T>): Promise<T> {
     const previous = queues.get(this.#layout.root) ?? Promise.resolve();

@@ -15,7 +15,9 @@ import { sandboxNodePath } from "../apps/runner/src/platform.js";
 import { validWindowsLimits } from "../apps/runner/src/sandbox-backend.js";
 import { SeatbeltBackend, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
 import { WINDOWS_RUNNER, WINDOWS_SUPPORT_CHECK, WindowsBackend, windowsSandboxSupport } from "../apps/runner/src/windows-sandbox.js";
+import { ipcLaunch, ProcessChannel, workerCodeMounts, workerEntry } from "../apps/runner/src/extensions/process.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
+import { seatbeltMissing } from "./helpers/workspaces.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 
 const allow = async () => {};
@@ -320,4 +322,58 @@ test("the Windows runner and helper are valid modules, and job limits are checke
 
 test("the Windows sandbox's steps run on the connector's own Node", () => {
   assert.equal(sandboxNodePath(), process.execPath);
+});
+
+test("in the macOS sandbox, an installed extension runs in a process Seatbelt confines: the worktree and its own files, nothing else of the host's, no network", { skip: seatbeltMissing() }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "native-extension-")));
+  const sandbox = new HelperWorkspace(binding("native-extension"), join(directory, "sandbox"), new SeatbeltBackend());
+  t.after(async () => { await sandbox.close(); await rm(directory, { recursive: true, force: true }); });
+  await sandbox.initialize();
+  assert.equal(sandbox.runsProcesses, true);
+  assert.ok(sandbox.nodeBin, "the host's Node.js is given to the sandbox");
+  await sandbox.writeFile("notes.txt", "in the worktree", allow);
+  const secret = join(directory, "host-secret.txt");
+  await writeFile(secret, "the host's own");
+  const extension = join(directory, "extension");
+  await mkdir(extension);
+  const file = join(extension, "probe.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    import { readFileSync, writeFileSync } from "node:fs";
+    const attempt = work => { try { return String(work()); } catch (error) { return "refused: " + error.code; } };
+    export default function (pi) {
+      pi.registerTool({ name: "probe", label: "Probe", description: "Probe the sandbox.", parameters: Type.Object({}),
+        async execute(_id, _params, _signal, _onUpdate, ctx) {
+          let network;
+          try { await fetch("https://example.com/", { signal: AbortSignal.timeout(5000) }); network = "reached"; } catch { network = "unreachable"; }
+          return { content: [{ type: "text", text: JSON.stringify({
+            cwd: ctx.cwd, worktree: attempt(() => readFileSync("notes.txt", "utf8")),
+            host: attempt(() => readFileSync(${JSON.stringify(secret)}, "utf8")),
+            own: attempt(() => readFileSync(${JSON.stringify(file)}, "utf8").length > 0),
+            writeOwn: attempt(() => writeFileSync(${JSON.stringify(join(extension, "written"))}, "x")),
+            writeWorktree: attempt(() => { writeFileSync("made.txt", "x"); return "written"; }),
+            network }) }], details: undefined };
+        } });
+    }`);
+  const output: string[] = [];
+  const channel = new ProcessChannel({ directory: sandbox.worktree, warn: (source, message) => { output.push(`${source}: ${message}`); }, log: line => { output.push(line); },
+    mountAllowed: path => sandbox.bindAllowed(path),
+    launch: ipcLaunch(sandbox.worktree, (target, mounts) => {
+      const launch = sandbox.processCommand(join(sandbox.nodeBin!, "node"), [...workerEntry(), target], [...new Set([...workerCodeMounts(), ...mounts])]);
+      return { program: launch.command, args: launch.args, env: launch.env, cwd: launch.cwd };
+    }) });
+  t.after(() => channel.close());
+  assert.throws(() => sandbox.processCommand("node", [], ["/"]), /can't be given/);
+  const opened = await channel.call("open", { source: "local:probe", files: [file], models: [], mount: extension }).catch(error => {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output.join("\n")}`);
+  });
+  assert.deepEqual(opened.value.errors, [], output.join("\n"));
+  const answer = await channel.call("execute", { source: "local:probe", settings: {}, tool: "probe", callId: "c", args: {} });
+  const seen = JSON.parse((answer.value.content[0] as { text: string }).text) as Record<string, string>;
+  assert.equal(seen.cwd, sandbox.worktree);
+  assert.equal(seen.worktree, "in the worktree");
+  assert.match(seen.host!, /^refused: (EPERM|EACCES)$/, "a host file outside what it was given can't be read");
+  assert.equal(seen.own, "true", "its own files can");
+  assert.match(seen.writeOwn!, /^refused: (EPERM|EACCES)$/, "but not written");
+  assert.equal(seen.writeWorktree, "written", "the worktree is the session's to change");
+  assert.equal(seen.network, "unreachable", "without the session's egress proxy there is no network");
 });

@@ -136,6 +136,24 @@ export class SeatbeltBackend implements HelperBackend {
 
   async prepare(_layout: HelperLayout): Promise<void> {}
 
+  process(command: { program: string; args: readonly string[] }, context: HelperContext, layout: HelperLayout, readRoots: readonly string[]): HelperLaunch {
+    const port = egressPort(context);
+    const { profile, parameters } = seatbeltProfile({
+      layout, readOnly: false, gitWritable: false, toolRoots: [...new Set([...this.#tools.roots, ...readRoots])],
+      ...(port !== undefined ? { egressPort: port } : {}),
+    });
+    return {
+      command: SANDBOX_EXEC,
+      args: ["-p", profile, ...Object.entries(parameters).flatMap(([name, value]) => ["-D", `${name}=${value}`]), command.program, ...command.args],
+      cwd: layout.worktree,
+      env: {
+        ...context.environment,
+        TMPDIR: join(layout.home, ".tmp"),
+        ...(this.#tools.sdk ? { SDKROOT: this.#tools.sdk } : {}),
+      },
+    };
+  }
+
   async launch(request: SandboxRequest, context: HelperContext, layout: HelperLayout): Promise<HelperLaunch> {
     const port = egressPort(context);
     const { profile, parameters } = seatbeltProfile({
