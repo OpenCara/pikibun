@@ -200,5 +200,32 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   the process channel, and the session's process is sandboxed), so built-in extensions and unsandboxed platforms keep the
   rule. A Read-only message still runs none: a tool may change the worktree.
 
+## Describing an extension (review 355, finding 42)
+
+The connector lists each installed extension's tools, handlers and settings, for the host's page and to decide what a
+session offers. It used to import the extension itself to do so, at start, after each install and when a pin changed:
+the module's top-level code and its factory ran in the connector, as the host's user, whatever the session's sandbox.
+
+- **The extension process describes it.** `describe` is one more request of the protocol: the worker loads the source's
+  files with Pi's loader and answers with the summary (`summarizeModules`). The connector starts a process for each
+  source it describes and ends it with the answer, or after a minute (`extensions/describe.ts`).
+- **In a sandbox where the host has one.** A connector that runs sessions in the Linux sandbox describes in one
+  (`sandboxDescribe`): a sandbox of its own under the state directory, with no session's files, no egress proxy (so no
+  network), and the connector's code and that extension's install mounted read-only. A source whose files the sandbox
+  can't be given (a local extension under `/tmp`, say) is described in a plain process instead, as sessions in the
+  sandbox refuse it and only sessions on the host run it. Elsewhere (macOS, Windows, unsandboxed hosts, the
+  `pikibun extensions` command) the process is a plain one.
+- **Without the connector's settings.** A plain extension process, for a description or a session, starts without the
+  connector's own environment variables (`workerEnvironment`: `PIKIBUN_*`, `RUNNER_*` and the others on-host commands
+  never get, `CONNECTOR_ENVIRONMENT`).
+- **Kept with the install.** A released connector writes the description beside an installed package
+  (`pikibun-description.json` in its project directory, which npm never writes to and which goes with the install), with
+  its own version and the files described; the next start reads it instead of running the extension again. Local
+  extensions, which change under the connector, and connectors run from source describe every time.
+- **The answer is checked.** A description, fresh or kept, is parsed as the server parses a host's report
+  (`parseExtensionModules`), and tools named as Pikibun's own are dropped again, so an extension can't describe itself
+  into one of the session's tools.
+- **Pikibun's own extensions** built into the connector are described in it, as they run in it.
+
 Until step 3 ships on every platform, the rule in `docs/extensions.md` stands: the host's owner installs only extensions they trust with
 their own account, as they would a program.

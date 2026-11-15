@@ -1,10 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Message, Model, TextContent } from "@earendil-works/pi-ai";
 import { createEventBus, createExtensionRuntime, ExtensionRunner, SessionManager, type AgentToolResult, type ExtensionActions, type ExtensionContext,
   type ExtensionContextActions, type ExtensionFactory, type ModelRegistry, type ToolCallEvent, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
 import { isJsonValue } from "./json.js";
-import { loadSource, supportedEvents } from "./load.js";
+import { loadSource, piLoader, summarizeModules, supportedEvents } from "./load.js";
 import type { ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription, RequestContext, Scoped, ToolOutput } from "./protocol.js";
 
 export interface WorkerOptions {
@@ -121,6 +124,15 @@ export class ExtensionWorker {
         return typeof result?.compaction?.summary === "string" ? { summary: result.compaction.summary } : null;
       },
       execute: (params, signal) => this.execute(params, signal),
+      describe: async params => {
+        const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
+        try {
+          const { loadExtensions } = await piLoader();
+          return summarizeModules(params.root, params.files, await loadExtensions(params.files, cwd, undefined, createExtensionRuntime()), new Set());
+        } finally {
+          await rm(cwd, { recursive: true, force: true }).catch(() => {});
+        }
+      },
       shutdown: async () => {
         for (const runner of this.#runners.values()) {
           try { runner.shutdown(); } catch { }

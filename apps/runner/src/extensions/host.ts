@@ -3,7 +3,8 @@ import { extensionLimits, isPikiExtensionSource, parseExtensionSourceSpec, parse
 import { compareVersions, connectorRelease, connectorRunsPin, inManagedScope, isVersion, MANAGED_EXTENSION_SCOPE, managedPinKey,
   type ManagedExtensionPin } from "../../../../packages/shared/src/managed-extensions.js";
 import { connectorPikiExtensions, managedSource, type PikiExtension } from "./piki/index.js";
-import { loadInstalled, loadManaged, type LoadedSource } from "./load.js";
+import type { Describe } from "./describe.js";
+import { loadInstalled, loadManaged, type LoadedSource, type LoadOptions } from "./load.js";
 import { newestLoaded, sameManaged, type ExtensionSource, type ExtensionStore } from "./store.js";
 
 const WORKSPACE_TTL_MS = 30_000;
@@ -21,6 +22,7 @@ export interface HostExtensionsOptions {
   managed?: boolean;
   connectorVersion?: string;
   log?: (line: string) => void;
+  describe?: Describe;
 }
 
 export class HostExtensions {
@@ -37,6 +39,11 @@ export class HostExtensions {
 
   get loaded(): readonly LoadedSource[] { return this.#loaded; }
 
+  private get loading(): LoadOptions {
+    const { describe, connectorVersion } = this.options;
+    return { ...(describe ? { describe } : {}), ...(connectorVersion !== undefined ? { version: connectorVersion } : {}) };
+  }
+
   get managesExtensions(): boolean {
     return this.options.managed === true && this.options.remoteInstalls && connectorRelease(this.options.connectorVersion);
   }
@@ -46,7 +53,7 @@ export class HostExtensions {
       this.#chosen = true;
       this.#managed = await this.choose(undefined);
     }
-    this.#loaded = await loadInstalled(this.store, this.options.pikiExtensions, this.#managed);
+    this.#loaded = await loadInstalled(this.store, this.options.pikiExtensions, this.#managed, this.loading);
   }
 
   reportWithoutPikiExtensions(): HostExtensionsReport {
@@ -103,7 +110,7 @@ export class HostExtensions {
       if (copy?.version !== undefined && bundledVersion === undefined) this.log(`${source}: its bundled copy's version ${copy.version} isn't a version, so it counts as none`);
       let before: LoadedSource | undefined;
       for (let entry = newestLoaded(installed, source); entry && !before; entry = newestLoaded(installed, source)) {
-        const candidate = this.#managed.find(item => item.managed?.directory === entry!.directory) ?? await loadManaged(this.store, entry);
+        const candidate = this.#managed.find(item => item.managed?.directory === entry!.directory) ?? await loadManaged(this.store, entry, this.loading);
         const failure = loadFailure(candidate);
         if (failure === undefined) { before = candidate; break; }
         this.log(`${source}: removed ${entry.package}@${entry.version}, which ran here before but no longer loads: ${failure}`);
@@ -158,7 +165,7 @@ export class HostExtensions {
     if (failed && now() - failed.at < MANAGED_RETRY_MS) return failed.reason;
     try {
       const installed = await this.store.addManaged(pin);
-      const loaded = await loadManaged(this.store, installed);
+      const loaded = await loadManaged(this.store, installed, this.loading);
       const failure = loadFailure(loaded);
       if (failure !== undefined) {
         await this.store.removeManaged(installed).catch(() => {});

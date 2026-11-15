@@ -1,3 +1,4 @@
+import { CONNECTOR_ENVIRONMENT } from "./connector-environment.js";
 import { runHostShell } from "./host-shell.js";
 import type { HostCommandOperation } from "../../../packages/shared/src/types.js";
 import { spawn } from "node:child_process";
@@ -37,9 +38,7 @@ export interface HostSudo {
 export type HostWorkspaceOptions = { ownerEnvironment?: boolean; privateEnvironment?: readonly string[]; sudo?: HostSudo };
 const SUDO_RECHECK_MS = 1000;
 
-export const CONNECTOR_ENVIRONMENT = new RegExp("^(?:PIKIBUN_|RUNNER_)|^(?:CONTROL_PLANE_URL|DATA_DIR|ALLOW_FAUX_MODEL|ALLOW_TEST_SHELL)$"
-  + "|^GIT_(?:DIR|WORK_TREE|IMPLICIT_WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|COMMON_DIR|PREFIX|INTERNAL_SUPER_PREFIX"
-  + "|SHALLOW_FILE|GRAFT_FILE|NO_REPLACE_OBJECTS|REPLACE_REF_BASE|CONFIG|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\\d+|CONFIG_VALUE_\\d+)$", "i");
+export { CONNECTOR_ENVIRONMENT };
 
 export function hostOwnersSession(binding: RunnerBinding): boolean {
   const hostOwner = binding.session.connectorOwnerId;

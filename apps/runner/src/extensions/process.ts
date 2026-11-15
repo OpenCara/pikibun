@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { holdHandles } from "../hold.js";
+import { CONNECTOR_ENVIRONMENT } from "../connector-environment.js";
 import { shellQuote } from "../program-command.js";
 import { pinServiceSocket, SANDBOX_SERVICE_SOCKETS, type ServiceProcess } from "../session-service.js";
 import { lineReader } from "./lines.js";
@@ -59,8 +60,12 @@ export function workerEntry(): string[] {
   throw new Error("This connector has no extension worker to start");
 }
 
+export function workerEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(base).filter(([name]) => !CONNECTOR_ENVIRONMENT.test(name)));
+}
+
 export function workerCommand(directory: string): WorkerCommand {
-  return { program: process.execPath, args: [...workerEntry(), directory], cwd: directory, env: process.env };
+  return { program: process.execPath, args: [...workerEntry(), directory], cwd: directory, env: workerEnvironment() };
 }
 
 export function codeRoot(file: string): string {
@@ -234,8 +239,8 @@ export class ProcessChannel implements ExtensionChannel {
 
   async call<M extends ExtensionMethod>(method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>> {
     if (this.#closed) throw new Error("The extension process is closed");
-    if (method === "open") {
-      const { mount } = params as ExtensionParams<"open">;
+    if (method === "open" || method === "describe") {
+      const { mount } = params as ExtensionParams<"open" | "describe">;
       if (this.#mounted && mount && !this.#mountAllowed(mount)) throw new Error(`Its files, in ${mount}, can't be given to the session's sandbox`);
       this.mount([mount]);
     }

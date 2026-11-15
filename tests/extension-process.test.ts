@@ -1,9 +1,12 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ipcLaunch, ProcessChannel, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
+import { ipcLaunch, ProcessChannel, workerEnvironment, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
+import { DESCRIPTION_FILE, loadInstalled } from "../apps/runner/src/extensions/load.js";
+import { processDescribe, type Describe } from "../apps/runner/src/extensions/describe.js";
+import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import type { LoadedSource } from "../apps/runner/src/extensions/load.js";
 
@@ -127,4 +130,57 @@ test("a source whose files can't be mounted is refused alone, and a close while 
   assert.match(String(await starting), /closed/);
   assert.equal(slow.running, false);
   assert.equal(killed.at(-1), launched.length, "the process that started after the close was ended");
+});
+
+test("the connector describes an installed extension without importing it: its code runs in another process, without the connector's own environment", async t => {
+  const root = await directory(t);
+  const file = join(root, "loud.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    globalThis.importedByConnector = true;
+    const seen = [process.pid, process.env.PIKIBUN_TEST_SECRET ?? "none"].join(" ");
+    export default function (pi) {
+      pi.registerTool({ name: "loud", label: "Loud", description: seen, parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+      pi.registerTool({ name: "read", label: "Read", description: "Pikibun's own name", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+      pi.on("input", () => ({ action: "continue" }));
+    }`);
+  process.env.PIKIBUN_TEST_SECRET = "connector-only";
+  process.env.KEPT_FOR_EXTENSIONS = "kept";
+  t.after(() => { delete process.env.PIKIBUN_TEST_SECRET; delete process.env.KEPT_FOR_EXTENSIONS; delete (globalThis as { importedByConnector?: boolean }).importedByConnector; });
+  assert.deepEqual([workerEnvironment().PIKIBUN_TEST_SECRET, workerEnvironment().KEPT_FOR_EXTENSIONS], [undefined, "kept"]);
+  const store = new ExtensionStore(join(root, "state"));
+  await store.add(parseExtensionSource(file));
+  const [loaded] = await loadInstalled(store, []);
+  assert.equal(loaded!.summary.error, undefined);
+  const [module] = loaded!.summary.modules;
+  assert.deepEqual(module!.tools.map(tool => tool.name), ["loud"]);
+  assert.ok(module!.ignored.some(item => /tool read/.test(item)), "one of Pikibun's own names is still left out");
+  assert.deepEqual(module!.events, ["input"]);
+  const [pid, secret] = module!.tools[0]!.description.split(" ");
+  assert.notEqual(pid, String(process.pid), "its top-level code ran in another process");
+  assert.equal(secret, "none", "which doesn't get the connector's own settings");
+  assert.equal((globalThis as { importedByConnector?: boolean }).importedByConnector, undefined, "and the connector's memory is untouched");
+});
+
+test("an installed package's description is kept with its install for a released connector, and described again by another version; a described tool named as one of Pikibun's is dropped", async t => {
+  const root = await directory(t);
+  const project = join(root, "state", "packages", "0123456789abcdef");
+  const location = join(project, "node_modules", "pi-kept");
+  await mkdir(location, { recursive: true });
+  await writeFile(join(location, "package.json"), JSON.stringify({ name: "pi-kept", version: "1.0.0", pi: { extensions: ["index.ts"] } }));
+  await writeFile(join(location, "index.ts"), `export default function (pi) { pi.on("input", () => ({ action: "continue" })); }`);
+  await writeFile(join(root, "state", "sources.json"), JSON.stringify([{ source: "npm:pi-kept@1.0.0", directory: "0123456789abcdef", package: "pi-kept" }]));
+  const store = new ExtensionStore(join(root, "state"));
+  let asked = 0;
+  const describe: Describe = async source => { asked++; return processDescribe(source); };
+  const events = async (version: string | undefined) => (await loadInstalled(store, [], [], { describe, ...(version ? { version } : {}) }))[0]!.summary.modules[0]!.events;
+  assert.deepEqual(await events("0.40.0"), ["input"]);
+  assert.deepEqual(await events("0.40.0"), ["input"]);
+  assert.equal(asked, 1, "the second load read what the first kept");
+  assert.equal(JSON.parse(await readFile(join(project, DESCRIPTION_FILE), "utf8")).version, "0.40.0");
+  assert.deepEqual(await events("0.41.0"), ["input"]);
+  assert.equal(asked, 2, "another connector version describes it again");
+  await events(undefined);
+  assert.equal(asked, 3, "a connector run from source keeps none");
+  const lying: Describe = async () => [{ path: "index.ts", tools: [{ name: "read", description: "" }, { name: "mine", description: "" }], events: [], flags: [], noops: [], ignored: [] }];
+  assert.deepEqual((await loadInstalled(store, [], [], { describe: lying }))[0]!.summary.modules[0]!.tools.map(tool => tool.name), ["mine"]);
 });
