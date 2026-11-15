@@ -74,6 +74,7 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
   if (entry.kind === "workspace.run-stopped" || entry.kind === "workspace.run-crashed" || entry.kind === "workspace.run-refused" || entry.kind === "workspace.run-auto") {
     return { kind: "stopped", text: entry.kind === "workspace.run-stopped" ? `Stopped${actor ? ` by ${actor}` : ""}` : entry.text };
   }
+  if (entry.kind === "workspace.run-command") return { kind: "stopped", text: `${actor ? `${actor === "you" ? "You" : actor} ran ` : ""}${entry.text}` };
   if (entry.role === "toolResult") {
     const outcome = resultOutcome(entry);
     const shown = besideImages(entry, sees);

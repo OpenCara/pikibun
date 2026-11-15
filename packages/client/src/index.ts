@@ -15,7 +15,7 @@ export type { CompactionFailure } from "../../shared/src/types";
 export { formatBytes, preparingRepositories, repositoryPhaseLabel, repositoryProgressText, repositoryProgressValue } from "./repository-progress";
 export { sessionStatus, type SessionStatus, type SessionStatusTone } from "./session-status";
 export {
-  parseSlashDraft, slashCommand, slashCommands, slashLevel, slashModel, slashSuggestions,
+  COMPACT_NEEDS_UPDATE, compactUnavailable, hostCommand, hostCommands, parseSlashDraft, slashCommand, slashCommands, slashLevel, slashModel, slashSuggestions,
   type SlashCommand, type SlashCommandName, type SlashDraft, type SlashModel, type SlashOffer, type SlashSuggestion,
 } from "./slash-commands";
 export { openFetchEventStream, SseParser, type FetchEventStreamOptions } from "./sse";

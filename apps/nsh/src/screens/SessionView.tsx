@@ -1,8 +1,8 @@
 import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
 import { Button as BaseButton, NavPage } from "nsh/base";
 import {
-  activeStatuses, autoChatOptionsBody, browserUnavailableText, chatOptionsBody, CONNECTOR_UPDATE_HINT, copyText, findModel,
-  initialSelection, levelLabels, managesSession, messageCut, modelUnavailable, offeredLevels, pairToolResults, parseSlashDraft, preparingRepositories,
+  activeStatuses, autoChatOptionsBody, browserUnavailableText, chatOptionsBody, COMPACT_NEEDS_UPDATE, compactUnavailable, CONNECTOR_UPDATE_HINT, copyText, findModel,
+  hostCommand, hostCommands, initialSelection, levelLabels, managesSession, messageCut, modelUnavailable, offeredLevels, pairToolResults, parseSlashDraft, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, selectModel, slashCommand, slashLevel, slashModel, slashSuggestions,
   type ChatSelection, type ConnectorInfo, type EntryView, type SessionRecord, type SlashCommandName, type SubmitResult,
 } from "../shared";
@@ -370,6 +370,8 @@ function Conversation(props: {
     commanding.clear();
     const command = slashCommand(text);
     if (command) { runCommand(command.command.name, command.argument, text); return; }
+    if (compactUnavailable(text, hostedCommands())) { void commanding.run(async () => { throw new Error(COMPACT_NEEDS_UPDATE); }); return; }
+    const message = hostCommand(text, hostedCommands())?.text ?? text;
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
     const auto = autoChatOn() && host?.capabilities.chatOptions === true;
@@ -388,7 +390,7 @@ function Conversation(props: {
       const images = pending.images ??= await encodeImages(pasted);
       const note = await attachments.upload(props.id, attached);
       const result = await session().api<SubmitResult>(`/api/sessions/${segment(props.id)}/${kind}`, { method: "POST",
-        body: { content: withFilesNote(sent, note), requestId: pending.id, ...(sending ? { options: sending } : {}), ...(images.length ? { images } : {}) } });
+        body: { content: withFilesNote(message, note), requestId: pending.id, ...(sending ? { options: sending } : {}), ...(images.length ? { images } : {}) } });
       receipt.set(result);
       if (sending && !auto) data.rememberChat(host, chosen, view().agent);
       if (kind === "ask") conversationId.set(result.conversationId);
@@ -479,6 +481,7 @@ function Conversation(props: {
     });
   }
 
+  const hostedCommands = computed(() => hostCommands(view().commands));
   const hostModels = () => (props.host()?.capabilities.chatOptions ? props.host()!.models : []);
   const chosenModel = () => findModel(props.host(), selection().model);
   const reasoningLevels = () => (autoChatOn() ? [] : offeredLevels(chosenModel()));
@@ -502,7 +505,7 @@ function Conversation(props: {
     "session", "settings",
   ];
   const suggestCommands = (draft: string) => (parseSlashDraft(draft)
-    ? slashSuggestions(draft, { commands: offeredCommands(), models: hostModels(), levels: reasoningLevels() }) : []);
+    ? slashSuggestions(draft, { commands: offeredCommands(), models: hostModels(), levels: reasoningLevels(), host: hostedCommands() }) : []);
 
   function runCommand(name: SlashCommandName, argument: string, sent: string) {
     copying.clear();

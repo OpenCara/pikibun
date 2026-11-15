@@ -2,8 +2,7 @@ import { sessionCommandLimits, type SessionCommand } from "../../../../packages/
 import { RunnerError } from "../protocol.js";
 import type { Run } from "./state.js";
 
-export const COMPACTION_STARTED = "Compaction started: Pi summarizes the older messages and keeps the most recent ones as they are. "
-  + "The summary shows in the conversation once it is written; a conversation with nothing old enough to summarize stays as it is.";
+export const COMPACTION_STARTED = "Compaction started. The summary shows here once Pi has written it; a conversation too short to summarize stays as it is.";
 export const ACTS = "changes the session, which a side ask or a Read-only message doesn't do: send it as a shared message that may act. Nothing ran.";
 export const COMMAND_FILES = "{,*/}{.pi/prompts/*.md,{.pi,.agents}/skills/{*.md,**/SKILL.md}}";
 const FILE_LIST_MS = 30_000;

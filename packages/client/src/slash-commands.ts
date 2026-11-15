@@ -1,5 +1,11 @@
 import type { ThinkingLevel } from "../../shared/src/types";
+import { parseSessionCommands, type SessionCommand, type SessionCommandKind } from "../../shared/src/session-commands";
 import { levelLabels } from "./chat-options";
+
+export const hostCommands = parseSessionCommands;
+export const COMPACT_NEEDS_UPDATE = "This session's host can't compact a conversation on request yet: update its connector (npx pikibun@latest connect).";
+
+const hostKinds: Record<SessionCommandKind, string> = { host: "Runs on the session's host", extension: "A command of an extension", prompt: "A prompt template", skill: "A skill" };
 
 export type SlashCommandName = "model" | "thinking" | "name" | "new" | "clone" | "copy" | "session" | "settings";
 
@@ -61,6 +67,21 @@ export interface SlashOffer {
   commands: readonly SlashCommandName[];
   models: readonly SlashModel[];
   levels: readonly ThinkingLevel[];
+  host?: readonly SessionCommand[];
+}
+
+const ownNames: ReadonlySet<string> = new Set(slashCommands.map(command => command.name));
+
+export function hostCommand(draft: string, commands: readonly SessionCommand[]): { command: SessionCommand; text: string } | undefined {
+  const match = /^\/([^\s]+)([\s\S]*)$/.exec(draft);
+  if (!match) return undefined;
+  const name = match[1]!.toLowerCase();
+  const command = ownNames.has(name) ? undefined : commands.find(item => item.name === match[1]) ?? commands.find(item => item.name.toLowerCase() === name);
+  return command ? { command, text: `/${command.name}${match[2]!.trimEnd()}` } : undefined;
+}
+
+export function compactUnavailable(draft: string, commands: readonly SessionCommand[]): boolean {
+  return /^\/compact(\s|$)/i.test(draft) && !commands.some(command => command.name === "compact");
 }
 
 const modelReference = (model: SlashModel) => `${model.provider}/${model.modelId}`;
@@ -70,13 +91,19 @@ export function slashSuggestions(draft: string, offer: SlashOffer): SlashSuggest
   const parsed = parseSlashDraft(draft);
   if (!parsed) return [];
   if (parsed.naming) {
-    return slashCommands.filter(command => offer.commands.includes(command.name) && command.name.startsWith(parsed.name)).map(command => ({
+    return [...slashCommands.filter(command => offer.commands.includes(command.name) && command.name.startsWith(parsed.name)).map(command => ({
       key: command.name,
       label: command.argument ? `/${command.name} [${command.argument}]` : `/${command.name}`,
       hint: command.description,
       draft: command.argument ? `/${command.name} ` : `/${command.name}`,
       runs: !command.lists,
-    }));
+    })), ...(offer.host ?? []).filter(command => !ownNames.has(command.name.toLowerCase()) && command.name.toLowerCase().startsWith(parsed.name)).map(command => ({
+      key: `host:${command.name}`,
+      label: command.argument ? `/${command.name} [${command.argument}]` : `/${command.name}`,
+      hint: command.description ?? hostKinds[command.kind],
+      draft: `/${command.name} `,
+      runs: command.kind === "host",
+    }))];
   }
   if (!offer.commands.some(name => name === parsed.name)) return [];
   const typed = parsed.argument.toLowerCase();
