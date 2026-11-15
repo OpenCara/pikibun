@@ -81,9 +81,11 @@ export function slashSuggestions(draft: string, offer: SlashOffer): SlashSuggest
   if (!offer.commands.some(name => name === parsed.name)) return [];
   const typed = parsed.argument.toLowerCase();
   if (parsed.name === "model") {
-    return offer.models.filter(model => modelReference(model).toLowerCase().includes(typed) || model.name.toLowerCase().includes(typed)).map(model => ({
-      key: modelReference(model), label: model.name, hint: modelReference(model), draft: `/model ${modelReference(model)}`, runs: true,
-    }));
+    const rank = (model: SlashModel) => (modelReference(model).toLowerCase() === typed ? 0
+      : model.modelId.toLowerCase() === typed || model.name.toLowerCase() === typed ? 1 : 2);
+    return offer.models.filter(model => modelReference(model).toLowerCase().includes(typed) || model.name.toLowerCase().includes(typed))
+      .map((model, index) => ({ model, index })).sort((a, b) => rank(a.model) - rank(b.model) || a.index - b.index)
+      .map(({ model }) => ({ key: modelReference(model), label: model.name, hint: modelReference(model), draft: `/model ${modelReference(model)}`, runs: true }));
   }
   if (parsed.name === "thinking") {
     return offer.levels.filter(level => plain(level).startsWith(plain(typed)) || plain(levelLabels[level]).startsWith(plain(typed))).map(level => ({

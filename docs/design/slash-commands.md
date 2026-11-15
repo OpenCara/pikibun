@@ -34,8 +34,8 @@ host.
   Unknown names pass through on purpose: a host extension's `input` handler may expand them (as #323 plans for
   `/skill:name`), and a typo then reaches the model as it did before, rather than being swallowed.
 - **Never sent.** A command isn't a submission: it has no receipt, isn't queued behind running work, and leaves no
-  entry in the transcript. Its outcome shows under the chat box, where a failed send shows. A command that fails keeps
-  its text in the chat box.
+  entry in the transcript. Its outcome shows under the chat box, where a failed send shows. A command that fails, or
+  one that asks first and is declined (`/clone`), keeps its text in the chat box.
 - **Offered by what you may do.** The list leaves out a command that can't run here (`/name` for someone who can't
   rename the session, `/clone` where there is no finished reply or no right to fork, `/thinking` for a model without
   reasoning levels). Typed anyway, it answers with the reason, so nobody wonders why a command they know does nothing.
@@ -57,7 +57,10 @@ the chat box has the focus, so `↑` in an empty chat box still takes back a que
 row only on the desktops, where Return sends; on a phone Return is a line break, and a row is pressed.
 
 A command with a short list of values (`/model`, `/thinking`) completes to its name and then lists the values; one with
-free text (`/name`) runs at once, and `Tab` completes it for typing the text.
+free text (`/name`) runs at once, and `Tab` completes it for typing the text. Return takes the highlighted row, which
+starts as the first, so `/model`'s list puts a model named exactly (by its reference, then its ID or name) before the
+ones that only contain what was typed: `/model openai/gpt-4` and Return sets that model, not a longer name the host
+lists first, and the list agrees with what the typed text alone would name.
 
 ## Left out
 

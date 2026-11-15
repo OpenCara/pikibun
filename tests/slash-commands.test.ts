@@ -53,6 +53,21 @@ test("a command that takes one of a few values lists them once its name is typed
   assert.deepEqual(drafts("/nope "), []);
 });
 
+test("a model named exactly comes first in /model's list, so Return picks the model that was typed", () => {
+  const mini = { provider: "openai", modelId: "gpt-6-mini", name: "GPT-6 mini" };
+  const listed: SlashOffer = { ...offer, models: [mini, gpt, sonnet] };
+  assert.deepEqual(drafts("/model gpt", listed), ["/model openai/gpt-6-mini", "/model openai/gpt-6"]);
+  assert.deepEqual(drafts("/model openai/gpt-6", listed), ["/model openai/gpt-6", "/model openai/gpt-6-mini"]);
+  assert.deepEqual(drafts("/model OpenAI/GPT-6", listed), ["/model openai/gpt-6", "/model openai/gpt-6-mini"]);
+  assert.deepEqual(drafts("/model gpt-6", listed), ["/model openai/gpt-6", "/model openai/gpt-6-mini"]);
+  assert.deepEqual(drafts("/model GPT-6 mini", listed), ["/model openai/gpt-6-mini"]);
+  for (const typed of ["openai/gpt-6", "gpt-6"]) {
+    const first = slashSuggestions(`/model ${typed}`, listed)[0]!;
+    assert.deepEqual(slashModel(listed.models, typed), { model: gpt });
+    assert.equal(first.draft, "/model openai/gpt-6", typed);
+  }
+});
+
 test("/model takes a model's reference, its ID or its name, or enough of one to tell it apart", () => {
   const models = [sonnet, opus, relayed, gpt];
   assert.deepEqual(slashModel(models, "anthropic/claude-sonnet"), { model: sonnet });

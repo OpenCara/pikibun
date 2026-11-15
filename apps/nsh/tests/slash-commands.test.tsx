@@ -122,6 +122,22 @@ describe("the chat box's slash commands", () => {
     expect(sent(app, "POST", "/api/sessions/s1/submit")).toHaveLength(0);
   });
 
+  test("Return on a model's exact name sets that model, though the host lists a longer name first", async () => {
+    const max = { ...opus, modelId: "claude-opus-max", name: "Claude Opus Max" };
+    const app = await desktop({ [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [{ ...host, models: [...host.models, max, opus] }] } } });
+    await app.type("id:composer-input", "/model anthropic/claude-opus");
+    await app.waitFor("id:composer-suggestion-anthropic/claude-opus-max");
+    await app.submit("id:composer-input");
+    await app.waitFor("text:Model set to Claude Opus, from your next message.");
+    await app.type("id:composer-input", "/model claude-opus");
+    await app.submit("id:composer-input");
+    await app.waitFor("text:Model set to Claude Opus, from your next message.");
+    await app.type("id:composer-input", "Carry on");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions/s1/submit") !== undefined);
+    expect(bodyOf(app, "POST", "/api/sessions/s1/submit").options.model).toEqual({ provider: "anthropic", modelId: "claude-opus" });
+  });
+
   test("/thinking sets the reasoning level of the next message, among those the model offers", async () => {
     const app = await desktop();
     await app.type("id:composer-input", "/thinking ");
@@ -165,7 +181,7 @@ describe("the chat box's slash commands", () => {
     await app.submit("id:composer-input");
     await app.waitFor("text:Reply copied");
     expect(app.clipboard()).toBe("The test races the session cookie.");
-    expect(app.value("id:composer-input")).toBe("");
+    await app.waitUntil(() => app.value("id:composer-input") === "");
   });
 
   test("/clone forks a new session from the agent's latest reply, once confirmed", async () => {
@@ -176,6 +192,17 @@ describe("the chat box's slash commands", () => {
     await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions/s1/fork") !== undefined);
     expect(bodyOf(app, "POST", "/api/sessions/s1/fork")).toEqual({ entryId: "0:2" });
     expect(app.dialogs().at(-1)?.message).toContain("up to the agent's latest finished reply");
+  });
+
+  test("/clone that isn't confirmed forks nothing and stays in the chat box", async () => {
+    const app = await desktop({ [`POST ${ORIGIN}/api/sessions/s1/fork`]: { body: { session: { ...sessionRecord, id: "s3", title: "Fork: Fix the flaky login test" } } } });
+    app.onDialog(() => "Cancel");
+    await app.type("id:composer-input", "/clone");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => app.dialogs().length === 1);
+    await app.wait(200);
+    expect(sent(app, "POST", "/api/sessions/s1/fork")).toHaveLength(0);
+    expect(app.value("id:composer-input")).toBe("/clone");
   });
 
   test("/session opens the session's details, /settings the settings, and /new a new session", async () => {

@@ -471,8 +471,8 @@ function Conversation(props: {
       message: `A new session of yours starts on the same host and model with this conversation up to ${point}, with this session's visibility. This session stays as it is.${hostOwner} Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again.`,
       confirmLabel: "Fork session",
     });
-    if (!confirmed) return;
-    void rewinding.run(async () => {
+    if (!confirmed) return false;
+    return rewinding.run(async () => {
       const result = await session().api<{ session: SessionRecord }>(`/api/sessions/${segment(props.id)}/fork`, { method: "POST", body: { entryId } });
       if (before) saveDraft(result.session.id, resendText(entry));
       props.openSession(result.session.id);
@@ -548,14 +548,12 @@ function Conversation(props: {
       case "clone": {
         const reply = clonePoint();
         if (!reply) return refuse(cloneRefusal() ?? "The agent has no finished reply to fork from yet.");
-        ran();
-        return void fork(reply, reply.id, false, "the agent's latest finished reply");
+        return void fork(reply, reply.id, false, "the agent's latest finished reply").then(forked => { if (forked) ran(); });
       }
       case "copy": {
         const reply = latestReply();
         if (!reply) return refuse("The agent hasn't replied yet.");
-        ran();
-        return void copying.run(() => Clipboard.writeText(copyText(reply)), "Reply copied");
+        return void copying.run(() => Clipboard.writeText(copyText(reply)), "Reply copied").then(copied => { if (copied) ran(); });
       }
       case "session": ran(); return props.onDetails();
       case "settings": ran(); return props.go({ name: "settings" });
