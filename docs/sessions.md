@@ -71,6 +71,25 @@ Beside the composer you can pick, for each message:
 - **Reasoning**: Off, Minimal, Low, Medium, High, Extra high or Max, as the model supports. A model starts at the level Pi on the host gives it: the level in its `enabledModels` pattern (such as `"anthropic/*:high"`), else its entry in `modelThinkingLevels`, else `defaultThinkingLevel`, else medium.
 The chat box offers no access choice: every shared message you send acts. Every tool of the session runs at once, as its owner, within the [tool groups](workspaces.md#tool-groups) of its owner and of the message's sender, and the rules of [What a session may do](approvals.md). To ask without changing anything, send a side ask. **Read only** remains for [scheduled prompts](#scheduled-prompts) and messages agents send each other: there, edits, commands, commits, pushes, GitHub effects, schedules and messages to other sessions are refused. Nobody approves anything: a call runs or is refused, and what runs on the host's own machine runs only for its owner and members they granted host commands ([What a session may do](approvals.md)). Messages an agent sends with the `sessions` tool act too, unless the agent chose **Read only** or the message it is working on was Read only; the answer to a Read-only message's question comes back Read only. The agent can merge any pull request of the workspace's github.com repositories that GitHub lets the owner merge; GitHub's branch protection and required checks still apply, so protect the branches that need a person's review. Apps from before approvals were removed may still send **Ask before acting**, **Auto-approve** or **Auto-merge**: messages with them act. Hosts running a connector older than 0.3.0 keep each session's model and offer none of these options, and a connector that still asks for approvals takes no new messages until it is updated.
 
+## Slash commands
+
+A session's chat box takes commands named after [Pi's own](https://github.com/earendil-works/pi). Type `/` as the first character and the commands you can use here are listed above the chat box; what you type next narrows the list. On a desktop, **↑** and **↓** move through it, **Return** runs the highlighted command, **Tab** completes it without running it, and **Esc** closes the list. On a phone, press a command. A command acts in the app and is never sent to the agent or kept in the transcript.
+
+| Command | What it does |
+| --- | --- |
+| `/model [provider/model]` | Sets the model of your next messages, as the chat box's model picker does. Without a name it lists the host's models; a name can be the model's reference (`anthropic/claude-sonnet`), its ID, its name, or enough of one to tell it apart. |
+| `/thinking [level]` | Sets the reasoning level of your next messages, among those the model offers (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Not while the model is **Auto**, which picks it for each message. |
+| `/name [title]` | Renames the session; without a title it opens **Rename**. For the session's owner and the workspace's owner and admins. |
+| `/new` | Opens a new session in this session's workspace. |
+| `/clone` | [Forks](#copying-going-back-and-forking) a new session from the agent's latest finished reply, after asking. For whoever may fork the session. |
+| `/copy` | Copies the agent's latest reply, as its **Copy message** does. |
+| `/session` | Opens the session's panel. |
+| `/settings` | Opens the settings. |
+
+A command the list doesn't offer you still answers when typed, with why it can't run; what you typed stays in the chat box. Text that starts with `/` but names none of these commands is a message like any other and goes to the agent as typed (`/usr/bin/env is missing`), as does a message of several lines. To send a message that starts with a command's name, put a space before the `/`.
+
+Pi's other commands aren't here: some have no meaning in Pikibun (`/quit`, `/login`, `/hotkeys`, `/reload`), others are done elsewhere (`/fork` and `/tree` by a message's **Fork** and **Go back**, `/resume` by the session list, `/export` and `/share` in the session's panel), and `/compact` and the commands of Pi extensions, prompt templates and skills aren't supported yet. See [the design](design/slash-commands.md).
+
 ## Status, menu and panel
 
 Session lists show what each session's agent is doing: **Starting**, **Not started**, **In progress**, **Done**, **Failed**, **Idle** or **Archived**. A session at rest with a [scheduled prompt](#scheduled-prompts) shows **Scheduled**, with a clock in place of its status dot. A session whose web server is online through its [tunnel](extensions.md#the-tunnel-pikitunnel) is marked **Online**. The **Sessions** page groups sessions by workspace, with a search box, **Show archived** and **Open by ID** (for a session ID someone gave you).

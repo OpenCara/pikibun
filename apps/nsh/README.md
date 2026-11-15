@@ -56,7 +56,8 @@ needs a decision stand out:
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
   the chat box's pickers (shared or side ask, model, reasoning, access)
   along its bottom edge: on a phone one line of them, tighter, that scrolls sideways where it doesn't fit, and any hint
-  but "Runs as … (you)" on a line under it. Details (owner, host, visibility, ID) are in the session's panel.
+  but "Runs as … (you)" on a line under it; a `/` typed first lists its
+  [slash commands](../../docs/sessions.md#slash-commands) inside the box, above the text. Details (owner, host, visibility, ID) are in the session's panel.
 - **Review**: the panel's Review tab (`src/session-panel/Review.tsx`) is drawn after JetBrains IDEA's pull request
   window, which the React client had no counterpart of: the title, branches and state, then the changed files in NSH's
   `Tree`, grouped by directory and coloured as IDEA colours file statuses (blue modified, green added, grey deleted,

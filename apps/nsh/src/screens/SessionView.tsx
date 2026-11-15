@@ -1,10 +1,10 @@
 import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
 import { Button as BaseButton, NavPage } from "nsh/base";
 import {
-  activeStatuses, autoChatOptionsBody, browserUnavailableText, chatOptionsBody, copyText,
-  initialSelection, managesSession, messageCut, modelUnavailable, pairToolResults, preparingRepositories,
-  REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, type ChatSelection, type ConnectorInfo, type EntryView,
-  type SessionRecord, type SubmitResult,
+  activeStatuses, autoChatOptionsBody, browserUnavailableText, chatOptionsBody, CONNECTOR_UPDATE_HINT, copyText, findModel,
+  initialSelection, levelLabels, managesSession, messageCut, modelUnavailable, offeredLevels, pairToolResults, parseSlashDraft, preparingRepositories,
+  REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, selectModel, slashCommand, slashLevel, slashModel, slashSuggestions,
+  type ChatSelection, type ConnectorInfo, type EntryView, type SessionRecord, type SlashCommandName, type SubmitResult,
 } from "../shared";
 import { RenameSheet } from "../components/SessionMenu";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
@@ -256,7 +256,8 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             </If>
           }>
           <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={sudoDock}
-            openSession={target => { data.refreshSessions(); props.openSession(target); }} />
+            openSession={target => { data.refreshSessions(); props.openSession(target); }}
+            go={props.go} manages={manages} onDetails={() => panelOpen.set(true)} onRename={() => renaming.set(true)} />
         </If>
         <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} sessionId={props.id} session={live.session} view={live.view}
           refresh={() => { live.refresh(); data.refreshSessions(); }} go={route => { panelOpen.set(false); props.go(route); }}
@@ -286,7 +287,10 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   );
 }
 
-function Conversation(props: { id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; openSession: (id: string) => void }) {
+function Conversation(props: {
+  id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; openSession: (id: string) => void;
+  go: (route: PageRoute) => void; manages: Accessor<boolean>; onDetails: () => void; onRename: () => void;
+}) {
   const { user } = untracked(session);
   const data = useAppData();
   const current = () => props.live.session()!;
@@ -309,6 +313,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const stopping = createAction();
   const rewinding = createAction();
   const copying = createAction();
+  const commanding = createAction();
   const receipt = signal<SubmitResult | null>(null);
   const list = signal<ListRef>();
   const expanded = signal<ReadonlySet<string>>(new Set());
@@ -362,6 +367,9 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     const pasted = untracked(attachments.images);
     const attached = untracked(attachments.files);
     if (!permitted() || (!text.trim() && !pasted.length && !attached.length) || submission.busy()) return;
+    commanding.clear();
+    const command = slashCommand(text);
+    if (command) { runCommand(command.command.name, command.argument, text); return; }
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
     const auto = autoChatOn() && host?.capabilities.chatOptions === true;
@@ -426,6 +434,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const working = () => view().busy || activeQueue().length > 0;
 
   async function copyMessage(entry: EntryView) {
+    commanding.clear();
     if (!await copying.run(() => Clipboard.writeText(copyText(entry)), "Message copied")) throw new Error("Not copied");
   }
 
@@ -454,20 +463,101 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     });
   }
 
-  async function fork(entry: EntryView, entryId: string, before: boolean) {
+  async function fork(entry: EntryView, entryId: string, before: boolean, point = before ? "just before this message, which goes into its chat box" : "this reply") {
     const host = props.host();
     const hostOwner = host && host.ownerId !== user.id ? ` The host is ${host.ownerName}'s: it can access the new session, as it does this one.` : "";
     const confirmed = await confirm({
       title: "Fork a new session from here?",
-      message: `A new session of yours starts on the same host and model with this conversation up to ${before ? "just before this message, which goes into its chat box" : "this reply"}, with this session's visibility. This session stays as it is.${hostOwner} Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again.`,
+      message: `A new session of yours starts on the same host and model with this conversation up to ${point}, with this session's visibility. This session stays as it is.${hostOwner} Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again.`,
       confirmLabel: "Fork session",
     });
-    if (!confirmed) return;
-    void rewinding.run(async () => {
+    if (!confirmed) return false;
+    return rewinding.run(async () => {
       const result = await session().api<{ session: SessionRecord }>(`/api/sessions/${segment(props.id)}/fork`, { method: "POST", body: { entryId } });
       if (before) saveDraft(result.session.id, resendText(entry));
       props.openSession(result.session.id);
     });
+  }
+
+  const hostModels = () => (props.host()?.capabilities.chatOptions ? props.host()!.models : []);
+  const chosenModel = () => findModel(props.host(), selection().model);
+  const reasoningLevels = () => (autoChatOn() ? [] : offeredLevels(chosenModel()));
+  const latestReply = () => [...entries()].reverse().find(entry => entry.role === "assistant" && copyText(entry).trim() !== "");
+  const cloneRefusal = () => (!rewindable(view()) ? "This session's host can't fork sessions yet: update its connector (npx pikibun@latest connect)."
+    : !owner() && !canWrite() ? "Forking someone else's session needs write permission on it."
+    : !owner() && view().memberForks !== true ? "On this session's host only the session's owner can fork it, until its connector is updated."
+    : undefined);
+  const clonePoint = () => {
+    if (readOnly() || cloneRefusal()) return undefined;
+    const asks = new Set(view().conversations.filter(item => item.mode === "ask").map(item => item.id));
+    return [...view().entries].reverse().find(entry => !(entry.conversationId && asks.has(entry.conversationId)) && messageCut(entry)?.before === false);
+  };
+  const offeredCommands = (): SlashCommandName[] => [
+    ...(hostModels().length ? ["model" as const] : []),
+    ...(reasoningLevels().length ? ["thinking" as const] : []),
+    ...(props.manages() ? ["name" as const] : []),
+    "new",
+    ...(clonePoint() ? ["clone" as const] : []),
+    ...(latestReply() ? ["copy" as const] : []),
+    "session", "settings",
+  ];
+  const suggestCommands = (draft: string) => (parseSlashDraft(draft)
+    ? slashSuggestions(draft, { commands: offeredCommands(), models: hostModels(), levels: reasoningLevels() }) : []);
+
+  function runCommand(name: SlashCommandName, argument: string, sent: string) {
+    copying.clear();
+    withdrawNotice.set("");
+    const refuse = (message: string) => void commanding.run(async () => { throw new Error(message); });
+    const ran = (notice?: string) => {
+      forgetSentDraft(props.id, sent);
+      if (notice) void commanding.run(async () => {}, notice);
+    };
+    switch (name) {
+      case "model": {
+        const host = props.host();
+        if (!host?.capabilities.chatOptions) return refuse(CONNECTOR_UPDATE_HINT);
+        if (!host.models.length) return refuse(`${host.name} offers no models right now.`);
+        const found = slashModel(host.models, argument);
+        if ("error" in found) return refuse(found.error);
+        autoChat.set(false);
+        selection.set(selectModel(selection(), found.model));
+        return ran(`Model set to ${found.model.name}, from your next message.`);
+      }
+      case "thinking": {
+        if (autoChatOn()) return refuse("Auto picks the reasoning level for each message. To set it yourself, choose a model first, with /model.");
+        const model = chosenModel();
+        const levels = offeredLevels(model);
+        if (!model || !levels.length) return refuse(model ? `${model.name} has no reasoning levels.` : "Choose a model first, with /model.");
+        const level = slashLevel(levels, argument);
+        if (!level) return refuse(`${argument ? `${model.name} has no "${argument}" reasoning level` : "Name a level after /thinking"}. It offers: ${levels.join(", ")}.`);
+        selection.set({ ...selection(), thinkingLevel: level });
+        return ran(`Reasoning set to ${levelLabels[level]}, from your next message.`);
+      }
+      case "name": {
+        if (!props.manages()) return refuse("Only the session's owner, or the workspace's owner or an admin, can rename it.");
+        if (!argument) { ran(); return props.onRename(); }
+        if (argument.length > 200) return refuse("A session's title has at most 200 characters.");
+        return void commanding.run(async () => {
+          await session().api(`/api/sessions/${segment(props.id)}`, { method: "PATCH", body: { title: argument } });
+          forgetSentDraft(props.id, sent);
+          props.live.refresh();
+          data.refreshSessions();
+        }, "Session renamed");
+      }
+      case "new": ran(); return props.go({ name: "new", workspaceId: current().workspaceId });
+      case "clone": {
+        const reply = clonePoint();
+        if (!reply) return refuse(cloneRefusal() ?? "The agent has no finished reply to fork from yet.");
+        return void fork(reply, reply.id, false, "the agent's latest finished reply").then(forked => { if (forked) ran(); });
+      }
+      case "copy": {
+        const reply = latestReply();
+        if (!reply) return refuse("The agent hasn't replied yet.");
+        return void copying.run(() => Clipboard.writeText(copyText(reply)), "Reply copied").then(copied => { if (copied) ran(); });
+      }
+      case "session": ran(); return props.onDetails();
+      case "settings": ran(); return props.go({ name: "settings" });
+    }
   }
 
   const draftHasSecret = () => Boolean(content().trim()) && redactSecrets(content()) !== content();
@@ -579,9 +669,9 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           </If>
           <Composer value={content()} onChange={value => content.set(value)} onSubmit={() => void submit()} busy={submission.busy()} disabled={!permitted()}
             onStop={canStop() ? stop : undefined} stopping={stopping.busy()} attachments={attachments}
-            onRecall={permitted() && editable().length > 0 && !editBlocked() ? recall : undefined}
+            onRecall={permitted() && editable().length > 0 && !editBlocked() ? recall : undefined} suggestions={suggestCommands}
             placeholder={!permitted() ? "Read-only" : editable().length && !editBlocked() ? (platform.desktop ? "Press ↑ to edit your queued message" : "Edit your queued message from the queue above")
-              : actualMode() === "ask" ? "Ask a side question without changing anything" : "Message the agent"}
+              : actualMode() === "ask" ? "Ask a side question without changing anything" : "Message the agent, or / for commands"}
             sendLabel={actualMode() === "ask" ? "Send side ask" : "Submit to session"}
             hint={hint()}
             phoneHint={runsAsYou() ? "" : undefined}
@@ -611,7 +701,8 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           <If when={draftHasSecret()}>
             <Small testID="draft-secret" tone="warning">{`This message looks like it holds a secret. Everyone, you included, sees it as ${REDACTED} in the transcript, but the agent and its host receive it as typed.`}</Small>
           </If>
-          <Feedback error={submission.error() || stopping.error() || withdrawing.error() || rewinding.error() || copying.error()} notice={withdrawNotice() || rewinding.notice() || copying.notice()} />
+          <Feedback error={submission.error() || stopping.error() || withdrawing.error() || rewinding.error() || copying.error() || commanding.error()}
+            notice={withdrawNotice() || rewinding.notice() || copying.notice() || commanding.notice()} />
         </View>
       </View>
     </>
