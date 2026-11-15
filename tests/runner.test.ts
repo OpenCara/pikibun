@@ -570,7 +570,8 @@ test("in the private workspace, the host owner's session on the host asks them f
   await idle(session);
   const ran = (await ranCommands(session)).at(-1)!;
   assert.equal(ran.status, "executed", ran.result);
-  assert.match(ran.result ?? "", /hunter2/, "the helper gave sudo the password");
+  assert.match(ran.result ?? "", /\[sudo password\]/, "the helper gave the command the password, and its output doesn't show it");
+  assert.doesNotMatch(ran.result ?? "", /hunter2/);
   assert.equal((await session.view()).sudo, undefined);
   assert.match((session as unknown as { agentInstructions(mode: string): string }).agentInstructions("write"), /use sudo -A/);
 

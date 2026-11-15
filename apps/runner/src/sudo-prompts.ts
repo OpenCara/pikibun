@@ -21,6 +21,7 @@ interface Pending {
 }
 
 const REQUEST_BYTES = 4096;
+export const SUDO_PASSWORD_SHOWN = "[sudo password]";
 const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 
 function helperSource(socket: string, token: string): string {
@@ -52,6 +53,8 @@ export class SudoPrompts {
   #starting: Promise<string> | undefined;
   #closing: Promise<void> | undefined;
   readonly #pending: Pending[] = [];
+  readonly #answered = new Set<string>();
+  #commands = 0;
   #waitingSince: number | undefined;
   #waited: { from: number; to: number }[] = [];
 
@@ -116,8 +119,35 @@ export class SudoPrompts {
   answer(id: string, password: string | undefined): boolean {
     const pending = this.#pending.find(item => item.view.id === id);
     if (!pending) return false;
+    if (password && this.#commands > 0) this.#answered.add(password);
     pending.settle(password);
     return true;
+  }
+
+  track(): { redact(text: string, cut?: boolean): string; end(): void } {
+    this.#commands++;
+    let ended = false;
+    return {
+      redact: (text, cut = false) => {
+        const passwords = [...this.#answered].sort((a, b) => b.length - a.length);
+        let shown = passwords.reduce((result, password) => result.split(password).join(SUDO_PASSWORD_SHOWN), text);
+        if (cut) {
+          for (const password of passwords) {
+            for (let length = password.length - 1; length > 0; length--) {
+              if (!shown.endsWith(password.slice(0, length))) continue;
+              shown = `${shown.slice(0, -length)}${SUDO_PASSWORD_SHOWN}`;
+              break;
+            }
+          }
+        }
+        return shown;
+      },
+      end: () => {
+        if (ended) return;
+        ended = true;
+        if (--this.#commands === 0) this.#answered.clear();
+      },
+    };
   }
 
   close(): Promise<void> {
@@ -125,6 +155,7 @@ export class SudoPrompts {
     this.#starting = undefined;
     this.#helper = undefined;
     for (const pending of [...this.#pending]) pending.settle(undefined);
+    if (this.#commands === 0) this.#answered.clear();
     const previous = this.#closing;
     const closing = (async () => {
       await previous;
