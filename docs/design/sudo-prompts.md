@@ -61,6 +61,21 @@ and they see the command it is for.
   prompt", never as the field's label, beside the command and the host. It clears the field as the answer is sent, so the text isn't left
   on screen or in a draft. People who aren't the host's owner see that sudo waits, but no field or button.
 
+## The password in a command's output
+
+The helper prints the password to whatever ran it, as sudo's askpass programs do, so a command that runs the helper
+itself, or a wrapper that echoes what it reads, would leave the password in its output: in the transcript, for everyone
+who reads the session. So the host takes an answered password out of the output of every command that ran while it was
+answered, before the result is recorded (`SudoPrompts.track`, `HostWorkspace.#spawn`), replacing it with
+`[sudo password]`. It keeps the password in memory only until the session's last running command ends.
+
+It takes out the password as it was typed. A command that encodes it first (base64, reversed, one character a line)
+still shows it, and so can a command that writes it to a file and reads it back later: the owner's judgment of the
+command the box shows is still what protects it (review 355, finding 44).
+
+The answer still crosses the Pikibun server on its way to the host, over TLS, as the owner's messages do; the server
+doesn't store or log it. Encrypting it to a key the host puts in the prompt is the next step.
+
 ## What it doesn't protect against
 
 A prompt the agent triggers on purpose, by running the helper itself, looks like any other; the owner decides from the

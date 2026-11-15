@@ -76,6 +76,21 @@ test("sudo -A's helper asks Pikibun, shows the prompt and command, and hands the
   assert.equal(sudo.answer(view.id, "again"), false, "a prompt takes one answer");
 });
 
+test("a password answered while a command runs is taken out of that command's output, and forgotten when the command ends", unix, async t => {
+  const sudo = prompts(t);
+  await sudo.prepare();
+  const shown = sudo.track();
+  const other = sudo.track();
+  const { exited } = ask(sudo.helper!);
+  const view = await waitFor(() => sudo.view());
+  assert.equal(sudo.answer(view.id, "s3cret pass"), true);
+  const printed = (await exited).stdout;
+  assert.equal(shown(`before ${printed}after s3cret pass`), "before [sudo password]\nafter [sudo password]");
+  assert.equal(shown("s3cret pass"), "[sudo password]", "while another command of the session still runs, it is still taken out");
+  assert.equal(other("s3cret pass again"), "[sudo password] again");
+  assert.equal(sudo.track()("s3cret pass"), "s3cret pass", "once no command runs, the password is forgotten");
+});
+
 test("a declined, unanswered or abandoned prompt gives sudo nothing", unix, async t => {
   const sudo = prompts(t, { waitMs: 300 });
   await sudo.prepare();
@@ -177,7 +192,7 @@ test("an on-host command gets SUDO_ASKPASS, and its time limit stops while sudo 
   assert.equal(view.command, command);
   await new Promise(resolve => setTimeout(resolve, 1500));
   sudo.answer(view.id, "hunter2");
-  assert.equal(await running, "hunter2\n", "the wait didn't count against the 1-second limit");
+  assert.equal(await running, "[sudo password]\n", "the wait didn't count against the 1-second limit");
   assert.equal(workspace.activeCommand, undefined);
   await assert.rejects(workspace.execute({ kind: "bash", command: "sleep 3" }, false, authorize, { limits }), /time limit/, "the limit still holds otherwise");
 });

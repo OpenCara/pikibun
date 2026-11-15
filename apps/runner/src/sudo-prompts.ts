@@ -21,6 +21,7 @@ interface Pending {
 }
 
 const REQUEST_BYTES = 4096;
+export const SUDO_PASSWORD_SHOWN = "[sudo password]";
 const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 
 function helperSource(socket: string, token: string): string {
@@ -52,6 +53,8 @@ export class SudoPrompts {
   #starting: Promise<string> | undefined;
   #closing: Promise<void> | undefined;
   readonly #pending: Pending[] = [];
+  readonly #answered = new Set<string>();
+  #commands = 0;
   #waitingSince: number | undefined;
   #waited: { from: number; to: number }[] = [];
 
@@ -116,8 +119,23 @@ export class SudoPrompts {
   answer(id: string, password: string | undefined): boolean {
     const pending = this.#pending.find(item => item.view.id === id);
     if (!pending) return false;
+    if (password && this.#commands > 0) this.#answered.add(password);
     pending.settle(password);
     return true;
+  }
+
+  track(): (text: string) => string {
+    this.#commands++;
+    let ended = false;
+    const redact = (text: string) => [...this.#answered].sort((a, b) => b.length - a.length).reduce((shown, password) => shown.split(password).join(SUDO_PASSWORD_SHOWN), text);
+    return text => {
+      const shown = redact(text);
+      if (!ended) {
+        ended = true;
+        if (--this.#commands === 0) this.#answered.clear();
+      }
+      return shown;
+    };
   }
 
   close(): Promise<void> {
@@ -125,6 +143,7 @@ export class SudoPrompts {
     this.#starting = undefined;
     this.#helper = undefined;
     for (const pending of [...this.#pending]) pending.settle(undefined);
+    if (this.#commands === 0) this.#answered.clear();
     const previous = this.#closing;
     const closing = (async () => {
       await previous;
