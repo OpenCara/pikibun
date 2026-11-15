@@ -13,18 +13,30 @@ export type Describe = (source: DescribedSource) => Promise<ExtensionModuleSumma
 export const DESCRIBE_TIMEOUT_MS = 60_000;
 const DESCRIBE_SESSION = "extension-describe";
 
-async function ask(channel: ProcessChannel, source: DescribedSource): Promise<ExtensionModuleSummary[]> {
-  const timer = setTimeout(() => channel.restart(`it took longer than ${DESCRIBE_TIMEOUT_MS / 1000} seconds to describe an extension`), DESCRIBE_TIMEOUT_MS);
-  try { return (await channel.call("describe", source)).value; }
+export async function describeThrough(channel: ProcessChannel, source: DescribedSource, timeoutMs = DESCRIBE_TIMEOUT_MS): Promise<ExtensionModuleSummary[]> {
+  let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      const reason = `It took longer than ${timeoutMs / 1000} seconds to describe`;
+      channel.restart(reason);
+      reject(new Error(reason));
+    }, timeoutMs);
+  });
+  const answer = channel.call("describe", source).then(result => result.value);
+  answer.catch(() => {});
+  try { return await Promise.race([answer, late]); }
   finally {
     clearTimeout(timer);
-    await channel.close().catch(() => {});
+    const closing = channel.close().catch(() => {});
+    if (!timedOut) await closing;
   }
 }
 
 export const processDescribe: Describe = async source => {
   const directory = await mkdtemp(join(tmpdir(), "pikibun-describe-"));
-  try { return await ask(new ProcessChannel({ directory, warn: () => {} }), source); }
+  try { return await describeThrough(new ProcessChannel({ directory, warn: () => {} }), source); }
   finally { await rm(directory, { recursive: true, force: true }).catch(() => {}); }
 };
 
@@ -45,7 +57,7 @@ export function sandboxDescribe(stateDirectory: string, fallback: Describe = pro
     const nodeBin = box.nodeBin;
     if (!nodeBin) throw new Error("This host's Node.js can't be given to the sandbox, so its extensions can't be described");
     const socketDirectory = serviceSocketDirectory(DESCRIBE_SESSION, stateDirectory);
-    return ask(new ProcessChannel({ directory: box.worktree, warn: () => {}, mountAllowed: path => box.bindAllowed(path),
+    return describeThrough(new ProcessChannel({ directory: box.worktree, warn: () => {}, mountAllowed: path => box.bindAllowed(path),
       launch: sandboxLaunch({ socketDirectory, nodeBin, worktree: box.worktree,
         start: (command, binds, onOutput, signal) => box.startService(command, async () => {}, { limits: serviceLimits(DESCRIBE_TIMEOUT_MS / 1000, 1), unbounded: true,
           socketDirectory, onOutput, signal, binds }) }) }), source);

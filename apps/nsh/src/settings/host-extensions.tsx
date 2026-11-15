@@ -157,10 +157,10 @@ function ModuleDetails(props: { extension: InstalledExtension }) {
 
 const info = (
   <View style={{ gap: 8 }}>
-    <Note>Pi extensions this host runs for the sessions on it: those a workspace chose that it has installed at the same version. They run in its connector, as your OS user, outside the sandbox.</Note>
+    <Note>Pi extensions this host runs for the sessions on it: those a workspace chose that it has installed at the same version. They run in a process of their own: in the session's sandbox on a Linux host, and as your OS user, outside the sandbox, elsewhere.</Note>
     <Note>Install what your workspaces use here, or on the host with pikibun extensions add. A dev extension, installed there from a local path, runs only in your own sessions on this host.</Note>
     <Note>Pikibun's own built-in extensions come with the connector too: piki:gh, piki:glab and piki:azure-cli run the GitHub, GitLab and Azure CLIs where your workspaces use them, as you are signed in to them on this host.</Note>
-    <Note>Extension tool calls run for you and members granted host commands; for everyone else only if you let every session run them here. Nobody approves each call.</Note>
+    <Note>Where an extension runs in the session's sandbox, its tool calls run for anyone who may send the session messages. Elsewhere they run for you and members granted host commands; for everyone else only if you let every session run them here. Nobody approves each call.</Note>
     <Note>Require an extension of every session to run it on this host whatever each workspace chose, yours included, with the settings you give it here. While this host can't run one you require, its sessions take no messages.</Note>
   </View>
 );
@@ -341,7 +341,7 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
         </Each>
         <If when={data()}>
           <If when={owner()} else={<Row title="Extension tools for every session" trailing={<Badge tone={data()?.automaticTools ? "warning" : "neutral"}>{data()?.automaticTools ? "Allowed" : "Off"}</Badge>} />}>
-            <Row title="Let every session run extension tools" hint="They run on this machine, outside the sandbox. Off: only your sessions, and those of members you granted host commands, run them; everyone else's are refused"
+            <Row title="Let every session run extension tools" hint="For extensions that run on this machine, outside the sandbox. Off: only your sessions, and those of members you granted host commands, run their tools; everyone else's are refused"
               trailing={<CheckControl label="Let every session run extension tools" checked={Boolean(data()?.automaticTools)} disabled={action.busy()} onChange={setAutomatic} />} />
           </If>
         </If>

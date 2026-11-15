@@ -34,7 +34,7 @@ The source code has no comments (see [Comments](../development.md#comments)), so
 - **What is signed.** Not the package's bytes but `pikibun app update v1`, its file name and its SHA-256 (`updateSignatureMessage`). The app hashes the download anyway, and the name carries the version, so an older signed package can't be passed off as a newer one, and the check costs nothing however large the package.
 - **One check on every desktop.** The same signature covers macOS, Windows and Linux. The platforms' own code signatures (Developer ID and notarization, SignPath's Authenticode) stay as they are; the Linux archive has no other.
 - **A release that would fail every app fails instead.** `scripts/sign-update.mjs` verifies each signature against the public key in the source before anything is published, so a missing or mismatched secret stops the release.
-- **What it doesn't cover.** Whoever can run the release job with the `release` environment can sign: the key guards against a release's files or GitHub's answer being changed after the fact, not against a release made by someone who may make one. The environment's protection rules are what limit that. Releases from before this change carry no `.sig`, and an app from before it checks nothing; the first update to a version with the key is trusted the old way.
+- **What it doesn't cover.** Whoever can run the release job with the `release` environment can sign: the key guards against a release's files or GitHub's answer being changed after the fact, not against a release made by someone who may make one. The environment's rules are what limit that: the `release` environment admits only the release tags (`app-v*.*.*`, `cli-v*.*.*`, `server-v*.*.*`, `ext-*-v*.*.*`), so a workflow on a branch gets none of its secrets. That holds for the key only while it is a secret of that environment and not of the repository, and it doesn't limit who may push such a tag: a tag ruleset and required reviewers on the environment do. Releases from before this change carry no `.sig`, and an app from before it checks nothing; the first update to a version with the key is trusted the old way.
 
 ## The app's command line
 
@@ -70,7 +70,7 @@ In the private workspace, **Where it runs** starts on the host for the host's ow
 
 In the private workspace's sessions of the host's owner, `sudo -A` asks the owner for their password in Pikibun, per use, in a box of its own, and nothing keeps it; see [sudo's password](sudo-prompts.md) for why per use and not once, and what that does and doesn't protect.
 
-What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. Extensions run in the connector process, on the host, for every session (`apps/runner/src/extensions/`), so a workspace's extensions are trusted code whichever environment a session uses.
+What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. A session on the host runs its extensions on the host too, in a process of their own as the owner's user (`apps/runner/src/extensions/`), so there a workspace's extensions are trusted code; in a sandboxed session on Linux they run in its sandbox ([extension isolation](extension-isolation.md)).
 
 ## Whose tools a message runs
 
@@ -140,9 +140,9 @@ connector fetched since, at the version Pikibun's control plane pins. What bound
 - **A failed pin runs nothing.** A package that fails a check is deleted; the host runs what it ran before, so a
   registry that is down or a bad pin can't stop a host that requires one of them.
 
-What it doesn't protect against: like every extension today, a managed package runs in the connector's process, as the
+What it doesn't protect against: outside a sandboxed session on Linux, a managed package runs in a process of its own but as the
 host's user, outside the sandbox ([extension isolation](extension-isolation.md)), and a version reaches every host that
-opted in within a sync. That is why it is opt-in until extensions run in a process of their own.
+opted in within a sync. That is why it stays opt-in until extensions run in the sandbox on every platform.
 
 ## Installed extensions and the host's models
 

@@ -79,7 +79,8 @@ limits never enable host shell.
 Pi model/auth configuration is used locally, including Pi's OAuth refresh. Provider
 credentials, private history and personal Pi extensions are not uploaded or shared: sessions
 run only the extensions installed with "pikibun extensions" (or from Pikibun) that their
-workspace chose, in this connector, outside the sandbox.
+workspace chose, in a process of their own: in the session's sandbox on Linux, and as
+this machine's user elsewhere.
 Catalogs over 200 models need enabledModels in Pi's settings or --model. Restart to reload config.
 `;
 
