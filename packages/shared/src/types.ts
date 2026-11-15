@@ -1,6 +1,7 @@
 import type { GitProvider, SessionRepository } from "./repositories.js";
 import type { SessionTunnelRecord, SessionTunnelView } from "./tunnel.js";
 import type { ChatImage } from "./chat-images.js";
+import type { SessionCommand } from "./session-commands.js";
 
 export const permissions = ["read", "ask", "write", "approve", "manage"] as const;
 export type Permission = (typeof permissions)[number];
@@ -607,6 +608,7 @@ export interface SessionView {
   withdrawable?: boolean;
   rewindable?: boolean;
   memberForks?: boolean;
+  commands?: SessionCommand[];
   agent?: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
   context?: SessionContextView;
   access?: AccessMode;

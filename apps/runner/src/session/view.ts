@@ -13,7 +13,7 @@ import { settleToolNames } from "../extensions/adapter.js";
 import type { SessionBuiltins } from "../extensions/builtin.js";
 import type { LoadedSource } from "../extensions/load.js";
 import { contextTokens } from "../model-failure.js";
-import { autoView, endView, entryView, refusedView } from "./entries.js";
+import { autoView, commandView, endView, entryView, refusedView } from "./entries.js";
 import { holdsQueue, tellsActivity, type Branch, type Metadata, type Run } from "./state.js";
 
 function modelFailed(entry: EntryRecord): boolean {
@@ -34,6 +34,7 @@ export interface ViewSource {
   context(messages: readonly Message[], model: { provider: string; modelId: string } | undefined): SessionView["context"];
   repositories(): RepositoryPreparationView | undefined;
   extensions(): Promise<Pick<SessionView, "extensions">>;
+  commands?(): Promise<SessionView["commands"]>;
 }
 
 export async function sessionView(source: ViewSource): Promise<SessionView> {
@@ -51,10 +52,10 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
   const entries: SessionView["entries"] = [];
   for (const snapshot of snapshots) {
     let previous: Run | undefined;
-    const refused = Object.values(state.runs).filter(run => run.refused && run.conversationId === snapshot.branch.id)
+    const refused = Object.values(state.runs).filter(run => (run.refused || run.command) && run.conversationId === snapshot.branch.id)
       .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
     const refusedAt = (after: (run: Run) => boolean) => {
-      for (const run of refused.filter(after)) entries.push(refusedView(run, snapshot.branch.id));
+      for (const run of refused.filter(after)) entries.push(run.command ? commandView(run, snapshot.branch.id) : refusedView(run, snapshot.branch.id));
     };
     refusedAt(run => !snapshot.entries.some(entry => entry.id <= run.startEntry));
     for (const entry of snapshot.entries) {
@@ -78,6 +79,7 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
   const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
   const access = latestWrite && (latestWrite.options?.access === "read" ? "read" : "auto");
   const repositories = source.repositories();
+  const commands = await source.commands?.().catch(() => undefined);
   const { id, displayName, gitName, gitEmail, githubLogin } = source.binding.owner;
   return { sessionId: source.binding.session.id, owner: { id, displayName, gitName, gitEmail, githubLogin }, entries,
     approvals: [],
@@ -85,11 +87,12 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
     busy: Object.values(state.runs).some(holdsQueue)
       || Object.values(state.approvals).some(approval => approval.status === "executing") || repositories?.status === "preparing",
     queue: Object.values(state.runs).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
-      .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.refused ? "refused" : run.status })),
+      .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.refused ? "refused" : run.command ? "command" : run.status })),
     stoppable: true,
     withdrawable: true,
     rewindable: true,
     memberForks: true,
+    ...(commands?.length ? { commands } : {}),
     ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
     ...(usage ? { context: usage } : {}),
     ...(access ? { access } : {}),

@@ -46,13 +46,14 @@ function describedRegistry(models: () => Model<string>[]): ModelRegistry {
 }
 
 const inputCall = new AsyncLocalStorage<{ notices: string[]; errors: string[] }>();
+const commandCall = new AsyncLocalStorage<{ notices: string[]; messages: string[] }>();
 
 function noticesOf(runner: ExtensionRunner): void {
   runner.onError(error => { if (error.event === "input") inputCall.getStore()?.errors.push(error.error); });
   const createContext = runner.createContext.bind(runner);
   runner.createContext = () => {
     const ctx = createContext();
-    const sink = inputCall.getStore()?.notices;
+    const sink = (inputCall.getStore() ?? commandCall.getStore())?.notices;
     if (!sink) return ctx;
     const ui = new Proxy(ctx.ui, { get: (target, name, receiver) => name === "notify"
       ? (message: unknown) => { sink.push(String(message)); }
@@ -124,6 +125,7 @@ export class ExtensionWorker {
         return typeof result?.compaction?.summary === "string" ? { summary: result.compaction.summary } : null;
       },
       execute: (params, signal) => this.execute(params, signal),
+      command: params => this.command(params),
       describe: async params => {
         const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
         try {
@@ -178,6 +180,9 @@ export class ExtensionWorker {
     const result = await loadSource(factories ? { files: params.files, factories } : { files: params.files }, directory, createEventBus(), runtime);
     const runner = new ExtensionRunner(result.extensions, runtime, directory, SessionManager.inMemory(directory), this.#registry ?? (undefined as never));
     runner.bindCore(noActions(runner, message => warn(source, message), () => this.thinkingLevel()), contextActions(() => this.model()));
+    const declined = async () => ({ cancelled: true });
+    runner.bindCommandContext({ waitForIdle: async () => {}, newSession: declined, fork: declined, navigateTree: declined, switchSession: declined,
+      reload: async () => {} } as never);
     runner.onError(error => warn(source, `${error.event}: ${error.error}`));
     noticesOf(runner);
     this.#runners.set(source, runner);
@@ -185,7 +190,19 @@ export class ExtensionWorker {
       name: definition.name, description: String(definition.description ?? ""), parameters: JSON.parse(JSON.stringify(definition.parameters ?? {})),
       ...(definition.executionMode ? { executionMode: definition.executionMode } : {}),
     }));
-    return { errors: result.errors.map(error => error.error), tools };
+    const commands = runner.getRegisteredCommands().map(command => ({ name: command.invocationName,
+      ...(typeof command.description === "string" && command.description ? { description: command.description } : {}) }));
+    return { errors: result.errors.map(error => error.error), tools, commands };
+  }
+
+  private async command(params: ExtensionParams<"command">): Promise<ExtensionRequests["command"][1]> {
+    const runner = this.runner(params);
+    const command = runner.getCommand(params.name);
+    if (!command) throw new Error(`${params.source} has no command /${params.name}`);
+    const notices: string[] = [];
+    const messages: string[] = [];
+    await commandCall.run({ notices, messages }, () => command.handler(params.args, runner.createCommandContext()));
+    return { notices, messages };
   }
 
   private async input(params: ExtensionParams<"input">): Promise<ExtensionRequests["input"][1]> {
@@ -229,7 +246,12 @@ function noActions(runner: ExtensionRunner, warn: (message: string) => void, thi
   const said = new Set<string>();
   const noop = (name: string) => () => { if (!said.has(name)) { said.add(name); warn(`${name}() does nothing in Pikibun`); } };
   return {
-    sendMessage: noop("sendMessage"), sendUserMessage: noop("sendUserMessage"), appendEntry: noop("appendEntry"),
+    sendMessage: noop("sendMessage"), appendEntry: noop("appendEntry"),
+    sendUserMessage: (content: unknown) => {
+      const sent = commandCall.getStore()?.messages;
+      if (sent) sent.push(textOf(content));
+      else noop("sendUserMessage")();
+    },
     setSessionName: noop("setSessionName"), getSessionName: () => undefined, setLabel: noop("setLabel"),
     getActiveTools: () => runner.getAllRegisteredTools().map(tool => tool.definition.name), getAllTools: () => [],
     getSettings: () => ({}) as never, setActiveTools: noop("setActiveTools"), refreshTools: () => {}, getCommands: () => [],

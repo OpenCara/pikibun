@@ -8,6 +8,13 @@ export interface ExtensionToolDescription {
   executionMode?: "sequential" | "parallel";
 }
 
+export interface ExtensionCommandDescription {
+  name: string;
+  description?: string;
+}
+
+export type CommandAnswer = { notices: string[]; messages: string[] };
+
 export interface RequestContext {
   model?: Model<string>;
   thinkingLevel?: string;
@@ -36,7 +43,9 @@ export type ToolResultEvent = {
 export type ToolOutput = { content: (TextContent | ImageContent)[]; details?: unknown };
 
 export interface ExtensionRequests {
-  open: [{ source: string; files: string[]; models: Model<string>[]; mount?: string }, { errors: string[]; tools: ExtensionToolDescription[] }];
+  open: [{ source: string; files: string[]; models: Model<string>[]; mount?: string },
+    { errors: string[]; tools: ExtensionToolDescription[]; commands?: ExtensionCommandDescription[] }];
+  command: [Scoped & { name: string; args: string }, CommandAnswer];
   emit: [Scoped & { event: { type: string } & Record<string, unknown> }, null];
   input: [Scoped & { text: string; images: ImageContent[]; inputSource: "interactive" | "rpc" }, InputAnswer];
   beforeAgentStart: [Scoped & { prompt: string; images?: ImageContent[] }, string];

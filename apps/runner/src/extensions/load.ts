@@ -147,7 +147,7 @@ export function summarizeModules(root: string, files: string[], result: LoadExte
     ignored.push(...providers.filter(item => item.path === file).map(item => `provider ${item.name}`));
     ignored.push(...models.filter(item => item.extensionPath === file).map(item => `model ${item.definition.provider}/${item.definition.id}`));
     ignored.push(...servers.filter(item => item.extensionPath === file).map(item => `MCP server ${item.name}`));
-    const noops = [...[...extension.commands.keys()].map(name => `/${name}`), ...[...extension.shortcuts.keys()].map(key => `shortcut ${key}`),
+    const noops = [...[...extension.shortcuts.keys()].map(key => `shortcut ${key}`),
       ...(extension.messageRenderers.size || extension.entryRenderers?.size || extension.toolRenderers?.length || extension.markdownTransformer ? ["renderers"] : [])];
     const flags = [...extension.flags.values()].slice(0, extensionLimits.flagsPerModule).map(flag => ({ name: flag.name, type: flag.type,
       ...(flag.description ? { description: flag.description.slice(0, extensionLimits.text) } : {}), ...(flag.default !== undefined ? { default: flag.default } : {}) }));

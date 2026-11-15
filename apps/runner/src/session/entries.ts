@@ -67,6 +67,11 @@ export function refusedView(run: Run, branch: number): SessionView["entries"][nu
   return { id: `${branch}:refused:${run.key}`, kind: "workspace.run-refused", role: "system", text: run.refused!.notice, actorId: run.initiatedBy, conversationId: String(branch) };
 }
 
+export function commandView(run: Run, branch: number): SessionView["entries"][number] {
+  return { id: `${branch}:command:${run.key}`, kind: "workspace.run-command", role: "system", text: `/${run.command!.name}: ${run.command!.notice}`, actorId: run.initiatedBy,
+    conversationId: String(branch) };
+}
+
 export function failureView(run: Run, branch: number): SessionView["entries"][number] {
   const { provider, modelId, compaction, cause, compacting } = run.failure!;
   return { id: `${branch}:failure:${run.key}`, kind: "workspace.run-failure", role: "assistant", text: "", actorId: run.initiatedBy, conversationId: String(branch),

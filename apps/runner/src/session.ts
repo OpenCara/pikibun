@@ -62,6 +62,7 @@ import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
 import { requeue, RunQueue, submissionRequestId } from "./session/run-queue.js";
+import { parseCommand, piExpansion, SessionCommands, type ExtensionCommand } from "./session/commands.js";
 import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
 import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
@@ -186,6 +187,7 @@ export class RunnerSession {
   private generation = 0;
   private closing = false;
   readonly #queue: RunQueue;
+  readonly #commands: SessionCommands;
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   #compaction: () => CompactionSettings | undefined = () => undefined;
@@ -290,7 +292,23 @@ export class RunnerSession {
       tool: definition => definedTool(this.#toolContext, definition), registry: () => this.#registry, toolNames: () => this.tools.map(tool => tool.name),
       added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); },
     });
+    const ownerReads = async () => { await this.authorize(this.binding.owner.id, "write"); };
+    this.#commands = new SessionCommands({
+      compact: (run, instructions) => this.compact(run, instructions),
+      extensionCommands: () => this.extensionCommands(),
+      runExtensionCommand: async (run, command, args) => {
+        const host = this.#hostExtensions;
+        if (!host) throw new RunnerError(409, `This extension (${command.source}) no longer applies to this session; /${command.name} didn't run.`);
+        await this.authorize(run.initiatedBy, "write");
+        await this.#piki.requireCommand(run.initiatedBy, command.source, command.name, host.isolated(command.source));
+        return host.command(command.source, command.name, args);
+      },
+      find: async (pattern, limit) => (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, ownerReads)).paths,
+      read: path => this.sandbox.readFile(path, ownerReads),
+      expansion: piExpansion,
+    });
     this.#queue = new RunQueue({
+      commands: this.#commands,
       sessionId: binding.session.id, connectorOwnerId: binding.session.connectorOwnerId, inputs: this.#inputs, config,
       configuredCompaction: () => this.#configuredCompaction, generation: () => this.generation, closing: () => this.closing,
       preparation: () => this.#repositories.status, harness: () => this.harness, hostExtensions: () => this.#hostExtensions,
@@ -974,7 +992,7 @@ export class RunnerSession {
       throw new RunnerError(400, "Invalid or missing Worker write admission");
     const prepared = images.length ? await prepareMessageImages(images) : [];
     const content = input.content;
-    const { screen } = await this.extensionGate();
+    const screen = (await this.extensionGate()).screen || parseCommand(content) !== undefined;
     return this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
       const preparation = this.#repositories.preparation;
@@ -1218,6 +1236,25 @@ export class RunnerSession {
       conversation: id => this.harness.conversation(id as ConversationId, context), agent: () => this.#shared.agent(context),
       context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
+      commands: async () => (this.#frozen || this.#packed || this.closing ? undefined : this.#commands.list()),
+    });
+  }
+
+  private async extensionCommands(): Promise<ExtensionCommand[]> {
+    const host = this.#hostExtensions;
+    if (!host || !this.config.extensions) return [];
+    const sources = (await this.extensionChoice()).chosen.map(item => item.source);
+    void this.openExtensions(sources).catch(() => {});
+    return host.commands(sources);
+  }
+
+  private async compact(run: Run, instructions: string | undefined): Promise<void> {
+    await this.exclusive(async () => {
+      if (this.closing) throw new RunnerError(503, "Session is closing");
+      await this.authorize(run.initiatedBy, "write");
+      const conversation = await this.harness.conversation(run.conversationId as ConversationId, context);
+      if (!conversation) throw new RunnerError(409, "That conversation is no longer the session's; reload it and send /compact again.");
+      await conversation.compact(instructions, context);
     });
   }
 

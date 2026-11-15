@@ -10,7 +10,7 @@ import type { LoadedSource } from "./load.js";
 import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
 import { wholeForScripts } from "../script-output.js";
-import type { ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription } from "./protocol.js";
+import type { CommandAnswer, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription } from "./protocol.js";
 import { addedPrompt, directChannel, ExtensionWorker, modelDescription } from "./worker.js";
 import { ProcessChannel } from "./process.js";
 
@@ -26,6 +26,7 @@ export interface ExtensionHost {
     execute: (signal: AbortSignal) => Promise<ToolExecutionResult>): Promise<ToolExecutionResult>;
   readonly hookTimeoutMs: number;
   readonly inputTimeoutMs?: number;
+  readonly commandTimeoutMs?: number;
   warn(source: string, message: string): void;
   readonly piki?: PikiSession;
   extensionProcess?(warn: (source: string, message: string) => void): ExtensionChannel;
@@ -104,6 +105,7 @@ async function activeSettings(host: ExtensionHost, source: string): Promise<Exte
 
 interface OpenedSource extends Link {
   dev: boolean;
+  commands: ExtensionCommandDescription[];
   tools: ToolRegistration[];
   sections: ReturnType<typeof section>[];
   hooks: HookRegistration[];
@@ -167,7 +169,7 @@ export class SessionExtensions {
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
-        const extension = build(link, loaded.summary.dev, result.tools.filter(tool => offered.has(tool.name)), this.host);
+        const extension = build(link, loaded.summary.dev, result.tools.filter(tool => offered.has(tool.name)), this.host, result.commands ?? []);
         this.#opened.push(extension);
         opened.push(extension);
       } catch (error) {
@@ -248,6 +250,32 @@ export class SessionExtensions {
     return { action: "continue", ...current };
   }
 
+  async commands(sources: readonly string[]): Promise<{ source: string; name: string; description?: string }[]> {
+    const commands: { source: string; name: string; description?: string }[] = [];
+    for (const source of sources) {
+      const opened = this.#opened.find(item => item.source === source);
+      if (!opened?.commands.length || this.#broken.has(source) || !await activeSettings(this.host, source)) continue;
+      for (const command of opened.commands) {
+        if (typeof command.name !== "string" || commands.some(item => item.name === command.name)) continue;
+        commands.push({ source, name: command.name, ...(typeof command.description === "string" ? { description: command.description } : {}) });
+      }
+    }
+    return commands;
+  }
+
+  async command(source: string, name: string, args: string): Promise<CommandAnswer> {
+    const opened = this.#opened.find(item => item.source === source);
+    const settings = opened && await activeSettings(this.host, source);
+    if (!opened || !settings) throw new Error(`This extension (${source}) no longer applies to this session`);
+    const answer = await withTimeout(() => request(this.host, opened, "command", { source, settings, name, args }),
+      this.host.commandTimeoutMs ?? this.host.hookTimeoutMs, `/${name}`, opened.channel);
+    return { notices: answer.notices.map(String), messages: answer.messages.map(String) };
+  }
+
+  isolated(source: string): boolean {
+    return this.#opened.find(item => item.source === source)?.isolated === true;
+  }
+
   sessionStart(): Promise<void> {
     this.#started = true;
     return this.each({ type: "session_start", reason: "startup" });
@@ -283,7 +311,7 @@ export function harnessResult(result: ToolExecutionResult): boolean {
   return result.isError === true && (result.diagnostics ?? []).some(diagnostic => diagnostic.severity === "error" && HARNESS_RESULT_CODES.has(diagnostic.code ?? ""));
 }
 
-function build(link: Link, dev: boolean, described: ExtensionToolDescription[], host: ExtensionHost): OpenedSource {
+function build(link: Link, dev: boolean, described: ExtensionToolDescription[], host: ExtensionHost, commands: ExtensionCommandDescription[]): OpenedSource {
   const { source } = link;
   const key = extensionKey(source);
   const ask = <M extends ExtensionMethod>(method: M, params: ExtensionRequests[M][0], signal?: AbortSignal) => request(host, link, method, params, signal);
@@ -407,5 +435,5 @@ function build(link: Link, dev: boolean, described: ExtensionToolDescription[], 
     if (!text || !(await host.state(source)).active) return undefined;
     return `<extension source="${source.replaceAll("\"", "'")}">\n${text}\n</extension>`;
   }, { tag: false })] : [];
-  return { ...link, dev, tools, sections, hooks, variants: new Map() };
+  return { ...link, dev, commands, tools, sections, hooks, variants: new Map() };
 }

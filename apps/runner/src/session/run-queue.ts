@@ -9,6 +9,7 @@ import { compactionFailure, configuredCompaction } from "../compaction.js";
 import type { InputOutcome, SessionExtensions } from "../extensions/adapter.js";
 import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "../model-failure.js";
 import { stableJson } from "../protocol.js";
+import type { SessionCommands } from "./commands.js";
 import { prepareMessageImages, type InputImage, type MessageInputs } from "./inputs.js";
 import type { RepositoryPreparation } from "./repositories.js";
 import type { Metadata, Run } from "./state.js";
@@ -65,6 +66,7 @@ export interface RunQueueOptions {
   preparation(): RepositoryPreparation["status"];
   harness(): Harness;
   hostExtensions(): SessionExtensions | undefined;
+  commands?: SessionCommands;
   exclusive(operation: () => Promise<void>): Promise<void>;
   metadata(): Promise<Metadata>;
   mutate(change: (state: Metadata) => void): Promise<void>;
@@ -263,7 +265,7 @@ export class RunQueue {
 
   async screen(key: string): Promise<void> {
     const generation = this.options.generation();
-    let outcome: InputOutcome | { action: "skip" };
+    let outcome: InputOutcome | { action: "skip" } | { action: "command"; name: string; notice: string };
     try { outcome = await this.#screenInput(key); }
     catch (error) {
       process.stderr.write(`Session ${this.options.sessionId}: couldn't screen a message, so it was refused: ${String(error instanceof Error ? error.message : error).slice(0, 300)}\n`);
@@ -293,6 +295,9 @@ export class RunQueue {
       if (result.action === "refused") {
         Object.assign(run, { status: "interrupted", refused: { by: result.by, notice: result.notice ?? REFUSED } });
         refused = true;
+      } else if (result.action === "command") {
+        Object.assign(run, { status: "settled", command: { name: result.name, notice: result.notice } });
+        refused = true;
       } else if (result.action === "continue") {
         run.content = result.text;
         if (images) {
@@ -305,19 +310,24 @@ export class RunQueue {
     this.options.drain();
   }
 
-  async #screenInput(key: string): Promise<InputOutcome | { action: "skip" }> {
+  async #screenInput(key: string): Promise<InputOutcome | { action: "skip" } | { action: "command"; name: string; notice: string }> {
     const host = this.options.hostExtensions();
+    const commands = this.options.commands;
     const run = (await this.options.metadata()).runs[key];
-    if (!host || !run?.screening || run.status !== "queued") return { action: "skip" };
+    if ((!host && !commands) || !run?.screening || run.status !== "queued") return { action: "skip" };
     const refusal = await this.options.requiredRefusal(true);
     if (refusal) return { action: "refused", by: "", notice: refusal };
     const images = run.images ? await this.options.inputs.read(key) : [];
     if (!images) return { action: "skip" };
-    const { chosen } = await this.options.extensionChoice();
+    const ran = await commands?.before(run);
+    if (ran && ran.action !== "message") return ran;
+    const text = ran ? ran.text : run.content;
+    const attached = images.map(image => ({ type: "image" as const, ...image }));
     const hostOwner = this.options.connectorOwnerId;
-    const outcome = await host.input(chosen.map(item => item.source), run.content, images.map(image => ({ type: "image" as const, ...image })),
-      hostOwner && run.initiatedBy === hostOwner ? "interactive" : "rpc");
-    if (outcome.action !== "refused") return outcome;
+    const outcome: InputOutcome = host
+      ? await host.input((await this.options.extensionChoice()).chosen.map(item => item.source), text, attached, hostOwner && run.initiatedBy === hostOwner ? "interactive" : "rpc")
+      : { action: "continue", text, images: attached };
+    if (outcome.action === "continue") return ran || !commands ? outcome : { ...outcome, text: await commands.expand(outcome.text) };
     const notice = outcome.notice?.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 300);
     process.stderr.write(`Session ${this.options.sessionId}: ${outcome.by} refused a message${notice ? `: ${notice}` : ""}\n`);
     return { action: "refused", by: outcome.by, notice: notice || `An extension on this host (${outcome.by}) refused this message.` };
