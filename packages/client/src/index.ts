@@ -14,6 +14,10 @@ export { copyText, messageCut, resendText, restoredDraft, rewindable, type Messa
 export type { CompactionFailure } from "../../shared/src/types";
 export { formatBytes, preparingRepositories, repositoryPhaseLabel, repositoryProgressText, repositoryProgressValue } from "./repository-progress";
 export { sessionStatus, type SessionStatus, type SessionStatusTone } from "./session-status";
+export {
+  parseSlashDraft, slashCommand, slashCommands, slashLevel, slashModel, slashSuggestions,
+  type SlashCommand, type SlashCommandName, type SlashDraft, type SlashModel, type SlashOffer, type SlashSuggestion,
+} from "./slash-commands";
 export { openFetchEventStream, SseParser, type FetchEventStreamOptions } from "./sse";
 export { splitToolCalls, transcriptLines, type ToolCallLine } from "./transcript";
 export { callHeadline, pairToolResults, resultOutcome, resultOutput, toolCallRows, type PairedTranscript, type ToolCallRow } from "./tool-rows";
