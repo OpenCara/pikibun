@@ -54,6 +54,11 @@ describe("the chat box's slash commands", () => {
     await app.type("id:composer-input", "e");
     await app.waitFor("id:composer-suggestions");
     expect(offered(app)).toEqual(["session", "settings"]);
+    await app.keyboard.press("escape");
+    await app.waitFor("id:composer-suggestions", { state: "gone" });
+    await app.clear("id:composer-input");
+    await app.type("id:composer-input", "/se");
+    await app.waitFor("id:composer-suggestions");
     expect(sent(app, "POST", "/api/sessions/s1/submit")).toHaveLength(0);
   });
 
@@ -214,6 +219,11 @@ describe("the chat box's slash commands", () => {
     await app.waitFor("text:Only the session's owner, or the workspace's owner or an admin, can rename it.");
     expect(sent(app, "PATCH", "/api/sessions/s1")).toHaveLength(0);
     expect(app.value("id:composer-input")).toBe("/name Mine now");
+    await app.clear("id:composer-input");
+    await app.type("id:composer-input", "/clone");
+    await app.submit("id:composer-input");
+    await app.waitFor("text:On this session's host only the session's owner can fork it, until its connector is updated.");
+    expect(app.dialogs()).toHaveLength(0);
   });
 
   test("on a phone, a command is chosen by pressing it", async () => {

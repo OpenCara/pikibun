@@ -483,8 +483,12 @@ function Conversation(props: {
   const chosenModel = () => findModel(props.host(), selection().model);
   const reasoningLevels = () => (autoChatOn() ? [] : offeredLevels(chosenModel()));
   const latestReply = () => [...entries()].reverse().find(entry => entry.role === "assistant" && copyText(entry).trim() !== "");
+  const cloneRefusal = () => (!rewindable(view()) ? "This session's host can't fork sessions yet: update its connector (npx pikibun@latest connect)."
+    : !owner() && !canWrite() ? "Forking someone else's session needs write permission on it."
+    : !owner() && view().memberForks !== true ? "On this session's host only the session's owner can fork it, until its connector is updated."
+    : undefined);
   const clonePoint = () => {
-    if (!rewindable(view()) || readOnly() || !(owner() || (canWrite() && view().memberForks === true))) return undefined;
+    if (readOnly() || cloneRefusal()) return undefined;
     const asks = new Set(view().conversations.filter(item => item.mode === "ask").map(item => item.id));
     return [...view().entries].reverse().find(entry => !(entry.conversationId && asks.has(entry.conversationId)) && messageCut(entry)?.before === false);
   };
@@ -543,7 +547,7 @@ function Conversation(props: {
       case "new": ran(); return props.go({ name: "new", workspaceId: current().workspaceId });
       case "clone": {
         const reply = clonePoint();
-        if (!reply) return refuse(rewindable(view()) ? "There is no finished reply of the agent's to fork from, or you can't fork this session." : "This session's host can't fork sessions: update its connector.");
+        if (!reply) return refuse(cloneRefusal() ?? "The agent has no finished reply to fork from yet.");
         ran();
         return void fork(reply, reply.id, false, "the agent's latest finished reply");
       }

@@ -54,7 +54,7 @@ export function Composer(props: {
   };
   const draft = () => props.value;
   effect(() => {
-    draft();
+    if (untracked(closedAt) !== draft()) closedAt.set(null);
     picked.set(0);
     if (caret === undefined) return;
     input?.setSelection(caret);
@@ -110,7 +110,8 @@ export function Composer(props: {
                 style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: narrow() ? control.medium : control.xsmall, paddingHorizontal: 8,
                   borderRadius: radius.small, backgroundColor: item().key === suggestions()[pick()]?.key ? palette().hoverStrong : "transparent" }}
                 hoverStyle={{ backgroundColor: palette().hoverStrong }} activeStyle={{ opacity: 0.8 }}>
-                <Text style={{ flexShrink: 0, maxWidth: "60%", numberOfLines: 1, fontSize: text.small, fontFamily: monospace, color: palette().text }}>{item().label}</Text>
+                <Text style={{ flexShrink: 0, maxWidth: "60%", numberOfLines: 1, fontSize: text.small, fontFamily: item().label.startsWith("/") ? monospace : undefined,
+                  color: palette().text }}>{item().label}</Text>
                 <Text style={{ flex: 1, minWidth: 0, numberOfLines: 1, fontSize: text.small, color: palette().muted }}>{item().hint}</Text>
               </BaseButton>
             )}
