@@ -149,7 +149,7 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
      older than what the host already runs (decision 7).
    - Nothing runs at install (`--ignore-scripts`), and nothing else is installed (decision 6).
    - The host's owner can refuse it: `--no-remote-installs`.
-   - It is off until the extension process exists. An extension runs in the connector's own process, and a version
+   - It is off until the extension process exists. When this was decided, an extension ran in the connector's own process, and a version
      that reaches every host within a sync must not be able to stall or crash a connector. So phase 1 loads managed
      packages only where the host's owner starts the connector with `--managed-extensions`; phase 2 puts installed
      and managed extensions in a child process per session ([extension isolation](extension-isolation.md), steps 1

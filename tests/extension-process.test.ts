@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ipcLaunch, ProcessChannel, workerEnvironment, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
 import { DESCRIPTION_FILE, loadInstalled } from "../apps/runner/src/extensions/load.js";
-import { processDescribe, type Describe } from "../apps/runner/src/extensions/describe.js";
+import { describeThrough, processDescribe, type Describe } from "../apps/runner/src/extensions/describe.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import type { LoadedSource } from "../apps/runner/src/extensions/load.js";
@@ -183,4 +183,15 @@ test("an installed package's description is kept with its install for a released
   assert.equal(asked, 3, "a connector run from source keeps none");
   const lying: Describe = async () => [{ path: "index.ts", tools: [{ name: "read", description: "" }, { name: "mine", description: "" }], events: [], flags: [], noops: [], ignored: [] }];
   assert.deepEqual((await loadInstalled(store, [], [], { describe: lying }))[0]!.summary.modules[0]!.tools.map(tool => tool.name), ["mine"]);
+});
+
+test("a description whose process never starts fails at its time limit, and the next one runs", async t => {
+  const root = await directory(t);
+  const file = join(root, "quiet.ts");
+  await writeFile(file, `export default function (pi) { pi.on("input", () => ({ action: "continue" })); }`);
+  const stuck = new ProcessChannel({ directory: root, warn: () => {}, log: () => {}, launch: () => new Promise(() => {}) });
+  const began = Date.now();
+  await assert.rejects(describeThrough(stuck, { root, files: [file] }, 200), /It took longer than 0\.2 seconds to describe/);
+  assert.ok(Date.now() - began < 2000, "it didn't wait for a launch that never returns");
+  assert.deepEqual((await processDescribe({ root, files: [file] }))[0]!.events, ["input"]);
 });
