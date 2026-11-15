@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProcessChannel, sandboxLaunch, workerCodeMounts } from "../apps/runner/src/extensions/process.js";
 import { installMount } from "../apps/runner/src/extensions/load.js";
+import { sandboxDescribe } from "../apps/runner/src/extensions/describe.js";
 import { Sandbox, serviceBindAllowed } from "../apps/runner/src/sandbox.js";
 import { serviceLimits, serviceSocketDirectory } from "../apps/runner/src/session-service.js";
 import { binding, linuxSandboxMissing } from "./helpers/workspaces.js";
@@ -80,4 +81,27 @@ test("in the Linux sandbox, an installed extension sees the session's worktree a
   for (let request = 0; request < 12; request++) await channel.call("emit", { source: "local:probe", settings: {}, event: { type: "session_start", reason: "startup" } });
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(warnings.filter(warning => warning.name === "MaxListenersExceededWarning"), [], "holding its process for each request leaves nothing on the process's closed pipes");
+});
+
+test("in the Linux sandbox, an installed extension is described without its code seeing the host: what it reads at load time isn't there", { skip: linuxSandboxMissing() }, async t => {
+  const state = await realpath(await mkdtemp(join(homedir(), ".pikibun-describe-state-")));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  const secret = join(state, "host-secret.txt");
+  await writeFile(secret, "the host's own");
+  const extension = join(state, "extension");
+  await mkdir(extension);
+  const file = join(extension, "peek.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    import { readFileSync } from "node:fs";
+    let seen;
+    try { seen = readFileSync(${JSON.stringify(secret)}, "utf8"); } catch (error) { seen = "refused: " + error.code; }
+    export default function (pi) {
+      pi.registerTool({ name: "peek", label: "Peek", description: seen + " " + process.cwd(), parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+    }`);
+  const describe = sandboxDescribe(state);
+  const [module] = await describe({ root: extension, files: [file], mount: extension });
+  assert.equal(module!.error, undefined);
+  assert.match(module!.tools[0]!.description, /^refused: ENOENT \/sessions\//, "its load-time code ran in the sandbox, where the host's file isn't");
+  const [again] = await describe({ root: extension, files: [file], mount: extension });
+  assert.equal(again!.tools[0]!.name, "peek", "each description gets a process of its own");
 });

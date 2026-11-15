@@ -169,6 +169,10 @@ The mounts are the host's own paths, so a mount names nothing the sandbox lacks:
 directories, the home directory and its parents, `/tmp` and the other trees the sandbox makes itself, and the session's
 own files, and the connector reaches the process only through a socket it has checked and pinned.
 
+The connector never imports an installed extension itself: to list its tools it asks an extension process, sandboxed
+where the host has the Linux sandbox, and checks the answer ([extension isolation](extension-isolation.md), "Describing
+an extension"). A plain extension process starts without the connector's own environment variables.
+
 Because the process is confined like the session's commands, a tool of such an extension runs for any message that may
 act, without a host command grant: it reaches nothing a shell command of that message couldn't. Where shell commands
 themselves count as host commands (no resource limits, someone else's session), so do these calls.
