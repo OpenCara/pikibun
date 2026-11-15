@@ -183,6 +183,11 @@ export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {
   return extensions;
 }
 
+export function parseExtensionModules(value: unknown): ExtensionModuleSummary[] {
+  if (!Array.isArray(value) || value.length > extensionLimits.modulesPerSource) throw new Error("Invalid extension modules");
+  return value.map(parseModule);
+}
+
 function parseModule(value: unknown): ExtensionModuleSummary {
   if (!isPlainObject(value)) throw new Error("Invalid extension module");
   only(value, ["path", "tools", "events", "flags", "noops", "ignored", "error"], "extension module");

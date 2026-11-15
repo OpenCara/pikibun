@@ -27,6 +27,7 @@ import { validateRelayRequest } from "./connector/relay-request.js";
 import { boundedBody, CALLBACK_LIMIT, decodeJson, encoder, IDENTIFIER, refusedReport, TOKEN } from "./connector/wire.js";
 import type { RunnerConfig } from "./session.js";
 import { HostExtensions } from "./extensions/host.js";
+import { sandboxDescribe } from "./extensions/describe.js";
 import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 import { buildVersion } from "../../../packages/shared/src/version.js";
@@ -273,7 +274,9 @@ export class LocalConnector {
       log: line => { if (/\b(ERR|WRN)\b/.test(line)) process.stderr.write(`cloudflared: ${line.slice(0, 1000)}\n`); } });
     this.hostExtensions = this.options.extensions
       ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false,
-        managed: this.options.managedExtensions === true, connectorVersion: this.options.version ?? buildVersion });
+        managed: this.options.managedExtensions === true, connectorVersion: this.options.version ?? buildVersion,
+        ...(process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend && !this.options.runtimeFactory
+          ? { describe: sandboxDescribe(this.directory) } : {}) });
     await this.hostExtensions.load();
     this.releaseLease = await (this.options.acquireLease ?? acquireRunnerLease)(this.directory, () => {
       this.lifetime.abort();

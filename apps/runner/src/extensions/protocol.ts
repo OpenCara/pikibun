@@ -1,5 +1,5 @@
 import type { ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
+import type { ExtensionModuleSummary, ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
 
 export interface ExtensionToolDescription {
   name: string;
@@ -48,6 +48,7 @@ export interface ExtensionRequests {
   beforeSettle: [Scoped, { continue: boolean; text: string }];
   compact: [Scoped & { reason: string; instructions?: string; messages: Message[] }, { cancel?: true; summary?: string } | null];
   execute: [Scoped & { tool: string; callId: string; args: Record<string, unknown> }, ToolOutput];
+  describe: [{ root: string; files: string[]; mount?: string }, ExtensionModuleSummary[]];
   shutdown: [Record<string, never>, null];
 }
 
