@@ -157,7 +157,7 @@ function ModuleDetails(props: { extension: InstalledExtension }) {
 
 const info = (
   <View style={{ gap: 8 }}>
-    <Note>Pi extensions this host runs for the sessions on it: those a workspace chose that it has installed at the same version. They run in its connector, as your OS user, outside the sandbox.</Note>
+    <Note>Pi extensions this host runs for the sessions on it: those a workspace chose that it has installed at the same version. They run in a process of their own: in the session's sandbox on a Linux host, and as your OS user, outside the sandbox, elsewhere.</Note>
     <Note>Install what your workspaces use here, or on the host with pikibun extensions add. A dev extension, installed there from a local path, runs only in your own sessions on this host.</Note>
     <Note>Pikibun's own built-in extensions come with the connector too: piki:gh, piki:glab and piki:azure-cli run the GitHub, GitLab and Azure CLIs where your workspaces use them, as you are signed in to them on this host.</Note>
     <Note>Extension tool calls run for you and members granted host commands; for everyone else only if you let every session run them here. Nobody approves each call.</Note>

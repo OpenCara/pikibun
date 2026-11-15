@@ -1,7 +1,7 @@
 # Running extensions out of the connector's process
 
-Review 268, finding 14 (High): installed extensions run in the connector's own Node.js process, as the host owner's OS
-user, with the owner's files, credentials and network. The workspace's network policy doesn't confine them. This
+Review 268, finding 14 (High): installed extensions ran in the connector's own Node.js process, as the host owner's OS
+user, with the owner's files, credentials and network, and the workspace's network policy didn't confine them. This
 document says what is contained today, what isn't, and how extensions move into a per-session child process with the
 session's sandbox and egress proxy. Steps 1 and 2 are built, and step 3 on Linux (see each "as built" section); step 3 on macOS
 and Windows is the plan.
@@ -214,7 +214,10 @@ the module's top-level code and its factory ran in the connector, as the host's 
   network), and the connector's code and that extension's install mounted read-only. A source whose files the sandbox
   can't be given (a local extension under `/tmp`, say) is described in a plain process instead, as sessions in the
   sandbox refuse it and only sessions on the host run it. Elsewhere (macOS, Windows, unsandboxed hosts, the
-  `pikibun extensions` command) the process is a plain one.
+  `pikibun extensions` command) the process is a plain one. A sandbox that can't be given the host's Node.js describes
+  nothing: each installed extension reports that error, rather than run outside the sandbox on a host whose sessions
+  are sandboxed, where sessions refuse extensions for the same reason. A description that takes longer than a minute
+  fails, whether its process answers late or never starts, so one extension can't hold up the others'.
 - **Without the connector's settings.** A plain extension process, for a description or a session, starts without the
   connector's own environment variables (`workerEnvironment`: `PIKIBUN_*`, `RUNNER_*` and the others on-host commands
   never get, `CONNECTOR_ENVIRONMENT`).

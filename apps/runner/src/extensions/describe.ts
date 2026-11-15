@@ -14,11 +14,20 @@ export const DESCRIBE_TIMEOUT_MS = 60_000;
 const DESCRIBE_SESSION = "extension-describe";
 
 async function ask(channel: ProcessChannel, source: DescribedSource): Promise<ExtensionModuleSummary[]> {
-  const timer = setTimeout(() => channel.restart(`it took longer than ${DESCRIBE_TIMEOUT_MS / 1000} seconds to describe an extension`), DESCRIBE_TIMEOUT_MS);
-  try { return (await channel.call("describe", source)).value; }
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const reason = `It took longer than ${DESCRIBE_TIMEOUT_MS / 1000} seconds to describe`;
+      channel.restart(reason);
+      reject(new Error(reason));
+    }, DESCRIBE_TIMEOUT_MS);
+  });
+  const answer = channel.call("describe", source).then(result => result.value);
+  answer.catch(() => {});
+  try { return await Promise.race([answer, late]); }
   finally {
     clearTimeout(timer);
-    await channel.close().catch(() => {});
+    void channel.close().catch(() => {});
   }
 }
 

@@ -41,7 +41,8 @@ its host has.
    offers them, the server's `WEB_SEARCH` provider and the workspace's **Web search** setting are gone, and older
    connectors' searches are refused (410). An extension may register tools with retired names, so a Pi web search
    extension provides `web_search` as it does in Pi. Unlike `web_fetch`, an extension's requests aren't confined by the
-   workspace's network access: they run in the connector, approved like host commands unless automatic.
+   workspace's network access where the extension runs outside the sandbox; in a sandboxed session on Linux they are
+   ([extension-isolation.md](extension-isolation.md)).
 10. **Pi's built-ins, from the host's configuration.** Pi ships built-in extensions (pi-coding-agent's `builtInExtensions`).
    A host's owner and admins turn them on for every session on the host, in every workspace
    (`HostConfig.builtinExtensions`, Host → Extensions), with nothing to install. Pikibun runs pi-durable's own versions,

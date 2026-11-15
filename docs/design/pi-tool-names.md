@@ -115,7 +115,7 @@ would then run on data it misreads, which is worse than not running.
 7. **Pikibun's tool wins a name.** The loader already ignores an extension's tool named like one of Pikibun's
    (`apps/runner/src/extensions/load.ts`, among the module's `ignored`), and the workspace's page shows it as left out
    (`packages/shared/src/workspace-tools.ts`: `shadowed`, kind `own`). After the rename that covers `read`, `write`,
-   `edit`, `grep` and `ls`, and `find` from phase 3. An extension's tool runs in the connector, outside the sandbox, so letting it take
+   `edit`, `grep` and `ls`, and `find` from phase 3. An extension's tool may run outside the sandbox, so letting it take
    the confined `read`'s place would change what the name can reach without the workspace choosing that. Until
    phase 3 an extension's `find` is offered as now.
 
