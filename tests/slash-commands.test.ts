@@ -33,8 +33,9 @@ test("typing a slash lists the commands offered, narrowed by what follows it", (
   assert.deepEqual(drafts("/usr"), []);
   assert.deepEqual(drafts("hello /"), []);
   assert.deepEqual(drafts("/", { ...offer, commands: ["copy", "new"] }), ["/new", "/copy"]);
-  const [model, , , fresh] = slashSuggestions("/", offer);
+  const [model, , name, fresh] = slashSuggestions("/", offer);
   assert.deepEqual(model, { key: "model", label: "/model [provider/model]", hint: "Choose the model for your next messages", draft: "/model ", runs: false });
+  assert.deepEqual(name, { key: "name", label: "/name [title]", hint: "Rename this session", draft: "/name ", runs: true });
   assert.deepEqual(fresh, { key: "new", label: "/new", hint: "Start a new session in this workspace", draft: "/new", runs: true });
 });
 
@@ -43,7 +44,7 @@ test("a command that takes one of a few values lists them once its name is typed
   assert.deepEqual(drafts("/model OPUS"), ["/model anthropic/claude-opus"]);
   assert.deepEqual(drafts("/model openai/"), ["/model openai/gpt-6"]);
   assert.deepEqual(drafts("/model llama"), []);
-  assert.deepEqual(slashSuggestions("/model gpt", offer), [{ key: "openai\ngpt-6", label: "GPT-6", hint: "openai/gpt-6", draft: "/model openai/gpt-6", runs: true }]);
+  assert.deepEqual(slashSuggestions("/model gpt", offer), [{ key: "openai/gpt-6", label: "GPT-6", hint: "openai/gpt-6", draft: "/model openai/gpt-6", runs: true }]);
   assert.deepEqual(drafts("/thinking "), ["/thinking off", "/thinking low", "/thinking high", "/thinking xhigh"]);
   assert.deepEqual(drafts("/thinking extra"), ["/thinking xhigh"]);
   assert.deepEqual(drafts("/thinking x"), ["/thinking xhigh"]);

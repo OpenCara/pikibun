@@ -7,11 +7,12 @@ export interface SlashCommand {
   name: SlashCommandName;
   description: string;
   argument?: string;
+  lists?: true;
 }
 
 export const slashCommands: readonly SlashCommand[] = [
-  { name: "model", description: "Choose the model for your next messages", argument: "provider/model" },
-  { name: "thinking", description: "Set the reasoning level for your next messages", argument: "level" },
+  { name: "model", description: "Choose the model for your next messages", argument: "provider/model", lists: true },
+  { name: "thinking", description: "Set the reasoning level for your next messages", argument: "level", lists: true },
   { name: "name", description: "Rename this session", argument: "title" },
   { name: "new", description: "Start a new session in this workspace" },
   { name: "clone", description: "Fork a new session from the agent's latest reply" },
@@ -74,14 +75,14 @@ export function slashSuggestions(draft: string, offer: SlashOffer): SlashSuggest
       label: command.argument ? `/${command.name} [${command.argument}]` : `/${command.name}`,
       hint: command.description,
       draft: command.argument ? `/${command.name} ` : `/${command.name}`,
-      runs: !command.argument,
+      runs: !command.lists,
     }));
   }
   if (!offer.commands.some(name => name === parsed.name)) return [];
   const typed = parsed.argument.toLowerCase();
   if (parsed.name === "model") {
     return offer.models.filter(model => modelReference(model).toLowerCase().includes(typed) || model.name.toLowerCase().includes(typed)).map(model => ({
-      key: `${model.provider}\n${model.modelId}`, label: model.name, hint: modelReference(model), draft: `/model ${modelReference(model)}`, runs: true,
+      key: modelReference(model), label: model.name, hint: modelReference(model), draft: `/model ${modelReference(model)}`, runs: true,
     }));
   }
   if (parsed.name === "thinking") {
