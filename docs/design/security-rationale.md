@@ -70,7 +70,7 @@ In the private workspace, **Where it runs** starts on the host for the host's ow
 
 In the private workspace's sessions of the host's owner, `sudo -A` asks the owner for their password in Pikibun, per use, in a box of its own, and nothing keeps it; see [sudo's password](sudo-prompts.md) for why per use and not once, and what that does and doesn't protect.
 
-What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. A session on the host runs its extensions on the host too, in a process of their own as the owner's user (`apps/runner/src/extensions/`), so there a workspace's extensions are trusted code; in a sandboxed session on Linux they run in its sandbox ([extension isolation](extension-isolation.md)).
+What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. A session on the host runs its extensions on the host too, in a process of their own as the owner's user (`apps/runner/src/extensions/`), so there a workspace's extensions are trusted code; in a sandboxed session on Linux or macOS they run in its sandbox ([extension isolation](extension-isolation.md)).
 
 ## Whose tools a message runs
 
@@ -140,7 +140,7 @@ connector fetched since, at the version Pikibun's control plane pins. What bound
 - **A failed pin runs nothing.** A package that fails a check is deleted; the host runs what it ran before, so a
   registry that is down or a bad pin can't stop a host that requires one of them.
 
-What it doesn't protect against: outside a sandboxed session on Linux, a managed package runs in a process of its own but as the
+What it doesn't protect against: outside a sandboxed session on Linux or macOS, a managed package runs in a process of its own but as the
 host's user, outside the sandbox ([extension isolation](extension-isolation.md)), and a version reaches every host that
 opted in within a sync. That is why it stays opt-in until extensions run in the sandbox on every platform.
 
@@ -160,9 +160,9 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
 - **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
   through Pi's API now is what they will reach from their own process.
 
-What it doesn't protect against: in a sandboxed session on Linux the extension process runs in the session's sandbox,
+What it doesn't protect against: in a sandboxed session on Linux or macOS the extension process runs in the session's sandbox,
 with only the connector's code and its extensions' installs mounted, read-only, and the workspace's network access.
-On macOS and Windows, in sessions on the host and on unsandboxed hosts, it still runs as the host's user and can read
+On Windows, in sessions on the host and on unsandboxed hosts, it still runs as the host's user and can read
 Pi's `auth.json` and `models.json` itself; there this closes the door Pi's API opened, not the file system's.
 
 The mounts are the host's own paths, so a mount names nothing the sandbox lacks: `serviceBindAllowed` refuses system
@@ -170,7 +170,7 @@ directories, the home directory and its parents, `/tmp` and the other trees the 
 own files, and the connector reaches the process only through a socket it has checked and pinned.
 
 The connector never imports an installed extension itself: to list its tools it asks an extension process, sandboxed
-where the host has the Linux sandbox, and checks the answer ([extension isolation](extension-isolation.md), "Describing
+where the host has the Linux or the macOS sandbox, and checks the answer ([extension isolation](extension-isolation.md), "Describing
 an extension"). A plain extension process starts without the connector's own environment variables.
 
 Because the process is confined like the session's commands, a tool of such an extension runs for any message that may

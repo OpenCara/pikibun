@@ -27,7 +27,8 @@ import { validateRelayRequest } from "./connector/relay-request.js";
 import { boundedBody, CALLBACK_LIMIT, decodeJson, encoder, IDENTIFIER, refusedReport, TOKEN } from "./connector/wire.js";
 import type { RunnerConfig } from "./session.js";
 import { HostExtensions } from "./extensions/host.js";
-import { sandboxDescribe } from "./extensions/describe.js";
+import { helperDescribe, sandboxDescribe } from "./extensions/describe.js";
+import { SeatbeltBackend } from "./seatbelt.js";
 import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 import { buildVersion } from "../../../packages/shared/src/version.js";
@@ -276,7 +277,9 @@ export class LocalConnector {
       ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false,
         managed: this.options.managedExtensions === true, connectorVersion: this.options.version ?? buildVersion,
         ...(process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend && !this.options.runtimeFactory
-          ? { describe: sandboxDescribe(this.directory) } : {}) });
+          ? { describe: sandboxDescribe(this.directory) }
+          : process.platform === "darwin" && !this.options.unsandboxed && this.options.sandboxBackend?.kind === "seatbelt" && !this.options.runtimeFactory
+            ? { describe: helperDescribe(this.directory, () => new SeatbeltBackend()) } : {}) });
     await this.hostExtensions.load();
     this.releaseLease = await (this.options.acquireLease ?? acquireRunnerLease)(this.directory, () => {
       this.lifetime.abort();

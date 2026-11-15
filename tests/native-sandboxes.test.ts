@@ -15,7 +15,8 @@ import { sandboxNodePath } from "../apps/runner/src/platform.js";
 import { validWindowsLimits } from "../apps/runner/src/sandbox-backend.js";
 import { SeatbeltBackend, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
 import { WINDOWS_RUNNER, WINDOWS_SUPPORT_CHECK, WindowsBackend, windowsSandboxSupport } from "../apps/runner/src/windows-sandbox.js";
-import { ipcLaunch, ProcessChannel, workerCodeMounts, workerEntry } from "../apps/runner/src/extensions/process.js";
+import { confinedLaunch, ProcessChannel } from "../apps/runner/src/extensions/process.js";
+import { helperDescribe } from "../apps/runner/src/extensions/describe.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
 import { seatbeltMissing } from "./helpers/workspaces.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
@@ -357,10 +358,7 @@ test("in the macOS sandbox, an installed extension runs in a process Seatbelt co
   const output: string[] = [];
   const channel = new ProcessChannel({ directory: sandbox.worktree, warn: (source, message) => { output.push(`${source}: ${message}`); }, log: line => { output.push(line); },
     mountAllowed: path => sandbox.bindAllowed(path),
-    launch: ipcLaunch(sandbox.worktree, (target, mounts) => {
-      const launch = sandbox.processCommand(join(sandbox.nodeBin!, "node"), [...workerEntry(), target], [...new Set([...workerCodeMounts(), ...mounts])]);
-      return { program: launch.command, args: launch.args, env: launch.env, cwd: launch.cwd };
-    }) });
+    launch: confinedLaunch(sandbox) });
   t.after(() => channel.close());
   assert.throws(() => sandbox.processCommand("node", [], ["/"]), /can't be given/);
   const opened = await channel.call("open", { source: "local:probe", files: [file], models: [], mount: extension }).catch(error => {
@@ -376,4 +374,27 @@ test("in the macOS sandbox, an installed extension runs in a process Seatbelt co
   assert.match(seen.writeOwn!, /^refused: (EPERM|EACCES)$/, "but not written");
   assert.equal(seen.writeWorktree, "written", "the worktree is the session's to change");
   assert.equal(seen.network, "unreachable", "without the session's egress proxy there is no network");
+});
+
+test("in the macOS sandbox, an installed extension is described without its load-time code reading the host's files", { skip: seatbeltMissing() }, async t => {
+  const state = await realpath(await mkdtemp(join(tmpdir(), "native-describe-")));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  const secret = join(state, "host-secret.txt");
+  await writeFile(secret, "the host's own");
+  const extension = join(state, "extension");
+  await mkdir(extension);
+  const file = join(extension, "peek.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    import { readFileSync } from "node:fs";
+    let seen;
+    try { seen = readFileSync(${JSON.stringify(secret)}, "utf8"); } catch (error) { seen = "refused: " + error.code; }
+    export default function (pi) {
+      pi.registerTool({ name: "peek", label: "Peek", description: seen, parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+    }`);
+  const describe = helperDescribe(state, () => new SeatbeltBackend());
+  const [module] = await describe({ root: extension, files: [file], mount: extension });
+  assert.equal(module!.error, undefined);
+  assert.match(module!.tools[0]!.description, /^refused: (EPERM|EACCES)$/);
+  const [again] = await describe({ root: extension, files: [file], mount: extension });
+  assert.equal(again!.tools[0]!.name, "peek");
 });

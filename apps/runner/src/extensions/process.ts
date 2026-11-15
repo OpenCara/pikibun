@@ -123,6 +123,20 @@ export function ipcLaunch(directory: string, command: WorkerCommandFor = workerC
   };
 }
 
+export interface ConfinedWorkspace {
+  readonly worktree: string;
+  readonly nodeBin?: string | undefined;
+  processCommand(program: string, args: readonly string[], readRoots: readonly string[]): { command: string; args: string[]; env: Record<string, string>; cwd: string };
+}
+
+export function confinedLaunch(sandbox: ConfinedWorkspace): WorkerLaunch {
+  return ipcLaunch(sandbox.worktree, (directory, mounts) => {
+    if (!sandbox.nodeBin) throw new Error("The host's Node.js can't be given to the sandbox");
+    const launch = sandbox.processCommand(join(sandbox.nodeBin, "node"), [...workerEntry(), directory], [...new Set([...workerCodeMounts(), ...mounts])]);
+    return { program: launch.command, args: launch.args, env: launch.env, cwd: launch.cwd };
+  });
+}
+
 export interface SandboxWorker {
   socketDirectory: string;
   nodeBin: string;
