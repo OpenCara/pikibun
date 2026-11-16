@@ -158,7 +158,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   const workspaceId = identifier(input.workspaceId, 'workspaceId');
   if (input.agentVersionId !== undefined) fail(400, 'invalid_input', 'Sessions start from a model; agents were removed.');
   const title = text(input.title ?? 'Untitled session', 'title', 200);
-  const visibility = sessionVisibility(input.visibility === undefined ? 'workspace' : input.visibility);
+  if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'workspace') fail(400, 'invalid_visibility', 'Sessions are visible to the workspace\'s members; leave visibility out.');
   const ownerId = c.get('auth').userId;
   await requireSessionCreator(c.env, workspaceId, ownerId);
   const model = await requireModel(c.env, identifier(input.modelId, 'modelId'), ownerId);
@@ -169,7 +169,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   if (model.connector_id && model.connector_owner_id !== ownerId && input.trustedConnectorId !== model.connector_id) {
     fail(400, 'connector_trust_required', 'Explicitly acknowledge that this host can access this session before continuing.');
   }
-  const session = { id: id(), workspace_id: workspaceId, owner_id: ownerId, title, visibility, policy_version: 1, status: 'provisioning' as const,
+  const session = { id: id(), workspace_id: workspaceId, owner_id: ownerId, title, policy_version: 1, status: 'provisioning' as const,
     created_at: now(), connector_id: model.connector_id ?? null, connector_owner_id: model.connector_owner_id ?? null };
   const capabilities = await hostCapabilities(c.env, session.connector_id) ?? parseCapabilities(null);
   if (session.connector_id && capabilities.plainGit !== true) {
@@ -230,7 +230,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     AND (? = 0 OR EXISTS (SELECT 1 FROM connector_configs accepted WHERE accepted.connector_id = ? AND accepted.host_sessions = 1))
     RETURNING id`)
     .bind(row.id, row.workspace_id, row.owner_id, row.agent_version_id, row.title, row.policy_version, row.status, row.created_at,
-      row.connector_id ?? null, row.connector_owner_id ?? null, row.repositories_json, row.visibility ?? 'private', row.repository_mode ?? null, row.branch ?? null,
+      row.connector_id ?? null, row.connector_owner_id ?? null, row.repositories_json, 'workspace', row.repository_mode ?? null, row.branch ?? null,
       row.host_environment ?? 0, row.tool_output ?? 'full',
       workspaceId, ownerId, workspaceId, resolved.sourceIds,
       ownerId, resolved.sourceIds === '[]' && !resolved.sourcesOptional ? 0 : 1, resolved.githubAuthority === null && testMode(c.env) ? 1 : 0,
@@ -325,7 +325,7 @@ export async function forkSession(c: AppContext, source: SessionRow, entryId: st
   }
   const modelId = await forkModel(c, source, agent, actorId);
   const { row } = await createSession(c, {
-    workspaceId: source.workspace_id, title: title ?? `${fromAsk ? 'Side ask' : 'Fork'}: ${source.title}`.slice(0, 200), visibility: source.visibility ?? 'private',
+    workspaceId: source.workspace_id, title: title ?? `${fromAsk ? 'Side ask' : 'Fork'}: ${source.title}`.slice(0, 200),
     modelId, trustedConnectorId: source.connector_id, ...(source.host_environment ? { hostEnvironment: true } : {}),
   }, fromAsk ? { parentSessionId: source.id } : {});
   try {
@@ -357,11 +357,6 @@ export async function bindingForSession(c: AppContext, row: SessionRow): Promise
   const profile = userProfile(owner);
   profile.env = validateUserEnv(profile.env);
   return { session: runnerSessionRecord(row), owner: profile, agent: agentVersion(agent), model: modelDefinition(model) };
-}
-
-function sessionVisibility(value: unknown): 'private' | 'workspace' {
-  if (value !== 'private' && value !== 'workspace') fail(400, 'invalid_visibility', 'Visibility must be private or workspace.');
-  return value;
 }
 
 async function viewRefused(c: AppContext, row: SessionRow): Promise<boolean> {
@@ -504,18 +499,8 @@ export function registerSessions(app: Hono<AppEnv>): void {
       await keepPortable(c, renamed);
       return c.json({ session: sessionRecord(renamed, access.permissions) });
     }
-    if (!manages) fail(403, 'owner_required', 'Only the session owner, or the workspace\'s owner or an admin, can change its visibility.');
-    if (keys.some(key => key !== 'visibility')) fail(400, 'invalid_input', 'Change the session title, its visibility or its tool output, one at a time.');
-    const visibility = sessionVisibility(input.visibility);
-    const updated = await c.env.DB.query<SessionRow>(`UPDATE sessions SET visibility = ?, policy_version = policy_version + 1
-      WHERE id = ? AND owner_id = ? AND policy_version = ? AND ${sessionManagerSQL('sessions')}
-        AND EXISTS (SELECT 1 FROM users owner JOIN agent_versions a ON a.id = sessions.agent_version_id
-          JOIN models m ON m.id = a.model_id WHERE owner.id = sessions.owner_id
-            AND (? = 1 OR (owner.auth_kind <> 'test' AND m.provider <> 'faux')))
-      RETURNING *`).bind(visibility, row.id, row.owner_id, row.policy_version, actorId, testMode(c.env) ? 1 : 0).first();
-    if (!updated) fail(409, 'policy_changed', 'Session membership or permissions changed; reload and retry.');
-    await auditStatement(c.env, actorId, 'session.visibility.updated', row.workspace_id, row.id, { visibility }).run();
-    return c.json({ session: sessionRecord(updated, access.permissions) });
+    if (keys.includes('visibility')) fail(400, 'visibility_removed', 'Sessions are always visible to the workspace\'s members.');
+    fail(400, 'invalid_input', 'Change the session title or its tool output, one at a time.');
   });
   app.post('/api/sessions/:id/archive', async c => {
     const archived = await archiveSession(c, identifier(c.req.param('id')));

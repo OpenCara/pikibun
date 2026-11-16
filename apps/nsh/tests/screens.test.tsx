@@ -64,8 +64,9 @@ describe("the session list", () => {
     await app.press("id:all-sessions");
     await app.waitFor("id:sessions-row-s5");
     const texts = app.texts().join("\n");
-    expect(texts).toContain("Grace Hopper · Viewer · Workspace-visible");
-    expect(texts).toContain("Yours · Workspace-visible");
+    expect(texts).toContain("Grace Hopper · Viewer · ");
+    expect(texts).toContain("Yours · ");
+    expect(texts).not.toContain("Workspace-visible");
   });
 });
 

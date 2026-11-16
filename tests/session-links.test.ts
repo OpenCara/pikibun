@@ -271,7 +271,6 @@ test('share links show anyone who has one the shared conversation, and nothing e
 test('the workspace\'s owner and admins turn off any session\'s share link, which only its owner sees or creates', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}`;
-  await json(await s.owner.request('PATCH', path, { visibility: 'private' }));
   const { link } = await json<{ link: SessionLink }>(await s.owner.request('PUT', `${path}/link`), 201);
   const token = link.url.slice(`${origin}/#/shared/`.length);
   await json(await s.owner.request('POST', `/api/workspaces/${s.team.id}/members`, { userId: s.member.user.id, role: 'admin' }));
@@ -284,7 +283,7 @@ test('the workspace\'s owner and admins turn off any session\'s share link, whic
   assert.deepEqual(f.sqlite.prepare("SELECT actor_id FROM audit WHERE session_id = ? AND action = 'session.link.revoked'").all(s.session.id)
     .map(row => row.actor_id), [s.member.user.id]);
   await json(await s.owner.request('POST', `/api/workspaces/${s.team.id}/members`, { userId: s.member.user.id, role: 'collaborator' }));
-  await denied(await s.member.request('DELETE', `${path}/link`), 404, 'not_found');
+  await denied(await s.member.request('DELETE', `${path}/link`), 403, 'owner_required');
 });
 
 test('a share link shows only entries of a conversation the view lists as shared, and nothing when it lists none', () => {

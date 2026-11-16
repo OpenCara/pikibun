@@ -87,7 +87,7 @@ export function WorkspaceDatabaseSection(props: { workspace: Workspace; owner: b
   return (
     <Section title="Session database" testID="workspace-database" info={<View style={{ gap: 8 }}>
       <Note>The workspace owner can connect a Postgres database of their own. Backups of this workspace's sessions are then saved there, with each session's details, instead of in the server's own backup storage (if it has any), and downloads and restores read them back from it.</Note>
-      <Note>Whoever can read that database can read the sessions saved there, private ones and their owners' personal environment values included. Other members confirm the database before each of their backups goes there, and again after it is pointed at another database.</Note>
+      <Note>Whoever can read that database can read the sessions saved there, their owners' personal environment values included. Other members confirm the database before each of their backups goes there, and again after it is pointed at another database.</Note>
       <Note>The owner can also have changed sessions backed up there on their own, once they're idle, on a schedule. The password is write-only: it is never shown again after saving.</Note>
     </View>} action={props.owner && data()?.available && !database() ? <Button small variant="outline" icon="plus" label="Connect database" onPress={() => editing.set(true)} /> : undefined}>
       <ResourceState inline loading={resource.loading() && !data()} error={resource.error()} retry={resource.refresh}>

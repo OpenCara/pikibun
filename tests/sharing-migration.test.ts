@@ -99,9 +99,11 @@ test('sharing migration backfills every populated share without creating new gra
   assert.deepEqual((await sessionAccess(env, 'connected-session', 'host'))?.permissions, ['read', 'write', 'approve', 'manage']);
   assert.deepEqual((await sessionAccess(env, 'legacy-session', 'reader'))?.permissions, ['read']);
   assert.deepEqual((await sessionAccess(env, 'ungranted-session', 'owner'))?.permissions, ['read', 'ask', 'write', 'approve', 'manage']);
-  assert.equal(await sessionAccess(env, 'ungranted-session', 'reader'), null);
-  assert.equal(await sessionAccess(env, 'ungranted-session', 'host'), null);
-  assert.equal(await sessionAccess(env, 'legacy-session', 'host'), null);
+  assert.deepEqual(sqlite.prepare('SELECT DISTINCT visibility FROM sessions').all().map(row => row.visibility), ['workspace'],
+    'private sessions were removed: every session is visible to its workspace\'s members');
+  assert.deepEqual((await sessionAccess(env, 'ungranted-session', 'reader'))?.permissions, ['read']);
+  assert.deepEqual((await sessionAccess(env, 'ungranted-session', 'host'))?.permissions, ['read']);
+  assert.deepEqual((await sessionAccess(env, 'legacy-session', 'host'))?.permissions, ['read']);
 });
 
 test('sharing migration constrains visibility and associations while keeping association and runtime grants independent', t => {

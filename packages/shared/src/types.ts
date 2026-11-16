@@ -134,7 +134,7 @@ export interface SessionRecord {
   branch?: string;
   frozen?: true;
   cloneUnavailable?: string;
-  visibility?: "private" | "workspace";
+  visibility?: "workspace";
   parentSessionId?: string;
   packed?: true;
   toolOutput?: "brief";

@@ -73,7 +73,7 @@ async function fixture(t: TestContext) {
   await run('INSERT INTO agents (id, author_id, created_at) VALUES (?, ?, ?)', 'agent', 'owner', created);
   await run('INSERT INTO agent_versions (id, agent_id, author_id, workspace_id, version, name, description, instructions, tools_json, model_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     'version', 'agent', 'owner', 'workspace', 1, 'Agent', '', '', '[]', 'model', created);
-  await run("INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id, connector_owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'private')",
+  await run("INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id, connector_owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'workspace')",
     'session', 'workspace', 'owner', 'version', 'Session', 1, 'ready', created, 'connector', 'host');
   await run('INSERT INTO session_grants VALUES (?, ?, ?, ?)', 'session', 'guest', '["read","manage"]', created);
   let beforeQuery: ((sql: string) => Promise<void>) | undefined;
@@ -284,7 +284,6 @@ const revocations: Record<string, string> = {
   share: 'DELETE FROM connector_shares',
   hostMembership: "DELETE FROM workspace_members WHERE user_id = 'host'",
   ownerMembership: "DELETE FROM workspace_members WHERE user_id = 'owner'",
-  grant: 'DELETE FROM session_grants',
   policyVersion: 'UPDATE sessions SET policy_version = policy_version + 1',
   modelAvailability: 'UPDATE models SET available = 0',
   manifest: "UPDATE connectors SET models_json = '[]'",
@@ -592,9 +591,9 @@ test('replacement during response policy lookup discards the old response', asyn
   assert.equal(await f.connectionHash(), await sha256(replacement.welcome.connectionToken));
 });
 
-test('workspace visibility authorizes relay reads without granting any mutation or backup action', async t => {
+test('workspace membership authorizes relay reads without granting any mutation or backup action', async t => {
   const f = await fixture(t);
-  await f.exec("DELETE FROM session_grants; UPDATE sessions SET visibility = 'workspace'");
+  await f.exec('DELETE FROM session_grants');
   const value = await f.envelope('view', '', 'guest');
   const pending = f.rpc(value);
   const wire = await f.initial.socket.nextRequest();
@@ -609,42 +608,37 @@ test('workspace visibility authorizes relay reads without granting any mutation 
   assert.equal(f.initial.socket.requests.length, 0);
 });
 
-for (const mutation of ['privacy', 'membership'] as const) {
-  for (const stage of ['dispatch', 'response'] as const) {
-    test(`workspace ${mutation} is rechecked by the relay before ${stage} without an explicit grant`, async t => {
-      const f = await fixture(t);
-      await f.exec("DELETE FROM session_grants; UPDATE sessions SET visibility = 'workspace'");
-      const value = await f.envelope('view', '', 'guest');
-      const sql = mutation === 'privacy' ? "UPDATE sessions SET visibility = 'private'"
-        : "DELETE FROM workspace_members WHERE user_id = 'guest'";
-      if (stage === 'dispatch') {
-        await f.exec(sql);
-        assert.equal((await f.rpc(value)).status, 403);
-        await settled();
-        assert.equal(f.initial.socket.requests.length, 0);
-      } else {
-        const pending = f.rpc(value);
-        const wire = await f.initial.socket.nextRequest();
-        await f.exec(sql);
-        f.reply(f.initial.socket, wire, '{"private":"workspace-revoked-must-not-leak"}');
-        const response = await pending;
-        assert.equal(response.status, 403);
-        assert.ok(!(await response.text()).includes('workspace-revoked-must-not-leak'));
-      }
-    });
-  }
+for (const stage of ['dispatch', 'response'] as const) {
+  test(`workspace membership is rechecked by the relay before ${stage} without an explicit grant`, async t => {
+    const f = await fixture(t);
+    await f.exec('DELETE FROM session_grants');
+    const value = await f.envelope('view', '', 'guest');
+    const sql = "DELETE FROM workspace_members WHERE user_id = 'guest'";
+    if (stage === 'dispatch') {
+      await f.exec(sql);
+      assert.equal((await f.rpc(value)).status, 403);
+      await settled();
+      assert.equal(f.initial.socket.requests.length, 0);
+    } else {
+      const pending = f.rpc(value);
+      const wire = await f.initial.socket.nextRequest();
+      await f.exec(sql);
+      f.reply(f.initial.socket, wire, '{"private":"workspace-revoked-must-not-leak"}');
+      const response = await pending;
+      assert.equal(response.status, 403);
+      assert.ok(!(await response.text()).includes('workspace-revoked-must-not-leak'));
+    }
+  });
 }
 
 const isolatedRevocations: Record<string, string> = {
   share: "DELETE FROM connector_shares; UPDATE sessions SET policy_version = policy_version + 1 WHERE owner_id <> 'host'",
-  privacy: "UPDATE sessions SET visibility = 'private', policy_version = policy_version + 1 WHERE id = 'session'",
   membership: "DELETE FROM workspace_members WHERE user_id = 'guest'",
 };
-for (const name of ['share', 'privacy', 'membership', 'revocation', 'credential', 'generation']) {
+for (const name of ['share', 'membership', 'revocation', 'credential', 'generation']) {
   test(`${name} response denial isolates session policy but preserves host-generation fencing`, async t => {
     const f = await fixture(t);
     await f.exec(`DELETE FROM session_grants;
-      UPDATE sessions SET visibility = 'workspace';
       INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status,
         created_at, connector_id, connector_owner_id, visibility)
       SELECT 'host-session', workspace_id, 'host', agent_version_id, 'Host session', 1, 'ready',

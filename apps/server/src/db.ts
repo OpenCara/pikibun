@@ -53,7 +53,7 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
   const pullRequest = row.pull_request_url ? sessionPullRequest(row.pull_request_url, row.pull_request_state)
     : sessionPullRequest(row.branch_pull_request_url, row.branch_pull_request_state);
   return { id: row.id, workspaceId: row.workspace_id, ownerId: row.owner_id, ...(row.owner_name ? { ownerName: row.owner_name } : {}), agentVersionId: row.agent_version_id,
-    title: row.title, visibility: row.visibility ?? 'private', policyVersion: row.policy_version, status: row.status, createdAt: row.created_at,
+    title: row.title, visibility: 'workspace', policyVersion: row.policy_version, status: row.status, createdAt: row.created_at,
     repositories: JSON.parse(row.repositories_json ?? '[]'),
     ...(row.repository_mode === 'clone' ? { repositoryMode: 'clone' as const } : {}),
     ...(row.repository_mode === 'clone' && row.branch ? { branch: row.branch } : {}),

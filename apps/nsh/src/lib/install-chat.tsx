@@ -38,7 +38,7 @@ export function createInstallChat(go: (route: PageRoute) => void) {
     const chat = { host: host.name, missing, onHost };
     const options = chatOptionsBody(host, selection, "submit");
     const created = await api<{ session: SessionRecord }>("/api/sessions", { method: "POST", body: {
-      workspaceId: workspace.id, modelId: model.id, title: installChatTitle(chat), visibility: "private", ...(onHost ? { hostEnvironment: true } : {}),
+      workspaceId: workspace.id, modelId: model.id, title: installChatTitle(chat), ...(onHost ? { hostEnvironment: true } : {}),
     } });
     const sessionId = created.session.id;
     const content = installChatMessage(chat);

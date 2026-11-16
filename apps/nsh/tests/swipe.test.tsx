@@ -32,7 +32,7 @@ describe("swiping a session's row on a phone", () => {
     await app.drag("id:session-row-s1", { x: -160 });
     await app.press("id:swipe-more-s1");
     await app.waitFor("id:menu-copy-id");
-    for (const item of ["menu-copy-link", "menu-rename", "menu-visibility", "menu-archive"]) expect(app.shows(`id:${item}`)).toBe(true);
+    for (const item of ["menu-copy-link", "menu-rename", "menu-archive"]) expect(app.shows(`id:${item}`)).toBe(true);
     await app.press("id:menu-copy-id");
     expect(app.clipboard()).toBe("s1");
     expect(app.shows("id:session-actions")).toBe(false);
