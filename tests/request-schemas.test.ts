@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readdir, readFile } from 'node:fs/promises';
+import { join, relative } from 'node:path';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { body, fields, identifier, parsed, text, userIdentifier } from '../apps/server/src/schemas.ts';
@@ -61,4 +63,63 @@ test('the body still has to be a JSON object of bounded size', async () => {
   assert.equal((await post({}, 'text/plain')).status, 415);
   assert.equal((await post([])).status, 400);
   assert.equal((await post({ padding: 'x'.repeat(32) })).status, 413);
+});
+
+test('fields() answers a fault of its keys with the route\'s code when it names one', async () => {
+  const post = app(fields({ token: z.string() }, 'Only token is accepted.', { code: 'invalid_account' }));
+  assert.deepEqual(await post({ token: 'x', other: 1 }), { status: 400, body: { error: 'Only token is accepted.', code: 'invalid_account' } });
+  assert.equal((await post({ token: 'x' })).status, 200);
+});
+
+const handChecked: Record<string, number> = {
+  'authority/api-access.ts': 1,
+  'authority/auth.ts': 4,
+  'authority/authorize.ts': 1,
+  'authority/git/accounts.ts': 1,
+  'authority/github-broker.ts': 4,
+  'authority/host-access.ts': 1,
+  'authority/network.ts': 3,
+  'authority/password-auth.ts': 6,
+  'authority/push/broker.ts': 2,
+  'authority/push/identities.ts': 2,
+  'authority/repositories.ts': 2,
+  'authority/sources/sources.ts': 3,
+  'authority/tool-checks.ts': 1,
+  'authority/workspace-connections.ts': 2,
+  'backups.ts': 1,
+  'catalog.ts': 5,
+  'connectors.ts': 4,
+  'cross-session.ts': 1,
+  'extensions.ts': 5,
+  'file-uploads.ts': 2,
+  'host-config.ts': 1,
+  'host-migrations.ts': 1,
+  'host-models.ts': 1,
+  'notifications.ts': 2,
+  'restore-routes.ts': 2,
+  'scheduled-prompts.ts': 3,
+  'session-branches.ts': 1,
+  'session-tunnels.ts': 1,
+  'sessions.ts': 7,
+  'workspace-databases/routes.ts': 4,
+  'workspace-invites.ts': 2,
+};
+
+test('new routes check their bodies with body(): hand-checked bodies only go away (#9)', async () => {
+  const root = join(import.meta.dirname, '..', 'apps', 'server', 'src');
+  const found: Record<string, number> = {};
+  for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+    const path = join(entry.parentPath, entry.name);
+    const file = relative(root, path).split('\\').join('/');
+    if (file === 'schemas.ts' || file === 'http.ts') continue;
+    const count = (await readFile(path, 'utf8')).match(/\bjsonObject\s*\(/g)?.length ?? 0;
+    if (count) found[file] = count;
+  }
+  for (const [file, count] of Object.entries(found)) {
+    assert.ok(count <= (handChecked[file] ?? 0), `${file} reads ${count} bodies with jsonObject(), more than the ${handChecked[file] ?? 0} it had: check a new body with body() and a schema (docs/design/request-schemas.md)`);
+  }
+  for (const [file, count] of Object.entries(handChecked)) {
+    assert.ok((found[file] ?? 0) >= count, `${file} moved a body to body(): lower its count in handChecked to ${found[file] ?? 0}`);
+  }
 });
