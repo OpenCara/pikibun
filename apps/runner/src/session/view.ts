@@ -92,7 +92,7 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
     withdrawable: true,
     rewindable: true,
     memberForks: true,
-    ...(commands?.length ? { commands } : {}),
+    ...(commands ? { commands } : {}),
     ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
     ...(usage ? { context: usage } : {}),
     ...(access ? { access } : {}),

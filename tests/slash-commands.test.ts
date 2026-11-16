@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compactUnavailable, hostCommand, parseSlashDraft, slashCommand, slashCommands, slashLevel, slashModel, slashSuggestions, type SlashOffer } from "../packages/client/src/slash-commands.js";
+import { COMPACT_NEEDS_UPDATE, COMPACT_UNAVAILABLE, compactRefusal, hostCommand, parseSlashDraft, slashCommand, slashCommands, slashLevel, slashModel, slashSuggestions, type SlashOffer } from "../packages/client/src/slash-commands.js";
 import type { SessionCommand } from "../packages/shared/src/session-commands.js";
 
 const sonnet = { provider: "anthropic", modelId: "claude-sonnet", name: "Claude Sonnet" };
@@ -72,10 +72,19 @@ test("the host's commands follow the client's own in the list, and a name the cl
   assert.deepEqual(hostCommand("/compact ", host), { command: host[0], text: "/compact" });
   assert.equal(hostCommand("/deploy prod\nnow", host)?.text, "/Deploy prod\nnow", "sent under the name the host knows");
   for (const draft of ["/new thing", "/nope", "review", "/usr/bin/env", " /review"]) assert.equal(hostCommand(draft, host), undefined, draft);
-  assert.equal(compactUnavailable("/compact", []), true);
-  assert.equal(compactUnavailable("/Compact keep the plan", [{ name: "review", kind: "prompt" }]), true);
-  assert.equal(compactUnavailable("/compact", host), false);
-  for (const draft of ["/compacting", "say /compact", "compact"]) assert.equal(compactUnavailable(draft, []), false, draft);
+});
+
+test("/compact on a host that lists no commands says to update it, and on one that lists others says it isn't taken now", () => {
+  const compact: SessionCommand = { name: "compact", kind: "host" };
+  assert.equal(compactRefusal("/compact", undefined), COMPACT_NEEDS_UPDATE);
+  assert.equal(compactRefusal("/Compact keep the plan", undefined), COMPACT_NEEDS_UPDATE);
+  assert.equal(compactRefusal("/compact\nkeep the plan", null), COMPACT_NEEDS_UPDATE);
+  assert.equal(compactRefusal("/compact", []), COMPACT_UNAVAILABLE, "a current host that takes none for this session");
+  assert.equal(compactRefusal("/compact", [{ name: "review", kind: "prompt" }]), COMPACT_UNAVAILABLE);
+  assert.equal(compactRefusal("/compact", [{ name: "compact" }]), COMPACT_UNAVAILABLE, "an entry that isn't well formed doesn't count");
+  assert.equal(compactRefusal("/compact", [compact]), undefined);
+  assert.equal(compactRefusal("/compact keep the plan", [{ name: "review", kind: "prompt" }, compact]), undefined);
+  for (const draft of ["/compacting", "say /compact", "compact", "/review"]) assert.equal(compactRefusal(draft, undefined), undefined, draft);
 });
 
 test("a model named exactly comes first in /model's list, so Return picks the model that was typed", () => {

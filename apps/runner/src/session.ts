@@ -188,6 +188,7 @@ export class RunnerSession {
   private closing = false;
   readonly #queue: RunQueue;
   readonly #commands: SessionCommands;
+  readonly #commandSources = new Set<string>();
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   #compaction: () => CompactionSettings | undefined = () => undefined;
@@ -1236,7 +1237,7 @@ export class RunnerSession {
       conversation: id => this.harness.conversation(id as ConversationId, context), agent: () => this.#shared.agent(context),
       context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
-      commands: async () => (this.#frozen || this.#packed || this.closing ? undefined : this.#commands.list()),
+      commands: async () => (this.#frozen || this.#packed || this.closing ? [] : this.#commands.list()),
     });
   }
 
@@ -1244,7 +1245,9 @@ export class RunnerSession {
     const host = this.#hostExtensions;
     if (!host || !this.config.extensions) return [];
     const sources = (await this.extensionChoice()).chosen.map(item => item.source);
-    void this.openExtensions(sources).catch(() => {});
+    const unasked = sources.filter(source => !this.#commandSources.has(source));
+    for (const source of unasked) this.#commandSources.add(source);
+    if (unasked.length) void this.openExtensions(sources).catch(() => {});
     return host.commands(sources);
   }
 
@@ -1434,6 +1437,7 @@ export class RunnerSession {
     this.generation++;
     const extensions = this.#hostExtensions;
     this.#hostExtensions = undefined;
+    this.#commandSources.clear();
     await extensions?.shutdown().catch(() => {});
     const failed = this.#failed;
     const builtins = this.#builtins;

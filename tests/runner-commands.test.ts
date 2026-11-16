@@ -10,7 +10,7 @@ import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@e
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { RunnerService } from "../apps/runner/src/server.js";
-import { COMMAND_FILES, commandFiles, COMPACTED, COMPACTION_STARTED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, SessionCommands,
+import { COMMAND_FILES, commandFiles, COMPACTED, COMPACTION_STARTED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, ranBefore, SessionCommands,
   type SessionCommandsOptions } from "../apps/runner/src/session/commands.js";
 import type { Run } from "../apps/runner/src/session/state.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
@@ -67,6 +67,7 @@ function fakeCommands(overrides: Partial<SessionCommandsOptions> = {}) {
     runExtensionCommand: async (_run, command, args) => {
       log.push(`${command.name} ${args}`);
       if (args === "boom") throw new Error("it broke\nbadly");
+      if (args === "bell") return { notices: ["Ring\u0007once\u001b[31m", " twice ", "\n"], messages: [] };
       return command.name === "ask" ? { notices: ["ignored"], messages: [`Asked: ${args}`, " "] } : { notices: args ? [`Hello ${args}`] : [], messages: [] };
     },
     find: async () => { log.push("find"); return Object.keys(files); },
@@ -114,6 +115,13 @@ test("/compact and an extension's command run on the host, and never in a side a
     assert.match(greet!.action === "refused" ? greet!.notice : "", /^\/greet is a command of an extension \(npm:greeter@1\.0\.0\), which changes the session/);
   }
   assert.equal(log.length, 5, "nothing ran for them");
+  assert.deepEqual(await commands.before(run("/greet bell")), { action: "command", name: "greet", notice: "Ring once [31m\ntwice" }, "what a command says is shown as plain text");
+  log.length = 0;
+  const again = async () => false;
+  assert.deepEqual(await commands.before(run("/compact"), again), { action: "command", name: "compact", notice: ranBefore("compact") });
+  assert.deepEqual(await commands.before(run("/greet Ada"), again), { action: "command", name: "greet", notice: ranBefore("greet") });
+  assert.deepEqual(log, [], "a command a host was running when it stopped isn't run a second time");
+  assert.equal(await commands.before(run("/review api.ts"), again), undefined);
   const failing = fakeCommands({ compact: async () => { throw new Error("storage is gone"); } });
   assert.deepEqual(await failing.commands.before(run("/compact")), { action: "refused", by: "", notice: "The host couldn't start compacting this conversation. Try again shortly." });
 });
@@ -133,6 +141,8 @@ test("a template fills in its arguments as Pi does, a skill comes in Pi's block,
   assert.equal(await commands.expand("/new thing"), "Brand new: thing", "a template added since the last look is found");
   delete files[".pi/prompts/review.md"];
   assert.equal(await commands.expand("/review api.ts"), "/review api.ts", "one that can't be read stays as typed");
+  const moved = fakeCommands({ expansion: async () => { throw new Error("Pi's template code moved"); } });
+  assert.equal(await moved.commands.expand("/review api.ts"), "/review api.ts", "and so does one Pi's code can't fill in");
 });
 
 test("a session runs /compact, extension commands, templates and skills from its messages, and lists them in its view", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
@@ -219,6 +229,8 @@ test("a session runs /compact, extension commands, templates and skills from its
   assert.equal(view.queue?.at(-1)?.status, "command");
   assert.equal(view.activity, "done", "the session's status is the last message's, not the command's");
   assert.equal(view.entries.find(entry => entry.kind === "workspace.run-command")?.actorId, "test:alice");
+  const runs = Object.values((await (session as unknown as { metadata(): Promise<{ runs: Record<string, { command?: unknown; commandStarted?: true }> }> }).metadata()).runs);
+  assert.deepEqual(runs.filter(item => item.command).map(item => item.commandStarted), [true], "the host notes that it started the command before it runs it");
   assert.equal(await compacted(), `/compact: ${NOTHING_TO_COMPACT}`, "the line ends with how the compaction went");
 
   view = await send("/greet Ada");

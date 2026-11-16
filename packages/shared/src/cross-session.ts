@@ -128,7 +128,7 @@ export function crossSessionHeader(message: { id: string; kind: CrossSessionMess
   return `[Pikibun cross-session ${what} xs:${message.id} · from session "${oneLine(origin.title)}" (${origin.id}) · sent by ${by} through its agent · hop ${message.hops}]`;
 }
 
-const doneStatuses = new Set(["settled", "interrupted", "stopped", "images lost", "refused"]);
+const doneStatuses = new Set(["settled", "interrupted", "stopped", "images lost", "refused", "command"]);
 
 export function messageOutcome(view: Pick<SessionView, "entries" | "queue">, message: Pick<CrossSessionMessage, "id" | "submissionId" | "conversationId">): CrossSessionOutcome {
   const queued = view.queue?.find(item => item.submissionId === message.submissionId);

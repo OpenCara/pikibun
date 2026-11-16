@@ -1,7 +1,7 @@
 import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
 import { Button as BaseButton, NavPage } from "nsh/base";
 import {
-  activeStatuses, autoChatOptionsBody, browserUnavailableText, chatOptionsBody, COMPACT_NEEDS_UPDATE, compactUnavailable, CONNECTOR_UPDATE_HINT, copyText, findModel,
+  activeStatuses, autoChatOptionsBody, browserUnavailableText, chatOptionsBody, compactRefusal, CONNECTOR_UPDATE_HINT, copyText, findModel,
   hostCommand, hostCommands, initialSelection, levelLabels, managesSession, messageCut, modelUnavailable, offeredLevels, pairToolResults, parseSlashDraft, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, selectModel, slashCommand, slashLevel, slashModel, slashSuggestions,
   type ChatSelection, type ConnectorInfo, type EntryView, type SessionRecord, type SlashCommandName, type SubmitResult,
@@ -370,7 +370,8 @@ function Conversation(props: {
     commanding.clear();
     const command = slashCommand(text);
     if (command) { runCommand(command.command.name, command.argument, text); return; }
-    if (compactUnavailable(text, hostedCommands())) { void commanding.run(async () => { throw new Error(COMPACT_NEEDS_UPDATE); }); return; }
+    const uncompactable = compactRefusal(text, view().commands);
+    if (uncompactable) { void commanding.run(async () => { throw new Error(uncompactable); }); return; }
     const message = hostCommand(text, hostedCommands())?.text ?? text;
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";

@@ -301,6 +301,14 @@ describe("the chat box's slash commands", () => {
     expect(app.value("id:composer-input")).toBe("/compact");
   });
 
+  test("/compact on a current host that takes no commands for the session says so, without asking for an update", async () => {
+    const app = await desktop({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...idle, commands: [] }, revision: "r1" } } });
+    await app.type("id:composer-input", "/compact");
+    await app.submit("id:composer-input");
+    await app.waitFor("text:This session's host isn't taking /compact for this session right now.");
+    expect(sent(app, "POST", "/api/sessions/s1/submit")).toHaveLength(0);
+  });
+
   test("a command the host ran shows as one line that says who ran it", async () => {
     const ran = { ...idle, entries: [...idle.entries,
       { id: "0:command:k1", kind: "workspace.run-command", role: "system", text: "/compact: Compaction started.", actorId: "u1", conversationId: "0" },

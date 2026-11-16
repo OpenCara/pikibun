@@ -117,6 +117,17 @@ messages.
   read when it is used, so the text sent is the file's as it is then.
 - **A side ask or a Read-only message** takes templates and skills, which are only text, and refuses `/compact` and
   extension commands, which act.
+- **At most once.** A message still being screened when its host stops is screened again when it starts, which is
+  right for a screen but not for a command that acts. The host notes on the message that it is starting the command
+  before it runs it (`commandStarted`), and a second screening finds the note and says, in the command's line, that
+  the host stopped while it ran and that it wasn't run again. Whether to run it again is the person's call.
+- **Failing soft.** Pi's code for filling in a template is loaded from its package when first needed. If it can't be
+  loaded or the file can't be read, the message goes to the model as typed, as on a host without this, and the next
+  one tries again. A command's own text is shown as plain text: control characters other than line breaks become
+  spaces.
+- **The app tells an old host from a current one** by whether the view has a list at all: a host from before this
+  sends none, and `/compact` there says to update its connector; a current host always sends one, empty for a session
+  that takes no commands (archived and packed, or closing), and `/compact` there says only that it isn't taken now.
 
 Not read: the host owner's own `~/.pi/agent/prompts` and `~/.pi/agent/skills`, which are their files, not the
 workspace's, and would be shown to other members' sessions; and the prompts and skills a Pi package ships (`pi.prompts`,

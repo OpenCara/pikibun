@@ -4,6 +4,7 @@ import { levelLabels } from "./chat-options";
 
 export const hostCommands = parseSessionCommands;
 export const COMPACT_NEEDS_UPDATE = "This session's host can't compact a conversation on request yet: update its connector (npx pikibun@latest connect).";
+export const COMPACT_UNAVAILABLE = "This session's host isn't taking /compact for this session right now.";
 
 const hostKinds: Record<SessionCommandKind, string> = { host: "Runs on the session's host", extension: "A command of an extension", prompt: "A prompt template", skill: "A skill" };
 
@@ -80,8 +81,10 @@ export function hostCommand(draft: string, commands: readonly SessionCommand[]):
   return command ? { command, text: `/${command.name}${match[2]!.trimEnd()}` } : undefined;
 }
 
-export function compactUnavailable(draft: string, commands: readonly SessionCommand[]): boolean {
-  return /^\/compact(\s|$)/i.test(draft) && !commands.some(command => command.name === "compact");
+export function compactRefusal(draft: string, listed: unknown): string | undefined {
+  if (!/^\/compact(\s|$)/i.test(draft)) return undefined;
+  if (!Array.isArray(listed)) return COMPACT_NEEDS_UPDATE;
+  return parseSessionCommands(listed).some(command => command.name === "compact") ? undefined : COMPACT_UNAVAILABLE;
 }
 
 const modelReference = (model: SlashModel) => `${model.provider}/${model.modelId}`;

@@ -23,6 +23,7 @@ export type Run = {
   refused?: { by: string; notice: string };
   command?: { name: string; notice: string };
   commandOutcome?: string;
+  commandStarted?: true;
   reverted?: true;
   withdrawn?: true;
   steered?: string;

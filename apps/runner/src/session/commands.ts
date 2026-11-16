@@ -7,6 +7,8 @@ export const COMPACTED = "Compacted: the summary of the older messages is in the
 export const NOTHING_TO_COMPACT = "Nothing to compact: the conversation is still too short to summarize.";
 export const COMPACTION_STOPPED = "Compaction stopped before it finished. The conversation is as it was.";
 export const compactionFailed = (reason: string) => `Compaction failed: ${reason.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 300) || "the model wrote no summary"}. The conversation is as it was.`;
+export const ranBefore = (name: string) => `The host stopped while /${name} ran, so whether it finished isn't known. It wasn't run again: send it again if it should be.`;
+const shown = (text: string) => text.replace(/[\x00-\x09\x0b-\x1f\x7f]+/g, " ").trim();
 export const ACTS = "changes the session, which a side ask or a Read-only message doesn't do: send it as a shared message that may act. Nothing ran.";
 export const COMMAND_FILES = "{,*/}{.pi/prompts/*.md,{.pi,.agents}/skills/{*.md,**/SKILL.md}}";
 const FILE_LIST_MS = 120_000;
@@ -87,23 +89,25 @@ type Expansion = Awaited<ReturnType<SessionCommandsOptions["expansion"]>>;
 let expansion: Promise<Expansion> | undefined;
 
 export function piExpansion(): Promise<Expansion> {
-  expansion ??= (async () => {
-    const at = (path: string) => new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent")).href;
-    const templates = await import(at("./core/prompt-templates.js")) as { parseCommandArgs(args: string): string[]; substituteArgs(content: string, args: string[]): string };
-    const { parseFrontmatter } = await import(at("./utils/frontmatter.js")) as { parseFrontmatter(content: string): { frontmatter: Record<string, unknown>; body: string } };
-    const parsed = (content: string) => {
-      try { return parseFrontmatter(content); } catch { return { frontmatter: {}, body: content }; }
-    };
-    return {
-      substitute: (content, args) => templates.substituteArgs(content, templates.parseCommandArgs(args)),
-      body: content => parsed(content).body,
-      skillName: content => {
-        const { name } = parsed(content).frontmatter;
-        return typeof name === "string" && NAME.test(name) ? name : undefined;
-      },
-    };
-  })();
+  expansion ??= load().catch(error => { expansion = undefined; throw error; });
   return expansion;
+}
+
+async function load(): Promise<Expansion> {
+  const at = (path: string) => new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent")).href;
+  const templates = await import(at("./core/prompt-templates.js")) as { parseCommandArgs(args: string): string[]; substituteArgs(content: string, args: string[]): string };
+  const { parseFrontmatter } = await import(at("./utils/frontmatter.js")) as { parseFrontmatter(content: string): { frontmatter: Record<string, unknown>; body: string } };
+  const parsed = (content: string) => {
+    try { return parseFrontmatter(content); } catch { return { frontmatter: {}, body: content }; }
+  };
+  return {
+    substitute: (content, args) => templates.substituteArgs(content, templates.parseCommandArgs(args)),
+    body: content => parsed(content).body,
+    skillName: content => {
+      const { name } = parsed(content).frontmatter;
+      return typeof name === "string" && NAME.test(name) ? name : undefined;
+    },
+  };
 }
 
 const directoryOf = (path: string) => path.split("/").slice(0, -1).join("/") || ".";
@@ -154,12 +158,13 @@ export class SessionCommands {
     return commands;
   }
 
-  async before(run: Run): Promise<CommandOutcome | undefined> {
+  async before(run: Run, first: () => Promise<boolean> = async () => true): Promise<CommandOutcome | undefined> {
     const parsed = parseCommand(run.content);
     if (!parsed) return undefined;
     const acts = run.mode === "write" && run.options?.access !== "read";
     if (parsed.name === "compact") {
       if (!acts) return { action: "refused", by: "", notice: `/compact ${ACTS}` };
+      if (!await first()) return { action: "command", name: "compact", notice: ranBefore("compact") };
       try { await this.options.compact(run, parsed.args || undefined); }
       catch (error) {
         return { action: "refused", by: "", notice: error instanceof RunnerError ? error.message : "The host couldn't start compacting this conversation. Try again shortly." };
@@ -169,11 +174,12 @@ export class SessionCommands {
     const command = (await this.options.extensionCommands()).find(item => item.name === parsed.name);
     if (!command) return undefined;
     if (!acts) return { action: "refused", by: command.source, notice: `/${command.name} is a command of an extension (${command.source}), which ${ACTS}` };
+    if (!await first()) return { action: "command", name: command.name, notice: ranBefore(command.name) };
     try {
       const { notices, messages } = await this.options.runExtensionCommand(run, command, parsed.args);
       const text = messages.map(message => message.trim()).filter(Boolean).join("\n\n");
       if (text) return { action: "message", text };
-      return { action: "command", name: command.name, notice: notices.map(notice => notice.trim()).filter(Boolean).join("\n").slice(0, sessionCommandLimits.notice) || "It ran, and said nothing." };
+      return { action: "command", name: command.name, notice: notices.map(shown).filter(Boolean).join("\n").slice(0, sessionCommandLimits.notice) || "It ran, and said nothing." };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return { action: "refused", by: command.source,
@@ -188,8 +194,11 @@ export class SessionCommands {
     const file = await this.found(item => skill !== undefined ? item.kind === "skill" && item.name === skill : item.kind === "prompt" && item.name === parsed.name);
     if (!file) return text;
     let content: string;
-    try { content = await this.options.read(file.path); } catch { return text; }
-    const expansion = await this.options.expansion();
+    let expansion: Expansion;
+    try {
+      content = await this.options.read(file.path);
+      expansion = await this.options.expansion();
+    } catch { return text; }
     if (file.kind === "prompt") return expansion.substitute(expansion.body(content), parsed.args);
     const block = `<skill name="${quoted(expansion.skillName(content) ?? file.name)}" location="${quoted(file.path)}">\nReferences are relative to ${directoryOf(file.path)}.\n\n${expansion.body(content).trim()}\n</skill>`;
     return parsed.args ? `${block}\n\n${parsed.args}` : block;

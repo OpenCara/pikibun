@@ -319,7 +319,16 @@ export class RunQueue {
     if (refusal) return { action: "refused", by: "", notice: refusal };
     const images = run.images ? await this.options.inputs.read(key) : [];
     if (!images) return { action: "skip" };
-    const ran = await commands?.before(run);
+    const ran = await commands?.before(run, async () => {
+      let first = false;
+      await this.options.mutate(meta => {
+        const saved = meta.runs[key];
+        if (!saved || saved.commandStarted) return;
+        saved.commandStarted = true;
+        first = true;
+      });
+      return first;
+    });
     if (ran && ran.action !== "message") return ran;
     const text = ran ? ran.text : run.content;
     const attached = images.map(image => ({ type: "image" as const, ...image }));
