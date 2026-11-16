@@ -122,6 +122,9 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   }
   const archivedText = () => {
     const current = live.session();
+    if (current?.detached) {
+      return "This session moved to another server its host is paired with, and its history here is read-only. To work on it here again, bring it back from your private workspace's list, where its host offers it.";
+    }
     if (current?.packed) {
       return manages() ? "This session is read-only. Its files are packed on its host. Unarchiving unpacks them and clones its repositories again, so its host must be online."
         : "This session is read-only. Its files are packed on its host. Only its owner, or the workspace's owner or an admin, can unarchive it.";
@@ -232,7 +235,8 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               {reason => <Banner testID="session-clone-unavailable" tone="warning" title="Can't clone repositories">{reason()}</Banner>}
             </If>
             <If when={archived()}>
-              <Banner title="Archived" actions={<If when={manages()}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
+              <Banner title={live.session()?.detached ? "Moved to another server" : "Archived"}
+                actions={<If when={manages() && !live.session()?.detached}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
                 {archivedText()}
               </Banner>
             </If>
@@ -334,6 +338,18 @@ function Conversation(props: {
     ? activeQueue().filter(item => item.actorId === user.id && item.status === "queued" && (item.mode === "ask" ? canAsk() : canWrite())) : []));
   const editBlocked = () => attachments.images().length > 0;
   const sideConversations = computed(() => view().conversations.filter(item => item.mode === "ask" && (!item.actorId || item.actorId === user.id)));
+  effect(() => {
+    const asked = data.sideAskRequest();
+    if (!asked || asked.sessionId !== props.id) return;
+    const known = sideConversations().some(item => item.id === asked.conversationId);
+    untracked(() => {
+      data.requestSideAsk(null);
+      if (asked.conversationId === null) { mode.set("write"); return; }
+      if (!canAsk()) return;
+      mode.set("ask");
+      conversationId.set(known ? asked.conversationId : "");
+    });
+  });
   const shownConversation = (conversation: { id: string; mode?: string; actorId?: string } | undefined) => (actualMode() === "ask"
     ? conversation?.mode === "ask" && (!conversation.actorId || conversation.actorId === user.id) && (!conversationId() || conversation.id === conversationId())
     : conversation?.mode !== "ask");
@@ -391,7 +407,7 @@ function Conversation(props: {
         body: { content: withFilesNote(message, note), requestId: pending.id, ...(sending ? { options: sending } : {}), ...(images.length ? { images } : {}) } });
       receipt.set(result);
       if (sending && !auto) data.rememberChat(host, chosen, view().agent);
-      if (kind === "ask") conversationId.set(result.conversationId);
+      if (kind === "ask") { conversationId.set(result.conversationId); void data.refreshSessions(); }
       forgetSentDraft(props.id, sent);
       attachments.sent(pasted, attached);
       request = null;

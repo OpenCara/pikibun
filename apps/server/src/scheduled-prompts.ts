@@ -12,6 +12,7 @@ import { childThinkingLevel, sessionCurrentModel } from './cross-session.js';
 import { requireUnfrozen } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
 import { archiveSession, createSession, submitMessage } from './sessions.js';
+import { keepPortable } from './portable-sessions.js';
 import type { AppContext, Env, ModelRow, SessionRow, AppEnv } from './types.js';
 
 export const MAX_SCHEDULES_PER_SESSION = 20;
@@ -350,6 +351,26 @@ async function deleteSchedule(env: Env, row: SessionRow, change: ScheduleChange,
   await refreshNextScheduled(env, row.id);
 }
 
+export async function sessionSchedules(env: Env, sessionId: string): Promise<SessionSchedule[]> {
+  const rows = await env.DB.query<ScheduleRow>('SELECT * FROM session_schedules WHERE session_id = ? ORDER BY created_at, id').bind(sessionId).all();
+  return rows.map(scheduleRecord);
+}
+
+export async function restorePortableSchedules(env: Env, row: SessionRow, schedules: Record<string, unknown>[]): Promise<number> {
+  if (!schedules.length) return 0;
+  const count = await env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM session_schedules WHERE session_id = ?').bind(row.id).first('n');
+  if (Number(count) > 0) return 0;
+  let restored = 0;
+  for (const schedule of schedules.slice(0, MAX_SCHEDULES_PER_SESSION)) {
+    const fields: ScheduleInput = Object.fromEntries(scheduleFields.filter(key => schedule[key] !== undefined).map(key => [key, schedule[key]]));
+    try {
+      await createSchedule(env, row, { actorId: row.owner_id }, fields);
+      restored++;
+    } catch { }
+  }
+  return restored;
+}
+
 type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number };
 
 export async function agentSchedules(c: AppContext, connectorId: string | null): Promise<Response> {
@@ -400,14 +421,19 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
   }
   const change: ScheduleChange = { actorId, callId };
   if (action === 'create') {
-    return c.json({ schedule: scheduleRecord(await createSchedule(c.env, row, change, fields)) } satisfies ScheduleToolResult, 201);
+    const created = await createSchedule(c.env, row, change, fields);
+    await keepPortable(c, row);
+    return c.json({ schedule: scheduleRecord(created) } satisfies ScheduleToolResult, 201);
   }
   const current = await findSchedule(c.env, row, scheduleId!);
   if (action === 'delete') {
     await deleteSchedule(c.env, row, change, current);
+    await keepPortable(c, row);
     return c.json({ deleted: current.id } satisfies ScheduleToolResult);
   }
-  return c.json({ schedule: scheduleRecord(await updateSchedule(c.env, row, change, current, fields)) } satisfies ScheduleToolResult);
+  const updated = await updateSchedule(c.env, row, change, current, fields);
+  await keepPortable(c, row);
+  return c.json({ schedule: scheduleRecord(updated) } satisfies ScheduleToolResult);
 }
 
 export function registerScheduledPrompts(app: Hono<AppEnv>) {
@@ -420,6 +446,7 @@ export function registerScheduledPrompts(app: Hono<AppEnv>) {
   app.post('/api/sessions/:id/schedules', async c => {
     const row = await ownSession(c);
     const schedule = await createSchedule(c.env, row, { actorId: c.get('auth').userId }, scheduleInput(await jsonObject(c)));
+    await keepPortable(c, row);
     return c.json({ schedule: scheduleRecord(schedule) }, 201);
   });
 
@@ -427,12 +454,14 @@ export function registerScheduledPrompts(app: Hono<AppEnv>) {
     const row = await ownSession(c);
     const current = await ownSchedule(c, row);
     const saved = await updateSchedule(c.env, row, { actorId: c.get('auth').userId }, current, scheduleInput(await jsonObject(c)));
+    await keepPortable(c, row);
     return c.json({ schedule: scheduleRecord(saved) });
   });
 
   app.delete('/api/sessions/:id/schedules/:scheduleId', async c => {
     const row = await ownSession(c);
     await deleteSchedule(c.env, row, { actorId: c.get('auth').userId }, await ownSchedule(c, row));
+    await keepPortable(c, row);
     return c.body(null, 204);
   });
 

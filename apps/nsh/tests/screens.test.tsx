@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { ORIGIN, server, sessionRecord, signedIn, view } from "./fixtures";
+import { ORIGIN, server, sessionRecord, signedIn, view, workspace } from "./fixtures";
 
 const shared = (overrides: Record<string, unknown>) => open("./harness/shared.tsx", { network: server(overrides) });
 
@@ -67,6 +67,29 @@ describe("the session list", () => {
     expect(texts).toContain("Grace Hopper · Viewer · ");
     expect(texts).toContain("Yours · ");
     expect(texts).not.toContain("Workspace-visible");
+  });
+});
+
+describe("portable sessions", () => {
+  const offer = { id: "p1", title: "Kept on my laptop", createdAt: sessionRecord.createdAt, connectorId: "c1", hostName: "Ada's laptop", hostEnvironment: true,
+    working: false, attachedElsewhere: true, model: { provider: "anthropic", modelId: "claude-sonnet" }, modelId: "m1" };
+  const brought = { ...sessionRecord, id: "p1", title: "Kept on my laptop", portable: true };
+
+  test("another server's session from this computer is listed in the private workspace, and Bring here brings it", async () => {
+    let attached = false;
+    const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1280, height: 820, network: server({
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, personal: true, name: "Private" }] } },
+      [`GET ${ORIGIN}/api/sessions`]: () => ({ body: { sessions: attached ? [sessionRecord, brought] : [sessionRecord] } }),
+      [`GET ${ORIGIN}/api/portable-sessions`]: () => ({ body: { sessions: attached ? [] : [offer] } }),
+      [`POST ${ORIGIN}/api/portable-sessions/p1/attach`]: () => { attached = true; return { status: 201, body: { session: brought } }; },
+    }) });
+    await app.waitFor("id:portable-row-p1");
+    expect(app.texts()).toContain("On another server · Ada's laptop");
+    await app.press("id:portable-bring-p1");
+    await app.waitFor("id:session-row-p1");
+    await app.waitUntil(() => !app.shows("id:portable-row-p1"));
+    const request = app.requests().find(item => item.method === "POST" && item.url.endsWith("/api/portable-sessions/p1/attach"));
+    expect(JSON.parse(request?.body ?? "{}")).toEqual({ connectorId: "c1" });
   });
 });
 

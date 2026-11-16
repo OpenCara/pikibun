@@ -32,6 +32,7 @@ export function userIdentifier(field = 'userId') {
 export interface FieldsOptions {
   required?: readonly string[];
   some?: true;
+  code?: string;
 }
 
 export function fields<T extends z.ZodRawShape>(shape: T, message: string, options: FieldsOptions = {}) {
@@ -40,7 +41,7 @@ export function fields<T extends z.ZodRawShape>(shape: T, message: string, optio
     .refine(value => {
       const keys = Object.keys(value);
       return keys.every(key => names.includes(key)) && (options.required ?? []).every(key => keys.includes(key)) && (!options.some || keys.length > 0);
-    }, message)
+    }, options.code ? { message, params: { code: options.code } } : message)
     .pipe(z.object(shape));
 }
 

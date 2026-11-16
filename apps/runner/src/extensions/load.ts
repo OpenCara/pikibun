@@ -31,7 +31,7 @@ const ENTRY = /\.(?:ts|js|mts|mjs)$/;
 const isFile = (path: string) => stat(path).then(found => found.isFile(), () => false);
 const isDirectory = (path: string) => stat(path).then(found => found.isDirectory(), () => false);
 
-async function packageEntries(directory: string, requireManifest: boolean): Promise<{ files: string[]; name?: string; version?: string; description?: string }> {
+export async function packageEntries(directory: string, requireManifest: boolean): Promise<{ files: string[]; name?: string; version?: string; description?: string }> {
   let manifest: { name?: unknown; version?: unknown; description?: unknown; keywords?: unknown; pi?: { extensions?: unknown } } = {};
   try { manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Its package.json can't be read"); }

@@ -18,6 +18,7 @@ import { verifyRunnerTicket } from '../apps/runner/src/protocol.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { ExtensionStore } from '../apps/runner/src/extensions/store.js';
 import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
+import { verifiedSigned } from '../packages/shared/src/identity.js';
 
 const hostMigration = process.platform === 'linux' ? { hostMigration: true } : {};
 
@@ -157,7 +158,7 @@ test('pairing posts only to the fixed origin and strips extra model/capability s
   assert.equal(request.redirect, 'error');
   assert.equal(request.credentials, 'omit');
   assert.equal(request.headers.get('authorization'), null);
-  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, autoModel: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   for (const secret of [providerSecret, credentials.token, 'fixture_pairing_code']) assert.equal(request.url.includes(secret), false);
 });
 
@@ -203,6 +204,8 @@ test('relay accepts exactly the supported action/method/path combinations and lo
     tunnel: JSON.stringify({ action: 'stop' }),
     image: JSON.stringify({ entryId: '1:2', index: 0, size: 'thumbnail' }),
     sudo: JSON.stringify({ id: 'prompt1', decline: true }),
+    attach: JSON.stringify({ binding: binding() }),
+    portable: JSON.stringify({ title: 'Kept', schedules: [] }),
   };
   for (const action of Object.keys(bodies) as (keyof typeof bodies)[]) {
     await t.test(action, async () => {
@@ -374,6 +377,9 @@ type FixtureOptions = {
   version?: string;
   localView?: ConnectorRuntime['view'];
   localEntries?: ConnectorRuntime['entries'];
+  identityDir?: string;
+  portable?: ConnectorRuntime['portable'];
+  identity?: (path: string, body: unknown) => Response | Promise<Response>;
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -392,7 +398,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
   const connector = createConnector({
     dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
-    ...(options.version ? { version: options.version } : {}),
+    ...(options.version ? { version: options.version } : {}), ...(options.identityDir ? { identityDir: options.identityDir } : {}),
     browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
     tunnel: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.tunnel },
     acquireLease: path => {
@@ -419,6 +425,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
         resume: () => { record.resumes++; return Promise.resolve(); },
         ...(options.localView ? { view: options.localView } : {}),
         ...(options.localEntries ? { entries: options.localEntries } : {}),
+        ...(options.portable ? { portable: options.portable } : {}),
       };
       return Promise.resolve(runtime);
     },
@@ -430,6 +437,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
         return options.hostConfig?.() ?? Response.json({ config: { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off' } });
       }
       if (request.url === `${origin}/api/connectors/self/extensions`) return options.extensionsSync?.(JSON.parse(call.body)) ?? Response.json({ requests: [] });
+      if (request.url.startsWith(`${origin}/api/connectors/self/identity`) && options.identity) return options.identity(new URL(request.url).pathname, JSON.parse(call.body));
       workerCalls.push(call);
       if (request.url === `${origin}/api/connectors/self/manifest`) {
         return options.manifest?.(manifests++) ?? Response.json({ ok: true });
@@ -533,7 +541,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   socket.welcome();
   const call = await fixture.workerCalls.next();
   assert.equal(call.request.url, `${origin}/api/connectors/self/manifest`);
-  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, autoModel: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   assert.equal(call.request.headers.get('x-connection-token'), connectionToken);
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(ready, false);
@@ -561,7 +569,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.deepEqual(fixture.statuses, ['connecting', 'connected', 'stopped']);
 });
 
-const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, autoModel: true, ...hostMigration, hostConfig: true, compactionConfig: true };
+const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, ...hostMigration, hostConfig: true, compactionConfig: true };
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
@@ -1464,4 +1472,43 @@ test('a connected host with --managed-extensions runs the package Pikibun pins i
   assert.deepEqual((await syncs.next()).report.installed.map(item => [item.source, item.version]), [['piki:pr-flow', undefined]], 'the bundled copy until Pikibun answers');
   assert.deepEqual((await syncs.next()).report.installed.map(item => [item.source, item.version]), [['piki:pr-flow', '0.2.0']], 'reported again at once');
   assert.equal(fixture.runtimes[0]!.config.extensions!.installed()[0]!.managed?.version, '0.2.0', 'sessions opened from now on run it');
+});
+
+test('a host with an identity says it keeps portable sessions, sends its delegation and sessions, and signs the settings its server asks for', { timeout: 10000 }, async t => {
+  const identityDir = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-identity-'));
+  t.after(() => rm(identityDir, { recursive: true, force: true }));
+  const reports = mailbox<Record<string, unknown>>();
+  const signed = mailbox<Record<string, unknown>>();
+  let answered = 0;
+  const fixture = await connectorFixture(t, { identityDir, portable: async () => [],
+    identity: (path, body) => {
+      if (path === '/api/connectors/self/identity/settings') { signed.push(body as Record<string, unknown>); return Response.json({ ok: true }); }
+      reports.push(body as Record<string, unknown>);
+      return Response.json(answered++ ? {} : { sign: { version: 3, settings: { name: 'Mine', paging: true } } });
+    } });
+  await startFixture(fixture);
+  const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
+  assert.equal(JSON.parse(manifest.body).capabilities.portableSessions, true);
+  assert.equal(fixture.runtimes[0]!.config.portable?.store.root, identityDir, 'sessions keep their marks in the identity');
+  const report = await reports.next();
+  const delegation = await verifiedSigned(report.delegation, 'delegation');
+  assert.equal(delegation.statement.server, origin);
+  assert.equal(delegation.statement.connector, credentials.connectorId);
+  assert.deepEqual(report.sessions, []);
+  assert.deepEqual(report.rotations, []);
+  assert.equal(report.settings, null);
+  const settings = await verifiedSigned((await signed.next()).settings, 'settings');
+  assert.equal(settings.statement.key, delegation.statement.key);
+  assert.deepEqual([settings.statement.version, settings.statement.settings], [3, { name: 'Mine', paging: true }]);
+});
+
+test('a host whose identity can\'t be made still connects, without portable sessions', { timeout: 10000 }, async t => {
+  const parent = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-no-identity-'));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  await writeFile(join(parent, 'identity'), 'not a directory');
+  const fixture = await connectorFixture(t, { identityDir: join(parent, 'identity'), portable: async () => [] });
+  await startFixture(fixture);
+  const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
+  assert.equal(JSON.parse(manifest.body).capabilities.portableSessions, undefined);
+  assert.equal(fixture.runtimes[0]!.config.portable, undefined);
 });

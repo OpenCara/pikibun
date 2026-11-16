@@ -58,6 +58,8 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
     ...(row.repository_mode === 'clone' ? { repositoryMode: 'clone' as const } : {}),
     ...(row.repository_mode === 'clone' && row.branch ? { branch: row.branch } : {}),
     ...(Number(row.host_environment ?? 0) === 1 ? { hostEnvironment: true as const } : {}),
+    ...(row.portable_key ? { portable: true as const } : {}),
+    ...(row.detached_at ? { detached: true as const } : {}),
     ...(frozenSession(row) ? { frozen: true as const } : {}),
     ...(row.connector_id ? { connectorId: row.connector_id, connectorOwnerId: row.connector_owner_id! } : {}),
     ...(grants ? { permissions: grants } : {}),
@@ -69,9 +71,9 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
     ...(pullRequest ? { pullRequest } : {}),
     ...(row.tunnel_url && row.tunnel_expires_at && row.status !== 'archived' && Date.parse(row.tunnel_expires_at) > Date.now() ? { tunnel: { url: row.tunnel_url, expiresAt: row.tunnel_expires_at } } : {}) };
 }
-export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'ownerName' | 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed' | 'tunnel'> {
+export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'ownerName' | 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed' | 'tunnel' | 'detached'> {
   const { ownerName: _ownerName, visibility: _visibility, permissions: _permissions, activity: _activity, frozen: _frozen, pullRequest: _pullRequest,
-    toolOutput: _toolOutput, nextScheduledAt: _nextScheduledAt, parentSessionId: _parentSessionId, packed: _packed, tunnel: _tunnel, ...record } = sessionRecord(row);
+    toolOutput: _toolOutput, nextScheduledAt: _nextScheduledAt, parentSessionId: _parentSessionId, packed: _packed, tunnel: _tunnel, detached: _detached, ...record } = sessionRecord(row);
   return record;
 }
 export async function requireActiveSession(env: Env, row: Pick<SessionRow, 'id' | 'status'>): Promise<void> {

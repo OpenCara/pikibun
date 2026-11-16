@@ -102,6 +102,8 @@ export interface SessionRow {
   tool_output?: 'full' | 'brief';
   tunnel_url?: string | null;
   tunnel_expires_at?: string | null;
+  portable_key?: string | null;
+  detached_at?: string | null;
   pull_request_url?: string | null;
   pull_request_state?: string | null;
   branch_pull_request_url?: string | null;

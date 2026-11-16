@@ -4,6 +4,7 @@ import { stdioTransport, type Transport } from '../../../runner/src/app-host-tra
 import { assertConnectorPlatform, assertPrerequisites, hostIsolation, loadConnectorModels, unsandboxedWarning } from '../../../runner/src/connect-setup.js';
 import type { LocalModels } from '../../../runner/src/local-pi.js';
 import { ConnectorSetupError } from '../../../runner/src/protocol.js';
+import { identityDirectory } from '../../../runner/src/identity.js';
 import { ConfigurationError } from '../config.js';
 import type { ServerEvent, ServerHostState, ServerInspection, ServerRequest, ServerStartRequest, ServerStatus } from '../../../../packages/shared/src/app-server-protocol.js';
 import { startLocalHost, type LocalHost } from './host.js';
@@ -91,13 +92,13 @@ async function launch(request: ServerStartRequest): Promise<void> {
   } else {
     const setHost = (next: ServerHostState) => { if (running === current) { current.hostState = next; status(); } };
     current.host = startLocalHost(server, stateDir, {
-      localModels: host.models, unsandboxed,
+      localModels: host.models, unsandboxed, identityDir: identityDirectory(),
       onWaiting: () => setHost('waiting'),
       onStatus: (next, reason) => {
         setHost(next);
         if (next === 'disconnected' && reason) log('warning', `This computer's host disconnected: ${reason}`);
       },
-      onWarning: () => log('warning', 'Some resource domains are unavailable; production bash remains fail-closed.'),
+      onWarning: (warning, detail) => log('warning', warning === 'identity-unavailable' ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.` : 'Some resource domains are unavailable; production bash remains fail-closed.'),
     });
     current.host.started.catch((error: unknown) => {
       if (current.stopping || (error instanceof Error && error.name === 'AbortError')) return;

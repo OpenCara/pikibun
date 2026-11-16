@@ -100,6 +100,11 @@ export class ControlPlaneCalls {
     await this.#report(generation, "/api/connectors/self/activity", { sessionId, activity }, "Activity report unavailable");
   }
 
+  async reportDetached(generation: Generation, sessionId: string): Promise<void> {
+    if (!IDENTIFIER.test(sessionId)) throw new Error("Invalid detached report");
+    await this.#report(generation, "/api/connectors/self/portable/detached", { sessionId }, "Detached report unavailable");
+  }
+
   async reportTunnel(generation: Generation, report: SessionTunnelReport): Promise<void> {
     if (!IDENTIFIER.test(report.sessionId)) throw new Error("Invalid tunnel report");
     await this.#report(generation, "/api/connectors/self/tunnel", report, "Tunnel report unavailable");

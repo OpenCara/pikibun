@@ -1,11 +1,12 @@
 import { Clipboard, computed, List, signal, Text, untracked, View } from "nsh";
 import { Button as BaseButton, Input } from "nsh/base";
-import { canCreateSessions, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord } from "../shared";
+import { canCreateSessions, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord, type SideAskSummary } from "../shared";
 import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../components/PullRequest";
 import { createSessionMenu, RenameSheet, type SessionMenu } from "../components/SessionMenu";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
-import type { Action } from "../lib/resource";
+import { createAction, createResource, type Action } from "../lib/resource";
+import type { PortableSessionOffer } from "../../../../packages/shared/src/types";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
 import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, StatusDot, SwipeRow, swipesRows, type MenuAction } from "../ui";
@@ -13,7 +14,18 @@ import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, Identit
 type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; archived: number; showArchived: boolean; canCreate: boolean }
   | { kind: "session"; key: string; session: SessionRecord; depth: number }
-  | { kind: "start"; key: string; workspaceId: string };
+  | { kind: "ask"; key: string; session: SessionRecord; ask: SideAskSummary; depth: number }
+  | { kind: "start"; key: string; workspaceId: string }
+  | { kind: "portable"; key: string; offer: PortableSessionOffer };
+
+const PORTABLE_POLL_MS = 30_000;
+
+export function sessionRows(sessions: readonly SessionRecord[]): Extract<Row, { kind: "session" | "ask" }>[] {
+  return nestSessions(sessions).flatMap(({ session: item, depth }) => [
+    { kind: "session" as const, key: item.id, session: item, depth },
+    ...(item.sideAsks ?? []).map(ask => ({ kind: "ask" as const, key: `${item.id}:ask:${ask.conversationId}`, session: item, ask, depth: Math.min(depth + 1, 4) })),
+  ]);
+}
 
 export function shortAge(value: string, now = Date.now()): string {
   const time = new Date(value).getTime();
@@ -49,6 +61,16 @@ export function SessionList(props: {
   const collapsed = signal<readonly string[]>([]);
   const swiped = signal<string | null>(null);
   const swipe = (id: string, open: boolean) => swiped.update(current => (open ? id : current === id ? null : current));
+  const portable = createResource<{ sessions: PortableSessionOffer[] }>(() => "/api/portable-sessions", PORTABLE_POLL_MS);
+  const bringing = createAction();
+  function bringHere(offer: PortableSessionOffer) {
+    void bringing.run(async () => {
+      const result = await session().api<{ session: SessionRecord }>(`/api/portable-sessions/${encodeURIComponent(offer.id)}/attach`,
+        { method: "POST", body: { connectorId: offer.connectorId } });
+      await Promise.all([data.refreshSessions(), portable.refresh()]);
+      props.onOpen(result.session.id);
+    }, `${offer.title} is here now.`);
+  }
   const rows = computed<Row[]>(() => {
     const needle = query().trim().toLowerCase();
     const byWorkspace = new Map<string, SessionRecord[]>();
@@ -70,11 +92,13 @@ export function SessionList(props: {
       const workspace = data.workspaces().find(item => item.id === id);
       const canCreate = Boolean(workspace && canCreateSessions(workspace.role));
       const folded = collapsed().includes(id) && !needle;
+      const offers = workspace?.personal ? (portable.data()?.sessions ?? []).filter(offer => matchesSession(offer, needle)) : [];
       return [
         { kind: "workspace", key: `workspace:${id}`, id, count: sessions.length, archived: archived.get(id) ?? 0, showArchived: showArchived().includes(id), canCreate,
           title: workspace?.name ?? "Other workspace" },
-        ...(folded ? [] : nestSessions(sessions).map(({ session: item, depth }): Row => ({ kind: "session", key: item.id, session: item, depth }))),
-        ...(!folded && !needle && !sessions.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
+        ...(folded ? [] : sessionRows(sessions)),
+        ...(!folded && !needle && !sessions.length && !offers.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
+        ...(folded ? [] : offers.map((offer): Row => ({ kind: "portable", key: `portable:${offer.connectorId}:${offer.id}`, offer }))),
       ];
     });
   });
@@ -90,7 +114,7 @@ export function SessionList(props: {
   function pullToRefresh() {
     const pull = ++pulls;
     refreshing.set(true);
-    void Promise.all([data.refreshSessions(), data.refreshWorkspaces()]).finally(() => { if (pull === pulls) refreshing.set(false); });
+    void Promise.all([data.refreshSessions(), data.refreshWorkspaces(), portable.refresh()]).finally(() => { if (pull === pulls) refreshing.set(false); });
   }
   const inset = () => (props.compact ? 8 : 12);
 
@@ -112,6 +136,9 @@ export function SessionList(props: {
             </If>
             <If when={!menu.renaming() && (menu.action.error() || menu.action.notice())}>
               <View testID="session-list-feedback" style={{ paddingHorizontal: 4 }}><Feedback error={menu.action.error()} notice={menu.action.notice()} /></View>
+            </If>
+            <If when={bringing.error() || bringing.notice()}>
+              <View testID="portable-feedback" style={{ paddingHorizontal: 4 }}><Feedback error={bringing.error()} notice={bringing.notice()} /></View>
             </If>
           </View>
         )}
@@ -144,8 +171,14 @@ export function SessionList(props: {
         )}>
         {row => (
           <View style={{ paddingHorizontal: inset() }}>
+            <If when={row().kind === "portable" ? row() as Extract<Row, { kind: "portable" }> : null}>
+              {item => <PortableRow offer={item().offer} compact={props.compact} busy={bringing.busy()} onBring={bringHere} />}
+            </If>
+            <If when={row().kind !== "portable"}>
             <If when={row().kind === "session" ? row() as Extract<Row, { kind: "session" }> : null}
               else={
+                <If when={row().kind === "ask" ? row() as Extract<Row, { kind: "ask" }> : null}
+                  else={
                 <If when={row().kind === "start" ? row() as Extract<Row, { kind: "start" }> : null}
                   else={
                     <WorkspaceRow row={row() as Extract<Row, { kind: "workspace" }>} collapsed={collapsed().includes((row() as Extract<Row, { kind: "workspace" }>).id)}
@@ -159,11 +192,19 @@ export function SessionList(props: {
                     </BaseButton>
                   )}
                 </If>
+                  }>
+                  {ask => (
+                    <SideAskRow session={ask().session} ask={ask().ask} depth={ask().depth} compact={props.compact}
+                      onOpen={(sessionId, conversationId) => { data.requestSideAsk({ sessionId, conversationId }); props.onOpen(sessionId); }} />
+                  )}
+                </If>
               }>
               {item => (
-                <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId} onOpen={props.onOpen} compact={props.compact} menu={menu}
+                <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId}
+                  onOpen={id => { data.requestSideAsk({ sessionId: id, conversationId: null }); props.onOpen(id); }} compact={props.compact} menu={menu}
                   swiped={swiped() === item().session.id} onSwipe={open => swipe(item().session.id, open)} />
               )}
+            </If>
             </If>
           </View>
         )}
@@ -206,6 +247,40 @@ function WorkspaceRow(props: {
         <DropdownMenu label={`${props.row.title} options`} testID={`workspace-options-${props.row.id}`} items={options()} />
       </View>
     </RowMenu>
+  );
+}
+
+export function portableHint(offer: Pick<PortableSessionOffer, "hostName" | "attachedElsewhere" | "working">): string {
+  return `${offer.working ? "Working on another server" : offer.attachedElsewhere ? "On another server" : "Not attached here"} · ${offer.hostName}`;
+}
+
+function PortableRow(props: { offer: PortableSessionOffer; compact?: boolean; busy: boolean; onBring: (offer: PortableSessionOffer) => void }) {
+  return (
+    <View testID={`portable-row-${props.offer.id}`} accessibilityLabel={`${props.offer.title}, ${portableHint(props.offer)}`}
+      style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8, paddingLeft: 32,
+        borderRadius: radius.medium }}>
+      <Icon name="arrow-down" size={11} color={palette().faint} />
+      <View style={{ flex: 1, gap: 1 }}>
+        <Text style={{ numberOfLines: 1, fontSize: text.body, color: palette().muted }}>{props.offer.title}</Text>
+        <Text style={{ numberOfLines: 1, fontSize: text.caption, color: palette().faint }}>{portableHint(props.offer)}</Text>
+      </View>
+      <Button small variant="outline" label="Bring here" testID={`portable-bring-${props.offer.id}`} disabled={props.busy || props.offer.working}
+        onPress={() => props.onBring(props.offer)} />
+    </View>
+  );
+}
+
+function SideAskRow(props: { session: SessionRecord; ask: SideAskSummary; depth: number; compact?: boolean; onOpen: (sessionId: string, conversationId: string) => void }) {
+  const id = () => `side-ask-row-${props.session.id}-${props.ask.conversationId}`;
+  return (
+    <BaseButton testID={id()} accessibilityLabel={`Side ask: ${props.ask.preview}`} onPress={rowPress(() => props.onOpen(props.session.id, props.ask.conversationId))}
+      style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 30 : 38, paddingVertical: 4, paddingRight: 8,
+        paddingLeft: 32 + props.depth * 12, borderRadius: radius.medium }}
+      hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ backgroundColor: palette().selection }}>
+      <Icon name="message-question" size={12} color={palette().faint} />
+      <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{props.ask.preview}</Text>
+      <Text style={{ fontSize: text.caption, color: palette().faint }}>{shortAge(props.ask.createdAt)}</Text>
+    </BaseButton>
   );
 }
 

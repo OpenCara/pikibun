@@ -2,7 +2,7 @@ export * from "../../../packages/client/src/index";
 export type { ConnectorInfo } from "../../../packages/shared/src/connector";
 export type { WorkspaceRepositoryList } from "../../../packages/shared/src/repositories";
 export type {
-  AccessMode, OperationRecord, EntryView, ModelDefinition, SessionActivity, SessionPullRequest, SessionRecord, SessionView, SubmitResult,
+  AccessMode, OperationRecord, EntryView, ModelDefinition, SessionActivity, SessionPullRequest, SessionRecord, SessionView, SideAskSummary, SubmitResult,
   ThinkingLevel, UserProfile, Workspace,
 } from "../../../packages/shared/src/types";
 export type {} from "../../../packages/shared/src/sharing";

@@ -27,11 +27,13 @@ import { isLinkShared } from './session-links.js';
 import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL, requireEnabledModel } from './host-models.js';
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
 import { stopSessionTunnel } from './session-tunnels.js';
+import { recordSideAsk, sideAsksOf } from './side-asks.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 import { packDueAfterArchiving } from './automatic-packing.js';
 import { autoModeEnabled } from './auto-mode.js';
+import { keepPortable, portableKeyFor } from './portable-sessions.js';
 import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
 
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown, content = ''): Promise<ChatOptions | undefined> {
@@ -239,12 +241,17 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       needsConsent ? 1 : 0, row.connector_id ?? null).first();
   if (!inserted) fail(409, 'session_configuration_changed', 'Workspace repositories, Git account access, membership, or connector authority changed. Try again.');
   link.inserted?.(row.id);
+  const portableKey = await portableKeyFor(c.env, row, resolved.sourceIds === '[]');
+  if (portableKey) {
+    await c.env.DB.query('UPDATE sessions SET portable_key = ? WHERE id = ?').bind(portableKey, row.id).run();
+    row.portable_key = portableKey;
+  }
   if (link.parentSessionId) {
     await c.env.DB.query('UPDATE sessions SET parent_session_id = ?, schedule_id = ? WHERE id = ?').bind(link.parentSessionId, link.scheduleId ?? null, row.id).run();
     row.parent_session_id = link.parentSessionId;
     row.schedule_id = link.scheduleId ?? null;
   }
-  await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}),
+  await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}), ...(portableKey ? { portable: true } : {}),
     ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}), ...(link.parentSessionId && link.scheduleId ? { scheduleId: link.scheduleId } : {}) }).run();
   try {
     const binding = await bindingForSession(c, row);
@@ -432,8 +439,13 @@ export async function cloneUnavailable(env: Env, capabilities: ConnectorCapabili
 export function registerSessions(app: Hono<AppEnv>): void {
   app.get('/api/sessions', async c => {
     const actorId = c.get('auth').userId;
-    const sessions = (await listSessionAccess(c.env, actorId))
-      .map(access => sessionRecord(access.row, access.permissions));
+    const access = await listSessionAccess(c.env, actorId);
+    const asked = await sideAsksOf(c.env, actorId, new Set(access.filter(item => hasPermission(item.permissions, 'ask')).map(item => item.row.id)));
+    const sessions = access.map(item => {
+      const record = sessionRecord(item.row, item.permissions);
+      const sideAsks = asked.get(item.row.id);
+      return sideAsks ? { ...record, sideAsks } : record;
+    });
     return c.json({ sessions });
   });
 
@@ -484,6 +496,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
         RETURNING *`).bind(title, row.id, row.owner_id, actorId).first();
       if (!renamed) fail(409, 'policy_changed', 'Session membership or status changed; reload and retry.');
       await auditStatement(c.env, actorId, 'session.renamed', row.workspace_id, row.id).run();
+      await keepPortable(c, renamed);
       return c.json({ session: sessionRecord(renamed, access.permissions) });
     }
     if (keys.includes('visibility')) fail(400, 'visibility_removed', 'Sessions are always visible to the workspace\'s members.');
@@ -501,6 +514,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     const access = await requireSessionManager(c, identifier(c.req.param('id')), 'read', 'Only the session owner, or the workspace\'s owner or an admin, can unarchive it.');
     const actorId = c.get('auth').userId;
     if (access.row.status !== 'archived') fail(409, 'session_not_archived', 'Session is not archived.');
+    if (access.row.detached_at) fail(409, 'session_detached', 'This session moved to another server its host is paired with. Bring it back here from Other servers\' sessions in your private workspace.');
     const row = await unpackSession(c, access);
     const restored = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = COALESCE(archived_status, 'ready'), archived_status = NULL, one_shot = 0,
         pack_due_at = NULL, policy_version = policy_version + 1
@@ -543,7 +557,9 @@ export function registerSessions(app: Hono<AppEnv>): void {
       const { row } = await requireSession(c, identifier(c.req.param('id')), mode === 'ask' ? 'ask' : 'write');
       requireUnfrozen(row);
       const input = await jsonObject(c, connectorLimits.requestBytes + 256 * 1024);
-      return c.json(await submitMessage(c, row, mode, input), 202);
+      const result = await submitMessage(c, row, mode, input);
+      if (mode === 'ask') await recordSideAsk(c, row.id, result.conversationId, input.content, Array.isArray(input.images) ? input.images.length : 0);
+      return c.json(result, 202);
     });
   }
 

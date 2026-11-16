@@ -6,6 +6,7 @@ import { auditStatement, requireMember } from './authority/index.js';
 import { z } from 'zod';
 import { fail, identifier, now } from './http.js';
 import { body } from './schemas.js';
+import { portableSettingsChanged } from './portable-sessions.js';
 import { toolOutputs, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 
 export interface TranscriptSettings {
@@ -54,6 +55,7 @@ export function registerTranscriptSettings(app: Hono<AppEnv>): void {
     const settings = settingsOf(saved);
     await auditStatement(c.env, actor, 'workspace.transcripts.updated', workspaceId, null,
       { ...(paging !== undefined ? { paging } : {}), ...(toolOutput !== undefined ? { toolOutput } : {}) }).run();
+    await portableSettingsChanged(c.env, workspaceId);
     return c.json({ settings });
   });
 }
