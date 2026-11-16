@@ -25,6 +25,9 @@ for fd_name in os.listdir('/proc/self/fd' if os.path.isdir('/proc/self/fd') else
 os.umask(0o077)
 PUSH_KINDS = ('clone-push-prepare', 'clone-push-pack')
 LONG_KINDS = PUSH_KINDS + ('clone-backup', 'clone-restore')
+# Tasks (processes and threads) one sandboxed call may hold at once: a runaway chain of processes stops
+# here instead of exhausting the host's memory. Ample for parallel builds.
+PROCESS_LIMIT = 4096
 
 
 def bounded(which, value):
@@ -33,10 +36,35 @@ def bounded(which, value):
     resource.setrlimit(which, (value, value))
 
 
+def expendable():
+    # Without cgroup limits, a command that exhausts the host's memory makes the kernel kill its largest
+    # process, the connector, and every session on the host loses its connection. The highest OOM score
+    # makes the sandbox's own processes go first; raising it needs no privilege and children inherit it.
+    try:
+        with open('/proc/self/oom_score_adj', 'w') as stream:
+            stream.write('1000')
+    except OSError:
+        pass
+
+
+def own_user_namespace():
+    # RLIMIT_NPROC counts a user's tasks in its own user namespace: in the sandbox's, only the sandbox's;
+    # in the host's, every process the user runs, which no fixed limit fits.
+    try:
+        with open('/proc/self/uid_map') as stream:
+            mapping = stream.read().split()
+    except OSError:
+        return False
+    return mapping != ['0', '0', '4294967295']
+
+
 def limits(request):
     kind = request['kind']
     push = kind in LONG_KINDS
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    expendable()
+    if own_user_namespace():
+        bounded(resource.RLIMIT_NPROC, PROCESS_LIMIT)
     cpu, size, files = (3600, 16 * 1024 * 1024 * 1024, 256) if push else (25, 64 * 1024 * 1024, 256)
     given = request.get('limits') if kind == 'bash' else None
     if given is not None:
