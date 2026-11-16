@@ -65,6 +65,7 @@ export class SessionPiki {
       piki: this.#session(),
       hookTimeoutMs: 30_000,
       inputTimeoutMs: 60_000,
+      commandTimeoutMs: 120_000,
       warn: (source, message) => { process.stderr.write(`Session ${binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
       ...(this.options.extensionProcess ? { extensionProcess: this.options.extensionProcess } : {}),
       sandboxedProcess: this.options.extensionsSandboxed === true,
@@ -110,6 +111,18 @@ export class SessionPiki {
     } finally {
       lease?.release();
     }
+  }
+
+  async requireCommand(actorId: string, source: string, name: string, isolated: boolean): Promise<void> {
+    const { chosen, automaticTools } = await this.options.extensionChoice();
+    if (!chosen.some(candidate => candidate.source === source)) throw new RunnerError(403, `This extension (${source}) no longer applies to this session; /${name} didn't run.`);
+    const sandboxed = isolated && this.options.extensionsSandboxed === true;
+    const inSandbox = sandboxed && !this.options.hostCommands.runsOnHost({ kind: "bash", command: "" }, !this.options.hostCommands.shellAllowed());
+    if (inSandbox || automaticTools || await this.options.hostCommands.allowed(actorId)) return;
+    throw new RunnerError(403, sandboxed
+      ? `/${name} is a command of an extension (${source}), which runs in the sandbox but, on this host, without resource limits, as shell commands do here: only in sessions of the `
+        + "host's owner and of members they granted host commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran."
+      : `/${name} is a command of an extension (${source}), which ${HOST_COMMANDS_RULE}`);
   }
 
   async #runTool(call: Parameters<ExtensionHost["runTool"]>[0], execute: Parameters<ExtensionHost["runTool"]>[1]): Promise<ToolExecutionResult> {

@@ -21,6 +21,9 @@ export type Run = {
   crashed?: true;
   screening?: true;
   refused?: { by: string; notice: string };
+  command?: { name: string; notice: string };
+  commandOutcome?: string;
+  commandStarted?: true;
   reverted?: true;
   withdrawn?: true;
   steered?: string;
@@ -38,7 +41,7 @@ export function comparableOptions(options: ChatOptions | undefined): ChatOptions
 }
 
 export function tellsActivity(run: Run): boolean {
-  return !run.reverted && !run.withdrawn;
+  return !run.reverted && !run.withdrawn && !run.command;
 }
 
 export function holdsQueue(run: Run): boolean {

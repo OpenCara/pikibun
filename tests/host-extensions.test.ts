@@ -111,7 +111,7 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
   assert.deepEqual(search, { source: "npm:pi-search@1.0.0", dev: false, name: "pi-search", version: "1.0.0", description: "Searches.", modules: [{
     path: "src/index.ts", tools: [{ name: "team_search", description: "Search the index." }, { name: "web_search", description: "Search the web." }], events: ["tool_call"],
     flags: [{ name: "endpoint", type: "string", description: "Where to search", default: "https://search.example.com" }],
-    noops: ["/search"], ignored: ["tool read_file (one of Pikibun's own)", "user_bash event", "provider proxy"],
+    noops: [], ignored: ["tool read_file (one of Pikibun's own)", "user_bash event", "provider proxy"],
   }] });
   assert.match(notExtension!.error!, /isn't a Pi extension package/);
   assert.equal(dev!.dev, true);

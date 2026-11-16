@@ -253,6 +253,71 @@ describe("the chat box's slash commands", () => {
     expect(app.dialogs()).toHaveLength(0);
   });
 
+  test("the host's commands are listed after the client's and sent as messages, under the name the host knows", async () => {
+    const hosted = { ...idle, commands: [
+      { name: "compact", kind: "host", description: "Summarize the older messages now", argument: "instructions" },
+      { name: "review", kind: "prompt", description: "Prompt template .pi/prompts/review.md", argument: "arguments" },
+      { name: "skill:release", kind: "skill" }, { name: "bad name", kind: "prompt" }, { name: "new", kind: "prompt" },
+    ] };
+    const app = await desktop({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: hosted, revision: "r1" } } });
+    await app.type("id:composer-input", "/");
+    await app.waitUntil(() => app.texts().some(text => text.startsWith("1–8 of 11")));
+    expect(app.shows("id:composer-suggestion-host:compact")).toBe(false);
+    await app.type("id:composer-input", "comp");
+    await app.waitFor("id:composer-suggestion-host:compact");
+    expect(app.texts()).toContain("Summarize the older messages now");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => sent(app, "POST", "/api/sessions/s1/submit").length === 1);
+    expect(bodyOf(app, "POST", "/api/sessions/s1/submit").content).toBe("/compact");
+    await app.waitUntil(() => app.value("id:composer-input") === "");
+    await app.type("id:composer-input", "/rev");
+    await app.waitFor("id:composer-suggestion-host:review");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => app.value("id:composer-input") === "/review ");
+    expect(sent(app, "POST", "/api/sessions/s1/submit")).toHaveLength(1);
+    await app.type("id:composer-input", "api.ts");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => sent(app, "POST", "/api/sessions/s1/submit").length === 2);
+    expect(bodyOf(app, "POST", "/api/sessions/s1/submit").content).toBe("/review api.ts");
+    await app.waitUntil(() => app.value("id:composer-input") === "");
+    await app.type("id:composer-input", "/Skill:Release v1.2");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => sent(app, "POST", "/api/sessions/s1/submit").length === 3);
+    expect(bodyOf(app, "POST", "/api/sessions/s1/submit").content).toBe("/skill:release v1.2");
+    await app.waitUntil(() => app.value("id:composer-input") === "");
+    await app.type("id:composer-input", "/new");
+    await app.submit("id:composer-input");
+    await app.waitFor("text:What should we work on?");
+    expect(sent(app, "POST", "/api/sessions/s1/submit")).toHaveLength(3);
+  });
+
+  test("/compact on a host that doesn't offer it says to update the connector, and sends nothing to the model", async () => {
+    const app = await desktop();
+    await app.type("id:composer-input", "/compact");
+    expect(app.shows("id:composer-suggestions")).toBe(false);
+    await app.submit("id:composer-input");
+    await app.waitFor("text:This session's host can't compact a conversation on request yet: update its connector (npx pikibun@latest connect).");
+    expect(sent(app, "POST", "/api/sessions/s1/submit")).toHaveLength(0);
+    expect(app.value("id:composer-input")).toBe("/compact");
+  });
+
+  test("/compact on a current host that takes no commands for the session says so, without asking for an update", async () => {
+    const app = await desktop({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...idle, commands: [] }, revision: "r1" } } });
+    await app.type("id:composer-input", "/compact");
+    await app.submit("id:composer-input");
+    await app.waitFor("text:This session's host isn't taking /compact for this session right now.");
+    expect(sent(app, "POST", "/api/sessions/s1/submit")).toHaveLength(0);
+  });
+
+  test("a command the host ran shows as one line that says who ran it", async () => {
+    const ran = { ...idle, entries: [...idle.entries,
+      { id: "0:command:k1", kind: "workspace.run-command", role: "system", text: "/compact: Compaction started.", actorId: "u1", conversationId: "0" },
+      { id: "0:command:k2", kind: "workspace.run-command", role: "system", text: "/greet: Hello Ada", actorId: "u2", conversationId: "0" }] };
+    const app = await desktop({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: ran, revision: "r1" } } });
+    await app.waitFor("text:You ran /compact: Compaction started.");
+    expect(app.texts().some(text => /ran \/greet: Hello Ada$/.test(text) && !text.startsWith("You"))).toBe(true);
+  });
+
   test("on a phone, a command is chosen by pressing it", async () => {
     const app = await open("../App.tsx", { storage: signedIn, platform: "ios", network: server({
       [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: idle, revision: "r1" } },
