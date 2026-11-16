@@ -198,7 +198,9 @@ the host instead of going to the model.
   access (in the sandbox, its helper), never by opening worktree paths in the connector, so a link out of the worktree
   is refused as it is for `read`. They are the repository's content, written by whoever can push to it, and reach the
   model only when someone types their name. A skill's `location` is a worktree path, so the agent opens its other
-  files with its own tools and rules.
+  files with its own tools and rules. Looking for them asks the Pikibun server nothing: the list is part of a view,
+  whose reader was already let in (and which the app reads from its own host without the server), and a command's
+  message was authorized when it was sent and is again before it runs.
 - **The list is the host's word.** The server passes it through with the view; the client keeps only names of the
   expected shape and bounded text (`parseSessionCommands`), and a name the client has itself always wins, so a
   repository can't take over `/model` or `/new`.

@@ -292,7 +292,7 @@ export class RunnerSession {
       tool: definition => definedTool(this.#toolContext, definition), registry: () => this.#registry, toolNames: () => this.tools.map(tool => tool.name),
       added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); },
     });
-    const ownerReads = async () => { await this.authorize(this.binding.owner.id, "write"); };
+    const alreadyAllowed = async () => {};
     this.#commands = new SessionCommands({
       compact: (run, instructions) => this.compact(run, instructions),
       extensionCommands: () => this.extensionCommands(),
@@ -303,8 +303,8 @@ export class RunnerSession {
         await this.#piki.requireCommand(run.initiatedBy, command.source, command.name, host.isolated(command.source));
         return host.command(command.source, command.name, args);
       },
-      find: async (pattern, limit) => (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, ownerReads)).paths,
-      read: path => this.sandbox.readFile(path, ownerReads),
+      find: async (pattern, limit) => (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, alreadyAllowed)).paths,
+      read: path => this.sandbox.readFile(path, alreadyAllowed),
       expansion: piExpansion,
     });
     this.#queue = new RunQueue({
