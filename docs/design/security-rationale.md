@@ -139,7 +139,7 @@ connector fetched since, at the version Pikibun's control plane pins. What bound
   and the install is deleted. Published extensions import only Node's modules and their peer dependencies
   (`scripts/check-extension-packages.mjs`), so a dependency is never needed.
 - **Only what has no authority of its own.** A pin replaces only a hook package the connector bundles as one
-  (`PikiExtension.managed`: `pr-flow`, `context-files`) or names one it doesn't know. The extensions that run a forge's
+  (`managedSource`: `pr-flow`, `context-files`) or names one it doesn't know. The extensions that run a forge's
   command with the host's sign-in, switch the session's own tools, or call a model with the host's keys (the prompt
   audit) are connector code, and a pin for one is ignored.
 - **The host's owner decides.** It is off unless the connector starts with `--managed-extensions`, and
