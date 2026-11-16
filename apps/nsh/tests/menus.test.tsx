@@ -16,9 +16,10 @@ describe("a session's right-click menu", () => {
     await app.waitFor("id:session-row-s1");
     await app.rightClick("id:session-row-s1");
     await app.waitFor("id:menu-copy-id");
-    for (const item of ["menu-copy-link", "menu-rename", "menu-visibility", "menu-archive"]) expect(app.shows(`id:${item}`)).toBe(true);
+    for (const item of ["menu-copy-link", "menu-rename", "menu-archive"]) expect(app.shows(`id:${item}`)).toBe(true);
     expect(app.shows("id:menu-open-tab")).toBe(false);
-    expect(app.shows("text:Make private")).toBe(true);
+    expect(app.shows("id:menu-visibility")).toBe(false);
+    expect(app.shows("text:Make private")).toBe(false);
     await app.press("id:menu-copy-id");
     expect(app.clipboard()).toBe("s1");
     await app.waitFor("text:Session ID copied");
@@ -61,17 +62,6 @@ describe("a session's right-click menu", () => {
     await app.waitFor("text:Session archived");
   });
 
-  test("changes the session's visibility once confirmed", async () => {
-    const app = await desktop();
-    await app.waitFor("id:session-row-s1");
-    app.onDialog(() => "Make private");
-    await app.rightClick("id:session-row-s1");
-    await app.press("id:menu-visibility");
-    await app.waitUntil(() => Boolean(bodyOf(app, "PATCH", `${ORIGIN}/api/sessions/s1`)));
-    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/sessions/s1`)).toEqual({ visibility: "private" });
-    await app.waitFor("text:Session is private. Existing explicit grants still apply.");
-  });
-
   test("unarchives an archived session", async () => {
     const app = await desktop({ [`POST ${ORIGIN}/api/sessions/s2/unarchive`]: { body: { ok: true } } });
     await app.press("id:workspace-options-w1");
@@ -96,7 +86,7 @@ describe("a session's right-click menu", () => {
     await app.rightClick("id:session-row-s5");
     await app.waitFor("id:menu-copy-id");
     expect(app.shows("id:menu-copy-link")).toBe(true);
-    for (const item of ["menu-rename", "menu-visibility", "menu-archive"]) expect(app.shows(`id:${item}`)).toBe(false);
+    for (const item of ["menu-rename", "menu-archive"]) expect(app.shows(`id:${item}`)).toBe(false);
   });
 
   test("opens from a finger held on the row on a phone, without opening the session", async () => {

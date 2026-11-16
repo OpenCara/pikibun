@@ -300,7 +300,7 @@ describe("settings", () => {
     await app.waitFor("id:install-chat-browser");
     await app.press("id:install-chat-browser");
     await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`)));
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install chromium on ada-mac", visibility: "private" });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install chromium on ada-mac" });
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`).content).toContain("the browser tool's chromium");
     await app.waitFor("text:Add a dark mode");
   });
