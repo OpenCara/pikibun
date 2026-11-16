@@ -7,6 +7,8 @@ type Incoming = { id: number; method: ExtensionMethod; params: Record<string, un
 type Outgoing = { id?: number } & Record<string, unknown>;
 
 const CONNECT_TIMEOUT_MS = 60_000;
+process.env.JITI_FS_CACHE = "false";
+process.env.JITI_REBUILD_FS_CACHE = "true";
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 const directory = process.argv.at(-1);
 const socketAt = process.argv.indexOf("--socket");

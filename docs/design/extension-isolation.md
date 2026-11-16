@@ -156,9 +156,18 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   leaving one more listener on it at each call. A sandbox service's stdin closes once its request line is written, so
   each request to a sandboxed extension process left two there, and Node warned of a leak at the eleventh
   (`MaxListenersExceededWarning`).
-- **Its environment is the connector's.** Until step 3, the process runs as the host's user, in the session's
-  directory, with the connector's environment, as extensions did in the connector. A promise an extension leaves
-  failing is logged rather than ending the process.
+- **Its environment is the connector's, less the connector's own.** Where step 3 doesn't apply, the process runs as
+  the host's user, in the session's directory, with the connector's environment except its own variables
+  (`workerEnvironment` drops what `CONNECTOR_ENVIRONMENT` matches: the connector's credentials and settings). A promise
+  an extension leaves failing is logged rather than ending the process.
+- **No transpile cache** (review 380, finding 45). Pi loads an extension's TypeScript through jiti, which by default
+  keeps the transpiled code in a cache under `os.tmpdir()` and runs a cached file without looking at the source again.
+  In a sandbox, that directory is the session's own (on Linux its `/tmp` is in the session's home, on macOS `TMPDIR`
+  is), so a command of the session could plant code there that the next extension process would run as the extension,
+  with its tools. `child.ts` sets `JITI_FS_CACHE=false` before it loads anything, on every platform, so each process
+  transpiles from the extension's own read-only files. Loading costs a little more at each start. jiti still writes a
+  temporary file for its rare fallback to a native `import()` of ESM syntax it couldn't transform; that file is
+  fresh each time and read back at once.
 
 ## Step 3 as built, on Linux
 
