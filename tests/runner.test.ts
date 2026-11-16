@@ -651,6 +651,16 @@ test("a longer command time limit gives builds room; the default keeps the limit
   assert.ok(Number(files) > 256 && Number(files) <= 8192, files);
 });
 
+test("a sandboxed command goes before the connector when memory runs out, and holds at most 4096 tasks", { skip: process.platform !== "linux" }, async t => {
+  const { service } = await fixture(t);
+  const session = await service.provision(binding("oom-session"), await ticket("oom-session", "create"));
+  const before = (await readFile(`/proc/${process.pid}/oom_score_adj`, "utf8")).trim();
+  const output = await session.sandbox.execute({ kind: "bash", command: "cat /proc/self/oom_score_adj; sh -c 'cat /proc/self/oom_score_adj'; ulimit -u" },
+    true, allowTestOperation, { allowTestShell: true });
+  assert.deepEqual(output.trim().split("\n"), ["1000", "1000", "4096"]);
+  assert.equal((await readFile(`/proc/${process.pid}/oom_score_adj`, "utf8")).trim(), before, "the connector keeps its own score");
+});
+
 test("a stopped shell command ends at once, and one stopped before it starts never runs", { skip: process.platform !== "linux" }, async t => {
   const { service } = await fixture(t);
   const session = await service.provision(binding("stop-session"), await ticket("stop-session", "create"));

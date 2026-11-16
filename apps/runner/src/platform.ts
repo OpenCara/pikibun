@@ -76,8 +76,10 @@ export const NULL_DEVICE = windows ? "NUL" : "/dev/null";
 
 const WINDOWS_HOST_BASH = "IFS= read -r -d '' __pikibun_command || exit 125; exec 0</dev/null; eval \"unset __pikibun_command; $__pikibun_command\"";
 
+const LINUX_HOST_PREFIX = "{ echo 1000 >/proc/self/oom_score_adj; } 2>/dev/null; ";
+
 export function hostBashArgs(command: string): string[] {
-  return ["--noprofile", "--norc", "-c", windows ? WINDOWS_HOST_BASH : command];
+  return ["--noprofile", "--norc", "-c", windows ? WINDOWS_HOST_BASH : process.platform === "linux" ? LINUX_HOST_PREFIX + command : command];
 }
 
 const hostJobs = new WeakMap<ChildProcess, WindowsJob>();

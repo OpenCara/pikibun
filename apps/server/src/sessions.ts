@@ -27,6 +27,7 @@ import { isLinkShared } from './session-links.js';
 import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL, requireEnabledModel } from './host-models.js';
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
 import { stopSessionTunnel } from './session-tunnels.js';
+import { recordSideAsk, sideAsksOf } from './side-asks.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
@@ -313,15 +314,20 @@ export async function forkSession(c: AppContext, source: SessionRow, entryId: st
   const actorId = c.get('auth').userId;
   requireUnfrozen(source);
   if (!source.connector_id) fail(409, 'connector_required', 'Only a session on a connected host can be forked.');
-  const { agent, memberForks } = (await sessionView(c, source, { latest: true })).view;
+  const { agent, memberForks, askForks, conversations } = (await sessionView(c, source, { latest: true })).view;
   if (source.owner_id !== actorId && memberForks !== true) {
     fail(409, 'connector_update_required', 'Only the session owner can fork it on this host until its connector is updated (npx pikibun@latest connect).');
   }
+  const conversationId = /^(\d{1,15}):/.exec(entryId)?.[1];
+  const fromAsk = conversationId !== undefined && conversations.some(conversation => conversation.mode === 'ask' && Number(conversation.id) === Number(conversationId));
+  if (fromAsk && askForks !== true) {
+    fail(409, 'connector_update_required', 'This host forks only from the shared conversation until its connector is updated (npx pikibun@latest connect).');
+  }
   const modelId = await forkModel(c, source, agent, actorId);
   const { row } = await createSession(c, {
-    workspaceId: source.workspace_id, title: title ?? `Fork: ${source.title}`.slice(0, 200), visibility: source.visibility ?? 'private',
+    workspaceId: source.workspace_id, title: title ?? `${fromAsk ? 'Side ask' : 'Fork'}: ${source.title}`.slice(0, 200), visibility: source.visibility ?? 'private',
     modelId, trustedConnectorId: source.connector_id, ...(source.host_environment ? { hostEnvironment: true } : {}),
-  });
+  }, fromAsk ? { parentSessionId: source.id } : {});
   try {
     const result = await runnerJSON<{ conversationId: string; entries: number }>(
       await runnerRequest(c, row, 'fork', '', { sourceSessionId: source.id, entryId }), 65536);
@@ -330,7 +336,7 @@ export async function forkSession(c: AppContext, source: SessionRow, entryId: st
     await archiveSession(c, row.id, { forkFailed: true }).catch(() => {});
     throw error;
   }
-  await auditStatement(c.env, actorId, 'session.forked', row.workspace_id, row.id, { sourceSessionId: source.id, entryId,
+  await auditStatement(c.env, actorId, 'session.forked', row.workspace_id, row.id, { sourceSessionId: source.id, entryId, ...(fromAsk ? { sideAsk: true } : {}),
     ...(source.owner_id !== actorId ? { sourceOwnerId: source.owner_id } : {}) }).run();
   return { row };
 }
@@ -438,8 +444,13 @@ export async function cloneUnavailable(env: Env, capabilities: ConnectorCapabili
 export function registerSessions(app: Hono<AppEnv>): void {
   app.get('/api/sessions', async c => {
     const actorId = c.get('auth').userId;
-    const sessions = (await listSessionAccess(c.env, actorId))
-      .map(access => sessionRecord(access.row, access.permissions));
+    const access = await listSessionAccess(c.env, actorId);
+    const asked = await sideAsksOf(c.env, actorId, new Set(access.filter(item => hasPermission(item.permissions, 'ask')).map(item => item.row.id)));
+    const sessions = access.map(item => {
+      const record = sessionRecord(item.row, item.permissions);
+      const sideAsks = asked.get(item.row.id);
+      return sideAsks ? { ...record, sideAsks } : record;
+    });
     return c.json({ sessions });
   });
 
@@ -561,7 +572,9 @@ export function registerSessions(app: Hono<AppEnv>): void {
       const { row } = await requireSession(c, identifier(c.req.param('id')), mode === 'ask' ? 'ask' : 'write');
       requireUnfrozen(row);
       const input = await jsonObject(c, connectorLimits.requestBytes + 256 * 1024);
-      return c.json(await submitMessage(c, row, mode, input), 202);
+      const result = await submitMessage(c, row, mode, input);
+      if (mode === 'ask') await recordSideAsk(c, row.id, result.conversationId, input.content, Array.isArray(input.images) ? input.images.length : 0);
+      return c.json(result, 202);
     });
   }
 

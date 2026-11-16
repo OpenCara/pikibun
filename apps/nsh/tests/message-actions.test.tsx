@@ -78,6 +78,43 @@ describe("a message's actions", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/fork`)).toEqual({ entryId: "0:2" });
   });
 
+  const asked = {
+    ...idle,
+    askForks: true,
+    conversations: [{ id: "0", mode: "write" }, { id: "5", mode: "ask", actorId: "u1" }],
+    entries: [...idle.entries,
+      { id: "5:3", kind: "message", role: "user", text: "Could we wait for the cookie instead?", actorId: "u1", conversationId: "5" },
+      { id: "5:4", kind: "message", role: "assistant", text: "Yes: await the login response before reading it.", conversationId: "5" }],
+  };
+
+  test("continue a side ask in a new session, from its reply or before its question", async () => {
+    const app = await desktop({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: asked, revision: "r1" } },
+      [`POST ${ORIGIN}/api/sessions/s1/fork`]: { body: { session: { ...sessionRecord, id: "s3", title: "Side ask: Fix the flaky login test" } } },
+    });
+    app.onDialog(dialog => (dialog.title === "Continue in a new session?" ? "Start session" : null));
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:composer-mode");
+    await app.press("id:composer-mode");
+    await app.press("text:Side ask");
+    await app.waitFor("id:message-fork-5-4");
+    expect(app.shows("id:message-revert-5-4")).toBe(false);
+    expect(app.shows("id:message-fork-5-3")).toBe(true);
+    await app.press("id:message-fork-5-4");
+    await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/fork`) !== undefined);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/fork`)).toEqual({ entryId: "5:4" });
+  });
+
+  test("don't offer continuing a side ask where the host can't fork one", async () => {
+    const app = await desktop({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...asked, askForks: undefined }, revision: "r1" } } });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:composer-mode");
+    await app.press("id:composer-mode");
+    await app.press("text:Side ask");
+    await app.waitFor("id:message-copy-5-4");
+    for (const id of ["message-fork-5-3", "message-fork-5-4", "message-revert-5-4"]) expect(app.shows(`id:${id}`)).toBe(false);
+  });
+
   test("offer a reader neither going back nor forking", async () => {
     const app = await desktop({
       [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...idle, memberForks: true }, revision: "r1" } },

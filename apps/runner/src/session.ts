@@ -911,8 +911,12 @@ export class RunnerSession {
     catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid sudo answer"); }
     await this.authorize(ticket.actorId, "write", ticket.policyVersion);
     if (!this.#sudo || ticket.actorId !== this.binding.session.connectorOwnerId) throw new RunnerError(403, "Only the host's owner answers sudo on it, in their own sessions");
-    if (answer.password !== undefined && !await this.sudoAllowed()) throw new RunnerError(403, "sudo takes a password only in sessions of the host owner's private workspace");
+    if ((answer.password !== undefined || answer.sealed !== undefined) && !await this.sudoAllowed()) throw new RunnerError(403, "sudo takes a password only in sessions of the host owner's private workspace");
     await this.consumeTicket(ticket);
+    if (answer.sealed) {
+      try { return { answered: await this.#sudo.answerSealed(answer.id, answer.sealed) }; }
+      catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid sudo answer"); }
+    }
     return { answered: this.#sudo.answer(answer.id, answer.password) };
   }
 
@@ -1171,13 +1175,13 @@ export class RunnerSession {
     return this.#operations.run(actorId, input, toolTaskId, consent, signal);
   }
 
-  private async cutPoint(conversation: Conversation, entryId: string): Promise<{ at: EntryId | undefined; last: boolean }> {
+  private async cutPoint(conversation: Conversation, entryId: string, where = "the shared conversation"): Promise<{ at: EntryId | undefined; last: boolean }> {
     const match = /^(\d{1,15}):(\d{1,15})$/.exec(entryId);
     if (!match) throw new RunnerError(400, "Invalid message");
-    if (Number(match[1]) !== Number(conversation.id)) throw new RunnerError(409, "That message is no longer in the shared conversation; reload it");
+    if (Number(match[1]) !== Number(conversation.id)) throw new RunnerError(409, `That message is no longer in ${where}; reload it`);
     const { entries } = await conversation.context(context);
     const index = entries.findIndex(entry => entry.id === Number(match[2]));
-    if (index < 0) throw new RunnerError(409, "That message is no longer in the shared conversation; reload it");
+    if (index < 0) throw new RunnerError(409, `That message is no longer in ${where}; reload it`);
     const entry = entries[index]!;
     const messages = entry.model ?? [];
     if (messages[0]?.role === "user" && entry.head === undefined) return { at: index > 0 ? entries[index - 1]!.id : undefined, last: false };
@@ -1228,13 +1232,23 @@ export class RunnerSession {
       if (this.closing) throw new RunnerError(503, "Session is closing");
       await this.authorize(actorId, "write");
       const shared = this.#shared;
-      const { at, last } = await this.cutPoint(shared, entryId);
-      if (last && this.working(await this.metadata())) throw new RunnerError(409, "Wait for the agent to finish before forking from its latest reply");
+      const state = await this.metadata();
+      const from = /^(\d{1,15}):/.exec(entryId)?.[1];
+      const ask = from !== undefined && Number(from) !== Number(shared.id)
+        ? state.branches.find(branch => branch.mode === "ask" && !branch.superseded && branch.id === Number(from)) : undefined;
+      const conversation = ask ? await this.harness.conversation(ask.id as ConversationId, context) : shared;
+      if (!conversation) throw new RunnerError(409, "That side ask is no longer there; reload it");
+      if (ask?.actorId && ask.actorId !== actorId) throw new RunnerError(403, "Only whoever sent a side ask continues it in a new session");
+      const { at, last } = await this.cutPoint(conversation, entryId, ask ? "the side ask" : "the shared conversation");
+      if (last && ask && Object.values(state.runs).some(run => run.conversationId === ask.id && (["queued", "admitting", "running"].includes(run.status) || run.stopped?.pending))) {
+        throw new RunnerError(409, "Wait for the side ask to finish before forking from its latest reply");
+      }
+      if (last && !ask && this.working(state)) throw new RunnerError(409, "Wait for the agent to finish before forking from its latest reply");
       const current = await shared.agent(context);
       const agent = { ...(current.model ? { model: { provider: current.model.provider, modelId: current.model.modelId } } : {}),
         ...(current.thinkingLevel ? { thinkingLevel: current.thinkingLevel as ThinkingLevel } : {}) };
       if (at === undefined) return { entries: [], agent };
-      const transcript = await shared.context(context, { at });
+      const transcript = await conversation.context(context, { at });
       const entries = transcript.entries.flatMap((_entry, index) => {
         const model = (transcript.contributions[index] ?? []).filter(message => (message.role as string) !== "system");
         return model.length ? [{ kind: FORKED_KIND, model }] : [];

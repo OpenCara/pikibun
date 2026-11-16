@@ -76,7 +76,7 @@ the session's own, then maps what it registered:
 
 | Pi | In Pikibun |
 |---|---|
-| `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), behind the approval of rule 5. `onUpdate` is ignored. A tool named like one of Pikibun's own is ignored, unless that one is retired (`web_fetch`, `web_search`, …) |
+| `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), under rule 5. `onUpdate` is ignored. A tool named like one of Pikibun's own is ignored, unless that one is retired (`web_fetch`, `web_search`, …). A tool registered once the extension runs (in `session_start`, say) is offered from the session's next message, up to 32 of them (one dropped as it loaded, such as one over the module's limit, stays dropped); a tool registered again with another schema or guidance is offered as changed; the host's page lists only those registered as it loads. Its `promptSnippet` and `promptGuidelines` go in the extension's prompt section, as Pi puts them in its tools and guidelines |
 | `before_agent_start` | Run once per message with its prompt; a returned `systemPrompt` (appended to the empty base it gets) and `message` become a prompt section |
 | `context` | `GenerationHooks.beforeRequest` |
 | `input` | On each message or side ask once it is queued, before it starts (`Session.screen`, `SessionExtensions.input`), beside the session's work: the connector answers one request at a time, so a handler that asks a model never holds up another session's request. The message and those queued behind it wait for it. `transform` changes what runs, `handled` refuses it: it ends `refused`, shown in the transcript (`workspace.run-refused`) with the source's last `ctx.ui.notify` text. `source` is `interactive` for the host owner's own messages and `rpc` for everyone else's. A handler that throws or takes over a minute refuses the message; a restart while one runs screens the message again |
@@ -93,12 +93,13 @@ the session's own, then maps what it registered:
 | `exec` | Runs on the host, in the session's worktree |
 | `ctx.cwd`, `ctx.signal`, `ctx.model`, `getThinkingLevel` | The session's worktree on the host, the call's signal, and the model and reasoning level of the message running (a message may switch them) |
 | `registerCommand` | A [slash command](slash-commands.md#commands-the-host-runs) of the session: the handler runs with Pi's command context, its `ctx.ui.notify` is the command's line in the transcript and its `sendUserMessage` the message sent in its place |
+| `ctx.ui.notify` elsewhere | At `warning` or `error`, a line in the host's log naming the session and the extension, up to 50 per extension process; otherwise nothing |
 | `ctx.ui.*`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage` outside a command, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
 | `registerProvider`, `registerMcpServer`, `registerVirtualModel`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 
 The host's page shows, per extension, which of its registrations work, are no-ops or are ignored, so a workspace can
-tell what it gets. `ctx.modelRegistry` is the host's Pi model registry, so an extension that uses the host's provider keys
-works.
+tell what it gets. An installed extension's `ctx.modelRegistry` lists the host's models but calls none
+([extension-isolation.md](extension-isolation.md)); Pikibun's own extensions get the host's registry.
 
 Extensions written directly against pi-durable (`defineExtension`) are libraries without a plugin contract (their own
 options and lifecycle), so a workspace can't name one. Pikibun wraps the useful ones itself as built-ins (rule 10).
@@ -179,8 +180,8 @@ them by their `piki:` source with the package's `version`. `--no-remote-installs
 
 ## Data and routes
 
-- `workspace_extensions`: workspace, source (normalized `npm:<name>@<version>` or `git:<url>@<commit>`), package key
-  (`npm:<name>` or `git:<url>`, unique per workspace), enabled, tools mode, settings JSON, who changed it and when.
+- `workspace_extensions`: workspace, source (normalized `npm:<name>@<version>` or `git:<url>@<commit>[#<directory>]`), package key
+  (`npm:<name>` or `git:<url>[#<directory>]`, unique per workspace), enabled, tools mode, settings JSON, who changed it and when.
 - `connector_extensions`: what the connector last reported (installed sources and their loaded extensions). Its dev
   extensions (their paths are the owner's files) are shown to the host's owner only.
 - `connector_extension_settings.automatic_tools`: the host owner's switch.
@@ -237,6 +238,25 @@ and wildcards), `host:` files from the host owner's context directory, and `http
 adds them as a prompt section, and its `tool_result` adds a clone's files to the result of the call that cloned it
 during a message. It reads nothing that links outside its repository, into `.git`, or outside that context directory, and fetches no page from
 a private network address. See its [README](../../extensions/context-files/README.md).
+
+## A directory of a Git repository (#255)
+
+A Git source may name a directory of its repository after the commit: `git:<url>@<commit>#<directory>`, for a package kept
+in a monorepo. The URL can't hold a `#`, so the first one splits them. The directory is relative, in segments of
+letters, digits and `._@-`, without `.` or `..`, and at most 200 characters (`gitSourcePath`). It is part of the package
+key, so two directories of one repository are two extensions, and another commit of one is another version of it.
+
+- **Installed with npm's `::path:`.** The connector installs `git+<url>.git#<commit>::path:<directory>`, with the
+  flags a Git source always gets (`--ignore-scripts`, `npm_config_allow_git=root`). An npm older than 11.10.0 ignores
+  `::path:` and installs the repository's root instead, so the connector asks npm its version first and refuses an older
+  one (`GIT_PATH_NPM`). What npm installed must be a Pi extension package as the loader reads an installed one
+  (`packageEntries` with a required manifest: a `pi.extensions` list or an `extensions/` directory, naming at least one
+  module), or the install is undone.
+- **Only to connectors that know the form** (`gitSubdirectories` in their capabilities). An older connector refuses a
+  whole list with one source it can't parse, so the server leaves such sources out of its workspace answer and its
+  required extensions, keeps its install and remove requests waiting (in the query, so they don't take the place of
+  others it is sent), and refuses a new one with `connector_update_required`.
+  It keeps running the workspace's other extensions.
 
 ## Later
 

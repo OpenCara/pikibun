@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0068_portable_sessions.sql.
+-- Postgres translation of sqlite/0069_portable_sessions.sql.
 
 -- Portable sessions (docs/design/portable-sessions.md, apps/server/src/portable-sessions.ts): private-workspace sessions that
 -- belong to their owner's identity, an Ed25519 key kept on their hosts, and can be attached to another server that

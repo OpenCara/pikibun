@@ -10,6 +10,7 @@ import type { Env } from '../apps/server/src/types.js';
 import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
 import { runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
 import { runAutomaticPacking } from '../apps/server/src/automatic-packing.js';
+import { sideAskPreview } from '../apps/server/src/side-asks.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase, type FakeHub } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommandGrant, HostModelSettings } from '../packages/shared/src/connector.js';
 import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, PullRequestReview, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
@@ -2117,6 +2118,30 @@ test('its owner forks a session from a message into a new one on the same host a
   assert.equal((f.sqlite.prepare('SELECT status FROM sessions WHERE id = ?').get(failed) as { status: string }).status, 'archived');
 });
 
+test('a fork from a side ask starts a child of the session, titled for the side ask, only on a host that forks side asks', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const path = `/api/sessions/${s.session.id}`;
+  let askForks = false;
+  const requests = rpcHub(f, s.connector, envelope => envelope.request.ticket.action === 'fork' ? Response.json({ conversationId: '1', entries: 4 })
+    : envelope.request.ticket.action === 'view' ? Response.json({ view: { ...s.view, conversations: [{ id: '1', mode: 'write' }, { id: '7', mode: 'ask', actorId: s.owner.user.id }],
+      ...(askForks ? { askForks: true } : {}) } })
+    : Response.json({ session: {} }, { status: 201 }));
+  const sessions = () => (f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }).n;
+  const count = sessions();
+  await denied(await s.owner.request('POST', `${path}/fork`, { entryId: '7:15' }), 409, 'connector_update_required');
+  assert.equal(sessions(), count, 'an older host starts no session for it');
+  askForks = true;
+  const { session } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '7:15' }), 201);
+  assert.deepEqual([session.title, session.parentSessionId, session.ownerId], [`Side ask: ${s.session.title}`, s.session.id, s.owner.user.id]);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body), { sourceSessionId: s.session.id, entryId: '7:15' });
+  assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE session_id = ? AND action = 'session.forked'").all(session.id).map(row => ({ ...row })),
+    [{ detail_json: JSON.stringify({ sourceSessionId: s.session.id, entryId: '7:15', sideAsk: true }) }]);
+  const { session: padded } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '07:15' }), 201);
+  assert.equal(padded.parentSessionId, s.session.id, 'the conversation is told by its number, as the host reads it');
+  const { session: shared } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '1:12' }), 201);
+  assert.deepEqual([shared.title, shared.parentSessionId], [`Fork: ${s.session.title}`, undefined], 'a fork of the shared conversation stays on its own');
+});
+
 test('explicitly private creation stays unlisted until granted and membership removal defeats both visibility and grants', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const { session: privateSession } = await json<{ session: SessionRecord }>(await s.owner.request('POST', '/api/sessions', {
@@ -2349,6 +2374,60 @@ for (const mutation of ['demoted', 'suspended'] as const) {
     assert.equal(s.hub.requests.length, 1);
   });
 }
+
+test('the session list shows each person their own latest three side asks under the session, previewed with secrets hidden', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  const collaborator = await f.client('collaborator');
+  await json(await s.admin.request('POST', `/api/workspaces/${s.team.id}/members`, { userId: collaborator.user.id, role: 'collaborator' }));
+  let next = 10;
+  const conversations = new Map<string, string>();
+  rpcHub(f, s.connector, envelope => {
+    const { requestId } = JSON.parse(envelope.request.body) as { requestId: string };
+    if (!conversations.has(requestId)) conversations.set(requestId, String(envelope.request.ticket.action === 'ask' ? next++ : 0));
+    return Response.json({ submissionId: `submission-${requestId}`, conversationId: conversations.get(requestId), status: 'queued' }, { status: 202 });
+  });
+  const path = `/api/sessions/${s.session.id}`;
+  const listed = async (client: typeof collaborator) => (await json<{ sessions: SessionRecord[] }>(await client.request('GET', '/api/sessions'))).sessions
+    .find(item => item.id === s.session.id)?.sideAsks;
+  assert.equal(await listed(s.creator), undefined, 'nothing asked, nothing listed');
+  const token = `ghp_${'A1b2C3d4'.repeat(5).slice(0, 36)}`;
+  const asks = ['\n\n  Why does   the login test fail?\nDetails follow.', `Try with ${token} please`, 'x'.repeat(300), 'The latest one'];
+  for (const [index, content] of asks.entries()) {
+    await json(await s.creator.request('POST', `${path}/ask`, { content, requestId: `ask-${index}` }), 202);
+    f.sqlite.prepare('UPDATE side_asks SET created_at = ? WHERE conversation_id = ?').run(`2026-01-01T00:00:0${index}Z`, String(10 + index));
+  }
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'A shared message', requestId: 'shared' }), 202);
+  const mine = await listed(s.creator);
+  assert.deepEqual(mine?.map(ask => ask.conversationId), ['13', '12', '11'], 'the latest three, newest first; shared messages are no side asks');
+  assert.equal(mine![0]!.preview, 'The latest one');
+  assert.equal(mine![1]!.preview, `${'x'.repeat(119)}\u2026`);
+  assert.ok(!mine![2]!.preview.includes(token) && mine![2]!.preview.startsWith('Try with '), mine![2]!.preview);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM side_asks WHERE session_id = ?').get(s.session.id)!.n, 3, 'only what is listed is kept');
+  await json(await s.creator.request('POST', `${path}/ask`, { content: 'The latest one', requestId: 'ask-3' }), 202);
+  assert.deepEqual((await listed(s.creator))?.map(ask => [ask.conversationId, ask.createdAt]),
+    [['13', '2026-01-01T00:00:03Z'], ['12', '2026-01-01T00:00:02Z'], ['11', '2026-01-01T00:00:01Z']], 'a retried side ask is listed once, as it was');
+
+  const insert = f.sqlite.prepare('INSERT INTO side_asks (session_id, actor_id, conversation_id, preview, created_at) VALUES (?,?,?,?,?)');
+  const other = f.sqlite.prepare('SELECT id FROM sessions WHERE id <> ? LIMIT 1').get(s.session.id) as { id: string } | undefined;
+  assert.ok(other, 'the fixture has another session to ask in');
+  for (let index = 0; index < 1100; index++) insert.run(other!.id, s.creator.user.id, `other-${index}`, 'Elsewhere', '2027-01-01T00:00:00Z');
+  assert.deepEqual((await listed(s.creator))?.map(ask => ask.conversationId), ['13', '12', '11'], 'newer side asks elsewhere never crowd these out');
+
+  assert.equal(await listed(collaborator), undefined, "someone else's side asks aren't listed for them");
+  await json(await collaborator.request('POST', `${path}/ask`, { content: 'Mine', requestId: 'collaborator-ask' }), 202);
+  assert.deepEqual((await listed(collaborator))?.map(ask => ask.preview), ['Mine']);
+  assert.equal((await s.admin.request('DELETE', `/api/workspaces/${s.team.id}/members/${encodeURIComponent(collaborator.user.id)}`)).status, 204);
+  assert.equal(await listed(collaborator), undefined, 'a session they may no longer see lists nothing');
+});
+
+test('a side ask is previewed by its first line, cut to 120 characters, or by its images', () => {
+  assert.equal(sideAskPreview('  first   line \nsecond', 0), 'first line');
+  assert.equal(sideAskPreview('', 2), '2 images');
+  assert.equal(sideAskPreview('\n', 1), 'An image');
+  assert.equal(sideAskPreview(undefined, 0), 'Side ask');
+  assert.equal(sideAskPreview('y'.repeat(120), 0), 'y'.repeat(120));
+  assert.equal(sideAskPreview(`${'z'.repeat(118)}\u{1F600}\u{1F600}\u{1F600}`, 0), `${'z'.repeat(118)}\u{1F600}\u2026`, 'cut by character, never inside one');
+});
 
 test('a collaborator sends a message to a workspace-visible session it does not own; a viewer cannot, whatever its grant', async t => {
   const f = await fixture(t); const s = await sharedSession(f);

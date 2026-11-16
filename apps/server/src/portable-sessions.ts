@@ -8,7 +8,9 @@ import type { PortableSessionOffer, SessionRecord, SessionSchedule } from '../..
 import { auditStatement, authenticateConnector, isPersonalWorkspace, type ConnectorRow } from './authority/index.js';
 import { chatAgentVersion, requireModel } from './catalog.js';
 import { sessionRecord } from './db.js';
-import { appOrigin, fail, id, identifier, jsonObject, now } from './http.js';
+import { z } from 'zod';
+import { appOrigin, fail, id, identifier, now } from './http.js';
+import { body, fields, identifier as identifierField, text as textField } from './schemas.js';
 import { ownerRequest, runnerJSON, runnerRequest } from './runner.js';
 import { restorePortableSchedules, sessionSchedules } from './scheduled-prompts.js';
 import { markSessionChanged } from './session-changes.js';
@@ -21,6 +23,17 @@ const REPORT_BYTES = 1024 * 1024;
 const MAX_REPORTED = 500;
 const MAX_ROTATIONS = 32;
 const CONVERT_BATCH = 50;
+
+const identityReportBody = fields({
+  delegation: z.unknown(), rotations: z.array(z.unknown(), { error: 'Invalid identity rotations.' }).max(MAX_ROTATIONS, 'Invalid identity rotations.'),
+  settings: z.unknown().optional(), sessions: z.array(z.unknown(), { error: 'The report lists no sessions.' }).max(MAX_REPORTED, 'Invalid portable session report.'),
+}, 'Unexpected identity report field.', { required: ['delegation', 'rotations', 'sessions'], code: 'invalid_report' });
+const signedSettingsBody = fields({ settings: z.unknown() }, 'Unexpected settings field.', { required: ['settings'], code: 'invalid_report' });
+const detachedBody = fields({ sessionId: identifierField('sessionId') }, 'Unexpected detached report field.', { required: ['sessionId'], code: 'invalid_report' });
+const attachBody = fields({ connectorId: identifierField('connectorId'), modelId: identifierField('modelId').optional() },
+  'Name the host (connectorId) and, optionally, a model of it.', { required: ['connectorId'] });
+const convertBody = fields({ after: fields({ createdAt: textField('after.createdAt', 64), id: identifierField('after.id') },
+  'Continue after a session\'s createdAt and id.', { required: ['createdAt', 'id'] }).optional() }, 'Only where to continue (after) is taken.');
 
 interface DelegationRow { connector_id: string; user_id: string; public_key: string }
 interface OfferRow {
@@ -142,8 +155,7 @@ async function reportedSessions(value: unknown, key: string): Promise<ReportedSe
 
 async function identityReport(c: AppContext): Promise<Response> {
   const connector = await authenticateConnector(c);
-  const input = await jsonObject(c, REPORT_BYTES);
-  if (Object.keys(input).some(key => !['delegation', 'rotations', 'settings', 'sessions'].includes(key))) fail(400, 'invalid_report', 'Unexpected identity report field.');
+  const input = await body(c, identityReportBody, { maxBytes: REPORT_BYTES });
   let delegation: Signed<StatementOf<'delegation'>>;
   try { delegation = await verifiedSigned(input.delegation, 'delegation'); }
   catch { fail(400, 'invalid_delegation', 'The host\'s delegation is not validly signed.'); }
@@ -152,8 +164,6 @@ async function identityReport(c: AppContext): Promise<Response> {
   }
   const key = delegation.statement.key;
   const rotations = input.rotations;
-  if (!Array.isArray(rotations) || rotations.length > MAX_ROTATIONS) fail(400, 'invalid_report', 'Invalid identity rotations.');
-  if (!Array.isArray(input.sessions)) fail(400, 'invalid_report', 'The report lists no sessions.');
   const statements: Query<never>[] = [];
   const chain: Signed<StatementOf<'rotation'>>[] = [];
   for (const rotation of rotations) {
@@ -201,8 +211,7 @@ async function identityReport(c: AppContext): Promise<Response> {
 
 async function signedSettings(c: AppContext): Promise<Response> {
   const connector = await authenticateConnector(c);
-  const input = await jsonObject(c, 64 * 1024);
-  if (Object.keys(input).some(key => key !== 'settings')) fail(400, 'invalid_report', 'Unexpected settings field.');
+  const input = await body(c, signedSettingsBody, { maxBytes: 64 * 1024 });
   let settings: Signed<StatementOf<'settings'>>;
   try { settings = await verifiedSigned(input.settings, 'settings'); }
   catch { fail(400, 'invalid_settings', 'The settings are not validly signed.'); }
@@ -214,9 +223,7 @@ async function signedSettings(c: AppContext): Promise<Response> {
 
 async function detached(c: AppContext): Promise<Response> {
   const connector = await authenticateConnector(c);
-  const input = await jsonObject(c, 4096);
-  if (Object.keys(input).some(key => key !== 'sessionId')) fail(400, 'invalid_report', 'Unexpected detached report field.');
-  const sessionId = identifier(input.sessionId, 'sessionId');
+  const { sessionId } = await body(c, detachedBody, { maxBytes: 4096 });
   const row = await c.env.DB.query<SessionRow>(`UPDATE sessions SET archived_status = CASE WHEN status = 'archived' THEN archived_status ELSE status END,
     status = 'archived', detached_at = ?, policy_version = policy_version + 1, pack_due_at = NULL, tunnel_url = NULL, tunnel_expires_at = NULL
     WHERE id = ? AND connector_id = ? AND owner_id = ? AND portable_key IS NOT NULL AND detached_at IS NULL RETURNING *`)
@@ -261,9 +268,8 @@ function keptSchedules(value: unknown): Record<string, unknown>[] {
 async function attachSession(c: AppContext): Promise<Response> {
   const userId = c.get('auth').userId;
   const sessionId = identifier(c.req.param('id'));
-  const input = await jsonObject(c, 4096);
-  if (Object.keys(input).some(key => key !== 'connectorId' && key !== 'modelId')) fail(400, 'invalid_input', 'Name the host (connectorId) and, optionally, a model of it.');
-  const connectorId = identifier(input.connectorId, 'connectorId');
+  const input = await body(c, attachBody, { maxBytes: 4096 });
+  const connectorId = input.connectorId;
   const offer = await c.env.DB.query<OfferRow>('SELECT * FROM portable_offers WHERE connector_id = ? AND session_id = ? AND user_id = ?')
     .bind(connectorId, sessionId, userId).first();
   if (!offer) fail(404, 'not_found', 'That host hasn\'t reported this session. Start the host, or wait a minute for it to report.');
@@ -357,14 +363,9 @@ async function convertSessions(c: AppContext): Promise<Response> {
   if (!delegation) fail(409, 'identity_pending', 'The host hasn\'t sent its identity yet. Wait a minute after it connects, then try again.');
   const workspaceId = await personalWorkspaceOf(c.env, userId);
   if (!workspaceId) fail(404, 'not_found', 'Private workspace not found.');
-  const input = c.req.header('content-type') ? await jsonObject(c, 1024) : {};
-  if (Object.keys(input).some(key => key !== 'after')) fail(400, 'invalid_input', 'Only where to continue (after) is taken.');
-  const after = input.after === undefined ? undefined : input.after as { createdAt?: unknown; id?: unknown };
-  if (after !== undefined && (!after || typeof after !== 'object' || typeof after.createdAt !== 'string' || after.createdAt.length > 64 || Object.keys(after).some(key => key !== 'createdAt' && key !== 'id'))) {
-    fail(400, 'invalid_input', 'Continue after a session\'s createdAt and id.');
-  }
-  const afterId = after ? identifier(after.id, 'after.id') : null;
-  const afterAt = after ? after.createdAt as string : null;
+  const { after } = c.req.header('content-type') ? await body(c, convertBody, { maxBytes: 1024 }) : { after: undefined };
+  const afterId = after?.id ?? null;
+  const afterAt = after?.createdAt ?? null;
   const candidates = await c.env.DB.query<SessionRow>(`SELECT * FROM sessions WHERE workspace_id = ? AND owner_id = ? AND connector_id = ? AND connector_owner_id = ?
     AND portable_key IS NULL AND status IN ('ready', 'error') AND packed_at IS NULL AND repository_mode = 'clone' AND COALESCE(repositories_json, '[]') = '[]'
     AND (? IS NULL OR created_at > ? OR (created_at = ? AND id > ?))

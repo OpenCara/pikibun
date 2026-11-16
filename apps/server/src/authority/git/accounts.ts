@@ -7,7 +7,9 @@ import { auditAfterChange, auditStatement } from '../audit.js';
 import { revokeGitHubToken } from '../auth.js';
 import { getUser } from '../../db.js';
 import { ConstraintError } from '../../db/types.js';
+import { z } from 'zod';
 import { fail, id, identifier, jsonObject, localMode, now, testMode } from '../../http.js';
+import { body, fields } from '../../schemas.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { githubRepositories, validRepositoryRef } from '../repositories.js';
 import { gitProviderAdapters, plainRepositoryId } from './providers.js';
@@ -93,6 +95,11 @@ export function providerRepository(provider: GitProvider, value: unknown): Provi
 function publicAccount(row: Pick<GitCredentialRow, 'id' | 'provider' | 'host' | 'organization' | 'login' | 'created_at'>): GitAccount {
   return { id: row.id, provider: row.provider, host: row.host, organization: row.organization, login: row.login, createdAt: row.created_at };
 }
+
+const githubTokenBody = fields({
+  token: z.custom<string>(value => typeof value === 'string' && /^[\x21-\x7e]{1,4096}$/.test(value.trim()),
+    { message: 'Paste a GitHub personal access token.', params: { code: 'invalid_git_token' } }).transform(value => value.trim()),
+}, 'Only token is accepted.', { code: 'invalid_git_account' });
 
 export function accountInput(input: Record<string, unknown>) {
   if (Object.keys(input).some(key => !['provider', 'host', 'organization', 'username', 'token'].includes(key))) {
@@ -313,10 +320,7 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
   app.put('/api/git/accounts/github', async c => {
     const userId = c.get('auth').userId;
     if (!localMode(c.env)) fail(400, 'invalid_git_provider', 'GitHub.com uses the sign-in connection here: sign in with GitHub.');
-    const input = await jsonObject(c, 32768);
-    if (Object.keys(input).some(key => key !== 'token')) fail(400, 'invalid_git_account', 'Only token is accepted.');
-    const token = typeof input.token === 'string' ? input.token.trim() : '';
-    if (!/^[\x21-\x7e]{1,4096}$/.test(token)) fail(400, 'invalid_git_token', 'Paste a GitHub personal access token.');
+    const { token } = await body(c, githubTokenBody, { maxBytes: 32768 });
     const account = await connectGitHubToken(c.env, userId, token, (owner, login) =>
       `This token is @${owner.login}'s. This Pikibun's owner signed in with ${login ? `@${login}` : 'another GitHub account'}: paste a token of that account.`);
     return c.json({ account }, 201);

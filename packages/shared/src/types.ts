@@ -148,6 +148,12 @@ export interface SessionRecord {
   nextScheduledAt?: string;
   pullRequest?: SessionPullRequest;
   tunnel?: SessionTunnelRecord;
+  sideAsks?: SideAskSummary[];
+}
+export interface SideAskSummary {
+  conversationId: string;
+  preview: string;
+  createdAt: string;
 }
 export interface PortableSessionOffer {
   id: string;
@@ -623,6 +629,7 @@ export interface SessionView {
   withdrawable?: boolean;
   rewindable?: boolean;
   memberForks?: boolean;
+  askForks?: boolean;
   commands?: SessionCommand[];
   agent?: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
   context?: SessionContextView;
@@ -637,6 +644,7 @@ export interface SessionView {
 export interface SudoPromptView {
   id: string;
   prompt: string;
+  key?: string;
   command?: string;
   requestedAt: string;
   expiresAt: string;

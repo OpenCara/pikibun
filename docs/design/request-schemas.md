@@ -25,6 +25,7 @@ type.
   ones, the required ones present, at least one with `some`), answered with the route's message, and only then each
   field. A plain `z.strictObject` reports a field's fault before an unknown key, and a union's fault as zod's own
   "Invalid input", so routes use `fields`, not `z.strictObject`, where they name the shape and a field differently.
+  Its `code` option answers a fault of the keys with the route's own code instead of `invalid_input`.
 
 `tests/request-schemas.test.ts` pins this order, and the converted routes' tests pin their messages, so a converted
 route answers clients and tests as before.
@@ -49,3 +50,12 @@ route answers clients and tests as before.
   (`tests/authority-boundary.test.ts`). The first to move are the bodies taken before anyone is signed in:
   `POST /api/auth/native/code` and `POST /api/me/app-codes` (`authority/app-codes.ts`) and `POST /api/auth/native/local`
   (`authority/auth.ts`). A malformed sign-in code is still `400 invalid_grant`, through the custom issue's `code`.
+  `PUT /api/git/accounts/github` (`authority/git/accounts.ts`), which takes a GitHub token, moved next, with its codes
+  `invalid_git_account` and `invalid_git_token`.
+
+## Keeping it from growing
+
+"New routes use `body()`" was a convention, and the 2026 review found a new route that takes a token written by hand.
+`tests/request-schemas.test.ts` now counts the bodies each server file reads with `jsonObject()` against a list. A
+file that reads more fails the test, with a pointer here. A file that reads fewer fails it too, until its count in
+the list is lowered, so the list only shrinks.

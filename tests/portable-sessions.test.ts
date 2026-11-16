@@ -459,6 +459,9 @@ test('an attach the host refuses leaves nothing behind, and only the host\'s own
   assert.equal(f.sqlite.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId), undefined);
   await json(await f.alice.request('POST', `/api/portable-sessions/${randomUUID()}/attach`, { connectorId: 'host' }), 404);
   await json(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host', modelId: 'missing' }), 404);
+  const odd = await json<{ code: string }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host', extra: true }), 400);
+  assert.equal(odd.code, 'invalid_input');
+  await json(await f.alice.request('POST', '/api/connectors/host/portable', { after: { createdAt: '2026-01-01' } }), 400);
 });
 
 test('existing private sessions on the host become portable, and new ones are portable from the start', async t => {

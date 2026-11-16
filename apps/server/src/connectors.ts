@@ -1,3 +1,5 @@
+import { knowsGitSubdirectories } from './extensions.js';
+import { inRepositoryDirectory } from '../../../packages/shared/src/host-extensions.js';
 import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import {
   apiCredential, auditStatement, authenticateConnector, authorizeSession, connectorAdmins, connectorHostGrants, type ConnectorRow, egressGrant,
@@ -320,7 +322,11 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/self/git/push/complete', async c => pushComplete(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/restores/:restoreId/download', async c => connectorRestoreDownload(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/network', async c => egressGrant(c, (await authenticateConnector(c)).id));
-  app.post('/api/connectors/self/config', async c => c.json({ config: await connectorHostConfig(c.env, (await authenticateConnector(c)).id) }));
+  app.post('/api/connectors/self/config', async c => {
+    const row = await authenticateConnector(c);
+    const config = await connectorHostConfig(c.env, row.id);
+    return c.json({ config: knowsGitSubdirectories(row) ? config : { ...config, requiredExtensions: config.requiredExtensions.filter(item => !inRepositoryDirectory(item.source)) } });
+  });
   app.post('/api/connectors/self/git/relay/:bindingId/:service', async c => gitRelay(c, await authenticateConnector(c)));
   app.post('/api/connectors/self/git/direct', async c => gitDirect(c, await authenticateConnector(c)));
   app.post('/api/connectors/self/api/credential', async c => apiCredential(c, await authenticateConnector(c)));

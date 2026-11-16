@@ -1,3 +1,4 @@
+import { openSudoPassword, sudoSealKeys, type SealedSudoPassword } from "../../../packages/shared/src/sudo-seal";
 import { describe, expect, open, test } from "nsh/test";
 import { host, ORIGIN, server, sessionRecord, signedIn, view, workspace } from "./fixtures";
 
@@ -158,6 +159,24 @@ describe("sudo's password box", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)).toEqual({ id: "prompt1", password: "hunter2" });
     expect(app.value("id:sudo-password")).toBe("");
     expect(app.requests().some(request => request.url.endsWith("/submit") && (request.body ?? "").includes("hunter2"))).toBe(false);
+  });
+
+  test("where the host gave a key, the password is sealed to it, so the server never reads it", async () => {
+    const host = await sudoSealKeys();
+    const app = await open("../App.tsx", { network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, sudo: { ...prompt, key: host.publicKey } }, revision: "r1" } },
+      [`POST ${ORIGIN}/api/sessions/s1/sudo`]: { body: { answered: true } },
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, personal: true }] } },
+    }), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:sudo-prompt");
+    await app.type("id:sudo-password", "hunter2");
+    await app.press("id:sudo-send");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`)));
+    const sent = bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/sudo`) as { id: string; sealed: SealedSudoPassword; password?: string };
+    expect(sent.password).toBe(undefined);
+    expect(JSON.stringify(sent).includes("hunter2")).toBe(false);
+    expect(await openSudoPassword(host.privateKey, "prompt1", sent.sealed)).toBe("hunter2");
   });
 
   test("outside the private workspace, the host's owner can only decline, and anyone else only sees that sudo waits", async () => {

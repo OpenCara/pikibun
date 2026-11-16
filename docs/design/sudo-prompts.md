@@ -77,8 +77,26 @@ It takes out the password as it was typed. A command that encodes it first (base
 still shows it, and so can a command that writes it to a file and reads it back later: the owner's judgment of the
 command the box shows is still what protects it (review 355, finding 44).
 
-The answer still crosses the Pikibun server on its way to the host, over TLS, as the owner's messages do; the server
-doesn't store or log it. Encrypting it to a key the host puts in the prompt is the next step.
+## The password on its way to the host
+
+The answer goes from the app through the Pikibun server to the host, and the server never reads it
+(`packages/shared/src/sudo-seal.ts`):
+
+- **A key per prompt.** The host makes a P-256 key pair for each prompt and puts the public half in the prompt's view
+  (`SudoPromptView.key`). The private half stays in the host's memory with the prompt and goes when it is answered,
+  declined or expires.
+- **Sealed in the app.** The app makes a key pair of its own, derives an AES-256-GCM key from the two (ECDH, then HKDF
+  over SHA-256 with the prompt's id), and sends `{ id, sealed: { key, iv, data } }`. The prompt's id is the cipher's
+  additional data too, so a sealed answer opens only for the prompt it was made for.
+- **Opened on the host.** The host opens it with the prompt's private key and checks it as a plain password. An answer
+  that doesn't open leaves the prompt waiting. The server checks only the shape and passes it on.
+- **Older parts.** A connector from before this change puts no key in the prompt, and the app then sends the password
+  as before, over TLS, and the server neither stores nor logs it.
+
+What it doesn't protect against: the server serves the app and relays the prompt, so a server that set out to read
+passwords could drop the key from the prompt, or serve an app that doesn't seal. Sealing keeps the password out of
+what an honest server holds, its memory, its logs and anything that records requests, not away from a server
+that is no longer honest.
 
 ## What it doesn't protect against
 

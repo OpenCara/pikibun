@@ -55,3 +55,14 @@ test('host shell uses the host tools/home and session cwd without inheriting run
   await assert.rejects(waiting, /cancelled/);
   await assert.rejects(runHostShell(host, { ...options, signal: AbortSignal.abort() }));
 });
+
+test('a host command goes before the connector when memory runs out, and keeps its own first line', { skip: process.platform !== 'linux' }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'host-shell-oom-test-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const options = { worktree: root, git: join(root, '.git'), gitConfig: join(root, 'owner.gitconfig'), gitName: 'Owner', gitEmail: 'owner@example.test', signal: new AbortController().signal };
+  await writeFile(options.gitConfig, '[user]\nname = Owner\nemail = owner@example.test\n');
+  const before = (await readFile(`/proc/${process.pid}/oom_score_adj`, 'utf8')).trim();
+  const output = await runHostShell({ ...host, command: '# a comment first\ncat /proc/self/oom_score_adj; sh -c "cat /proc/self/oom_score_adj"; echo "$LINENO"' }, options);
+  assert.deepEqual(output.trim().split('\n'), ['1000', '1000', '2']);
+  assert.equal((await readFile(`/proc/${process.pid}/oom_score_adj`, 'utf8')).trim(), before, 'the connector keeps its own score');
+});
