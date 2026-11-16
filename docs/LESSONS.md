@@ -22,6 +22,9 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - For one test, run `node --import tsx --test --test-name-pattern "<words>" tests/<file>.test.ts` instead of the whole suite. For the client's tests, run `node scripts/nsh.mjs test tests/<file>.test.tsx --filter "<words>"` from the repository's root; it takes one path, and without one runs the whole client suite in about two minutes.
 - The client's first typecheck or test run downloads Native Shell, and that download fails now and then in the sandbox. Run it again before treating it as an error.
 - Give the node and python tools `directory: "<the clone>"`: run from the worktree's top, they fail for want of a `package.json`.
+- The repository installs with pnpm (`pnpm install --frozen-lockfile`); `npm ci` fails in it.
+- The `@earendil-works` packages (Pi, pi-durable and the rest) pin each other exactly: upgrade all of them together, in the root and `packages/cli` manifests, and regenerate both lockfiles.
+- `pnpm --filter pikibun run shrinkwrap` fails under npm 12, which dropped `npm shrinkwrap`. Regenerate `packages/cli/npm-shrinkwrap.json` with npm 11, following that script's steps.
 - Give `timeout_seconds` to any run that could hang, such as a test suite or a server: without it a hung test holds the session until the host's command time limit.
 - The whole suite can't pass inside a session's sandbox: dozens of tests fail there on nested sandboxes and temporary paths. Run the files around your change, and when you do run everything, compare the set of failing tests with unmodified `main`'s rather than their number. CI is the full run.
 - When CI is green, check in the job's log that a new test which needs a real sandbox or a real dependency ran there, and wasn't skipped.
@@ -44,6 +47,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 
 - Wait for CI with `gh pr checks <n> --watch` and a long timeout. If the watch stops on a proxy or authentication error, that is not a failed check: wait with `github_read` and `wait: "checks"`, or poll the run's status from a codemode script that prints only the result, at most once a minute. In such a loop, look at each result: a tool can report a failure as its result without throwing. Every read counts against GitHub rate limits that all of the owner's sessions share, and `gh run watch` on its own reads every 3 seconds (the gh tool makes it 30).
 - A check may not be registered right after a push. Find the run with `gh run list` and watch that.
+- `github_read` with `wait: "change"` also returns on your own comments and pushes. Look at what changed, and wait again until the review window ends.
 - Long tool output is cut, and `gh run view --log-failed` can end before the failure. Filter the log for the failing lines in a codemode script, or fetch the job's log through `gh api`.
 - GitHub runs no pull request checks on a branch that conflicts with `main`. Merge `main` in and resolve the conflicts first.
 - The browser driver test and the web smoke test fail now and then on CI. Before blaming your change, see whether the same commit passed in another run, and say in your reply that the failure was intermittent.
@@ -62,7 +66,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - There is no "web" release line: the `server-v` tag ships the web client with the backend. Installed apps get a client change only from an `app-v` tag, and hosts get a connector change only from a `cli-v` tag: say which releases a merged fix still needs before it reaches people.
 - A release is a tag on a commit already in `main`, pushed with `git_push {directory, branch: "main", tag}`: for the server, the connector and the app the workflow takes the version from the tag, so there is no commit and no pull request. Check that CI passed on that commit first, then watch each release run, and the server deploy that follows a `server-v` release.
 - Before tagging, look at what changed since each line's last tag to decide which lines need a release, and follow the earlier bumps (a minor version for a feature). npm shows a new version a few minutes after its run ends.
-- Each extension under `extensions/` has its own `ext-<name>-v` line, and its tag must repeat the version committed in `extensions/<name>/package.json`. So an extension release starts with a version bump merged through a pull request; don't release one that hasn't changed since its last tag.
+- Each extension under `extensions/` has its own `ext-<name>-v` line, and its tag must repeat the version committed in `extensions/<name>/package.json`. So an extension release starts with a version bump merged through a pull request; don't release one that hasn't changed since its last tag. Once npm has it, update its pin in `packages/shared/src/managed-extensions.ts`, as `docs/development.md` describes.
 - When the server's minimum connector version went up, release the connector first and tag the server once npm has it.
 - A release step that succeeds may not have delivered: an upload can be accepted and still be held by the store. Check the outcome where it lands before saying it shipped.
 - When git, `gh` and `github_read` all fail with "access could not be verified", the session's GitHub access is stale and the session can't repair it. Keep the commit, save any drafted text in the worktree, and tell the person to reconnect their GitHub account.
@@ -72,7 +76,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 
 ## Sessions and schedules
 
-- A `sessions` read returns only a session's latest 50 entries, each cut short. To learn why another session failed, read its last entries. A read of an archived session can also fail outright: skip it.
+- A `sessions` read returns only a session's latest 50 entries, each cut short. To learn why another session failed, read its last entries. A read of an archived session can also fail outright, such as when its host's connector is offline: skip it.
 - A session visible to the workspace can't read a private session. Say so, and work from what the person describes or reproduce the problem yourself.
 - In a workspace with many sessions, the `sessions` list is cut off before its models section, so a model's id may not be visible there. Ask the person for the id rather than guess one.
 - A schedule belongs to its session and can't be managed from another one. Give a recurring job its own session: a busy session skips its runs, and missed runs aren't caught up.
@@ -85,6 +89,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 ## Writing for people
 
 - Don't say something succeeded when it was only started: "compaction started" is not "compacted".
+- On GitHub, put `#` only before an issue or pull request number. A report's own item numbers written as `#42` link to unrelated issues; write "finding 42".
 - Don't report what you only inferred, such as from a job's name. Read what the step printed, or say it is an assumption.
 - Say plainly what you couldn't check: not seen on screen, not tried on a real device, full suite not run.
 - When a request's wording could name two places in the product (a menu or a settings page), say which one you took it to mean.
