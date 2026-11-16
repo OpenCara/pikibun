@@ -622,6 +622,7 @@ export interface SessionView {
 export interface SudoPromptView {
   id: string;
   prompt: string;
+  key?: string;
   command?: string;
   requestedAt: string;
   expiresAt: string;

@@ -1,5 +1,6 @@
 import { signal, Text, View } from "nsh";
 import type { SudoPromptView } from "../../../../packages/shared/src/types";
+import { sealSudoPassword } from "../../../../packages/shared/src/sudo-seal";
 import { segment } from "../shared";
 import { session } from "../lib/auth";
 import { createAction } from "../lib/resource";
@@ -18,8 +19,10 @@ export function SudoPrompt(props: { sessionId: string; prompt: SudoPromptView; h
     if (action.busy() || (!decline && !typed)) return;
     password.set("");
     void action.run(async () => {
-      await session().api(`/api/sessions/${segment(props.sessionId)}/sudo`, { method: "POST",
-        body: decline ? { id: props.prompt.id, decline: true } : { id: props.prompt.id, password: typed } });
+      const key = props.prompt.key;
+      const body = decline ? { id: props.prompt.id, decline: true }
+        : key ? { id: props.prompt.id, sealed: await sealSudoPassword(key, props.prompt.id, typed) } : { id: props.prompt.id, password: typed };
+      await session().api(`/api/sessions/${segment(props.sessionId)}/sudo`, { method: "POST", body });
     });
   }
   return (

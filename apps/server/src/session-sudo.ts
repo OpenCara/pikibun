@@ -17,11 +17,11 @@ export function registerSessionSudo(app: Hono<AppEnv>): void {
       fail(403, 'host_owner_required', 'Only the host\'s owner answers sudo on it, in their own sessions.');
     }
     const answer = await body(c, sudoAnswer, { maxBytes: 4096 });
-    const password = answer.password;
+    const password = answer.password ?? answer.sealed;
     if (password !== undefined && !await isPersonalWorkspace(c.env, row.workspace_id, actor)) {
       fail(403, 'private_workspace_required', 'sudo takes a password only in sessions of your private workspace.');
     }
-    const relayed = { id: answer.id, ...(password !== undefined ? { password } : { decline: true }), nonce: id().replace(/-/g, '') };
+    const relayed = { id: answer.id, ...(answer.sealed ? { sealed: answer.sealed } : answer.password !== undefined ? { password: answer.password } : { decline: true }), nonce: id().replace(/-/g, '') };
     const result = await runnerJSON<{ answered?: unknown }>(await runnerRequest(c, row, 'sudo', '', relayed));
     invalidateSessionView(c, row.id);
     if (typeof result?.answered !== 'boolean') fail(502, 'invalid_runner_response', 'The runner returned an invalid sudo result.');

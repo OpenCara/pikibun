@@ -3,7 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sudoCommandText, sudoLimits, sudoPromptText } from "../../../packages/shared/src/sudo.js";
+import { checkSudoPassword, sudoCommandText, sudoLimits, sudoPromptText } from "../../../packages/shared/src/sudo.js";
+import { openSudoPassword, sudoSealKeys, type SealedSudoPassword } from "../../../packages/shared/src/sudo-seal.js";
 import type { SudoPromptView } from "../../../packages/shared/src/types.js";
 
 export interface SudoPromptsOptions {
@@ -17,6 +18,7 @@ export interface SudoPromptsOptions {
 
 interface Pending {
   view: SudoPromptView;
+  privateKey?: CryptoKey;
   settle: (password: string | undefined) => void;
 }
 
@@ -116,6 +118,15 @@ export class SudoPrompts {
     return spans.reduce((total, span) => total + Math.max(0, Math.min(span.to, now) - Math.max(span.from, start)), 0);
   }
 
+  async answerSealed(id: string, sealed: SealedSudoPassword): Promise<boolean> {
+    const pending = this.#pending.find(item => item.view.id === id);
+    if (!pending?.privateKey) return false;
+    let password: string;
+    try { password = checkSudoPassword(await openSudoPassword(pending.privateKey, id, sealed)); }
+    catch { throw new Error("The sealed password couldn't be opened"); }
+    return this.answer(id, password);
+  }
+
   answer(id: string, password: string | undefined): boolean {
     const pending = this.#pending.find(item => item.view.id === id);
     if (!pending) return false;
@@ -191,7 +202,7 @@ export class SudoPrompts {
       let request: { token?: unknown; prompt?: unknown };
       try { request = JSON.parse(received.slice(0, end)) as typeof request; } catch { connection.destroy(); return; }
       if (!this.#authentic(request.token) || !this.#helper) { connection.end(JSON.stringify({ declined: true })); return; }
-      this.#ask(connection, sudoPromptText(request.prompt));
+      void this.#ask(connection, sudoPromptText(request.prompt)).catch(() => connection.destroy());
     });
   }
 
@@ -202,11 +213,13 @@ export class SudoPrompts {
     return given.length === expected.length && timingSafeEqual(given, expected);
   }
 
-  #ask(connection: Socket, prompt: string): void {
+  async #ask(connection: Socket, prompt: string): Promise<void> {
+    const keys = await sudoSealKeys();
+    if (connection.destroyed) return;
     const now = this.#now();
     const waitMs = this.#options.waitMs ?? sudoLimits.waitMs;
     const command = sudoCommandText(this.#options.command?.());
-    const view: SudoPromptView = { id: randomUUID().replace(/-/g, ""), prompt, ...(command ? { command } : {}),
+    const view: SudoPromptView = { id: randomUUID().replace(/-/g, ""), prompt, key: keys.publicKey, ...(command ? { command } : {}),
       requestedAt: new Date(now).toISOString(), expiresAt: new Date(now + waitMs).toISOString() };
     let settled = false;
     const timer = setTimeout(() => settle(undefined), waitMs);
@@ -224,7 +237,7 @@ export class SudoPrompts {
       if (!connection.destroyed) connection.end(JSON.stringify(password === undefined ? { declined: true } : { password }));
       this.#options.changed();
     };
-    const pending: Pending = { view, settle };
+    const pending: Pending = { view, settle, privateKey: keys.privateKey };
     connection.on("close", () => settle(undefined));
     if (!this.#pending.length) this.#waitingSince = now;
     this.#pending.push(pending);
