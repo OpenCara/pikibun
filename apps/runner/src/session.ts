@@ -303,7 +303,7 @@ export class RunnerSession {
         const host = this.#hostExtensions;
         if (!host) throw new RunnerError(409, `This extension (${command.source}) no longer applies to this session; /${command.name} didn't run.`);
         await this.authorize(run.initiatedBy, "write");
-        await this.#piki.requireCommand(run.initiatedBy, command.source, command.name, host.isolated(command.source));
+        await this.#piki.requireCommand(run.initiatedBy, command.source, command.name, host.sandboxed(command.source));
         return host.command(command.source, command.name, args);
       },
       find: async (pattern, limit) => (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, alreadyAllowed)).paths,
@@ -325,7 +325,6 @@ export class RunnerSession {
       wholeResults: this.#wholeResults, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
       mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(), extensionProcess: this.extensionProcess(),
-      extensionsSandboxed: (this.sandbox instanceof Sandbox || (this.sandbox instanceof HelperWorkspace && this.sandbox.runsProcesses)) && !!this.sandbox.nodeBin,
     });
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
@@ -868,12 +867,12 @@ export class RunnerSession {
     const sandbox = this.sandbox;
     if (sandbox instanceof HelperWorkspace && sandbox.runsProcesses) {
       if (!sandbox.nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
-      return warn => new ProcessChannel({ directory: sandbox.worktree, warn, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox) });
+      return warn => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox) });
     }
     if (!(sandbox instanceof Sandbox)) return undefined;
     const nodeBin = sandbox.nodeBin;
     if (!nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
-    return warn => new ProcessChannel({ directory: sandbox.worktree, warn, mountAllowed: path => sandbox.bindAllowed(path), launch: sandboxLaunch({
+    return warn => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: sandboxLaunch({
       socketDirectory: serviceSocketDirectory(`${this.binding.session.id}\0extensions`, this.directory), nodeBin, worktree: sandbox.worktree,
       start: async (command, binds, onOutput, signal) => {
         const config = await this.hostConfig();

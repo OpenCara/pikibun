@@ -201,7 +201,7 @@ the host instead of going to the model.
 - **An extension's command runs under the rule of its tools.** A handler is the extension's code, acting for whoever
   typed the command, with their arguments. It runs for any sender where the extension's process is in the session's
   sandbox, and otherwise only for the host's owner and members they granted host commands, or where the host's owner
-  lets extension tools run for every session; the refusal says which (`requireCommand`, as `#runTool`). Unlike a tool
+  lets extension tools run for every session; the refusal says which (`requireCommand` and `#runTool` share one rule, `#extensionMayRun`, and take "in the sandbox" from the channel that runs the source). Unlike a tool
   call it isn't a card: no model chose it, the person typed it.
 - **Acting commands need a message that may act.** `/compact` and extension commands are refused in a side ask and in a
   Read-only message, as an extension's tools are. Templates and skills only replace the message's text, so they pass:
