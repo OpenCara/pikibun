@@ -56,6 +56,7 @@ export interface SessionCommandsOptions {
 }
 
 export const WORKTREE_OWNER = "worktree";
+const RESERVED_OWNERS = new Set([WORKTREE_OWNER, "skill"]);
 
 export function commandFiles(paths: readonly string[]): CommandFile[] {
   const sorted = [...paths].map(path => path.replace(/\/+$/, "")).sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
@@ -95,8 +96,9 @@ export function commandFiles(paths: readonly string[]): CommandFile[] {
   for (const { owner, ...file } of found) {
     const shared = owners.get(`${file.kind}\n${file.name}`)!.size > 1;
     const qualifier = owner || WORKTREE_OWNER;
-    if (shared && !NAME.test(qualifier)) continue;
+    if (shared && (!NAME.test(qualifier) || (owner && RESERVED_OWNERS.has(owner)))) continue;
     const name = shared ? `${qualifier}:${file.name}` : file.name;
+    if ((file.kind === "skill" ? "skill:".length : 0) + name.length > sessionCommandLimits.name) continue;
     const key = `${file.kind}\n${name}`;
     if (names.has(key) || files.filter(item => item.kind === file.kind).length >= sessionCommandLimits.perKind) continue;
     names.add(key);

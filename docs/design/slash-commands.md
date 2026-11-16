@@ -117,7 +117,8 @@ messages.
 - **A name in two places is qualified.** Within one clone (or the worktree's root) the first file of a name wins, in
   Pi's own order. Where two places claim one name, neither keeps it: each is offered as `/<clone>:<name>` (or
   `/skill:<clone>:<name>`), and `worktree:` names the root's, so a public repository cloned to read can't answer for
-  the workspace's own `/release`.
+  the workspace's own `/release`. A clone named `skill` or `worktree` isn't offered for a shared name (its names would read
+  as a skill, or as the root's), nor is a qualified name longer than a command may be.
 - **One look for the list, one read for a command.** Each file access is a sandboxed call, and a session's file
   calls run one after another, behind a command that is running. So the view never waits for the worktree: it lists
   what the last look found (one `find`, at most every two minutes, started by a view and finished in the background),
