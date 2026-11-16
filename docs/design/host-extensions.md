@@ -22,7 +22,7 @@ its host has.
    from its page in Pikibun, where extensions a workspace uses but the host lacks show an **Install** button, or with
    `pikibun extensions` on the machine. Every install is pinned, runs no npm scripts, and is audited.
 4. **In a process of their own.** Each session's installed extensions run in a process of their own, which a timeout or
-   a crash ends without the connector; on Linux, in a sandboxed session, inside the session's sandbox and behind its
+   a crash ends without the connector; on Linux and macOS, in a sandboxed session, inside the session's sandbox and behind its
    egress proxy ([extension-isolation.md](extension-isolation.md)). Pikibun's own extensions built into the connector
    run in it. Modules are
    found as Pi finds them: a directory a package's `pi.extensions` names loads its `index.ts`/`index.js` alone when it
@@ -41,7 +41,7 @@ its host has.
    offers them, the server's `WEB_SEARCH` provider and the workspace's **Web search** setting are gone, and older
    connectors' searches are refused (410). An extension may register tools with retired names, so a Pi web search
    extension provides `web_search` as it does in Pi. Unlike `web_fetch`, an extension's requests aren't confined by the
-   workspace's network access where the extension runs outside the sandbox; in a sandboxed session on Linux they are
+   workspace's network access where the extension runs outside the sandbox; in a sandboxed session on Linux or macOS they are
    ([extension-isolation.md](extension-isolation.md)).
 10. **Pi's built-ins, from the host's configuration.** Pi ships built-in extensions (pi-coding-agent's `builtInExtensions`).
    A host's owner and admins turn them on for every session on the host, in every workspace
@@ -240,7 +240,7 @@ a private network address. See its [README](../../extensions/context-files/READM
 
 ## Later
 
-- Isolation in the session's sandbox on macOS and Windows, whose sandboxes have no services yet: the rest of
+- Isolation in the session's sandbox on Windows, whose process container is started through a runner of its own: the rest of
   [extension-isolation.md](extension-isolation.md)'s step 3.
 - Pikibun's own hook packages (`piki:pr-flow`, `piki:context-files`, `piki:prompt-audit`) installed by the store at a
   version the control plane pins, instead of compiled into the connector: planned in

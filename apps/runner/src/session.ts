@@ -32,7 +32,7 @@ import { SudoPrompts } from "./sudo-prompts.js";
 import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
-import { ProcessChannel, refusedChannel, sandboxLaunch } from "./extensions/process.js";
+import { confinedLaunch, ProcessChannel, refusedChannel, sandboxLaunch } from "./extensions/process.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace, hostOwnersSession } from "./host-workspace.js";
@@ -323,7 +323,7 @@ export class RunnerSession {
       wholeResults: this.#wholeResults, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
       mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(), extensionProcess: this.extensionProcess(),
-      extensionsSandboxed: this.sandbox instanceof Sandbox && !!this.sandbox.nodeBin,
+      extensionsSandboxed: (this.sandbox instanceof Sandbox || (this.sandbox instanceof HelperWorkspace && this.sandbox.runsProcesses)) && !!this.sandbox.nodeBin,
     });
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
@@ -815,6 +815,10 @@ export class RunnerSession {
 
   private extensionProcess(): ExtensionHost["extensionProcess"] {
     const sandbox = this.sandbox;
+    if (sandbox instanceof HelperWorkspace && sandbox.runsProcesses) {
+      if (!sandbox.nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
+      return warn => new ProcessChannel({ directory: sandbox.worktree, warn, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox) });
+    }
     if (!(sandbox instanceof Sandbox)) return undefined;
     const nodeBin = sandbox.nodeBin;
     if (!nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");

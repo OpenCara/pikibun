@@ -3,8 +3,8 @@
 Review 268, finding 14 (High): installed extensions ran in the connector's own Node.js process, as the host owner's OS
 user, with the owner's files, credentials and network, and the workspace's network policy didn't confine them. This
 document says what is contained today, what isn't, and how extensions move into a per-session child process with the
-session's sandbox and egress proxy. Steps 1 and 2 are built, and step 3 on Linux (see each "as built" section); step 3 on macOS
-and Windows is the plan.
+session's sandbox and egress proxy. Steps 1 and 2 are built, and step 3 on Linux and macOS (see each "as built" section); step 3 on
+Windows is the plan.
 
 ## What is contained today
 
@@ -92,7 +92,7 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
    `host-extensions.test.ts` and `context-files.test.ts` hold it.
 2. **The child, unsandboxed** (done). Run the child half in a child process for every session. This already takes crashes,
    blocked event loops and leaks out of the connector, and makes timeouts kill.
-3. **The sandbox and the proxy** (done on Linux). Start the child in the session's sandbox per platform, with the mounts and egress
+3. **The sandbox and the proxy** (done on Linux and macOS). Start the child in the session's sandbox per platform, with the mounts and egress
    above; tests in `tests/sandbox-conformance.test.ts` check that an extension can't read a host path or reach a host
    the policy refuses.
 4. **The docs.** `docs/extensions.md` loses "Outside the sandbox" for sandboxed sessions; `host-extensions.md` moves
@@ -185,8 +185,9 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   with them; the adapter declares a session's mounts before opening its sources, so that is one restart at most.
 - **It fails closed.** A sandbox the host's Node.js can't be given to refuses every request (`refusedChannel`) rather
   than run extensions outside it.
-- **Not yet on macOS and Windows.** Their sandboxes run commands through `HelperWorkspace`, which has no services; their
-  sessions' extension processes run as in step 2, as the host's user. So do those of sessions on the host and of
+- **Not yet on Windows.** Its process container is started through a runner that reads one request and ends with it,
+  and Microsoft's MXC SDK isn't on the CI's Windows machines, so nothing there could check a long-lived process in it.
+  Its sessions' extension processes run as in step 2, as the host's user. So do those of sessions on the host and of
   unsandboxed hosts, whose commands do too.
 - **What extensions lose there.** Files of the host outside the worktree and their own install (the npm copy of
   `context-files` loses its `host:` files; the copy built into the connector keeps them), the connector's environment
@@ -199,6 +200,26 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   (`runsOnHost` for a `bash` operation). The adapter says which calls these are (`sandboxed`: the source runs behind
   the process channel, and the session's process is sandboxed), so built-in extensions and unsandboxed platforms keep the
   rule. A Read-only message still runs none: a tool may change the worktree.
+
+## Step 3 as built, on macOS
+
+- **The process runs under Seatbelt.** A session whose workspace is a `HelperWorkspace` over the macOS backend starts
+  its extension process with `sandbox-exec` and the profile the session's commands get (`SeatbeltBackend.process`,
+  `HelperWorkspace.processCommand`): deny by default, the session's home and worktree writable, the session's egress
+  proxy the only network, and the host's Node.js among the tool roots.
+- **Its own files are tool roots.** The connector's code and each extension's install are added to the profile's
+  read-only roots, checked by the rule the Linux mounts get (`serviceBindAllowed`): never a system directory, the
+  home directory or one of its parents, or the session's own files.
+- **Node's IPC channel still carries the protocol.** `sandbox-exec` replaces itself with Node.js, which inherits the
+  channel the connector opened, so the process is started as an unsandboxed one is (`ipcLaunch`), with another command
+  (`confinedLaunch`). There is no socket to pin.
+- **No limits of its own.** macOS has no resource limits for commands either (`limitedShell` is false), so a tool of
+  an extension there is a host command wherever a shell command is: in someone else's session it needs a grant.
+- **Described there too.** A connector started with the macOS sandbox describes installed extensions under Seatbelt
+  (`helperDescribe`), in a workspace of its own with no egress proxy.
+- **Checked on a real Mac.** `tests/native-sandboxes.test.ts` runs both on the CI's macOS machine: an extension reads the
+  worktree and its own files, can write the first but not the second, can't read a host file beside them and has no
+  network; one that reads a host file as it loads is described with that read refused.
 
 ## Describing an extension (review 355, finding 42)
 
@@ -213,7 +234,8 @@ the module's top-level code and its factory ran in the connector, as the host's 
   (`sandboxDescribe`): a sandbox of its own under the state directory, with no session's files, no egress proxy (so no
   network), and the connector's code and that extension's install mounted read-only. A source whose files the sandbox
   can't be given (a local extension under `/tmp`, say) is described in a plain process instead, as sessions in the
-  sandbox refuse it and only sessions on the host run it. Elsewhere (macOS, Windows, unsandboxed hosts, the
+  sandbox refuse it and only sessions on the host run it. A connector with the macOS sandbox does the same under
+  Seatbelt (`helperDescribe`). Elsewhere (Windows, unsandboxed hosts, the
   `pikibun extensions` command) the process is a plain one. A sandbox that can't be given the host's Node.js describes
   nothing: each installed extension reports that error, rather than run outside the sandbox on a host whose sessions
   are sandboxed, where sessions refuse extensions for the same reason. A description that takes longer than a minute

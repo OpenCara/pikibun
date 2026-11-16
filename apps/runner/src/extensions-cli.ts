@@ -10,7 +10,7 @@ const HELP = `Usage: pikibun extensions <command> [options]
 Pi extensions for the sessions on this host. A workspace chooses which ones its sessions use (Settings > Workspaces >
 the workspace > Extensions in Pikibun); a session runs with those this host has at the same version. The host's owner
 can also install them from Pikibun (Settings > Hosts > this host > Extensions). They run in a process of their
-own: in the session's sandbox on Linux, and as this machine's user, outside the sandbox, elsewhere. Install only code
+own: in the session's sandbox on Linux and macOS, and as this machine's user, outside the sandbox, elsewhere. Install only code
 you trust.
 
 Commands:

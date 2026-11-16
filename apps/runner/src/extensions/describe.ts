@@ -5,7 +5,8 @@ import type { ExtensionModuleSummary } from "../../../../packages/shared/src/hos
 import type { RunnerBinding } from "../../../../packages/shared/src/types.js";
 import { Sandbox } from "../sandbox.js";
 import { serviceLimits, serviceSocketDirectory } from "../session-service.js";
-import { ProcessChannel, sandboxLaunch } from "./process.js";
+import { HelperWorkspace, type HelperBackend } from "../helper-workspace.js";
+import { confinedLaunch, ProcessChannel, sandboxLaunch } from "./process.js";
 
 export interface DescribedSource { root: string; files: string[]; mount?: string }
 export type Describe = (source: DescribedSource) => Promise<ExtensionModuleSummary[]>;
@@ -40,16 +41,44 @@ export const processDescribe: Describe = async source => {
   finally { await rm(directory, { recursive: true, force: true }).catch(() => {}); }
 };
 
-export function sandboxDescribe(stateDirectory: string, fallback: Describe = processDescribe): Describe {
-  let sandbox: Sandbox | undefined;
+const describeBinding = (): RunnerBinding => {
+  const owner = "pikibun:host";
+  return { session: { id: DESCRIBE_SESSION, ownerId: owner }, owner: { id: owner, githubLogin: null, gitName: "Pikibun", gitEmail: "pikibun@localhost", env: {} },
+    model: { provider: "none" } } as unknown as RunnerBinding;
+};
+
+function queued(describe: Describe): Describe {
   let queue: Promise<unknown> = Promise.resolve();
-  const describe = async (source: DescribedSource) => {
+  return source => {
+    const next = queue.then(() => describe(source));
+    queue = next.catch(() => {});
+    return next;
+  };
+}
+
+export function helperDescribe(stateDirectory: string, backend: () => HelperBackend, fallback: Describe = processDescribe): Describe {
+  let sandbox: HelperWorkspace | undefined;
+  return queued(async source => {
     if (!sandbox) {
       const root = join(stateDirectory, DESCRIBE_SESSION);
       await mkdir(root, { recursive: true, mode: 0o700 });
-      const owner = "pikibun:host";
-      sandbox = new Sandbox({ session: { id: DESCRIBE_SESSION, ownerId: owner }, owner: { id: owner, githubLogin: null, gitName: "Pikibun", gitEmail: "pikibun@localhost", env: {} },
-        model: { provider: "none" } } as unknown as RunnerBinding, root, undefined, { browser: null });
+      sandbox = new HelperWorkspace(describeBinding(), join(root, "sandbox"), backend());
+    }
+    const box = sandbox;
+    await box.initialize();
+    if (!box.runsProcesses || (source.mount && !box.bindAllowed(source.mount))) return fallback(source);
+    if (!box.nodeBin) throw new Error("This host's Node.js can't be given to the sandbox, so its extensions can't be described");
+    return describeThrough(new ProcessChannel({ directory: box.worktree, warn: () => {}, mountAllowed: path => box.bindAllowed(path), launch: confinedLaunch(box) }), source);
+  });
+}
+
+export function sandboxDescribe(stateDirectory: string, fallback: Describe = processDescribe): Describe {
+  let sandbox: Sandbox | undefined;
+  return queued(async source => {
+    if (!sandbox) {
+      const root = join(stateDirectory, DESCRIBE_SESSION);
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      sandbox = new Sandbox(describeBinding(), root, undefined, { browser: null });
     }
     const box = sandbox;
     await box.initialize();
@@ -61,10 +90,5 @@ export function sandboxDescribe(stateDirectory: string, fallback: Describe = pro
       launch: sandboxLaunch({ socketDirectory, nodeBin, worktree: box.worktree,
         start: (command, binds, onOutput, signal) => box.startService(command, async () => {}, { limits: serviceLimits(DESCRIBE_TIMEOUT_MS / 1000, 1), unbounded: true,
           socketDirectory, onOutput, signal, binds }) }) }), source);
-  };
-  return source => {
-    const next = queue.then(() => describe(source));
-    queue = next.catch(() => {});
-    return next;
-  };
+  });
 }

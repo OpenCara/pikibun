@@ -12,6 +12,8 @@ import { pinServiceSocket, SANDBOX_SERVICE_SOCKETS, type ServiceProcess } from "
 import { lineReader } from "./lines.js";
 import type { ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams } from "./protocol.js";
 
+export type WorkerCommandFor = (directory: string, mounts: readonly string[]) => WorkerCommand | Promise<WorkerCommand>;
+
 export interface WorkerCommand {
   program: string;
   args: string[];
@@ -39,7 +41,7 @@ export type WorkerLaunch = (handlers: LaunchHandlers, mounts: readonly string[])
 export interface ProcessChannelOptions {
   directory: string;
   warn(source: string, message: string): void;
-  command?: (directory: string) => WorkerCommand;
+  command?: WorkerCommandFor;
   launch?: WorkerLaunch;
   mountAllowed?(path: string): boolean;
   log?(line: string): void;
@@ -93,9 +95,9 @@ export function workerCodeMounts(): string[] {
   return [...roots];
 }
 
-export function ipcLaunch(directory: string, command: (directory: string) => WorkerCommand = workerCommand): WorkerLaunch {
-  return async handlers => {
-    const run = command(directory);
+export function ipcLaunch(directory: string, command: WorkerCommandFor = workerCommand): WorkerLaunch {
+  return async (handlers, mounts) => {
+    const run = await command(directory, mounts);
     const child = spawn(run.program, run.args, { cwd: run.cwd ?? directory, env: run.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe", "ipc"], serialization: "json", windowsHide: true });
     for (const stream of [child.stdout, child.stderr]) if (stream) createInterface({ input: stream }).on("line", handlers.log);
@@ -119,6 +121,20 @@ export function ipcLaunch(directory: string, command: (directory: string) => Wor
     link.hold(false);
     return link;
   };
+}
+
+export interface ConfinedWorkspace {
+  readonly worktree: string;
+  readonly nodeBin?: string | undefined;
+  processCommand(program: string, args: readonly string[], readRoots: readonly string[]): { command: string; args: string[]; env: Record<string, string>; cwd: string };
+}
+
+export function confinedLaunch(sandbox: ConfinedWorkspace): WorkerLaunch {
+  return ipcLaunch(sandbox.worktree, (directory, mounts) => {
+    if (!sandbox.nodeBin) throw new Error("The host's Node.js can't be given to the sandbox");
+    const launch = sandbox.processCommand(join(sandbox.nodeBin, "node"), [...workerEntry(), directory], [...new Set([...workerCodeMounts(), ...mounts])]);
+    return { program: launch.command, args: launch.args, env: launch.env, cwd: launch.cwd };
+  });
 }
 
 export interface SandboxWorker {
