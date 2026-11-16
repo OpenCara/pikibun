@@ -2380,7 +2380,12 @@ test('the session list shows each person their own latest three side asks under 
   const collaborator = await f.client('collaborator');
   await json(await s.admin.request('POST', `/api/workspaces/${s.team.id}/members`, { userId: collaborator.user.id, role: 'collaborator' }));
   let next = 10;
-  rpcHub(f, s.connector, envelope => Response.json({ submissionId: `submission-${next}`, conversationId: String(envelope.request.ticket.action === 'ask' ? next++ : 0), status: 'queued' }, { status: 202 }));
+  const conversations = new Map<string, string>();
+  rpcHub(f, s.connector, envelope => {
+    const { requestId } = JSON.parse(envelope.request.body) as { requestId: string };
+    if (!conversations.has(requestId)) conversations.set(requestId, String(envelope.request.ticket.action === 'ask' ? next++ : 0));
+    return Response.json({ submissionId: `submission-${requestId}`, conversationId: conversations.get(requestId), status: 'queued' }, { status: 202 });
+  });
   const path = `/api/sessions/${s.session.id}`;
   const listed = async (client: typeof collaborator) => (await json<{ sessions: SessionRecord[] }>(await client.request('GET', '/api/sessions'))).sessions
     .find(item => item.id === s.session.id)?.sideAsks;
@@ -2399,7 +2404,14 @@ test('the session list shows each person their own latest three side asks under 
   assert.ok(!mine![2]!.preview.includes(token) && mine![2]!.preview.startsWith('Try with '), mine![2]!.preview);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM side_asks WHERE session_id = ?').get(s.session.id)!.n, 3, 'only what is listed is kept');
   await json(await s.creator.request('POST', `${path}/ask`, { content: 'The latest one', requestId: 'ask-3' }), 202);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM side_asks WHERE session_id = ?').get(s.session.id)!.n, 3, 'a retried side ask is listed once');
+  assert.deepEqual((await listed(s.creator))?.map(ask => [ask.conversationId, ask.createdAt]),
+    [['13', '2026-01-01T00:00:03Z'], ['12', '2026-01-01T00:00:02Z'], ['11', '2026-01-01T00:00:01Z']], 'a retried side ask is listed once, as it was');
+
+  const insert = f.sqlite.prepare('INSERT INTO side_asks (session_id, actor_id, conversation_id, preview, created_at) VALUES (?,?,?,?,?)');
+  const other = f.sqlite.prepare('SELECT id FROM sessions WHERE id <> ? LIMIT 1').get(s.session.id) as { id: string } | undefined;
+  assert.ok(other, 'the fixture has another session to ask in');
+  for (let index = 0; index < 1100; index++) insert.run(other!.id, s.creator.user.id, `other-${index}`, 'Elsewhere', '2027-01-01T00:00:00Z');
+  assert.deepEqual((await listed(s.creator))?.map(ask => ask.conversationId), ['13', '12', '11'], 'newer side asks elsewhere never crowd these out');
 
   assert.equal(await listed(collaborator), undefined, "someone else's side asks aren't listed for them");
   await json(await collaborator.request('POST', `${path}/ask`, { content: 'Mine', requestId: 'collaborator-ask' }), 202);
@@ -2414,6 +2426,7 @@ test('a side ask is previewed by its first line, cut to 120 characters, or by it
   assert.equal(sideAskPreview('\n', 1), 'An image');
   assert.equal(sideAskPreview(undefined, 0), 'Side ask');
   assert.equal(sideAskPreview('y'.repeat(120), 0), 'y'.repeat(120));
+  assert.equal(sideAskPreview(`${'z'.repeat(118)}\u{1F600}\u{1F600}\u{1F600}`, 0), `${'z'.repeat(118)}\u{1F600}\u2026`, 'cut by character, never inside one');
 });
 
 test('a collaborator sends a message to a workspace-visible session it does not own; a viewer cannot, whatever its grant', async t => {
