@@ -11,6 +11,7 @@ import type { SandboxAuthorize } from "../apps/runner/src/sandbox.js";
 import { agentInstructions } from "../apps/runner/src/session/instructions.js";
 import { SudoPrompts, type SudoPromptsOptions } from "../apps/runner/src/sudo-prompts.js";
 import { parseSudoAnswer, sudoCommandText, sudoPromptText } from "../packages/shared/src/sudo.js";
+import { base64url, fromBase64url, openSudoPassword, sealSudoPassword, sudoSealKeys } from "../packages/shared/src/sudo-seal.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 
 const unix = { skip: process.platform === "win32" };
@@ -94,6 +95,43 @@ test("a password answered while a command runs is taken out of that command's ou
   assert.equal(other.redact("s3cret pass again"), "[sudo password] again", "while another command of the session still runs, it is still taken out");
   other.end();
   assert.equal(sudo.track().redact("s3cret pass"), "s3cret pass", "once no command runs, the password is forgotten");
+});
+
+test("a password sealed to a prompt's key opens with that prompt's key and id alone, and a changed byte opens nothing", async () => {
+  for (const bytes of [new Uint8Array([]), new Uint8Array([1]), new Uint8Array([1, 2]), new Uint8Array([250, 251, 252, 253])]) {
+    assert.deepEqual([...fromBase64url(base64url(bytes))], [...bytes]);
+    assert.equal(base64url(bytes), Buffer.from(bytes).toString("base64url"));
+  }
+  const host = await sudoSealKeys();
+  const sealed = await sealSudoPassword(host.publicKey, "prompt1", "s3cret pass");
+  assert.ok(!JSON.stringify(sealed).includes("s3cret"));
+  assert.equal(await openSudoPassword(host.privateKey, "prompt1", sealed), "s3cret pass");
+  await assert.rejects(openSudoPassword(host.privateKey, "prompt2", sealed), "it is bound to its prompt");
+  await assert.rejects(openSudoPassword((await sudoSealKeys()).privateKey, "prompt1", sealed), "and to the host's key");
+  const flipped = fromBase64url(sealed.data); flipped[0] ^= 1;
+  await assert.rejects(openSudoPassword(host.privateKey, "prompt1", { ...sealed, data: base64url(flipped) }));
+  assert.deepEqual(parseSudoAnswer({ id: "abc", sealed }), { id: "abc", sealed });
+  for (const bad of [{ id: "abc", sealed, password: "x" }, { id: "abc", sealed, decline: true }, { id: "abc", sealed: { ...sealed, extra: "x" } },
+    { id: "abc", sealed: { ...sealed, data: "not base64!" } }, { id: "abc", sealed: { ...sealed, data: "A".repeat(2000) } }]) {
+    assert.throws(() => parseSudoAnswer(bad), JSON.stringify(bad));
+  }
+});
+
+test("each prompt carries a key of its own, and a sealed answer reaches sudo as the password; one that doesn't open answers nothing", unix, async t => {
+  const sudo = prompts(t);
+  await sudo.prepare();
+  const first = ask(sudo.helper!);
+  const view = await waitFor(() => sudo.view());
+  assert.match(view.key ?? "", /^[A-Za-z0-9_-]{87}$/, "an uncompressed P-256 public key");
+  await assert.rejects(sudo.answerSealed(view.id, await sealSudoPassword((await sudoSealKeys()).publicKey, view.id, "wrong key")), /couldn't be opened/);
+  assert.equal(sudo.waiting(), true, "a sealed answer that doesn't open leaves the prompt waiting");
+  assert.equal(await sudo.answerSealed(view.id, await sealSudoPassword(view.key!, view.id, "s3cret pass")), true);
+  assert.deepEqual(await first.exited, { code: 0, stdout: "s3cret pass\n" });
+  const second = ask(sudo.helper!);
+  const next = await waitFor(() => sudo.view());
+  assert.notEqual(next.key, view.key, "a new prompt, a new key");
+  assert.equal(sudo.answer(next.id, undefined), true);
+  assert.equal((await second.exited).code, 1);
 });
 
 test("a declined, unanswered or abandoned prompt gives sudo nothing", unix, async t => {

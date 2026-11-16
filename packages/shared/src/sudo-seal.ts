@@ -6,7 +6,7 @@ export interface SealedSudoPassword {
 
 export const SUDO_SEAL_LIMITS = Object.freeze({ key: 100, iv: 20, data: 1500 });
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const BASE64URL = /^[A-Za-z0-9_-]+$/;
+const BASE64URL = /^[A-Za-z0-9_-]*$/;
 const P256 = { name: "ECDH", namedCurve: "P-256" } as const;
 
 export function base64url(bytes: Uint8Array): string {
@@ -73,7 +73,7 @@ export function parseSealedSudoPassword(value: unknown): SealedSudoPassword {
   if (Object.keys(record).sort().join() !== "data,iv,key") throw new Error("Invalid sealed password.");
   for (const name of ["key", "iv", "data"] as const) {
     const part = record[name];
-    if (typeof part !== "string" || !BASE64URL.test(part) || part.length > SUDO_SEAL_LIMITS[name]) throw new Error("Invalid sealed password.");
+    if (typeof part !== "string" || !part || !BASE64URL.test(part) || part.length > SUDO_SEAL_LIMITS[name]) throw new Error("Invalid sealed password.");
   }
   return { key: record.key as string, iv: record.iv as string, data: record.data as string };
 }
