@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync, rmSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, type Socket } from "node:net";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
@@ -22,6 +22,37 @@ export interface WorkerCommand {
 }
 
 type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string; error?: string } | { warn: { source: string; message: string } };
+
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === "string");
+
+function toolDescription(value: unknown): value is ExtensionToolDescription {
+  return isObject(value) && typeof value.name === "string" && typeof value.description === "string" && isObject(value.parameters)
+    && (value.executionMode === undefined || value.executionMode === "sequential" || value.executionMode === "parallel")
+    && (value.promptSnippet === undefined || typeof value.promptSnippet === "string")
+    && (value.promptGuidelines === undefined || isStrings(value.promptGuidelines));
+}
+
+export function replyOf(value: unknown): Reply | undefined {
+  if (!isObject(value)) return undefined;
+  if ("warn" in value) {
+    const warn = value.warn;
+    return isObject(warn) && typeof warn.source === "string" && typeof warn.message === "string" ? { warn: { source: warn.source, message: warn.message } } : undefined;
+  }
+  const { id, error, handlers, tools, toolsSignature } = value;
+  if (typeof id !== "number" || !Number.isSafeInteger(id)) return undefined;
+  if (error !== undefined) return typeof error === "string" ? { id, error } : undefined;
+  if ((handlers !== undefined && !isStrings(handlers)) || (tools !== undefined && !(Array.isArray(tools) && tools.every(toolDescription)))
+    || (toolsSignature !== undefined && typeof toolsSignature !== "string")) return undefined;
+  return { id, value: value.value, ...(handlers ? { handlers } : {}), ...(tools ? { tools: tools as ExtensionToolDescription[] } : {}),
+    ...(toolsSignature !== undefined ? { toolsSignature } : {}) };
+}
+
+function deliver(handlers: LaunchHandlers, value: unknown): void {
+  const reply = replyOf(value);
+  if (!reply) return;
+  try { handlers.reply(reply); } catch (error) { handlers.log(`An extension process's answer couldn't be taken: ${error instanceof Error ? error.message : String(error)}`); }
+}
 
 export interface WorkerLink {
   send(message: unknown, failed: (error: Error) => void): void;
@@ -101,7 +132,7 @@ export function ipcLaunch(directory: string, command: WorkerCommandFor = workerC
     const child = spawn(run.program, run.args, { cwd: run.cwd ?? directory, env: run.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe", "ipc"], serialization: "json", windowsHide: true });
     for (const stream of [child.stdout, child.stderr]) if (stream) createInterface({ input: stream }).on("line", handlers.log);
-    child.on("message", (reply: Reply) => handlers.reply(reply));
+    child.on("message", (reply: unknown) => deliver(handlers, reply));
     const exited = new Promise<void>(resolve => { child.once("exit", () => resolve()); });
     child.once("exit", (code, signal) => handlers.ended(signal ? `it was ended by ${signal}` : `it exited with ${code}`));
     child.once("error", error => handlers.ended(`it couldn't run: ${error.message}`));
@@ -123,6 +154,59 @@ export function ipcLaunch(directory: string, command: WorkerCommandFor = workerC
   };
 }
 
+function readReplies(socket: Socket, handlers: LaunchHandlers, overflow: () => void): void {
+  socket.on("data", lineReader(line => {
+    let reply: unknown;
+    try { reply = JSON.parse(line); } catch { return; }
+    deliver(handlers, reply);
+  }, overflow));
+  socket.on("error", () => {});
+}
+
+export const PIPE_FD = 3;
+
+export function pipeLaunch(directory: string, command: WorkerCommandFor = workerCommand): WorkerLaunch {
+  return async (handlers, mounts) => {
+    const run = await command(directory, mounts);
+    const child = spawn(run.program, run.args, { cwd: run.cwd ?? directory, env: run.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe", "pipe"], windowsHide: true });
+    for (const stream of [child.stdout, child.stderr]) if (stream) stream.on("data", lineReader(handlers.log, () => {}, 64 * 1024));
+    let stopped = false;
+    const end = (reason: string) => {
+      if (stopped) return;
+      stopped = true;
+      handlers.ended(reason);
+    };
+    const exited = new Promise<void>(resolve => { child.once("exit", () => resolve()); });
+    child.once("exit", (code, signal) => end(signal ? `it was ended by ${signal}` : `it exited with ${code}`));
+    child.once("error", error => end(`it couldn't run: ${error.message}`));
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", () => resolve());
+      child.once("error", reject);
+    });
+    const channel = child.stdio[PIPE_FD] as Socket;
+    readReplies(channel, handlers, () => {
+      end("it sent more than a message may hold");
+      channel.destroy();
+      child.kill("SIGKILL");
+    });
+    const link: WorkerLink = {
+      send: (message, failed) => {
+        if (channel.destroyed || !channel.writable) failed(new Error("its channel is closed"));
+        else channel.write(`${JSON.stringify(message)}\n`, error => { if (error) failed(error); });
+      },
+      hold: held => holdHandles([child, channel, child.stdout, child.stderr], held),
+      kill: () => {
+        channel.destroy();
+        child.kill("SIGKILL");
+      },
+      exited,
+    };
+    link.hold(false);
+    return link;
+  };
+}
+
 export interface ConfinedWorkspace {
   readonly worktree: string;
   readonly nodeBin?: string | undefined;
@@ -130,9 +214,9 @@ export interface ConfinedWorkspace {
 }
 
 export function confinedLaunch(sandbox: ConfinedWorkspace): WorkerLaunch {
-  return ipcLaunch(sandbox.worktree, (directory, mounts) => {
+  return pipeLaunch(sandbox.worktree, (directory, mounts) => {
     if (!sandbox.nodeBin) throw new Error("The host's Node.js can't be given to the sandbox");
-    const launch = sandbox.processCommand(join(sandbox.nodeBin, "node"), [...workerEntry(), directory], [...new Set([...workerCodeMounts(), ...mounts])]);
+    const launch = sandbox.processCommand(join(sandbox.nodeBin, "node"), [...workerEntry(), "--pipe", directory], [...new Set([...workerCodeMounts(), ...mounts])]);
     return { program: launch.command, args: launch.args, env: launch.env, cwd: launch.cwd };
   });
 }
@@ -175,16 +259,11 @@ export function sandboxLaunch(worker: SandboxWorker): WorkerLaunch {
       service.kill();
       throw error;
     });
-    socket.on("data", lineReader(line => {
-      let reply: Reply;
-      try { reply = JSON.parse(line) as Reply; } catch { return; }
-      handlers.reply(reply);
-    }, () => {
+    readReplies(socket, handlers, () => {
       end("it sent more than a message may hold");
       socket.destroy();
       service.kill();
-    }));
-    socket.on("error", () => {});
+    });
     socket.on("close", () => {
       end("its connection closed");
       service.kill();
