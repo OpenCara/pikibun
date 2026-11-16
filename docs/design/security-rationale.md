@@ -208,8 +208,12 @@ the host instead of going to the model.
   the message still runs with the tools it had.
 - **Templates and skills are read as the session reads files.** The host finds and reads them with the session's file
   access (in the sandbox, its helper), never by opening worktree paths in the connector, so a link out of the worktree
-  is refused as it is for `read`. They are the repository's content, written by whoever can push to it, and reach the
-  model only when someone types their name. A skill's `location` is a worktree path, so the agent opens its other
+  is refused as it is for `read`. They are any file of the worktree in those places, committed or not: written by
+  whoever can push to a clone, but also by the session's own commands, and at the worktree's root, which no repository
+  owns. They reach the model only when someone types their name, and an expanded one passes the `input` handlers again
+  (review 380, finding 48). A name that files in two places claim (two clones, or a clone and the worktree's root) is
+  offered by neither alone: each is listed as `<clone>:<name>` (`worktree:<name>` at the root), so which file a name
+  means never depends on where a directory sorts (review 380, finding 50). A skill's `location` is a worktree path, so the agent opens its other
   files with its own tools and rules. Looking for them asks the Pikibun server nothing: the list is part of a view,
   whose reader was already let in (and which the app reads from its own host without the server), and a command's
   message was authorized when it was sent and is again before it runs.
