@@ -41,6 +41,11 @@ function parseKept(value: unknown): PortableKept {
   return { ...(input.title !== undefined ? { title: input.title as string } : {}), schedules: input.schedules };
 }
 
+export function reportedTitle(title: unknown): string {
+  const plain = typeof title === "string" ? title.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 200).trim() : "";
+  return plain || "Untitled session";
+}
+
 async function exists(path: string): Promise<boolean> {
   return lstat(path).then(() => true, () => false);
 }
@@ -320,6 +325,7 @@ export class RunnerService {
   async portableSessions(): Promise<PortableReport[]> {
     const portable = this.config.portable;
     if (!portable) return [];
+    await portable.store.repair().catch(() => 0);
     const key = await portable.store.publicKey();
     const reports: PortableReport[] = [];
     for (const entry of await portable.store.entries()) {
@@ -329,7 +335,7 @@ export class RunnerService {
       catch { continue; }
       if (binding?.session?.id !== entry.sessionId || typeof binding.model?.provider !== "string" || typeof binding.model.modelId !== "string") continue;
       const kept = await this.kept(entry.directory);
-      reports.push({ id: entry.sessionId, title: kept.title ?? binding.session.title, createdAt: binding.session.createdAt,
+      reports.push({ id: entry.sessionId, title: reportedTitle(kept.title ?? binding.session.title), createdAt: binding.session.createdAt,
         attached: binding.session.connectorId === this.config.connectorId, hostEnvironment: binding.session.hostEnvironment === true,
         working: await exists(join(entry.directory, WORK_MARKER)), model: { provider: binding.model.provider, modelId: binding.model.modelId }, mark: entry.mark });
     }
@@ -370,18 +376,21 @@ export class RunnerService {
     const key = await portable.store.publicKey();
     const entry = await portable.store.entry(source);
     if (source !== id && !entry) throw new RunnerError(404, "Session not found");
-    if (source !== id && (await portable.store.entry(id) || await exists(join(this.dataDir, "sessions", id)))) throw new RunnerError(409, "A session with that ID is on this host already");
     const directory = entry?.directory ?? join(this.dataDir, "sessions", id);
+    const target = source !== id ? await portable.store.entry(id) : undefined;
+    if (source !== id && ((target && target.directory !== directory) || (!target && await exists(join(this.dataDir, "sessions", id))))) {
+      throw new RunnerError(409, "A session with that ID is on this host already");
+    }
     if (entry && entry.mark.statement.key !== key) throw new RunnerError(403, "This session belongs to another identity");
     let current: RunnerBinding;
     try { current = JSON.parse(await readFile(join(directory, "binding.json"), "utf8")) as RunnerBinding; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new RunnerError(404, "Session not found"); throw error; }
-    if (current?.session?.id !== source) throw new RunnerError(403, "Invalid session storage");
+    if (current?.session?.id !== source && !(source !== id && current?.session?.id === id)) throw new RunnerError(403, "Invalid session storage");
     if (await realpath(directory) !== directory) throw new RunnerError(403, "Invalid session storage");
     if (await exists(join(directory, PACK_FILE))) throw new RunnerError(409, "This session's files are packed. Unarchive it where it is attached now first");
     const here = current.session.connectorId === this.config.connectorId;
     if (!entry && !here) throw new RunnerError(404, "Session not found");
-    if (here && (current.owner?.id !== binding.owner.id || source !== id)) throw new RunnerError(403, "A portable session keeps its owner and ID on the same server");
+    if (here && (current.owner?.id !== binding.owner.id || current.session.id !== id)) throw new RunnerError(403, "A portable session keeps its owner and ID on the same server");
     if ((current.session.hostEnvironment === true) !== (binding.session.hostEnvironment === true)
       || current.session.repositoryMode !== binding.session.repositoryMode || (binding.session.repositories ?? []).length > 0) {
       throw new RunnerError(409, "The session's record doesn't match where it runs on this host");
@@ -404,9 +413,14 @@ export class RunnerService {
       await this.leases.acquire(directory);
       try {
         if (await exists(marker)) throw new RunnerError(409, "This session started working where it is attached now. Try again once it finishes");
-        await this.rebind(binding, directory, source);
-        if (!entry || source !== id) await portable.store.mark(id, directory);
-        if (source !== id) await portable.store.forget(source);
+        if (source !== id && !target) await portable.store.mark(id, directory);
+        try { await this.rebind(binding, directory, [source, id]); }
+        catch (error) {
+          if (source !== id && !target && current.session.id === source) await portable.store.forget(id).catch(() => {});
+          throw error;
+        }
+        if (!entry) await portable.store.mark(id, directory);
+        if (source !== id) await portable.store.forget(source).catch(() => {});
       } catch (error) {
         await this.leases.release(directory);
         throw error;
@@ -418,7 +432,7 @@ export class RunnerService {
     return { session: binding.session, kept };
   }
 
-  private async rebind(binding: RunnerBinding, directory: string, source: string): Promise<void> {
+  private async rebind(binding: RunnerBinding, directory: string, sources: readonly string[]): Promise<void> {
     const ownerConfig = join(directory, "sandbox", OWNER_CONFIG);
     const pinned = await readFile(ownerConfig, "utf8").catch(() => undefined);
     const path = join(directory, "binding.json");
@@ -428,7 +442,7 @@ export class RunnerService {
     };
     await rm(ownerConfig, { force: true });
     const staged = new RunnerSession(binding, directory, this.config);
-    try { await staged.rebind(source); }
+    try { await staged.rebind(sources); }
     catch (error) { await restoreOwnerConfig().catch(() => {}); throw error; }
     finally { await staged.sandbox.close().catch(() => {}); }
     try { await replaceFile(path, JSON.stringify(binding)); }

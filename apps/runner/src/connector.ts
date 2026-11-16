@@ -207,7 +207,7 @@ export interface ConnectorOptions {
   remoteExtensionInstalls?: boolean;
   managedExtensions?: boolean;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
-  onWarning?: (warning: "resources-unavailable" | "identity-unavailable") => void;
+  onWarning?: (warning: "resources-unavailable" | "identity-unavailable", detail?: string) => void;
 }
 
 type Runtime = { value: ConnectorRuntime; repositoryCache: RepositoryCacheMode; resumed: boolean };
@@ -279,7 +279,9 @@ export class LocalConnector {
       try {
         await identity.key();
         this.identity = identity;
-      } catch { this.options.onWarning?.("identity-unavailable"); }
+      } catch (error) {
+        this.options.onWarning?.("identity-unavailable", `${identity.root}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     this.browser = new HostBrowserSource({ supported: process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend,
       ...this.options.browser, root: browserDownloads(this.directory), signal: this.lifetime.signal });

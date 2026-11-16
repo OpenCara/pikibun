@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { portableKeyFor } from '../apps/server/src/portable-sessions.js';
 import { IdentityBusy, IdentityStore } from '../apps/runner/src/identity.js';
-import { RunnerService } from '../apps/runner/src/server.js';
+import { reportedTitle, RunnerService } from '../apps/runner/src/server.js';
+import { PortableLeases } from '../apps/runner/src/portable-lease.js';
 import { WORK_MARKER } from '../apps/runner/src/session.js';
 import { RunnerError } from '../apps/runner/src/protocol.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
@@ -125,6 +126,31 @@ test('one attach at a time holds a session, across processes; a lock its holder 
   await assert.rejects(new IdentityStore(root).withLock('session-1', async () => {}), /Another Pikibun on this computer/);
   await writeFile(join(root, 'sessions', 'session-1.lock'), '2147483646');
   assert.equal(await new IdentityStore(root).withLock('session-1', async () => 'taken'), 'taken');
+  await writeFile(join(root, 'sessions', 'session-1.lock'), '');
+  await assert.rejects(new IdentityStore(root).withLock('session-1', async () => {}), IdentityBusy, 'a lock file just made and not yet readable is held');
+  const old = new Date(Date.now() - 120_000);
+  await utimes(join(root, 'sessions', 'session-1.lock'), old, old);
+  assert.equal(await new IdentityStore(root).withLock('session-1', async () => 'taken'), 'taken', 'one left unreadable for long is taken over');
+  await assert.rejects(new IdentityStore(join(root, 'key.json')).withLock('session-1', async () => {}), (error: Error) => !(error instanceof IdentityBusy),
+    'a lock that can\'t be made at all says why, rather than that it is busy');
+
+  const leases = new PortableLeases();
+  t.after(() => leases.close());
+  const session = join(root, 'session-folder');
+  await mkdir(session);
+  await writeFile(join(session, 'open.lock'), '');
+  assert.equal(await leases.holder(session), 'other');
+  await assert.rejects(leases.acquire(session), /open on another/);
+  await utimes(join(session, 'open.lock'), old, old);
+  await leases.acquire(session);
+  assert.equal(await leases.holder(session), 'self');
+});
+
+test('a host reports a title it can show whatever was typed', () => {
+  assert.equal(reportedTitle('Fix\tthe\nbuild\u001b[31m '), 'Fix the build [31m');
+  assert.equal(reportedTitle('   '), 'Untitled session');
+  assert.equal(reportedTitle('x'.repeat(300)).length, 200);
+  assert.equal(reportedTitle(undefined), 'Untitled session');
 });
 
 test('pikibun identity shows the key and its sessions, and exports, imports and rotates it', async t => {
@@ -272,6 +298,23 @@ test('an existing session of this pairing becomes portable, and only sessions of
   await assert.rejects(f.b.attach({ binding: missing, sourceSessionId: 'nothing' }, await runnerTicket(missing, 'attach')), status(404));
 });
 
+test('a session moved under a new ID whose old entry was left behind is finished by trying again', async t => {
+  const f = await hosts(t);
+  const made = runnerBinding('session-x', 'connector-a', 'test:alice');
+  await f.a.provision(made, await runnerTicket(made, 'create'));
+  const folder = (await f.store.entry('session-x'))!.directory;
+  const moved = runnerBinding('session-y', 'connector-b', 'password:alice');
+  await f.b.attach({ binding: moved, sourceSessionId: 'session-x' }, await runnerTicket(moved, 'attach'));
+  await f.store.mark('session-x', folder);
+  await f.b.close();
+  const again = new RunnerService({ ...f.b.config });
+  await again.initialize();
+  t.after(() => again.close());
+  await again.attach({ binding: moved, sourceSessionId: 'session-x' }, await runnerTicket(moved, 'attach'));
+  assert.deepEqual((await f.store.entries()).map(entry => entry.sessionId), ['session-y']);
+  assert.equal((await again.get('session-y')).directory, folder);
+});
+
 interface Client { user: { id: string }; request(method: string, path: string, body?: unknown): Response | Promise<Response> }
 
 async function json<T>(response: Response, expected = 200): Promise<T> {
@@ -342,6 +385,11 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   report.sessions.push({ ...report.sessions[0]!, id: randomUUID(), mark: await signStatement(stranger.privateKey, { kind: 'session', key: stranger.publicKey,
     session: 'other', issuedAt }) });
   assert.deepEqual(await json(await f.host('/api/connectors/self/identity', report)), {});
+  const odd = await identityReport(key, [{ id: randomUUID(), title: 'ok', attached: false }]);
+  odd.sessions[0]!.title = '\u0007';
+  const oddReport = { ...report, sessions: [...report.sessions, odd.sessions[0]!] };
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', oddReport)), {}, 'one session it can\'t take doesn\'t refuse the rest');
+  await json(await f.host('/api/connectors/self/identity', { ...report, sessions: undefined }), 400);
   const forged = await identityReport(key, []);
   await json(await f.host('/api/connectors/self/identity', { ...forged, delegation: { ...forged.delegation, statement: { ...forged.delegation.statement, connector: 'other-host' } } }), 400);
   const elsewhere = await signStatement(key.privateKey, { kind: 'delegation', key: key.publicKey, server: 'https://another.example', connector: 'host', issuedAt });
@@ -437,6 +485,18 @@ test('existing private sessions on the host become portable, and new ones are po
   assert.equal(await portableKeyFor(f.env, { ...row, connector_owner_id: 'test:someone' }, false), null);
   f.sqlite.prepare("INSERT INTO workspaces (id, name, owner_id, created_at) VALUES ('team', 'Team', ?, '2026-01-01')").run(f.alice.user.id);
   assert.equal(await portableKeyFor(f.env, { ...row, workspace_id: 'team' }, false), null, 'only the private workspace\'s sessions');
+
+  const next = await keyPair();
+  const stray = await keyPair();
+  const strayRotation = await signStatement(stray.privateKey, { kind: 'rotation', key: stray.publicKey, next: next.publicKey, issuedAt });
+  await json(await f.host('/api/connectors/self/identity', await identityReport(next, [], { rotations: [strayRotation] })));
+  const keyOf = () => (f.sqlite.prepare("SELECT portable_key FROM sessions WHERE id = 'ready-one'").get() as { portable_key: string }).portable_key;
+  assert.equal(keyOf(), key.publicKey, 'a rotation that doesn\'t start from a key of these sessions changes nothing');
+  const rotation = await signStatement(key.privateKey, { kind: 'rotation', key: key.publicKey, next: stray.publicKey, issuedAt });
+  await json(await f.host('/api/connectors/self/identity', await identityReport(next, [], { rotations: [rotation] })));
+  assert.equal(keyOf(), key.publicKey, 'nor does a chain that doesn\'t end at the key the host signs with');
+  await json(await f.host('/api/connectors/self/identity', await identityReport(next, [], { rotations: [rotation, strayRotation] })));
+  assert.equal(keyOf(), next.publicKey, 'a whole chain moves the sessions to the new key');
 });
 
 test('the private workspace\'s settings travel signed by the identity, and a server can\'t forge them', async t => {
@@ -464,5 +524,11 @@ test('the private workspace\'s settings travel signed by the identity, and a ser
   await json(await second.host('/api/connectors/self/identity', await identityReport(key, [], { settings: signed })));
   assert.equal((second.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(second.workspaceId) as { name: string }).name, 'Renamed later',
     'a version already applied isn\'t applied again');
+  const elsewhere = await signStatement(key.privateKey, { kind: 'settings', key: key.publicKey, version: 3, settings: { name: 'From elsewhere' }, issuedAt });
+  const asked = await json<{ sign?: { version: number; settings: PortableSettings } }>(
+    await second.host('/api/connectors/self/identity', await identityReport(key, [], { settings: elsewhere })));
+  assert.equal((second.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(second.workspaceId) as { name: string }).name, 'Renamed later',
+    'a change made here and not signed yet isn\'t overwritten by one of the same version from elsewhere');
+  assert.deepEqual([asked.sign?.version, asked.sign?.settings.name], [4, 'Renamed later'], 'it is signed as the newer one instead');
   assert.equal(JSON.parse(canonicalJson(signed.statement)).kind, 'settings');
 });

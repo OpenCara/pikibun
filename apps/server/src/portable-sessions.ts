@@ -14,12 +14,13 @@ import { restorePortableSchedules, sessionSchedules } from './scheduled-prompts.
 import { markSessionChanged } from './session-changes.js';
 import { bindingForSession } from './sessions.js';
 import { newSessionToolOutput, workspaceTranscriptSettings } from './transcript-settings.js';
-import type { Query } from './db/types.js';
+import { ConstraintError, type Query } from './db/types.js';
 import type { AppContext, AppEnv, Env, SessionRow } from './types.js';
 
 const REPORT_BYTES = 1024 * 1024;
 const MAX_REPORTED = 500;
 const MAX_ROTATIONS = 32;
+const CONVERT_BATCH = 50;
 
 interface DelegationRow { connector_id: string; user_id: string; public_key: string }
 interface OfferRow {
@@ -99,11 +100,15 @@ async function storeSettings(env: Env, userId: string, signed: Signed<StatementO
     ON CONFLICT (user_id) DO UPDATE SET public_key = excluded.public_key, version = excluded.version, statement_json = excluded.statement_json,
       signature = excluded.signature, applied_version = CASE WHEN portable_settings.applied_version > excluded.applied_version
         THEN portable_settings.applied_version ELSE excluded.applied_version END,
-      pending_version = CASE WHEN portable_settings.pending_version > excluded.version THEN portable_settings.pending_version ELSE NULL END,
-      pending_json = CASE WHEN portable_settings.pending_version > excluded.version THEN portable_settings.pending_json ELSE NULL END,
+      pending_version = CASE WHEN portable_settings.pending_version > excluded.version THEN portable_settings.pending_version
+        WHEN ? = 1 AND portable_settings.pending_version = excluded.version THEN excluded.version + 1 ELSE NULL END,
+      pending_json = CASE WHEN portable_settings.pending_version > excluded.version OR (? = 1 AND portable_settings.pending_version = excluded.version)
+        THEN portable_settings.pending_json ELSE NULL END,
       updated_at = excluded.updated_at`)
-    .bind(userId, signed.statement.key, version, canonicalJson(signed.statement), signed.signature, version, timestamp).run();
-  if (apply && (!current || version > Number(current.applied_version))) await applySettings(env, userId, signed.statement.settings);
+    .bind(userId, signed.statement.key, version, canonicalJson(signed.statement), signed.signature, version, timestamp, apply ? 1 : 0, apply ? 1 : 0).run();
+  const newer = !current || version > Number(current.applied_version);
+  const localEdit = current?.pending_version !== null && current?.pending_version !== undefined && Number(current.pending_version) >= version;
+  if (apply && newer && !localEdit) await applySettings(env, userId, signed.statement.settings);
 }
 
 type ReportedSession = {
@@ -123,9 +128,7 @@ async function reportedSessions(value: unknown, key: string): Promise<ReportedSe
     const modelId = plainText(model?.modelId, 200);
     if (!input || typeof input !== 'object' || typeof input.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(input.id) || !title
       || typeof input.createdAt !== 'string' || Number.isNaN(Date.parse(input.createdAt)) || typeof input.attached !== 'boolean'
-      || typeof input.hostEnvironment !== 'boolean' || typeof input.working !== 'boolean' || !provider || !modelId || seen.has(input.id)) {
-      fail(400, 'invalid_report', 'Invalid portable session report.');
-    }
+      || typeof input.hostEnvironment !== 'boolean' || typeof input.working !== 'boolean' || !provider || !modelId || seen.has(input.id)) continue;
     let mark: Signed<StatementOf<'session'>>;
     try { mark = await verifiedSigned(input.mark, 'session'); }
     catch { continue; }
@@ -148,17 +151,23 @@ async function identityReport(c: AppContext): Promise<Response> {
     fail(403, 'foreign_delegation', 'The delegation names another server or host.');
   }
   const key = delegation.statement.key;
-  const rotations = input.rotations === undefined ? [] : input.rotations;
+  const rotations = input.rotations;
   if (!Array.isArray(rotations) || rotations.length > MAX_ROTATIONS) fail(400, 'invalid_report', 'Invalid identity rotations.');
+  if (!Array.isArray(input.sessions)) fail(400, 'invalid_report', 'The report lists no sessions.');
   const statements: Query<never>[] = [];
+  const chain: Signed<StatementOf<'rotation'>>[] = [];
   for (const rotation of rotations) {
-    let signed: Signed<StatementOf<'rotation'>>;
-    try { signed = await verifiedSigned(rotation, 'rotation'); }
-    catch { fail(400, 'invalid_report', 'Invalid identity rotation.'); }
-    statements.push(c.env.DB.query<never>('UPDATE sessions SET portable_key = ? WHERE owner_id = ? AND portable_key = ?')
-      .bind(signed.statement.next, connector.owner_id, signed.statement.key));
+    try { chain.push(await verifiedSigned(rotation, 'rotation')); }
+    catch { chain.length = 0; break; }
   }
-  const sessions = await reportedSessions(input.sessions ?? [], key);
+  const linked = chain.length > 0 && chain.at(-1)!.statement.next === key && chain.every((rotation, index) => index === 0 || chain[index - 1]!.statement.next === rotation.statement.key);
+  if (linked) {
+    for (const rotation of chain) {
+      statements.push(c.env.DB.query<never>('UPDATE sessions SET portable_key = ? WHERE owner_id = ? AND portable_key = ?')
+        .bind(key, connector.owner_id, rotation.statement.key));
+    }
+  }
+  const sessions = await reportedSessions(input.sessions, key);
   const timestamp = now();
   statements.push(
     c.env.DB.query<never>(`INSERT INTO identity_delegations (connector_id, user_id, public_key, statement_json, signature, created_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -288,12 +297,18 @@ async function attachSession(c: AppContext): Promise<Response> {
   } else {
     const agent = await chatAgentVersion(c.env, userId, model, capabilities);
     const branch = capabilities.sessionBranches === true ? sessionBranchName(offer.title, targetId) : null;
-    const inserted = await c.env.DB.query<SessionRow>(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at,
-      connector_id, connector_owner_id, repositories_json, visibility, repository_mode, branch, host_environment, tool_output, portable_key)
-      SELECT ?, ?, ?, ?, ?, 1, 'provisioning', ?, ?, ?, '[]', 'private', 'clone', ?, ?, ?, ?
-      WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?) RETURNING *`)
-      .bind(targetId, workspaceId, userId, agent.id, offer.title, offer.created_at, connectorId, userId, branch, Number(offer.host_environment) === 1 ? 1 : 0,
-        await newSessionToolOutput(c.env.DB, workspaceId), offer.public_key, workspaceId, userId).first();
+    let inserted: SessionRow | null;
+    try {
+      inserted = await c.env.DB.query<SessionRow>(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at,
+        connector_id, connector_owner_id, repositories_json, visibility, repository_mode, branch, host_environment, tool_output, portable_key)
+        SELECT ?, ?, ?, ?, ?, 1, 'provisioning', ?, ?, ?, '[]', 'private', 'clone', ?, ?, ?, ?
+        WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?) RETURNING *`)
+        .bind(targetId, workspaceId, userId, agent.id, offer.title, offer.created_at, connectorId, userId, branch, Number(offer.host_environment) === 1 ? 1 : 0,
+          await newSessionToolOutput(c.env.DB, workspaceId), offer.public_key, workspaceId, userId).first();
+    } catch (error) {
+      if (error instanceof ConstraintError) fail(409, 'attach_in_progress', 'This session is being brought here already.');
+      throw error;
+    }
     if (!inserted) fail(409, 'session_configuration_changed', 'Your private workspace changed meanwhile; try again.');
     row = inserted;
   }
@@ -344,7 +359,9 @@ async function convertSessions(c: AppContext): Promise<Response> {
   if (!workspaceId) fail(404, 'not_found', 'Private workspace not found.');
   const candidates = await c.env.DB.query<SessionRow>(`SELECT * FROM sessions WHERE workspace_id = ? AND owner_id = ? AND connector_id = ? AND connector_owner_id = ?
     AND portable_key IS NULL AND status IN ('ready', 'error') AND packed_at IS NULL AND repository_mode = 'clone' AND COALESCE(repositories_json, '[]') = '[]'
-    ORDER BY created_at LIMIT 200`).bind(workspaceId, userId, connectorId, userId).all();
+    ORDER BY created_at LIMIT ?`).bind(workspaceId, userId, connectorId, userId, CONVERT_BATCH + 1).all();
+  const more = candidates.length > CONVERT_BATCH;
+  candidates.splice(CONVERT_BATCH);
   const converted: string[] = [];
   const skipped: { id: string; reason: string }[] = [];
   for (const candidate of candidates) {
@@ -364,7 +381,7 @@ async function convertSessions(c: AppContext): Promise<Response> {
       skipped.push({ id: marked.id, reason: message });
     }
   }
-  return c.json({ converted, skipped });
+  return c.json({ converted, skipped, ...(more ? { more: true } : {}) });
 }
 
 export async function keepPortable(c: AppContext, row: SessionRow): Promise<void> {

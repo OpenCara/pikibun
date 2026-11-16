@@ -101,7 +101,7 @@ async function hostOptions(values: Record<string, string | boolean | string[] | 
   return {
     localModels, unsandboxed, resources, allowFaux: values['allow-faux'] === true, allowTestShell: values['allow-test-shell'] === true, identityDir: identityDirectory(),
     onStatus: (status, reason) => { process.stderr.write(`This computer: ${status}${reason ? ` (${reason})` : ''}\n`); },
-    onWarning: warning => { process.stderr.write(warning === 'identity-unavailable' ? "Your identity (~/.local/share/pikibun/identity) couldn't be read or made, so this host's private sessions aren't portable until it can.\n" : 'Some resource domains are unavailable; production bash remains fail-closed.\n'); },
+    onWarning: (warning, detail) => { process.stderr.write(warning === 'identity-unavailable' ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : 'Some resource domains are unavailable; production bash remains fail-closed.\n'); },
   };
 }
 

@@ -296,8 +296,8 @@ function PortableSessionsSection(props: { connector: ConnectorInfo }) {
       message: `Your private sessions on ${props.connector.name} will belong to your identity on it, so you can bring them to another server it is paired with. They keep running here as before; sessions working right now are left as they are.` })) return;
     outcome.set("");
     await action.run(async () => {
-      const result = await session().api<{ converted: string[]; skipped: { id: string; reason: string }[] }>(`/api/connectors/${segment(props.connector.id)}/portable`, { method: "POST", body: {} });
-      outcome.set(`${count(result.converted.length, "session is", "sessions are")} portable now.${result.skipped.length ? ` ${count(result.skipped.length, "was", "were")} skipped: ${result.skipped[0]!.reason}` : ""}`);
+      const result = await session().api<{ converted: string[]; skipped: { id: string; reason: string }[]; more?: true }>(`/api/connectors/${segment(props.connector.id)}/portable`, { method: "POST", body: {} });
+      outcome.set(`${count(result.converted.length, "session is", "sessions are")} portable now.${result.skipped.length ? ` ${count(result.skipped.length, "was", "were")} skipped: ${result.skipped[0]!.reason}` : ""}${result.more ? " There are more: make portable again for the next ones." : ""}`);
     });
   }
   return (

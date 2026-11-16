@@ -52,6 +52,16 @@ async function writePrivate(path: string, content: string, mode: "create" | "rep
   }
 }
 
+export const STALE_LOCK_MS = 60_000;
+
+export async function olderThan(path: string, ms: number): Promise<boolean> {
+  return lstat(path).then(stat => Date.now() - stat.mtimeMs > ms, () => true);
+}
+
+export async function createFilled(path: string, content: string): Promise<boolean> {
+  return writePrivate(path, content, "create");
+}
+
 async function readJson(path: string): Promise<unknown> {
   const stat = await lstat(path);
   if (!stat.isFile()) throw new Error(`${path} is not a regular file`);
@@ -184,6 +194,19 @@ export class IdentityStore {
     return entries;
   }
 
+  async repair(): Promise<number> {
+    const key = await this.key();
+    const previous = new Set(key.rotations.map(rotation => rotation.statement.key));
+    let repaired = 0;
+    for (const entry of await this.entries()) {
+      if (entry.mark.statement.key === key.publicKey || !previous.has(entry.mark.statement.key)) continue;
+      const mark = await signStatement(key.privateKey, { kind: "session", key: key.publicKey, session: entry.sessionId, issuedAt: now() });
+      await writePrivate(join(this.root, "sessions", `${entry.sessionId}.json`), JSON.stringify({ version: 1, directory: entry.directory, mark }), "replace");
+      repaired++;
+    }
+    return repaired;
+  }
+
   async forget(sessionId: string): Promise<void> {
     assertId(sessionId);
     await rm(join(this.root, "sessions", `${sessionId}.json`), { force: true });
@@ -195,19 +218,17 @@ export class IdentityStore {
     this.#held.add(sessionId);
     try {
       const path = join(await this.directory("sessions"), `${sessionId}.lock`);
+      const busy = () => new IdentityBusy("Another Pikibun on this computer is attaching this session. Try again shortly");
       for (let attempt = 0; ; attempt++) {
-        try {
-          const handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-          try { await handle.writeFile(String(process.pid)); } finally { await handle.close(); }
-          break;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0) throw error instanceof RunnerError ? error : new IdentityBusy("Another Pikibun on this computer is attaching this session; try again shortly");
-          const holder = Number.parseInt(await readFile(path, "utf8").catch(() => ""), 10);
-          if (Number.isSafeInteger(holder) && holder > 0 && holder !== process.pid && processAlive(holder)) {
-            throw new IdentityBusy("Another Pikibun on this computer is attaching this session; try again shortly");
-          }
-          await unlink(path).catch(() => {});
-        }
+        if (await createFilled(path, String(process.pid))) break;
+        if (attempt > 0) throw busy();
+        let content: string;
+        try { content = await readFile(path, "utf8"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+        const holder = Number.parseInt(content, 10);
+        const unreadable = !Number.isSafeInteger(holder) || holder < 1;
+        if (unreadable ? !await olderThan(path, STALE_LOCK_MS) : holder !== process.pid && processAlive(holder)) throw busy();
+        await unlink(path).catch(() => {});
       }
       try { return await work(); }
       finally { await unlink(path).catch(() => {}); }

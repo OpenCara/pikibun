@@ -133,7 +133,7 @@ async function start(request: StartRequest): Promise<void> {
       status("stopped");
       if (!expected) emit({ type: "failed", error: { code: "failed", message: "The host stopped unexpectedly: it lost its lock on this computer's pairing. Start it again." } });
     },
-    onWarning: warning => log("warning", warning === "identity-unavailable" ? "Your identity (~/.local/share/pikibun/identity) couldn't be read or made, so this host's private sessions aren't portable until it can." : "Some resource domains are unavailable; production bash remains fail-closed."),
+    onWarning: (warning, detail) => log("warning", warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.` : "Some resource domains are unavailable; production bash remains fail-closed."),
   });
   const current = { connector, stopRequested: false };
   running = current;

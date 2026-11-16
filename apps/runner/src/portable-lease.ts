@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { open, readFile, rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { createFilled, olderThan, STALE_LOCK_MS } from "./identity.js";
 import { RunnerError } from "./protocol.js";
 
 const LEASE_FILE = "open.lock";
@@ -24,30 +25,26 @@ export class PortableLeases {
   close(): void { liveLeases.delete(this.#token); }
 
   async holder(directory: string): Promise<LeaseHolder> {
+    const path = join(directory, LEASE_FILE);
     let content: string;
-    try { content = await readFile(join(directory, LEASE_FILE), "utf8"); }
+    try { content = await readFile(path, "utf8"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "none"; throw error; }
     const [pidText, token] = content.trim().split(" ");
     const pid = Number.parseInt(pidText ?? "", 10);
     if (token === this.#token && pid === process.pid) return "self";
-    if (!Number.isSafeInteger(pid) || pid < 1 || !token) return "none";
+    if (!Number.isSafeInteger(pid) || pid < 1 || !token) return await olderThan(path, STALE_LOCK_MS) ? "none" : "other";
     const alive = pid === process.pid ? liveLeases.has(token) : processAlive(pid);
     return alive ? "other" : "none";
   }
 
   async acquire(directory: string): Promise<void> {
+    const path = join(directory, LEASE_FILE);
     for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const handle = await open(join(directory, LEASE_FILE), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-        try { await handle.writeFile(`${process.pid} ${this.#token}`); } finally { await handle.close(); }
-        return;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        const holder = await this.holder(directory);
-        if (holder === "self") return;
-        if (holder === "other") throw new RunnerError(409, "This session is open on another of this computer's connections. Try again shortly");
-        await unlink(join(directory, LEASE_FILE)).catch(() => {});
-      }
+      if (await createFilled(path, `${process.pid} ${this.#token}`)) return;
+      const holder = await this.holder(directory);
+      if (holder === "self") return;
+      if (holder === "other") break;
+      await unlink(path).catch(() => {});
     }
     throw new RunnerError(409, "This session is open on another of this computer's connections. Try again shortly");
   }

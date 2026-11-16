@@ -467,7 +467,7 @@ export class RunnerSession {
     } finally { await harness.close(context); }
   }
 
-  async rebind(source: string = this.binding.session.id): Promise<void> {
+  async rebind(sources: readonly string[] = [this.binding.session.id]): Promise<void> {
     await this.initializeRepositories();
     const resolved = this.config.resolveModels ? await this.config.resolveModels(this.binding.model)
       : { models: runnerModels(this.binding.model, this.config.allowFaux) };
@@ -484,7 +484,7 @@ export class RunnerSession {
         const doc = await tx.doc(RunnerState);
         if (!doc.json) throw new RunnerError(409, "This session has no conversation yet to attach");
         const state: Metadata = JSON.parse(doc.json);
-        if (state.binding?.session?.id !== source) throw new RunnerError(403, "Persisted binding mismatch");
+        if (!sources.includes(state.binding?.session?.id)) throw new RunnerError(403, "Persisted binding mismatch");
         let cursor: Cursor | undefined;
         do {
           const page = await tx.scanConversations({}, 100, cursor);

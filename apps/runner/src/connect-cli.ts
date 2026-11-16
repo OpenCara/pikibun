@@ -261,7 +261,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
     capabilities: { platform: process.platform, sandbox: false, productionShell: false },
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },
-    onWarning: warning => { process.stderr.write(warning === "identity-unavailable" ? "Your identity (~/.local/share/pikibun/identity) couldn't be read or made, so this host's private sessions aren't portable until it can.\n" : "Some resource domains are unavailable; production bash remains fail-closed.\n"); },
+    onWarning: (warning, detail) => { process.stderr.write(warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : "Some resource domains are unavailable; production bash remains fail-closed.\n"); },
   });
   process.stderr.write(unsandboxed
     ? "Running unsandboxed: commands execute directly on this machine.\n"

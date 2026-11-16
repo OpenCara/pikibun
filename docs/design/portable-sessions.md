@@ -66,7 +66,8 @@ environments, `node_modules/.bin`), and the index lets every connection of the i
 1. The host, paired with the new server, reports the portable sessions of its identity: ID, title, when each was made,
    where it runs, its model, whether it is attached to this pairing or working, and its signed mark. The server keeps
    the ones whose mark is by the delegated key (`portable_offers`) and lists those not attached here under the private
-   workspace, with **Bring here** (`GET /api/portable-sessions`).
+   workspace, with **Bring here** (`GET /api/portable-sessions`). The host reports titles as plain single lines, and a
+   session the server can't take is left out of the list rather than refusing the report.
 2. **Bring here** (`POST /api/portable-sessions/:id/attach`, with the host and optionally a model of it) makes the
    session's record, private, under the same ID, and asks the host to `attach` it with the new binding.
 3. The host attaches it only for its owner, and only a session marked by its identity's current key. Under a lock in
@@ -92,7 +93,8 @@ is archived as moved.
 A host's connections are separate processes, one per server, each with its own runtime, and two of them must never
 work in one session's database. A connection holds a lease file in each portable session it has open
 (`open.lock`: its process ID and a token of the runtime; `apps/runner/src/portable-lease.ts`), and another connection
-refuses to open it while that process lives. To attach a session another connection has open, the attaching one asks
+refuses to open it while that process lives. Lease and lock files are written whole before they appear (linked into
+place), so none is ever seen empty; one that can't be read is taken as held until it is a minute old. To attach a session another connection has open, the attaching one asks
 it to let go (`release` in the session's folder) and waits up to ten seconds: the other connection closes it at its
 next sweep unless it is working.
 
@@ -107,14 +109,15 @@ next sweep unless it is working.
 ## Converting existing sessions
 
 **Make private sessions portable** on a host's page (`POST /api/connectors/:id/portable`) converts its owner's private
-sessions on that host that qualify and are idle: the server records the key and asks the host to `attach` each with its
+sessions on that host that qualify and are idle, fifty at a time: the server records the key and asks the host to `attach` each with its
 current binding, which marks and indexes it. Those the host refuses, working ones say, keep their record as it was.
 
 ## Replacing the key
 
 - `pikibun identity rotate` makes a new key, signs a `rotation` with the old one, and signs every mark and the settings
-  again with the new one; delegations are signed again at the next connection. Each server follows the rotation it is
-  sent, for its user's records.
+  again with the new one; delegations are signed again at the next connection. Each server follows the rotations it is
+  sent, for its user's records, only as a whole chain ending at the key the connection signs with. A mark still by an
+  earlier key of the chain (a rotation stopped halfway) is signed again the next time the host reports.
 - `pikibun identity reset` is for a lost or leaked key: a new key without the old one's signature, the marks and
   settings signed again. It is safe because only someone who can read the identity's directory can run it. Each server
   takes the new delegation from its own connector, which it authenticates, and the marks it reports with it.
@@ -125,7 +128,8 @@ The private workspace's settings that mean something on every server, its name, 
 default, travel as a `settings` statement. When its owner changes them, the server asks the next identity report to
 sign the new version (`sign` in its answer); the host keeps the latest beside its key and sends it with every report.
 A server applies a signed version newer than any it applied, so a new server takes the name and defaults the owner set
-elsewhere, and none can forge them: the version, the settings and the key are all signed.
+elsewhere, and none can forge them: the version, the settings and the key are all signed. A change made on this server
+that isn't signed yet wins over a version from elsewhere no newer than it: it is signed next, as the newer one.
 
 ## Trust
 
