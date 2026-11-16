@@ -10,6 +10,7 @@ import type { Env } from '../apps/server/src/types.js';
 import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
 import { runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
 import { runAutomaticPacking } from '../apps/server/src/automatic-packing.js';
+import { sideAskPreview } from '../apps/server/src/side-asks.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase, type FakeHub } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommandGrant, HostModelSettings } from '../packages/shared/src/connector.js';
 import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, PullRequestReview, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
@@ -2373,6 +2374,47 @@ for (const mutation of ['demoted', 'suspended'] as const) {
     assert.equal(s.hub.requests.length, 1);
   });
 }
+
+test('the session list shows each person their own latest three side asks under the session, previewed with secrets hidden', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  const collaborator = await f.client('collaborator');
+  await json(await s.admin.request('POST', `/api/workspaces/${s.team.id}/members`, { userId: collaborator.user.id, role: 'collaborator' }));
+  let next = 10;
+  rpcHub(f, s.connector, envelope => Response.json({ submissionId: `submission-${next}`, conversationId: String(envelope.request.ticket.action === 'ask' ? next++ : 0), status: 'queued' }, { status: 202 }));
+  const path = `/api/sessions/${s.session.id}`;
+  const listed = async (client: typeof collaborator) => (await json<{ sessions: SessionRecord[] }>(await client.request('GET', '/api/sessions'))).sessions
+    .find(item => item.id === s.session.id)?.sideAsks;
+  assert.equal(await listed(s.creator), undefined, 'nothing asked, nothing listed');
+  const token = `ghp_${'A1b2C3d4'.repeat(5).slice(0, 36)}`;
+  const asks = ['\n\n  Why does   the login test fail?\nDetails follow.', `Try with ${token} please`, 'x'.repeat(300), 'The latest one'];
+  for (const [index, content] of asks.entries()) {
+    await json(await s.creator.request('POST', `${path}/ask`, { content, requestId: `ask-${index}` }), 202);
+    f.sqlite.prepare('UPDATE side_asks SET created_at = ? WHERE conversation_id = ?').run(`2026-01-01T00:00:0${index}Z`, String(10 + index));
+  }
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'A shared message', requestId: 'shared' }), 202);
+  const mine = await listed(s.creator);
+  assert.deepEqual(mine?.map(ask => ask.conversationId), ['13', '12', '11'], 'the latest three, newest first; shared messages are no side asks');
+  assert.equal(mine![0]!.preview, 'The latest one');
+  assert.equal(mine![1]!.preview, `${'x'.repeat(119)}\u2026`);
+  assert.ok(!mine![2]!.preview.includes(token) && mine![2]!.preview.startsWith('Try with '), mine![2]!.preview);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM side_asks WHERE session_id = ?').get(s.session.id)!.n, 3, 'only what is listed is kept');
+  await json(await s.creator.request('POST', `${path}/ask`, { content: 'The latest one', requestId: 'ask-3' }), 202);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM side_asks WHERE session_id = ?').get(s.session.id)!.n, 3, 'a retried side ask is listed once');
+
+  assert.equal(await listed(collaborator), undefined, "someone else's side asks aren't listed for them");
+  await json(await collaborator.request('POST', `${path}/ask`, { content: 'Mine', requestId: 'collaborator-ask' }), 202);
+  assert.deepEqual((await listed(collaborator))?.map(ask => ask.preview), ['Mine']);
+  assert.equal((await s.admin.request('DELETE', `/api/workspaces/${s.team.id}/members/${encodeURIComponent(collaborator.user.id)}`)).status, 204);
+  assert.equal(await listed(collaborator), undefined, 'a session they may no longer see lists nothing');
+});
+
+test('a side ask is previewed by its first line, cut to 120 characters, or by its images', () => {
+  assert.equal(sideAskPreview('  first   line \nsecond', 0), 'first line');
+  assert.equal(sideAskPreview('', 2), '2 images');
+  assert.equal(sideAskPreview('\n', 1), 'An image');
+  assert.equal(sideAskPreview(undefined, 0), 'Side ask');
+  assert.equal(sideAskPreview('y'.repeat(120), 0), 'y'.repeat(120));
+});
 
 test('a collaborator sends a message to a workspace-visible session it does not own; a viewer cannot, whatever its grant', async t => {
   const f = await fixture(t); const s = await sharedSession(f);

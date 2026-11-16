@@ -343,6 +343,7 @@ function Conversation(props: {
     const known = sideConversations().some(item => item.id === asked.conversationId);
     untracked(() => {
       data.requestSideAsk(null);
+      if (asked.conversationId === null) { mode.set("write"); return; }
       if (!canAsk()) return;
       mode.set("ask");
       conversationId.set(known ? asked.conversationId : "");

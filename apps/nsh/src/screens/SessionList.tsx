@@ -178,7 +178,7 @@ export function SessionList(props: {
               }>
               {item => (
                 <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId}
-                  onOpen={id => { data.requestSideAsk(null); props.onOpen(id); }} compact={props.compact} menu={menu}
+                  onOpen={id => { data.requestSideAsk({ sessionId: id, conversationId: null }); props.onOpen(id); }} compact={props.compact} menu={menu}
                   swiped={swiped() === item().session.id} onSwipe={open => swipe(item().session.id, open)} />
               )}
             </If>

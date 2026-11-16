@@ -33,7 +33,7 @@ export interface LiveActivity {
 
 export interface SideAskRequest {
   sessionId: string;
-  conversationId: string;
+  conversationId: string | null;
 }
 
 export interface AppData {
