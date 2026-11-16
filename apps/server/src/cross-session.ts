@@ -8,7 +8,7 @@ import {
 } from '../../../packages/shared/src/cross-session.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  auditStatement, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
+  admissionExpired, auditStatement, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
   sessionsNeedGranted, workspaceSessionAccess,
 } from './authority/index.js';
 import { getUser } from './db.js';
@@ -136,8 +136,8 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, request_id, expires_at FROM run_admissions WHERE id = ?')
     .bind(admissionId).first();
   if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-    || admission.expires_at <= Math.floor(Date.now() / 1000)) {
-    fail(403, 'sessions_not_admitted', 'The sessions tool needs a write message sent within the last hour.');
+    || await admissionExpired(c.env, admissionId, admission)) {
+    fail(403, 'sessions_not_admitted', 'The sessions tool needs a write message sent within the last hour, or whose run is still going.');
   }
   await requireToolCall(c.env, origin, actorId, 'sessions');
   if (sessionsWriteActions.includes(action) && admission.access === 'read') {

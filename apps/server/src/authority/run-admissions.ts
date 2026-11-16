@@ -4,10 +4,13 @@ import { requireConnectorSession } from './hosts.js';
 import { sessionAccess } from './access.js';
 import { ownHostsOnlySQL } from './personal-workspaces.js';
 import { fail, now, randomToken, testMode, text } from '../http.js';
-import type { AppContext, SessionRow } from '../types.js';
+import type { AppContext, Env, SessionRow } from '../types.js';
 import type { AccessMode } from '../../../../packages/shared/src/types.js';
 
 const ADMISSION_TTL_SECONDS = 3600;
+// How long, from the message, its admission lasts while its run is still going: past the hour, an admission lives on
+// while the session is working (or waiting on an approval) and no later message came in, up to this cap.
+export const ADMISSION_RENEWAL_MAX_SECONDS = 8 * 3600;
 const MAX_SESSION_ACTOR_PENDING = 1000;
 const MAX_ACTOR_PENDING = 1000;
 const MAX_OWNER_PENDING = 5000;
@@ -62,6 +65,25 @@ const ELIGIBLE_SESSION = `SELECT s.id FROM sessions s
           WHERE json_extract(local_model.value, '$.provider') = m.provider
             AND json_extract(local_model.value, '$.modelId') = m.model_id)
     ))`;
+
+/**
+ * Whether a write admission still lets its message act. It does for an hour after the message; past that, for as long
+ * as the session's run goes on (its host reports it working, or waiting on an approval) and it is the session's latest
+ * admission, so the run is still this message's, up to ADMISSION_RENEWAL_MAX_SECONDS after the message. A run that
+ * ended (done, failed, idle) or a later message ends it, as the hour always did.
+ */
+export async function admissionExpired(env: Env, admissionId: string, admission: { expires_at: number },
+  nowSeconds = Math.floor(Date.now() / 1000)): Promise<boolean> {
+  if (!Number.isSafeInteger(admission.expires_at)) return true;
+  if (admission.expires_at > nowSeconds) return false;
+  const issuedAt = admission.expires_at - ADMISSION_TTL_SECONDS;
+  if (issuedAt + ADMISSION_RENEWAL_MAX_SECONDS <= nowSeconds) return true;
+  const running = await env.DB.query<{ id: string }>(`SELECT a.id FROM run_admissions a JOIN sessions s ON s.id = a.session_id
+    WHERE a.id = ? AND s.status <> 'archived' AND s.activity IN ('working', 'waiting')
+      AND NOT EXISTS (SELECT 1 FROM run_admissions newer WHERE newer.session_id = a.session_id AND newer.created_at > a.created_at)`)
+    .bind(admissionId).first();
+  return running?.id !== admissionId;
+}
 
 async function admissionStorage<T>(operation: Promise<T>): Promise<T> {
   try { return await operation; }

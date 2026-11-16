@@ -7,6 +7,7 @@ import type { AppContext, Env, PushCredentialRow, SessionAccess, SessionRow } fr
 import { auditStatement } from '../audit.js';
 import { requireNoMigration, requireUnfrozen } from '../../db.js';
 import { sessionAccess } from '../access.js';
+import { admissionExpired } from '../run-admissions.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../../http.js';
 import { parseOperation } from '../operations.js';
 import { decryptToken, encryptToken } from '../vault.js';
@@ -98,7 +99,7 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
     const admission = await c.env.DB.query<{ session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>('SELECT session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?')
       .bind(admissionId).first();
     if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || admission.access === 'read' ||
-        admission.expires_at <= Math.floor(Date.now() / 1000)) {
+        await admissionExpired(c.env, admissionId, admission)) {
       fail(403, 'automatic_push_not_admitted', 'Pushes run only for an unexpired message that may act, from the person who sent it.');
     }
     await requireCallbackScope(c, owner.row, connectorId);

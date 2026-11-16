@@ -8,6 +8,7 @@ import {
 import type { AppContext, Env, SessionRow, AppEnv } from '../../types.js';
 import { auditStatement } from '../audit.js';
 import { requireMember, sessionAccess } from '../access.js';
+import { admissionExpired } from '../run-admissions.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../../http.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { requireCallbackScope } from '../hosts.js';
@@ -107,8 +108,8 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
     const admission = await c.env.DB.query<{ id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>(
       'SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?').bind(admissionId).first();
     if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-      || admission.expires_at <= Math.floor(Date.now() / 1000)) {
-      fail(403, 'source_read_not_admitted', 'Source reads need a write message from the requester sent within the last hour.');
+      || await admissionExpired(c.env, admissionId, admission)) {
+      fail(403, 'source_read_not_admitted', 'Source reads need a write message from the requester sent within the last hour, or whose run is still going.');
     }
     await requireToolCall(c.env, access.row, actorId, 'source_read');
     const source = await c.env.DB.query<DocumentSourceRow>(`${documentSourceSelect} WHERE d.source_id = ? AND d.workspace_id = ?`).bind(sourceId, access.row.workspace_id).first();
