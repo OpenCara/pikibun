@@ -72,13 +72,15 @@ messages.
   permission, receipt and audit. The host looks at a message's first word before the model sees it, where it already
   lets extensions screen a message (`RunQueue.screen`), in the order Pi's own `prompt()` takes them: `/compact`, an
   extension's command, the extensions' `input` handlers, `/skill:name`, then a prompt template. Anything else goes to
-  the model as typed. One step is Pikibun's own: a template or skill that changed the text sends the result through
-  the `input` handlers again, and a refusal there refuses the message (review 380, finding 48). In Pi a template is
-  the user's own file; here it is any file of the worktree, and the handler that matters is often a guard, such as
-  `piki:prompt-audit`, which would otherwise judge `/name arguments` and never the text the model gets. So there is no new server route, relay action or permission to keep in step across the server,
+  the model as typed. So there is no new server route, relay action or permission to keep in step across the server,
   the connector and the apps, and a scheduled prompt can be a command too (a message from another session's agent
   can't: it starts with its header, not with `/`). A host from before this passes the text to the model, as it always
   did, which is why the client offers only what the host lists.
+- **An expanded template is screened again** (review 380, finding 48). This step is Pikibun's own: a template or skill
+  that changed the text sends the result through the `input` handlers again, and a refusal there refuses the message.
+  In Pi a template is the user's own file. Here it is any file of the worktree, and the handler that matters is often
+  a guard, such as `piki:prompt-audit`, which would otherwise judge `/name arguments` and never the text the model
+  gets. Handlers run twice for such a message, so one with a cost (a model-backed audit) pays twice.
 - **The host lists them.** A session's view carries `commands`: each one's name, description, argument hint and kind
   (`host`, `extension`, `prompt`, `skill`). The client adds them to its list after its own commands, and a name the
   client has itself (`/model`, `/new`) stays the client's. The list is the host's word, so the client keeps only
