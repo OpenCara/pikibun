@@ -6,18 +6,19 @@ Owners and admins rename a workspace with **General → Rename** (`PATCH /api/wo
 
 Owners and admins add people with **Members → Add member**, entering the person's **User ID** and a role; saving an existing member changes their role, which takes effect at once. Or they share an invite link instead (see [Invite links and pending members](#invite-links-and-pending-members)). Below the owner there are four tiers:
 
-- **Viewer**: follows workspace-visible sessions read-only and can't start sessions, restore a backup into a new one, or move one to another host. A session role can't give a viewer more than session viewer (read).
-- **Member**: starts sessions, and follows other people's workspace-visible sessions read-only unless their owner grants more.
-- **Collaborator**: starts sessions, and can send messages and side asks to any workspace-visible session.
-- **Admin**: everything a collaborator can do, plus managing the workspace and every session in it, private ones included (see [Managing every session](#managing-every-session)).
+- **Viewer**: follows the workspace's sessions read-only and can't start sessions, restore a backup into a new one, or move one to another host. A session role can't give a viewer more than session viewer (read).
+- **Member**: starts sessions, and follows other people's sessions read-only unless their owner grants more.
+- **Collaborator**: starts sessions, and can send messages and side asks to any session in the workspace.
+- **Admin**: everything a collaborator can do, plus managing the workspace and every session in it (see [Managing every session](#managing-every-session)).
+
+Every session is visible to every member of its workspace; there are no private sessions (see [Collaborating on a session](collaboration.md#visibility-and-session-roles)).
 
 | | Owner | Admin | Collaborator | Member | Viewer |
 |---|:-:|:-:|:-:|:-:|:-:|
-| View workspace-visible sessions | ✓ | ✓ | ✓ | ✓ | ✓ |
+| View every session | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Start sessions | ✓ | ✓ | ✓ | ✓ | |
-| Send messages to any workspace-visible session | ✓ | ✓ | ✓ | | |
-| View, message and stop any session, private ones included | ✓ | ✓ | | | |
-| Rename, archive or unarchive any session, change its visibility and tool output, give it session roles, turn off its share link | ✓ | ✓ | | | |
+| Send messages to any session and stop its work | ✓ | ✓ | ✓ | | |
+| Rename, archive or unarchive any session, change its tool output, give it session roles, turn off its share link | ✓ | ✓ | | | |
 | Rename the workspace | ✓ | ✓ | | | |
 | Add and remove sources (repositories, documents), set repositories' push policy and Git LFS | ✓ | ✓ | | | |
 | Manage push identities | ✓ | ✓ | | | |
@@ -32,7 +33,7 @@ Owners and admins add people with **Members → Add member**, entering the perso
 
 ## Tool groups
 
-A message in a session runs only the tools both the session owner's **tool group** and its sender's have, whatever access it uses. The owner's group bounds what anyone runs in their sessions, and nobody borrows the owner's tools by writing in their session: a collaborator's message to an admin's workspace-visible session doesn't merge pull requests, and a member with a session role of Collaborator doesn't push to other branches there. The owner's own messages and scheduled prompts run with the owner's group alone. A tool outside it isn't offered to the agent for that message, and a call to it is refused, on the host and for the actions Pikibun brokers (pushes, GitHub comments, issues and merges, schedules, other sessions, document sources). Changes take effect on a session's next tool call, within half a minute.
+A message in a session runs only the tools both the session owner's **tool group** and its sender's have, whatever access it uses. The owner's group bounds what anyone runs in their sessions, and nobody borrows the owner's tools by writing in their session: a collaborator's message to an admin's session doesn't merge pull requests, and a member with a session role of Collaborator doesn't push to other branches there. The owner's own messages and scheduled prompts run with the owner's group alone. A tool outside it isn't offered to the agent for that message, and a call to it is refused, on the host and for the actions Pikibun brokers (pushes, GitHub comments, issues and merges, schedules, other sessions, document sources). Changes take effect on a session's next tool call, within half a minute.
 
 Each member's sessions get the tools of their role, unless an owner or admin puts them in a group of the workspace's own:
 
@@ -49,7 +50,7 @@ The API is `GET /api/workspaces/:id/tool-groups` (every member), `POST /api/work
 
 Tool groups cover Pikibun's own tools. The tools of other extensions are switched for everyone under **Extensions**. A host learns each member's group with the workspace's extensions and keeps the last answer it read, so a failed fetch lifts nothing; until it has read one, its sessions only read their files. A connector from before tool groups doesn't hide the left-out tools from the agent or refuse them in the sandbox (files and commands), and one from before senders' groups counted hides and refuses there only what the owner's group leaves out; Pikibun still refuses the actions it brokers (pushes, GitHub, schedules, other sessions, document sources) for both, so update connectors (`npx pikibun@latest connect`) before relying on groups for sandboxed tools.
 
-For collaborators, members and viewers, opening or managing someone else's private session takes an explicit grant from its owner.
+For collaborators, members and viewers, managing someone else's session takes a session role from its owner.
 
 ## Your private workspace
 
@@ -61,16 +62,16 @@ Every account has one workspace that is its alone, named **Private** at first (y
 - Your own hosts are connected to it, as to every workspace you belong to, so you can start a session there as soon as a host is paired. New sessions there run [directly on the host](hosts.md#sessions-on-the-host), without the sandbox, wherever the host can, with [your own environment](hosts.md#the-owners-own-environment) (your `HOME`, ssh agent and Git configuration), and in the desktop app they go to **This Computer** (**This Mac**) while it is your host and online; choose another host, or **Where it runs → Sandbox**, when you start one.
 - There, a session on your host can run commands as root with `sudo -A`: sudo asks for your password in Pikibun, in a box of its own beside the chat box, each time it needs it (see [sudo asks you](hosts.md#sessions-on-the-host)).
 - Its sessions need no source: an agent starts in an empty worktree and works on what you give it, or on what it clones itself. Add repositories or documents under **Sources** as in any workspace if you want them.
-- New sessions there are private, and its sessions show to nobody but you unless you turn on a session's share link. The server's administrators still see that it exists, as they see every workspace (see [Administration](self-hosting.md#administration)).
+- As nobody else is a member, its sessions show to nobody but you unless you turn on a session's share link. The server's administrators still see that it exists, as they see every workspace (see [Administration](self-hosting.md#administration)).
 
 To work with other people, create a workspace with **New workspace**.
 
 ## Managing every session
 
-The workspace's owner and admins manage every session in it, private ones included, without a session role. On a session they don't own they hold `read`, `ask`, `write` and `manage`, so they can:
+The workspace's owner and admins manage every session in it without a session role. On a session they don't own they hold `read`, `ask`, `write` and `manage`, so they can:
 
 - open it from their session lists, follow it, send side asks and shared messages, stop its work and browse its **Files**;
-- **Rename**, **Archive** and **Unarchive** it, make it private or workspace-visible, and turn its **Full tool output** on or off;
+- **Rename**, **Archive** and **Unarchive** it, and turn its **Full tool output** on or off;
 - give workspace members session roles up to **Collaborator** and remove anyone's, under **Details → People → Session roles**;
 - **Turn off** its share link.
 
@@ -86,4 +87,4 @@ Owners and admins can share one link to the workspace with anyone: **Members →
 - A pending member can withdraw their request from the link's page, or under **Settings → Profile → Your requests to join**, which keeps working after the link is turned off or replaced. Adding someone with **Add member** also settles their pending request.
 - At most 200 people wait to join one workspace at a time. Requests count until someone accepts, declines or withdraws them, also after the link changes, so decline the ones you won't accept to make room.
 
-Workspace admins manage only their workspace; the server's administrators are configured separately (see [Administration](self-hosting.md#administration)). A workspace has one owner, who can't be removed. Membership alone grants no GitHub access, no tool use and no access to anyone's host, and it shows private sessions only to the workspace's owner and admins. Removing a member also removes their grants on the workspace's sessions; sessions they own are not reassigned, and nobody, the workspace's owner and admins included, can open them while their owner isn't a member.
+Workspace admins manage only their workspace; the server's administrators are configured separately (see [Administration](self-hosting.md#administration)). A workspace has one owner, who can't be removed. Membership alone grants no GitHub access, no tool use and no access to anyone's host; it shows every session of the workspace. Removing a member also removes their grants on the workspace's sessions; sessions they own are not reassigned, and nobody, the workspace's owner and admins included, can open them while their owner isn't a member.
