@@ -72,7 +72,9 @@ export async function admissionExpired(env: Env, admissionId: string, admission:
   if (issuedAt + ADMISSION_RENEWAL_MAX_SECONDS <= nowSeconds) return true;
   const running = await env.DB.query<{ id: string }>(`SELECT a.id FROM run_admissions a JOIN sessions s ON s.id = a.session_id
     WHERE a.id = ? AND s.status <> 'archived' AND s.activity IN ('working', 'waiting')
-      AND NOT EXISTS (SELECT 1 FROM run_admissions newer WHERE newer.session_id = a.session_id AND newer.created_at > a.created_at)`)
+      AND (s.activity_ended_at IS NULL OR s.activity_ended_at < a.created_at)
+      AND NOT EXISTS (SELECT 1 FROM run_admissions newer WHERE newer.session_id = a.session_id
+        AND (newer.created_at > a.created_at OR (newer.created_at = a.created_at AND newer.id > a.id)))`)
     .bind(admissionId).first();
   return running?.id !== admissionId;
 }

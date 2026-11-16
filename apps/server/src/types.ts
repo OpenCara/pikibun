@@ -95,6 +95,7 @@ export interface SessionRow {
   packed_at?: string | null;
   pack_due_at?: string | null;
   activity?: SessionActivity | null;
+  activity_ended_at?: string | null;
   next_scheduled_at?: string | null;
   parent_session_id?: string | null;
   schedule_id?: string | null;

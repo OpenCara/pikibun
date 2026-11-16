@@ -100,7 +100,7 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
       .bind(admissionId).first();
     if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || admission.access === 'read' ||
         await admissionExpired(c.env, admissionId, admission)) {
-      fail(403, 'automatic_push_not_admitted', 'Pushes run only for an unexpired message that may act, from the person who sent it.');
+      fail(403, 'automatic_push_not_admitted', 'Pushes run only for a message that may act, from the person who sent it, within an hour of it or while its run is still going.');
     }
     await requireCallbackScope(c, owner.row, connectorId);
     await requireOperationTool(c.env, owner.row, actorId, operation);
