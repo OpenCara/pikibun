@@ -30,7 +30,6 @@ export interface ExtensionHost {
   warn(source: string, message: string): void;
   readonly piki?: PikiSession;
   extensionProcess?(warn: (source: string, message: string) => void): ExtensionChannel;
-  readonly sandboxedProcess?: boolean;
 }
 
 export const ExtensionPrompts = defineDoc<{ prompts: Record<string, string> }>({ kind: "pikibun.extension-prompts", version: 1, scope: "conversation",
@@ -77,6 +76,7 @@ export function settleToolNames(sources: readonly { source: string; tools: reado
 interface Link {
   source: string;
   isolated: boolean;
+  sandboxed: boolean;
   channel: ExtensionChannel;
   handlers: Set<string>;
   toolsSeen?: string;
@@ -170,7 +170,8 @@ export class SessionExtensions {
         const factories = piki ? loaded.factories!.map(item => ({ path: item.path, factory: piki.forSession(this.host.piki ?? noPikiSession) })) : loaded.factories;
         if (factories) this.#factories.set(source, factories);
         const models = factories ? [] : listedModels(this.host);
-        const link: Link = { source, isolated: factories === undefined, channel: this.channel(factories !== undefined), handlers: new Set() };
+        const channel = this.channel(factories !== undefined);
+        const link: Link = { source, isolated: factories === undefined, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
@@ -278,8 +279,8 @@ export class SessionExtensions {
     return { notices: answer.notices.map(String), messages: answer.messages.map(String) };
   }
 
-  isolated(source: string): boolean {
-    return this.#opened.find(item => item.source === source)?.isolated === true;
+  sandboxed(source: string): boolean {
+    return this.#opened.find(item => item.source === source)?.sandboxed === true;
   }
 
   sessionStart(): Promise<void> {
@@ -358,7 +359,7 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
       if (!settings) throw new Error(`This extension (${source}) no longer applies to this session; ${definition.name} didn't run.`);
       const input = args as Record<string, unknown>;
       return host.runTool({ source, tool: definition.name, arguments: input, api, signal: info.abortSignal ?? new AbortController().signal, context: info,
-        sandboxed: link.isolated && host.sandboxedProcess === true },
+        sandboxed: link.sandboxed },
         async signal => {
           const output = await ask("execute", { source, settings, tool: definition.name, callId: api.callId, args: input }, signal);
           return { output: output.content, ...(output.details !== undefined ? { details: output.details as never } : {}) };

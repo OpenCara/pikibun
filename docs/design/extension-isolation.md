@@ -209,9 +209,12 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   sandbox needs no host command grant and no "let every session run extension tools" (`session/piki.ts`, `#runTool`): it
   can do what the session's shell commands can. It is a host command exactly where a shell command would be: on a host
   without resource limits, in a session that isn't the host owner's, where the process runs unbounded
-  (`runsOnHost` for a `bash` operation). The adapter says which calls these are (`sandboxed`: the source runs behind
-  the process channel, and the session's process is sandboxed), so built-in extensions and unsandboxed platforms keep the
-  rule. A Read-only message still runs none: a tool may change the worktree.
+  (`runsOnHost` for a `bash` operation). Whether a call is one of these is the word of the channel that runs it (review
+  380, finding 47): the session makes the channel to its sandbox with `sandboxed: true`, the adapter marks a source
+  sandboxed only when it was opened on such a channel, and one rule (`SessionPiki.#extensionMayRun`) decides for tools
+  and for extension commands alike. So built-in extensions, a sandbox that can't be given Node.js and unsandboxed
+  platforms keep the rule, and a new platform can't make the flag and the process disagree. A Read-only message still
+  runs none: a tool may change the worktree.
 
 ## Step 3 as built, on macOS
 

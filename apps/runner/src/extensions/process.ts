@@ -71,6 +71,7 @@ export type WorkerLaunch = (handlers: LaunchHandlers, mounts: readonly string[])
 
 export interface ProcessChannelOptions {
   directory: string;
+  sandboxed?: boolean;
   warn(source: string, message: string): void;
   command?: WorkerCommandFor;
   launch?: WorkerLaunch;
@@ -318,6 +319,8 @@ export class ProcessChannel implements ExtensionChannel {
   }
 
   get running(): boolean { return !!this.#live; }
+
+  get sandboxed(): boolean { return this.options.sandboxed === true; }
 
   mount(paths: readonly (string | undefined)[]): void {
     if (!this.#mounted) return;

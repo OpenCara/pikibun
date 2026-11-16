@@ -68,6 +68,7 @@ export type ExtensionParams<M extends ExtensionMethod> = ExtensionRequests[M][0]
 export interface ExtensionAnswer<M extends ExtensionMethod> { value: ExtensionRequests[M][1]; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string }
 
 export interface ExtensionChannel {
+  readonly sandboxed?: boolean;
   call<M extends ExtensionMethod>(method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>>;
   ready?(): Promise<void>;
   mount?(paths: readonly (string | undefined)[]): void;
