@@ -21,7 +21,7 @@ import { PortableLeases } from "./portable-lease.js";
 export const MOVED_SESSION = "This session was moved to another server this computer is paired with";
 const KEPT_FILE = "portable.json";
 const KEPT_BYTES = 256 * 1024;
-const PORTABLE_SWEEP_MS = 500;
+const PORTABLE_SWEEP_MS = 1000;
 const OWNER_CONFIG = "owner.gitconfig";
 const RELEASE_WAIT_MS = 10_000;
 const RELEASED_WATCH_MS = 60_000;

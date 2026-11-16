@@ -77,7 +77,7 @@ environments, `node_modules/.bin`), and the index lets every connection of the i
    only then replaces `binding.json`. Any failure before that puts the Git identity back and leaves the binding as it
    was.
 4. The connection that had it notices: each open of a portable session checks that `binding.json` still names its own
-   pairing and ID, and so does a sweep every half second of the ones it has open, and of the ones it let go of for a
+   pairing and ID, and so does a sweep every second of the ones it has open, and of the ones it let go of for a
    minute after. It tells its server (`POST /api/connectors/self/portable/detached`), which archives its record as
    **Moved to another server** (`session.detached`). Such a record can't be unarchived: it is brought back as in 2.
 
