@@ -9,7 +9,7 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 export const extensionToolModes = ["approval", "automatic"] as const;
 export type ExtensionToolMode = (typeof extensionToolModes)[number];
 
-export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string }
+export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string; path?: string }
   | { kind: "piki"; name: string };
 
 export const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -36,7 +36,12 @@ export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
     return { kind: "npm", package: name, version };
   }
   if (spec.startsWith("git:")) {
-    const rest = spec.slice(4);
+    const hash = spec.indexOf("#");
+    const path = hash < 0 ? undefined : spec.slice(hash + 1);
+    const rest = spec.slice(4, hash < 0 ? undefined : hash);
+    if (path !== undefined && !gitSourcePath(path)) {
+      throw new ExtensionSourceError(`Name a directory of the repository after #, such as extensions/name: relative, without . or .., in letters, digits and ._@-`);
+    }
     const at = rest.lastIndexOf("@");
     const url = at > 0 ? rest.slice(0, at) : rest;
     const commit = at > 0 ? rest.slice(at + 1) : "";
@@ -47,13 +52,25 @@ export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
       throw new ExtensionSourceError("Git extensions install from an https:// URL without credentials.");
     }
     if (!COMMIT.test(commit)) throw new ExtensionSourceError(`Pin a full commit, such as git:${url}@<40-character commit>: branches and tags could load different code later.`);
-    return { kind: "git", url: parsed.href.replace(/\/$/, "").replace(/\.git$/, ""), commit };
+    return { kind: "git", url: parsed.href.replace(/\/$/, "").replace(/\.git$/, ""), commit, ...(path !== undefined ? { path } : {}) };
   }
-  throw new ExtensionSourceError("An extension source is npm:<package>@<version>, git:<https URL>@<commit> or piki:<name>.");
+  throw new ExtensionSourceError("An extension source is npm:<package>@<version>, git:<https URL>@<commit>[#<directory>] or piki:<name>.");
 }
 
 export function extensionSourceString(spec: ExtensionSourceSpec): string {
-  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : spec.kind === "git" ? `git:${spec.url}@${spec.commit}` : `piki:${spec.name}`;
+  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : spec.kind === "git" ? `git:${spec.url}@${spec.commit}${spec.path ? `#${spec.path}` : ""}` : `piki:${spec.name}`;
+}
+
+export const GIT_PATH_LIMIT = 200;
+const GIT_PATH_SEGMENT = /^[A-Za-z0-9._@-]+$/;
+
+export function gitSourcePath(path: string): boolean {
+  if (!path || path.length > GIT_PATH_LIMIT) return false;
+  return path.split("/").every(segment => GIT_PATH_SEGMENT.test(segment) && segment !== "." && segment !== "..");
+}
+
+export function inRepositoryDirectory(source: string): boolean {
+  return source.startsWith("git:") && source.includes("#");
 }
 
 export function isPikiExtensionSource(source: string): boolean {
@@ -66,7 +83,7 @@ export function normalizeExtensionSource(spec: string): string {
 
 export function extensionPackageKey(source: string): string {
   const spec = parseExtensionSourceSpec(source);
-  return spec.kind === "npm" ? `npm:${spec.package}` : spec.kind === "git" ? `git:${spec.url}` : `piki:${spec.name}`;
+  return spec.kind === "npm" ? `npm:${spec.package}` : spec.kind === "git" ? `git:${spec.url}${spec.path ? `#${spec.path}` : ""}` : `piki:${spec.name}`;
 }
 
 export interface ExtensionFlag {

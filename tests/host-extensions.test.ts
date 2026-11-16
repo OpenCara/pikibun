@@ -17,7 +17,7 @@ import { sha256 } from "../packages/shared/src/crypto.js";
 import type { OperationRecord, RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
-import { extensionAvailability, extensionPackageKey, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
+import { extensionAvailability, extensionPackageKey, inRepositoryDirectory, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
   sessionExtensions, type ExtensionSettings, type InstalledExtension } from "../packages/shared/src/host-extensions.js";
 import { extensionOffer, workspaceTools } from "../packages/shared/src/workspace-tools.js";
 
@@ -62,6 +62,51 @@ test("sources are pinned and normalized; a workspace uses one version of each pa
   assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0" }, { source: "npm:a@2.0.0" }]), /one version/);
   assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0", settings: { key: { nested: true } } }]), /true, false or text/);
   assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0", secret: "x" }]), /Invalid extension/);
+});
+
+test("a Git source may name a directory of its repository, which is part of its package's identity (#255)", () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  const source = `git:github.com/OpenCara/pikibun@${commit}#extensions/context-files`;
+  assert.equal(normalizeExtensionSource(source), `git:https://github.com/OpenCara/pikibun@${commit}#extensions/context-files`);
+  assert.equal(extensionPackageKey(source), "git:https://github.com/OpenCara/pikibun#extensions/context-files");
+  assert.notEqual(extensionPackageKey(source), extensionPackageKey(`git:github.com/OpenCara/pikibun@${commit}#extensions/pr-flow`), "two directories are two packages");
+  assert.equal(extensionPackageKey(source), extensionPackageKey(`git:github.com/OpenCara/pikibun@${"f".repeat(40)}#extensions/context-files`), "another commit is another version");
+  assert.equal(inRepositoryDirectory(normalizeExtensionSource(source)), true);
+  assert.equal(inRepositoryDirectory(`git:github.com/OpenCara/pikibun@${commit}`), false);
+  for (const path of ["", "/abs", "a//b", "a/", "../up", "a/./b", "a/../b", "has space", "a\\b", "x".repeat(201)]) {
+    assert.throws(() => normalizeExtensionSource(`git:github.com/acme/repo@${commit}#${path}`), /./, JSON.stringify(path));
+  }
+  assert.deepEqual(parseWorkspaceExtensions([{ source }]).map(item => item.source), [normalizeExtensionSource(source)]);
+});
+
+test("a directory of a Git repository installs only with an npm that knows ::path:, and only if it is a Pi extension package", async t => {
+  const root = await directory(t);
+  const calls: string[][] = [];
+  let version = "11.10.0";
+  let manifest: Record<string, unknown> = { name: "@opencara/pi-context-files", version: "0.1.0", pi: { extensions: ["./index.ts"] } };
+  const store = new ExtensionStore(join(root, "state", "extensions"), async (args, cwd, env) => {
+    calls.push([...args, ...(env?.npm_config_allow_git ? [`allow_git=${env.npm_config_allow_git}`] : [])]);
+    if (args[0] === "--version") return `${version}\n`;
+    const name = String(manifest.name);
+    await mkdir(join(cwd, "node_modules", name), { recursive: true });
+    await writeFile(join(cwd, "node_modules", name, "package.json"), JSON.stringify(manifest));
+    const project = JSON.parse(await readFile(join(cwd, "package.json"), "utf8"));
+    project.dependencies[name] = args.at(-1);
+    await writeFile(join(cwd, "package.json"), JSON.stringify(project));
+  });
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  const installed = await store.add(parseExtensionSource(`git:github.com/OpenCara/pikibun@${commit}#extensions/context-files`));
+  assert.equal(installed.package, "@opencara/pi-context-files");
+  assert.deepEqual(calls[0], ["--version"]);
+  assert.equal(calls[1]!.at(-2), `git+https://github.com/OpenCara/pikibun.git#${commit}::path:extensions/context-files`);
+  assert.ok(calls[1]!.includes("--ignore-scripts") && calls[1]!.at(-1) === "allow_git=root");
+  version = "11.9.0";
+  await assert.rejects(store.add(parseExtensionSource(`git:github.com/OpenCara/pikibun@${commit}#extensions/pr-flow`)), /needs npm 11\.10\.0 or later; this host has 11\.9\.0/);
+  assert.equal(calls.length, 3, "an npm too old for ::path: never installs the repository's root");
+  version = "11.12.1";
+  manifest = { name: "@opencara/pikibun", version: "0.1.0" };
+  await assert.rejects(store.add(parseExtensionSource(`git:github.com/OpenCara/pikibun@${commit}#apps`)), /isn't a Pi extension package/);
+  assert.deepEqual((await store.list()).map(item => item.source), [`git:https://github.com/OpenCara/pikibun@${commit}#extensions/context-files`]);
 });
 
 test("a session runs with the workspace's enabled extensions its host has at that version, and its owner's dev extensions", () => {

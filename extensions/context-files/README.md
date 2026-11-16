@@ -73,6 +73,13 @@ A host can also run this directory as a dev extension instead, to try changes in
 npx pikibun@latest extensions add ./extensions/context-files             # dev mode, from a clone: the host owner's own sessions only
 ```
 
+To run a version of it other than the connector's in a Pikibun workspace, install it on the host from this repository
+(npm 11.10 or later), pinned to a commit, and add the same source to the workspace:
+
+```sh
+npx pikibun@latest extensions add git:github.com/OpenCara/pikibun@<commit>#extensions/context-files
+```
+
 ## In Pi
 
 ```bash
