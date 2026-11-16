@@ -111,10 +111,9 @@ export class SessionPiki {
     }
   }
 
-  async #extensionMayRun(actorId: string, sandboxed: boolean, automaticTools: boolean, what: string): Promise<boolean> {
-    const trusted = await this.options.hostCommands.allowed(actorId);
+  async #extensionMayRun(actorId: string, sandboxed: boolean, automaticTools: boolean, what: string): Promise<void> {
     const inSandbox = sandboxed && !this.options.hostCommands.runsOnHost({ kind: "bash", command: "" }, !this.options.hostCommands.shellAllowed());
-    if (inSandbox || trusted || automaticTools) return trusted;
+    if (inSandbox || automaticTools || await this.options.hostCommands.allowed(actorId)) return;
     throw new RunnerError(403, sandboxed
       ? `${what}, which runs in the sandbox but, on this host, without resource limits, as shell commands do here: only in sessions of the `
         + "host's owner and of members they granted host commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran."
@@ -144,7 +143,8 @@ export class SessionPiki {
     const operation: ExtensionToolOperation = { kind: "extension.tool", source: call.source, tool: call.tool,
       arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
       digest: createHash("sha256").update(json).digest("hex") };
-    const trusted = await this.#extensionMayRun(attribution.initiatedBy, call.sandboxed === true, automaticTools, `${call.tool} comes from an extension`);
+    await this.#extensionMayRun(attribution.initiatedBy, call.sandboxed === true, automaticTools, `${call.tool} comes from an extension`);
+    const trusted = await this.options.hostCommands.allowed(attribution.initiatedBy);
     const approval = await this.options.operations.run(attribution.initiatedBy, operation, String(call.api.taskId), { hostChecked: true });
     if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
     const id = approval.id;

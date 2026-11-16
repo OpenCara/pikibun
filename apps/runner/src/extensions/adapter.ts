@@ -75,7 +75,6 @@ export function settleToolNames(sources: readonly { source: string; tools: reado
 
 interface Link {
   source: string;
-  isolated: boolean;
   sandboxed: boolean;
   channel: ExtensionChannel;
   handlers: Set<string>;
@@ -171,7 +170,7 @@ export class SessionExtensions {
         if (factories) this.#factories.set(source, factories);
         const models = factories ? [] : listedModels(this.host);
         const channel = this.channel(factories !== undefined);
-        const link: Link = { source, isolated: factories === undefined, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
+        const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
