@@ -325,6 +325,7 @@ describe("on a phone", () => {
     await app.press("id:new-session");
     await app.waitFor("text:What should we work on?");
     await app.type("id:new-message", "Add a dark mode");
+    expect(app.shows("id:new-visibility")).toBe(false);
     await app.waitUntil(() => app.enabled("id:new-start"));
     await app.press("id:new-start");
     await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/sessions`) !== undefined);

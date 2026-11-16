@@ -92,7 +92,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const choice = signal("");
   const draftId = newSessionDraftId(props.workspace.id);
   const content = createDraft(draftId);
-  const visibility = signal<"workspace" | "private">("workspace");
   const trustedHost = signal("");
   const onHost = signal<boolean | null>(null);
   const personal = () => props.workspace.personal === true;
@@ -173,7 +172,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       const { api } = session();
       const images = await encodeImages(pasted);
       const result = await api<{ session: SessionRecord }>("/api/sessions", { method: "POST", body: {
-        workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name), visibility: visibility(),
+        workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name), visibility: "workspace",
         ...(foreign() ? { trustedConnectorId: current.id } : {}), ...(hostEnvironment ? { hostEnvironment: true } : {}),
       } });
       const sessionId = result.session.id;
@@ -260,14 +259,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       </Text>
     </Switch>
   );
-  const visibilityPicker = () => (
-    <Picker<"workspace" | "private"> title="Who can see it" value={visibility()} onSelect={value => visibility.set(value)} placement="bottom"
-      trigger={<Chip small testID="new-visibility" icon={visibility() === "workspace" ? "users" : "lock"} label={visibility() === "workspace" ? "Workspace" : "Private"} disabled={action.busy()} />}
-      options={[
-        { value: "workspace", label: "Workspace", icon: "users", hint: "Members can view the transcript; collaborators can message it." },
-        { value: "private", label: "Private", icon: "lock", hint: "Only you, the workspace's owner and admins, and people you give a session role." },
-      ]} />
-  );
   const repositoryCount = () => { const count = repositories()?.length ?? 0; return count ? count === 1 ? "1 repository" : `${count} repositories` : ""; };
   const showDetails = signal(false);
 
@@ -287,7 +278,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
           {props.workspacePicker}
           {hostPicker()}
           <If when={hostSessions()}>{environmentPicker()}</If>
-          {visibilityPicker()}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginLeft: "auto" }}>
             <If when={repositoryCount()}>
               {count => <Text style={{ fontSize: text.small, color: palette().faint, paddingHorizontal: 8 }}>{count()}</Text>}
