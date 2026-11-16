@@ -608,6 +608,8 @@ export interface SessionView {
   withdrawable?: boolean;
   rewindable?: boolean;
   memberForks?: boolean;
+  /** The host forks a new session from a side ask's thread too, not only from the shared conversation. */
+  askForks?: boolean;
   commands?: SessionCommand[];
   agent?: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
   context?: SessionContextView;
