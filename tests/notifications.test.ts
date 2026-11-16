@@ -139,7 +139,7 @@ async function fixture(t: TestContext) {
   const connectionToken = b64(randomBytes(32));
   sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   const { models } = await json<{ models: ModelDefinition[] }>(await alice.request('GET', `/api/workspaces/${workspace.id}/models`));
-  const { session } = await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: models[0]!.id, title: 'Fix the build', visibility: 'private' }), 201);
+  const { session } = await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: models[0]!.id, title: 'Fix the build' }), 201);
   await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: bob.user.id, role: 'collaborator' }));
 
   const report = (activity: SessionActivity) => request('POST', '/api/connectors/self/activity', { sessionId: session.id, activity },
@@ -175,6 +175,7 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   const [aliceFrom, bobFrom, carolFrom] = [await f.cursor(f.alice), await f.cursor(f.bob), await f.cursor(f.carol)];
   f.sent(f.bob);
   f.sent(f.carol);
+  assert.ok((await f.alice.request('DELETE', `/api/workspaces/${f.workspace.id}/members/${f.carol.user.id}`)).ok, 'Carol leaves: nothing reaches who can no longer read the session');
   await f.reportAll('working', 'waiting');
 
   const aliceFeed = await f.feed(f.alice, aliceFrom);

@@ -259,9 +259,11 @@ test('agents are gone; saved versions are immutable and do not grant authors acc
   assert.equal(fromAgent.status, 400);
   assert.equal((await fromAgent.json() as { code: string }).code, 'invalid_input');
   assert.throws(() => f.sqlite.prepare('UPDATE agent_versions SET name = ? WHERE id = ?').run('changed', published.id), /immutable/);
-  f.sqlite.prepare("INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'private')")
-    .run('bob-session', workspace.id, bob.user.id, published.id, 'private session', 1, 'ready', new Date().toISOString());
-  assert.equal((await carol.request('GET', '/api/sessions/bob-session')).status, 404);
+  f.sqlite.prepare("INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'workspace')")
+    .run('bob-session', workspace.id, bob.user.id, published.id, "Bob's session", 1, 'ready', new Date().toISOString());
+  const authorView = await carol.request('GET', '/api/sessions/bob-session');
+  assert.equal(authorView.status, 200);
+  assert.deepEqual((await authorView.json() as { session: { permissions: string[] } }).session.permissions, ['read'], 'the version\'s author reads it as every member does, and no more');
   assert.equal((await eve.request('GET', '/api/sessions/bob-session')).status, 404);
   const workspaceOwner = await alice.request('GET', '/api/sessions/bob-session');
   assert.equal(workspaceOwner.status, 200);
@@ -274,7 +276,7 @@ test('agents are gone; saved versions are immutable and do not grant authors acc
   assert.equal((await carol.request('POST', '/api/sessions/bob-session/grants', { userId: eve.user.id, permissions: ['read'] })).status, 404);
   assert.equal((await bob.request('POST', '/api/sessions/bob-session/grants', { userId: bob.user.id, permissions: ['read'] })).status, 400);
   assert.equal((await bob.request('DELETE', `/api/sessions/bob-session/grants/${encodeURIComponent(carol.user.id)}`)).status, 200);
-  assert.equal((await carol.request('GET', '/api/sessions/bob-session')).status, 404);
+  assert.deepEqual((await (await carol.request('GET', '/api/sessions/bob-session')).json() as { session: { permissions: string[] } }).session.permissions, ['read']);
   assert.equal((await bob.request('POST', '/api/sessions/bob-session/backup', {})).status, 503);
   assert.equal((await bob.request('GET', '/api/sessions/bob-session/view')).status, 503);
 });
@@ -424,9 +426,8 @@ async function pollingFixture(t: TestContext) {
   await owner.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: reader.user.id, role: 'member' });
   const model = (await (await owner.request('POST', `/api/workspaces/${workspace.id}/models`, { name: 'polling', provider: 'faux', modelId: 'faux-1' })).json() as { model: { id: string } }).model;
   const agent = seedAgentVersion(f.sqlite, { authorId: owner.user.id, modelId: model.id, tools: ['identity'] });
-  f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility) VALUES (?,?,?,?,?,?,?,'private')")
+  f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility) VALUES (?,?,?,?,?,?,?,'workspace')")
     .run('poll-session', workspace.id, owner.user.id, agent.id, 'polling', 'ready', new Date().toISOString());
-  await owner.request('POST', '/api/sessions/poll-session/grants', { userId: reader.user.id, permissions: ['read'] });
   f.env.RUNNER_URL = 'https://runner.example.test';
   f.env.RUNNER_EVENT_TRANSPORT = 'poll';
   const view = { sessionId: 'poll-session', owner: { id: owner.user.id, displayName: 'Owner', gitName: 'Owner', gitEmail: 'owner@example.test', githubLogin: null },
@@ -464,7 +465,7 @@ test('poll SSE emits at most four authoritative views within the subrequest budg
   assert.ok(f.queryCount() - before + polls <= 27, 'Four snapshots including restore-state checks must fit the query budget');
 });
 
-test('poll SSE rechecks live grants after fetching and before emitting each snapshot', async t => {
+test('poll SSE rechecks live access after fetching and before emitting each snapshot', async t => {
   const f = await pollingFixture(t);
   const previousFetch = globalThis.fetch; t.after(() => { globalThis.fetch = previousFetch; });
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -472,8 +473,7 @@ test('poll SSE rechecks live grants after fetching and before emitting each snap
   globalThis.fetch = async () => {
     polls++;
     if (polls === 2) {
-      f.sqlite.prepare('DELETE FROM session_grants WHERE session_id = ? AND user_id = ?').run('poll-session', f.reader.user.id);
-      f.sqlite.prepare('UPDATE sessions SET policy_version = policy_version + 1 WHERE id = ?').run('poll-session');
+      f.sqlite.prepare('DELETE FROM workspace_members WHERE user_id = ?').run(f.reader.user.id);
     }
     return Response.json({ view: { ...f.view, entries: [{ id: String(polls), kind: 'message', role: 'assistant', text: polls === 1 ? 'authorized' : 'must-not-leak' }] } });
   };
@@ -683,7 +683,7 @@ test('a client holding a revision gets patches: nothing while nothing changed, t
   }
 });
 
-test('workspace roles: viewers read and create nothing, members read, collaborators message shared sessions, owners and admins manage every session', async t => {
+test('workspace roles: viewers read and create nothing, members read, collaborators message every session, owners and admins manage every session', async t => {
   const f = await fixture(t);
   const owner = await f.client('roles-owner');
   const [viewer, member, collaborator, admin, other] = await Promise.all(['roles-viewer', 'roles-member', 'roles-collaborator', 'roles-admin', 'roles-other'].map(name => f.client(name)));
@@ -701,15 +701,12 @@ test('workspace roles: viewers read and create nothing, members read, collaborat
   const agent = seedAgentVersion(f.sqlite, { authorId: owner.user.id, modelId: model.id, tools: ['identity'] });
   const insert = f.sqlite.prepare('INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility) VALUES (?,?,?,?,?,?,?,?)');
   insert.run('roles-shared', workspace.id, owner.user.id, agent.id, 'shared', 'ready', new Date().toISOString(), 'workspace');
-  insert.run('roles-private', workspace.id, owner.user.id, agent.id, 'private', 'ready', new Date().toISOString(), 'private');
   const held = async (client: { user: { id: string } }, sessionId: string) => (await sessionAccess(f.env, sessionId, client.user.id))?.permissions ?? null;
 
   assert.deepEqual(await held(viewer, 'roles-shared'), ['read']);
   assert.deepEqual(await held(member, 'roles-shared'), ['read']);
   assert.deepEqual(await held(collaborator, 'roles-shared'), ['read', 'ask', 'write']);
   assert.deepEqual(await held(admin, 'roles-shared'), ['read', 'ask', 'write', 'manage']);
-  for (const client of [viewer, member, collaborator]) assert.equal(await held(client, 'roles-private'), null);
-  assert.deepEqual(await held(admin, 'roles-private'), ['read', 'ask', 'write', 'manage']);
 
   assert.equal((await owner.request('POST', '/api/sessions/roles-shared/grants', { userId: member.user.id, permissions: ['read', 'write'] })).status, 200);
   assert.deepEqual(await held(member, 'roles-shared'), ['read', 'write']);
@@ -717,8 +714,8 @@ test('workspace roles: viewers read and create nothing, members read, collaborat
   assert.equal(refused.status, 400);
   assert.equal((await refused.json() as { code: string }).code, 'viewer_role');
   f.sqlite.prepare('INSERT INTO session_grants (session_id,user_id,permissions_json,created_at) VALUES (?,?,?,?)')
-    .run('roles-private', viewer.user.id, JSON.stringify(['read', 'ask', 'write', 'approve', 'manage']), new Date().toISOString());
-  assert.deepEqual(await held(viewer, 'roles-private'), ['read']);
+    .run('roles-shared', viewer.user.id, JSON.stringify(['read', 'ask', 'write', 'approve', 'manage']), new Date().toISOString());
+  assert.deepEqual(await held(viewer, 'roles-shared'), ['read']);
 
   const created = await viewer.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: model.id, title: 'mine' });
   assert.equal(created.status, 403);
@@ -769,7 +766,6 @@ test('workspace roles: viewers read and create nothing, members read, collaborat
   assert.equal((await change(owner, collaborator.user.id, { role: 'admin' })).status, 200);
   assert.equal((await change(owner, collaborator.user.id, { role: 'collaborator' })).status, 200);
   assert.equal((await owner.request('POST', members, { userId: admin.user.id, role: 'collaborator' })).status, 200);
-  assert.equal(await held(admin, 'roles-private'), null);
   assert.deepEqual(await held(admin, 'roles-shared'), ['read', 'ask', 'write']);
 });
 
@@ -785,9 +781,9 @@ test('session roles: an owner gives a member one of four tiers, capped by their 
   const model = (await (await owner.request('POST', `/api/workspaces/${workspace.id}/models`, { name: 'tiers', provider: 'faux', modelId: 'faux-1' })).json() as { model: { id: string } }).model;
   const agent = seedAgentVersion(f.sqlite, { authorId: owner.user.id, modelId: model.id, tools: ['identity'] });
   f.sqlite.prepare('INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility) VALUES (?,?,?,?,?,?,?,?)')
-    .run('tiers-private', workspace.id, owner.user.id, agent.id, 'private', 'ready', new Date().toISOString(), 'private');
-  const grants = '/api/sessions/tiers-private/grants';
-  const held = async (client: { user: { id: string } }) => (await sessionAccess(f.env, 'tiers-private', client.user.id))?.permissions ?? null;
+    .run('tiers-session', workspace.id, owner.user.id, agent.id, 'tiers', 'ready', new Date().toISOString(), 'workspace');
+  const grants = '/api/sessions/tiers-session/grants';
+  const held = async (client: { user: { id: string } }) => (await sessionAccess(f.env, 'tiers-session', client.user.id))?.permissions ?? null;
   const code = async (response: Response) => (await response.json() as { code: string }).code;
 
   const tiers = [['viewer', ['read']], ['member', ['read', 'ask']], ['collaborator', ['read', 'ask', 'write']], ['admin', ['read', 'ask', 'write', 'approve', 'manage']]] as const;
@@ -809,7 +805,7 @@ test('session roles: an owner gives a member one of four tiers, capped by their 
   assert.deepEqual(await held(viewer), ['read']);
 
   f.sqlite.prepare('INSERT INTO session_grants (session_id,user_id,permissions_json,created_at) VALUES (?,?,?,?)')
-    .run('tiers-private', manager.user.id, JSON.stringify(['read', 'ask', 'manage']), new Date().toISOString());
+    .run('tiers-session', manager.user.id, JSON.stringify(['read', 'ask', 'manage']), new Date().toISOString());
   assert.equal((await manager.request('POST', grants, { userId: collaborator.user.id, role: 'member' })).status, 200);
   const escalated = await manager.request('POST', grants, { userId: collaborator.user.id, role: 'collaborator' });
   assert.equal(escalated.status, 403);
