@@ -25,6 +25,7 @@ for fd_name in os.listdir('/proc/self/fd' if os.path.isdir('/proc/self/fd') else
 os.umask(0o077)
 PUSH_KINDS = ('clone-push-prepare', 'clone-push-pack')
 LONG_KINDS = PUSH_KINDS + ('clone-backup', 'clone-restore')
+PROCESS_LIMIT = 4096
 
 
 def bounded(which, value):
@@ -33,10 +34,24 @@ def bounded(which, value):
     resource.setrlimit(which, (value, value))
 
 
+def process_limit_counts_this_step_alone():
+    release = re.match(r'(\d+)\.(\d+)', os.uname().release)
+    if release is None or (int(release.group(1)), int(release.group(2))) < (5, 14):
+        return False
+    try:
+        with open('/proc/self/uid_map') as stream:
+            mapping = stream.read().split()
+    except OSError:
+        return False
+    return mapping != ['0', '0', '4294967295']
+
+
 def limits(request):
     kind = request['kind']
     push = kind in LONG_KINDS
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if process_limit_counts_this_step_alone():
+        bounded(resource.RLIMIT_NPROC, PROCESS_LIMIT)
     cpu, size, files = (3600, 16 * 1024 * 1024 * 1024, 256) if push else (25, 64 * 1024 * 1024, 256)
     given = request.get('limits') if kind == 'bash' else None
     if given is not None:
