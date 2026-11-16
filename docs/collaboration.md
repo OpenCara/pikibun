@@ -29,8 +29,8 @@ sequenceDiagram
 
 ## Visibility and session roles
 
-- **Workspace-visible** sessions can be viewed by every workspace member: prompts, output, tool output, repository content shown in the transcript, and side asks. Collaborators and admins can also send them messages. **Private** sessions only by the owner, the workspace's owner and admins, and people with a grant. The owner, and the workspace's owner and admins, change visibility; making a session private keeps explicit grants but can't recall what was already seen.
-- Session roles (**Details → People → Session roles**) give a workspace member one of four tiers of access to one session, named after the workspace roles. Each tier includes everything in the tiers below it. You can only give a tier whose permissions you hold, and the owner's own access can't be changed. A workspace viewer can only be a session viewer. Removing someone's session role doesn't take away what their workspace role gives them on a workspace-visible session (viewing, and for collaborators and admins messaging); making the session private does, except for the workspace's owner and admins, who manage every session.
+- Every session can be viewed by every member of its workspace: prompts, output, tool output, repository content shown in the transcript, and side asks. Collaborators and admins can also send it messages. There are no private sessions: for work nobody else should see, use your [private workspace](workspaces.md#your-private-workspace), which nobody else can join. Sessions made private before private sessions were removed became visible to their workspace's members.
+- Session roles (**Details → People → Session roles**) give a workspace member one of four tiers of access to one session, named after the workspace roles. Each tier includes everything in the tiers below it. You can only give a tier whose permissions you hold, and the owner's own access can't be changed. A workspace viewer can only be a session viewer. Removing someone's session role doesn't take away what their workspace role gives them (viewing, and for collaborators and admins messaging).
 
 | Session role | Permissions | Allows |
 |---|---|---|
@@ -41,7 +41,7 @@ sequenceDiagram
 
 The API takes a tier (`POST /api/sessions/:id/grants` with `{ userId, role }`) or, as before, an explicit permission list (`{ userId, permissions }`). A grant that matches no tier, such as one made before tiers existed, shows as **Custom** until someone chooses a tier for it.
 
-Only the session's owner can restart it, create its share link, back it up, restore, move or export it, schedule prompts, and let content pass between it and sessions other people read. Nobody approves its tool calls: whoever may send it messages runs its tools, as its owner, but only those both the owner's tool group and their own have (see [What a session may do](approvals.md)), so a message can't borrow the owner's tools. Its owner and the workspace's owner and admins rename, archive and unarchive it, change its visibility and tool output, and turn off its share link (see [Managing every session](workspaces.md#managing-every-session)).
+Only the session's owner can restart it, create its share link, back it up, restore, move or export it, schedule prompts, and let content pass between it and sessions other people read. Nobody approves its tool calls: whoever may send it messages runs its tools, as its owner, but only those both the owner's tool group and their own have (see [What a session may do](approvals.md)), so a message can't borrow the owner's tools. Its owner and the workspace's owner and admins rename, archive and unarchive it, change its tool output, and turn off its share link (see [Managing every session](workspaces.md#managing-every-session)).
 
 ## Share links
 

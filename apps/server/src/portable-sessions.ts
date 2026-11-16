@@ -307,7 +307,7 @@ async function attachSession(c: AppContext): Promise<Response> {
     try {
       inserted = await c.env.DB.query<SessionRow>(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at,
         connector_id, connector_owner_id, repositories_json, visibility, repository_mode, branch, host_environment, tool_output, portable_key)
-        SELECT ?, ?, ?, ?, ?, 1, 'provisioning', ?, ?, ?, '[]', 'private', 'clone', ?, ?, ?, ?
+        SELECT ?, ?, ?, ?, ?, 1, 'provisioning', ?, ?, ?, '[]', 'workspace', 'clone', ?, ?, ?, ?
         WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?) RETURNING *`)
         .bind(targetId, workspaceId, userId, agent.id, offer.title, offer.created_at, connectorId, userId, branch, Number(offer.host_environment) === 1 ? 1 : 0,
           await newSessionToolOutput(c.env.DB, workspaceId), offer.public_key, workspaceId, userId).first();

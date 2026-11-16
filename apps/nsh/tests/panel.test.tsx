@@ -62,7 +62,7 @@ describe("a session's panel", () => {
     expect(app.shows("id:install-chat-tunnel")).toBe(false);
     await app.press("id:install-chat-node");
     await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`)));
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install pnpm and yarn on ada-mac", visibility: "private", hostEnvironment: true });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install pnpm and yarn on ada-mac", hostEnvironment: true });
     const submitted = bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`);
     expect(submitted.content).toContain("Install on this host (ada-mac) the programs Pikibun's sessions on it lack: the node tool's pnpm and yarn.");
     expect(submitted.options.model).toEqual({ provider: "anthropic", modelId: "claude-sonnet" });
@@ -80,7 +80,7 @@ describe("a session's panel", () => {
     await app.waitFor("id:install-chat-node");
     await app.press("id:install-chat-node");
     await app.waitFor("text:Add a dark mode");
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install pnpm on ada-mac", visibility: "private" });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toEqual({ workspaceId: "w0", modelId: "m0", title: "Install pnpm on ada-mac" });
     await app.waitUntil(() => (app.value("id:composer-input") ?? "").startsWith("Install on this host (ada-mac)"));
   });
 

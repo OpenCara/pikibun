@@ -1,3 +1,4 @@
+import "./jiti-environment.js";
 import { createServer, Socket } from "node:net";
 import { ExtensionWorker } from "./worker.js";
 import type { ExtensionMethod } from "./protocol.js";

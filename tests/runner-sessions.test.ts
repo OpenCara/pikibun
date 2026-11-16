@@ -83,7 +83,7 @@ test("the agent works with other sessions through the control plane at once; a R
   assert.deepEqual(strip(requests[1]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "read", targetSessionId: "worker" });
   assert.match(await transcript(), /can let content pass between sessions whose readers differ under the session's Details/);
 
-  const read = (done: boolean): SessionsToolResult => ({ session: { id: "worker", title: "Worker", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], createdAt: "" },
+  const read = (done: boolean): SessionsToolResult => ({ session: { id: "worker", title: "Worker", ownerId: "test:alice", status: "ready", permissions: ["read"], createdAt: "" },
     busy: !done, entries: [{ id: "0:1", role: "assistant", kind: "message", text: "hidden" }],
     outcome: done ? { status: "settled", done: true, reply: "All green." } : { status: "running", done: false } });
   answers.push(read(false), read(true));
@@ -105,7 +105,7 @@ test("the agent works with other sessions through the control plane at once; a R
   assert.match(await transcript(), /which a Read-only message doesn't do/);
   assert.deepEqual((await session.view()).approvals, []);
 
-  answers.push({ session: { id: "docs", title: "Docs", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], parentSessionId: id, createdAt: "" },
+  answers.push({ session: { id: "docs", title: "Docs", ownerId: "test:alice", status: "ready", permissions: ["read"], parentSessionId: id, createdAt: "" },
     model: { id: "model-2", provider: "faux", modelId: "faux-2", thinkingLevel: "low" } });
   await session.submit(await ticket(id, "submit"), { content: "Start a docs sub-task.", requestId: "create", admissionId }, "write");
   await idle(session);

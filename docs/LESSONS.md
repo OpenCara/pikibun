@@ -77,7 +77,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 ## Sessions and schedules
 
 - A `sessions` read returns only a session's latest 50 entries, each cut short. To learn why another session failed, read its last entries. A read of an archived session can also fail outright, such as when its host's connector is offline: skip it.
-- A session visible to the workspace can't read a private session. Say so, and work from what the person describes or reproduce the problem yourself.
+- A session can't read sessions of another workspace. Say so, and work from what the person describes or reproduce the problem yourself.
 - In a workspace with many sessions, the `sessions` list is cut off before its models section, so a model's id may not be visible there. Ask the person for the id rather than guess one.
 - A schedule belongs to its session and can't be managed from another one. Give a recurring job its own session: a busy session skips its runs, and missed runs aren't caught up.
 - A scheduled run uses its session's current model, and a child session inherits it unless a model is named.

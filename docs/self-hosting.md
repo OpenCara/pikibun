@@ -215,4 +215,4 @@ docker compose exec -T pikibun node dist/server/main.js --import-dump - < worksp
 pnpm -s db:import workspace.json   # from source
 ```
 
-An operator's dump holds every session of the workspace, other members' private ones included: importing it gives whoever can read the workspace database their records and activity.
+An operator's dump holds every session of the workspace, other members' included: importing it gives whoever can read the workspace database their records and activity.

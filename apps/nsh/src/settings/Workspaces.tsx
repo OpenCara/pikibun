@@ -413,8 +413,8 @@ function Members(props: { workspace: Workspace; admin: boolean; owner: boolean }
     <>
       <Section title="Members" testID="workspace-members" info={<View style={{ gap: 8 }}>
         <If when={!props.admin}><Note>Only workspace owners and admins can manage membership.</Note></If>
-        <Note>Every role can follow workspace-visible sessions, which shows prompts, tool output and repository content in the transcript.</Note>
-        <Note>Viewer: follows them read-only and can't start sessions, whatever a session grants. Member: starts sessions, and follows other people's read-only unless they grant more. Collaborator: starts sessions, and sends messages to any workspace-visible session. Admin: a collaborator who also manages the workspace and every session in it, private ones included. Only the owner manages admins.</Note>
+        <Note>Every role can follow every session in the workspace, which shows prompts, tool output and repository content in the transcript.</Note>
+        <Note>Viewer: follows them read-only and can't start sessions, whatever a session grants. Member: starts sessions, and follows other people's read-only unless they grant more. Collaborator: starts sessions, and sends messages to any session in the workspace. Admin: a collaborator who also manages the workspace and every session in it. Only the owner manages admins.</Note>
         <Note>Membership never grants GitHub access, tool execution, or use of anyone's private Pi host.</Note>
       </View>} action={props.admin ? <Button small variant="outline" icon="plus" label="Add member" testID="add-member" onPress={() => adding.set(true)} /> : undefined}>
         <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>

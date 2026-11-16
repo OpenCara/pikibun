@@ -91,7 +91,6 @@ export interface SessionRow {
   repository_mode?: 'clone' | null;
   branch?: string | null;
   host_environment?: number | null;
-  visibility?: 'private' | 'workspace';
   archived_status?: 'provisioning' | 'ready' | 'error' | null;
   packed_at?: string | null;
   pack_due_at?: string | null;

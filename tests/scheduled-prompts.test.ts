@@ -232,7 +232,7 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   assert.match(String(f.submitted[0]!.body.requestId), new RegExp(`^schedule:${schedule.id}:`));
   const child = f.sqlite.prepare('SELECT * FROM sessions WHERE id = ?').get(childId)!;
   assert.deepEqual([child.parent_session_id, child.schedule_id, child.owner_id, child.visibility, child.status],
-    ['scheduled-session', schedule.id, f.owner.user.id, 'private', 'ready']);
+    ['scheduled-session', schedule.id, f.owner.user.id, 'workspace', 'ready']);
   assert.match(String(child.title), /^Triage · \d{4}-\d{2}-\d{2} 09:00$/, 'named for the schedule and its run');
   const submit = f.sqlite.prepare("SELECT actor_id, session_id, detail_json FROM audit WHERE action = 'session.submit'").get()!;
   assert.deepEqual([submit.actor_id, submit.session_id], [f.owner.user.id, childId], 'sent as the owner, in the new session');

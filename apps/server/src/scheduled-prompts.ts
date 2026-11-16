@@ -150,7 +150,7 @@ async function startChild(c: AppContext, parent: SessionRow, schedule: ScheduleR
   const started: { id?: string } = {};
   try {
     const { row: child } = await createSession(c, { workspaceId: parent.workspace_id, title: `${schedule.name} · ${runLabel(at, schedule.time_zone)}`,
-      visibility: parent.visibility ?? 'private', modelId: model.id,
+      modelId: model.id,
       ...(model.connector_id && model.connector_id === parent.connector_id ? { trustedConnectorId: model.connector_id } : {}),
     }, { parentSessionId: parent.id, scheduleId: schedule.id, inserted: sessionId => { started.id = sessionId; } });
     if (await openScheduledChildren(c.env, parent.id) > MAX_SCHEDULED_CHILDREN) tooManyChildren();

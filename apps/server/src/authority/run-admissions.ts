@@ -39,9 +39,9 @@ const ELIGIBLE_SESSION = `SELECT s.id FROM sessions s
     AND (? = 1 OR (actor_user.auth_kind <> 'test' AND owner_user.auth_kind <> 'test' AND m.provider <> 'faux'))
     AND (s.owner_id = actor.user_id
       -- As sessionAccess decides it: the workspace's owner and admins, who manage every session there, a role that
-      -- messages shared sessions, or a write grant to a role above read-only.
+      -- messages every session of the workspace, or a write grant to a role above read-only.
       OR actor.role IN (${sqlList(workspaceManagerRoles)})
-      OR (s.visibility = 'workspace' AND actor.role IN (${sqlList(sharedSessionWriterRoles)}))
+      OR actor.role IN (${sqlList(sharedSessionWriterRoles)})
       OR (actor.role NOT IN (${sqlList(readOnlyRoles)}) AND EXISTS (
         SELECT 1 FROM session_grants g, json_each(g.permissions_json) permission
         WHERE g.session_id = s.id AND g.user_id = actor.user_id AND permission.value = 'write'

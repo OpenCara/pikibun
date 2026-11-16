@@ -111,7 +111,7 @@ test('a session export is its owner\'s, archived sessions included, with every r
   const granted = await f.get('/api/sessions/owner-private/export', 'test:admin');
   assert.equal(granted.status, 403);
   assert.equal((await granted.json() as { code: string }).code, 'owner_required');
-  assert.equal((await f.get('/api/sessions/owner-private/export', 'test:member')).status, 404);
+  assert.equal((await f.get('/api/sessions/owner-private/export', 'test:member')).status, 403, 'every member sees the session, but only its owner exports it');
   assert.equal((await f.get('/api/sessions/owner-private/export', 'test:outsider')).status, 404);
   assert.equal((await f.get('/api/sessions/member-granted/export', 'test:owner')).status, 403);
 

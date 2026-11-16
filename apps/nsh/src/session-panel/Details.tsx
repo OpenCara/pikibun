@@ -255,7 +255,6 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
   const isOwner = () => props.current.ownerId === user.id;
   const manages = () => managesSession(user.id, props.current.ownerId, props.workspaceRole);
   const managerRole = () => (!isOwner() && props.workspaceRole && workspaceManagerRoles.includes(props.workspaceRole) ? props.workspaceRole : null);
-  const visibility = () => props.current.visibility ?? "private";
   const viewerOnly = () => !isOwner() && !own().some(permission => permission !== "read");
   const ownRole = () => sessionRoleOf(own());
   const canManage = () => own().includes("manage");
@@ -272,7 +271,7 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
   const targetRole = (): WorkspaceRole | undefined => existing()?.workspaceRole ?? (people().person(target()) as { role?: WorkspaceRole }).role;
   const tierBlocked = (role: SessionRole): string | null => (!sessionRoleGrantable(role, own()) ? "needs permissions you don't hold"
     : !sessionRoleAllowed(role, targetRole()) ? "workspace viewers can only be session viewers" : null);
-  const fromWorkspace = () => (targetRole() && !ownerSelected() ? workspaceSessionPermissions(targetRole()!, visibility()) : []);
+  const fromWorkspace = () => (targetRole() && !ownerSelected() ? workspaceSessionPermissions(targetRole()!) : []);
   const targetManages = () => targetRole() !== undefined && workspaceManagerRoles.includes(targetRole()!);
   const grantReady = () => canManage() && !ownerSelected() && Boolean(target()) && selected() !== null && !tierBlocked(selected()!) && selected() !== existingRole();
   function chooseGrant(value: string) {
@@ -293,15 +292,14 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
     if (!canManage() || ownerSelected() || !existing() || form.busy()) return;
     if (!await confirm({ title: "Remove session access?", confirmLabel: "Remove access", destructive: true,
       message: targetManages() ? `Remove ${targetName()}'s session role? As a ${workspaceRoleLabel[targetRole()!]}, they still manage this session, as they do every session in the workspace.`
-        : visibility() === "workspace" ? `Remove ${targetName()}'s session role? They keep what their workspace role gives them while this session is workspace-visible. Making it private removes that.`
-        : `Remove ${targetName()}'s session role? They will no longer be able to open this private session.` })) return;
+        : `Remove ${targetName()}'s session role? They keep what their workspace role gives them in every session of the workspace.` })) return;
     await form.run(async () => {
       await session().api(`${base()}/grants/${segment(target())}`, { method: "DELETE" });
       chooseGrant("");
       grants.refresh();
       props.refresh();
     }, targetManages() ? "Session role removed. As a workspace owner or admin, they still manage this session."
-      : visibility() === "workspace" ? "Session role removed. Workspace members can still view this session until it is made private." : "Session role removed");
+      : "Session role removed. As a workspace member, they can still view this session.");
   }
   async function setAudienceSharing(enabled: boolean) {
     if (form.busy() || !isOwner()) return;
@@ -336,19 +334,14 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
   return (
     <Section title="People" testID="panel-people" info={<View style={{ gap: 8 }}>
       <Note>The server checks every request. You give a workspace member one of four session roles: a viewer follows the session; a member also asks side questions; a collaborator also sends messages to the agent; an admin also manages who has access. You can only give a role whose permissions you hold, and workspace viewers can only be session viewers.</Note>
-      <Note>The workspace's owner and admins manage every session in it, private ones included. The session's tools run as its owner, as the owner's tool group allows.</Note>
+      <Note>Every workspace member can view the session, and collaborators can send it messages. The workspace's owner and admins manage every session in it. The session's tools run as its owner, as the owner's tool group allows.</Note>
       <Note>The owner can also share a link: anyone who has it can view the shared conversation without signing in, but not side asks, who sent each message, or the host.</Note>
     </View>}>
       <Row leading={icon("user")} title={isOwner() ? "Owner" : managerRole() ? `Workspace ${managerRole()}` : ownRole() ? `Session ${sessionRoleLabel[ownRole()!].toLowerCase()}` : "Custom access"}
-        hint={`Your permissions: ${own().join(", ") || "none"}${viewerOnly() ? ". You can follow committed work but can't ask, submit, manage grants, change visibility, or use backups"
+        hint={`Your permissions: ${own().join(", ") || "none"}${viewerOnly() ? ". You can follow committed work but can't ask, submit, manage grants, or use backups"
           : managerRole() ? `. As the workspace's ${managerRole()}, you manage every session in it` : ""}`} />
-      <Row leading={icon(visibility() === "workspace" ? "globe" : "lock")} title={visibility() === "workspace" ? "Workspace-visible" : "Private"}
-        hint={`${visibility() === "workspace" ? "All workspace members can view existing and future prompts and output, including tool output, repository content in the transcript, and side asks"
-          : "Only the owner, the workspace's owner and admins, and people with a session role can view prompts and output"}. ${manages()
-          ? visibility() === "workspace" ? "Making it private keeps explicit grants and can't recall content already viewed or copied" : "Before sharing, check existing prompts, tool output and side asks for secrets"
-          : "Only the session owner, or the workspace's owner or an admin, can change visibility"}`}
-        trailing={manages() && !archived() ? <Button small variant="outline" label={visibility() === "workspace" ? "Make private" : "Make workspace-visible"} disabled={props.actions.action.busy()}
-          onPress={props.actions.changeVisibility} /> : undefined} />
+      <Row leading={icon("globe")} title="Visible to the workspace"
+        hint="All workspace members can view existing and future prompts and output, including tool output, repository content in the transcript, and side asks" />
       <If when={isOwner() || linkShared()}>
         <Row leading={icon("link")} title={linkShared() ? "Anyone with the link can view" : "Link sharing off"}
           hint={!isOwner() ? `The owner shared this session by link: anyone who has it can view the shared conversation without signing in, including messages you send to it. Side asks stay hidden${manages() ? ". You can turn the link off, which stops it at once" : ""}`
@@ -399,15 +392,13 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
                   <Note>{`${targetName()} has a custom grant (${existing()?.permissions.join(", ")}) from before session roles. Choose a role to replace it.`}</Note>
                 </If>
                 <If when={fromWorkspace().length > 1 && targetRole()}>
-                  <Note>{`As a ${workspaceRoleLabel[targetRole()!]}, ${targetName()} already has ${fromWorkspace().join(", ")} on this ${targetManages() ? "session, as on every session in the workspace" : "workspace-visible session"}; a session role adds to that.`}</Note>
+                  <Note>{`As a ${workspaceRoleLabel[targetRole()!]}, ${targetName()} already has ${fromWorkspace().join(", ")} on this session, as on every session in the workspace; a session role adds to that.`}</Note>
                 </If>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                   <Button small label={form.busy() ? "Saving…" : existing() ? "Change role" : "Give role"} disabled={!grantReady()} onPress={saveGrant} />
                   <If when={existing() && !ownerSelected()}><Button small variant="outline" label="Remove access" disabled={form.busy()} onPress={() => void revoke()} /></If>
                 </View>
-                <If when={visibility() === "workspace"}>
-                  <Note>Removing someone's session role doesn't stop workspace members from viewing; make the session private for that. The workspace's owner and admins keep managing it either way.</Note>
-                </If>
+                <Note>Removing someone's session role doesn't stop them viewing it as a workspace member. The workspace's owner and admins keep managing it either way.</Note>
               </>
             )}
           </If>
@@ -488,7 +479,7 @@ function BackupsSection(props: Part) {
     <Section title="Backups" testID="panel-backups" info={<View style={{ gap: 8 }}>
       <Note>Only the session owner can create, download or restore backups. Backups need the session to be idle.</Note>
       <Note>A backup keeps the conversation, the session's files and each clone's local work. Conversation only keeps just the conversation: it's much smaller, and a session restored from it starts with an empty worktree.</Note>
-      <Note>Restore creates a new private session and never overwrites this one. It doesn't run any operations again, and needs the original host to be available.</Note>
+      <Note>Restore creates a new session and never overwrites this one. It doesn't run any operations again, and needs the original host to be available.</Note>
     </View>} action={<View style={{ flexDirection: "row", gap: 4 }}>
       <IconButton icon="refresh" label="Refresh backups" size={28} onPress={actions.backups.refresh} />
       <Button small variant="ghost" label="Conversation only" disabled={off() || actions.backupsPending() || blocked() || actions.conversationOnlyOff() || actions.action.busy()}
@@ -581,12 +572,12 @@ function BackupItem(props: Part & { backup: Backup }) {
           </View>
         </If>
       </If>
-      <Field label="New session title" hint="Optional. Restore creates a new private session and never overwrites this one">
+      <Field label="New session title" hint="Optional. Restore creates a new session and never overwrites this one">
         <TextField value={title()} onChange={value => title.set(value)} maxLength={200} disabled={Boolean(attempt()) || unreadable() || pending()} />
       </Field>
       <If when={attempt()}><Note>{`Restore request ${attempt()?.requestId}. Retrying reuses this request ID and title, so it resolves the same new session instead of creating another.`}</Note></If>
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-        <Button small label={pending() ? "Restoring…" : attempt()?.targetSessionId ? "Open restored session" : attempt() ? "Retry same restore" : "Restore into new private session"}
+        <Button small label={pending() ? "Restoring…" : attempt()?.targetSessionId ? "Open restored session" : attempt() ? "Retry same restore" : "Restore into new session"}
           disabled={unreadable() || pending()} onPress={() => void restore()} />
         <If when={pending()}><Small>Waiting for the server to confirm the new session…</Small></If>
       </View>
@@ -595,7 +586,7 @@ function BackupItem(props: Part & { backup: Backup }) {
         <Banner tone="warning" title="Outcome not confirmed">Retry the same restore; an error doesn't mean no session was created.</Banner>
       </If>
       <If when={attempt()?.targetSessionId}>
-        {target => <Small>{`Restored session: ${target()}. It is private; only its owner, or the workspace's owner or an admin, can change visibility.`}</Small>}
+        {target => <Small>{`Restored session: ${target()}. Like every session, it is visible to the workspace's members.`}</Small>}
       </If>
     </CollapsibleRow>
   );
@@ -717,11 +708,8 @@ function MoveHostSection(props: Part) {
 
 function AccessSection(props: Part) {
   const { user } = untracked(session);
-  const visibility = () => props.current.visibility ?? "private";
   return (
-    <Section title="Access" testID="panel-access" info={`${visibility() === "workspace"
-      ? "Workspace-visible: all workspace members can view existing and future prompts and output, including tool output, repository content in the transcript, and side asks."
-      : "Private: only the owner, the workspace's owner and admins, and members with a session role can view prompts and output."}${props.current.linkShared ? " Anyone with the session's share link can also view the shared conversation, without signing in." : ""} Values that look like passwords, tokens or keys are shown as ${REDACTED} to everyone; the agent and the host still see the real values.`}>
+    <Section title="Access" testID="panel-access" info={`All workspace members can view existing and future prompts and output, including tool output, repository content in the transcript, and side asks.${props.current.linkShared ? " Anyone with the session's share link can also view the shared conversation, without signing in." : ""} Values that look like passwords, tokens or keys are shown as ${REDACTED} to everyone; the agent and the host still see the real values.`}>
       <If when={props.view()} else={<Row title="Loading identity…" />}>
         {current => (
           <>

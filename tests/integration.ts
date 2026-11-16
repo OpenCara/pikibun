@@ -207,7 +207,7 @@ if (connectedRuntime) {
     await bob.request("POST", `/api/sessions/${sessionId}/restart`, {}, [403]);
     await bob.request("POST", `/api/sessions/${sessionId}/backup`, {}, [403]);
     await bob.request("GET", `/api/sessions/${sessionId}/backups`, undefined, [403]);
-    await bob.request("PATCH", `/api/sessions/${sessionId}`, { visibility: "private" }, [403]);
+    await bob.request("PATCH", `/api/sessions/${sessionId}`, { title: "Renamed by a viewer" }, [403]);
     await bob.request("POST", "/api/sessions", {
       workspaceId: workspace.id, modelId: ownModel.id, title: "No private model use", trustedConnectorId: aliceConnector!.id,
     }, [403, 404]);
@@ -226,34 +226,14 @@ if (connectedRuntime) {
       workspaceId: workspace.id, modelId: ownModel.id, title: "No private model use", trustedConnectorId: aliceConnector!.id,
     }, [403, 404]);
   });
-  await check("workspace viewing follows membership and privacy changes immediately, without granting control", async () => {
+  await check("workspace viewing follows membership immediately, without granting control", async () => {
     const sessionId = workspaceVisibleSession!.id;
     await alice.request("POST", `/api/workspaces/${workspace.id}/members`, { userId: eve.user.id, role: "member" });
     assert.equal((await eve.view(sessionId)).owner.id, alice.user.id);
+    assert.deepEqual((await eve.request("GET", `/api/sessions/${sessionId}`)).session.permissions, ["read"]);
     await alice.request("DELETE", `/api/workspaces/${workspace.id}/members/${encodeURIComponent(eve.user.id)}`, undefined, [200, 204]);
     await eve.request("GET", `/api/sessions/${sessionId}/view`, undefined, [403, 404]);
-    const abort = new AbortController();
-    const timeout = setTimeout(() => abort.abort(), 12_000);
-    try {
-      const response = await fetch(`${base}/api/sessions/${sessionId}/events`, {
-        headers: { Cookie: [...bob.cookies].map(([key, value]) => `${key}=${value}`).join("; "), Origin: base }, signal: abort.signal,
-      });
-      assert.equal(response.status, 200);
-      assert.ok(response.headers.get("content-type")?.includes("text/event-stream"));
-      const reader = response.body!.getReader();
-      await reader.read();
-      const changed = (await alice.request("PATCH", `/api/sessions/${sessionId}`, { visibility: "private" })).session;
-      assert.equal(changed.visibility, "private");
-      while (!(await reader.read()).done) { }
-      assert.equal(abort.signal.aborted, false);
-    } finally { clearTimeout(timeout); abort.abort(); }
-    await bob.request("GET", `/api/sessions/${sessionId}/view`, undefined, [403, 404]);
-    assert.ok(!(await bob.request("GET", "/api/sessions")).sessions.some((item: SessionRecord) => item.id === sessionId));
-    await alice.request("POST", `/api/sessions/${sessionId}/grants`, { userId: bob.user.id, permissions: ["read"] });
-    assert.equal((await bob.view(sessionId)).owner.id, alice.user.id);
-    await alice.request("DELETE", `/api/sessions/${sessionId}/grants/${encodeURIComponent(bob.user.id)}`);
-    await bob.request("GET", `/api/sessions/${sessionId}/view`, undefined, [403, 404]);
-    workspaceVisibleSession = (await alice.request("PATCH", `/api/sessions/${sessionId}`, { visibility: "workspace" })).session;
+    await alice.request("PATCH", `/api/sessions/${sessionId}`, { visibility: "private" }, [400]);
     assert.deepEqual((await bob.request("GET", `/api/sessions/${sessionId}`)).session.permissions, ["read"]);
   });
 }
@@ -307,12 +287,12 @@ await check("session repositories are assigned by the server, not the session ca
 });
 
 await check("the same model starts distinct owner-bound sessions", async () => {
-  aliceSession = (await alice.request("POST", "/api/sessions", { workspaceId: workspace.id, modelId: model.id, title: "Alice's session", visibility: "private" })).session;
+  aliceSession = (await alice.request("POST", "/api/sessions", { workspaceId: workspace.id, modelId: model.id, title: "Alice's session" })).session;
   if (connectedRuntime) {
     await bob.request("POST", "/api/sessions", { workspaceId: workspace.id, modelId: model.id, title: "Missing host trust" }, [400, 403]);
   }
   bobSession = (await bob.request("POST", "/api/sessions", {
-    workspaceId: workspace.id, modelId: model.id, title: "Bob's session", visibility: "private",
+    workspaceId: workspace.id, modelId: model.id, title: "Bob's session",
     ...(connectedRuntime ? { trustedConnectorId: aliceConnector!.id } : {}),
   })).session;
   if (connectedRuntime) {
@@ -330,9 +310,8 @@ await check("the same model starts distinct owner-bound sessions", async () => {
   assert.equal(bv.owner.id, bob.user.id);
   assert.equal(av.owner.gitEmail, "alice@example.invalid");
   assert.equal(bv.owner.gitEmail, "bob@example.invalid");
-  await bob.request("GET", `/api/sessions/${aliceSession.id}/view`, undefined, [403, 404]);
   const bobVisible: SessionRecord[] = (await bob.request("GET", "/api/sessions")).sessions;
-  assert.ok(!bobVisible.some((session) => session.id === aliceSession.id), "a member doesn't see another member's private session");
+  assert.deepEqual(bobVisible.find((session) => session.id === aliceSession.id)?.permissions, ["read"], "a member reads every session of the workspace, and no more");
   assert.equal((await alice.view(bobSession.id)).owner.id, bob.user.id);
   const visible: SessionRecord[] = (await alice.request("GET", "/api/sessions")).sessions;
   assert.deepEqual(visible.find((session) => session.id === bobSession.id)?.permissions, ["read", "ask", "write", "manage"]);
@@ -357,7 +336,7 @@ if (connectedRuntime) {
 await check("session ownership is assigned by the server, not the session caller", async () => {
   await bob.request("POST", "/api/sessions", { workspaceId: workspace.id, modelId: model.id, title: "Spoofed owner", ownerId: alice.user.id }, [400]);
   assert.equal((await bob.request("GET", `/api/sessions/${bobSession.id}`)).session.ownerId, bob.user.id);
-  await bob.request("GET", `/api/sessions/${aliceSession.id}/view`, undefined, [403, 404]);
+  assert.equal((await bob.request("GET", `/api/sessions/${aliceSession.id}`)).session.ownerId, alice.user.id);
 });
 
 await check("read-only sharing cannot prompt, ask, manage, or cross workspace boundaries", async () => {
@@ -492,21 +471,25 @@ await check("writers stop the running and queued messages through the host, and 
 });
 
 await check("revocation closes existing streams and blocks subsequent requests", async () => {
+  await alice.request("DELETE", `/api/sessions/${aliceSession.id}/grants/${encodeURIComponent(bob.user.id)}`);
+  assert.deepEqual((await bob.request("GET", `/api/sessions/${aliceSession.id}`)).session.permissions, ["read"], "a member keeps reading once their session role is gone");
+  await bob.request("POST", `/api/sessions/${aliceSession.id}/submit`, { content: "TEST_IDENTITY", requestId: "after-revoke" }, [403]);
+  await alice.request("POST", `/api/workspaces/${workspace.id}/members`, { userId: eve.user.id, role: "member" });
   const abort = new AbortController();
   const timeout = setTimeout(() => abort.abort(), 12_000);
-  const response = await fetch(`${base}/api/sessions/${aliceSession.id}/events`, { headers: { Cookie: [...bob.cookies].map(([key, value]) => `${key}=${value}`).join("; "), Origin: base }, signal: abort.signal });
+  const response = await fetch(`${base}/api/sessions/${aliceSession.id}/events`, { headers: { Cookie: [...eve.cookies].map(([key, value]) => `${key}=${value}`).join("; "), Origin: base }, signal: abort.signal });
   assert.equal(response.status, 200);
   assert.ok(response.headers.get("content-type")?.includes("text/event-stream"));
   const reader = response.body!.getReader();
   await reader.read();
-  await alice.request("DELETE", `/api/sessions/${aliceSession.id}/grants/${encodeURIComponent(bob.user.id)}`);
+  await alice.request("DELETE", `/api/workspaces/${workspace.id}/members/${encodeURIComponent(eve.user.id)}`, undefined, [200, 204]);
   try {
     let ended = false;
     while (!ended) ended = (await reader.read()).done;
     assert.equal(abort.signal.aborted, false, "stream must close promptly on revocation, not only on client timeout");
   } finally { clearTimeout(timeout); abort.abort(); }
-  await bob.request("GET", `/api/sessions/${aliceSession.id}/view`, undefined, [403, 404]);
-  await bob.request("POST", `/api/sessions/${aliceSession.id}/submit`, { content: "TEST_IDENTITY", requestId: "after-revoke" }, [403, 404]);
+  await eve.request("GET", `/api/sessions/${aliceSession.id}/view`, undefined, [403, 404]);
+  await eve.request("POST", `/api/sessions/${aliceSession.id}/submit`, { content: "TEST_IDENTITY", requestId: "after-revoke" }, [403, 404]);
 });
 
 const health = await alice.request("GET", "/api/health");
@@ -537,7 +520,7 @@ if (!health.backupsConfigured && process.env.ALLOW_MISSING_BACKUPS === "true") {
     assert.equal(snapshot.binding.owner.id, alice.user.id);
     assert.equal(Buffer.from(snapshot.sqlite, "base64").subarray(0, 15).toString(), "SQLite format 3");
   });
-  await check("backup restoration creates an owner-only independent session with an idempotent receipt", async () => {
+  await check("backup restoration creates an independent session of its owner's with an idempotent receipt", async () => {
     const { backups } = await alice.request("GET", `/api/sessions/${aliceSession.id}/backups`);
     const backup = backups[0];
     assert.ok(backup?.id);
@@ -550,14 +533,14 @@ if (!health.backupsConfigured && process.env.ALLOW_MISSING_BACKUPS === "true") {
     await alice.request("PATCH", "/api/me", { gitName: "Alice Restored" });
     const restored: SessionRecord = (await alice.request("POST", restorePath, input)).session;
     assert.notEqual(restored.id, aliceSession.id);
-    assert.equal(restored.visibility, "private", "restores must not republish historical session content");
+    assert.equal(restored.visibility, "workspace", "every session, a restored one too, is visible to the workspace's members");
     assert.equal(restored.ownerId, alice.user.id);
     assert.equal(restored.agentVersionId, aliceSession.agentVersionId);
     assert.equal(restored.connectorId, aliceSession.connectorId);
     const retry = await alice.request("POST", restorePath, input);
     assert.equal(retry.session.id, restored.id);
     await alice.request("POST", restorePath, { ...input, title: "Conflicting retry" }, [409]);
-    await bob.request("GET", `/api/sessions/${restored.id}/view`, undefined, [403, 404]);
+    assert.deepEqual((await bob.request("GET", `/api/sessions/${restored.id}`)).session.permissions, ["read"], "the source's session roles aren't copied");
     await alice.submit(restored.id, "TEST_READ evidence.txt");
     const restoredView = await alice.settled(restored.id, "owned-by-alice");
     assert.equal(restoredView.owner.gitName, "Alice Restored");
@@ -584,7 +567,7 @@ if (connectedRuntime) {
     const localModel = models.find(item => item.connectorId === bobConnector!.id)!;
     assert.ok(localModel);
     bobLocalSession = (await bob.request("POST", "/api/sessions", {
-      workspaceId: workspace.id, modelId: localModel.id, title: "Bob's separate host", visibility: "private",
+      workspaceId: workspace.id, modelId: localModel.id, title: "Bob's separate host",
     })).session;
     assert.ok(bobLocalSession);
     const headers = { authorization: `Bearer ${aliceConnector!.token}`, "x-connection-token": aliceConnector!.connectionToken, "content-type": "application/json" };

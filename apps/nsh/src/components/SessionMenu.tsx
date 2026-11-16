@@ -4,7 +4,7 @@ import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { pageAvailable, routeHash } from "../lib/page";
 import { createAction, type Action } from "../lib/resource";
-import { confirmArchive, confirmVisibilityChange, unarchiveNotice, visibilityNotice } from "../lib/session-actions";
+import { confirmArchive, unarchiveNotice } from "../lib/session-actions";
 import { Field, TextField } from "../form";
 import { Button, Feedback, FormSheet, type MenuAction, type SwipeAction } from "../ui";
 
@@ -31,10 +31,6 @@ export function createSessionMenu(): SessionMenu {
     return () => clearTimeout(timer);
   });
 
-  async function changeVisibility(current: SessionRecord) {
-    const next = await confirmVisibilityChange(current);
-    if (next) await action.run(async () => { await session().api(base(current), { method: "PATCH", body: { visibility: next } }); changed(); }, visibilityNotice(next));
-  }
   async function archive(current: SessionRecord) {
     if (await confirmArchive()) await action.run(async () => { await session().api(`${base(current)}/archive`, { method: "POST" }); changed(); }, "Session archived");
   }
@@ -60,10 +56,6 @@ export function createSessionMenu(): SessionMenu {
       copyLink: { label: "Copy link", icon: "link", testID: "menu-copy-link", onSelect: () => void action.run(() => Clipboard.writeText(sessionLink(current.id)), "Link copied") } satisfies MenuAction,
       copyId: { label: "Copy session ID", icon: "copy", testID: "menu-copy-id", onSelect: () => void action.run(() => Clipboard.writeText(current.id), "Session ID copied") } satisfies MenuAction,
       rename: editable ? { label: "Rename", icon: "pencil", testID: "menu-rename", disabled: busy, onSelect: () => { action.clear(); renaming.set(current); } } satisfies MenuAction : null,
-      visibility: editable
-        ? { label: current.visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: current.visibility === "workspace" ? "lock" : "globe",
-          testID: "menu-visibility", disabled: busy, onSelect: () => void changeVisibility(current) } satisfies MenuAction
-        : null,
       archive: editable ? { label: "Archive", icon: "archive", testID: "menu-archive", disabled: busy, onSelect: () => void archive(current) } satisfies MenuAction : null,
       unarchive: manages && archived
         ? { label: "Unarchive", icon: "archive", testID: "menu-unarchive", disabled: busy,
@@ -73,9 +65,9 @@ export function createSessionMenu(): SessionMenu {
   }
 
   function items(current: SessionRecord): (MenuAction | "separator")[] {
-    const { openTab, copyLink, copyId, rename, visibility, archive, unarchive } = actions(current);
+    const { openTab, copyLink, copyId, rename, archive, unarchive } = actions(current);
     const menu: (MenuAction | "separator")[] = [...(openTab ? [openTab] : []), copyLink, copyId];
-    if (rename && visibility && archive) menu.push("separator", rename, visibility, archive);
+    if (rename && archive) menu.push("separator", rename, archive);
     if (unarchive) menu.push("separator", unarchive);
     return menu;
   }

@@ -125,7 +125,6 @@ test('only the original owner may restore, not a manager or template/connector a
 
 test('workspace viewers and explicit managers cannot create, list, download or restore owner backups', async t => {
   const f = await fixture(t);
-  f.sqlite.exec("UPDATE sessions SET visibility = 'workspace' WHERE id = 'source'");
   for (const actor of ['test:host', 'test:manager']) {
     const headers = { 'x-test-user': actor };
     assert.equal((await f.request('/api/sessions/source/backup', {}, headers)).status, 403);
@@ -140,7 +139,6 @@ test('workspace viewers and explicit managers cannot create, list, download or r
 
 test('restore pins one new target, uses current owner profile and copies no grants; completed replay is inert', async t => {
   const f = await fixture(t);
-  f.sqlite.exec("UPDATE sessions SET visibility = 'workspace' WHERE id = 'source'");
   assert.deepEqual((await sessionAccess(f.env, 'source', 'test:host'))?.permissions, ['read']);
   const sourceBefore = f.sqlite.prepare("SELECT * FROM sessions WHERE id='source'").get();
   let calls = 0;
@@ -176,10 +174,10 @@ test('restore pins one new target, uses current owner profile and copies no gran
   const firstBody = await first.json() as { session: { id: string; status: string; visibility: string } };
   assert.equal(firstBody.session.id, targetId);
   assert.equal(firstBody.session.status, 'ready');
-  assert.equal(firstBody.session.visibility, 'private');
-  assert.equal(f.sqlite.prepare('SELECT visibility FROM sessions WHERE id = ?').get(targetId)!.visibility, 'private');
-  assert.equal(await sessionAccess(f.env, targetId, 'test:host'), null);
-  assert.equal(await sessionAccess(f.env, targetId, 'test:manager'), null);
+  assert.equal(firstBody.session.visibility, 'workspace');
+  assert.equal(f.sqlite.prepare('SELECT visibility FROM sessions WHERE id = ?').get(targetId)!.visibility, 'workspace');
+  assert.deepEqual((await sessionAccess(f.env, targetId, 'test:host'))?.permissions, ['read'], 'every member reads the restored session');
+  assert.deepEqual((await sessionAccess(f.env, targetId, 'test:manager'))?.permissions, ['read'], 'the manage grant on the source isn\'t copied');
   assert.deepEqual(f.sqlite.prepare("SELECT * FROM sessions WHERE id='source'").get(), sourceBefore);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_grants WHERE session_id=?').get(targetId)!.n, 0);
   f.objects.clear();

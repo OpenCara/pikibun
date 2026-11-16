@@ -92,9 +92,10 @@ and does nothing; the runner raises a second permission card for the same call (
 grant (for the call, or the session), which the control plane checks against the card's own target, requester and
 admission (`sessionsNeedGranted`). The owner's own Auto-approve message raises no card, as for any permission.
 
-A session the agent starts is never more visible than its parent: a private session starts only private ones. A new
-private session is read by its owner (the actor) and the workspace's owner and admins, who read every session, so a
-private parent's outcome comes back from it without a card unless the parent has other readers.
+Every session is visible to its workspace's members (see [Sessions without visibility](security-rationale.md#sessions-without-visibility)),
+so within a workspace the readers of two sessions differ only where one of them is shared by link. A session the agent
+starts is read by every member and the actor; a `visibility` a runner from before private sessions were removed still
+sends with `create` is accepted and ignored, so such a runner keeps starting sessions.
 
 ## Provenance, chains and limits
 

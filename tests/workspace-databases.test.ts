@@ -393,7 +393,7 @@ test('backups of a workspace with its own database are saved and read back there
   assert.equal(saved.session.id, 'session');
   assert.equal(saved.session.ownerId, 'test:member');
   assert.equal(saved.session.title, 'Member session');
-  assert.equal(saved.session.visibility, 'private');
+  assert.equal(saved.session.visibility, 'workspace');
   assert.equal((saved.session.record as { id: string; title: string }).title, 'Member session');
   assert.deepEqual(saved.backup, { id: backup.id, format: 'pi-runner-backup-v1', sha256: backup.sha256, size: backup.size,
     createdAt: saved.backup.createdAt });

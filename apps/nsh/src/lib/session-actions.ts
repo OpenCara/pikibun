@@ -22,30 +22,12 @@ export interface SessionActions {
   backupsPending: Accessor<boolean>;
   conversationOnlyOff: Accessor<boolean>;
   backupBlocked: Accessor<boolean>;
-  changeVisibility: () => void;
   createBackup: (options?: { conversationOnly?: boolean }) => void;
   rename: (title: string) => Promise<boolean>;
   archive: () => void;
   unarchive: () => void;
   pack: () => void;
 }
-
-type Visibility = NonNullable<SessionRecord["visibility"]>;
-
-export async function confirmVisibilityChange(current: SessionRecord): Promise<Visibility | null> {
-  const next: Visibility = (current.visibility ?? "private") === "workspace" ? "private" : "workspace";
-  const confirmed = await confirm(next === "workspace" ? {
-    title: "Make session workspace-visible?", confirmLabel: "Make workspace-visible",
-    message: "All workspace members will be able to view existing and future prompts and output, including tool output, repository content shown in the transcript, and side asks, which may contain sensitive information. This grants viewing only, not direct GitHub access, permission to run tools, or ask/control permissions.",
-  } : {
-    title: "Make session private?", confirmLabel: "Make private",
-    message: "Workspace membership will no longer grant viewing access, except to the workspace's owner and admins, who manage every session. Existing explicit grants will remain in effect, and previously viewed or copied content cannot be recalled.",
-  });
-  return confirmed ? next : null;
-}
-
-export const visibilityNotice = (visibility: Visibility): string => (visibility === "workspace"
-  ? "Session is workspace-visible. Workspace members can view prompts and output." : "Session is private. Existing explicit grants still apply.");
 
 export const confirmArchive = (): Promise<boolean> => confirm({ title: "Archive session?", confirmLabel: "Archive",
   message: "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. You can unarchive it later." });
@@ -65,16 +47,6 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
   const conversationOnlyOff = () => backups.data()?.conversationOnlySupported === false;
   const base = () => `/api/sessions/${segment(options.session()!.id)}`;
 
-  async function changeVisibility() {
-    const current = options.session();
-    if (!current || !options.manages() || action.busy()) return;
-    const next = await confirmVisibilityChange(current);
-    if (!next) return;
-    await action.run(async () => {
-      await session().api(base(), { method: "PATCH", body: { visibility: next } });
-      options.onChange();
-    }, visibilityNotice(next));
-  }
   async function createBackup({ conversationOnly = false }: { conversationOnly?: boolean } = {}) {
     if (!options.session() || !isOwner() || options.backupBlocked() || backupsOff() || backupsPending() || action.busy() || (conversationOnly && conversationOnlyOff())) return;
     backup.set(null);
@@ -134,7 +106,7 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
   }
   return {
     action, backup, backups, backupsOff, backupsPending, conversationOnlyOff, backupBlocked: options.backupBlocked,
-    changeVisibility: () => void changeVisibility(), createBackup: value => void createBackup(value), rename,
+    createBackup: value => void createBackup(value), rename,
     archive: () => void archive(), unarchive, pack: () => void pack(),
   };
 }

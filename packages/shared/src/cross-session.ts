@@ -29,7 +29,6 @@ export interface CrossSessionSummary {
   ownerId: string;
   status: SessionRecord["status"];
   activity?: SessionActivity;
-  visibility: "private" | "workspace";
   permissions: Permission[];
   parentSessionId?: string;
   self?: true;
@@ -79,7 +78,6 @@ export interface SessionsToolRequest {
   title?: string;
   modelId?: string;
   thinkingLevel?: ThinkingLevel;
-  visibility?: "private" | "workspace";
   messageId?: string;
   limit?: number;
 }
@@ -95,14 +93,13 @@ export type SessionsToolResult =
   | { consent: "audience"; target: string; reason: string };
 
 export function sessionsToolTarget(request: { action: SessionsToolAction; targetSessionId?: string; message?: string; access?: AccessMode; notify?: boolean;
-  title?: string; modelId?: string; thinkingLevel?: string; visibility?: string; messageId?: string }): string {
+  title?: string; modelId?: string; thinkingLevel?: string; messageId?: string }): string {
   const parts: string[] = [request.action];
   if (request.targetSessionId) parts.push(`session ${request.targetSessionId}`);
   if (request.messageId) parts.push(`message ${request.messageId}`);
   if (request.title !== undefined) parts.push(`title ${JSON.stringify(request.title)}`);
   if (request.modelId) parts.push(`model ${request.modelId}`);
   if (request.thinkingLevel) parts.push(`thinking ${request.thinkingLevel}`);
-  if (request.visibility) parts.push(`visibility ${request.visibility}`);
   if (request.access) parts.push(`access ${request.access}`);
   if (request.notify) parts.push("notify");
   const head = parts.join(" · ");

@@ -65,7 +65,7 @@ async function fixture(t: TestContext) {
   const connectionToken = b64(randomBytes(32));
   sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   const { models } = await json<{ models: ModelDefinition[] }>(await alice.request('GET', `/api/workspaces/${workspace.id}/models`));
-  const { session } = await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: models[0]!.id, title: 'Preview', visibility: 'private' }), 201);
+  const { session } = await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: models[0]!.id, title: 'Preview' }), 201);
   await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: bob.user.id, role: 'collaborator' }));
   await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: dave.user.id, role: 'viewer' }));
   const host = { Authorization: `Bearer ${credentials.token}`, 'X-Connection-Token': connectionToken };
@@ -82,7 +82,7 @@ test('a host reports its sessions\' tunnels: the audit log records each start an
   await json(await f.report({ sessionId: f.session.id, event: 'started', url: 'https://quiet-river.trycloudflare.com', actorId: f.bob.user.id, expiresAt }));
   assert.deepEqual((await f.listed(f.alice))?.tunnel, { url: 'https://quiet-river.trycloudflare.com', expiresAt });
   assert.deepEqual((await f.listed(f.bob))?.tunnel?.url, 'https://quiet-river.trycloudflare.com', 'everyone the session is shared with sees it online');
-  assert.equal(await f.listed(f.carol), undefined);
+  assert.deepEqual((await f.listed(f.carol))?.tunnel?.url, 'https://quiet-river.trycloudflare.com', 'and every member of the workspace');
   const single = await json<{ session: SessionRecord }>(await f.alice.request('GET', `/api/sessions/${f.session.id}`));
   assert.equal(single.session.tunnel?.url, 'https://quiet-river.trycloudflare.com');
   await json(await f.report({ sessionId: f.session.id, event: 'stopped', url: 'https://quiet-river.trycloudflare.com', reason: 'lifetime' }));
@@ -119,7 +119,7 @@ test('the session panel\'s Stop asks the session\'s host to take its server offl
   const expiresAt = new Date(Date.now() + 3600_000).toISOString();
   await json(await f.report({ sessionId: f.session.id, event: 'started', url: 'https://quiet-river.trycloudflare.com', actorId: f.alice.user.id, expiresAt }));
   assert.equal((await f.dave.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})).status, 403);
-  assert.equal((await f.carol.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})).status, 404);
+  assert.equal((await f.carol.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})).status, 403);
   assert.deepEqual(f.relayed, []);
   assert.deepEqual(await json(await f.bob.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})), { stopped: true });
   assert.deepEqual(f.relayed, [{ action: 'tunnel', body: { action: 'stop' }, actorId: f.bob.user.id }]);

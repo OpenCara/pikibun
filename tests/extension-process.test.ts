@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ipcLaunch, pipeLaunch, ProcessChannel, replyOf, workerCommand, workerEnvironment, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
@@ -342,4 +342,21 @@ test("the connector takes an extension process's answer only in the protocol's s
   assert.deepEqual(replyOf({ id: 2, value: { any: "thing" }, handlers: ["input"], tools: [{ name: "a", description: "b", parameters: {} }], toolsSignature: "s", other: 1 }),
     { id: 2, value: { any: "thing" }, handlers: ["input"], tools: [{ name: "a", description: "b", parameters: {} }], toolsSignature: "s" });
   assert.deepEqual(replyOf({ id: 3, error: "it broke" }), { id: 3, error: "it broke" });
+});
+
+test("an extension process keeps no transpile cache that a session's commands could plant code in (#380, finding 45)", async t => {
+  const root = await directory(t);
+  const temporary = join(root, "tmp");
+  await mkdir(temporary);
+  const file = join(root, "typed.ts");
+  await writeFile(file, `const greeting: string = "hi";
+    export default function (pi) { pi.on("session_start", () => { void greeting; }); }`);
+  const channel = new ProcessChannel({ directory: root, warn: () => {}, log: () => {},
+    command: directory => { const command = workerCommand(directory); return { ...command, env: { ...command.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary } }; } });
+  t.after(() => channel.close());
+  const opened = await channel.call("open", { source: "local:typed", files: [file], models: [] });
+  assert.deepEqual(opened.value.errors, []);
+  await channel.close();
+  const left = await readdir(temporary, { recursive: true });
+  assert.deepEqual(left.filter(name => /jiti/.test(name)), [], `no jiti cache in the process's TMPDIR: ${left.join(", ")}`);
 });
