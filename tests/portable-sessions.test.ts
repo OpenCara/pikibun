@@ -127,6 +127,30 @@ test('one attach at a time holds a session, across processes; a lock its holder 
   assert.equal(await new IdentityStore(root).withLock('session-1', async () => 'taken'), 'taken');
 });
 
+test('pikibun identity shows the key and its sessions, and exports, imports and rotates it', async t => {
+  const root = await temporary(t, 'identity-cli-');
+  const { identityMain } = await import('../apps/runner/src/identity-cli.js');
+  const run = async (...args: string[]) => {
+    let output = '';
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => { output += chunk; return true; }) as typeof process.stdout.write;
+    try { await identityMain(args); } finally { process.stdout.write = write; }
+    return output;
+  };
+  process.env.PIKIBUN_IDENTITY_PASSPHRASE = 'correct horse battery staple';
+  t.after(() => { delete process.env.PIKIBUN_IDENTITY_PASSPHRASE; });
+  const shown = await run('show', '--identity-dir', join(root, 'one'));
+  const key = /^Identity ([A-Za-z0-9_-]{43})$/m.exec(shown)?.[1];
+  assert.ok(key, shown);
+  assert.match(shown, /No portable sessions on this computer yet/);
+  await run('export', '--identity-dir', join(root, 'one'), '--out', join(root, 'exported'));
+  assert.match(await run('import', join(root, 'exported'), '--identity-dir', join(root, 'two')), new RegExp(`now uses identity ${key}`));
+  assert.match(await run('rotate', '--identity-dir', join(root, 'two')), new RegExp(`Rotated ${key} to`));
+  await assert.rejects(run('import', join(root, 'exported'), '--identity-dir', join(root, 'two')), /already has an identity/);
+  await assert.rejects(run('export', '--identity-dir', join(root, 'one'), '--out', join(root, 'exported')), /EEXIST/, 'an export never overwrites a file');
+  await assert.rejects(run('nonsense', '--identity-dir', join(root, 'one')), /Unknown identity command/);
+});
+
 function runnerBinding(id: string, connector: string, owner: string, portable = true): RunnerBinding {
   const route = { connectorId: connector, connectorOwnerId: owner };
   const workspaceId = `private-${connector}`;

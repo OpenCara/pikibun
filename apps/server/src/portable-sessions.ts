@@ -4,7 +4,7 @@ import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
 import {
   canonicalJson, parseSettings, verifiedSigned, type PortableSettings, type Signed, type StatementOf,
 } from '../../../packages/shared/src/identity.js';
-import type { SessionRecord, SessionSchedule } from '../../../packages/shared/src/types.js';
+import type { PortableSessionOffer, SessionRecord, SessionSchedule } from '../../../packages/shared/src/types.js';
 import { auditStatement, authenticateConnector, isPersonalWorkspace, type ConnectorRow } from './authority/index.js';
 import { chatAgentVersion, requireModel } from './catalog.js';
 import { sessionRecord } from './db.js';
@@ -31,10 +31,6 @@ interface SettingsRow {
   applied_version: number; pending_version: number | null; pending_json: string | null; updated_at: string;
 }
 
-export interface PortableOffer {
-  id: string; title: string; createdAt: string; connectorId: string; hostName: string; hostEnvironment: boolean; working: boolean;
-  attachedElsewhere: boolean; model: { provider: string; modelId: string }; modelId?: string; existing?: boolean;
-}
 
 function plainText(value: unknown, max: number): string | null {
   return typeof value === 'string' && value.trim() && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : null;
@@ -232,7 +228,7 @@ export function registerPortableConnectorRoutes(app: Hono<AppEnv>): void {
   app.post('/api/connectors/self/portable/detached', detached);
 }
 
-export async function portableOffers(env: Env, userId: string): Promise<PortableOffer[]> {
+export async function portableOffers(env: Env, userId: string): Promise<PortableSessionOffer[]> {
   const workspaceId = await personalWorkspaceOf(env, userId);
   const rows = await env.DB.query<OfferRow & { host_name: string; local_model_id: string | null; existing: number }>(`SELECT o.*, c.name AS host_name,
       (SELECT m.id FROM models m WHERE m.workspace_id = ? AND m.connector_id = o.connector_id AND m.provider = o.provider AND m.model_id = o.model_id

@@ -28,6 +28,31 @@ A session's files stay on its host when it is archived: clones, dependencies suc
 - A pack is written in full before the session's files go, and unpacked files are written in full before the pack goes, so a host that stops halfway keeps one or the other. If the server doesn't hear back from the host, the session still shows as packed, and unarchiving unpacks whatever the host packed.
 - Packing needs a current connector on the session's host (`sessionPacking` capability). Packing and unpacking are audited as `session.packed` (with `automatic: true` when the server asked) and `session.unpacked`; turning automatic packing on or off as `workspace.packing.updated`.
 
+## Moving a session to another server
+
+Sessions in your [private workspace](workspaces.md#your-private-workspace) are **portable**: they belong to your
+identity, a key your computer keeps for all its connections, not to the server you started them on. Pair the computer
+with another server (a Pikibun on your own computer, a team's, `pikibun.com`, or the same one again with `--force`),
+and your private sessions there can be brought along. Their conversation and files never leave your computer.
+
+- **Which sessions:** private-workspace sessions on a host you paired yourself that run on the host, or in the sandbox
+  with no workspace sources, made from now on. For earlier ones, choose **Make private sessions portable** on the host's
+  page (**Settings → Hosts →** the host); sessions working at the time are left as they are.
+- **Bring here:** each portable session the computer has that isn't on this server is listed in your private workspace,
+  with **Bring here**. Its record here takes its title and its scheduled prompts with it, and the server it came from
+  shows it as **Moved to another server**, read-only. Bring it back the same way.
+- **When:** a session moves only while it isn't working. One that another connection of the computer has open is let go
+  of within a few seconds, unless it is working. Activity, push history, share links, backups and session roles stay on
+  the server they belong to, and Git accounts are each server's own: connect them on the new one.
+- **Your workspace's settings come along:** the private workspace's name, transcript paging and tool output default,
+  signed by your identity so no server can change them for the others.
+- **Your identity** is in `~/.local/share/pikibun/identity` (`--identity-dir`). `pikibun identity show` lists it and
+  its portable sessions; `export` and `import` carry it to another computer with a passphrase, for a backup or to use
+  the same identity there; `rotate` replaces the key, signed over by the old one; `reset` makes a new one when the old
+  one leaked or was lost. Anyone who can read that folder can act as your identity: keep it as private as your SSH keys.
+
+How it works, and what it trusts, is in the [design note](design/portable-sessions.md).
+
 ## Moving a session to another host
 
 While both hosts are connected, a session's owner can move it to a model on another host in its workspace (session panel → **Move to another host**, or `POST /api/sessions/:id/migrate` with `requestId` and `modelId`). The source host's live snapshot, the same one a backup takes, goes straight to the new host, so no `STORAGE_URL` is needed:

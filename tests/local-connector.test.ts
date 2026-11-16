@@ -18,6 +18,7 @@ import { verifyRunnerTicket } from '../apps/runner/src/protocol.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { ExtensionStore } from '../apps/runner/src/extensions/store.js';
 import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
+import { verifiedSigned } from '../packages/shared/src/identity.js';
 
 const hostMigration = process.platform === 'linux' ? { hostMigration: true } : {};
 
@@ -376,6 +377,9 @@ type FixtureOptions = {
   version?: string;
   localView?: ConnectorRuntime['view'];
   localEntries?: ConnectorRuntime['entries'];
+  identityDir?: string;
+  portable?: ConnectorRuntime['portable'];
+  identity?: (path: string, body: unknown) => Response | Promise<Response>;
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -394,7 +398,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
   const connector = createConnector({
     dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
-    ...(options.version ? { version: options.version } : {}),
+    ...(options.version ? { version: options.version } : {}), ...(options.identityDir ? { identityDir: options.identityDir } : {}),
     browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
     tunnel: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.tunnel },
     acquireLease: path => {
@@ -421,6 +425,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
         resume: () => { record.resumes++; return Promise.resolve(); },
         ...(options.localView ? { view: options.localView } : {}),
         ...(options.localEntries ? { entries: options.localEntries } : {}),
+        ...(options.portable ? { portable: options.portable } : {}),
       };
       return Promise.resolve(runtime);
     },
@@ -432,6 +437,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
         return options.hostConfig?.() ?? Response.json({ config: { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off' } });
       }
       if (request.url === `${origin}/api/connectors/self/extensions`) return options.extensionsSync?.(JSON.parse(call.body)) ?? Response.json({ requests: [] });
+      if (request.url.startsWith(`${origin}/api/connectors/self/identity`) && options.identity) return options.identity(new URL(request.url).pathname, JSON.parse(call.body));
       workerCalls.push(call);
       if (request.url === `${origin}/api/connectors/self/manifest`) {
         return options.manifest?.(manifests++) ?? Response.json({ ok: true });
@@ -1466,4 +1472,32 @@ test('a connected host with --managed-extensions runs the package Pikibun pins i
   assert.deepEqual((await syncs.next()).report.installed.map(item => [item.source, item.version]), [['piki:pr-flow', undefined]], 'the bundled copy until Pikibun answers');
   assert.deepEqual((await syncs.next()).report.installed.map(item => [item.source, item.version]), [['piki:pr-flow', '0.2.0']], 'reported again at once');
   assert.equal(fixture.runtimes[0]!.config.extensions!.installed()[0]!.managed?.version, '0.2.0', 'sessions opened from now on run it');
+});
+
+test('a host with an identity says it keeps portable sessions, sends its delegation and sessions, and signs the settings its server asks for', { timeout: 10000 }, async t => {
+  const identityDir = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-identity-'));
+  t.after(() => rm(identityDir, { recursive: true, force: true }));
+  const reports = mailbox<Record<string, unknown>>();
+  const signed = mailbox<Record<string, unknown>>();
+  let answered = 0;
+  const fixture = await connectorFixture(t, { identityDir, portable: async () => [],
+    identity: (path, body) => {
+      if (path === '/api/connectors/self/identity/settings') { signed.push(body as Record<string, unknown>); return Response.json({ ok: true }); }
+      reports.push(body as Record<string, unknown>);
+      return Response.json(answered++ ? {} : { sign: { version: 3, settings: { name: 'Mine', paging: true } } });
+    } });
+  await startFixture(fixture);
+  const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
+  assert.equal(JSON.parse(manifest.body).capabilities.portableSessions, true);
+  assert.equal(fixture.runtimes[0]!.config.portable?.store.root, identityDir, 'sessions keep their marks in the identity');
+  const report = await reports.next();
+  const delegation = await verifiedSigned(report.delegation, 'delegation');
+  assert.equal(delegation.statement.server, origin);
+  assert.equal(delegation.statement.connector, credentials.connectorId);
+  assert.deepEqual(report.sessions, []);
+  assert.deepEqual(report.rotations, []);
+  assert.equal(report.settings, null);
+  const settings = await verifiedSigned((await signed.next()).settings, 'settings');
+  assert.equal(settings.statement.key, delegation.statement.key);
+  assert.deepEqual([settings.statement.version, settings.statement.settings], [3, { name: 'Mine', paging: true }]);
 });

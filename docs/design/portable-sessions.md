@@ -1,6 +1,7 @@
 # Design: portable sessions
 
-Status: in progress.
+Status: implemented. Signing each request on the owner's devices, so that the server a session is attached to is out
+of its trust entirely, is not: see [Trust](#trust).
 
 ## Why
 
@@ -8,118 +9,134 @@ A session in someone's [private workspace](../workspaces.md#your-private-workspa
 its conversation and files are already on that host. What the server adds is the relay, sign-in, GitHub, notifications
 and schedules, and one decision: who may use the session. In a private workspace that decision is always "its owner".
 
-Until now the server also owned the session's record, so pairing the host with another server (from a Pikibun on your
-own computer to a team's, or back) left every private session behind: the host refused them (their binding names the
-old pairing), and the new server had never heard of them.
+Before this, the server also owned the session's record, so pairing the host with another server (from a Pikibun on
+your own computer to a team's, or back, or the same server again with `--force`) left every private session behind:
+the host refused them, as their binding named the old pairing, and the new server had never heard of them.
 
 A **portable session** belongs to its owner's **identity**, a key kept on their hosts, rather than to a server. The
 server it is attached to keeps a record for the relay and its features, but the host holds what makes the session
-whole, and can attach it to another server the same identity is paired with.
+whole and can attach it to another server the same identity's pairing is connected to.
 
 ## The identity
 
-- Each OS user's hosts share one Ed25519 key pair, made the first time a connector, the desktop app's host or
-  `pikibun serve` starts: `~/.local/share/pikibun/identity/key.json` (`--identity-dir` chooses another), private to the
-  user (`0600` in a `0700` directory). Every pairing of that user on that machine uses it, whichever server it is for.
-- The identity's ID is the public key, base64url. It is never sent anywhere private: servers see the public key and
-  the statements it signs.
-- Another machine joins the same identity with `pikibun identity export` and `pikibun identity import`, which carry the
-  key in a file encrypted with a passphrase (scrypt and AES-256-GCM). Nothing syncs sessions between machines: each
-  host keeps its own.
+- Each OS user's connections on a computer share one Ed25519 key pair, made the first time `pikibun connect`, the
+  desktop app's host or `pikibun serve`'s host starts: `~/.local/share/pikibun/identity/key.json`
+  (`apps/runner/src/identity.ts`; `--identity-dir` or `PIKIBUN_IDENTITY_DIR` choose another), `0600` in a `0700`
+  directory. Two connections starting at once make it once: the file is linked into place, never overwritten.
+- Its ID is the public key, base64url. Only the public key and the statements it signs leave the computer.
+- `pikibun identity export` writes the key encrypted with a passphrase (scrypt, N = 2¹⁵, and AES-256-GCM), and
+  `pikibun identity import` takes it on another computer. Nothing syncs sessions between computers: each host keeps
+  its own, and **Move to another host** still moves one.
 
 ## Statements
 
-Every statement is canonical JSON (keys sorted, no whitespace) signed with Ed25519, in
-`packages/shared/src/identity.ts`:
+Every statement is canonical JSON (keys sorted, no whitespace) after the line `pikibun identity v1`, signed with
+Ed25519 through WebCrypto (`packages/shared/src/identity.ts`, used by the connector and the server alike). Parsing is
+strict: an unknown field, a non-origin server or an unknown kind is refused before a signature is checked.
 
 | Kind | Says | Signed by |
 |---|---|---|
 | `delegation` | the account that paired connector `C` on server `S` acts for key `K` | `K` |
-| `session` | session `X` belongs to key `K` | `K` |
+| `session` | session `X` belongs to key `K` (its mark) | `K` |
 | `rotation` | key `K1` is replaced by `K2` | `K1` |
-| `settings` | version `n` of the private workspace's settings is this | `K` |
+| `settings` | version `n` of the private workspace's settings | `K` |
 
-### Delegation is signed at pairing
+### A delegation is signed at pairing
 
-Pairing already needs the machine's own user: they type a code that the account made. So the host signs the
-delegation for that pairing itself, the first time it connects, and sends it to the server
-(`POST /api/connectors/self/identity`). The server checks the signature, and records that the connector's owner acts
-for `K` on this server. Nobody signs anything in a browser or on a phone: the apps hold no key.
+Pairing already needs the machine's own user, who types a code the account made. So the host signs the delegation for
+its pairing itself, and sends it, with its sessions, each time it connects and every minute after
+(`POST /api/connectors/self/identity`). The server checks the signature, that `S` is its own origin and `C` the
+connector calling, and records it (`identity_delegations`). Nobody signs anything in a browser or on a phone: the apps
+hold no key.
 
 ## What makes a session portable
 
-A session is portable when, at creation, all of these hold:
+At creation (`portableKeyFor` in `apps/server/src/portable-sessions.ts`), a session is portable when it is in its
+owner's private workspace, on a host they paired themselves that says it keeps portable sessions (`portableSessions`
+capability) and has sent a delegation, and it runs on the host or in the sandbox with no workspace sources (its clones
+are made on demand with the owner's own access, on whichever server it is attached to). The server records the key
+(`sessions.portable_key`) and the binding says so (`session.portable`). The host, provisioning it, signs its mark and
+records it in the identity's index (`<identity>/sessions/<id>.json`: its folder and the mark).
 
-- it is in the owner's private workspace, on a host the owner paired themselves;
-- the host has said it supports portable sessions (`portableSessions` capability) and has sent a delegation;
-- it runs [directly on the host](../hosts.md#sessions-on-the-host), or in the sandbox with no workspace sources (its
-  clones are made on demand with the owner's own access, wherever the session is attached).
-
-The server marks the row (`sessions.portable_key`) and the binding (`session.portable`). The host, provisioning it,
-signs a `session` statement and records the session in the identity's index
-(`<identity>/sessions/<id>.json`: its folder, its key and the signed mark). The session's folder stays where the
-connector made it: moving it would break absolute paths in its files (virtual environments, `node_modules/.bin`).
+The folder stays where its connection made it. Moving it would break absolute paths in its files (virtual
+environments, `node_modules/.bin`), and the index lets every connection of the identity find it.
 
 ## Attaching a session to another server
 
-1. Pair the host with the new server, as usual. Its connector signs a delegation there.
-2. It reports the portable sessions in its identity's index (`POST /api/connectors/self/portable`): ID, title, when
-   each was made, and the signed mark. The server checks each mark against a key the reporting connector's owner has
-   a delegation for, and lists the ones attached elsewhere under **Other servers' sessions** in the private workspace.
-3. **Bring here** (`POST /api/portable-sessions/:id/attach` with a model of that host) creates the session's record on
-   this server, under the same ID, and asks the host to `attach` it with the new binding.
-4. The host attaches it only if: the session's mark is by the key the binding's owner has a delegation for on this
-   pairing; the session isn't working (no `working` marker); and no other connector on this machine has it open for
-   work. It rewrites `binding.json` (the only file that names the server) under the identity's lock, then opens it.
-5. The connector that had it before notices the next time it opens it (every open checks that `binding.json` still
-   names its own pairing) and tells its server (`POST /api/connectors/self/portable/detached`), which archives its
-   record as **Moved to another server** (`session.detached`). Bringing it back is the same step in the other
-   direction: an existing record with the same ID is reopened instead of a new one made.
+1. The host, paired with the new server, reports the portable sessions of its identity: ID, title, when each was made,
+   where it runs, its model, whether it is attached to this pairing or working, and its signed mark. The server keeps
+   the ones whose mark is by the delegated key (`portable_offers`) and lists those not attached here under the private
+   workspace, with **Bring here** (`GET /api/portable-sessions`).
+2. **Bring here** (`POST /api/portable-sessions/:id/attach`, with the host and optionally a model of it) makes the
+   session's record, private, under the same ID, and asks the host to `attach` it with the new binding.
+3. The host attaches it only for its owner, and only a session marked by its identity's current key. Under a lock in
+   the identity (one attach of a session at a time on the computer), it refuses a session that is working or packed;
+   asks the connection that has it open to let go (below); takes the session's open lease; replaces the pinned Git
+   identity (`sandbox/owner.gitconfig`, which pins the owner's name and email) and rewrites the binding kept in the
+   session's own database, as a restore does: interrupted cards stay history, used tickets and grants are dropped; and
+   only then replaces `binding.json`. Any failure before that puts the Git identity back and leaves the binding as it
+   was.
+4. The connection that had it notices: each open of a portable session checks that `binding.json` still names its own
+   pairing and ID, and so does a sweep every half second of the ones it has open, and of the ones it let go of for a
+   minute after. It tells its server (`POST /api/connectors/self/portable/detached`), which archives its record as
+   **Moved to another server** (`session.detached`). Such a record can't be unarchived: it is brought back as in 2.
 
-Session IDs are UUIDs, so one session keeps one ID on every server.
+Session IDs are UUIDs, so a session keeps its ID on every server. Bringing it back to a server that has its record
+reopens that record, when the session comes back through the same pairing. A record there under another pairing (the
+host was paired again with `--force`) can't change its host, which is immutable, so the session is attached under a
+new ID (`sourceSessionId` in the request): the host signs a mark for the new ID, forgets the old one, and the old record
+is archived as moved.
+
+### Open leases between connections
+
+A host's connections are separate processes, one per server, each with its own runtime, and two of them must never
+work in one session's database. A connection holds a lease file in each portable session it has open
+(`open.lock`: its process ID and a token of the runtime; `apps/runner/src/portable-lease.ts`), and another connection
+refuses to open it while that process lives. To attach a session another connection has open, the attaching one asks
+it to let go (`release` in the session's folder) and waits up to ten seconds: the other connection closes it at its
+next sweep unless it is working.
 
 ### What moves with it, and what doesn't
 
-- **Moves:** the conversation, the files, the title, and its [scheduled prompts](../sessions.md): the server that has
-  it keeps a copy of its schedules on the host (`schedules.json`, sent with each change), and the next server creates
-  them again when it attaches the session.
+- **Moves:** the conversation, the files, the title, and its [scheduled prompts](../sessions.md): the server it is
+  attached to keeps a copy of its title and schedules on the host (`portable.json`, through the `portable` action, sent
+  with each change), and the next server creates them again when it attaches the session and has none for it.
 - **Stays on the old server:** activity, push history, share links, backups and session roles. GitHub and other Git
-  accounts are each server's own: connect them on the new one.
+  accounts are each server's own; connect them on the new one.
 
 ## Converting existing sessions
 
-**Make private sessions portable** on a host's page (`POST /api/hosts/:id/portable`) converts the owner's existing
-private sessions on that host that qualify (above): the server marks each, and the host signs and indexes them
-(`attach` with the session's current binding). Sessions working at the time are skipped and can be converted later.
+**Make private sessions portable** on a host's page (`POST /api/connectors/:id/portable`) converts its owner's private
+sessions on that host that qualify and are idle: the server records the key and asks the host to `attach` each with its
+current binding, which marks and indexes it. Those the host refuses, working ones say, keep their record as it was.
 
-## Losing or replacing the key
+## Replacing the key
 
-- `pikibun identity rotate` makes a new key, signs a `rotation` with the old one, re-signs every mark and delegation
-  in the index with the new one, and sends the rotation to each server with the delegation. Servers accept a rotation
-  only signed by a key their user has a delegation for.
-- `pikibun identity reset` is for a lost or leaked key: it makes a new key without the old one's signature and
-  re-signs this host's own sessions. It is safe because only someone who can already read the host's state can run
-  it. Its delegations are signed again at the next connection, and the old key's delegations on each server are
-  replaced by the connector's new one.
-- `pikibun identity export` writes an encrypted copy, for backup or for another machine.
+- `pikibun identity rotate` makes a new key, signs a `rotation` with the old one, and signs every mark and the settings
+  again with the new one; delegations are signed again at the next connection. Each server follows the rotation it is
+  sent, for its user's records.
+- `pikibun identity reset` is for a lost or leaked key: a new key without the old one's signature, the marks and
+  settings signed again. It is safe because only someone who can read the identity's directory can run it. Each server
+  takes the new delegation from its own connector, which it authenticates, and the marks it reports with it.
 
 ## Private workspace settings
 
-The settings of the private workspace that mean something on every server (its name, the extensions its sessions
-run, the transcript and tool output defaults) are kept in a `settings` statement signed by the identity. When the
-owner changes them, the server sends them to the owner's connected hosts (`settings` in the host's config answer),
-which sign the new version and keep it beside the key. A host paired with a new server sends its latest version with
-its delegation, and the server applies it when its version is newer than the one it applied. A server can't forge
-one, since only the host's key signs them.
+The private workspace's settings that mean something on every server, its name, transcript paging and tool output
+default, travel as a `settings` statement. When its owner changes them, the server asks the next identity report to
+sign the new version (`sign` in its answer); the host keeps the latest beside its key and sends it with every report.
+A server applies a signed version newer than any it applied, so a new server takes the name and defaults the owner set
+elsewhere, and none can forge them: the version, the settings and the key are all signed.
 
 ## Trust
 
-- The server a session is attached to still signs its users in, so it can act as the owner's account there, as for
-  any session. It can't attach a portable session to another account: the host attaches only to the account its own
-  pairing delegates to, and only sessions whose mark is by that key.
-- A server can't take a session away from the host: detaching is the host's decision, made when another of its
-  pairings attaches it.
-- Server administrators see that a portable session's record exists, as for any private session; deleting a user on
-  a server removes its records and delegation, and the sessions stay on the hosts.
-- Taking the server out of trust entirely needs each request signed by the owner's device, checked by the host: see
-  [#113](https://github.com/OpenCara/pikibun/issues/113), which this key is meant to serve.
+- The server a session is attached to still signs its users in, so it can act as the owner's account there, as for any
+  session. It can't attach a portable session to another account, or one of another identity: the host attaches only
+  for its pairing's owner and only sessions marked by its key.
+- A server can't take a session away from the host or keep it: detaching is the host's decision, made when another of
+  its connections attaches it, and the server it left only learns of it.
+- Server administrators see that a portable session's record exists, as for any private session. Deleting a user on a
+  server removes the records and delegation there; the sessions stay on the hosts.
+- Not done: taking the server out of trust entirely needs each request signed by the owner's device and checked by
+  the host. It needs keys on the owner's devices, enrolled from the identity, and requests the relay can't forge, and
+  it belongs with [#113](https://github.com/OpenCara/pikibun/issues/113)'s direct connections, which the same key can
+  serve.

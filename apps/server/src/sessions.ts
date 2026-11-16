@@ -518,6 +518,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     const access = await requireSessionManager(c, identifier(c.req.param('id')), 'read', 'Only the session owner, or the workspace\'s owner or an admin, can unarchive it.');
     const actorId = c.get('auth').userId;
     if (access.row.status !== 'archived') fail(409, 'session_not_archived', 'Session is not archived.');
+    if (access.row.detached_at) fail(409, 'session_detached', 'This session moved to another server its host is paired with. Bring it back here from Other servers\' sessions in your private workspace.');
     const row = await unpackSession(c, access);
     const restored = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = COALESCE(archived_status, 'ready'), archived_status = NULL, one_shot = 0,
         pack_due_at = NULL, policy_version = policy_version + 1

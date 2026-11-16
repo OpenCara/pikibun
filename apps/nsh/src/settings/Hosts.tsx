@@ -252,6 +252,7 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
         <If when={share.error() || share.notice()}><CardBody><Feedback error={share.error()} notice={share.notice()} /></CardBody></If>
       </Section>
       <HostConfigSection connector={connector()} refresh={props.refresh} />
+      <If when={owner() && connector().capabilities.portableSessions && !connector().revokedAt}><PortableSessionsSection connector={connector()} /></If>
       <If when={connector().config}><HostCompactionSection connector={connector()} refresh={props.refresh} /></If>
       <If when={connector().role}><HostExtensionsSection connector={connector()} refresh={props.refresh} go={props.go} /></If>
       <If when={connector().capabilities.hostCommands}><HostCommandGrantsSection connector={connector()} refresh={props.refresh} /></If>
@@ -282,6 +283,29 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
         <Button variant="outline" label="Refresh status" onPress={props.refresh} />
       </FormSheet>
     </>
+  );
+}
+
+const portableInfo = "Your identity is a key kept on this computer, shared by every connection of yours on it. A private session that belongs to it isn't tied to this server: pair this computer with another server and bring the session there from your private workspace, then back again. Sessions that run on the host, and sandboxed ones with no workspace sources, can be portable. New ones are from the start.";
+
+function PortableSessionsSection(props: { connector: ConnectorInfo }) {
+  const action = createAction();
+  const outcome = signal("");
+  async function convert() {
+    if (!await confirm({ title: "Make private sessions portable?", confirmLabel: "Make portable",
+      message: `Your private sessions on ${props.connector.name} will belong to your identity on it, so you can bring them to another server it is paired with. They keep running here as before; sessions working right now are left as they are.` })) return;
+    outcome.set("");
+    await action.run(async () => {
+      const result = await session().api<{ converted: string[]; skipped: { id: string; reason: string }[] }>(`/api/connectors/${segment(props.connector.id)}/portable`, { method: "POST", body: {} });
+      outcome.set(`${count(result.converted.length, "session is", "sessions are")} portable now.${result.skipped.length ? ` ${count(result.skipped.length, "was", "were")} skipped: ${result.skipped[0]!.reason}` : ""}`);
+    });
+  }
+  return (
+    <Section title="Portable sessions" testID="host-portable" info={portableInfo}>
+      <Row title="Make private sessions portable" hint="Sessions in your private workspace on this host that aren't portable yet"
+        trailing={<Button small variant="outline" label={action.busy() ? "Working…" : "Make portable"} disabled={action.busy()} testID="host-portable-convert" onPress={() => void convert()} />} />
+      <If when={action.error() || outcome()}><CardBody><Feedback error={action.error()} notice={outcome()} /></CardBody></If>
+    </Section>
   );
 }
 
