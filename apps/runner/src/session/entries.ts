@@ -68,7 +68,7 @@ export function refusedView(run: Run, branch: number): SessionView["entries"][nu
 }
 
 export function commandView(run: Run, branch: number): SessionView["entries"][number] {
-  return { id: `${branch}:command:${run.key}`, kind: "workspace.run-command", role: "system", text: `/${run.command!.name}: ${run.command!.notice}`, actorId: run.initiatedBy,
+  return { id: `${branch}:command:${run.key}`, kind: "workspace.run-command", role: "system", text: `/${run.command!.name}: ${run.commandOutcome ?? run.command!.notice}`, actorId: run.initiatedBy,
     conversationId: String(branch) };
 }
 

@@ -10,7 +10,8 @@ import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@e
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { RunnerService } from "../apps/runner/src/server.js";
-import { COMMAND_FILES, commandFiles, COMPACTION_STARTED, parseCommand, piExpansion, SessionCommands, type SessionCommandsOptions } from "../apps/runner/src/session/commands.js";
+import { COMMAND_FILES, commandFiles, COMPACTED, COMPACTION_STARTED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, SessionCommands,
+  type SessionCommandsOptions } from "../apps/runner/src/session/commands.js";
 import type { Run } from "../apps/runner/src/session/state.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { parseWorkspaceExtensions } from "../packages/shared/src/host-extensions.js";
@@ -146,11 +147,12 @@ test("a session runs /compact, extension commands, templates and skills from its
   const [dev] = await loadInstalled(store, []);
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:greeter@1.0.0", dev: false } }];
   let answer = { extensions: parseWorkspaceExtensions([{ source: "npm:greeter@1.0.0" }]), automaticTools: false };
-  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow: 1_000_000 }] });
   const respond: FauxResponseFactory = async request => {
     faux.appendResponses([respond]);
     const last = request.messages.findLast(message => message.role === "user");
-    return fauxAssistantMessage(`saw: ${typeof last?.content === "string" ? last.content : (last?.content ?? []).map(part => part.type === "text" ? part.text : "").join("")}`);
+    const said = typeof last?.content === "string" ? last.content : (last?.content ?? []).map(part => part.type === "text" ? part.text : "").join("");
+    return fauxAssistantMessage(`saw: ${said.slice(0, 200)}`);
   };
   faux.setResponses([respond]);
   const models = createModels(); models.setProvider(faux.provider);
@@ -190,6 +192,14 @@ test("a session runs /compact, extension commands, templates and skills from its
   };
   const texts = (view: Awaited<ReturnType<typeof session.view>>, kind: string) => view.entries.filter(entry => entry.kind === kind).map(entry => entry.text);
   const users = (view: Awaited<ReturnType<typeof session.view>>) => view.entries.filter(entry => entry.role === "user").map(entry => entry.text);
+  const compacted = async () => {
+    for (let count = 0; count < 500; count++) {
+      const text = texts(await session.view(), "workspace.run-command").findLast(item => item.startsWith("/compact: "));
+      if (text && text !== `/compact: ${COMPACTION_STARTED}`) return text;
+      await delay(20);
+    }
+    return assert.fail("the compaction's outcome never showed");
+  };
 
   let view = await send("hello");
   assert.deepEqual(users(view), ["hello"]);
@@ -203,11 +213,13 @@ test("a session runs /compact, extension commands, templates and skills from its
   ]);
 
   view = await send("/compact keep the plan");
-  assert.deepEqual(texts(view, "workspace.run-command"), [`/compact: ${COMPACTION_STARTED}`]);
+  assert.ok([`/compact: ${COMPACTION_STARTED}`, `/compact: ${NOTHING_TO_COMPACT}`].includes(texts(view, "workspace.run-command")[0]!), texts(view, "workspace.run-command").join("\n"));
+  assert.equal(texts(view, "workspace.run-command").length, 1);
   assert.deepEqual(users(view), ["hello"], "the command isn't a message to the model");
   assert.equal(view.queue?.at(-1)?.status, "command");
   assert.equal(view.activity, "done", "the session's status is the last message's, not the command's");
   assert.equal(view.entries.find(entry => entry.kind === "workspace.run-command")?.actorId, "test:alice");
+  assert.equal(await compacted(), `/compact: ${NOTHING_TO_COMPACT}`, "the line ends with how the compaction went");
 
   view = await send("/greet Ada");
   assert.match(texts(view, "workspace.run-refused").at(-1)!, /^\/greet is a command of an extension \(npm:greeter@1\.0\.0\), which runs on the host's own machine/,
@@ -234,4 +246,12 @@ test("a session runs /compact, extension commands, templates and skills from its
   view = await send("/review notes.md", "read");
   assert.equal(users(view).at(-1), "Review notes.md for notes.md", "a template is only text, so a Read-only message takes it");
   assert.equal(texts(view, "workspace.run-command").length, 2);
+
+  for (let index = 0; index < 3; index++) await send(`${index} ${"x".repeat(99_000)}`);
+  view = await send("/compact keep the numbers");
+  assert.equal(await compacted(), `/compact: ${COMPACTED}`);
+  view = await session.view();
+  assert.ok(view.entries.some(entry => /compaction/.test(entry.kind)), `the summary is in the transcript: ${view.entries.map(entry => entry.kind).join(", ")}`);
+  assert.equal(texts(view, "workspace.run-command").length, 3);
+  assert.equal(compactionFailed("529 overloaded\nretry later"), "Compaction failed: 529 overloaded retry later. The conversation is as it was.");
 });

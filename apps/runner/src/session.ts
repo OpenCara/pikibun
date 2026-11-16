@@ -62,7 +62,7 @@ import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
 import { requeue, RunQueue, submissionRequestId } from "./session/run-queue.js";
-import { parseCommand, piExpansion, SessionCommands, type ExtensionCommand } from "./session/commands.js";
+import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, SessionCommands, type ExtensionCommand } from "./session/commands.js";
 import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
 import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
@@ -1249,13 +1249,25 @@ export class RunnerSession {
   }
 
   private async compact(run: Run, instructions: string | undefined): Promise<void> {
-    await this.exclusive(async () => {
+    const task = await this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
       await this.authorize(run.initiatedBy, "write");
       const conversation = await this.harness.conversation(run.conversationId as ConversationId, context);
       if (!conversation) throw new RunnerError(409, "That conversation is no longer the session's; reload it and send /compact again.");
-      await conversation.compact(instructions, context);
+      return conversation.compact(instructions, context);
     });
+    const generation = this.generation;
+    void (async () => {
+      const { outcome } = (await this.harness.waitForTask(task, context)).state;
+      let notice = COMPACTION_STOPPED;
+      if (outcome.status === "completed") {
+        const written = outcome.result.submissionId;
+        if (written !== undefined) await (await this.harness.submission(written, context))?.wait(context);
+        notice = written !== undefined || outcome.result.entryId !== undefined ? COMPACTED : NOTHING_TO_COMPACT;
+      } else if (outcome.status === "failed" || outcome.status === "faulted") notice = compactionFailed(outcome.error.message);
+      if (generation !== this.generation || this.closing) return;
+      await this.mutate(meta => { const saved = meta.runs[run.key]; if (saved) saved.commandOutcome = notice; });
+    })().catch(() => {});
   }
 
   private extensionView(): Promise<Pick<SessionView, "extensions">> {

@@ -3,9 +3,13 @@ import { RunnerError } from "../protocol.js";
 import type { Run } from "./state.js";
 
 export const COMPACTION_STARTED = "Compaction started. The summary shows here once Pi has written it; a conversation too short to summarize stays as it is.";
+export const COMPACTED = "Compacted: the summary of the older messages is in the conversation.";
+export const NOTHING_TO_COMPACT = "Nothing to compact: the conversation is still too short to summarize.";
+export const COMPACTION_STOPPED = "Compaction stopped before it finished. The conversation is as it was.";
+export const compactionFailed = (reason: string) => `Compaction failed: ${reason.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 300) || "the model wrote no summary"}. The conversation is as it was.`;
 export const ACTS = "changes the session, which a side ask or a Read-only message doesn't do: send it as a shared message that may act. Nothing ran.";
 export const COMMAND_FILES = "{,*/}{.pi/prompts/*.md,{.pi,.agents}/skills/{*.md,**/SKILL.md}}";
-const FILE_LIST_MS = 30_000;
+const FILE_LIST_MS = 120_000;
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export interface ParsedCommand {

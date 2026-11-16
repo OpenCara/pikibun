@@ -85,8 +85,10 @@ messages.
   session's status. A template or a skill becomes the message, so the transcript shows the text the model got.
 - **`/compact [instructions]`** asks Pi for a manual compaction (`Conversation.compact`): it summarizes the older
   messages while the agent keeps working and places the summary at the next boundary, whatever the host's automatic
-  compaction is set to. The line says compaction started, not that it finished: the summary shows when it has. It
-  needs write permission, as going back does, since it changes the conversation for everyone. The client knows
+  compaction is set to. Its line says compaction started, and the host then follows the compaction's task (and the
+  write that places the summary) and changes the line to how it ended: compacted, nothing to compact, or why it
+  failed. Started is never shown as done, and a failure isn't left looking like a start. A host that restarts
+  meanwhile leaves the line at started. It needs write permission, as going back does, since it changes the conversation for everyone. The client knows
   `/compact` by name, so on a host that doesn't list it the client says to update the connector rather than send the
   word to the model.
 - **Extension commands** (`pi.registerCommand`) run their handler in the extension's process, with Pi's command
@@ -109,7 +111,7 @@ messages.
   someone types their name.
 - **One look for the list, one read for a command.** Each file access is a sandboxed call, and a session's file
   calls run one after another, behind a command that is running. So the view never waits for the worktree: it lists
-  what the last look found (one `find`, at most every half minute, started by a view and finished in the background),
+  what the last look found (one `find`, at most every two minutes, started by a view and finished in the background),
   and shows each template's and skill's path rather than the description in its front matter, which would cost one
   read per file. A command typed for a file the list doesn't have yet looks again before it gives up, and the file is
   read when it is used, so the text sent is the file's as it is then.
