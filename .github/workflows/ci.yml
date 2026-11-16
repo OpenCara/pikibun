@@ -5,8 +5,8 @@ name: CI
 #
 # A pull request runs only what its changes need: one that changes only documentation (Markdown, docs/images, the licence)
 # runs none of it, and the container image is built only when something it is built from changes. A release or a run
-# by hand checks everything, as do main's pushes and the merge queue. `verify` is the one result to wait for, and the one a
-# branch protection rule or ruleset for main should require: it passes once every job passed or was not needed.
+# by hand checks everything, as do main's pushes and the merge queue. `verify` is the one result to wait for, and the one main's
+# ruleset requires: it passes once every job passed or was not needed.
 on:
   pull_request:
   push:
