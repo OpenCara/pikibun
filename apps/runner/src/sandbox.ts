@@ -70,6 +70,7 @@ export const SANDBOX_TMP = "/tmp";
 export const CA_BUNDLE_FILE = "ca-certificates.crt";
 export const SANDBOX_USER = "pikibun";
 const SANDBOX_ETC = "etc";
+const EXPENDABLE = ["-c", "echo 1000 >/proc/self/oom_score_adj 2>/dev/null; exec \"$@\"", "sh"] as const;
 export function sandboxEtc(home: string, uid: number, gid: number): Readonly<Record<string, string>> {
   const user = uid === 0 ? "" : `${SANDBOX_USER}:x:${uid}:${gid}:Pikibun session:${home}:/bin/bash\n`;
   const group = gid === 0 ? "" : `${SANDBOX_USER}:x:${gid}:\n`;
@@ -760,7 +761,7 @@ export class Sandbox implements IsolatedWorkspace {
       ? resourceLaunch(this.#resources!, domain, args, deadline / 1000)
       : { command: "/usr/bin/bwrap", args };
     return new Promise<string>((resolveResult, reject) => {
-      const child = spawn(launch.command, launch.args, {
+      const child = spawn("/bin/sh", [...EXPENDABLE, launch.command, ...launch.args], {
         cwd: "/",
         env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8" },
         detached: true,
