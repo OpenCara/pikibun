@@ -35,7 +35,7 @@ const setup = [
   "printf '*.log\\n' > .gitignore && git add .gitignore && mkdir 'dir with space' && printf 's\\n' > 'dir with space/f.txt' && printf 'q\\n' > 'quo\"te.txt'",
   "git update-ref refs/remotes/origin/work HEAD~1 && ln -s app ../linked",
   `head -c ${localChangesLimits.patchBytes + 10} /dev/zero | tr '\\0' 'x' > huge.txt && ln -s a.txt link`,
-  `ln -s a.txt "$(printf 'evil\\ndiff --git forged forged\\nnew file mode 100644')" && printf 'z\\n' > "$(printf 'bell\\a.txt')"`,
+  `ln -s a.txt "$(printf 'evil\\ndiff --git forged forged\\nnew file mode 100644')" && printf 'z\\n' > "$(printf 'bell\\a.txt')" && ln -s a.txt 'junk "b"'`,
   "git config diff.external 'touch ../ran-external' && git config core.fsmonitor 'touch ../ran-fsmonitor' && printf 'a.txt diff=conv\\n' > .git/info/attributes && git config diff.conv.textconv 'touch ../ran-textconv; cat'",
 ].join(" && ");
 
@@ -67,7 +67,7 @@ async function exercise(run: Run, outside?: string): Promise<void> {
     ["quo\"te.txt", "added", 1, 0, undefined, undefined],
     ["untracked.txt", "added", 1, 0, undefined, undefined],
   ]);
-  assert.deepEqual(first.omitted, { files: 2 }, "new files whose names hold control characters are left out and counted, so a name can't forge an entry (#380, finding 46)");
+  assert.deepEqual(first.omitted, { files: 3 }, "new files whose names hold control characters are left out and counted, so a name can't forge an entry (#380, finding 46)");
   assert.equal(first.files[1]!.patch, "@@ -1,2 +1,2 @@\n one\n-two\n+TWO");
   assert.equal(first.files[4]!.patch, "@@ -0,0 +1 @@\n+s");
   assert.equal(first.files[3]!.patch, undefined);

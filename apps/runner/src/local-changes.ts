@@ -17,11 +17,12 @@ export function localChangesCommand(request: LocalChangesRequest, marker: string
   const diff = commit
     ? `p=$(g rev-parse --quiet --verify ${shellQuote(`${commit}^1`)} 2>/dev/null) || p=${EMPTY_TREE}; d "$p" ${shellQuote(commit)} 2>/dev/null`
     : `b=HEAD; g rev-parse --quiet --verify HEAD >/dev/null 2>&1 || b=${EMPTY_TREE}; d "$b" 2>/dev/null; n=0; `
+      + `u() { case "$f" in *'"'*|*'\\'*) printf '${CONTROL_NAME}\\n'; return 1;; esac; }; `
       + `g ls-files --others --exclude-standard -z 2>/dev/null | while IFS= read -r -d '' f; do n=$((n+1)); [ "$n" -le ${localChangesLimits.untracked} ] || break; `
       + `case "$f" in *[[:cntrl:]]*) printf '${CONTROL_NAME}\\n'; continue;; esac; `
       + `if [ -f "$f" ] && [ ! -L "$f" ]; then if [ "$(wc -c < "$f")" -le ${localChangesLimits.patchBytes} ]; then d --no-index -- /dev/null "$f" 2>/dev/null; `
-      + `else printf 'diff --git a/%s b/%s\\nnew file mode 100644\\n${TOO_LARGE}\\n' "$f" "$f"; fi; `
-      + `elif [ ! -d "$f" ]; then printf 'diff --git a/%s b/%s\\nnew file mode 100644\\n' "$f" "$f"; fi; done`;
+      + `elif u; then printf 'diff --git a/%s b/%s\\nnew file mode 100644\\n${TOO_LARGE}\\n' "$f" "$f"; fi; `
+      + `elif [ ! -d "$f" ] && u; then printf 'diff --git a/%s b/%s\\nnew file mode 100644\\n' "$f" "$f"; fi; done`;
   return [
     `M=${marker}`,
     "g() { GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false -c core.quotepath=false -c core.hooksPath=/dev/null -c color.ui=false \"$@\"; }",
