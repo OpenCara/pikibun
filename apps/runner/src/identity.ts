@@ -126,6 +126,11 @@ export class IdentityStore {
 
   async publicKey(): Promise<string> { return (await this.key()).publicKey; }
 
+  private async existingKey(): Promise<KeyFile | undefined> {
+    try { return parseKeyFile(await readJson(join(this.root, KEY_FILE))); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  }
+
   async delegation(server: string, connector: string): Promise<Signed<DelegationStatement>> {
     assertId(connector);
     const key = await this.key();
@@ -237,7 +242,7 @@ export class IdentityStore {
   }
 
   async reset(): Promise<{ previous: string | undefined; next: string }> {
-    const previous = await this.key().then(key => key.publicKey, () => undefined);
+    const previous = (await this.existingKey().catch(() => undefined))?.publicKey;
     const { file, privateKey } = await generate();
     await this.replaceKey(file, privateKey);
     return { previous, next: file.publicKey };
@@ -283,7 +288,7 @@ export class IdentityStore {
     } catch { throw new RunnerError(400, "Wrong passphrase, or the file is damaged"); }
     const file = parseKeyFile(JSON.parse(plain.toString("utf8")));
     const privateKey = await importPrivate(file);
-    const current = await this.key().catch(() => undefined);
+    const current = await this.existingKey();
     if (current?.publicKey === file.publicKey) return file.publicKey;
     if (current && !options.replace) throw new RunnerError(409, "This computer already has an identity; add --replace to use the imported one instead");
     await this.replaceKey(file, privateKey);

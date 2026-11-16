@@ -1,4 +1,4 @@
-import { mkdir, readFile, open, link, unlink, chmod, realpath, lstat, readdir, rename } from "node:fs/promises";
+import { mkdir, readFile, open, link, unlink, chmod, realpath, lstat, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,10 +16,15 @@ import { PACK_FILE, readPack, settlePack, unpackSandbox, writePack, type PackSum
 import { LocalViews } from "./local-view.js";
 import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
 import { FailureLog, type LogLine } from "./failure-log.js";
+import { PortableLeases } from "./portable-lease.js";
 
 export const MOVED_SESSION = "This session was moved to another server this computer is paired with";
 const KEPT_FILE = "portable.json";
 const KEPT_BYTES = 256 * 1024;
+const PORTABLE_SWEEP_MS = 500;
+const OWNER_CONFIG = "owner.gitconfig";
+const RELEASE_WAIT_MS = 10_000;
+const RELEASED_WATCH_MS = 60_000;
 
 export interface PortableKept { title?: string; schedules: unknown[] }
 export interface PortableReport {
@@ -65,6 +70,10 @@ export class RunnerService {
   private readonly reported = new WeakSet<object>();
   private readonly portableOpen = new Set<string>();
   private readonly detachedReported = new Set<string>();
+  private readonly leases = new PortableLeases();
+  private readonly released = new Map<string, { directory: string; until: number }>();
+  private sweep?: NodeJS.Timeout;
+  private sweeping = false;
   readonly failures: FailureLog;
   readonly dataDir: string;
   constructor(readonly config: RunnerConfig, log?: LogLine) {
@@ -91,6 +100,33 @@ export class RunnerService {
     if ((await lstat(this.dataDir)).isSymbolicLink() || await realpath(this.dataDir) !== this.dataDir) throw new Error("DATA_DIR must be canonical and not symlinked");
     await chmod(this.dataDir, 0o700);
     await mkdir(join(this.dataDir, "sessions"), { recursive: true, mode: 0o700 });
+    if (this.config.portable) {
+      this.sweep = setInterval(() => { void this.sweepPortable(); }, PORTABLE_SWEEP_MS);
+      this.sweep.unref();
+    }
+  }
+
+  private async sweepPortable(): Promise<void> {
+    if (this.sweeping || this.closed) return;
+    this.sweeping = true;
+    try {
+      for (const id of [...this.portableOpen]) {
+        const pending = this.sessions.get(id);
+        const session = await pending?.catch(() => undefined);
+        if (!pending || !session) continue;
+        const attached = await this.stillAttached(session.directory, id);
+        if (attached && !await this.leases.releaseRequested(session.directory)) continue;
+        if (await exists(join(session.directory, WORK_MARKER))) continue;
+        if (this.sessions.get(id) === pending) await this.evict(id, session);
+        if (!attached) this.detach(id);
+        else this.released.set(id, { directory: session.directory, until: Date.now() + RELEASED_WATCH_MS });
+      }
+      for (const [id, { directory, until }] of [...this.released]) {
+        if (this.sessions.has(id)) { this.released.delete(id); continue; }
+        if (!await this.stillAttached(directory, id)) { this.released.delete(id); this.detach(id); }
+        else if (Date.now() > until) this.released.delete(id);
+      }
+    } finally { this.sweeping = false; }
   }
 
   async get(id: string): Promise<RunnerSession> {
@@ -99,7 +135,7 @@ export class RunnerService {
     const existing = this.sessions.get(id);
     if (existing) {
       const session = await existing;
-      if (this.portableOpen.has(id) && !await this.stillAttached(session.directory)) {
+      if (this.portableOpen.has(id) && !await this.stillAttached(session.directory, id)) {
         if (this.sessions.get(id) === existing) await this.evict(id, session);
         this.detach(id);
         throw new RunnerError(410, MOVED_SESSION);
@@ -142,18 +178,19 @@ export class RunnerService {
     return entry ? { directory: entry.directory, portable: true } : { directory: join(this.dataDir, "sessions", id), portable: false };
   }
 
-  private async stillAttached(directory: string): Promise<boolean> {
-    let value: { session?: { connectorId?: unknown } };
+  private async stillAttached(directory: string, id?: string): Promise<boolean> {
+    let value: { session?: { connectorId?: unknown; id?: unknown } };
     try { value = JSON.parse(await readFile(join(directory, "binding.json"), "utf8")); }
     catch { return true; }
-    return value?.session?.connectorId === this.config.connectorId;
+    return value?.session?.connectorId === this.config.connectorId && (id === undefined || value.session?.id === id);
   }
 
   private async evict(id: string, session: RunnerSession): Promise<void> {
     this.sessions.delete(id);
-    this.portableOpen.delete(id);
+    const portable = this.portableOpen.delete(id);
     await session.close().catch(() => {});
     await session.sandbox.close().catch(() => {});
+    if (portable) await this.leases.release(session.directory);
   }
 
   private detach(id: string): void {
@@ -168,18 +205,21 @@ export class RunnerService {
     let raw: unknown;
     try { raw = JSON.parse(await readFile(join(directory, "binding.json"), "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new RunnerError(404, "Session not found"); throw error; }
-    if (portable && (raw as RunnerBinding | null)?.session?.connectorId !== this.config.connectorId) {
+    const stored = (raw as RunnerBinding | null)?.session;
+    if ((portable || stored?.portable === true) && (stored?.connectorId !== this.config.connectorId || stored?.id !== id)) {
       this.detach(id);
       throw new RunnerError(410, MOVED_SESSION);
     }
     const binding = this.binding(raw, id);
     if (await realpath(directory) !== directory) throw new RunnerError(403, "Invalid session storage");
+    if (portable) await this.leases.acquire(directory);
     await settlePack(directory);
     const session = new RunnerSession(immutable(binding), directory, this.config);
     try { await session.open(); }
     catch (error) {
       await session.close().catch(() => {});
       await session.sandbox.close().catch(() => {});
+      if (portable) await this.leases.release(directory);
       throw error;
     }
     if (portable) {
@@ -319,51 +359,80 @@ export class RunnerService {
     if (this.closed) throw new RunnerError(503, "Runner service is closed");
     this.assertConnector(ticket);
     const portable = this.config.portable;
-    if (!portable) throw new RunnerError(409, "This host keeps no portable sessions; update its connector");
-    const binding = immutable(this.binding(input, id));
+    if (!portable) throw new RunnerError(409, "This host keeps no portable sessions. Update its connector");
+    const request = input as { binding?: unknown; sourceSessionId?: unknown } | null;
+    if (!request || typeof request !== "object" || Array.isArray(request) || Object.keys(request).some(key => key !== "binding" && key !== "sourceSessionId")
+      || (request.sourceSessionId !== undefined && typeof request.sourceSessionId !== "string")) throw new RunnerError(400, "Invalid attach request");
+    const source = request.sourceSessionId === undefined ? id : assertId(request.sourceSessionId as string);
+    const binding = immutable(this.binding(request.binding, id));
     if (binding.session.portable !== true) throw new RunnerError(400, "Only a portable session is attached");
     if (binding.owner.id !== ticket.ownerId || ticket.actorId !== ticket.ownerId) throw new RunnerError(403, "Only the session's owner attaches it");
     const key = await portable.store.publicKey();
-    const entry = await portable.store.entry(id);
+    const entry = await portable.store.entry(source);
+    if (source !== id && !entry) throw new RunnerError(404, "Session not found");
+    if (source !== id && (await portable.store.entry(id) || await exists(join(this.dataDir, "sessions", id)))) throw new RunnerError(409, "A session with that ID is on this host already");
     const directory = entry?.directory ?? join(this.dataDir, "sessions", id);
     if (entry && entry.mark.statement.key !== key) throw new RunnerError(403, "This session belongs to another identity");
     let current: RunnerBinding;
     try { current = JSON.parse(await readFile(join(directory, "binding.json"), "utf8")) as RunnerBinding; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new RunnerError(404, "Session not found"); throw error; }
-    if (current?.session?.id !== id) throw new RunnerError(403, "Invalid session storage");
+    if (current?.session?.id !== source) throw new RunnerError(403, "Invalid session storage");
     if (await realpath(directory) !== directory) throw new RunnerError(403, "Invalid session storage");
+    if (await exists(join(directory, PACK_FILE))) throw new RunnerError(409, "This session's files are packed. Unarchive it where it is attached now first");
     const here = current.session.connectorId === this.config.connectorId;
     if (!entry && !here) throw new RunnerError(404, "Session not found");
-    if (here && current.owner?.id !== binding.owner.id) throw new RunnerError(403, "A portable session keeps its owner on the same server");
+    if (here && (current.owner?.id !== binding.owner.id || source !== id)) throw new RunnerError(403, "A portable session keeps its owner and ID on the same server");
     if ((current.session.hostEnvironment === true) !== (binding.session.hostEnvironment === true)
       || current.session.repositoryMode !== binding.session.repositoryMode || (binding.session.repositories ?? []).length > 0) {
       throw new RunnerError(409, "The session's record doesn't match where it runs on this host");
     }
     const authority = new RunnerSession(binding, directory, this.config);
     await authority.authorize(ticket.actorId, "manage", ticket.policyVersion);
-    await portable.store.withLock(id, async () => {
+    await portable.store.withLock(source, async () => {
       const marker = join(directory, WORK_MARKER);
-      if (await exists(marker)) throw new RunnerError(409, "This session is working; stop it, or wait for it to finish, where it is attached now");
+      if (await exists(marker)) throw new RunnerError(409, "This session is working. Stop it, or wait for it to finish, where it is attached now");
+      if (await this.leases.holder(directory) === "other" && !await this.leases.requestRelease(directory, RELEASE_WAIT_MS)) {
+        throw new RunnerError(409, "This session is still open on another of this computer's connections. Try again shortly");
+      }
       const open = this.sessions.get(id);
       if (open) {
         const session = await open.catch(() => undefined);
-        this.sessions.delete(id);
+        if (this.sessions.get(id) === open) this.sessions.delete(id);
         this.portableOpen.delete(id);
         if (session) { await session.close().catch(() => {}); await session.sandbox.close().catch(() => {}); }
       }
-      const path = join(directory, "binding.json");
-      const previous = await readFile(path, "utf8");
-      await replaceFile(path, JSON.stringify(binding));
-      if (await exists(marker)) {
-        await replaceFile(path, previous);
-        throw new RunnerError(409, "This session started working where it is attached now; try again once it finishes");
+      await this.leases.acquire(directory);
+      try {
+        if (await exists(marker)) throw new RunnerError(409, "This session started working where it is attached now. Try again once it finishes");
+        await this.rebind(binding, directory, source);
+        if (!entry || source !== id) await portable.store.mark(id, directory);
+        if (source !== id) await portable.store.forget(source);
+      } catch (error) {
+        await this.leases.release(directory);
+        throw error;
       }
-      if (!entry) await portable.store.mark(id, directory);
     });
     this.detachedReported.delete(id);
     const kept = await this.kept(directory);
     await this.get(id);
     return { session: binding.session, kept };
+  }
+
+  private async rebind(binding: RunnerBinding, directory: string, source: string): Promise<void> {
+    const ownerConfig = join(directory, "sandbox", OWNER_CONFIG);
+    const pinned = await readFile(ownerConfig, "utf8").catch(() => undefined);
+    const path = join(directory, "binding.json");
+    const restoreOwnerConfig = async () => {
+      await rm(ownerConfig, { force: true });
+      if (pinned !== undefined) await writeFile(ownerConfig, pinned, { mode: 0o400, flag: "wx" });
+    };
+    await rm(ownerConfig, { force: true });
+    const staged = new RunnerSession(binding, directory, this.config);
+    try { await staged.rebind(source); }
+    catch (error) { await restoreOwnerConfig().catch(() => {}); throw error; }
+    finally { await staged.sandbox.close().catch(() => {}); }
+    try { await replaceFile(path, JSON.stringify(binding)); }
+    catch { throw new RunnerError(503, "The session's new record couldn't be saved on this host. Bring it here again to finish"); }
   }
 
   async provision(input: unknown, ticket: RunnerTicket): Promise<RunnerSession> {
@@ -457,13 +526,17 @@ export class RunnerService {
 
   async close(): Promise<void> {
     this.closed = true;
-    for (const pending of this.sessions.values()) {
+    if (this.sweep) clearInterval(this.sweep);
+    for (const [id, pending] of this.sessions) {
       const session = await pending.catch(() => undefined);
       if (!session) continue;
       await session.close();
       await session.sandbox.close();
+      if (this.portableOpen.has(id)) await this.leases.release(session.directory);
     }
     this.sessions.clear();
+    this.portableOpen.clear();
+    this.leases.close();
   }
 }
 

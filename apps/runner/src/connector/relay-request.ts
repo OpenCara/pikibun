@@ -36,7 +36,7 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
     action = match[2]!.startsWith("view/") ? "view" : match[2] as RunnerAction;
     if (rpc.method !== (action === "view" ? "GET" : "POST")) throw new Error("Relay method is not allowed");
     if (action === "attach") {
-      const binding = decodeJson(encoder.encode(rpc.body)) as RunnerBinding;
+      const binding = (decodeJson(encoder.encode(rpc.body)) as { binding?: RunnerBinding } | null)?.binding;
       if (binding?.session?.id !== sessionId || binding.session.connectorId !== connectorId || binding.model?.connectorId !== connectorId
         || binding.owner?.id !== rpc.ticket?.ownerId || binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign attach binding");
     }

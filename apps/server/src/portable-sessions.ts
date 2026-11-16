@@ -8,7 +8,7 @@ import type { SessionRecord, SessionSchedule } from '../../../packages/shared/sr
 import { auditStatement, authenticateConnector, isPersonalWorkspace, type ConnectorRow } from './authority/index.js';
 import { chatAgentVersion, requireModel } from './catalog.js';
 import { sessionRecord } from './db.js';
-import { appOrigin, fail, identifier, jsonObject, now } from './http.js';
+import { appOrigin, fail, id, identifier, jsonObject, now } from './http.js';
 import { ownerRequest, runnerJSON, runnerRequest } from './runner.js';
 import { restorePortableSchedules, sessionSchedules } from './scheduled-prompts.js';
 import { markSessionChanged } from './session-changes.js';
@@ -276,27 +276,27 @@ async function attachSession(c: AppContext): Promise<Response> {
   if (!modelId) fail(409, 'model_required', 'The host no longer offers the model this session ran on. Choose one of its models.');
   const model = await requireModel(c.env, modelId, userId);
   if (model.workspace_id !== workspaceId || model.connector_id !== connectorId) fail(400, 'invalid_model', 'Choose a model of that host in your private workspace.');
-  const agent = await chatAgentVersion(c.env, userId, model, capabilities);
   const existing = await c.env.DB.query<SessionRow>('SELECT * FROM sessions WHERE id = ?').bind(sessionId).first();
-  if (existing && (existing.owner_id !== userId || existing.workspace_id !== workspaceId)) fail(409, 'session_conflict', 'Another session here has this session\'s ID.');
   if (existing && existing.status !== 'archived' && existing.connector_id === connectorId) fail(409, 'already_here', 'This session is attached here already.');
-  const branch = capabilities.sessionBranches === true ? sessionBranchName(offer.title, sessionId) : null;
-  const hostEnvironment = Number(offer.host_environment) === 1 ? 1 : 0;
+  const reuse = !!existing && existing.owner_id === userId && existing.workspace_id === workspaceId && existing.connector_id === connectorId
+    && existing.repository_mode === 'clone' && (existing.repositories_json ?? '[]') === '[]';
+  const targetId = existing && !reuse ? id() : sessionId;
   let row: SessionRow;
-  if (existing) {
-    const updated = await c.env.DB.query<SessionRow>(`UPDATE sessions SET connector_id = ?, connector_owner_id = ?, agent_version_id = ?, status = 'provisioning',
-      archived_status = NULL, detached_at = NULL, policy_version = policy_version + 1, portable_key = ?, title = ?, pack_due_at = NULL, host_environment = ?,
-      repository_mode = 'clone', repositories_json = '[]', branch = ?
-      WHERE id = ? AND owner_id = ? AND workspace_id = ? AND policy_version = ? RETURNING *`)
-      .bind(connectorId, userId, agent.id, offer.public_key, offer.title, hostEnvironment, branch, sessionId, userId, workspaceId, existing.policy_version).first();
+  if (reuse) {
+    const updated = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = 'provisioning', archived_status = NULL, detached_at = NULL,
+      policy_version = policy_version + 1, portable_key = ?, title = ?, pack_due_at = NULL
+      WHERE id = ? AND owner_id = ? AND workspace_id = ? AND connector_id = ? AND policy_version = ? AND status = 'archived' RETURNING *`)
+      .bind(offer.public_key, offer.title, sessionId, userId, workspaceId, connectorId, existing!.policy_version).first();
     if (!updated) fail(409, 'policy_changed', 'The session changed meanwhile; try again.');
     row = updated;
   } else {
+    const agent = await chatAgentVersion(c.env, userId, model, capabilities);
+    const branch = capabilities.sessionBranches === true ? sessionBranchName(offer.title, targetId) : null;
     const inserted = await c.env.DB.query<SessionRow>(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at,
       connector_id, connector_owner_id, repositories_json, visibility, repository_mode, branch, host_environment, tool_output, portable_key)
       SELECT ?, ?, ?, ?, ?, 1, 'provisioning', ?, ?, ?, '[]', 'private', 'clone', ?, ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?) RETURNING *`)
-      .bind(sessionId, workspaceId, userId, agent.id, offer.title, offer.created_at, connectorId, userId, branch, hostEnvironment,
+      .bind(targetId, workspaceId, userId, agent.id, offer.title, offer.created_at, connectorId, userId, branch, Number(offer.host_environment) === 1 ? 1 : 0,
         await newSessionToolOutput(c.env.DB, workspaceId), offer.public_key, workspaceId, userId).first();
     if (!inserted) fail(409, 'session_configuration_changed', 'Your private workspace changed meanwhile; try again.');
     row = inserted;
@@ -304,27 +304,34 @@ async function attachSession(c: AppContext): Promise<Response> {
   let kept: { title?: string; schedules?: unknown } | undefined;
   try {
     const binding = await bindingForSession(c, row);
-    const result = await runnerJSON<{ session?: SessionRecord; kept?: { title?: string; schedules?: unknown } }>(await runnerRequest(c, row, 'attach', '', binding));
+    const result = await runnerJSON<{ session?: SessionRecord; kept?: { title?: string; schedules?: unknown } }>(
+      await runnerRequest(c, row, 'attach', '', { binding, ...(targetId !== sessionId ? { sourceSessionId: sessionId } : {}) }));
     kept = result.kept;
   } catch (error) {
-    if (existing) {
-      await c.env.DB.query(`UPDATE sessions SET connector_id = ?, connector_owner_id = ?, agent_version_id = ?, status = ?, archived_status = ?, detached_at = ?,
-        policy_version = policy_version + 1, portable_key = ?, title = ?, host_environment = ?, branch = ? WHERE id = ?`)
-        .bind(existing.connector_id ?? null, existing.connector_owner_id ?? null, existing.agent_version_id, existing.status, existing.archived_status ?? null,
-          existing.detached_at ?? null, existing.portable_key ?? null, existing.title, existing.host_environment ?? 0, existing.branch ?? null, sessionId).run();
+    if (reuse) {
+      await c.env.DB.query(`UPDATE sessions SET status = 'archived', archived_status = ?, detached_at = ?, policy_version = policy_version + 1, portable_key = ?, title = ?
+        WHERE id = ?`).bind(existing!.archived_status ?? null, existing!.detached_at ?? null, existing!.portable_key ?? null, existing!.title, sessionId).run();
     } else {
-      await c.env.DB.query("DELETE FROM sessions WHERE id = ? AND status = 'provisioning'").bind(sessionId).run();
+      await c.env.DB.query("DELETE FROM sessions WHERE id = ? AND status = 'provisioning'").bind(targetId).run();
     }
     throw error;
   }
-  const ready = await c.env.DB.query<SessionRow>("UPDATE sessions SET status = 'ready' WHERE id = ? RETURNING *").bind(sessionId).first() ?? row;
+  const ready = await c.env.DB.query<SessionRow>("UPDATE sessions SET status = 'ready' WHERE id = ? RETURNING *").bind(targetId).first() ?? row;
   await c.env.DB.batch([
-    c.env.DB.query<never>('UPDATE portable_offers SET attached = CASE WHEN connector_id = ? THEN 1 ELSE 0 END WHERE session_id = ? AND user_id = ?').bind(connectorId, sessionId, userId),
-    auditStatement(c.env, userId, 'session.attached', workspaceId, sessionId, { connectorId, ...(existing ? { returned: true } : {}) }),
+    ...(targetId !== sessionId ? [
+      c.env.DB.query<never>(`UPDATE sessions SET archived_status = CASE WHEN status = 'archived' THEN archived_status ELSE status END, status = 'archived',
+        detached_at = COALESCE(detached_at, ?), policy_version = policy_version + 1, pack_due_at = NULL WHERE id = ? AND owner_id = ? AND portable_key IS NOT NULL`)
+        .bind(now(), sessionId, userId),
+      c.env.DB.query<never>('DELETE FROM portable_offers WHERE session_id = ? AND user_id = ?').bind(sessionId, userId),
+    ] : [
+      c.env.DB.query<never>('UPDATE portable_offers SET attached = CASE WHEN connector_id = ? THEN 1 ELSE 0 END WHERE session_id = ? AND user_id = ?').bind(connectorId, sessionId, userId),
+    ]),
+    auditStatement(c.env, userId, 'session.attached', workspaceId, targetId, { connectorId, ...(reuse ? { returned: true } : {}),
+      ...(targetId !== sessionId ? { hostSessionId: sessionId } : {}) }),
   ]);
   const restored = await restorePortableSchedules(c.env, ready, keptSchedules(kept?.schedules));
-  await markSessionChanged(c.env, sessionId);
-  return c.json({ session: sessionRecord(ready), ...(restored ? { schedules: restored } : {}) }, existing ? 200 : 201);
+  await markSessionChanged(c.env, targetId);
+  return c.json({ session: sessionRecord(ready), ...(restored ? { schedules: restored } : {}) }, reuse ? 200 : 201);
 }
 
 async function convertSessions(c: AppContext): Promise<Response> {
@@ -349,7 +356,7 @@ async function convertSessions(c: AppContext): Promise<Response> {
       .bind(delegation.public_key, candidate.id).first();
     if (!marked) continue;
     try {
-      const response = await runnerRequest(c, marked, 'attach', '', await bindingForSession(c, marked));
+      const response = await runnerRequest(c, marked, 'attach', '', { binding: await bindingForSession(c, marked) });
       await response.body?.cancel();
       converted.push(marked.id);
       await auditStatement(c.env, userId, 'session.portable', workspaceId, marked.id, { connectorId }).run();

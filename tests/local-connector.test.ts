@@ -203,7 +203,7 @@ test('relay accepts exactly the supported action/method/path combinations and lo
     tunnel: JSON.stringify({ action: 'stop' }),
     image: JSON.stringify({ entryId: '1:2', index: 0, size: 'thumbnail' }),
     sudo: JSON.stringify({ id: 'prompt1', decline: true }),
-    attach: JSON.stringify(binding()),
+    attach: JSON.stringify({ binding: binding() }),
     portable: JSON.stringify({ title: 'Kept', schedules: [] }),
   };
   for (const action of Object.keys(bodies) as (keyof typeof bodies)[]) {

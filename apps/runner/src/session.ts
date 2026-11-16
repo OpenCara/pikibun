@@ -467,6 +467,55 @@ export class RunnerSession {
     } finally { await harness.close(context); }
   }
 
+  async rebind(source: string = this.binding.session.id): Promise<void> {
+    await this.initializeRepositories();
+    const resolved = this.config.resolveModels ? await this.config.resolveModels(this.binding.model)
+      : { models: runnerModels(this.binding.model, this.config.allowFaux) };
+    const storage = await this.openStorage();
+    let harness: Harness;
+    try { harness = await Harness.open(storage, { models: resolved.models, registry: createRegistry() }, context); }
+    catch (error) { await storage.close(context); throw error; }
+    try {
+      const graph = await harness.watchTaskGraph(context);
+      try { if (Object.keys(graph.value.tasks).length) throw new RunnerError(409, "This session still has work in progress. Let it finish where it is attached now"); }
+      finally { await graph.stop(); }
+      const root = await harness.root(context);
+      await root.commit(async tx => {
+        const doc = await tx.doc(RunnerState);
+        if (!doc.json) throw new RunnerError(409, "This session has no conversation yet to attach");
+        const state: Metadata = JSON.parse(doc.json);
+        if (state.binding?.session?.id !== source) throw new RunnerError(403, "Persisted binding mismatch");
+        let cursor: Cursor | undefined;
+        do {
+          const page = await tx.scanConversations({}, 100, cursor);
+          for (const conversation of page.items) {
+            if ((await tx.doc(InboxDoc, conversation.id)).items.length) throw new RunnerError(409, "This session has messages waiting. Let them run where it is attached now");
+          }
+          cursor = page.next;
+        } while (cursor);
+        if (Object.values(state.runs).some(run => !["settled", "interrupted"].includes(run.status))
+          || Object.values(state.approvals).some(approval => approval.status === "executing")) {
+          throw new RunnerError(409, "This session is working. Stop it, or wait for it to finish, where it is attached now");
+        }
+        state.binding = this.binding;
+        state.usedTickets = {};
+        state.toolActors = {};
+        delete state.grants;
+        for (const run of Object.values(state.runs)) delete run.admissionId;
+        for (const approval of Object.values(state.approvals)) {
+          approval.sessionId = this.binding.session.id;
+          delete approval.admissionId;
+          delete approval.reviewHash;
+          if (approval.status === "pending") {
+            approval.status = "interrupted";
+            approval.result = "The session moved to another server; a new operation needs asking again.";
+          }
+        }
+        doc.json = JSON.stringify(state);
+      }, context);
+    } finally { await harness.close(context); }
+  }
+
   private async initializeRepositories(): Promise<void> {
     await this.sandbox.initialize();
   }
