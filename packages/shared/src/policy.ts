@@ -36,9 +36,9 @@ export const sessionCreatorRoles: readonly WorkspaceRole[] = ["owner", "admin", 
 export const workspaceManagerRoles: readonly WorkspaceRole[] = ["owner", "admin"];
 export const adminManagedRoles: readonly WorkspaceRole[] = ["collaborator", "member", "viewer"];
 
-export function workspaceSessionPermissions(role: WorkspaceRole, visibility: "private" | "workspace"): Permission[] {
+/** What a workspace role gives in every session of the workspace: all of them are visible to its members. */
+export function workspaceSessionPermissions(role: WorkspaceRole): Permission[] {
   if (workspaceManagerRoles.includes(role)) return ["read", "ask", "write", "manage"];
-  if (visibility !== "workspace") return [];
   return sharedSessionWriterRoles.includes(role) ? ["read", "ask", "write"] : ["read"];
 }
 

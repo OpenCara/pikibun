@@ -14,7 +14,7 @@ const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sess
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access read: inspect only; left out, it acts as that session's tools allow); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
-  + "create {message?, title?, model?, thinking?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
+  + "create {message?, title?, model?, thinking?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
   + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
   + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
   + "chains of messages stop after 3 hops and never loop back to a session they came from. "
@@ -26,14 +26,14 @@ export function sessionsTool(context: ToolContext): ToolRegistration {
     executionMode: "sequential", parameters: obj({
     action: StringEnum(sessionsToolActions), session: opt(str()), message: opt(str()),
     access: opt(StringEnum(accessModes)), notify: opt(bool()), title: opt(str()), model: opt(str()),
-    thinking: opt(StringEnum(thinkingLevels)), visibility: opt(StringEnum(["private", "workspace"] as const)), message_id: opt(str()),
+    thinking: opt(StringEnum(thinkingLevels)), message_id: opt(str()),
     limit: opt(int({ minimum: 1, maximum: crossSessionLimits.readEntries })),
     timeout_seconds: opt(int({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
   }, { open: true }), execute: async (args, api, call) => {
     await context.requireSessionTool("sessions");
     const attribution = await calls.actor(api, true);
     const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-      modelId: args.model, thinkingLevel: args.thinking, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
+      modelId: args.model, thinkingLevel: args.thinking, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
       Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
     if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");
     const wait = args.action === "wait";
