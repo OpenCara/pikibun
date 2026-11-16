@@ -73,9 +73,9 @@ messages.
   lets extensions screen a message (`RunQueue.screen`), in the order Pi's own `prompt()` takes them: `/compact`, an
   extension's command, the extensions' `input` handlers, `/skill:name`, then a prompt template. Anything else goes to
   the model as typed. So there is no new server route, relay action or permission to keep in step across the server,
-  the connector and the apps, and a scheduled prompt or a message from another session can be a command too. A host
-  from before this passes the text to the model, as it always did, which is why the client offers only what the host
-  lists.
+  the connector and the apps, and a scheduled prompt can be a command too (a message from another session's agent
+  can't: it starts with its header, not with `/`). A host from before this passes the text to the model, as it always
+  did, which is why the client offers only what the host lists.
 - **The host lists them.** A session's view carries `commands`: each one's name, description, argument hint and kind
   (`host`, `extension`, `prompt`, `skill`). The client adds them to its list after its own commands, and a name the
   client has itself (`/model`, `/new`) stays the client's. The list is the host's word, so the client keeps only
@@ -98,8 +98,8 @@ messages.
   otherwise for the host's owner and members they granted host commands, or where the host's owner lets extension
   tools run for every session ([security rationale](security-rationale.md)).
 - **Prompt templates** are Pi's: `.pi/prompts/*.md` in the worktree and in each repository cloned into it, with
-  `description` and `argument-hint` in the front matter and `$1`, `$@`, `$ARGUMENTS` and `${1:-default}` in the text.
-  `/name arguments` sends the template with the arguments filled in.
+  `$1`, `$@`, `$ARGUMENTS` and `${1:-default}` in the text, filled in by Pi's own `substituteArgs`. `/name arguments`
+  sends the template with the arguments filled in, without its front matter.
 - **Skills** are `SKILL.md` files under `.pi/skills` and `.agents/skills` in the same places. `/skill:name arguments`
   sends the skill's text in Pi's `<skill>` block, with its location as a worktree path, so the agent opens the skill's
   other files with `read`. Skills aren't listed in the system prompt for the model to pick by itself: that is #323.
@@ -107,6 +107,12 @@ messages.
   (the sandbox's helper), never by the connector opening paths under the worktree, so a link that leaves the worktree
   is refused there as for the `read` tool. They come from whoever can push to the repository, and do nothing until
   someone types their name.
+- **One look for the list, one read for a command.** Each file access is a sandboxed call, and a session's file
+  calls run one after another, behind a command that is running. So the view never waits for the worktree: it lists
+  what the last look found (one `find`, at most every half minute, started by a view and finished in the background),
+  and shows each template's and skill's path rather than the description in its front matter, which would cost one
+  read per file. A command typed for a file the list doesn't have yet looks again before it gives up, and the file is
+  read when it is used, so the text sent is the file's as it is then.
 - **A side ask or a Read-only message** takes templates and skills, which are only text, and refuses `/compact` and
   extension commands, which act.
 

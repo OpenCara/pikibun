@@ -177,6 +177,32 @@ Because the process is confined like the session's commands, a tool of such an e
 act, without a host command grant: it reaches nothing a shell command of that message couldn't. Where shell commands
 themselves count as host commands (no resource limits, someone else's session), so do these calls.
 
+## Slash commands the host runs
+
+`apps/runner/src/session/commands.ts`, `RunQueue.screen`, `SessionPiki.requireCommand`; the design is
+[slash commands](slash-commands.md#commands-the-host-runs). A message whose first word names a command is handled by
+the host instead of going to the model.
+
+- **A command is a message.** It arrives through the route, the permission and the audit of any message, so nothing
+  new can ask a host to act. What the host does with it is decided on the host, from the session's own state: the
+  client's list is only a menu.
+- **An extension's command runs under the rule of its tools.** A handler is the extension's code, acting for whoever
+  typed the command, with their arguments. It runs for any sender where the extension's process is in the session's
+  sandbox, and otherwise only for the host's owner and members they granted host commands, or where the host's owner
+  lets extension tools run for every session; the refusal says which (`requireCommand`, as `#runTool`). Unlike a tool
+  call it isn't a card: no model chose it, the person typed it.
+- **Acting commands need a message that may act.** `/compact` and extension commands are refused in a side ask and in a
+  Read-only message, as an extension's tools are. Templates and skills only replace the message's text, so they pass:
+  the message still runs with the tools it had.
+- **Templates and skills are read as the session reads files.** The host finds and reads them with the session's file
+  access (in the sandbox, its helper), never by opening worktree paths in the connector, so a link out of the worktree
+  is refused as it is for `read`. They are the repository's content, written by whoever can push to it, and reach the
+  model only when someone types their name. A skill's `location` is a worktree path, so the agent opens its other
+  files with its own tools and rules.
+- **The list is the host's word.** The server passes it through with the view; the client keeps only names of the
+  expected shape and bounded text (`parseSessionCommands`), and a name the client has itself always wins, so a
+  repository can't take over `/model` or `/new`.
+
 ## Password authentication
 
 `apps/server/src/authority/password-auth.ts`, for servers with `PASSWORD_AUTH=true`.

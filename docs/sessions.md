@@ -73,7 +73,9 @@ The chat box offers no access choice: every shared message you send acts. Every 
 
 ## Slash commands
 
-A session's chat box takes commands named after [Pi's own](https://github.com/earendil-works/pi). Type `/` as the first character and the commands you can use here are listed above the chat box; what you type next narrows the list. On a desktop, **↑** and **↓** move through it, **Return** runs the highlighted command, **Tab** completes it without running it, and **Esc** closes the list. On a phone, press a command. A command acts in the app and is never sent to the agent or kept in the transcript.
+A session's chat box takes commands named after [Pi's own](https://github.com/earendil-works/pi). Type `/` as the first character and the commands you can use here are listed above the chat box; what you type next narrows the list. On a desktop, **↑** and **↓** move through it, **Return** runs the highlighted command, **Tab** completes it without running it, and **Esc** closes the list. On a phone, press a command.
+
+The first commands below act in the app: they are never sent to the agent or kept in the transcript.
 
 | Command | What it does |
 | --- | --- |
@@ -86,9 +88,22 @@ A session's chat box takes commands named after [Pi's own](https://github.com/ea
 | `/session` | Opens the session's panel. |
 | `/settings` | Opens the settings. |
 
-A command the list doesn't offer you still answers when typed, with why it can't run; what you typed stays in the chat box. Text that starts with `/` but names none of these commands is a message like any other and goes to the agent as typed (`/usr/bin/env is missing`), as does a message of several lines. To send a message that starts with a command's name, put a space before the `/`.
+A command the list doesn't offer you still answers when typed, with why it can't run; what you typed stays in the chat box.
 
-Pi's other commands aren't here: some have no meaning in Pikibun (`/quit`, `/login`, `/hotkeys`, `/reload`), others are done elsewhere (`/fork` and `/tree` by a message's **Fork** and **Go back**, `/resume` by the session list, `/export` and `/share` in the session's panel), and `/compact` and the commands of Pi extensions, prompt templates and skills aren't supported yet. See [the design](design/slash-commands.md).
+The session's host runs the rest, and the list shows the ones this session has, after the app's own. They are sent like a message, so they need what a message needs (write permission for a shared one), get a receipt, and can be a [scheduled prompt](#scheduled-prompts) too:
+
+| Command | What it does |
+| --- | --- |
+| `/compact [instructions]` | Has Pi summarize the conversation's older messages now, keeping the most recent ones as they are, to free the model's context without waiting for it to fill (see **Context** in the session's panel). The agent keeps working meanwhile. The transcript says that compaction started, and shows the summary once it is written; a conversation too short to summarize stays as it is. Instructions say what the summary should keep. |
+| An extension's command | A command one of the workspace's [Pi extensions](extensions.md) registers (`pi.registerCommand`) runs on the host. What it reports shows as a line in the transcript; what it sends as a message goes to the agent as yours. It runs where the extension's tools run: for anyone who may send messages where extensions run in the sandbox, and otherwise for the host's owner and members they granted host commands, or where the host's owner lets extension tools run in every session. |
+| `/<template> [arguments]` | Sends a prompt template with its arguments filled in. Templates are Markdown files in `.pi/prompts/` of the worktree or of a repository cloned into it, in [Pi's format](https://github.com/earendil-works/pi): `$1`, `$2`, `$@` and `$ARGUMENTS` stand for the arguments, `${1:-default}` for one with a default. The transcript shows the text the agent got. |
+| `/skill:<name> [arguments]` | Sends a skill's instructions, followed by the arguments. Skills are `SKILL.md` files in a folder of their own under `.pi/skills/` or `.agents/skills/` in the same places (or a Markdown file directly in one of them). The agent reads the skill's other files from the worktree. |
+
+A command the host ran itself (`/compact`, an extension's) leaves one line in the transcript, with who ran it, and no message. A side ask and a Read-only message take templates and skills, which are only text, but not `/compact` or an extension's command. Templates and skills come from the repository, so whoever can push to it writes them; they do nothing until someone types their name. The list names where each one is, and picks up new ones within about half a minute; one typed before then still works. Hosts need a connector from the release that brought these: on an older one the list has only the app's commands, and `/compact` says to update it.
+
+Text that starts with `/` but names no command is a message like any other and goes to the agent as typed (`/usr/bin/env is missing`). To send a message that starts with a command's name, put a space before the `/`. A name the app has itself (`/new`, `/model`) is the app's, whatever a repository or an extension calls its own.
+
+Pi's other commands aren't here: some have no meaning in Pikibun (`/quit`, `/login`, `/hotkeys`, `/reload`), and others are done elsewhere (`/fork` and `/tree` by a message's **Fork** and **Go back**, `/resume` by the session list, `/export` and `/share` in the session's panel). The prompts and skills in the host owner's own Pi folder (`~/.pi/agent`) aren't read, as they are that person's and not the workspace's. See [the design](design/slash-commands.md).
 
 ## Status, menu and panel
 

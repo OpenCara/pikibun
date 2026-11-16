@@ -92,7 +92,8 @@ the session's own, then maps what it registered:
 | `registerFlag`, `getFlag` | The extension's settings, set by the workspace |
 | `exec` | Runs on the host, in the session's worktree |
 | `ctx.cwd`, `ctx.signal`, `ctx.model`, `getThinkingLevel` | The session's worktree on the host, the call's signal, and the model and reasoning level of the message running (a message may switch them) |
-| `ctx.ui.*`, `registerCommand`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage`, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
+| `registerCommand` | A [slash command](slash-commands.md#commands-the-host-runs) of the session: the handler runs with Pi's command context, its `ctx.ui.notify` is the command's line in the transcript and its `sendUserMessage` the message sent in its place |
+| `ctx.ui.*`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage` outside a command, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
 | `registerProvider`, `registerMcpServer`, `registerVirtualModel`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 
 The host's page shows, per extension, which of its registrations work, are no-ops or are ignored, so a workspace can
