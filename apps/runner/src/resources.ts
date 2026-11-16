@@ -305,6 +305,11 @@ def run(cg, control, entries):
                             os.close(fd)
                         except OSError:
                             pass
+                try:
+                    with open('/proc/self/oom_score_adj', 'w') as stream:
+                        stream.write('1000')
+                except OSError:
+                    pass
                 os.execve('/usr/bin/bwrap', ['/usr/bin/bwrap'] + sys.argv[5:], {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'})
             except BaseException:
                 os._exit(125)
