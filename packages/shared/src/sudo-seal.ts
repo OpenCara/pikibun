@@ -4,7 +4,8 @@ export interface SealedSudoPassword {
   data: string;
 }
 
-export const SUDO_SEAL_LIMITS = Object.freeze({ key: 100, iv: 20, data: 1500 });
+export const SUDO_SEAL_LIMITS = Object.freeze({ key: 100, iv: 20, data: 4200 });
+type KeyPair = { publicKey: CryptoKey; privateKey: CryptoKey };
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const BASE64URL = /^[A-Za-z0-9_-]*$/;
 const P256 = { name: "ECDH", namedCurve: "P-256" } as const;
@@ -49,12 +50,12 @@ async function sealKey(privateKey: CryptoKey, publicKey: Uint8Array<ArrayBuffer>
 }
 
 export async function sudoSealKeys(): Promise<{ publicKey: string; privateKey: CryptoKey }> {
-  const pair = await crypto.subtle.generateKey(P256, false, ["deriveBits"]) as CryptoKeyPair;
+  const pair = await crypto.subtle.generateKey(P256, false, ["deriveBits"]) as unknown as KeyPair;
   return { publicKey: base64url(copy(await crypto.subtle.exportKey("raw", pair.publicKey) as ArrayBuffer)), privateKey: pair.privateKey };
 }
 
 export async function sealSudoPassword(hostKey: string, id: string, password: string): Promise<SealedSudoPassword> {
-  const mine = await crypto.subtle.generateKey(P256, true, ["deriveBits"]) as CryptoKeyPair;
+  const mine = await crypto.subtle.generateKey(P256, false, ["deriveBits"]) as unknown as KeyPair;
   const key = await sealKey(mine.privateKey, fromBase64url(hostKey), id, "encrypt");
   const iv = copy(crypto.getRandomValues(new Uint8Array(12)));
   const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoded(id) }, key, encoded(password));

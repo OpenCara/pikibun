@@ -121,10 +121,10 @@ export class SudoPrompts {
   async answerSealed(id: string, sealed: SealedSudoPassword): Promise<boolean> {
     const pending = this.#pending.find(item => item.view.id === id);
     if (!pending?.privateKey) return false;
-    let password: string;
-    try { password = checkSudoPassword(await openSudoPassword(pending.privateKey, id, sealed)); }
+    let opened: string;
+    try { opened = await openSudoPassword(pending.privateKey, id, sealed); }
     catch { throw new Error("The sealed password couldn't be opened"); }
-    return this.answer(id, password);
+    return this.answer(id, checkSudoPassword(opened));
   }
 
   answer(id: string, password: string | undefined): boolean {

@@ -1,6 +1,6 @@
-export const sudoLimits = Object.freeze({ password: 1024, prompt: 200, command: 400, waitMs: 5 * 60_000 });
-
 import { parseSealedSudoPassword, type SealedSudoPassword } from "./sudo-seal.js";
+
+export const sudoLimits = Object.freeze({ password: 1024, prompt: 200, command: 400, waitMs: 5 * 60_000 });
 
 export interface SudoAnswer {
   id: string;

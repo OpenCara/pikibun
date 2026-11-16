@@ -16,7 +16,7 @@ export function registerSessionSudo(app: Hono<AppEnv>): void {
     if (!row.connector_id || row.connector_owner_id !== actor || row.owner_id !== actor) {
       fail(403, 'host_owner_required', 'Only the host\'s owner answers sudo on it, in their own sessions.');
     }
-    const answer = await body(c, sudoAnswer, { maxBytes: 4096 });
+    const answer = await body(c, sudoAnswer, { maxBytes: 8192 });
     const password = answer.password ?? answer.sealed;
     if (password !== undefined && !await isPersonalWorkspace(c.env, row.workspace_id, actor)) {
       fail(403, 'private_workspace_required', 'sudo takes a password only in sessions of your private workspace.');

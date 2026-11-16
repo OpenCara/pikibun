@@ -111,8 +111,13 @@ test("a password sealed to a prompt's key opens with that prompt's key and id al
   const flipped = fromBase64url(sealed.data); flipped[0] ^= 1;
   await assert.rejects(openSudoPassword(host.privateKey, "prompt1", { ...sealed, data: base64url(flipped) }));
   assert.deepEqual(parseSudoAnswer({ id: "abc", sealed }), { id: "abc", sealed });
+  const longest = "密".repeat(1024);
+  const big = await sealSudoPassword(host.publicKey, "abc", longest);
+  assert.deepEqual(parseSudoAnswer({ id: "abc", sealed: big }).sealed, big, "the longest password the plain path takes, in three-byte characters, fits sealed too");
+  assert.ok(JSON.stringify({ id: "abc", sealed: big }).length < 8192, "and within the request body's limit");
+  assert.equal(await openSudoPassword(host.privateKey, "abc", big), longest);
   for (const bad of [{ id: "abc", sealed, password: "x" }, { id: "abc", sealed, decline: true }, { id: "abc", sealed: { ...sealed, extra: "x" } },
-    { id: "abc", sealed: { ...sealed, data: "not base64!" } }, { id: "abc", sealed: { ...sealed, data: "A".repeat(2000) } }]) {
+    { id: "abc", sealed: { ...sealed, data: "not base64!" } }, { id: "abc", sealed: { ...sealed, data: "A".repeat(4300) } }]) {
     assert.throws(() => parseSudoAnswer(bad), JSON.stringify(bad));
   }
 });
