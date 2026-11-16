@@ -1178,8 +1178,6 @@ export class RunnerSession {
       await this.authorize(actorId, "write");
       const shared = this.#shared;
       const state = await this.metadata();
-      // A side ask's thread forks too: its conversation holds the shared one as it was when the side ask was sent, then the
-      // side ask, so the new session continues from what was asked on the side, with the tools a shared message has.
       const from = /^(\d{1,15}):/.exec(entryId)?.[1];
       const ask = from !== undefined && Number(from) !== Number(shared.id)
         ? state.branches.find(branch => branch.mode === "ask" && !branch.superseded && branch.id === Number(from)) : undefined;

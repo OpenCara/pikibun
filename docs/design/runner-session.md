@@ -53,6 +53,12 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   requests on the owner's account; nothing starts while a stop is under way. Host extensions' `agent_end` and
   `agent_settled` follow shared messages only, as `agent_start` and `before_agent_start` do, so a side ask that ends
   mid-task doesn't tell them the agent's work ended.
+- **A side ask's thread forks like the shared conversation.** `forkEntries` takes a message of a side ask as well as
+  one of the shared conversation: the side ask's conversation holds the shared one as it was when the side ask was sent,
+  then the side ask, so the new session goes on from what was asked on the side, with the tools a shared message has.
+  Forking from a side ask's latest reply waits only for that side ask's own run, not for the shared work, as the side ask
+  didn't. The server starts such a fork as a child of the session (`parentSessionId`), titled `Side ask: …`, and only
+  where the view says `askForks`, so a host whose connector predates it refuses nothing it never offered.
 - **The session keeps thin members tests reach by name.** `metadata()`, `tools`, `buildTools()`, `drainQueue()`,
   `agentInstructions(mode)`, `activity()`, `harness` and `hostCommands` stay on `RunnerSession`, delegating where the work
   moved, so the whole-session tests read the same members they always did.

@@ -442,12 +442,17 @@ function Conversation(props: {
   }
 
   const messageActions: MessageActions = entry => {
-    const cut = rewindable(view()) && actualMode() === "write" && !readOnly() ? messageCut(entry) : undefined;
+    const cut = rewindable(view()) && !readOnly() ? messageCut(entry) : undefined;
     if (!cut) return {};
     const busy = rewinding.busy();
+    const mayFork = owner() || (canWrite() && view().memberForks === true);
+    if (actualMode() === "ask") {
+      const side = view().askForks === true && view().conversations.some(item => item.mode === "ask" && item.id === entry.conversationId);
+      return side && mayFork ? { fork: { label: "Continue in a new session from here", disabled: busy, run: () => void fork(entry, cut.entryId, cut.before, undefined, true) } } : {};
+    }
     return {
       ...(canWrite() ? { revert: { label: cut.before ? "Go back to before this message" : "Go back to this reply", disabled: busy, run: () => void revert(entry, cut.entryId, cut.before) } } : {}),
-      ...(owner() || (canWrite() && view().memberForks === true) ? { fork: { label: "Fork a new session from here", disabled: busy, run: () => void fork(entry, cut.entryId, cut.before) } } : {}),
+      ...(mayFork ? { fork: { label: "Fork a new session from here", disabled: busy, run: () => void fork(entry, cut.entryId, cut.before) } } : {}),
     };
   };
 
@@ -466,10 +471,14 @@ function Conversation(props: {
     });
   }
 
-  async function fork(entry: EntryView, entryId: string, before: boolean, point = before ? "just before this message, which goes into its chat box" : "this reply") {
+  async function fork(entry: EntryView, entryId: string, before: boolean, point = before ? "just before this message, which goes into its chat box" : "this reply", side = false) {
     const host = props.host();
     const hostOwner = host && host.ownerId !== user.id ? ` The host is ${host.ownerName}'s: it can access the new session, as it does this one.` : "";
-    const confirmed = await confirm({
+    const confirmed = await confirm(side ? {
+      title: "Continue in a new session?",
+      message: `A new session of yours starts under this one, on the same host and model, with the shared conversation as it was when you asked and this side ask up to ${point}, with this session's visibility. Unlike a side ask, its agent can act: edit, run commands, commit and push. This session and its work stay as they are.${hostOwner} Like every new session, its worktree starts empty: its agent clones the workspace's repositories again, so only what was pushed is there.`,
+      confirmLabel: "Start session",
+    } : {
       title: "Fork a new session from here?",
       message: `A new session of yours starts on the same host and model with this conversation up to ${point}, with this session's visibility. This session stays as it is.${hostOwner} Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again.`,
       confirmLabel: "Fork session",
