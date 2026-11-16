@@ -55,32 +55,54 @@ export interface SessionCommandsOptions {
   now?(): number;
 }
 
+export const WORKTREE_OWNER = "worktree";
+const RESERVED_OWNERS = new Set([WORKTREE_OWNER, "skill"]);
+
 export function commandFiles(paths: readonly string[]): CommandFile[] {
   const sorted = [...paths].map(path => path.replace(/\/+$/, "")).sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
-  const files: CommandFile[] = [];
+  const found: (CommandFile & { owner: string })[] = [];
   const skillRoots: string[] = [];
   const taken = new Set<string>();
-  const add = (file: CommandFile) => {
-    const key = `${file.kind}\n${file.name}`;
-    if (!NAME.test(file.name) || taken.has(key) || files.filter(item => item.kind === file.kind).length >= sessionCommandLimits.perKind) return;
+  const add = (file: CommandFile, owner: string) => {
+    const key = `${owner}\n${file.kind}\n${file.name}`;
+    if (!NAME.test(file.name) || taken.has(key)) return;
     taken.add(key);
-    files.push(file);
+    found.push({ ...file, owner });
   };
   for (const path of sorted) {
     const parts = path.split("/");
     const file = parts.at(-1)!;
     const at = parts.findIndex((part, index) => (part === ".pi" || part === ".agents") && index <= 1);
     if (at < 0) continue;
+    const owner = at === 1 ? parts[0]! : "";
     if (parts[at] === ".pi" && parts[at + 1] === "prompts" && parts.length === at + 3 && file.endsWith(".md")) {
-      add({ kind: "prompt", name: file.slice(0, -3), path });
+      add({ kind: "prompt", name: file.slice(0, -3), path }, owner);
     } else if (parts[at + 1] === "skills") {
       const directory = parts.slice(0, -1).join("/");
       if (skillRoots.some(root => directory.startsWith(`${root}/`))) continue;
       if (file === "SKILL.md" && parts.length > at + 3) {
         skillRoots.push(directory);
-        add({ kind: "skill", name: parts.at(-2)!, path });
-      } else if (parts.length === at + 3 && file.endsWith(".md") && file !== "SKILL.md") add({ kind: "skill", name: file.slice(0, -3), path });
+        add({ kind: "skill", name: parts.at(-2)!, path }, owner);
+      } else if (parts.length === at + 3 && file.endsWith(".md") && file !== "SKILL.md") add({ kind: "skill", name: file.slice(0, -3), path }, owner);
     }
+  }
+  const owners = new Map<string, Set<string>>();
+  for (const file of found) {
+    const key = `${file.kind}\n${file.name}`;
+    owners.set(key, (owners.get(key) ?? new Set()).add(file.owner));
+  }
+  const files: CommandFile[] = [];
+  const names = new Set<string>();
+  for (const { owner, ...file } of found) {
+    const shared = owners.get(`${file.kind}\n${file.name}`)!.size > 1;
+    const qualifier = owner || WORKTREE_OWNER;
+    if (shared && (!NAME.test(qualifier) || (owner && RESERVED_OWNERS.has(owner)))) continue;
+    const name = shared ? `${qualifier}:${file.name}` : file.name;
+    if ((file.kind === "skill" ? "skill:".length : 0) + name.length > sessionCommandLimits.name) continue;
+    const key = `${file.kind}\n${name}`;
+    if (names.has(key) || files.filter(item => item.kind === file.kind).length >= sessionCommandLimits.perKind) continue;
+    names.add(key);
+    files.push({ ...file, name });
   }
   return files;
 }

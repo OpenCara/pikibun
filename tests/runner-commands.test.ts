@@ -31,12 +31,25 @@ test("prompt templates and skills are the files Pi would take, in the worktree a
     "app/.pi/skills/release/SKILL.md", "app/.pi/skills/release/extra/SKILL.md", "app/.pi/skills/release/notes.md", "app/.agents/skills/lint.md",
     ".agents/skills/group/audit/SKILL.md", "app/.pi/skills/SKILL.md", "app/docs/.pi/prompts/deep.md", "app/src/prompts/x.md", "app/.pi/skills/release/",
   ]), [
-    { kind: "prompt", name: "review", path: ".pi/prompts/review.md" },
+    { kind: "prompt", name: "worktree:review", path: ".pi/prompts/review.md" },
     { kind: "skill", name: "lint", path: "app/.agents/skills/lint.md" },
+    { kind: "prompt", name: "app:review", path: "app/.pi/prompts/review.md" },
     { kind: "skill", name: "audit", path: ".agents/skills/group/audit/SKILL.md" },
     { kind: "skill", name: "release", path: "app/.pi/skills/release/SKILL.md" },
   ]);
   assert.match(COMMAND_FILES, /\.pi\/prompts/);
+  assert.deepEqual(commandFiles(["web/.pi/prompts/release.md", "api/.pi/prompts/release.md", "api/.pi/skills/ship/SKILL.md", "api/.agents/skills/ship.md",
+    "docs/.pi/prompts/only.md", "bad name/.pi/prompts/release.md", "skill/.pi/prompts/release.md", "worktree/.pi/prompts/release.md"]).map(file => [file.name, file.path]), [
+    ["ship", "api/.agents/skills/ship.md"],
+    ["api:release", "api/.pi/prompts/release.md"],
+    ["only", "docs/.pi/prompts/only.md"],
+    ["web:release", "web/.pi/prompts/release.md"],
+  ], "a name two clones claim is offered by neither alone, but under each clone's name; one clone keeps Pi's own order (#380, finding 50). Clones named skill or worktree, "
+    + "whose qualified names would read as a skill or the root's, and names too long to type, aren't offered");
+  const long = "r".repeat(64);
+  assert.deepEqual(commandFiles([`${"a".repeat(64)}/.pi/prompts/${long}.md`, `api/.pi/prompts/${long}.md`]).map(file => file.name), [`api:${long}`],
+    "a qualified name longer than a command may be isn't offered");
+  assert.deepEqual(commandFiles([".pi/prompts/x.md", "worktree/.pi/prompts/x.md"]).map(file => file.name), ["worktree:x"], "the root keeps worktree:");
 });
 
 test("the list of commands a client gets keeps only well-formed entries", () => {
