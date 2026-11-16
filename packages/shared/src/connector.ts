@@ -45,6 +45,7 @@ export interface ConnectorCapabilities {
   extensions?: boolean;
   builtinExtensions?: boolean;
   requiredExtensions?: boolean;
+  gitSubdirectories?: boolean;
   fakeIpTunnels?: boolean;
   hostConfig?: boolean;
   compactionConfig?: boolean;

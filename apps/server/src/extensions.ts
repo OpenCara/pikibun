@@ -2,7 +2,8 @@ import type { Hono } from 'hono';
 import { isControlPlaneExtension, pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { managedExtensions } from '../../../packages/shared/src/managed-extensions.js';
-import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
+import { parseCapabilities } from '../../../packages/shared/src/connector.js';
+import { extensionAvailability, extensionLimits, extensionPackageKey, inRepositoryDirectory, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, AppEnv } from './types.js';
@@ -35,6 +36,10 @@ function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExte
 }
 
 const coreSources: readonly string[] = pikiSessionToolExtensions().filter(item => item.core).map(item => item.source);
+
+export function knowsGitSubdirectories(row: { capabilities_json?: string | null }): boolean {
+  try { return parseCapabilities(row.capabilities_json ?? '{}').gitSubdirectories === true; } catch { return false; }
+}
 
 export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined,
   options: { toolDefinitions?: boolean } = {}): WorkspaceExtension[] {
@@ -85,7 +90,8 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     }
     await c.env.DB.batch(statements);
     const pending = await c.env.DB.query<ExtensionRequest>(`SELECT id, action, source FROM connector_extension_requests
-      WHERE connector_id = ? AND status = 'pending' ORDER BY requested_at, id LIMIT ?`).bind(row.id, MAX_PENDING).all();
+      WHERE connector_id = ? AND status = 'pending' AND (? = 1 OR source NOT LIKE 'git:%#%') ORDER BY requested_at, id LIMIT ?`)
+      .bind(row.id, knowsGitSubdirectories(row) ? 1 : 0, MAX_PENDING).all();
     return c.json({ requests: pending.map(item => ({ id: item.id, action: item.action, source: item.source })), managed: managedExtensions });
   });
 
@@ -98,7 +104,8 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
       JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = ?
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
     if (!connected) fail(404, 'not_found', 'Workspace not found.');
-    const extensions = await workspaceExtensions(c.env, workspaceId);
+    const known = knowsGitSubdirectories(row);
+    const extensions = (await workspaceExtensions(c.env, workspaceId)).filter(item => known || !inRepositoryDirectory(item.source));
     const shown = extensions.some(item => isPikiExtensionSource(item.source))
       ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed, options) : extensions;
     const toolGroups = await memberToolGroups(c.env, workspaceId);
@@ -206,6 +213,9 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     try { source = normalizeExtensionSource(input.source); }
     catch (error) { return fail(400, 'invalid_extension_request', error instanceof Error ? error.message : 'Invalid extension source.'); }
     if (isPikiExtensionSource(source)) fail(400, 'piki_extension', 'Pikibun extensions come with the connector: update it (npx pikibun@latest connect) to get newer ones.');
+    if (inRepositoryDirectory(source) && !knowsGitSubdirectories(row)) {
+      fail(409, 'connector_update_required', 'A directory of a Git repository needs a newer connector on this host to install or remove it: update it (npx pikibun@latest connect).');
+    }
     const reported = await hostReport(c.env, row.id);
     if (reported && !reported.report.remoteInstalls) fail(409, 'remote_installs_off', 'This host\'s connector refuses installs from Pikibun: install extensions on it with pikibun extensions.');
     const existing = await c.env.DB.query<{ id: string }>(`SELECT id FROM connector_extension_requests WHERE connector_id = ? AND status = 'pending' AND action = ? AND source = ?`)

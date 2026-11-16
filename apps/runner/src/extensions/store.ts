@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { EXACT_VERSION, extensionLimits, extensionPackageKey, extensionSourceString, ExtensionSourceError, parseExtensionSourceSpec,
   type ExtensionSourceSpec } from "../../../../packages/shared/src/host-extensions.js";
 import { compareVersions, inManagedScope, MANAGED_EXTENSION_SCOPE, managedPinKey, type ManagedExtensionPin } from "../../../../packages/shared/src/managed-extensions.js";
+import { packageEntries } from "./load.js";
 
 const run = promisify(execFile);
 
@@ -55,7 +56,16 @@ export function sourceString(source: ExtensionSource): string {
   return source.kind === "local" ? `local:${source.path}` : extensionSourceString(source);
 }
 
-type Npm = (args: string[], cwd: string, env?: Record<string, string>) => Promise<void>;
+type Npm = (args: string[], cwd: string, env?: Record<string, string>) => Promise<string | void>;
+
+export const GIT_PATH_NPM = "11.10.0";
+
+async function piPackageFault(location: string): Promise<string | null> {
+  try {
+    const { files } = await packageEntries(location, true);
+    return files.length ? null : "it lists no extension modules";
+  } catch (error) { return error instanceof Error ? error.message : "it can't be read"; }
+}
 
 export class ExtensionStore {
   #queue: Promise<unknown> = Promise.resolve();
@@ -176,14 +186,24 @@ export class ExtensionStore {
       await rm(project, { recursive: true, force: true });
       await mkdir(project, { recursive: true, mode: 0o700 });
       await writeFile(join(project, "package.json"), `${JSON.stringify({ name: "pikibun-extension", private: true, dependencies: {} }, null, 2)}\n`, { mode: 0o600 });
-      const spec = source.kind === "npm" ? `${source.package}@${source.version}` : `git+${source.url}.git#${source.commit}`;
+      const spec = source.kind === "npm" ? `${source.package}@${source.version}` : `git+${source.url}.git#${source.commit}${source.path ? `::path:${source.path}` : ""}`;
       try {
+        if (source.kind === "git" && source.path) {
+          const version = String(await this.npm(["--version"], project) ?? "").trim();
+          if (!EXACT_VERSION.test(version) || compareVersions(version, GIT_PATH_NPM) < 0) {
+            throw new ExtensionSourceError(`Installing a directory of a Git repository needs npm ${GIT_PATH_NPM} or later; this host has ${version || "an npm that didn't say its version"}, which would install the repository's root instead. Update npm (npm install -g npm@latest).`);
+          }
+        }
         await this.npm(["install", "--save-exact", "--no-audit", "--no-fund", "--legacy-peer-deps", ...(options.allowScripts ? [] : ["--ignore-scripts"]), spec], project,
           source.kind === "git" ? { npm_config_allow_git: "root" } : undefined);
         const dependencies = (JSON.parse(await readFile(join(project, "package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
         const name = Object.keys(dependencies)[0];
         if (!name || Object.keys(dependencies).length !== 1) throw new ExtensionSourceError(`npm installed ${spec}, but not as the one package of ${project}.`);
         if (source.kind === "npm" && name !== source.package) throw new ExtensionSourceError(`npm installed ${name} for ${spec}.`);
+        const fault = source.kind === "git" && source.path ? await piPackageFault(join(project, "node_modules", ...name.split("/"))) : null;
+        if (fault && source.kind === "git") {
+          throw new ExtensionSourceError(`${source.path} of ${source.url} at ${source.commit} isn't a Pi extension package: npm installed ${name}, and ${fault}.`);
+        }
         const installed = { source: normalized, directory, package: name };
         await this.save([...sources, installed]);
         return installed;
@@ -251,8 +271,8 @@ async function checkLock(project: string, pin: ManagedExtensionPin): Promise<voi
   if (Object.keys(dependencies).join() !== pin.package) throw new ExtensionSourceError(`npm installed ${pin.package}@${pin.version}, but not as the one package of ${project}.`);
 }
 
-async function defaultNpm(args: string[], cwd: string, env?: Record<string, string>): Promise<void> {
-  try { await run(process.platform === "win32" ? "npm.cmd" : "npm", args, { cwd, maxBuffer: 16 * 1024 * 1024, shell: process.platform === "win32", env: { ...process.env, ...env } }); }
+async function defaultNpm(args: string[], cwd: string, env?: Record<string, string>): Promise<string> {
+  try { return (await run(process.platform === "win32" ? "npm.cmd" : "npm", args, { cwd, maxBuffer: 16 * 1024 * 1024, shell: process.platform === "win32", env: { ...process.env, ...env } })).stdout; }
   catch (error) { throw npmFailure(error, args); }
 }
 

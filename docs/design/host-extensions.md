@@ -180,8 +180,8 @@ them by their `piki:` source with the package's `version`. `--no-remote-installs
 
 ## Data and routes
 
-- `workspace_extensions`: workspace, source (normalized `npm:<name>@<version>` or `git:<url>@<commit>`), package key
-  (`npm:<name>` or `git:<url>`, unique per workspace), enabled, tools mode, settings JSON, who changed it and when.
+- `workspace_extensions`: workspace, source (normalized `npm:<name>@<version>` or `git:<url>@<commit>[#<directory>]`), package key
+  (`npm:<name>` or `git:<url>[#<directory>]`, unique per workspace), enabled, tools mode, settings JSON, who changed it and when.
 - `connector_extensions`: what the connector last reported (installed sources and their loaded extensions). Its dev
   extensions (their paths are the owner's files) are shown to the host's owner only.
 - `connector_extension_settings.automatic_tools`: the host owner's switch.
@@ -238,6 +238,25 @@ and wildcards), `host:` files from the host owner's context directory, and `http
 adds them as a prompt section, and its `tool_result` adds a clone's files to the result of the call that cloned it
 during a message. It reads nothing that links outside its repository, into `.git`, or outside that context directory, and fetches no page from
 a private network address. See its [README](../../extensions/context-files/README.md).
+
+## A directory of a Git repository (#255)
+
+A Git source may name a directory of its repository after the commit: `git:<url>@<commit>#<directory>`, for a package kept
+in a monorepo. The URL can't hold a `#`, so the first one splits them. The directory is relative, in segments of
+letters, digits and `._@-`, without `.` or `..`, and at most 200 characters (`gitSourcePath`). It is part of the package
+key, so two directories of one repository are two extensions, and another commit of one is another version of it.
+
+- **Installed with npm's `::path:`.** The connector installs `git+<url>.git#<commit>::path:<directory>`, with the
+  flags a Git source always gets (`--ignore-scripts`, `npm_config_allow_git=root`). An npm older than 11.10.0 ignores
+  `::path:` and installs the repository's root instead, so the connector asks npm its version first and refuses an older
+  one (`GIT_PATH_NPM`). What npm installed must be a Pi extension package as the loader reads an installed one
+  (`packageEntries` with a required manifest: a `pi.extensions` list or an `extensions/` directory, naming at least one
+  module), or the install is undone.
+- **Only to connectors that know the form** (`gitSubdirectories` in their capabilities). An older connector refuses a
+  whole list with one source it can't parse, so the server leaves such sources out of its workspace answer and its
+  required extensions, keeps its install and remove requests waiting (in the query, so they don't take the place of
+  others it is sent), and refuses a new one with `connector_update_required`.
+  It keeps running the workspace's other extensions.
 
 ## Later
 

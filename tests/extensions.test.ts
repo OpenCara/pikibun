@@ -230,6 +230,26 @@ test('Pikibun extensions: hosts aren\'t asked to install them, and a connector t
   assert.deepEqual(['piki:gh', 'piki:glab'].map(sources), [true, false], 'a tool card names one the workspace runs');
 });
 
+test('a Git source that names a directory goes only to connectors that know the form, and an older one keeps the workspace\'s others (#255)', async t => {
+  const f = await fixture(t); const s = await team(f);
+  const commit = 'a'.repeat(40);
+  const directory = `git:https://github.com/OpenCara/pikibun@${commit}#extensions/context-files`;
+  const path = `/api/workspaces/${s.workspaceId}/extensions`;
+  await json(await s.alice.request('PUT', path, { source: directory }));
+  await json(await s.alice.request('PUT', path, { source: 'npm:pi-memory@0.4.2' }));
+  const ask = async () => (await json<{ extensions: WorkspaceExtension[] }>(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.workspaceId })))
+    .extensions.map(item => item.source);
+  assert.deepEqual(await ask(), ['npm:pi-memory@0.4.2'], 'a connector that predates the form never sees it');
+  await denied(await s.alice.request('POST', `/api/connectors/${s.connector.connectorId}/extensions/requests`, { action: 'install', source: directory }), 409, 'connector_update_required');
+  f.sqlite.prepare("UPDATE connectors SET capabilities_json = json_set(capabilities_json, '$.gitSubdirectories', json('true')) WHERE id = ?").run(s.connector.connectorId);
+  assert.deepEqual((await ask()).sort(), [directory, 'npm:pi-memory@0.4.2'].sort());
+  await json(await s.alice.request('POST', `/api/connectors/${s.connector.connectorId}/extensions/requests`, { action: 'install', source: directory }), 201);
+  const sync = async () => (await json<{ requests: { source: string }[] }>(await self(f, s.connector, 'extensions', { report: report([]), results: [] }))).requests.map(item => item.source);
+  assert.deepEqual(await sync(), [directory]);
+  f.sqlite.prepare("UPDATE connectors SET capabilities_json = json_remove(capabilities_json, '$.gitSubdirectories') WHERE id = ?").run(s.connector.connectorId);
+  assert.deepEqual(await sync(), [], 'the request waits while the host runs a connector that would refuse the list');
+});
+
 test('every workspace starts with popular extensions, turned off, and existing ones got them after their own', async t => {
   const f = await fixture(t);
   const alice = await f.client('alice');

@@ -132,7 +132,8 @@ export function extensionLabel(source: string): string {
     const spec = parseExtensionSourceSpec(source);
     if (spec.kind === "piki") return pikiExtension(source)?.title ?? source;
     if (spec.kind === "npm") return spec.package;
-    return spec.url.slice(spec.url.lastIndexOf("/") + 1) || source;
+    const repository = spec.url.slice(spec.url.lastIndexOf("/") + 1) || spec.url;
+    return spec.path ? `${repository}/${spec.path}` : repository;
   } catch { return source; }
 }
 
