@@ -164,10 +164,13 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   keeps the transpiled code in a cache under `os.tmpdir()` and runs a cached file without looking at the source again.
   In a sandbox, that directory is the session's own (on Linux its `/tmp` is in the session's home, on macOS `TMPDIR`
   is), so a command of the session could plant code there that the next extension process would run as the extension,
-  with its tools. `child.ts` sets `JITI_FS_CACHE=false` before it loads anything, on every platform, so each process
-  transpiles from the extension's own read-only files. Loading costs a little more at each start. jiti still writes a
-  temporary file for its rare fallback to a native `import()` of ESM syntax it couldn't transform; that file is
-  fresh each time and read back at once.
+  with its tools. `child.ts` imports `jiti-environment.ts` first, which sets `JITI_FS_CACHE=false` on every platform,
+  so each process transpiles from the extension's own read-only files. Loading costs a little more at each start. jiti
+  reads these variables each time Pi's loader makes a jiti, and Pi passes no cache option of its own (1.5.2). What is
+  left: jiti's fallback to a native `import()` of ESM syntax it couldn't transform imports a data URL, and writes a
+  temporary file under `os.tmpdir()/jiti-esm` only where that URL is too long for the platform (`ENAMETOOLONG`;
+  `JITI_ESM_EVAL_TEMP_FILE` is set false so nothing asks for it otherwise). The file has a random name and is imported
+  at once, but it is in the session's temporary directory, so a command running at that moment could replace it.
 
 ## Step 3 as built, on Linux
 

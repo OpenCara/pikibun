@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ipcLaunch, pipeLaunch, ProcessChannel, replyOf, workerCommand, workerEnvironment, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
@@ -357,7 +357,6 @@ test("an extension process keeps no transpile cache that a session's commands co
   const opened = await channel.call("open", { source: "local:typed", files: [file], models: [] });
   assert.deepEqual(opened.value.errors, []);
   await channel.close();
-  const { readdir } = await import("node:fs/promises");
   const left = await readdir(temporary, { recursive: true });
   assert.deepEqual(left.filter(name => /jiti/.test(name)), [], `no jiti cache in the process's TMPDIR: ${left.join(", ")}`);
 });
