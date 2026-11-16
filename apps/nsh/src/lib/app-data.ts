@@ -31,6 +31,11 @@ export interface LiveActivity {
   activity: SessionActivity;
 }
 
+export interface SideAskRequest {
+  sessionId: string;
+  conversationId: string;
+}
+
 export interface AppData {
   sessions: Accessor<SessionRecord[]>;
   sessionsLoading: Accessor<boolean>;
@@ -48,12 +53,15 @@ export interface AppData {
   rememberAuto: (value: AutoPreference) => void;
   liveActivity: Accessor<LiveActivity | null>;
   setLiveActivity: (value: LiveActivity | null) => void;
+  sideAskRequest: Accessor<SideAskRequest | null>;
+  requestSideAsk: (value: SideAskRequest | null) => void;
 }
 
 export const AppDataContext = context<AppData | null>(null);
 
 export function createAppData(): AppData {
   const liveActivity = signal<LiveActivity | null>(null);
+  const sideAskRequest = signal<SideAskRequest | null>(null);
   let working: Accessor<boolean> = () => false;
   const sessions = createResource<{ sessions: SessionRecord[] }>(() => "/api/sessions", () => (working() ? 10_000 : 30_000));
   const workspaces = createResource<{ workspaces: Workspace[] }>(() => "/api/workspaces");
@@ -91,6 +99,8 @@ export function createAppData(): AppData {
     },
     liveActivity,
     setLiveActivity: value => liveActivity.set(value),
+    sideAskRequest,
+    requestSideAsk: value => sideAskRequest.set(value),
   };
 }
 

@@ -337,6 +337,17 @@ function Conversation(props: {
     ? activeQueue().filter(item => item.actorId === user.id && item.status === "queued" && (item.mode === "ask" ? canAsk() : canWrite())) : []));
   const editBlocked = () => attachments.images().length > 0;
   const sideConversations = computed(() => view().conversations.filter(item => item.mode === "ask" && (!item.actorId || item.actorId === user.id)));
+  effect(() => {
+    const asked = data.sideAskRequest();
+    if (!asked || asked.sessionId !== props.id) return;
+    const known = sideConversations().some(item => item.id === asked.conversationId);
+    untracked(() => {
+      data.requestSideAsk(null);
+      if (!canAsk()) return;
+      mode.set("ask");
+      conversationId.set(known ? asked.conversationId : "");
+    });
+  });
   const shownConversation = (conversation: { id: string; mode?: string; actorId?: string } | undefined) => (actualMode() === "ask"
     ? conversation?.mode === "ask" && (!conversation.actorId || conversation.actorId === user.id) && (!conversationId() || conversation.id === conversationId())
     : conversation?.mode !== "ask");
@@ -394,7 +405,7 @@ function Conversation(props: {
         body: { content: withFilesNote(message, note), requestId: pending.id, ...(sending ? { options: sending } : {}), ...(images.length ? { images } : {}) } });
       receipt.set(result);
       if (sending && !auto) data.rememberChat(host, chosen, view().agent);
-      if (kind === "ask") conversationId.set(result.conversationId);
+      if (kind === "ask") { conversationId.set(result.conversationId); void data.refreshSessions(); }
       forgetSentDraft(props.id, sent);
       attachments.sent(pasted, attached);
       request = null;
