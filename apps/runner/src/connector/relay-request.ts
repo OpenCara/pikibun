@@ -8,7 +8,7 @@ import { actorSchema, decodeJson, encoder, IDENTIFIER } from "./wire.js";
 
 export const ticketSchema = z.object({
   aud: z.literal("runner"), sessionId: z.string().regex(IDENTIFIER), actorId: actorSchema, ownerId: actorSchema,
-  action: z.enum(["create", "view", "events", "submit", "ask", "backup", "restart", "restore", "stop", "files", "changes", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image", "sudo"]),
+  action: z.enum(["create", "view", "events", "submit", "ask", "backup", "restart", "restore", "stop", "files", "changes", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image", "sudo", "attach", "portable"]),
   policyVersion: z.number().int().positive(), iat: z.number().int(), exp: z.number().int(),
   jti: z.string().regex(IDENTIFIER), bodyHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/), connectorId: z.string().regex(IDENTIFIER),
 }).strict();
@@ -30,11 +30,16 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
     if (binding.session.connectorId !== connectorId || binding.model?.connectorId !== connectorId
       || binding.owner?.id !== rpc.ticket?.ownerId || binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign connector binding");
   } else {
-    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|restart|backup|restore|stop|files|changes|revert|fork|pack|unpack|withdraw|upload|tunnel|image|sudo)$/.exec(rpc.path);
+    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|restart|backup|restore|stop|files|changes|revert|fork|pack|unpack|withdraw|upload|tunnel|image|sudo|attach|portable)$/.exec(rpc.path);
     if (!match) throw new Error("Relay path is not allowed");
     sessionId = match[1]!;
     action = match[2]!.startsWith("view/") ? "view" : match[2] as RunnerAction;
     if (rpc.method !== (action === "view" ? "GET" : "POST")) throw new Error("Relay method is not allowed");
+    if (action === "attach") {
+      const binding = decodeJson(encoder.encode(rpc.body)) as RunnerBinding;
+      if (binding?.session?.id !== sessionId || binding.session.connectorId !== connectorId || binding.model?.connectorId !== connectorId
+        || binding.owner?.id !== rpc.ticket?.ownerId || binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign attach binding");
+    }
     if (action === "restore") {
       const input = decodeJson(encoder.encode(rpc.body)) as { binding?: RunnerBinding };
       if (input.binding?.session?.id !== sessionId || input.binding.session.connectorId !== connectorId
@@ -45,7 +50,7 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
   const ticket = rpc.ticket;
   if (ticket.connectorId !== connectorId
     || (rpc.method === "GET" && rpc.body !== "")
-    || (["create", "restore", "restart", "fork", "pack", "unpack"].includes(action) && ticket.actorId !== ticket.ownerId)) throw new Error("Invalid relay ticket");
+    || (["create", "restore", "restart", "fork", "pack", "unpack", "attach", "portable"].includes(action) && ticket.actorId !== ticket.ownerId)) throw new Error("Invalid relay ticket");
   const authorization = await signToken(ticket, verifierSecret);
   await verifyRunnerTicket(authorization, verifierSecret, action, sessionId, rpc.body);
   return { rpc, authorization };

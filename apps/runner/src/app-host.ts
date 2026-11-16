@@ -7,6 +7,7 @@ import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsol
 import { stdioTransport, type Transport } from "./app-host-transport.js";
 import { pairingCodePattern, pairingIdPattern, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "../../../packages/shared/src/app-host-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
+import { identityDirectory } from "./identity.js";
 import { ConnectorSetupError, RunnerError } from "./protocol.js";
 import { transcriptPage } from "../../../packages/shared/src/transcript-display.js";
 import { LoginError, LoginSession, loginProviders, piLogin, runLogin } from "./pi-login.js";
@@ -53,6 +54,7 @@ function hostError(error: unknown, fallback: string): HostError {
 }
 
 let stateDir: string;
+let identityDir: string;
 let transport: Transport<HostEvent>;
 let running: { connector: LocalConnector; stopRequested: boolean } | undefined;
 let signingIn: { id: number; session: LoginSession } | undefined;
@@ -116,7 +118,7 @@ async function start(request: StartRequest): Promise<void> {
   if (running) throw new HostFailure("already-running", "The host is already running.");
   const pairing = request.pairing && { id: request.pairing.id, code: request.pairing.code };
   const connector = createConnector({
-    dataDir: stateDir, server, pairing, replacePairing: replace, localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}),
+    dataDir: stateDir, identityDir, server, pairing, replacePairing: replace, localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}),
     allowInsecureLoopback: request.allowInsecureLoopback, allowFaux: request.allowFaux,
     capabilities: { platform: process.platform, sandbox: false, productionShell: false },
     onStatus: state => {
@@ -225,10 +227,11 @@ async function shutdown(): Promise<void> {
 
 export function runAppHost(args: string[]): void {
   if (transport) throw new Error("The host is already running in this process.");
-  const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: { "state-dir": { type: "string" }, stdio: { type: "boolean" } } });
+  const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: { "state-dir": { type: "string" }, "identity-dir": { type: "string" }, stdio: { type: "boolean" } } });
   if (!values.stdio) throw new Error("The host speaks only over --stdio.");
   const givenStateDir = values["state-dir"];
   stateDir = givenStateDir === undefined ? defaultStateDir() : givenStateDir.startsWith("~/") ? join(homedir(), givenStateDir.slice(2)) : givenStateDir;
+  identityDir = identityDirectory(values["identity-dir"]);
   transport = stdioTransport<HostEvent>();
   transport.onMessage(value => {
     const request = hostRequestSchema.safeParse(value);

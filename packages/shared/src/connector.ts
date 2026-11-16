@@ -48,6 +48,7 @@ export interface ConnectorCapabilities {
   fakeIpTunnels?: boolean;
   hostConfig?: boolean;
   compactionConfig?: boolean;
+  portableSessions?: boolean;
   gpu?: GpuKind;
 }
 

@@ -21,6 +21,7 @@ import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson } from "./protocol.js";
+import type { IdentityStore } from "./identity.js";
 import { localChangesRequest, type LocalChanges, type LocalChangesRequest } from "../../../packages/shared/src/local-changes.js";
 import { LOCAL_CHANGES_SECONDS, localChangesCommand, NotARepository, parseLocalChanges } from "./local-changes.js";
 import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
@@ -130,6 +131,7 @@ export type RunnerConfig = {
   readBackup?: (restore: RestoreDescriptor, targetSessionId: string) => Promise<Uint8Array>;
   compaction?: CompactionSettings;
   identity?: ClientIdentity;
+  portable?: { store: IdentityStore; detached?(sessionId: string): Promise<void> };
   repositoryCache?: RepositoryCache;
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;

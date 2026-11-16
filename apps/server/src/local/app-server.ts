@@ -4,6 +4,7 @@ import { stdioTransport, type Transport } from '../../../runner/src/app-host-tra
 import { assertConnectorPlatform, assertPrerequisites, hostIsolation, loadConnectorModels, unsandboxedWarning } from '../../../runner/src/connect-setup.js';
 import type { LocalModels } from '../../../runner/src/local-pi.js';
 import { ConnectorSetupError } from '../../../runner/src/protocol.js';
+import { identityDirectory } from '../../../runner/src/identity.js';
 import { ConfigurationError } from '../config.js';
 import type { ServerEvent, ServerHostState, ServerInspection, ServerRequest, ServerStartRequest, ServerStatus } from '../../../../packages/shared/src/app-server-protocol.js';
 import { startLocalHost, type LocalHost } from './host.js';
@@ -91,7 +92,7 @@ async function launch(request: ServerStartRequest): Promise<void> {
   } else {
     const setHost = (next: ServerHostState) => { if (running === current) { current.hostState = next; status(); } };
     current.host = startLocalHost(server, stateDir, {
-      localModels: host.models, unsandboxed,
+      localModels: host.models, unsandboxed, identityDir: identityDirectory(),
       onWaiting: () => setHost('waiting'),
       onStatus: (next, reason) => {
         setHost(next);

@@ -28,7 +28,7 @@ export function requestKey(actorId: string, mode: "write" | "ask", requestId: st
 export function permissionFor(action: RunnerAction): Permission {
   if (action === "submit" || action === "create" || action === "stop" || action === "files" || action === "changes" || action === "revert" || action === "fork" || action === "upload" || action === "tunnel" || action === "image" || action === "sudo") return "write";
   if (action === "ask" || action === "withdraw") return "ask";
-  if (action === "restart" || action === "backup" || action === "restore" || action === "pack" || action === "unpack") return "manage";
+  if (action === "restart" || action === "backup" || action === "restore" || action === "pack" || action === "unpack" || action === "attach" || action === "portable") return "manage";
   return "read";
 }
 export async function verifyRunnerTicket(token: string, secret: string, action: RunnerAction, sessionId: string, body: string, now = Date.now()): Promise<RunnerTicket> {
@@ -93,6 +93,7 @@ export function validateBinding(value: unknown, id: string, allowNativeModels = 
     || b.session.connectorId !== b.model.connectorId || b.session.connectorOwnerId !== b.model.connectorOwnerId)
     throw new RunnerError(400, "Invalid runner workspace or connector binding");
   if (b.session.connectorId !== undefined) assertId(b.session.connectorId);
+  if (b.session.portable !== undefined && (b.session.portable !== true || !b.session.connectorId)) throw new RunnerError(400, "Invalid portable session binding");
   validateRepositories(b.session.repositories);
   if (b.session.repositoryMode !== undefined && (b.session.repositoryMode !== "clone" || b.session.repositories?.length))
     throw new RunnerError(400, "Invalid session repository mode");

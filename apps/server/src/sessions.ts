@@ -32,6 +32,7 @@ import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 import { packDueAfterArchiving } from './automatic-packing.js';
 import { autoModeEnabled } from './auto-mode.js';
+import { keepPortable, portableKeyFor } from './portable-sessions.js';
 import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
 
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown, content = ''): Promise<ChatOptions | undefined> {
@@ -239,12 +240,17 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       needsConsent ? 1 : 0, row.connector_id ?? null).first();
   if (!inserted) fail(409, 'session_configuration_changed', 'Workspace repositories, Git account access, membership, or connector authority changed. Try again.');
   link.inserted?.(row.id);
+  const portableKey = await portableKeyFor(c.env, row, resolved.sourceIds === '[]');
+  if (portableKey) {
+    await c.env.DB.query('UPDATE sessions SET portable_key = ? WHERE id = ?').bind(portableKey, row.id).run();
+    row.portable_key = portableKey;
+  }
   if (link.parentSessionId) {
     await c.env.DB.query('UPDATE sessions SET parent_session_id = ?, schedule_id = ? WHERE id = ?').bind(link.parentSessionId, link.scheduleId ?? null, row.id).run();
     row.parent_session_id = link.parentSessionId;
     row.schedule_id = link.scheduleId ?? null;
   }
-  await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}),
+  await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}), ...(portableKey ? { portable: true } : {}),
     ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}), ...(link.parentSessionId && link.scheduleId ? { scheduleId: link.scheduleId } : {}) }).run();
   try {
     const binding = await bindingForSession(c, row);
@@ -484,6 +490,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
         RETURNING *`).bind(title, row.id, row.owner_id, actorId).first();
       if (!renamed) fail(409, 'policy_changed', 'Session membership or status changed; reload and retry.');
       await auditStatement(c.env, actorId, 'session.renamed', row.workspace_id, row.id).run();
+      await keepPortable(c, renamed);
       return c.json({ session: sessionRecord(renamed, access.permissions) });
     }
     if (!manages) fail(403, 'owner_required', 'Only the session owner, or the workspace\'s owner or an admin, can change its visibility.');

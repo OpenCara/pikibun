@@ -2,6 +2,7 @@ import { connectMain } from "../../../apps/runner/src/connect-cli.js";
 import { cacheMain } from "../../../apps/runner/src/cache-cli.js";
 import { extensionsMain } from "../../../apps/runner/src/extensions-cli.js";
 import { hostMain } from "../../../apps/runner/src/host-cli.js";
+import { identityMain } from "../../../apps/runner/src/identity-cli.js";
 import { ConnectorSetupError } from "../../../apps/runner/src/protocol.js";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -13,6 +14,8 @@ Commands:
               or shared with others (--share)
   cache       List or prune this host's repository cache
   extensions  Add, list or remove this host's extensions
+  identity    Your identity on this computer, which keeps your private sessions
+              portable between servers: show, export, import, rotate or reset it
   host        This computer's host for the Pikibun app, which runs it itself
               (host --stdio)
 
@@ -25,7 +28,7 @@ Run "pikibun connect --help" or "pikibun serve --help" for their options.
 
 const [command, ...args] = process.argv.slice(2);
 const serveMain = async (args: string[]) => (await import("../../../apps/server/src/local/cli.js")).serveMain(args);
-const run = command === "connect" ? connectMain : command === "cache" ? cacheMain : command === "extensions" ? extensionsMain : command === "serve" ? serveMain
+const run = command === "connect" ? connectMain : command === "cache" ? cacheMain : command === "extensions" ? extensionsMain : command === "identity" ? identityMain : command === "serve" ? serveMain
   : command === "host" ? hostMain : undefined;
 if (run) {
   run(args).catch((error: unknown) => {

@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 import { assertConnectorPlatform, assertPrerequisites, checkPrerequisites, loadConnectorModels } from '../../../runner/src/connect-setup.js';
 import { confirmUnsandboxed, promptHidden, resourceConfig } from '../../../runner/src/connect-cli.js';
 import { ConnectorSetupError } from '../../../runner/src/protocol.js';
+import { identityDirectory } from '../../../runner/src/identity.js';
 import { ConfigurationError } from '../config.js';
 import { startLocalHost, type LocalHost, type LocalHostOptions } from './host.js';
 import { githubOAuthAppInstructions, LocalServerError, startLocalServer } from './launch.js';
@@ -98,7 +99,7 @@ async function hostOptions(values: Record<string, string | boolean | string[] | 
   const resources = typeof values.resources === 'string' ? await resourceConfig(values.resources) : undefined;
   if (unsandboxed) await confirmUnsandboxed();
   return {
-    localModels, unsandboxed, resources, allowFaux: values['allow-faux'] === true, allowTestShell: values['allow-test-shell'] === true,
+    localModels, unsandboxed, resources, allowFaux: values['allow-faux'] === true, allowTestShell: values['allow-test-shell'] === true, identityDir: identityDirectory(),
     onStatus: (status, reason) => { process.stderr.write(`This computer: ${status}${reason ? ` (${reason})` : ''}\n`); },
     onWarning: () => { process.stderr.write('Some resource domains are unavailable; production bash remains fail-closed.\n'); },
   };

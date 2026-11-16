@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { createConnector, controlPlaneOrigin } from "./connector.js";
 import { assertConnectorPlatform, assertPrerequisites, checkPrerequisites, defaultStateDir, loadConnectorModels, savedPairing, unsandboxedWarning } from "./connect-setup.js";
 import { ConnectorSetupError } from "./protocol.js";
+import { identityDirectory } from "./identity.js";
 import type { ResourceConfig } from "./resources.js";
 import { DEFAULT_WINDOWS_LIMITS, validWindowsLimits, windowsRuntimeDirectory, type SandboxBackendConfig } from "./sandbox-backend.js";
 
@@ -40,6 +41,9 @@ Options:
 
 This machine's own setup, when the defaults don't fit:
   --state-dir PATH         Private connector state (default ~/.local/share/pikibun/connector)
+  --identity-dir PATH      Your identity, shared by every connection on this computer, which
+                           keeps your private sessions portable between servers (default
+                           ~/.local/share/pikibun/identity; see "pikibun identity --help")
   --pi-agent-dir PATH      Pi config/auth directory (default: Pi's own getAgentDir())
   --model PROVIDER/MODEL   Advertise this configured local model (repeatable); without it,
                            the models matched by enabledModels in Pi's settings.json are
@@ -88,7 +92,7 @@ export function promptPairingCode(): Promise<string> {
   return promptHidden("Pairing code (hidden): ", "Pairing", "pairing code");
 }
 
-export function promptHidden(label: string, action: string, noun: string): Promise<string> {
+export function promptHidden(label: string, action: string, noun: string, accept: RegExp = /^[A-Za-z0-9_-]$/): Promise<string> {
   if (!process.stdin.isTTY || !process.stderr.isTTY || !process.stdin.setRawMode) throw new Error(`${action} requires a private interactive terminal; ${noun}s are never accepted on argv or stdin pipes`);
   const wasRaw = process.stdin.isRaw;
   const wasPaused = process.stdin.isPaused();
@@ -114,7 +118,7 @@ export function promptHidden(label: string, action: string, noun: string): Promi
       if (char === "\r" || char === "\n") { finish(); return; }
       if (char === "\u0003" || char === "\u0004") { finish(new Error(`${action} cancelled`)); return; }
       if (char === "\u007f" || char === "\b") { code = code.slice(0, -1); continue; }
-      if (!/^[A-Za-z0-9_-]$/.test(char) || code.length >= 256) { finish(new Error(`Invalid ${noun}`)); return; }
+      if (!accept.test(char) || code.length >= 256) { finish(new Error(`Invalid ${noun}`)); return; }
       code += char;
     }
   };
@@ -194,7 +198,7 @@ export function movedOptionsNotice(given: readonly string[]): string {
 export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
     help: { type: "boolean" }, server: { type: "string" }, "pairing-id": { type: "string" }, force: { type: "boolean" },
-    "state-dir": { type: "string" }, "pi-agent-dir": { type: "string" }, model: { type: "string", multiple: true },
+    "state-dir": { type: "string" }, "identity-dir": { type: "string" }, "pi-agent-dir": { type: "string" }, model: { type: "string", multiple: true },
     resources: { type: "string" }, "allow-insecure-loopback": { type: "boolean" },
     "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" }, "no-remote-installs": { type: "boolean" },
     "managed-extensions": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
@@ -251,7 +255,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   if (pairingId && !code) throw new ConnectorSetupError("No pairing code was entered. Paste the single-use code shown in Pikibun at the hidden prompt.");
   const pairing = pairingId ? { id: pairingId, code } : undefined;
   const connector = createConnector({
-    dataDir,
+    dataDir, identityDir: identityDirectory(values["identity-dir"]),
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
     remoteExtensionInstalls: values["no-remote-installs"] !== true, managedExtensions: values["managed-extensions"] === true,
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
