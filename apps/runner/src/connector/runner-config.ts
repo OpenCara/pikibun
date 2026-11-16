@@ -6,6 +6,7 @@ import type { GitHubEffectAuthority, GitHubIssueView, ScheduleToolResult } from 
 import type { HostBrowserSource } from "../browser-host.js";
 import { parseEgressGrant, relayGitRequest, relayPath } from "../egress.js";
 import type { HostExtensions } from "../extensions/host.js";
+import type { IdentityStore } from "../identity.js";
 import { HostCredentialError, hostGitAuthorization } from "../git-credentials.js";
 import type { HostConfigSource } from "../host-config.js";
 import type { LocalModels } from "../local-pi.js";
@@ -38,6 +39,7 @@ export interface RunnerConfigSource {
     localModels: LocalModels; fetch?: typeof fetch;
   };
   lifetime: AbortSignal;
+  identity?: IdentityStore;
   hostConfig: HostConfigSource;
   hostExtensions: HostExtensions | undefined;
   browser(): HostBrowserSource | undefined;
@@ -75,6 +77,7 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
       return options.localModels.resolve(model);
     },
     compaction: options.localModels.compaction, identity: options.localModels.identity,
+    ...(source.identity ? { portable: { store: source.identity, detached: async (sessionId: string) => calls.reportDetached(await source.connection(), sessionId) } } : {}),
     ...(source.hostExtensions ? { extensions: runnerExtensions(source, source.hostExtensions) } : {}),
     ...(source.browser() ? { browser: () => source.browser()?.current(), browserStatus: () => source.browser()?.status() } : {}),
     ...(source.tunnels() && source.tunnel() ? { tunnels: { open: (socket: string, signal?: AbortSignal, access?: TunnelAccess) => source.tunnels()!.open(socket, signal, access), status: () => source.tunnel()?.status() } } : {}),

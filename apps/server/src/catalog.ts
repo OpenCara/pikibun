@@ -15,6 +15,7 @@ import type { AgentRow, Env, ModelRow, AppEnv } from './types.js';
 import { ConstraintError, type Query } from './db/types.js';
 import { ownerHostStatements } from './connectors.js';
 import { modelEnabledSQL } from './host-models.js';
+import { portableSettingsChanged } from './portable-sessions.js';
 
 interface SafeMember {
   userId: string;
@@ -277,6 +278,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     const row = result[2].results[0];
     if (result[0].changes !== 1 || !row) fail(403, 'forbidden', 'Workspace administrator access is required.');
     const workspace: Workspace = { ...row, personal: Number(row.personal) === 1 };
+    if (workspace.personal) await portableSettingsChanged(c.env, workspaceId);
     return c.json({ workspace });
   });
 

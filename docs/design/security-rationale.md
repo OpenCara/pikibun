@@ -243,6 +243,17 @@ the host instead of going to the model.
 - **Asked, not followed.** A `pikibun://auth/code` link names its server, and anyone can send one. The app never signs in from a link it is handed: it fills in the code and asks, naming the server, so a link can't quietly sign it in to someone else's account or server.
 - **Audited.** `account.app_code.created` and `account.app_code.used` (with the app's name) go to the audit log.
 
+## Portable sessions
+
+A private session can be attached to whichever server its owner's identity is paired with ([design](portable-sessions.md)). What keeps that safe:
+
+- **The key never leaves the computer.** It is kept `0600` in a `0700` directory, and only its public half and the statements it signs reach a server. An exported copy is encrypted with the owner's passphrase (scrypt, AES-256-GCM).
+- **Delegation rides on pairing.** A host signs a delegation only for its own pairing, which its machine's user made with a code from that account. A server accepts one only for its own origin and from the connector it names, authenticated.
+- **The host decides.** It attaches only for its pairing's owner, and only sessions marked by its current key; a server can't attach a session to another account, or take one away.
+- **One writer at a time.** An open lease per session keeps two connections of the computer out of one session's database, and attaching rewrites its pinned Git identity and stored binding only while it holds the lease and the session is idle.
+- **Settings can't be forged.** A server applies the private workspace's settings only signed by the identity, at a newer version than it applied.
+- **Not covered:** the server a session is attached to signs its users in, so it can still act as their account there.
+
 ## Single instance
 
 The server holds a database lock while it runs ([One server per database](../self-hosting.md#one-server-per-database)): live state (connected hosts, requests in flight, live updates, the password hashing queue) is in memory, and a second server would split it. On Postgres the lock lives on a connection of its own, which the server keeps watching (`apps/server/src/db/instance-lock.ts`): if that connection drops it takes the lock again, and if another server got it first, or the database stays unreachable for a minute, it stops rather than run beside it.

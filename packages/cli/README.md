@@ -31,7 +31,16 @@ To pair the machine again, for example after revoking its host in Pikibun or to 
 npx pikibun@latest connect --server https://pikibun.com --pairing-id PAIRING_ID --force
 ```
 
-The saved token is replaced only once the new code is accepted. The old host stays in **Settings → Hosts**, offline, until you revoke it there; its sessions are not moved to the new host.
+The saved token is replaced only once the new code is accepted. The old host stays in **Settings → Hosts**, offline, until you revoke it there; its sessions are not moved to the new host, apart from your portable private sessions.
+
+Sessions in your private workspace are portable: they belong to your identity, a key every connection of yours on this machine shares (`~/.local/share/pikibun/identity`, `--identity-dir`), not to a server. Paired with another server, the machine offers them there under your private workspace, with **Bring here**; see [Moving a session to another server](https://github.com/OpenCara/pikibun/blob/main/docs/backups.md#moving-a-session-to-another-server). Manage the identity with `pikibun identity`:
+
+```sh
+npx pikibun@latest identity show                      # its public key and the portable sessions here
+npx pikibun@latest identity export --out identity.key  # encrypted with a passphrase, for a backup or another machine
+npx pikibun@latest identity import identity.key
+npx pikibun@latest identity rotate                    # a new key, signed over by the old one
+```
 
 Connector 0.8.0 moved the default state directory from `~/.local/share/opencara/connector` to `~/.local/share/pikibun/connector` without moving anything: to keep a pairing made by an older connector, run `npx pikibun@latest connect --state-dir ~/.local/share/opencara/connector`, or pair the machine again.
 

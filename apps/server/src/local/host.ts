@@ -9,7 +9,7 @@ import { createPairing } from '../connectors.js';
 import type { LocalServer } from './launch.js';
 
 export type LocalHostOptions = Pick<ConnectorOptions, 'localModels' | 'unsandboxed' | 'resources' | 'allowFaux' | 'allowTestShell' | 'onStatus' | 'onWarning' | 'capabilities'
-  | 'acquireLease' | 'runtimeFactory'>;
+  | 'acquireLease' | 'runtimeFactory' | 'identityDir'>;
 
 export interface LocalHost {
   readonly started: Promise<void>;

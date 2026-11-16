@@ -18,7 +18,9 @@ import { detectGpu, HostConfigSource } from "./host-config.js";
 import type { GpuKind, RepositoryCacheMode } from "../../../packages/shared/src/host-config.js";
 import { recoverResourceOrphans } from "./resources.js";
 import { RepositoryCache } from "./repo-cache.js";
-import { RunnerService, createRunnerApp } from "./server.js";
+import { RunnerService, createRunnerApp, type PortableReport } from "./server.js";
+import { IdentityStore } from "./identity.js";
+import { parseSettings } from "../../../packages/shared/src/identity.js";
 import { ControlPlaneCalls } from "./connector/control-plane.js";
 import type { ConnectorSocket, Generation } from "./connector/generation.js";
 import { connectorRunnerConfig } from "./connector/runner-config.js";
@@ -40,6 +42,9 @@ const STATE_FILE = "connector.json";
 const EXTENSION_SYNC_MS = 30_000;
 const HOST_CONFIG_LIMIT = 128 * 1024;
 const RECONNECT_WAIT = 15_000;
+const IDENTITY_SYNC_MS = 60_000;
+const IDENTITY_REPORT_LIMIT = 500;
+const IDENTITY_ANSWER_LIMIT = 64 * 1024;
 const credentialsSchema = z.object({
   connectorId: z.string().regex(IDENTIFIER), token: z.string().regex(TOKEN), controlPlaneUrl: z.string(),
 }).strict();
@@ -167,6 +172,7 @@ export interface ConnectorRuntime {
   resume?(): Promise<void>;
   view?(sessionId: string, options: { since?: string; brief?: boolean }): Promise<LocalView>;
   entries?(sessionId: string, options: { conversation: string; before: string; limit: number; brief?: boolean }): Promise<LocalPage | null>;
+  portable?(): Promise<PortableReport[]>;
 }
 
 export class LocalViewUnavailable extends Error {
@@ -175,6 +181,7 @@ export class LocalViewUnavailable extends Error {
 
 export interface ConnectorOptions {
   dataDir: string;
+  identityDir?: string;
   server?: string;
   pairing?: { id: string; code: string };
   replacePairing?: boolean;
@@ -200,7 +207,7 @@ export interface ConnectorOptions {
   remoteExtensionInstalls?: boolean;
   managedExtensions?: boolean;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
-  onWarning?: (warning: "resources-unavailable") => void;
+  onWarning?: (warning: "resources-unavailable" | "identity-unavailable", detail?: string) => void;
 }
 
 type Runtime = { value: ConnectorRuntime; repositoryCache: RepositoryCacheMode; resumed: boolean };
@@ -231,6 +238,7 @@ export class LocalConnector {
   private readonly repositoryCaches = new Map<Exclude<RepositoryCacheMode, "off">, RepositoryCache>();
   private readonly gpu?: GpuKind;
   private hostExtensions?: HostExtensions;
+  private identity?: IdentityStore;
 
   constructor(private readonly options: ConnectorOptions) {
     this.ready = this.readiness.promise;
@@ -266,6 +274,15 @@ export class LocalConnector {
     if (!this.options.runtimeFactory && process.platform !== "linux" && !this.options.unsandboxed && !this.options.sandboxBackend)
       throw new Error("This platform has no sandbox unless one is chosen (sandboxBackend); no host-shell fallback");
     this.directory = await privateDirectory(this.options.dataDir);
+    if (this.options.identityDir) {
+      const identity = new IdentityStore(resolve(this.options.identityDir));
+      try {
+        await identity.key();
+        this.identity = identity;
+      } catch (error) {
+        this.options.onWarning?.("identity-unavailable", `${identity.root}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     this.browser = new HostBrowserSource({ supported: process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend,
       ...this.options.browser, root: browserDownloads(this.directory), signal: this.lifetime.signal });
     this.tunnel = new HostTunnelSource({ supported: process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend,
@@ -385,12 +402,14 @@ export class LocalConnector {
       await this.tunnel?.apply(configured.tunnel).catch(() => {});
       const runtime = await this.ensureRuntime(generation, answered || !this.runtime ? configured.repositoryCache : this.runtime.repositoryCache);
       this.requireGeneration(generation);
-      const advertised = capabilities(this.options.capabilities, { unsandboxed: this.options.unsandboxed, repositoryCache: runtime.repositoryCache !== "off", gpu: this.gpu });
+      const advertised = { ...capabilities(this.options.capabilities, { unsandboxed: this.options.unsandboxed, repositoryCache: runtime.repositoryCache !== "off", gpu: this.gpu }),
+        ...(this.identity && runtime.value.portable ? { portableSessions: true } : {}) };
       await this.calls.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
         capabilities: withHostToolCapabilities(advertised) });
       this.requireGeneration(generation);
       generation.runtimeReady.resolve();
       void this.syncExtensions(generation);
+      void this.syncIdentity(generation);
       this.options.onStatus?.("connected");
       this.readiness.resolve();
       if (!runtime.resumed) {
@@ -456,6 +475,33 @@ export class LocalConnector {
     }
   }
 
+  async reportIdentity(generation: Generation): Promise<void> {
+    const identity = this.identity;
+    const runtime = this.runtime?.value;
+    if (!identity || !runtime?.portable) return;
+    const state = this.state!;
+    const delegation = await identity.delegation(new URL(state.controlPlaneUrl).origin, state.connectorId);
+    const key = await identity.key();
+    const sessions = (await runtime.portable()).slice(0, IDENTITY_REPORT_LIMIT);
+    const answer = z.object({ sign: z.object({ version: z.number().int().positive(), settings: z.unknown() }).strict().optional() }).strict()
+      .parse(await this.calls.callback(generation, "/api/connectors/self/identity", {
+        delegation, rotations: key.rotations, settings: await identity.settings() ?? null, sessions,
+      }, IDENTITY_ANSWER_LIMIT) ?? {});
+    if (answer.sign) {
+      const settings = await identity.signSettings(answer.sign.version, parseSettings(answer.sign.settings));
+      await this.calls.callback(generation, "/api/connectors/self/identity/settings", { settings });
+    }
+  }
+
+  private async syncIdentity(generation: Generation): Promise<void> {
+    if (!this.identity) return;
+    const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
+    while (!signal.aborted) {
+      await this.reportIdentity(generation).catch(() => {});
+      await delay(IDENTITY_SYNC_MS, undefined, { signal }).catch(() => {});
+    }
+  }
+
   private async ensureRuntime(generation: Generation, repositoryCache: RepositoryCacheMode): Promise<Runtime> {
     const replacing = this.runtime !== undefined && this.runtime.repositoryCache !== repositoryCache;
     if (replacing) {
@@ -504,7 +550,7 @@ export class LocalConnector {
 
   private runnerConfig(repositoryCache: RepositoryCache | undefined): RunnerConfig {
     return connectorRunnerConfig({
-      credentials: this.state!, directory: this.directory, secret: this.secret, options: this.options, lifetime: this.lifetime.signal,
+      credentials: this.state!, directory: this.directory, secret: this.secret, options: this.options, lifetime: this.lifetime.signal, identity: this.identity,
       hostConfig: this.hostConfig, hostExtensions: this.hostExtensions, browser: () => this.browser, tunnel: () => this.tunnel, tunnels: () => this.tunnels,
       calls: this.calls, connection: () => this.connection(), requireGeneration: generation => this.requireGeneration(generation),
     }, repositoryCache);
@@ -572,6 +618,7 @@ async function defaultRuntime(config: RunnerConfig): Promise<ConnectorRuntime> {
     fetch: request => app.fetch(request), close: () => service.close(), resume: () => service.resume(),
     view: (sessionId, options) => service.localView(sessionId, options),
     entries: (sessionId, options) => service.localEntries(sessionId, options),
+    portable: () => service.portableSessions(),
   };
 }
 

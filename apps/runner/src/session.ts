@@ -21,6 +21,7 @@ import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson } from "./protocol.js";
+import type { IdentityStore } from "./identity.js";
 import { localChangesRequest, type LocalChanges, type LocalChangesRequest } from "../../../packages/shared/src/local-changes.js";
 import { LOCAL_CHANGES_SECONDS, localChangesCommand, NotARepository, parseLocalChanges } from "./local-changes.js";
 import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
@@ -130,6 +131,7 @@ export type RunnerConfig = {
   readBackup?: (restore: RestoreDescriptor, targetSessionId: string) => Promise<Uint8Array>;
   compaction?: CompactionSettings;
   identity?: ClientIdentity;
+  portable?: { store: IdentityStore; detached?(sessionId: string): Promise<void> };
   repositoryCache?: RepositoryCache;
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;
@@ -458,6 +460,55 @@ export class RunnerSession {
           if (approval.status === "pending") {
             approval.status = "interrupted";
             approval.result = "Restored history only; fresh approval is required for any new operation.";
+          }
+        }
+        doc.json = JSON.stringify(state);
+      }, context);
+    } finally { await harness.close(context); }
+  }
+
+  async rebind(sources: readonly string[] = [this.binding.session.id]): Promise<void> {
+    await this.initializeRepositories();
+    const resolved = this.config.resolveModels ? await this.config.resolveModels(this.binding.model)
+      : { models: runnerModels(this.binding.model, this.config.allowFaux) };
+    const storage = await this.openStorage();
+    let harness: Harness;
+    try { harness = await Harness.open(storage, { models: resolved.models, registry: createRegistry() }, context); }
+    catch (error) { await storage.close(context); throw error; }
+    try {
+      const graph = await harness.watchTaskGraph(context);
+      try { if (Object.keys(graph.value.tasks).length) throw new RunnerError(409, "This session still has work in progress. Let it finish where it is attached now"); }
+      finally { await graph.stop(); }
+      const root = await harness.root(context);
+      await root.commit(async tx => {
+        const doc = await tx.doc(RunnerState);
+        if (!doc.json) throw new RunnerError(409, "This session has no conversation yet to attach");
+        const state: Metadata = JSON.parse(doc.json);
+        if (!sources.includes(state.binding?.session?.id)) throw new RunnerError(403, "Persisted binding mismatch");
+        let cursor: Cursor | undefined;
+        do {
+          const page = await tx.scanConversations({}, 100, cursor);
+          for (const conversation of page.items) {
+            if ((await tx.doc(InboxDoc, conversation.id)).items.length) throw new RunnerError(409, "This session has messages waiting. Let them run where it is attached now");
+          }
+          cursor = page.next;
+        } while (cursor);
+        if (Object.values(state.runs).some(run => !["settled", "interrupted"].includes(run.status))
+          || Object.values(state.approvals).some(approval => approval.status === "executing")) {
+          throw new RunnerError(409, "This session is working. Stop it, or wait for it to finish, where it is attached now");
+        }
+        state.binding = this.binding;
+        state.usedTickets = {};
+        state.toolActors = {};
+        delete state.grants;
+        for (const run of Object.values(state.runs)) delete run.admissionId;
+        for (const approval of Object.values(state.approvals)) {
+          approval.sessionId = this.binding.session.id;
+          delete approval.admissionId;
+          delete approval.reviewHash;
+          if (approval.status === "pending") {
+            approval.status = "interrupted";
+            approval.result = "The session moved to another server; a new operation needs asking again.";
           }
         }
         doc.json = JSON.stringify(state);

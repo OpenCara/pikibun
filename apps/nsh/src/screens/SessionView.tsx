@@ -124,6 +124,9 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   }
   const archivedText = () => {
     const current = live.session();
+    if (current?.detached) {
+      return "This session moved to another server its host is paired with, and its history here is read-only. To work on it here again, bring it back from your private workspace's list, where its host offers it.";
+    }
     if (current?.packed) {
       return manages() ? "This session is read-only. Its files are packed on its host. Unarchiving unpacks them and clones its repositories again, so its host must be online."
         : "This session is read-only. Its files are packed on its host. Only its owner, or the workspace's owner or an admin, can unarchive it.";
@@ -235,7 +238,8 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               {reason => <Banner testID="session-clone-unavailable" tone="warning" title="Can't clone repositories">{reason()}</Banner>}
             </If>
             <If when={archived()}>
-              <Banner title="Archived" actions={<If when={manages()}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
+              <Banner title={live.session()?.detached ? "Moved to another server" : "Archived"}
+                actions={<If when={manages() && !live.session()?.detached}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
                 {archivedText()}
               </Banner>
             </If>
