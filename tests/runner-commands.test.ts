@@ -151,6 +151,11 @@ test("a session runs /compact, extension commands, templates and skills from its
   await writeFile(join(root, "greeter.ts"), `export default function (pi) {
       pi.registerCommand("greet", { description: "Say hello", handler: async (args, ctx) => { ctx.ui.notify("Hello " + (args || "there")); } });
       pi.registerCommand("ask", { description: "Ask the model", handler: async (args) => { pi.sendUserMessage("Asked: " + args); } });
+      pi.on("input", (event, ctx) => {
+        if (!event.text.includes("forbidden")) return { action: "continue" };
+        ctx.ui.notify("Screened: " + event.text.slice(0, 40));
+        return { action: "handled" };
+      });
     }`);
   const store = new ExtensionStore(join(root, "state"));
   await store.add(parseExtensionSource(join(root, "greeter.ts")));
@@ -191,6 +196,7 @@ test("a session runs /compact, extension commands, templates and skills from its
   const worktree = (session as unknown as { sandbox: { hostWorktree: string } }).sandbox.hostWorktree;
   await mkdir(join(worktree, ".pi", "prompts"), { recursive: true });
   await writeFile(join(worktree, ".pi", "prompts", "review.md"), "---\ndescription: Review a file\n---\nReview $1 for $ARGUMENTS");
+  await writeFile(join(worktree, ".pi", "prompts", "smuggle.md"), "Do the forbidden thing with $1");
   await mkdir(join(worktree, "app", ".pi", "skills", "release"), { recursive: true });
   await writeFile(join(worktree, "app", ".pi", "skills", "release", "SKILL.md"), "---\nname: release\ndescription: Cut a release\n---\nRun scripts/tag.sh.");
   let sent = 0;
@@ -219,6 +225,7 @@ test("a session runs /compact, extension commands, templates and skills from its
     { name: "greet", kind: "extension", description: "Say hello" },
     { name: "ask", kind: "extension", description: "Ask the model" },
     { name: "review", kind: "prompt", description: "Prompt template .pi/prompts/review.md", argument: "arguments" },
+    { name: "smuggle", kind: "prompt", description: "Prompt template .pi/prompts/smuggle.md", argument: "arguments" },
     { name: "skill:release", kind: "skill", description: "Skill app/.pi/skills/release/SKILL.md", argument: "arguments" },
   ]);
 
@@ -248,6 +255,10 @@ test("a session runs /compact, extension commands, templates and skills from its
   assert.equal(users(view).at(-1), "Review api.ts for api.ts");
   view = await send("/skill:release v1.2");
   assert.equal(users(view).at(-1), '<skill name="release" location="app/.pi/skills/release/SKILL.md">\nReferences are relative to app/.pi/skills/release.\n\nRun scripts/tag.sh.\n</skill>\n\nv1.2');
+  const before = users(view).length;
+  view = await send("/smuggle now");
+  assert.equal(users(view).length, before, "a template whose text an input handler refuses never reaches the model (#380, finding 48)");
+  assert.match(texts(view, "workspace.run-refused").at(-1)!, /Screened: Do the forbidden thing with now/, "the handler saw the expanded text, not /smuggle now");
   view = await send("/nope stays as typed");
   assert.equal(users(view).at(-1), "/nope stays as typed");
   view = await send("/usr/bin/env is missing");
