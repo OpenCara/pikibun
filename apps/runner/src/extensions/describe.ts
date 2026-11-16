@@ -65,7 +65,12 @@ export function helperDescribe(stateDirectory: string, backend: () => HelperBack
       sandbox = new HelperWorkspace(describeBinding(), join(root, "sandbox"), backend());
     }
     const box = sandbox;
-    await box.initialize();
+    try { await box.initialize(); }
+    catch (error) {
+      if (sandbox === box) sandbox = undefined;
+      await box.close().catch(() => {});
+      throw error;
+    }
     if (!box.runsProcesses || (source.mount && !box.bindAllowed(source.mount))) return fallback(source);
     if (!box.nodeBin) throw new Error("This host's Node.js can't be given to the sandbox, so its extensions can't be described");
     return describeThrough(new ProcessChannel({ directory: box.worktree, warn: () => {}, mountAllowed: path => box.bindAllowed(path), launch: confinedLaunch(box) }), source);
@@ -81,7 +86,12 @@ export function sandboxDescribe(stateDirectory: string, fallback: Describe = pro
       sandbox = new Sandbox(describeBinding(), root, undefined, { browser: null });
     }
     const box = sandbox;
-    await box.initialize();
+    try { await box.initialize(); }
+    catch (error) {
+      if (sandbox === box) sandbox = undefined;
+      await box.close().catch(() => {});
+      throw error;
+    }
     if (source.mount && !box.bindAllowed(source.mount)) return fallback(source);
     const nodeBin = box.nodeBin;
     if (!nodeBin) throw new Error("This host's Node.js can't be given to the sandbox, so its extensions can't be described");

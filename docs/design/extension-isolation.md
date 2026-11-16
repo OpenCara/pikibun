@@ -239,7 +239,8 @@ the module's top-level code and its factory ran in the connector, as the host's 
   `pikibun extensions` command) the process is a plain one. A sandbox that can't be given the host's Node.js describes
   nothing: each installed extension reports that error, rather than run outside the sandbox on a host whose sessions
   are sandboxed, where sessions refuse extensions for the same reason. A description that takes longer than a minute
-  fails, whether its process answers late or never starts, so one extension can't hold up the others'.
+  fails, whether its process answers late or never starts, so one extension can't hold up the others'. A describing
+  sandbox whose setup failed is dropped, so the next description sets up a new one.
 - **Without the connector's settings.** A plain extension process, for a description or a session, starts without the
   connector's own environment variables (`workerEnvironment`: `PIKIBUN_*`, `RUNNER_*` and the others on-host commands
   never get, `CONNECTOR_ENVIRONMENT`).

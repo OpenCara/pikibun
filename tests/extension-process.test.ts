@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ipcLaunch, ProcessChannel, workerEnvironment, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
 import { DESCRIPTION_FILE, loadInstalled } from "../apps/runner/src/extensions/load.js";
-import { describeThrough, processDescribe, type Describe } from "../apps/runner/src/extensions/describe.js";
+import { describeThrough, helperDescribe, processDescribe, type Describe } from "../apps/runner/src/extensions/describe.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import type { LoadedSource } from "../apps/runner/src/extensions/load.js";
@@ -194,4 +194,22 @@ test("a description whose process never starts fails at its time limit, and the 
   await assert.rejects(describeThrough(stuck, { root, files: [file] }, 200), /It took longer than 0\.2 seconds to describe/);
   assert.ok(Date.now() - began < 2000, "it didn't wait for a launch that never returns");
   assert.deepEqual((await processDescribe({ root, files: [file] }))[0]!.events, ["input"]);
+});
+
+test("a describing sandbox whose setup failed is dropped, and the next description sets up a new one", async t => {
+  const root = await directory(t);
+  let made = 0;
+  const backend = () => {
+    made++;
+    return { name: "test", limitedShell: false, path: "/usr/bin:/bin", supports: () => true, launch: async () => { throw new Error("unused"); },
+      prepare: async () => { if (made === 1) throw new Error("setup failed"); } } as never;
+  };
+  const file = join(root, "plain.ts");
+  await writeFile(file, `export default function (pi) { pi.on("input", () => ({ action: "continue" })); }`);
+  const describe = helperDescribe(join(root, "state"), backend);
+  await assert.rejects(describe({ root, files: [file] }), /setup failed/);
+  await assert.rejects(describe({ root, files: [file] }), /unused/, "the second description set up a new sandbox, which got past the step the first failed at");
+  assert.equal(made, 2);
+  await assert.rejects(describe({ root, files: [file] }), /unused/);
+  assert.equal(made, 3, "and so does each one after a failed setup");
 });
