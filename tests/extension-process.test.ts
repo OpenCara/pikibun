@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ipcLaunch, pipeLaunch, ProcessChannel, workerCommand, workerEnvironment, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
+import { ipcLaunch, pipeLaunch, ProcessChannel, replyOf, workerCommand, workerEnvironment, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
 import { DESCRIPTION_FILE, loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { describeThrough, helperDescribe, processDescribe, type Describe } from "../apps/runner/src/extensions/describe.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
@@ -303,6 +303,9 @@ test("a confined process speaks over a pipe the connector reads itself: what isn
         async execute(_id, params) {
           writeSync(3, "this isn't JSON\\n");
           writeSync(3, "null\\n");
+          writeSync(3, JSON.stringify({ warn: null }) + "\\n");
+          writeSync(3, JSON.stringify({ id: "1", value: 1 }) + "\\n");
+          writeSync(3, JSON.stringify({ id: 999, tools: [{ name: 1 }] }) + "\\n");
           console.log("printed, to the log");
           if (params.endless) { const block = Buffer.alloc(1024 * 1024, 120); for (let sent = 0; sent < 80 * block.length;) { try { sent += writeSync(3, block); } catch (error) { if (error.code !== "EAGAIN") throw error; } } }
           return { content: [{ type: "text", text: String(process.pid) }], details: undefined };
@@ -323,7 +326,19 @@ test("a confined process speaks over a pipe the connector reads itself: what isn
   assert.notEqual(first, String(process.pid));
   assert.ok(logs.includes("printed, to the log"), logs.join("\n"));
   await assert.rejects(ask(true), /The extension process stopped/);
-  assert.ok(logs.some(line => /more than a message may hold/.test(line)), logs.join("\n"));
+  assert.ok(warnings.some(line => /more than a message may hold/.test(line)), warnings.join("\n"));
   const again = text((await ask(false)).value);
   assert.notEqual(again, first, "the next request runs in a new process, and the connector is still here");
+});
+
+test("the connector takes an extension process's answer only in the protocol's shape, whatever channel it came on", () => {
+  for (const bad of [null, 1, "x", [], { warn: null }, { warn: { source: 1, message: "m" } }, { id: "1" }, { id: 1.5 }, { id: 1, error: {} },
+    { id: 1, handlers: [1] }, { id: 1, tools: {} }, { id: 1, tools: [{ name: "a", description: "b" }] }, { id: 1, tools: [{ name: "a", description: "b", parameters: {}, promptGuidelines: "x" }] },
+    { id: 1, toolsSignature: 2 }]) {
+    assert.equal(replyOf(bad), undefined, JSON.stringify(bad));
+  }
+  assert.deepEqual(replyOf({ warn: { source: "", message: "m", extra: 1 } }), { warn: { source: "", message: "m" } });
+  assert.deepEqual(replyOf({ id: 2, value: { any: "thing" }, handlers: ["input"], tools: [{ name: "a", description: "b", parameters: {} }], toolsSignature: "s", other: 1 }),
+    { id: 2, value: { any: "thing" }, handlers: ["input"], tools: [{ name: "a", description: "b", parameters: {} }], toolsSignature: "s" });
+  assert.deepEqual(replyOf({ id: 3, error: "it broke" }), { id: 3, error: "it broke" });
 });

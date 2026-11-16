@@ -218,6 +218,10 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
   newline-delimited JSON on it, as on the Linux socket. The connector reads it with `lineReader`, parses each line in a
   `try`, drops what isn't a message, and ends the process at a line over 64 MiB. stdout and stderr stay the log.
   Unsandboxed processes keep the IPC channel: they run as the host's user, and could end the connector anyway.
+- **An answer is taken only in the protocol's shape** (`replyOf`), on every channel: a warning has a string source and
+  message, and anything else has an integer id with an error string, or a value with handler names, tool descriptions
+  (name, description, a parameters object, and the optional fields with their types) and a signature, each checked.
+  Anything else is dropped, and a fault taking an answer is logged, not thrown into the connector.
 - **No limits of its own.** macOS has no resource limits for commands either (`limitedShell` is false), so a tool of
   an extension there is a host command wherever a shell command is: in someone else's session it needs a grant.
 - **Described there too.** A connector started with the macOS sandbox describes installed extensions under Seatbelt

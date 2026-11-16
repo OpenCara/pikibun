@@ -23,6 +23,37 @@ export interface WorkerCommand {
 
 type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string; error?: string } | { warn: { source: string; message: string } };
 
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === "string");
+
+function toolDescription(value: unknown): value is ExtensionToolDescription {
+  return isObject(value) && typeof value.name === "string" && typeof value.description === "string" && isObject(value.parameters)
+    && (value.executionMode === undefined || value.executionMode === "sequential" || value.executionMode === "parallel")
+    && (value.promptSnippet === undefined || typeof value.promptSnippet === "string")
+    && (value.promptGuidelines === undefined || isStrings(value.promptGuidelines));
+}
+
+export function replyOf(value: unknown): Reply | undefined {
+  if (!isObject(value)) return undefined;
+  if ("warn" in value) {
+    const warn = value.warn;
+    return isObject(warn) && typeof warn.source === "string" && typeof warn.message === "string" ? { warn: { source: warn.source, message: warn.message } } : undefined;
+  }
+  const { id, error, handlers, tools, toolsSignature } = value;
+  if (typeof id !== "number" || !Number.isSafeInteger(id)) return undefined;
+  if (error !== undefined) return typeof error === "string" ? { id, error } : undefined;
+  if ((handlers !== undefined && !isStrings(handlers)) || (tools !== undefined && !(Array.isArray(tools) && tools.every(toolDescription)))
+    || (toolsSignature !== undefined && typeof toolsSignature !== "string")) return undefined;
+  return { id, value: value.value, ...(handlers ? { handlers } : {}), ...(tools ? { tools: tools as ExtensionToolDescription[] } : {}),
+    ...(toolsSignature !== undefined ? { toolsSignature } : {}) };
+}
+
+function deliver(handlers: LaunchHandlers, value: unknown): void {
+  const reply = replyOf(value);
+  if (!reply) return;
+  try { handlers.reply(reply); } catch (error) { handlers.log(`An extension process's answer couldn't be taken: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
 export interface WorkerLink {
   send(message: unknown, failed: (error: Error) => void): void;
   hold(held: boolean): void;
@@ -101,7 +132,7 @@ export function ipcLaunch(directory: string, command: WorkerCommandFor = workerC
     const child = spawn(run.program, run.args, { cwd: run.cwd ?? directory, env: run.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe", "ipc"], serialization: "json", windowsHide: true });
     for (const stream of [child.stdout, child.stderr]) if (stream) createInterface({ input: stream }).on("line", handlers.log);
-    child.on("message", (reply: Reply) => handlers.reply(reply));
+    child.on("message", (reply: unknown) => deliver(handlers, reply));
     const exited = new Promise<void>(resolve => { child.once("exit", () => resolve()); });
     child.once("exit", (code, signal) => handlers.ended(signal ? `it was ended by ${signal}` : `it exited with ${code}`));
     child.once("error", error => handlers.ended(`it couldn't run: ${error.message}`));
@@ -125,9 +156,9 @@ export function ipcLaunch(directory: string, command: WorkerCommandFor = workerC
 
 function readReplies(socket: Socket, handlers: LaunchHandlers, overflow: () => void): void {
   socket.on("data", lineReader(line => {
-    let reply: Reply;
-    try { reply = JSON.parse(line) as Reply; } catch { return; }
-    if (reply && typeof reply === "object") handlers.reply(reply);
+    let reply: unknown;
+    try { reply = JSON.parse(line); } catch { return; }
+    deliver(handlers, reply);
   }, overflow));
   socket.on("error", () => {});
 }
@@ -140,16 +171,22 @@ export function pipeLaunch(directory: string, command: WorkerCommandFor = worker
     const child = spawn(run.program, run.args, { cwd: run.cwd ?? directory, env: run.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe", "pipe"], windowsHide: true });
     for (const stream of [child.stdout, child.stderr]) if (stream) stream.on("data", lineReader(handlers.log, () => {}, 64 * 1024));
+    let stopped = false;
+    const end = (reason: string) => {
+      if (stopped) return;
+      stopped = true;
+      handlers.ended(reason);
+    };
     const exited = new Promise<void>(resolve => { child.once("exit", () => resolve()); });
-    child.once("exit", (code, signal) => handlers.ended(signal ? `it was ended by ${signal}` : `it exited with ${code}`));
-    child.once("error", error => handlers.ended(`it couldn't run: ${error.message}`));
+    child.once("exit", (code, signal) => end(signal ? `it was ended by ${signal}` : `it exited with ${code}`));
+    child.once("error", error => end(`it couldn't run: ${error.message}`));
     await new Promise<void>((resolve, reject) => {
       child.once("spawn", () => resolve());
       child.once("error", reject);
     });
     const channel = child.stdio[PIPE_FD] as Socket;
     readReplies(channel, handlers, () => {
-      handlers.log("The extension process sent more than a message may hold, so it was ended");
+      end("it sent more than a message may hold");
       channel.destroy();
       child.kill("SIGKILL");
     });
