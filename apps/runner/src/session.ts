@@ -860,8 +860,12 @@ export class RunnerSession {
     catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid sudo answer"); }
     await this.authorize(ticket.actorId, "write", ticket.policyVersion);
     if (!this.#sudo || ticket.actorId !== this.binding.session.connectorOwnerId) throw new RunnerError(403, "Only the host's owner answers sudo on it, in their own sessions");
-    if (answer.password !== undefined && !await this.sudoAllowed()) throw new RunnerError(403, "sudo takes a password only in sessions of the host owner's private workspace");
+    if ((answer.password !== undefined || answer.sealed !== undefined) && !await this.sudoAllowed()) throw new RunnerError(403, "sudo takes a password only in sessions of the host owner's private workspace");
     await this.consumeTicket(ticket);
+    if (answer.sealed) {
+      try { return { answered: await this.#sudo.answerSealed(answer.id, answer.sealed) }; }
+      catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid sudo answer"); }
+    }
     return { answered: this.#sudo.answer(answer.id, answer.password) };
   }
 

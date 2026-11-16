@@ -90,6 +90,12 @@ test('the host\'s owner answers sudo in their private workspace\'s sessions: the
   assert.deepEqual(events.map(({ action, detail }) => ({ action, detail })), [{ action: 'session.sudo.answered', detail: { promptId: 'prompt1', answered: true } }]);
   assert.ok(!JSON.stringify(events).includes(password), 'the audit log never holds the password');
 
+  const sealed = { key: 'A'.repeat(87), iv: 'B'.repeat(16), data: 'C'.repeat(40) };
+  assert.deepEqual(await json(await f.alice.request('POST', `/api/sessions/${f.own.id}/sudo`, { id: 'prompt3', sealed })), { answered: true });
+  assert.deepEqual(f.relayed[1]!.body.sealed, sealed, 'a sealed password goes to the host as it was sealed');
+  assert.deepEqual(Object.keys(f.relayed[1]!.body).sort(), ['id', 'nonce', 'sealed']);
+  assert.equal((await f.alice.request('POST', `/api/sessions/${f.shared.id}/sudo`, { id: 'prompt3', sealed })).status, 403, 'only in the private workspace, as a plain one');
+  f.relayed.splice(1, 1);
   await json(await f.alice.request('POST', `/api/sessions/${f.own.id}/sudo`, { id: 'prompt2', decline: true }));
   assert.deepEqual(Object.keys(f.relayed[1]!.body).sort(), ['decline', 'id', 'nonce']);
   assert.equal((await f.audit(f.own.id)).filter(event => event.action === 'session.sudo.declined').length, 1);
