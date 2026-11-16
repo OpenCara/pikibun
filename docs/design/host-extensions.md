@@ -76,7 +76,7 @@ the session's own, then maps what it registered:
 
 | Pi | In Pikibun |
 |---|---|
-| `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), behind the approval of rule 5. `onUpdate` is ignored. A tool named like one of Pikibun's own is ignored, unless that one is retired (`web_fetch`, `web_search`, …) |
+| `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), under rule 5. `onUpdate` is ignored. A tool named like one of Pikibun's own is ignored, unless that one is retired (`web_fetch`, `web_search`, …). A tool registered once the extension runs (in `session_start`, say) is offered from the session's next message, up to 32 of them (one dropped as it loaded, such as one over the module's limit, stays dropped); a tool registered again with another schema or guidance is offered as changed; the host's page lists only those registered as it loads. Its `promptSnippet` and `promptGuidelines` go in the extension's prompt section, as Pi puts them in its tools and guidelines |
 | `before_agent_start` | Run once per message with its prompt; a returned `systemPrompt` (appended to the empty base it gets) and `message` become a prompt section |
 | `context` | `GenerationHooks.beforeRequest` |
 | `input` | On each message or side ask once it is queued, before it starts (`Session.screen`, `SessionExtensions.input`), beside the session's work: the connector answers one request at a time, so a handler that asks a model never holds up another session's request. The message and those queued behind it wait for it. `transform` changes what runs, `handled` refuses it: it ends `refused`, shown in the transcript (`workspace.run-refused`) with the source's last `ctx.ui.notify` text. `source` is `interactive` for the host owner's own messages and `rpc` for everyone else's. A handler that throws or takes over a minute refuses the message; a restart while one runs screens the message again |
@@ -93,12 +93,13 @@ the session's own, then maps what it registered:
 | `exec` | Runs on the host, in the session's worktree |
 | `ctx.cwd`, `ctx.signal`, `ctx.model`, `getThinkingLevel` | The session's worktree on the host, the call's signal, and the model and reasoning level of the message running (a message may switch them) |
 | `registerCommand` | A [slash command](slash-commands.md#commands-the-host-runs) of the session: the handler runs with Pi's command context, its `ctx.ui.notify` is the command's line in the transcript and its `sendUserMessage` the message sent in its place |
+| `ctx.ui.notify` elsewhere | At `warning` or `error`, a line in the host's log naming the session and the extension, up to 50 per extension process; otherwise nothing |
 | `ctx.ui.*`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage` outside a command, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
 | `registerProvider`, `registerMcpServer`, `registerVirtualModel`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 
 The host's page shows, per extension, which of its registrations work, are no-ops or are ignored, so a workspace can
-tell what it gets. `ctx.modelRegistry` is the host's Pi model registry, so an extension that uses the host's provider keys
-works.
+tell what it gets. An installed extension's `ctx.modelRegistry` lists the host's models but calls none
+([extension-isolation.md](extension-isolation.md)); Pikibun's own extensions get the host's registry.
 
 Extensions written directly against pi-durable (`defineExtension`) are libraries without a plugin contract (their own
 options and lifecycle), so a workspace can't name one. Pikibun wraps the useful ones itself as built-ins (rule 10).

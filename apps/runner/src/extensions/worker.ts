@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,15 +49,28 @@ function describedRegistry(models: () => Model<string>[]): ModelRegistry {
 const inputCall = new AsyncLocalStorage<{ notices: string[]; errors: string[] }>();
 const commandCall = new AsyncLocalStorage<{ notices: string[]; messages: string[] }>();
 
-function noticesOf(runner: ExtensionRunner): void {
+export const NOTICE_LIMIT = 500;
+export const NOTICES_PER_SOURCE = 50;
+const PROMPT_TEXT_LIMIT = 1000;
+const GUIDELINES_LIMIT = 8;
+
+function noticesOf(runner: ExtensionRunner, warn: (message: string) => void): void {
+  let logged = 0;
+  const log = (message: string) => {
+    logged++;
+    if (logged <= NOTICES_PER_SOURCE) warn(message);
+    else if (logged === NOTICES_PER_SOURCE + 1) warn(`it sent more than ${NOTICES_PER_SOURCE} warnings; the rest go unlogged until its process starts again`);
+  };
   runner.onError(error => { if (error.event === "input") inputCall.getStore()?.errors.push(error.error); });
   const createContext = runner.createContext.bind(runner);
   runner.createContext = () => {
     const ctx = createContext();
     const sink = (inputCall.getStore() ?? commandCall.getStore())?.notices;
-    if (!sink) return ctx;
     const ui = new Proxy(ctx.ui, { get: (target, name, receiver) => name === "notify"
-      ? (message: unknown) => { sink.push(String(message)); }
+      ? (message: unknown, level?: unknown) => {
+        if (sink) sink.push(String(message));
+        else if (level === "warning" || level === "error") log(`${level}: ${String(message).slice(0, NOTICE_LIMIT)}`);
+      }
       : Reflect.get(target, name, receiver) });
     return Object.create(ctx, { ui: { value: ui } }) as ExtensionContext;
   };
@@ -69,6 +83,22 @@ function toOutput(result: AgentToolResult<unknown>): ToolOutput {
   const content = Array.isArray(result?.content) ? result.content.filter(part => part && (part.type === "text" || part.type === "image")) : [];
   return { content, ...(result?.details !== undefined && isJsonValue(result.details) ? { details: result.details } : {}) };
 }
+
+const promptText = (value: unknown) => typeof value === "string" ? value.replace(/[\x00-\x08\x0b-\x1f\x7f]+/g, " ").trim().slice(0, PROMPT_TEXT_LIMIT) : "";
+
+export function describeTools(runner: ExtensionRunner): ExtensionToolDescription[] {
+  return runner.getAllRegisteredTools().map(({ definition }) => {
+    const snippet = promptText(definition.promptSnippet);
+    const guidelines = Array.isArray(definition.promptGuidelines) ? definition.promptGuidelines.map(promptText).filter(Boolean).slice(0, GUIDELINES_LIMIT) : [];
+    return {
+      name: definition.name, description: String(definition.description ?? ""), parameters: JSON.parse(JSON.stringify(definition.parameters ?? {})),
+      ...(definition.executionMode ? { executionMode: definition.executionMode } : {}),
+      ...(snippet ? { promptSnippet: snippet } : {}), ...(guidelines.length ? { promptGuidelines: guidelines } : {}),
+    };
+  });
+}
+
+const toolSignature = (tools: readonly ExtensionToolDescription[]) => createHash("sha256").update(JSON.stringify(tools)).digest("base64url");
 
 const boundary = () => ({ contextEntries: [], contextMessages: [], llmMessages: [], pendingMessages: [], canContinue: true });
 const requestContext = new AsyncLocalStorage<RequestContext>();
@@ -152,7 +182,16 @@ export class ExtensionWorker {
     const value = await requestContext.run(params.context ?? this.#context, () => handler(params, signal));
     const source = (params as { source?: unknown }).source;
     const runner = typeof source === "string" ? this.#runners.get(source) : undefined;
-    return { value, ...(runner ? { handlers: [...supportedEvents].filter(event => runner.hasHandlers(event)) } : {}) };
+    if (!runner || typeof source !== "string") return { value };
+    const handlers = [...supportedEvents].filter(event => runner.hasHandlers(event));
+    let tools: ExtensionToolDescription[];
+    try { tools = describeTools(runner); }
+    catch (error) {
+      this.options.warn(source, `its tools can't be described: ${error instanceof Error ? error.message : String(error)}`);
+      return { value, handlers };
+    }
+    const signature = toolSignature(tools);
+    return { value, handlers, toolsSignature: signature, ...(params.toolsSeen !== signature ? { tools } : {}) };
   }
 
   private runner(params: Scoped): ExtensionRunner {
@@ -184,12 +223,9 @@ export class ExtensionWorker {
     runner.bindCommandContext({ waitForIdle: async () => {}, newSession: declined, fork: declined, navigateTree: declined, switchSession: declined,
       reload: async () => {} } as never);
     runner.onError(error => warn(source, `${error.event}: ${error.error}`));
-    noticesOf(runner);
+    noticesOf(runner, message => warn(source, message));
     this.#runners.set(source, runner);
-    const tools: ExtensionToolDescription[] = runner.getAllRegisteredTools().map(({ definition }) => ({
-      name: definition.name, description: String(definition.description ?? ""), parameters: JSON.parse(JSON.stringify(definition.parameters ?? {})),
-      ...(definition.executionMode ? { executionMode: definition.executionMode } : {}),
-    }));
+    const tools = describeTools(runner);
     const commands = runner.getRegisteredCommands().map(command => ({ name: command.invocationName,
       ...(typeof command.description === "string" && command.description ? { description: command.description } : {}) }));
     return { errors: result.errors.map(error => error.error), tools, commands };

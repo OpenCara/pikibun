@@ -7,7 +7,7 @@ import { ipcLaunch, ProcessChannel, workerEnvironment, type WorkerLaunch } from 
 import { DESCRIPTION_FILE, loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { describeThrough, helperDescribe, processDescribe, type Describe } from "../apps/runner/src/extensions/describe.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
-import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
+import { lateTools, SessionExtensions, toolGuidance, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import type { LoadedSource } from "../apps/runner/src/extensions/load.js";
 
 async function directory(t: TestContext): Promise<string> {
@@ -212,4 +212,83 @@ test("a describing sandbox whose setup failed is dropped, and the next descripti
   assert.equal(made, 2);
   await assert.rejects(describe({ root, files: [file] }), /unused/);
   assert.equal(made, 3, "and so does each one after a failed setup");
+});
+
+test("tools an extension registers once it runs are offered from the next selection, its tools' prompt snippets and guidelines reach the prompt, and its warnings reach the host's log (#182)", async t => {
+  const root = await directory(t);
+  const file = join(root, "fff.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    export default function (pi) {
+      pi.registerTool({ name: "ffgrep", label: "Grep", description: "Search file contents.", promptSnippet: "fast content search",
+        promptGuidelines: ["Prefer ffgrep to running rg in bash"], parameters: Type.Object({}), async execute() { return { content: [{ type: "text", text: "found" }], details: undefined }; } });
+      pi.on("session_start", (_event, ctx) => {
+        pi.registerTool({ name: "fff_multi", label: "Multi", description: "Search several patterns.", parameters: Type.Object({}),
+          async execute() { return { content: [{ type: "text", text: "multi" }], details: undefined }; } });
+        pi.registerTool({ name: "grep", label: "Grep", description: "Taking Pikibun's own name.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+        ctx.ui.notify("FFF init failed: no native library", "error");
+        ctx.ui.notify("indexed 3 files", "info");
+      });
+    }`);
+  const summary = { source: "local:fff", dev: true, modules: [{ path: "fff.ts", tools: [{ name: "ffgrep", description: "" }], events: ["session_start"], flags: [], noops: [], ignored: [] }] };
+  const warnings: string[] = [];
+  const host: ExtensionHost = { directory: root, model: () => undefined, state: async () => ({ active: true, settings: {} }),
+    runTool: async (_call, execute) => execute(new AbortController().signal), hookTimeoutMs: 5000, warn: (source, message) => { warnings.push(`${source}: ${message}`); } };
+  const session = new SessionExtensions(host, ["bash"]);
+  t.after(() => session.shutdown());
+  await session.ensure([{ installed: { source: "local:fff" }, root, files: [file], summary }]);
+  assert.deepEqual(session.select(["local:fff"]).selected[0]!.tools.map(tool => tool.name), ["ffgrep"]);
+  await session.sessionStart();
+  const after = session.select(["local:fff"]);
+  assert.deepEqual(after.selected[0]!.tools.map(tool => tool.name), ["ffgrep", "fff_multi"], "the late tool is offered, and one of Pikibun's names is not");
+  assert.equal(after.created.length, 1, "as a new variant of the extension, which the session installs");
+  assert.ok(warnings.includes("local:fff: error: FFF init failed: no native library"), warnings.join("\n"));
+  assert.ok(!warnings.some(warning => warning.includes("indexed 3 files")), "information stays out of the log");
+});
+
+test("an extension's tool guidance lists its snippets and guidelines once each, and late tools are bounded and never take Pikibun's names", () => {
+  const tool = (name: string, extra = {}) => ({ name, description: "", parameters: {}, ...extra });
+  assert.equal(toolGuidance([tool("a", { promptSnippet: "does a", promptGuidelines: ["Use a first", "Be brief"] }), tool("b", { promptGuidelines: ["Be brief"] }), tool("c")]),
+    "Its tools:\n- a: does a\n\nWhen to use them:\n- Use a first\n- Be brief");
+  assert.equal(toolGuidance([tool("c")]), "");
+  const many = Array.from({ length: 40 }, (_, index) => tool(`late_${index}`));
+  const kept = lateTools([tool("offered"), tool("read"), ...many], new Set(["offered"]));
+  assert.deepEqual(kept.slice(0, 2).map(item => item.name), ["offered", "late_0"]);
+  assert.equal(kept.length, 33);
+});
+
+test("a tool registered again with another schema makes a new variant, a tool dropped as the extension loaded stays dropped, and tools reach the connector until it has seen them", async t => {
+  const root = await directory(t);
+  const file = join(root, "changing.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    export default function (pi) {
+      const tool = description => ({ name: "shift", label: "Shift", description, parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+      pi.registerTool(tool("first"));
+      pi.registerTool({ ...tool("dropped"), name: "dropped" });
+      pi.on("session_start", () => { pi.registerTool(tool("second")); });
+    }`);
+  const summary = { source: "local:changing", dev: true, modules: [{ path: "changing.ts", tools: [{ name: "shift", description: "" }], events: ["session_start"], flags: [], noops: [], ignored: ["tool dropped (too many tools)"] }] };
+  const host: ExtensionHost = { directory: root, model: () => undefined, state: async () => ({ active: true, settings: {} }),
+    runTool: async (_call, execute) => execute(new AbortController().signal), hookTimeoutMs: 5000, warn: () => {} };
+  const session = new SessionExtensions(host, []);
+  t.after(() => session.shutdown());
+  await session.ensure([{ installed: { source: "local:changing" }, root, files: [file], summary }]);
+  const before = session.select(["local:changing"]);
+  assert.deepEqual(before.selected[0]!.tools.map(tool => [tool.name, tool.description]), [["shift", "first"]]);
+  await session.sessionStart();
+  const after = session.select(["local:changing"]);
+  assert.deepEqual(after.selected[0]!.tools.map(tool => [tool.name, tool.description]), [["shift", "second"]], "the dropped tool stays dropped");
+  assert.equal(after.created.length, 1, "the changed schema is a new variant");
+  assert.notEqual(after.selected[0]!.extension, before.selected[0]!.extension);
+  assert.equal(session.select(["local:changing"]).created.length, 0, "and an unchanged one isn't");
+
+  const channel = new ProcessChannel({ directory: root, warn: () => {}, log: () => {} });
+  t.after(() => channel.close());
+  const opened = await channel.call("open", { source: "local:changing", files: [file], models: [] });
+  assert.ok(opened.toolsSignature);
+  const seen = opened.toolsSignature!;
+  assert.equal((await channel.call("emit", { source: "local:changing", settings: {}, event: { type: "agent_start" }, toolsSeen: seen })).tools, undefined, "nothing to send");
+  const changed = await channel.call("emit", { source: "local:changing", settings: {}, event: { type: "session_start", reason: "startup" }, toolsSeen: seen });
+  assert.ok(changed.tools && changed.toolsSignature !== seen);
+  const again = await channel.call("emit", { source: "local:changing", settings: {}, event: { type: "agent_start" }, toolsSeen: seen });
+  assert.deepEqual(again.tools, changed.tools, "a connector that hasn't seen them, its answer lost, gets them again");
 });

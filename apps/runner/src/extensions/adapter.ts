@@ -6,7 +6,7 @@ import type { ImageContent, Message, Model, TextContent } from "@earendil-works/
 import type { ExtensionFactory, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
 import { isJsonValue } from "./json.js";
-import type { LoadedSource } from "./load.js";
+import { pikibunOwn, type LoadedSource } from "./load.js";
 import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
 import { wholeForScripts } from "../script-output.js";
@@ -79,16 +79,22 @@ interface Link {
   isolated: boolean;
   channel: ExtensionChannel;
   handlers: Set<string>;
+  toolsSeen?: string;
+  onTools?: (tools: ExtensionToolDescription[]) => void;
 }
 
 async function request<M extends ExtensionMethod>(host: ExtensionHost, link: Link, method: M, params: ExtensionRequests[M][0], signal?: AbortSignal): Promise<ExtensionRequests[M][1]> {
   const model = modelDescription(host.model());
   const thinkingLevel = host.thinkingLevel?.();
   const context = { ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
-  const answer = await link.channel.call(method, { ...params, context } as ExtensionParams<M>, signal);
+  const answer = await link.channel.call(method, { ...params, context, ...(link.toolsSeen ? { toolsSeen: link.toolsSeen } : {}) } as ExtensionParams<M>, signal);
   if (answer.handlers) {
     link.handlers.clear();
     for (const event of answer.handlers) link.handlers.add(event);
+  }
+  if (answer.tools && link.onTools) {
+    link.onTools(answer.tools);
+    if (answer.toolsSignature) link.toolsSeen = answer.toolsSignature;
   }
   return answer.value;
 }
@@ -169,7 +175,7 @@ export class SessionExtensions {
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
-        const extension = build(link, loaded.summary.dev, result.tools.filter(tool => offered.has(tool.name)), this.host, result.commands ?? []);
+        const extension = build(link, loaded.summary.dev, result.tools, offered, this.host, result.commands ?? []);
         this.#opened.push(extension);
         opened.push(extension);
       } catch (error) {
@@ -194,7 +200,7 @@ export class SessionExtensions {
         this.host.warn(source, `tool ${name} is left out: an earlier extension or the session has a tool named so`);
       }
       const tools = opened.tools.filter(tool => kept.includes(tool.name));
-      const key = tools.map(tool => tool.name).sort().join("\n");
+      const key = tools.map(tool => `${tool.name}\0${registrationSignature.get(tool) ?? ""}`).sort().join("\n");
       let extension = opened.variants.get(key);
       if (!extension) {
         const name = tools.length === opened.tools.length ? extensionKey(source) : `${extensionKey(source)}-${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
@@ -311,7 +317,26 @@ export function harnessResult(result: ToolExecutionResult): boolean {
   return result.isError === true && (result.diagnostics ?? []).some(diagnostic => diagnostic.severity === "error" && HARNESS_RESULT_CODES.has(diagnostic.code ?? ""));
 }
 
-function build(link: Link, dev: boolean, described: ExtensionToolDescription[], host: ExtensionHost, commands: ExtensionCommandDescription[]): OpenedSource {
+export const LATE_TOOLS_LIMIT = 32;
+
+export const GUIDANCE_LIMIT = 8000;
+const registrationSignature = new WeakMap<ToolRegistration, string>();
+
+export function lateTools(described: readonly ExtensionToolDescription[], offered: ReadonlySet<string>, atOpen: ReadonlySet<string> = new Set()): ExtensionToolDescription[] {
+  const late = described.filter(tool => !offered.has(tool.name) && !atOpen.has(tool.name) && !pikibunOwn(tool.name)).slice(0, LATE_TOOLS_LIMIT);
+  return described.filter(tool => offered.has(tool.name) || late.includes(tool));
+}
+
+export function toolGuidance(described: readonly ExtensionToolDescription[]): string {
+  const snippets = described.filter(tool => tool.promptSnippet).map(tool => `- ${tool.name}: ${tool.promptSnippet}`);
+  const rules = [...new Set(described.flatMap(tool => tool.promptGuidelines ?? []))].map(rule => `- ${rule}`);
+  const text = [snippets.length ? `Its tools:\n${snippets.join("\n")}` : "", rules.length ? `When to use them:\n${rules.join("\n")}` : ""].filter(Boolean).join("\n\n");
+  return text.length > GUIDANCE_LIMIT ? `${text.slice(0, GUIDANCE_LIMIT - 1)}…` : text;
+}
+
+function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offered: ReadonlySet<string>, host: ExtensionHost, commands: ExtensionCommandDescription[]): OpenedSource {
+  const atOpen = new Set(all.map(tool => tool.name));
+  let described = lateTools(all, offered, atOpen);
   const { source } = link;
   const key = extensionKey(source);
   const ask = <M extends ExtensionMethod>(method: M, params: ExtensionRequests[M][0], signal?: AbortSignal) => request(host, link, method, params, signal);
@@ -325,7 +350,7 @@ function build(link: Link, dev: boolean, described: ExtensionToolDescription[], 
   };
   const emit = async (event: { type: string } & Record<string, unknown>) => { if (link.handlers.has(event.type)) await quiet(event.type, settings => ask("emit", { source, settings, event })); };
   const has = (...events: string[]) => events.some(event => link.handlers.has(event));
-  const tools = described.map(definition => wholeForScripts(defineTool({
+  const toolFor = (definition: ExtensionToolDescription) => wholeForScripts(defineTool({
     name: definition.name, description: definition.description, parameters: definition.parameters as never,
     ...(definition.executionMode ? { executionMode: definition.executionMode } : {}),
     execute: async (args, api, info) => {
@@ -339,7 +364,18 @@ function build(link: Link, dev: boolean, described: ExtensionToolDescription[], 
           return { output: output.content, ...(output.details !== undefined ? { details: output.details as never } : {}) };
         });
     },
-  })));
+  }));
+  const built = new Map<string, { signature: string; tool: ToolRegistration }>();
+  const toolsOf = (list: readonly ExtensionToolDescription[]) => list.map(definition => {
+    const signature = JSON.stringify(definition);
+    const kept = built.get(definition.name);
+    if (kept?.signature === signature) return kept.tool;
+    const tool = toolFor(definition);
+    built.set(definition.name, { signature, tool });
+    registrationSignature.set(tool, signature);
+    return tool;
+  });
+  const tools = toolsOf(described);
 
   const hooks: HookRegistration[] = [];
   if (has("tool_call", "tool_result", "tool_execution_start", "tool_execution_end")) {
@@ -430,10 +466,16 @@ function build(link: Link, dev: boolean, described: ExtensionToolDescription[], 
       },
     }));
   }
-  const sections = has("before_agent_start") ? [section(key, async (input, context) => {
-    const text = (await input.read.snapshot(ExtensionPrompts, input.conversationId, context))?.prompts[source];
+  const sections = [section(key, async (input, context) => {
+    const added = has("before_agent_start") ? (await input.read.snapshot(ExtensionPrompts, input.conversationId, context))?.prompts[source] : undefined;
+    const text = [toolGuidance(described), added ?? ""].filter(Boolean).join("\n\n");
     if (!text || !(await host.state(source)).active) return undefined;
     return `<extension source="${source.replaceAll("\"", "'")}">\n${text}\n</extension>`;
-  }, { tag: false })] : [];
-  return { ...link, dev, commands, tools, sections, hooks, variants: new Map() };
+  }, { tag: false })];
+  const opened: OpenedSource = { ...link, dev, commands, tools, sections, hooks, variants: new Map() };
+  opened.onTools = link.onTools = next => {
+    described = lateTools(next, offered, atOpen);
+    opened.tools = toolsOf(described);
+  };
+  return opened;
 }
