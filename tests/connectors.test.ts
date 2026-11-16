@@ -2532,7 +2532,7 @@ test('past its hour, a message acts on GitHub while its run is still going, and 
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_comment']); const fetch = githubFetch(t);
   const owner = s.creator.user.id; const nowSeconds = Math.floor(Date.now() / 1000);
   const comment = (approvalId: string, admissionId: string) => ({ sessionId: s.session.id, actorId: owner, approvalId, admissionId,
-    repository: 'owner/repo', issue: 3, body: 'Long run' });
+    repository: 'owner/repo', issue: 3, body: 'Exactly approved text' });
   const activity = async (value: string) => json(await self(f, s.connector, 'activity', { sessionId: s.session.id, activity: value }));
   const seed = (sentAgo: number, createdAt: string) => {
     const id = token();
@@ -2540,7 +2540,6 @@ test('past its hour, a message acts on GitHub while its run is still going, and 
       .run(id, s.session.id, owner, 'write', `request-${id}`, 'h'.repeat(43), nowSeconds - sentAgo + 3600, createdAt, 'auto', 0);
     return id;
   };
-  // Sent 90 minutes ago: its hour ended 30 minutes ago.
   const long = seed(90 * 60, new Date(Date.now() - 90 * 60_000).toISOString());
 
   await activity('done');
@@ -2551,11 +2550,10 @@ test('past its hour, a message acts on GitHub while its run is still going, and 
   await json(await self(f, s.connector, 'github/comment', comment('tool-waiting', long)));
   assert.equal(fetch.mock.callCount(), 2);
 
-  const ancient = seed(9 * 3600, new Date(Date.now() - 9 * 3600_000).toISOString());
-  f.sqlite.prepare('DELETE FROM run_admissions WHERE id = ?').run(long);
+  const ancient = seed(9 * 3600, new Date(Date.now() - 60_000).toISOString());
   await denied(await self(f, s.connector, 'github/comment', comment('tool-ancient', ancient)), 403, 'automatic_github_not_admitted');
 
-  const renewed = seed(90 * 60, new Date(Date.now() - 90 * 60_000).toISOString());
+  const renewed = seed(90 * 60, new Date(Date.now() - 30_000).toISOString());
   await json(await self(f, s.connector, 'github/comment', comment('tool-renewed', renewed)));
   seed(0, new Date().toISOString());
   await denied(await self(f, s.connector, 'github/comment', comment('tool-superseded', renewed)), 403, 'automatic_github_not_admitted');

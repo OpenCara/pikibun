@@ -59,7 +59,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - `main` takes one squashed commit per pull request. Merge at the head commit that was reviewed and that CI passed on.
 - After fixing review points, update the pull request's description too: it often still says what couldn't be run or describes the first version. Where `gh pr edit` fails for want of a token scope, set the title and body with `gh api -X PATCH repos/<owner>/<name>/pulls/<n>`.
 - If `main` moved while a pull request waited, merge it in and rerun the checks before merging: a rule or test added on `main` since the branch was cut applies to it too.
-- `github_read`, `github_merge` and `git_push` act only for about an hour after the person's last message. In a long run they stop working before the review wait or the merge: report the pull request's state and say that a new message lets the session finish.
+- `github_read`, `github_merge` and `git_push` act for an hour after the person's last message, and past that for as long as that message's run goes on, up to 8 hours from the message (`ADMISSION_RENEWAL_MAX_SECONDS`). A run that outlives that, or whose message a later one followed, stops being able to: report the pull request's state and say that a new message lets the session finish.
 - When a merge call ends with an unclear result, read the pull request's state before anything else. If it is still open, say so and let the person decide, rather than retry on your own.
 - Issues can be opened only in the workspace's repositories. For an upstream project, draft the report and give it to the person to file.
 - Search the existing issues before opening one. If creating an issue returns an unclear result, search again before retrying, so no duplicate is filed.

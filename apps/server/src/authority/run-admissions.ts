@@ -8,8 +8,6 @@ import type { AppContext, Env, SessionRow } from '../types.js';
 import type { AccessMode } from '../../../../packages/shared/src/types.js';
 
 const ADMISSION_TTL_SECONDS = 3600;
-// How long, from the message, its admission lasts while its run is still going: past the hour, an admission lives on
-// while the session is working (or waiting on an approval) and no later message came in, up to this cap.
 export const ADMISSION_RENEWAL_MAX_SECONDS = 8 * 3600;
 const MAX_SESSION_ACTOR_PENDING = 1000;
 const MAX_ACTOR_PENDING = 1000;
@@ -66,12 +64,6 @@ const ELIGIBLE_SESSION = `SELECT s.id FROM sessions s
             AND json_extract(local_model.value, '$.modelId') = m.model_id)
     ))`;
 
-/**
- * Whether a write admission still lets its message act. It does for an hour after the message; past that, for as long
- * as the session's run goes on (its host reports it working, or waiting on an approval) and it is the session's latest
- * admission, so the run is still this message's, up to ADMISSION_RENEWAL_MAX_SECONDS after the message. A run that
- * ended (done, failed, idle) or a later message ends it, as the hour always did.
- */
 export async function admissionExpired(env: Env, admissionId: string, admission: { expires_at: number },
   nowSeconds = Math.floor(Date.now() / 1000)): Promise<boolean> {
   if (!Number.isSafeInteger(admission.expires_at)) return true;
