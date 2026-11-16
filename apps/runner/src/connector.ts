@@ -207,7 +207,7 @@ export interface ConnectorOptions {
   remoteExtensionInstalls?: boolean;
   managedExtensions?: boolean;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
-  onWarning?: (warning: "resources-unavailable") => void;
+  onWarning?: (warning: "resources-unavailable" | "identity-unavailable") => void;
 }
 
 type Runtime = { value: ConnectorRuntime; repositoryCache: RepositoryCacheMode; resumed: boolean };
@@ -275,8 +275,11 @@ export class LocalConnector {
       throw new Error("This platform has no sandbox unless one is chosen (sandboxBackend); no host-shell fallback");
     this.directory = await privateDirectory(this.options.dataDir);
     if (this.options.identityDir) {
-      this.identity = new IdentityStore(resolve(this.options.identityDir));
-      await this.identity.key();
+      const identity = new IdentityStore(resolve(this.options.identityDir));
+      try {
+        await identity.key();
+        this.identity = identity;
+      } catch { this.options.onWarning?.("identity-unavailable"); }
     }
     this.browser = new HostBrowserSource({ supported: process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend,
       ...this.options.browser, root: browserDownloads(this.directory), signal: this.lifetime.signal });

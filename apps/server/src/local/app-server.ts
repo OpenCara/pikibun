@@ -98,7 +98,7 @@ async function launch(request: ServerStartRequest): Promise<void> {
         setHost(next);
         if (next === 'disconnected' && reason) log('warning', `This computer's host disconnected: ${reason}`);
       },
-      onWarning: () => log('warning', 'Some resource domains are unavailable; production bash remains fail-closed.'),
+      onWarning: warning => log('warning', warning === 'identity-unavailable' ? "Your identity (~/.local/share/pikibun/identity) couldn't be read or made, so this host's private sessions aren't portable until it can." : 'Some resource domains are unavailable; production bash remains fail-closed.'),
     });
     current.host.started.catch((error: unknown) => {
       if (current.stopping || (error instanceof Error && error.name === 'AbortError')) return;

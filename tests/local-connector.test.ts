@@ -1501,3 +1501,14 @@ test('a host with an identity says it keeps portable sessions, sends its delegat
   assert.equal(settings.statement.key, delegation.statement.key);
   assert.deepEqual([settings.statement.version, settings.statement.settings], [3, { name: 'Mine', paging: true }]);
 });
+
+test('a host whose identity can\'t be made still connects, without portable sessions', { timeout: 10000 }, async t => {
+  const parent = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-no-identity-'));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  await writeFile(join(parent, 'identity'), 'not a directory');
+  const fixture = await connectorFixture(t, { identityDir: join(parent, 'identity'), portable: async () => [] });
+  await startFixture(fixture);
+  const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
+  assert.equal(JSON.parse(manifest.body).capabilities.portableSessions, undefined);
+  assert.equal(fixture.runtimes[0]!.config.portable, undefined);
+});
