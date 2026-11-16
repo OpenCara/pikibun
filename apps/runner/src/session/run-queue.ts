@@ -333,10 +333,15 @@ export class RunQueue {
     const text = ran ? ran.text : run.content;
     const attached = images.map(image => ({ type: "image" as const, ...image }));
     const hostOwner = this.options.connectorOwnerId;
-    const outcome: InputOutcome = host
-      ? await host.input((await this.options.extensionChoice()).chosen.map(item => item.source), text, attached, hostOwner && run.initiatedBy === hostOwner ? "interactive" : "rpc")
-      : { action: "continue", text, images: attached };
-    if (outcome.action === "continue") return ran || !commands ? outcome : { ...outcome, text: await commands.expand(outcome.text) };
+    const mode = hostOwner && run.initiatedBy === hostOwner ? "interactive" : "rpc";
+    const sources = host ? (await this.options.extensionChoice()).chosen.map(item => item.source) : [];
+    let outcome: InputOutcome = host ? await host.input(sources, text, attached, mode) : { action: "continue", text, images: attached };
+    if (outcome.action === "continue" && !ran && commands) {
+      const expanded = await commands.expand(outcome.text);
+      if (expanded === outcome.text) return outcome;
+      outcome = host ? await host.input(sources, expanded, outcome.images, mode) : { ...outcome, text: expanded };
+    }
+    if (outcome.action === "continue") return outcome;
     const notice = outcome.notice?.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 300);
     process.stderr.write(`Session ${this.options.sessionId}: ${outcome.by} refused a message${notice ? `: ${notice}` : ""}\n`);
     return { action: "refused", by: outcome.by, notice: notice || `An extension on this host (${outcome.by}) refused this message.` };

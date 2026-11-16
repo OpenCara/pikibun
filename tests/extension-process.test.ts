@@ -324,7 +324,8 @@ test("a confined process speaks over a pipe the connector reads itself: what isn
   const ask = (endless: boolean) => channel.call("execute", { source: "local:plain", settings: {}, tool: "noise", callId: "c", args: { endless } });
   const first = text((await ask(false)).value);
   assert.notEqual(first, String(process.pid));
-  assert.ok(logs.includes("printed, to the log"), logs.join("\n"));
+  for (let waited = 0; waited < 100 && !logs.includes("printed, to the log"); waited++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(logs.includes("printed, to the log"), `what it prints reaches the log, on a pipe of its own: ${logs.join("\n")}`);
   await assert.rejects(ask(true), /The extension process stopped/);
   assert.ok(warnings.some(line => /more than a message may hold/.test(line)), warnings.join("\n"));
   const again = text((await ask(false)).value);
