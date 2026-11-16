@@ -146,6 +146,12 @@ export interface SessionRecord {
   nextScheduledAt?: string;
   pullRequest?: SessionPullRequest;
   tunnel?: SessionTunnelRecord;
+  sideAsks?: SideAskSummary[];
+}
+export interface SideAskSummary {
+  conversationId: string;
+  preview: string;
+  createdAt: string;
 }
 export type PullRequestState = "draft" | "open" | "failing" | "changes_requested" | "merged" | "closed";
 export interface SessionPullRequest {

@@ -27,6 +27,7 @@ import { isLinkShared } from './session-links.js';
 import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL, requireEnabledModel } from './host-models.js';
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
 import { stopSessionTunnel } from './session-tunnels.js';
+import { recordSideAsk, sideAsksOf } from './side-asks.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
@@ -437,8 +438,13 @@ export async function cloneUnavailable(env: Env, capabilities: ConnectorCapabili
 export function registerSessions(app: Hono<AppEnv>): void {
   app.get('/api/sessions', async c => {
     const actorId = c.get('auth').userId;
-    const sessions = (await listSessionAccess(c.env, actorId))
-      .map(access => sessionRecord(access.row, access.permissions));
+    const access = await listSessionAccess(c.env, actorId);
+    const asked = await sideAsksOf(c.env, actorId, new Set(access.filter(item => hasPermission(item.permissions, 'ask')).map(item => item.row.id)));
+    const sessions = access.map(item => {
+      const record = sessionRecord(item.row, item.permissions);
+      const sideAsks = asked.get(item.row.id);
+      return sideAsks ? { ...record, sideAsks } : record;
+    });
     return c.json({ sessions });
   });
 
@@ -558,7 +564,9 @@ export function registerSessions(app: Hono<AppEnv>): void {
       const { row } = await requireSession(c, identifier(c.req.param('id')), mode === 'ask' ? 'ask' : 'write');
       requireUnfrozen(row);
       const input = await jsonObject(c, connectorLimits.requestBytes + 256 * 1024);
-      return c.json(await submitMessage(c, row, mode, input), 202);
+      const result = await submitMessage(c, row, mode, input);
+      if (mode === 'ask') await recordSideAsk(c, row.id, result.conversationId, input.content, Array.isArray(input.images) ? input.images.length : 0);
+      return c.json(result, 202);
     });
   }
 
