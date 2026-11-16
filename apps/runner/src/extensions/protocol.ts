@@ -6,6 +6,8 @@ export interface ExtensionToolDescription {
   description: string;
   parameters: Record<string, unknown>;
   executionMode?: "sequential" | "parallel";
+  promptSnippet?: string;
+  promptGuidelines?: string[];
 }
 
 export interface ExtensionCommandDescription {
@@ -63,7 +65,7 @@ export interface ExtensionRequests {
 
 export type ExtensionMethod = keyof ExtensionRequests;
 export type ExtensionParams<M extends ExtensionMethod> = ExtensionRequests[M][0] & { context?: RequestContext };
-export interface ExtensionAnswer<M extends ExtensionMethod> { value: ExtensionRequests[M][1]; handlers?: string[] }
+export interface ExtensionAnswer<M extends ExtensionMethod> { value: ExtensionRequests[M][1]; handlers?: string[]; tools?: ExtensionToolDescription[] }
 
 export interface ExtensionChannel {
   call<M extends ExtensionMethod>(method: M, params: ExtensionParams<M>, signal?: AbortSignal): Promise<ExtensionAnswer<M>>;

@@ -10,7 +10,7 @@ import { CONNECTOR_ENVIRONMENT } from "../connector-environment.js";
 import { shellQuote } from "../program-command.js";
 import { pinServiceSocket, SANDBOX_SERVICE_SOCKETS, type ServiceProcess } from "../session-service.js";
 import { lineReader } from "./lines.js";
-import type { ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams } from "./protocol.js";
+import type { ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionToolDescription } from "./protocol.js";
 
 export type WorkerCommandFor = (directory: string, mounts: readonly string[]) => WorkerCommand | Promise<WorkerCommand>;
 
@@ -21,7 +21,7 @@ export interface WorkerCommand {
   cwd?: string;
 }
 
-type Reply = { id: number; value?: unknown; handlers?: string[]; error?: string } | { warn: { source: string; message: string } };
+type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; error?: string } | { warn: { source: string; message: string } };
 
 export interface WorkerLink {
   send(message: unknown, failed: (error: Error) => void): void;
@@ -400,7 +400,7 @@ export class ProcessChannel implements ExtensionChannel {
     const pending = this.#pending.get(reply.id);
     if (!pending) return;
     if (reply.error !== undefined) pending.reject(new Error(reply.error));
-    else pending.resolve({ value: reply.value as never, ...(reply.handlers ? { handlers: reply.handlers } : {}) });
+    else pending.resolve({ value: reply.value as never, ...(reply.handlers ? { handlers: reply.handlers } : {}), ...(reply.tools ? { tools: reply.tools } : {}) });
   }
 
   #ended(run: Run, reason: string): void {
