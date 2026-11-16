@@ -1,4 +1,4 @@
-import { createServer, type Socket } from "node:net";
+import { createServer, Socket } from "node:net";
 import { ExtensionWorker } from "./worker.js";
 import type { ExtensionMethod } from "./protocol.js";
 import { lineReader } from "./lines.js";
@@ -11,12 +11,28 @@ const describe = (error: unknown) => error instanceof Error ? error.message : St
 const directory = process.argv.at(-1);
 const socketAt = process.argv.indexOf("--socket");
 const socketPath = socketAt >= 0 ? process.argv[socketAt + 1] : undefined;
-if (!directory || (!socketPath && !process.send)) {
-  process.stderr.write("The extension process is started by the connector, with an IPC channel or a socket, and its session's directory.\n");
+const piped = process.argv.includes("--pipe");
+if (!directory || (!socketPath && !piped && !process.send)) {
+  process.stderr.write("The extension process is started by the connector, with an IPC channel, a pipe or a socket, and its session's directory.\n");
   process.exit(2);
 }
 
+function speak(socket: Socket, handle: (message: Incoming) => void): (message: Outgoing) => void {
+  socket.on("data", lineReader(line => {
+    let message: Incoming;
+    try { message = JSON.parse(line) as Incoming; } catch { return; }
+    handle(message);
+  }, () => socket.destroy()));
+  socket.on("close", () => process.exit(0));
+  socket.on("error", () => process.exit(0));
+  return message => { socket.write(`${JSON.stringify(message)}\n`); };
+}
+
 function serve(handle: (message: Incoming) => void, connected: (write: (message: Outgoing) => void) => void): void {
+  if (piped) {
+    connected(speak(new Socket({ fd: 3, readable: true, writable: true }), handle));
+    return;
+  }
   if (!socketPath) {
     process.on("message", handle);
     process.on("disconnect", () => process.exit(0));
@@ -32,14 +48,7 @@ function serve(handle: (message: Incoming) => void, connected: (write: (message:
     peer = socket;
     server.close();
     clearTimeout(waiting);
-    socket.on("data", lineReader(line => {
-      let message: Incoming;
-      try { message = JSON.parse(line) as Incoming; } catch { return; }
-      handle(message);
-    }, () => socket.destroy()));
-    socket.on("close", () => process.exit(0));
-    socket.on("error", () => process.exit(0));
-    connected(message => { socket.write(`${JSON.stringify(message)}\n`); });
+    connected(speak(socket, handle));
   });
   const waiting = setTimeout(() => process.exit(3), CONNECT_TIMEOUT_MS);
   server.on("error", error => {
