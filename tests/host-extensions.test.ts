@@ -20,6 +20,7 @@ import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensi
 import { extensionAvailability, extensionPackageKey, inRepositoryDirectory, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
   sessionExtensions, type ExtensionSettings, type InstalledExtension } from "../packages/shared/src/host-extensions.js";
 import { extensionOffer, workspaceTools } from "../packages/shared/src/workspace-tools.js";
+import { extensionLabel } from "../packages/shared/src/workspace-tools.js";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -77,6 +78,7 @@ test("a Git source may name a directory of its repository, which is part of its 
     assert.throws(() => normalizeExtensionSource(`git:github.com/acme/repo@${commit}#${path}`), /./, JSON.stringify(path));
   }
   assert.deepEqual(parseWorkspaceExtensions([{ source }]).map(item => item.source), [normalizeExtensionSource(source)]);
+  assert.equal(extensionLabel(source), "pikibun/extensions/context-files", "two directories of one repository are told apart");
 });
 
 test("a directory of a Git repository installs only with an npm that knows ::path:, and only if it is a Pi extension package", async t => {
@@ -90,6 +92,7 @@ test("a directory of a Git repository installs only with an npm that knows ::pat
     const name = String(manifest.name);
     await mkdir(join(cwd, "node_modules", name), { recursive: true });
     await writeFile(join(cwd, "node_modules", name, "package.json"), JSON.stringify(manifest));
+    await writeFile(join(cwd, "node_modules", name, "index.ts"), "export default () => {};");
     const project = JSON.parse(await readFile(join(cwd, "package.json"), "utf8"));
     project.dependencies[name] = args.at(-1);
     await writeFile(join(cwd, "package.json"), JSON.stringify(project));
@@ -106,6 +109,11 @@ test("a directory of a Git repository installs only with an npm that knows ::pat
   version = "11.12.1";
   manifest = { name: "@opencara/pikibun", version: "0.1.0" };
   await assert.rejects(store.add(parseExtensionSource(`git:github.com/OpenCara/pikibun@${commit}#apps`)), /isn't a Pi extension package/);
+  manifest = { name: "index-only", version: "0.1.0" };
+  await assert.rejects(store.add(parseExtensionSource(`git:github.com/OpenCara/pikibun@${commit}#tools/index-only`)), /isn't a Pi extension package/,
+    "an index file alone isn't enough, as the loader requires a manifest of installed packages");
+  manifest = { name: "empty", version: "0.1.0", pi: { extensions: ["./missing.ts"] } };
+  await assert.rejects(store.add(parseExtensionSource(`git:github.com/OpenCara/pikibun@${commit}#tools/empty`)), /lists no extension modules/);
   assert.deepEqual((await store.list()).map(item => item.source), [`git:https://github.com/OpenCara/pikibun@${commit}#extensions/context-files`]);
 });
 

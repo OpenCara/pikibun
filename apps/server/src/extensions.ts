@@ -90,10 +90,9 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     }
     await c.env.DB.batch(statements);
     const pending = await c.env.DB.query<ExtensionRequest>(`SELECT id, action, source FROM connector_extension_requests
-      WHERE connector_id = ? AND status = 'pending' ORDER BY requested_at, id LIMIT ?`).bind(row.id, MAX_PENDING).all();
-    const subdirectories = knowsGitSubdirectories(row);
-    return c.json({ requests: pending.filter(item => subdirectories || !inRepositoryDirectory(item.source)).map(item => ({ id: item.id, action: item.action, source: item.source })),
-      managed: managedExtensions });
+      WHERE connector_id = ? AND status = 'pending' AND (? = 1 OR source NOT LIKE 'git:%#%') ORDER BY requested_at, id LIMIT ?`)
+      .bind(row.id, knowsGitSubdirectories(row) ? 1 : 0, MAX_PENDING).all();
+    return c.json({ requests: pending.map(item => ({ id: item.id, action: item.action, source: item.source })), managed: managedExtensions });
   });
 
   app.post('/api/connectors/self/extensions/workspace', async c => {
@@ -215,7 +214,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     catch (error) { return fail(400, 'invalid_extension_request', error instanceof Error ? error.message : 'Invalid extension source.'); }
     if (isPikiExtensionSource(source)) fail(400, 'piki_extension', 'Pikibun extensions come with the connector: update it (npx pikibun@latest connect) to get newer ones.');
     if (inRepositoryDirectory(source) && !knowsGitSubdirectories(row)) {
-      fail(409, 'connector_update_required', 'Installing a directory of a Git repository needs a newer connector on this host: update it (npx pikibun@latest connect).');
+      fail(409, 'connector_update_required', 'A directory of a Git repository needs a newer connector on this host to install or remove it: update it (npx pikibun@latest connect).');
     }
     const reported = await hostReport(c.env, row.id);
     if (reported && !reported.report.remoteInstalls) fail(409, 'remote_installs_off', 'This host\'s connector refuses installs from Pikibun: install extensions on it with pikibun extensions.');

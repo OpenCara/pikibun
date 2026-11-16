@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { EXACT_VERSION, extensionLimits, extensionPackageKey, extensionSourceString, ExtensionSourceError, parseExtensionSourceSpec,
   type ExtensionSourceSpec } from "../../../../packages/shared/src/host-extensions.js";
 import { compareVersions, inManagedScope, MANAGED_EXTENSION_SCOPE, managedPinKey, type ManagedExtensionPin } from "../../../../packages/shared/src/managed-extensions.js";
+import { packageEntries } from "./load.js";
 
 const run = promisify(execFile);
 
@@ -59,12 +60,11 @@ type Npm = (args: string[], cwd: string, env?: Record<string, string>) => Promis
 
 export const GIT_PATH_NPM = "11.10.0";
 
-async function hasPiPackage(location: string): Promise<boolean> {
+async function piPackageFault(location: string): Promise<string | null> {
   try {
-    const manifest = JSON.parse(await readFile(join(location, "package.json"), "utf8")) as { pi?: { extensions?: unknown } };
-    if (Array.isArray(manifest.pi?.extensions)) return true;
-  } catch { }
-  return ["extensions", "index.ts", "index.js"].some(name => existsSync(join(location, name)));
+    const { files } = await packageEntries(location, true);
+    return files.length ? null : "it lists no extension modules";
+  } catch (error) { return error instanceof Error ? error.message : "it can't be read"; }
 }
 
 export class ExtensionStore {
@@ -200,8 +200,9 @@ export class ExtensionStore {
         const name = Object.keys(dependencies)[0];
         if (!name || Object.keys(dependencies).length !== 1) throw new ExtensionSourceError(`npm installed ${spec}, but not as the one package of ${project}.`);
         if (source.kind === "npm" && name !== source.package) throw new ExtensionSourceError(`npm installed ${name} for ${spec}.`);
-        if (source.kind === "git" && source.path && !await hasPiPackage(join(project, "node_modules", ...name.split("/")))) {
-          throw new ExtensionSourceError(`${source.path} of ${source.url} at ${source.commit} isn't a Pi extension package: npm installed ${name}, which has no "pi" manifest, extensions/ directory or index file.`);
+        const fault = source.kind === "git" && source.path ? await piPackageFault(join(project, "node_modules", ...name.split("/"))) : null;
+        if (fault && source.kind === "git") {
+          throw new ExtensionSourceError(`${source.path} of ${source.url} at ${source.commit} isn't a Pi extension package: npm installed ${name}, and ${fault}.`);
         }
         const installed = { source: normalized, directory, package: name };
         await this.save([...sources, installed]);

@@ -249,11 +249,13 @@ key, so two directories of one repository are two extensions, and another commit
 - **Installed with npm's `::path:`.** The connector installs `git+<url>.git#<commit>::path:<directory>`, with the
   flags a Git source always gets (`--ignore-scripts`, `npm_config_allow_git=root`). An npm older than 11.10.0 ignores
   `::path:` and installs the repository's root instead, so the connector asks npm its version first and refuses an older
-  one (`GIT_PATH_NPM`). What npm installed must be a Pi extension package, with a `pi` manifest, an `extensions/`
-  directory or an index file at its root, or the install is undone.
+  one (`GIT_PATH_NPM`). What npm installed must be a Pi extension package as the loader reads an installed one
+  (`packageEntries` with a required manifest: a `pi.extensions` list or an `extensions/` directory, naming at least one
+  module), or the install is undone.
 - **Only to connectors that know the form** (`gitSubdirectories` in their capabilities). An older connector refuses a
   whole list with one source it can't parse, so the server leaves such sources out of its workspace answer and its
-  required extensions, keeps its install requests waiting, and refuses a new one with `connector_update_required`.
+  required extensions, keeps its install and remove requests waiting (in the query, so they don't take the place of
+  others it is sent), and refuses a new one with `connector_update_required`.
   It keeps running the workspace's other extensions.
 
 ## Later
