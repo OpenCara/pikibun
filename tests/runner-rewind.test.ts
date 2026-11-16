@@ -240,6 +240,43 @@ test("a fork starts a new session with the shared conversation up to a message, 
   await assert.rejects(runner.service.fork(elsewhere, await ticket(elsewhere, "fork"), input), refused(403, /same workspace/));
 });
 
+test("a fork from a side ask starts from the shared conversation as it was when asked, then the side ask, while the shared work goes on", async t => {
+  const runner = await fixture(t);
+  const source = await runner.provision("ask-fork-source");
+  await send(source, "one");
+  const ask = await source.submit(await ticket(source, "ask"), { content: "aside", requestId: randomUUID() }, "ask");
+  let view = await idle(source);
+  assert.equal(view.askForks, true);
+  const thread = view.entries.filter(entry => entry.conversationId === ask.conversationId);
+  const question = thread.find(entry => entry.role === "user" && entry.text === "aside")!;
+  const reply = thread.find(entry => entry.role === "assistant" && entry.text === "saw one|aside")!;
+  assert.ok(question && reply, JSON.stringify(thread));
+
+  const release = runner.hold();
+  await source.submit(await ticket(source, "submit"), { content: "HOLD", requestId: randomUUID() }, "write");
+  const target = await runner.provision("ask-fork-target");
+  const result = await runner.service.fork(target, await ticket(target, "fork"), { sourceSessionId: "ask-fork-source", entryId: reply.id });
+  assert.ok(result.entries >= 4, JSON.stringify(result));
+  let forked = await target.view();
+  assert.deepEqual(lines(forked), ["user: one", "assistant: saw one", "user: aside", "assistant: saw one|aside"], "a side ask's finished reply forks while the shared work runs");
+  forked = await send(target, "act");
+  assert.equal(shared(forked).at(-1)!.text, "saw one|aside|act");
+
+  const before = await runner.provision("ask-fork-before");
+  await runner.service.fork(before, await ticket(before, "fork"), { sourceSessionId: "ask-fork-source", entryId: question.id });
+  assert.deepEqual(lines(await before.view()), ["user: one", "assistant: saw one"], "before the side ask's question: the shared conversation as it was");
+  release();
+  view = await idle(source);
+  assert.deepEqual(lines(view), ["user: one", "assistant: saw one", "user: HOLD", "assistant: saw one|HOLD"], "the source session is unchanged");
+
+  const bobs = await runner.provision("ask-fork-bob", BOB);
+  await assert.rejects(runner.service.fork(bobs, await ticket(bobs, "fork"), { sourceSessionId: "ask-fork-source", entryId: reply.id }), refused(403, /Only whoever sent a side ask/));
+  assert.deepEqual(lines(await bobs.view()), [], "someone else's side ask isn't theirs to continue");
+
+  const busy = await runner.provision("ask-fork-busy");
+  await assert.rejects(runner.service.fork(busy, await ticket(busy, "fork"), { sourceSessionId: "ask-fork-source", entryId: `999:${reply.id.split(":")[1]}` }), refused(409, /no longer in the shared conversation/));
+});
+
 test("a backup of a session that went back keeps the conversation it went back from, and a restore takes exactly one as current", async t => {
   const runner = await fixture(t);
   const source = await runner.provision("restore-source");

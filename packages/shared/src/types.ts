@@ -608,6 +608,7 @@ export interface SessionView {
   withdrawable?: boolean;
   rewindable?: boolean;
   memberForks?: boolean;
+  askForks?: boolean;
   commands?: SessionCommand[];
   agent?: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
   context?: SessionContextView;

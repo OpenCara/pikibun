@@ -2117,6 +2117,30 @@ test('its owner forks a session from a message into a new one on the same host a
   assert.equal((f.sqlite.prepare('SELECT status FROM sessions WHERE id = ?').get(failed) as { status: string }).status, 'archived');
 });
 
+test('a fork from a side ask starts a child of the session, titled for the side ask, only on a host that forks side asks', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const path = `/api/sessions/${s.session.id}`;
+  let askForks = false;
+  const requests = rpcHub(f, s.connector, envelope => envelope.request.ticket.action === 'fork' ? Response.json({ conversationId: '1', entries: 4 })
+    : envelope.request.ticket.action === 'view' ? Response.json({ view: { ...s.view, conversations: [{ id: '1', mode: 'write' }, { id: '7', mode: 'ask', actorId: s.owner.user.id }],
+      ...(askForks ? { askForks: true } : {}) } })
+    : Response.json({ session: {} }, { status: 201 }));
+  const sessions = () => (f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }).n;
+  const count = sessions();
+  await denied(await s.owner.request('POST', `${path}/fork`, { entryId: '7:15' }), 409, 'connector_update_required');
+  assert.equal(sessions(), count, 'an older host starts no session for it');
+  askForks = true;
+  const { session } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '7:15' }), 201);
+  assert.deepEqual([session.title, session.parentSessionId, session.ownerId], [`Side ask: ${s.session.title}`, s.session.id, s.owner.user.id]);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body), { sourceSessionId: s.session.id, entryId: '7:15' });
+  assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE session_id = ? AND action = 'session.forked'").all(session.id).map(row => ({ ...row })),
+    [{ detail_json: JSON.stringify({ sourceSessionId: s.session.id, entryId: '7:15', sideAsk: true }) }]);
+  const { session: padded } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '07:15' }), 201);
+  assert.equal(padded.parentSessionId, s.session.id, 'the conversation is told by its number, as the host reads it');
+  const { session: shared } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '1:12' }), 201);
+  assert.deepEqual([shared.title, shared.parentSessionId], [`Fork: ${s.session.title}`, undefined], 'a fork of the shared conversation stays on its own');
+});
+
 test('explicitly private creation stays unlisted until granted and membership removal defeats both visibility and grants', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const { session: privateSession } = await json<{ session: SessionRecord }>(await s.owner.request('POST', '/api/sessions', {
