@@ -2135,6 +2135,8 @@ test('a fork from a side ask starts a child of the session, titled for the side 
   assert.deepEqual(JSON.parse(requests.at(-1)!.request.body), { sourceSessionId: s.session.id, entryId: '7:15' });
   assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE session_id = ? AND action = 'session.forked'").all(session.id).map(row => ({ ...row })),
     [{ detail_json: JSON.stringify({ sourceSessionId: s.session.id, entryId: '7:15', sideAsk: true }) }]);
+  const { session: padded } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '07:15' }), 201);
+  assert.equal(padded.parentSessionId, s.session.id, 'the conversation is told by its number, as the host reads it');
   const { session: shared } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '1:12' }), 201);
   assert.deepEqual([shared.title, shared.parentSessionId], [`Fork: ${s.session.title}`, undefined], 'a fork of the shared conversation stays on its own');
 });

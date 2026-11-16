@@ -57,7 +57,9 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   one of the shared conversation: the side ask's conversation holds the shared one as it was when the side ask was sent,
   then the side ask, so the new session goes on from what was asked on the side, with the tools a shared message has.
   Forking from a side ask's latest reply waits only for that side ask's own run, not for the shared work, as the side ask
-  didn't. The server starts such a fork as a child of the session (`parentSessionId`), titled `Side ask: …`, and only
+  didn't, and its runs are all it checks: a side ask makes no operations. Only whoever sent the side ask forks from it, as
+  the app offers it only on one's own side asks. The server tells a side ask's message by its conversation's number, as
+  the runner does, and starts such a fork as a child of the session (`parentSessionId`), titled `Side ask: …`, and only
   where the view says `askForks`, so a host whose connector predates it refuses nothing it never offered.
 - **The session keeps thin members tests reach by name.** `metadata()`, `tools`, `buildTools()`, `drainQueue()`,
   `agentInstructions(mode)`, `activity()`, `harness` and `hostCommands` stay on `RunnerSession`, delegating where the work

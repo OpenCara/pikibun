@@ -269,6 +269,10 @@ test("a fork from a side ask starts from the shared conversation as it was when 
   view = await idle(source);
   assert.deepEqual(lines(view), ["user: one", "assistant: saw one", "user: HOLD", "assistant: saw one|HOLD"], "the source session is unchanged");
 
+  const bobs = await runner.provision("ask-fork-bob", BOB);
+  await assert.rejects(runner.service.fork(bobs, await ticket(bobs, "fork"), { sourceSessionId: "ask-fork-source", entryId: reply.id }), refused(403, /Only whoever sent a side ask/));
+  assert.deepEqual(lines(await bobs.view()), [], "someone else's side ask isn't theirs to continue");
+
   const busy = await runner.provision("ask-fork-busy");
   await assert.rejects(runner.service.fork(busy, await ticket(busy, "fork"), { sourceSessionId: "ask-fork-source", entryId: `999:${reply.id.split(":")[1]}` }), refused(409, /no longer in the shared conversation/));
 });

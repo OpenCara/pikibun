@@ -312,7 +312,7 @@ export async function forkSession(c: AppContext, source: SessionRow, entryId: st
     fail(409, 'connector_update_required', 'Only the session owner can fork it on this host until its connector is updated (npx pikibun@latest connect).');
   }
   const conversationId = /^(\d{1,15}):/.exec(entryId)?.[1];
-  const fromAsk = conversations.some(conversation => conversation.mode === 'ask' && conversation.id === conversationId);
+  const fromAsk = conversationId !== undefined && conversations.some(conversation => conversation.mode === 'ask' && Number(conversation.id) === Number(conversationId));
   if (fromAsk && askForks !== true) {
     fail(409, 'connector_update_required', 'This host forks only from the shared conversation until its connector is updated (npx pikibun@latest connect).');
   }

@@ -1183,6 +1183,7 @@ export class RunnerSession {
         ? state.branches.find(branch => branch.mode === "ask" && !branch.superseded && branch.id === Number(from)) : undefined;
       const conversation = ask ? await this.harness.conversation(ask.id as ConversationId, context) : shared;
       if (!conversation) throw new RunnerError(409, "That side ask is no longer there; reload it");
+      if (ask?.actorId && ask.actorId !== actorId) throw new RunnerError(403, "Only whoever sent a side ask continues it in a new session");
       const { at, last } = await this.cutPoint(conversation, entryId, ask ? "the side ask" : "the shared conversation");
       if (last && ask && Object.values(state.runs).some(run => run.conversationId === ask.id && (["queued", "admitting", "running"].includes(run.status) || run.stopped?.pending))) {
         throw new RunnerError(409, "Wait for the side ask to finish before forking from its latest reply");
