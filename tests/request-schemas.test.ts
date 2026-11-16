@@ -113,7 +113,7 @@ test('new routes check their bodies with body(): hand-checked bodies only go awa
     const path = join(entry.parentPath, entry.name);
     const file = relative(root, path).split('\\').join('/');
     if (file === 'schemas.ts' || file === 'http.ts') continue;
-    const count = (await readFile(path, 'utf8')).match(/jsonObject\(c\b/g)?.length ?? 0;
+    const count = (await readFile(path, 'utf8')).match(/\bjsonObject\s*\(/g)?.length ?? 0;
     if (count) found[file] = count;
   }
   for (const [file, count] of Object.entries(found)) {
