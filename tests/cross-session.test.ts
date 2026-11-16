@@ -134,7 +134,7 @@ test('an agent lists and reads the sessions its sender can see, and a read never
   const write = f.admit('session-a', ownerId);
   for (const [body, code] of [[{ action: 'read' }, 'invalid_input'], [{ action: 'list', targetSessionId: 'session-b' }, 'invalid_input'],
     [{ action: 'send', targetSessionId: 'session-b' }, 'invalid_input'], [{ action: 'jump' }, 'invalid_input'], [{ action: 'read', targetSessionId: 'session-b', limit: 51 }, 'invalid_input'],
-    [{ action: 'ask', targetSessionId: 'session-b', message: 'hi', access: 'auto' }, 'invalid_input']] as const) {
+    [{ action: 'ask', targetSessionId: 'session-b', message: 'hi', access: 'auto' }, 'invalid_input'], [{ action: 'create', visibility: 'secret' }, 'invalid_input']] as const) {
     await f.refused(f.tool('session-a', ownerId, write, body), 400, code);
   }
   await f.refused(f.tool('session-a', ownerId, f.admit('session-b', ownerId), { action: 'list' }), 403, 'sessions_not_admitted');

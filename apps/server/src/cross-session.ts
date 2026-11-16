@@ -118,6 +118,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   if (input.thinkingLevel !== undefined && !thinkingLevels.includes(input.thinkingLevel as ThinkingLevel)) fail(400, 'invalid_input', `Thinking is ${thinkingLevels.join(', ')}.`);
   const thinkingLevel = input.thinkingLevel as ThinkingLevel | undefined;
   if (thinkingLevel !== undefined && message === undefined) fail(400, 'invalid_input', 'A reasoning level goes with the opening message: send one, or leave thinking out.');
+  if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'workspace') fail(400, 'invalid_input', 'Sessions are visible to the workspace\'s members; leave visibility out.');
   const messageId = input.messageId === undefined ? undefined : identifier(input.messageId, 'messageId');
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > crossSessionLimits.readEntries)) {
     fail(400, 'invalid_input', `The limit is 1 to ${crossSessionLimits.readEntries}.`);
