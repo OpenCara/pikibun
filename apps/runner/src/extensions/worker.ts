@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,10 +50,17 @@ const inputCall = new AsyncLocalStorage<{ notices: string[]; errors: string[] }>
 const commandCall = new AsyncLocalStorage<{ notices: string[]; messages: string[] }>();
 
 export const NOTICE_LIMIT = 500;
+export const NOTICES_PER_SOURCE = 50;
 const PROMPT_TEXT_LIMIT = 1000;
 const GUIDELINES_LIMIT = 8;
 
 function noticesOf(runner: ExtensionRunner, warn: (message: string) => void): void {
+  let logged = 0;
+  const log = (message: string) => {
+    logged++;
+    if (logged <= NOTICES_PER_SOURCE) warn(message);
+    else if (logged === NOTICES_PER_SOURCE + 1) warn(`it sent more than ${NOTICES_PER_SOURCE} warnings; the rest go unlogged until its process starts again`);
+  };
   runner.onError(error => { if (error.event === "input") inputCall.getStore()?.errors.push(error.error); });
   const createContext = runner.createContext.bind(runner);
   runner.createContext = () => {
@@ -61,7 +69,7 @@ function noticesOf(runner: ExtensionRunner, warn: (message: string) => void): vo
     const ui = new Proxy(ctx.ui, { get: (target, name, receiver) => name === "notify"
       ? (message: unknown, level?: unknown) => {
         if (sink) sink.push(String(message));
-        else if (level === "warning" || level === "error") warn(`${level}: ${String(message).slice(0, NOTICE_LIMIT)}`);
+        else if (level === "warning" || level === "error") log(`${level}: ${String(message).slice(0, NOTICE_LIMIT)}`);
       }
       : Reflect.get(target, name, receiver) });
     return Object.create(ctx, { ui: { value: ui } }) as ExtensionContext;
@@ -90,7 +98,7 @@ export function describeTools(runner: ExtensionRunner): ExtensionToolDescription
   });
 }
 
-const toolSignature = (tools: readonly ExtensionToolDescription[]) => JSON.stringify(tools);
+const toolSignature = (tools: readonly ExtensionToolDescription[]) => createHash("sha256").update(JSON.stringify(tools)).digest("base64url");
 
 const boundary = () => ({ contextEntries: [], contextMessages: [], llmMessages: [], pendingMessages: [], canContinue: true });
 const requestContext = new AsyncLocalStorage<RequestContext>();
@@ -99,7 +107,6 @@ type Handlers = { [M in ExtensionMethod]: (params: ExtensionParams<M>, signal?: 
 
 export class ExtensionWorker {
   readonly #runners = new Map<string, ExtensionRunner>();
-  readonly #reported = new Map<string, string>();
   #context: RequestContext = {};
   #models: Model<string>[] = [];
   readonly #registry: ModelRegistry | undefined;
@@ -176,11 +183,15 @@ export class ExtensionWorker {
     const source = (params as { source?: unknown }).source;
     const runner = typeof source === "string" ? this.#runners.get(source) : undefined;
     if (!runner || typeof source !== "string") return { value };
-    const tools = describeTools(runner);
+    const handlers = [...supportedEvents].filter(event => runner.hasHandlers(event));
+    let tools: ExtensionToolDescription[];
+    try { tools = describeTools(runner); }
+    catch (error) {
+      this.options.warn(source, `its tools can't be described: ${error instanceof Error ? error.message : String(error)}`);
+      return { value, handlers };
+    }
     const signature = toolSignature(tools);
-    const changed = this.#reported.get(source) !== signature;
-    if (changed) this.#reported.set(source, signature);
-    return { value, handlers: [...supportedEvents].filter(event => runner.hasHandlers(event)), ...(changed ? { tools } : {}) };
+    return { value, handlers, toolsSignature: signature, ...(params.toolsSeen !== signature ? { tools } : {}) };
   }
 
   private runner(params: Scoped): ExtensionRunner {
@@ -215,7 +226,6 @@ export class ExtensionWorker {
     noticesOf(runner, message => warn(source, message));
     this.#runners.set(source, runner);
     const tools = describeTools(runner);
-    this.#reported.set(source, toolSignature(tools));
     const commands = runner.getRegisteredCommands().map(command => ({ name: command.invocationName,
       ...(typeof command.description === "string" && command.description ? { description: command.description } : {}) }));
     return { errors: result.errors.map(error => error.error), tools, commands };

@@ -79,6 +79,7 @@ interface Link {
   isolated: boolean;
   channel: ExtensionChannel;
   handlers: Set<string>;
+  toolsSeen?: string;
   onTools?: (tools: ExtensionToolDescription[]) => void;
 }
 
@@ -86,12 +87,15 @@ async function request<M extends ExtensionMethod>(host: ExtensionHost, link: Lin
   const model = modelDescription(host.model());
   const thinkingLevel = host.thinkingLevel?.();
   const context = { ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
-  const answer = await link.channel.call(method, { ...params, context } as ExtensionParams<M>, signal);
+  const answer = await link.channel.call(method, { ...params, context, ...(link.toolsSeen ? { toolsSeen: link.toolsSeen } : {}) } as ExtensionParams<M>, signal);
   if (answer.handlers) {
     link.handlers.clear();
     for (const event of answer.handlers) link.handlers.add(event);
   }
-  if (answer.tools) link.onTools?.(answer.tools);
+  if (answer.tools && link.onTools) {
+    link.onTools(answer.tools);
+    if (answer.toolsSignature) link.toolsSeen = answer.toolsSignature;
+  }
   return answer.value;
 }
 
@@ -196,7 +200,7 @@ export class SessionExtensions {
         this.host.warn(source, `tool ${name} is left out: an earlier extension or the session has a tool named so`);
       }
       const tools = opened.tools.filter(tool => kept.includes(tool.name));
-      const key = tools.map(tool => tool.name).sort().join("\n");
+      const key = tools.map(tool => `${tool.name}\0${registrationSignature.get(tool) ?? ""}`).sort().join("\n");
       let extension = opened.variants.get(key);
       if (!extension) {
         const name = tools.length === opened.tools.length ? extensionKey(source) : `${extensionKey(source)}-${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
@@ -315,19 +319,24 @@ export function harnessResult(result: ToolExecutionResult): boolean {
 
 export const LATE_TOOLS_LIMIT = 32;
 
-export function lateTools(described: readonly ExtensionToolDescription[], offered: ReadonlySet<string>): ExtensionToolDescription[] {
-  const late = described.filter(tool => !offered.has(tool.name) && !pikibunOwn(tool.name)).slice(0, LATE_TOOLS_LIMIT);
+export const GUIDANCE_LIMIT = 8000;
+const registrationSignature = new WeakMap<ToolRegistration, string>();
+
+export function lateTools(described: readonly ExtensionToolDescription[], offered: ReadonlySet<string>, atOpen: ReadonlySet<string> = new Set()): ExtensionToolDescription[] {
+  const late = described.filter(tool => !offered.has(tool.name) && !atOpen.has(tool.name) && !pikibunOwn(tool.name)).slice(0, LATE_TOOLS_LIMIT);
   return described.filter(tool => offered.has(tool.name) || late.includes(tool));
 }
 
 export function toolGuidance(described: readonly ExtensionToolDescription[]): string {
   const snippets = described.filter(tool => tool.promptSnippet).map(tool => `- ${tool.name}: ${tool.promptSnippet}`);
   const rules = [...new Set(described.flatMap(tool => tool.promptGuidelines ?? []))].map(rule => `- ${rule}`);
-  return [snippets.length ? `Its tools:\n${snippets.join("\n")}` : "", rules.length ? `When to use them:\n${rules.join("\n")}` : ""].filter(Boolean).join("\n\n");
+  const text = [snippets.length ? `Its tools:\n${snippets.join("\n")}` : "", rules.length ? `When to use them:\n${rules.join("\n")}` : ""].filter(Boolean).join("\n\n");
+  return text.length > GUIDANCE_LIMIT ? `${text.slice(0, GUIDANCE_LIMIT - 1)}…` : text;
 }
 
 function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offered: ReadonlySet<string>, host: ExtensionHost, commands: ExtensionCommandDescription[]): OpenedSource {
-  let described = lateTools(all, offered);
+  const atOpen = new Set(all.map(tool => tool.name));
+  let described = lateTools(all, offered, atOpen);
   const { source } = link;
   const key = extensionKey(source);
   const ask = <M extends ExtensionMethod>(method: M, params: ExtensionRequests[M][0], signal?: AbortSignal) => request(host, link, method, params, signal);
@@ -363,6 +372,7 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
     if (kept?.signature === signature) return kept.tool;
     const tool = toolFor(definition);
     built.set(definition.name, { signature, tool });
+    registrationSignature.set(tool, signature);
     return tool;
   });
   const tools = toolsOf(described);
@@ -464,7 +474,7 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
   }, { tag: false })];
   const opened: OpenedSource = { ...link, dev, commands, tools, sections, hooks, variants: new Map() };
   opened.onTools = link.onTools = next => {
-    described = lateTools(next, offered);
+    described = lateTools(next, offered, atOpen);
     opened.tools = toolsOf(described);
   };
   return opened;

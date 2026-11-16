@@ -255,3 +255,40 @@ test("an extension's tool guidance lists its snippets and guidelines once each, 
   assert.deepEqual(kept.slice(0, 2).map(item => item.name), ["offered", "late_0"]);
   assert.equal(kept.length, 33);
 });
+
+test("a tool registered again with another schema makes a new variant, a tool dropped as the extension loaded stays dropped, and tools reach the connector until it has seen them", async t => {
+  const root = await directory(t);
+  const file = join(root, "changing.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    export default function (pi) {
+      const tool = description => ({ name: "shift", label: "Shift", description, parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+      pi.registerTool(tool("first"));
+      pi.registerTool({ ...tool("dropped"), name: "dropped" });
+      pi.on("session_start", () => { pi.registerTool(tool("second")); });
+    }`);
+  const summary = { source: "local:changing", dev: true, modules: [{ path: "changing.ts", tools: [{ name: "shift", description: "" }], events: ["session_start"], flags: [], noops: [], ignored: ["tool dropped (too many tools)"] }] };
+  const host: ExtensionHost = { directory: root, model: () => undefined, state: async () => ({ active: true, settings: {} }),
+    runTool: async (_call, execute) => execute(new AbortController().signal), hookTimeoutMs: 5000, warn: () => {} };
+  const session = new SessionExtensions(host, []);
+  t.after(() => session.shutdown());
+  await session.ensure([{ installed: { source: "local:changing" }, root, files: [file], summary }]);
+  const before = session.select(["local:changing"]);
+  assert.deepEqual(before.selected[0]!.tools.map(tool => [tool.name, tool.description]), [["shift", "first"]]);
+  await session.sessionStart();
+  const after = session.select(["local:changing"]);
+  assert.deepEqual(after.selected[0]!.tools.map(tool => [tool.name, tool.description]), [["shift", "second"]], "the dropped tool stays dropped");
+  assert.equal(after.created.length, 1, "the changed schema is a new variant");
+  assert.notEqual(after.selected[0]!.extension, before.selected[0]!.extension);
+  assert.equal(session.select(["local:changing"]).created.length, 0, "and an unchanged one isn't");
+
+  const channel = new ProcessChannel({ directory: root, warn: () => {}, log: () => {} });
+  t.after(() => channel.close());
+  const opened = await channel.call("open", { source: "local:changing", files: [file], models: [] });
+  assert.ok(opened.toolsSignature);
+  const seen = opened.toolsSignature!;
+  assert.equal((await channel.call("emit", { source: "local:changing", settings: {}, event: { type: "agent_start" }, toolsSeen: seen })).tools, undefined, "nothing to send");
+  const changed = await channel.call("emit", { source: "local:changing", settings: {}, event: { type: "session_start", reason: "startup" }, toolsSeen: seen });
+  assert.ok(changed.tools && changed.toolsSignature !== seen);
+  const again = await channel.call("emit", { source: "local:changing", settings: {}, event: { type: "agent_start" }, toolsSeen: seen });
+  assert.deepEqual(again.tools, changed.tools, "a connector that hasn't seen them, its answer lost, gets them again");
+});

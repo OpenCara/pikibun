@@ -21,7 +21,7 @@ export interface WorkerCommand {
   cwd?: string;
 }
 
-type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; error?: string } | { warn: { source: string; message: string } };
+type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string; error?: string } | { warn: { source: string; message: string } };
 
 export interface WorkerLink {
   send(message: unknown, failed: (error: Error) => void): void;
@@ -400,7 +400,7 @@ export class ProcessChannel implements ExtensionChannel {
     const pending = this.#pending.get(reply.id);
     if (!pending) return;
     if (reply.error !== undefined) pending.reject(new Error(reply.error));
-    else pending.resolve({ value: reply.value as never, ...(reply.handlers ? { handlers: reply.handlers } : {}), ...(reply.tools ? { tools: reply.tools } : {}) });
+    else pending.resolve({ value: reply.value as never, ...(reply.handlers ? { handlers: reply.handlers } : {}), ...(reply.tools ? { tools: reply.tools } : {}), ...(reply.toolsSignature ? { toolsSignature: reply.toolsSignature } : {}) });
   }
 
   #ended(run: Run, reason: string): void {
