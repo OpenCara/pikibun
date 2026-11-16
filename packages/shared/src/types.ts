@@ -134,7 +134,6 @@ export interface SessionRecord {
   branch?: string;
   frozen?: true;
   cloneUnavailable?: string;
-  /** Always "workspace": every session is visible to its workspace's members. Sent for apps from before private sessions were removed. */
   visibility?: "workspace";
   parentSessionId?: string;
   packed?: true;

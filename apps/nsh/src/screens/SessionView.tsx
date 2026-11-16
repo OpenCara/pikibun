@@ -84,8 +84,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     const items: (MenuAction | "separator")[] = [{ label: "Copy session ID", icon: "copy", testID: "session-copy-id", onSelect: copyId }];
     if (current && manages() && !archived()) {
       items.push({ label: "Rename", icon: "pencil", testID: "session-rename", disabled: actions.action.busy(), onSelect: () => renaming.set(true) });
-      items.push({ label: current.visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: current.visibility === "workspace" ? "lock" : "globe",
-        disabled: actions.action.busy(), onSelect: actions.changeVisibility });
       if (isOwner() && !current.frozen) {
         items.push({ label: "Create backup", icon: "archive", disabled: actions.backupsOff() || actions.backupsPending() || backupBlocked() || actions.action.busy(),
           hint: actions.backupsOff() ? "Backups are off" : backupBlocked() ? "Session busy" : undefined, onSelect: () => actions.createBackup() });
@@ -162,8 +160,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     const current = live.session();
     const parts = [workspace()?.name, host() ? `${host()!.name}${host()!.online ? "" : " (offline)"}` : undefined];
     if (current) {
-      parts.push(current.visibility === "workspace" ? "Workspace-visible" : "Private", ...(current.linkShared ? ["Link shared"] : []),
-        ...(current.packed ? ["Files packed"] : []));
+      parts.push(...(current.linkShared ? ["Link shared"] : []), ...(current.packed ? ["Files packed"] : []));
     }
     return parts.filter(Boolean).join(" · ");
   };
@@ -476,11 +473,11 @@ function Conversation(props: {
     const hostOwner = host && host.ownerId !== user.id ? ` The host is ${host.ownerName}'s: it can access the new session, as it does this one.` : "";
     const confirmed = await confirm(side ? {
       title: "Continue in a new session?",
-      message: `A new session of yours starts under this one, on the same host and model, with the shared conversation as it was when you asked and this side ask up to ${point}, with this session's visibility. Unlike a side ask, its agent can act: edit, run commands, commit and push. This session and its work stay as they are.${hostOwner} Like every new session, its worktree starts empty: its agent clones the workspace's repositories again, so only what was pushed is there.`,
+      message: `A new session of yours starts under this one, on the same host and model, with the shared conversation as it was when you asked and this side ask up to ${point}, visible to the workspace's members. Unlike a side ask, its agent can act: edit, run commands, commit and push. This session and its work stay as they are.${hostOwner} Like every new session, its worktree starts empty: its agent clones the workspace's repositories again, so only what was pushed is there.`,
       confirmLabel: "Start session",
     } : {
       title: "Fork a new session from here?",
-      message: `A new session of yours starts on the same host and model with this conversation up to ${point}, with this session's visibility. This session stays as it is.${hostOwner} Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again.`,
+      message: `A new session of yours starts on the same host and model with this conversation up to ${point}, visible to the workspace's members. This session stays as it is.${hostOwner} Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again.`,
       confirmLabel: "Fork session",
     });
     if (!confirmed) return false;

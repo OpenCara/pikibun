@@ -113,7 +113,7 @@ export async function createBackup(c: AppContext, row: SessionRow, options: Crea
       await provider.save(target, {
         workspace: { id: workspace.id, name: workspace.name, ownerId: workspace.owner_id },
         session: { id: current.id, workspaceId: current.workspace_id, ownerId: current.owner_id, title: current.title,
-          status: current.status, visibility: current.visibility ?? 'private', createdAt: current.created_at, record: sessionRecord(current) },
+          status: current.status, visibility: 'workspace', createdAt: current.created_at, record: sessionRecord(current) },
         backup: { id: record.id, format: snapshotFormat, sha256: record.sha256, size: record.size, createdAt: record.created_at },
         snapshot: encoded,
       });

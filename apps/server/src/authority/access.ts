@@ -53,7 +53,7 @@ function accessFromSnapshot(snapshot: SessionPolicyRow | null, actorId: string):
   const { grants_json, actor_role, ...row } = snapshot;
   if (row.owner_id === actorId) return { row, permissions: [...permissions], role: actor_role };
   const held = new Set<Permission>(grants_json ? normalizePermissions(JSON.parse(grants_json)) : []);
-  for (const permission of workspaceSessionPermissions(actor_role, row.visibility ?? 'private')) held.add(permission);
+  for (const permission of workspaceSessionPermissions(actor_role)) held.add(permission);
   if (held.size) held.add('read');
   const ceiling = roleSessionCeiling(actor_role);
   const grants = permissions.filter(permission => held.has(permission) && (!ceiling || ceiling.includes(permission)));
@@ -79,13 +79,10 @@ export async function sessionReaders(env: Env, sessionId: string): Promise<Set<s
   return readers;
 }
 
-const LISTED_SESSIONS_SQL = `(s.owner_id = ? OR s.visibility = 'workspace' OR g.user_id IS NOT NULL OR actor.role IN (${workspaceManagerRolesSQL}))`;
-
 export async function listSessionAccess(env: Env, actorId: string): Promise<SessionAccess[]> {
   const snapshots = await env.DB.query<SessionPolicyRow>(`${SESSION_ACCESS_SQL}
-    AND ${LISTED_SESSIONS_SQL}
     ORDER BY s.created_at DESC, s.id DESC LIMIT 500`)
-    .bind(actorId, testMode(env) ? 1 : 0, actorId).all();
+    .bind(actorId, testMode(env) ? 1 : 0).all();
   return snapshots.flatMap(snapshot => {
     const access = accessFromSnapshot(snapshot, actorId);
     return access ? [access] : [];
@@ -93,9 +90,9 @@ export async function listSessionAccess(env: Env, actorId: string): Promise<Sess
 }
 export async function workspaceSessionAccess(env: Env, workspaceId: string, actorId: string): Promise<SessionAccess[]> {
   const snapshots = await env.DB.query<SessionPolicyRow>(`${SESSION_ACCESS_SQL}
-    AND s.workspace_id = ? AND ${LISTED_SESSIONS_SQL}
+    AND s.workspace_id = ?
     ORDER BY s.created_at DESC, s.id DESC`)
-    .bind(actorId, testMode(env) ? 1 : 0, workspaceId, actorId).all();
+    .bind(actorId, testMode(env) ? 1 : 0, workspaceId).all();
   return snapshots.flatMap(snapshot => {
     const access = accessFromSnapshot(snapshot, actorId);
     return access ? [access] : [];

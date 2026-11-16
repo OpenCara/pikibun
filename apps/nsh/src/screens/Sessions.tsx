@@ -40,9 +40,8 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, paddingVertical: 8, paddingHorizontal: 16 }}>
         <InfoTip label="Who can see a session">
           <View style={{ gap: 8 }}>
-            <Note>Private sessions are visible to their owner, the workspace's owner and admins, and people with an explicit grant. Workspace-visible sessions can be viewed by every workspace member.</Note>
-            <Note>Viewing never allows asking, writing or managing; those need separate grants. The workspace's owner and admins manage every session in it. Opening a session keeps its original owner identity and history.</Note>
-            <Note>Only the owner, or the workspace's owner or an admin, can change visibility, which is separate from sharing a host.</Note>
+            <Note>Every session is visible to all members of its workspace. Collaborators can also send it messages, and the workspace's owner and admins manage every session in it.</Note>
+            <Note>A session role gives someone more in one session. Opening a session keeps its original owner identity and history.</Note>
           </View>
         </InfoTip>
         <View style={{ flex: 1 }} />
@@ -81,7 +80,7 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
                                   leading={<StatusDot tone={status().tone} label={status().label ?? record().status} />}
                                   title={`${item().depth > 0 ? `${"  ".repeat(item().depth - 1)}↳ ` : ""}${record().title}`}
                                   hint={`${status().label ? `${status().label} · ` : ""}${record().tunnel ? "Online · " : ""}${record().pullRequest
-                                    ? `${pullRequestLabel(record().pullRequest!)}${record().pullRequest!.state ? ` ${pullRequestStateLabels[record().pullRequest!.state!]}` : ""} · ` : ""}${owner()} · ${record().visibility === "workspace" ? "Workspace-visible" : "Private"} · ${relativeTime(record().createdAt)}`} />
+                                    ? `${pullRequestLabel(record().pullRequest!)}${record().pullRequest!.state ? ` ${pullRequestStateLabels[record().pullRequest!.state!]}` : ""} · ` : ""}${owner()} · ${relativeTime(record().createdAt)}`} />
                               </RowMenu>
                             );
                           }}

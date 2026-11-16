@@ -172,7 +172,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       const { api } = session();
       const images = await encodeImages(pasted);
       const result = await api<{ session: SessionRecord }>("/api/sessions", { method: "POST", body: {
-        workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name), visibility: "workspace",
+        workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name),
         ...(foreign() ? { trustedConnectorId: current.id } : {}), ...(hostEnvironment ? { hostEnvironment: true } : {}),
       } });
       const sessionId = result.session.id;

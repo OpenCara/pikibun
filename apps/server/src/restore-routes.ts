@@ -87,7 +87,7 @@ export function registerRestoreRoutes(app: Hono<AppEnv>): void {
       const target: SessionRow = { id: id(), workspace_id: source.workspace_id, owner_id: ownerId,
         agent_version_id: source.agent_version_id, connector_id: source.connector_id ?? null,
         connector_owner_id: source.connector_owner_id ?? null, title: title ?? `Restored: ${source.title}`.slice(0, 200),
-        repositories_json: source.repositories_json, repository_mode: source.repository_mode ?? null, visibility: 'private', policy_version: 1,
+        repositories_json: source.repositories_json, repository_mode: source.repository_mode ?? null, policy_version: 1,
         status: 'provisioning', created_at: now(), tool_output: source.tool_output === 'brief' ? 'brief' : 'full' };
       if (target.connector_id) {
         target.branch = successorBranch(target, await hostCapabilities(c.env, target.connector_id) ?? parseCapabilities(null));
@@ -97,7 +97,7 @@ export function registerRestoreRoutes(app: Hono<AppEnv>): void {
       await c.env.DB.batch([
         c.env.DB.query(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, connector_id,
           connector_owner_id, repositories_json, title, policy_version, status, created_at, visibility, repository_mode, branch, tool_output)
-          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'private', ?, ?, ?
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'workspace', ?, ?, ?
           WHERE NOT EXISTS (SELECT 1 FROM restore_jobs WHERE owner_id = ? AND request_id = ?) AND ${sessionCreatorSQL('?')}`)
           .bind(target.id, target.workspace_id, ownerId, target.agent_version_id, target.connector_id ?? null,
             target.connector_owner_id ?? null, target.repositories_json ?? '[]', target.title, 1, 'provisioning', target.created_at,

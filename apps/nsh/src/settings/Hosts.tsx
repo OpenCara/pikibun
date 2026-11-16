@@ -185,7 +185,7 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
   const available = () => data.workspaces().filter(workspace => !connector().workspaceIds.includes(workspace.id));
   async function unshare(workspaceId: string) {
     if (!await confirm({ title: "Stop sharing this host?", confirmLabel: "Unshare",
-      message: "Other members' sessions can no longer run work on it in this workspace. It stays connected for your own use; existing session records and visibility are unchanged." })) return;
+      message: "Other members' sessions can no longer run work on it in this workspace. It stays connected for your own use; existing session records are unchanged." })) return;
     await share.run(async () => {
       await session().api(`/api/connectors/${segment(connector().id)}/shares/${segment(workspaceId)}`, { method: "DELETE" });
       props.refresh();
@@ -298,7 +298,7 @@ function ShareRow(props: { connector: ConnectorInfo; available: Workspace[]; bus
     await props.run(async () => {
       await session().api(`/api/connectors/${segment(props.connector.id)}/shares/${segment(target().id)}`, { method: "PUT", body: {} });
       props.refresh();
-    }, "Host shared with workspace. Session visibility and permissions are unchanged; personal Pi history is not imported.");
+    }, "Host shared with workspace. Session permissions are unchanged; personal Pi history is not imported.");
   }
   const hint = () => (repositories.loading() ? "Checking repositories…" : repositories.error() ? repositories.error()
     : !configured() ? `No repositories configured for ${target().name}. Ask an owner or admin to bind one before sharing`

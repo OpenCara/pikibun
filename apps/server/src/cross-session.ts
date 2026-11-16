@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
-import { accessModes, thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type SubmitResult, type ThinkingLevel, type WorkspaceRole } from '../../../packages/shared/src/types.js';
+import { accessModes, thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type SubmitResult, type ThinkingLevel } from '../../../packages/shared/src/types.js';
 import { parseCapabilities, type LocalModelSummary } from '../../../packages/shared/src/connector.js';
-import { hasPermission, workspaceSessionPermissions } from '../../../packages/shared/src/policy.js';
+import { hasPermission } from '../../../packages/shared/src/policy.js';
 import {
   audienceTarget, crossSessionHeader, crossSessionLimits, cut, messageOutcome, sessionsBrokerActions, sessionsToolTarget, sessionsWriteActions,
   type CrossSessionMessage, type CrossSessionOutcome, type CrossSessionSummary, type SessionConnections, type SessionsBrokerAction, type SessionsToolResult,
@@ -46,7 +46,7 @@ function summary(access: SessionAccess, selfId?: string): CrossSessionSummary {
   const { row } = access;
   return {
     id: row.id, title: row.title, ownerId: row.owner_id, status: row.status, ...(row.activity ? { activity: row.activity } : {}),
-    visibility: row.visibility ?? 'private', permissions: access.permissions, ...(row.parent_session_id ? { parentSessionId: row.parent_session_id } : {}),
+    permissions: access.permissions, ...(row.parent_session_id ? { parentSessionId: row.parent_session_id } : {}),
     ...(row.id === selfId ? { self: true as const } : {}), createdAt: row.created_at,
   };
 }
@@ -118,14 +118,12 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   if (input.thinkingLevel !== undefined && !thinkingLevels.includes(input.thinkingLevel as ThinkingLevel)) fail(400, 'invalid_input', `Thinking is ${thinkingLevels.join(', ')}.`);
   const thinkingLevel = input.thinkingLevel as ThinkingLevel | undefined;
   if (thinkingLevel !== undefined && message === undefined) fail(400, 'invalid_input', 'A reasoning level goes with the opening message: send one, or leave thinking out.');
-  if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'workspace') fail(400, 'invalid_input', 'Visibility is private or workspace.');
-  const visibility = input.visibility as 'private' | 'workspace' | undefined;
   const messageId = input.messageId === undefined ? undefined : identifier(input.messageId, 'messageId');
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > crossSessionLimits.readEntries)) {
     fail(400, 'invalid_input', `The limit is 1 to ${crossSessionLimits.readEntries}.`);
   }
   const limit = (input.limit as number | undefined) ?? crossSessionLimits.defaultEntries;
-  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, visibility, messageId });
+  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, messageId });
 
   const originAccess = await sessionAccess(c.env, sessionId, actorId);
   if (!originAccess || originAccess.row.status === 'archived' || !hasPermission(originAccess.permissions, 'write')) {
@@ -153,7 +151,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
     if (consent) return c.json(consent);
     return c.json({ message: await deliver(call, other, action, message!, access, notify) } satisfies SessionsToolResult, 202);
   }
-  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel, visibility });
+  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel });
   const other = await requireOther(call, targetSessionId!, action === 'stop' ? 'write' : 'manage');
   const audit = { crossSession: true, originSessionId: origin.id, callId };
   if (action === 'stop') {
@@ -284,16 +282,12 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
   return messageRecord(row);
 }
 
-async function createChild(call: Call, options: { message?: string; access?: AccessMode; notify: boolean; title?: string; modelId?: string; thinkingLevel?: ThinkingLevel;
-  visibility?: 'private' | 'workspace' }): Promise<Response> {
+async function createChild(call: Call, options: { message?: string; access?: AccessMode; notify: boolean; title?: string; modelId?: string; thinkingLevel?: ThinkingLevel }): Promise<Response> {
   const { c, origin, actorId } = call;
   await requireSessionCreator(c.env, origin.workspace_id, actorId);
   const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ? AND schedule_id IS NULL').bind(origin.id).first();
   if (Number(children?.n ?? 0) >= crossSessionLimits.children) fail(429, 'cross_session_limit', `A session starts at most ${crossSessionLimits.children} sessions.`);
   if (options.message !== undefined) await requireSendable(call, null);
-  const parentVisibility = origin.visibility ?? 'private';
-  const visibility = options.visibility ?? parentVisibility;
-  if (visibility === 'workspace' && parentVisibility === 'private') fail(403, 'visibility_wider', 'A private session starts only private sessions.');
   const { childModels } = await workspaceChildSessionSettings(c.env.DB, origin.workspace_id);
   if (!childModels && (options.modelId !== undefined || options.thinkingLevel !== undefined)) {
     fail(403, 'child_models_disabled', 'This workspace runs the sessions agents start on their parent\'s model and reasoning level. Leave out model and thinking.');
@@ -312,14 +306,14 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
     fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
   }
   if (options.message !== undefined && options.notify) {
-    const members = await c.env.DB.query<{ user_id: string; role: WorkspaceRole }>(`SELECT member.user_id, member.role FROM workspace_members member
+    const members = await c.env.DB.query<{ user_id: string }>(`SELECT member.user_id FROM workspace_members member
       JOIN users u ON u.id = member.user_id WHERE member.workspace_id = ? AND u.suspended_at IS NULL`).bind(origin.workspace_id).all();
-    const readers = new Set([actorId, ...members.filter(member => workspaceSessionPermissions(member.role, visibility).length > 0).map(member => member.user_id)]);
+    const readers = new Set([actorId, ...members.map(member => member.user_id)]);
     const consent = await audienceConsent(call, { id: null, title: options.title ?? 'new session', readers }, ['in']);
     if (consent) return c.json(consent);
   }
   const title = options.title ?? cut(`${origin.title} · sub-task`, 190).split('\n')[0]!;
-  const { row } = await asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, visibility, modelId,
+  const { row } = await asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, modelId,
     ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}) }, { parentSessionId: origin.id }));
   await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId, modelId,
     ...(thinkingLevel ? { thinkingLevel } : {}), ...(inheritsModel ? { inheritedModel: true } : {}),
