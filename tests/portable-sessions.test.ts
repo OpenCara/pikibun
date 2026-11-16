@@ -499,6 +499,28 @@ test('existing private sessions on the host become portable, and new ones are po
   assert.equal(keyOf(), next.publicKey, 'a whole chain moves the sessions to the new key');
 });
 
+test('making sessions portable goes on past the ones its host refuses', async t => {
+  const f = await server(t, (action, body) => {
+    const id = (JSON.parse(body) as { binding?: RunnerBinding }).binding?.session.id ?? '';
+    if (action === 'attach' && id.startsWith('stuck-')) return Response.json({ error: 'This session has no conversation yet to attach' }, { status: 409 });
+    return Response.json(action === 'attach' ? { session: {}, kept: { schedules: [] } } : { kept: true });
+  });
+  const key = await keyPair();
+  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [])));
+  f.sqlite.prepare("INSERT INTO agents (id, author_id, created_at) VALUES ('agent', ?, '2026-01-01')").run(f.alice.user.id);
+  f.sqlite.prepare(`INSERT INTO agent_versions (id, agent_id, author_id, workspace_id, version, name, description, instructions, tools_json, model_id, created_at)
+    VALUES ('version', 'agent', ?, ?, 1, 'Agent', '', '', '[]', 'model', '2026-01-01')`).run(f.alice.user.id, f.workspaceId);
+  const insert = f.sqlite.prepare(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id,
+    connector_owner_id, repositories_json, visibility, repository_mode, host_environment) VALUES (?, ?, ?, 'version', 'Session', 1, 'ready', ?, 'host', ?, '[]', 'private', 'clone', 1)`);
+  for (let index = 0; index < 50; index++) insert.run(`stuck-${String(index).padStart(2, '0')}`, f.workspaceId, f.alice.user.id, '2026-01-01T00:00:00.000Z', f.alice.user.id);
+  insert.run('later', f.workspaceId, f.alice.user.id, '2026-02-01T00:00:00.000Z', f.alice.user.id);
+  const first = await json<{ converted: string[]; skipped: unknown[]; next?: { createdAt: string; id: string } }>(await f.alice.request('POST', '/api/connectors/host/portable', {}));
+  assert.deepEqual([first.converted, first.skipped.length], [[], 50]);
+  assert.deepEqual(first.next, { createdAt: '2026-01-01T00:00:00.000Z', id: 'stuck-49' });
+  const second = await json<{ converted: string[]; next?: unknown }>(await f.alice.request('POST', '/api/connectors/host/portable', { after: first.next }));
+  assert.deepEqual(second, { converted: ['later'], skipped: [] });
+});
+
 test('the private workspace\'s settings travel signed by the identity, and a server can\'t forge them', async t => {
   const first = await server(t, () => Response.json({}));
   const key = await keyPair();

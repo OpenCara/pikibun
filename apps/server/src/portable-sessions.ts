@@ -357,11 +357,22 @@ async function convertSessions(c: AppContext): Promise<Response> {
   if (!delegation) fail(409, 'identity_pending', 'The host hasn\'t sent its identity yet. Wait a minute after it connects, then try again.');
   const workspaceId = await personalWorkspaceOf(c.env, userId);
   if (!workspaceId) fail(404, 'not_found', 'Private workspace not found.');
+  const input = c.req.header('content-type') ? await jsonObject(c, 1024) : {};
+  if (Object.keys(input).some(key => key !== 'after')) fail(400, 'invalid_input', 'Only where to continue (after) is taken.');
+  const after = input.after === undefined ? undefined : input.after as { createdAt?: unknown; id?: unknown };
+  if (after !== undefined && (!after || typeof after !== 'object' || typeof after.createdAt !== 'string' || after.createdAt.length > 64 || Object.keys(after).some(key => key !== 'createdAt' && key !== 'id'))) {
+    fail(400, 'invalid_input', 'Continue after a session\'s createdAt and id.');
+  }
+  const afterId = after ? identifier(after.id, 'after.id') : null;
+  const afterAt = after ? after.createdAt as string : null;
   const candidates = await c.env.DB.query<SessionRow>(`SELECT * FROM sessions WHERE workspace_id = ? AND owner_id = ? AND connector_id = ? AND connector_owner_id = ?
     AND portable_key IS NULL AND status IN ('ready', 'error') AND packed_at IS NULL AND repository_mode = 'clone' AND COALESCE(repositories_json, '[]') = '[]'
-    ORDER BY created_at LIMIT ?`).bind(workspaceId, userId, connectorId, userId, CONVERT_BATCH + 1).all();
+    AND (? IS NULL OR created_at > ? OR (created_at = ? AND id > ?))
+    ORDER BY created_at, id LIMIT ?`).bind(workspaceId, userId, connectorId, userId, afterId, afterAt, afterAt, afterId,
+      CONVERT_BATCH + 1).all();
   const more = candidates.length > CONVERT_BATCH;
   candidates.splice(CONVERT_BATCH);
+  const last = candidates.at(-1);
   const converted: string[] = [];
   const skipped: { id: string; reason: string }[] = [];
   for (const candidate of candidates) {
@@ -381,7 +392,7 @@ async function convertSessions(c: AppContext): Promise<Response> {
       skipped.push({ id: marked.id, reason: message });
     }
   }
-  return c.json({ converted, skipped, ...(more ? { more: true } : {}) });
+  return c.json({ converted, skipped, ...(more && last ? { next: { createdAt: last.created_at, id: last.id } } : {}) });
 }
 
 export async function keepPortable(c: AppContext, row: SessionRow): Promise<void> {

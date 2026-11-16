@@ -109,7 +109,8 @@ next sweep unless it is working.
 ## Converting existing sessions
 
 **Make private sessions portable** on a host's page (`POST /api/connectors/:id/portable`) converts its owner's private
-sessions on that host that qualify and are idle, fifty at a time: the server records the key and asks the host to `attach` each with its
+sessions on that host that qualify and are idle, fifty at a time, each batch after the last one it tried (`after`), so
+ones the host refuses don't hold up the rest: the server records the key and asks the host to `attach` each with its
 current binding, which marks and indexes it. Those the host refuses, working ones say, keep their record as it was.
 
 ## Replacing the key

@@ -37,7 +37,7 @@ and your private sessions there can be brought along. Their conversation and fil
 
 - **Which sessions:** private-workspace sessions on a host you paired yourself that run on the host, or in the sandbox
   with no workspace sources, made from now on. For earlier ones, choose **Make private sessions portable** on the host's
-  page (**Settings → Hosts →** the host); sessions working at the time are left as they are.
+  page (**Settings → Hosts →** the host), and **Continue** for more than fifty; sessions working at the time are left as they are.
 - **Bring here:** each portable session the computer has that isn't on this server is listed in your private workspace,
   with **Bring here**. Its record here takes its title and its scheduled prompts with it, and the server it came from
   shows it as **Moved to another server**, read-only. Bring it back the same way.

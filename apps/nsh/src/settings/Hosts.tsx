@@ -291,19 +291,23 @@ const portableInfo = "Your identity is a key kept on this computer, shared by ev
 function PortableSessionsSection(props: { connector: ConnectorInfo }) {
   const action = createAction();
   const outcome = signal("");
+  const next = signal<{ createdAt: string; id: string } | null>(null);
   async function convert() {
-    if (!await confirm({ title: "Make private sessions portable?", confirmLabel: "Make portable",
+    const after = next();
+    if (!after && !await confirm({ title: "Make private sessions portable?", confirmLabel: "Make portable",
       message: `Your private sessions on ${props.connector.name} will belong to your identity on it, so you can bring them to another server it is paired with. They keep running here as before; sessions working right now are left as they are.` })) return;
     outcome.set("");
     await action.run(async () => {
-      const result = await session().api<{ converted: string[]; skipped: { id: string; reason: string }[]; more?: true }>(`/api/connectors/${segment(props.connector.id)}/portable`, { method: "POST", body: {} });
-      outcome.set(`${count(result.converted.length, "session is", "sessions are")} portable now.${result.skipped.length ? ` ${count(result.skipped.length, "was", "were")} skipped: ${result.skipped[0]!.reason}` : ""}${result.more ? " There are more: make portable again for the next ones." : ""}`);
+      const result = await session().api<{ converted: string[]; skipped: { id: string; reason: string }[]; next?: { createdAt: string; id: string } }>(
+        `/api/connectors/${segment(props.connector.id)}/portable`, { method: "POST", body: after ? { after } : {} });
+      next.set(result.next ?? null);
+      outcome.set(`${count(result.converted.length, "session is", "sessions are")} portable now.${result.skipped.length ? ` ${count(result.skipped.length, "was", "were")} skipped: ${result.skipped[0]!.reason}` : ""}${result.next ? " There are more: continue for the next ones." : ""}`);
     });
   }
   return (
     <Section title="Portable sessions" testID="host-portable" info={portableInfo}>
       <Row title="Make private sessions portable" hint="Sessions in your private workspace on this host that aren't portable yet"
-        trailing={<Button small variant="outline" label={action.busy() ? "Working…" : "Make portable"} disabled={action.busy()} testID="host-portable-convert" onPress={() => void convert()} />} />
+        trailing={<Button small variant="outline" label={action.busy() ? "Working…" : next() ? "Continue" : "Make portable"} disabled={action.busy()} testID="host-portable-convert" onPress={() => void convert()} />} />
       <If when={action.error() || outcome()}><CardBody><Feedback error={action.error()} notice={outcome()} /></CardBody></If>
     </Section>
   );
