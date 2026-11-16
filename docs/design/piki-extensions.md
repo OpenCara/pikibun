@@ -210,7 +210,7 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     the comments, reviews (with their states) and review comments with their contents, so an edit or a dismissal shows,
     how many of each a full list left out, so a new item shows, the head commit and the checks' statuses; never
     GitHub's own mergeable state, which it works out again by itself. The runner reads again every 30 seconds, up to
-    `timeout_seconds` (at most 30 minutes, within the hour a message's admission lets it read), its last sleep cut to
+    `timeout_seconds` (at most 30 minutes, within the time a message's admission lets it read), its last sleep cut to
     end at the deadline and a read after it, as the same call: the control plane checks and audits each read as it does one.
     A read that fails during the wait (the admission ran out, say) ends it with the last view and the reason, and
     stopping the message stops the wait. It runs in the runner, so codemode scripts, which have no timers, wait with it too.

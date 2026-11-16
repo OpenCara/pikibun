@@ -8,6 +8,7 @@ import type { AppContext, Env, SessionRow } from '../types.js';
 import { auditStatement } from './audit.js';
 import { getUser, requireUnfrozen } from '../db.js';
 import { sessionAccess } from './access.js';
+import { admissionExpired } from './run-admissions.js';
 import { fail, identifier, jsonObject, now, text, userIdentifier } from '../http.js';
 import { githubRepositoryName, issueNumber, parseOperation } from './operations.js';
 import { decryptToken } from './vault.js';
@@ -76,8 +77,8 @@ async function approvedEffect<T>(c: AppContext, connectorId: string | null, appr
     const admission = await c.env.DB.query<{ id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>(
       'SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?').bind(admissionId).first();
     if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || admission.access === 'read'
-      || admission.expires_at <= Math.floor(Date.now() / 1000)) {
-      fail(403, 'automatic_github_not_admitted', 'GitHub effects run only for an unexpired message that may act, from the person who sent it.');
+      || await admissionExpired(c.env, admissionId, admission)) {
+      fail(403, 'automatic_github_not_admitted', 'GitHub effects run only for a message that may act, from the person who sent it, within an hour of it or while its run is still going.');
     }
     await requireCallbackScope(c, owner.row, connectorId);
     await requireOperationTool(c.env, owner.row, actorId, operation);
@@ -469,8 +470,8 @@ export async function githubRead(c: AppContext, connectorId: string | null): Pro
     const admission = await c.env.DB.query<{ id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>(
       'SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?').bind(admissionId).first();
     if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-      || admission.expires_at <= Math.floor(Date.now() / 1000)) {
-      fail(403, 'github_read_not_admitted', 'GitHub reads need a write message from the requester sent within the last hour.');
+      || await admissionExpired(c.env, admissionId, admission)) {
+      fail(403, 'github_read_not_admitted', 'GitHub reads need a write message from the requester sent within the last hour, or whose run is still going.');
     }
     await requireToolCall(c.env, access.row, actorId, 'github_read');
     return access.row;

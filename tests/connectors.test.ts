@@ -2454,6 +2454,50 @@ test('a message that may act posts GitHub comments, once per tool call and only 
   assert.equal(fetch.mock.callCount(), 21, 'another member who may write posts for their own message, as the owner');
 });
 
+test('past its hour, a message acts on GitHub while its run is still going, and stops once it ends, a later message comes, a side ask runs after it or 8 hours pass', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_comment']); const fetch = githubFetch(t);
+  const owner = s.creator.user.id; const nowSeconds = Math.floor(Date.now() / 1000);
+  const comment = (approvalId: string, admissionId: string) => ({ sessionId: s.session.id, actorId: owner, approvalId, admissionId,
+    repository: 'owner/repo', issue: 3, body: 'Exactly approved text' });
+  const activity = async (value: string) => json(await self(f, s.connector, 'activity', { sessionId: s.session.id, activity: value }));
+  const seed = (sentAgo: number, createdAt: string) => {
+    const id = token();
+    f.sqlite.prepare(`INSERT INTO run_admissions (id,session_id,actor_id,mode,request_id,content_hash,expires_at,created_at,access,auto_merge) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run(id, s.session.id, owner, 'write', `request-${id}`, 'h'.repeat(43), nowSeconds - sentAgo + 3600, createdAt, 'auto', 0);
+    return id;
+  };
+  const long = seed(90 * 60, new Date(Date.now() - 90 * 60_000).toISOString());
+
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-unreported', long)), 403, 'automatic_github_not_admitted');
+  await activity('working');
+  await json(await self(f, s.connector, 'github/comment', comment('tool-working', long)));
+  await activity('waiting');
+  await json(await self(f, s.connector, 'github/comment', comment('tool-waiting', long)));
+  assert.equal(fetch.mock.callCount(), 2);
+
+  const ancient = seed(9 * 3600, new Date(Date.now() - 60_000).toISOString());
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-ancient', ancient)), 403, 'automatic_github_not_admitted');
+
+  const renewed = seed(90 * 60, new Date(Date.now() - 30_000).toISOString());
+  await json(await self(f, s.connector, 'github/comment', comment('tool-renewed', renewed)));
+  const sameInstant = new Date(Date.now() - 20_000).toISOString();
+  const [first, second] = [seed(90 * 60, sameInstant), seed(90 * 60, sameInstant)].sort();
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-superseded', renewed)), 403, 'automatic_github_not_admitted');
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-tied', first)), 403, 'automatic_github_not_admitted');
+  await json(await self(f, s.connector, 'github/comment', comment('tool-latest', second)));
+  assert.equal(fetch.mock.callCount(), 4);
+
+  await activity('done');
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-done', second)), 403, 'automatic_github_not_admitted');
+  await activity('working');
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-side-ask', second)), 403, 'automatic_github_not_admitted');
+  assert.equal(fetch.mock.callCount(), 4);
+
+  const next = seed(61 * 60, new Date(Date.now() + 1000).toISOString());
+  await json(await self(f, s.connector, 'github/comment', comment('tool-next-run', next)));
+  assert.equal(fetch.mock.callCount(), 5);
+});
+
 
 test('host owners add admins who manage sharing and host command grants, and grants decide host command authority', async t => {
   const f = await fixture(t); const s = await sharedSession(f); const outsider = await f.client('outsider');

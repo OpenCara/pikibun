@@ -103,9 +103,13 @@ async function reportSessionActivity(c: AppContext, connectorId: string): Promis
   if (!row) fail(404, 'not_found', 'Session not found.');
   await requireCallbackScope(c, row, connectorId);
   if (row.activity !== activity) {
-    const { changes } = await c.env.DB.query('UPDATE sessions SET activity = ? WHERE id = ? AND connector_id = ? AND COALESCE(activity, \'\') = ?')
-      .bind(activity, row.id, connectorId, row.activity ?? '').run();
-    if (!changes) await c.env.DB.query('UPDATE sessions SET activity = ? WHERE id = ? AND connector_id = ?').bind(activity, row.id, connectorId).run();
+    const ended = activity === 'working' || activity === 'waiting' ? null : now();
+    const { changes } = await c.env.DB.query('UPDATE sessions SET activity = ?, activity_ended_at = COALESCE(?, activity_ended_at) WHERE id = ? AND connector_id = ? AND COALESCE(activity, \'\') = ?')
+      .bind(activity, ended, row.id, connectorId, row.activity ?? '').run();
+    if (!changes) {
+      await c.env.DB.query('UPDATE sessions SET activity = ?, activity_ended_at = COALESCE(?, activity_ended_at) WHERE id = ? AND connector_id = ?')
+        .bind(activity, ended, row.id, connectorId).run();
+    }
     if (activity === 'working') await markSessionChanged(c.env, row.id);
     if (changes) await notifySessionActivityQuietly(c.env, row, row.activity, activity);
   }

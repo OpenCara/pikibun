@@ -31,7 +31,8 @@ Every call runs as the **actor**: the person whose message the agent is working 
 session's owner on someone else's behalf. The control plane checks, on each call:
 
 1. The actor still writes to the origin session, and the call comes from the origin's host (`requireCallbackScope`).
-2. The call belongs to the actor's write admission for the origin, under an hour old.
+2. The call belongs to the actor's write admission for the origin, under an hour old, or older while its run still goes
+   on (`admissionExpired` in `run-admissions.ts`, see [security-rationale.md](security-rationale.md)).
 3. The origin may use the tool (its agent's, or allowed by the owner: `requireToolCall`).
 4. In a Read-only message, a change elsewhere (`send`, `create`, `stop`, `archive`) was allowed by the owner
    (`sessions:write` grant, for the call or the session), unless it is the owner's own Auto-approve message.

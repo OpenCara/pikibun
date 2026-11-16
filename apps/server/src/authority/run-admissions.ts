@@ -4,10 +4,11 @@ import { requireConnectorSession } from './hosts.js';
 import { sessionAccess } from './access.js';
 import { ownHostsOnlySQL } from './personal-workspaces.js';
 import { fail, now, randomToken, testMode, text } from '../http.js';
-import type { AppContext, SessionRow } from '../types.js';
+import type { AppContext, Env, SessionRow } from '../types.js';
 import type { AccessMode } from '../../../../packages/shared/src/types.js';
 
 const ADMISSION_TTL_SECONDS = 3600;
+export const ADMISSION_RENEWAL_MAX_SECONDS = 8 * 3600;
 const MAX_SESSION_ACTOR_PENDING = 1000;
 const MAX_ACTOR_PENDING = 1000;
 const MAX_OWNER_PENDING = 5000;
@@ -62,6 +63,21 @@ const ELIGIBLE_SESSION = `SELECT s.id FROM sessions s
           WHERE json_extract(local_model.value, '$.provider') = m.provider
             AND json_extract(local_model.value, '$.modelId') = m.model_id)
     ))`;
+
+export async function admissionExpired(env: Env, admissionId: string, admission: { expires_at: number },
+  nowSeconds = Math.floor(Date.now() / 1000)): Promise<boolean> {
+  if (!Number.isSafeInteger(admission.expires_at)) return true;
+  if (admission.expires_at > nowSeconds) return false;
+  const issuedAt = admission.expires_at - ADMISSION_TTL_SECONDS;
+  if (issuedAt + ADMISSION_RENEWAL_MAX_SECONDS <= nowSeconds) return true;
+  const running = await env.DB.query<{ id: string }>(`SELECT a.id FROM run_admissions a JOIN sessions s ON s.id = a.session_id
+    WHERE a.id = ? AND s.status <> 'archived' AND s.activity IN ('working', 'waiting')
+      AND (s.activity_ended_at IS NULL OR s.activity_ended_at < a.created_at)
+      AND NOT EXISTS (SELECT 1 FROM run_admissions newer WHERE newer.session_id = a.session_id
+        AND (newer.created_at > a.created_at OR (newer.created_at = a.created_at AND newer.id > a.id)))`)
+    .bind(admissionId).first();
+  return running?.id !== admissionId;
+}
 
 async function admissionStorage<T>(operation: Promise<T>): Promise<T> {
   try { return await operation; }

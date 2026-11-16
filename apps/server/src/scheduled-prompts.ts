@@ -7,7 +7,7 @@ import {
 import { CronError, isTimeZone, nextCronTime, parseCron } from '../../../packages/shared/src/cron.js';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
-import { auditStatement, requireCallbackScope, requireSession, requireToolCall, sessionAccess } from './authority/index.js';
+import { admissionExpired, auditStatement, requireCallbackScope, requireSession, requireToolCall, sessionAccess } from './authority/index.js';
 import { childThinkingLevel, sessionCurrentModel } from './cross-session.js';
 import { requireUnfrozen } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
@@ -407,8 +407,8 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
   const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?')
     .bind(admissionId).first();
   if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-    || admission.expires_at <= Math.floor(Date.now() / 1000)) {
-    fail(403, 'schedule_not_admitted', 'Scheduling needs a write message from the session owner sent within the last hour.');
+    || await admissionExpired(c.env, admissionId, admission)) {
+    fail(403, 'schedule_not_admitted', 'Scheduling needs a write message from the session owner sent within the last hour, or whose run is still going.');
   }
   await requireToolCall(c.env, row, actorId, 'schedule');
   if (action === 'list') {
