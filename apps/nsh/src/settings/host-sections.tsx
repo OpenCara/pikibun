@@ -74,7 +74,7 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
     if (next.fakeIpTunnels && !before.fakeIpTunnels && !await confirm({ title: "Trust this host's fake-IP proxy for every host?", confirmLabel: "Trust it", destructive: true,
       message: `Sessions on ${name} will reach any host their workspace's network policy allows even where ${name}'s DNS answers with a local proxy's fake-IP addresses (198.18.0.0/15, as Clash, mihomo, sing-box or Surge give in a fake-IP or TUN mode). Pikibun can't check where that proxy then connects: a name a session picks that really points at this machine or its local network (its router, a NAS, an intranet) is reached on port 443 through it. Without this, only hosts the policy names exactly and package registries go through such addresses.` })) return;
     if (next.gpu && !before.gpu && !await confirm({ title: "Lend this host's GPU to sandboxed commands?", confirmLabel: "Lend GPU", destructive: true,
-      message: `Shell commands in every session on ${name} will be able to use its GPU for rendering and compute. They get its render device only, never the screen, windows or input, but its driver is more of the kernel exposed to them, and they share the GPU with everything else on the machine.` })) return;
+      message: `Commands in every session on ${name} will be able to use its GPU for rendering and compute. They get its render device only, never the screen, windows or input, but its driver is more of the kernel exposed to them, and they share the GPU with everything else on the machine.` })) return;
     await action.run(async () => {
       await session().api(`/api/connectors/${segment(props.connector.id)}/config`, { method: "PATCH", body: Object.fromEntries(changes().map(key => [key, next[key]])) });
       props.refresh();
@@ -87,7 +87,7 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
     : `${capabilities().gpu === "dxg" ? "WSL GPU (/dev/dxg)" : "Linux render nodes (/dev/dri)"}: rendering and compute, never the screen, windows or input`);
   return (
     <Section title="Configuration" info={configInfo} testID="host-configuration">
-      <Row title="Command time limit" hint={capabilities().unsandboxed ? "How long a shell command may run before it is stopped" : "How long a shell command may run in the sandbox before it is stopped"}
+      <Row title="Command time limit" hint={capabilities().unsandboxed ? "How long a command (git, node, python, …) may run before it is stopped" : "How long a command (git, node, python, …) may run in the sandbox before it is stopped"}
         trailing={<Select<number> compact label="Command time limit" value={config().commandTimeoutSeconds} disabled={!editable()}
           options={choices().map(seconds => ({ value: seconds, label: duration(seconds), ...(seconds === defaultHostConfig.commandTimeoutSeconds ? { hint: "Default" } : {}) }))}
           onChange={value => set({ commandTimeoutSeconds: value })} />} />
@@ -381,7 +381,7 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
       title: withSessions ? "Grant sessions on the host?" : "Grant host commands?",
       message: `${who()} will be able to run host commands on ${name}, such as its extensions' tools, OUTSIDE the sandbox, as soon as their messages' agents call them; nobody approves each command. Commands run on the owner's machine as its user, with its files, credentials and network, and no resource limits.`
         + (withSessions ? ` They will also be able to start their own sessions directly on ${name}, without the sandbox: every command of those sessions runs as its user, and their clones use its Git and credentials.` : "")
-        + (lendsShell() ? ` As ${name} has no resource limits for commands, the shell commands of their own sandboxed sessions will run there without them too.` : "")
+        + (lendsShell() ? ` As ${name} has no resource limits for commands, the commands of their own sandboxed sessions will run there without them too.` : "")
         + (dropsSessions ? ` This replaces their current grant, which includes sessions on the host: they will no longer start sessions directly on ${name}, and the next command of any they have there will stop.` : ""),
       confirmLabel: "Grant", destructive: true,
     })) return;
@@ -403,7 +403,7 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
     }, "Host command access removed.");
   }
   return (
-    <Section title="Host command access" testID="host-grants" info="Host commands, such as the tools of this host's extensions, run OUTSIDE the sandbox, on this machine as its user. By default they run only in the owner's own sessions; anyone else's are refused. Grant members of a shared workspace the right to run them in their own sessions and messages. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run shell commands without them. Grants end when they expire, when you remove them, or when the host stops being shared there.">
+    <Section title="Host command access" testID="host-grants" info="Host commands, such as the tools of this host's extensions, run OUTSIDE the sandbox, on this machine as its user. By default they run only in the owner's own sessions; anyone else's are refused. Grant members of a shared workspace the right to run them in their own sessions and messages. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run commands (git, node, python, …) without them. Grants end when they expire, when you remove them, or when the host stops being shared there.">
       <If when={grants().length > 0} else={<Row title="Only the owner" hint="No one else runs host commands on this host" />}>
         <Each of={grants()} key={item => `${item.workspaceId}:${item.userId ?? ""}`}>
           {item => (

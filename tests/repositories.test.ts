@@ -1228,7 +1228,7 @@ test('every session clones: older connectors are refused, and a session whose ag
   const unlimited = await host({}, true);
   const { session: empty } = await json<{ session: SessionRecord }>(await start(member_, unlimited), 201);
   assert.equal(empty.repositoryMode, 'clone');
-  assert.match(empty.cloneUnavailable ?? '', /runs shell commands only for its owner and for members they granted host commands/);
+  assert.match(empty.cloneUnavailable ?? '', /runs commands \(git, node, python, …\) only for its owner and for members they granted host commands/);
   assert.match((await json<{ session: SessionRecord }>(await member_.request('GET', `/api/sessions/${empty.id}`))).session.cloneUnavailable ?? '', /only for its owner/);
   const { session: limited } = await json<{ session: SessionRecord }>(await start(member_, await host({ productionShell: true }, true)), 201);
   assert.equal(limited.cloneUnavailable, undefined);

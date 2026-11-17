@@ -224,8 +224,15 @@ which pinned sessions were checked out of until phase 5. Clone sessions borrow f
   token, for the mirror (the same `SessionMirrors.mirror`: the owner's listing through the relay, then the fill), and
   adds `--reference-if-able` with the mirror's host path. Its answers and messages are the proxy's. The session
   confirms its mirrors and moves their keep refs now and then while commands run. Nothing confines such a session, so
-  the cache's read-only rule doesn't hold for it; it holds nothing the connector's user can't reach anyway. Windows,
-  whose hosts keep no cache, gets no launcher.
+  the cache's read-only rule doesn't hold for it; it holds nothing the connector's user can't reach anyway. On Windows
+  the launcher runs in Git for Windows' bash: the socket is a named pipe, and the launcher turns the real git's MSYS
+  path into a Windows one (`cygpath -w`) for the Node program.
+- **The Windows sandbox** has no bind mounts and no Python. Its clone sessions get the same Node program, asking the
+  session's proxy as the Python shim does (port and credentials from `PIKIBUN_EGRESS_STATUS`), behind a busybox `sh`
+  launcher in the layout's `bin`, first on `PATH`, that runs `SANDBOX_GIT` for everything but `git clone`. Each step
+  that runs Git in a clone gets the session's authorized mirrors as read-only container paths, fixed when the step
+  starts; a mirror it wasn't given can't be listed, and the clone stops to be run again, as in the other sandboxes.
+  It adds no LFS filters: Git would run them through Git for Windows' `sh`, which can't start in the container.
 
 ### Not in phase 3
 

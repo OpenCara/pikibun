@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -7,7 +8,7 @@ export interface GitHttpOptions { protocolV2?: boolean; authorization?: string }
 
 export async function startGitHttpServer(projectRoot: string, options: GitHttpOptions = {}): Promise<{ url(repo: string): string; close(): Promise<void> }> {
   const execPath = spawnSync("git", ["--exec-path"], { encoding: "utf8" }).stdout.trim();
-  const backend = join(execPath, "git-http-backend");
+  const backend = process.platform === "win32" && existsSync(join(execPath, "git-http-backend.exe")) ? join(execPath, "git-http-backend.exe") : join(execPath, "git-http-backend");
   const server = createServer((request, response) => serve(request, response));
 
   function serve(request: IncomingMessage, response: ServerResponse): void {

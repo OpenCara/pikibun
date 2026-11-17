@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,9 @@ import { startGitHttpServer } from "./helpers/git-http.js";
 import { egressPort, HelperWorkspace, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "../apps/runner/src/helper-workspace.js";
 import { NODE_HELPER, NODE_HELPER_KINDS } from "../apps/runner/src/node-helper.js";
 import { HELPER, type SandboxRequest } from "../apps/runner/src/sandbox.js";
-import { sandboxNodePath } from "../apps/runner/src/platform.js";
+import { bashPath, sandboxNodePath } from "../apps/runner/src/platform.js";
+import { hostGitBashScript, hostGitEnvironment, HostGitShim } from "../apps/runner/src/host-git-shim.js";
+import { realpathSync } from "node:fs";
 import { validWindowsLimits } from "../apps/runner/src/sandbox-backend.js";
 import { SeatbeltBackend, seatbeltGitShim, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
 import { WINDOWS_RUNNER, WINDOWS_SUPPORT_CHECK, WindowsBackend, windowsSandboxSupport } from "../apps/runner/src/windows-sandbox.js";
@@ -113,14 +115,129 @@ for (const helper of ["python", "node"] as const) {
   });
 }
 
-test("the Python helper backs up clones on macOS too; the Node helper's backend refuses what it can't do yet", { skip: !posix || !python }, async t => {
-  const mac = await workspace(t, new Unconfined("python", false, "python"));
-  await mac.execute({ kind: "bash", command: "git init -q -b main app && cd app && git commit -q --allow-empty -m first" }, false, allow, { unbounded: true });
-  const backup = await mac.cloneBackup(allow);
-  assert.deepEqual(backup.found, ["app"]);
-  const windows = await workspace(t, new Unconfined("node", true, "node"));
-  await assert.rejects(windows.cloneBackup(allow), /can't do this yet \(clone-backup\)/);
+test("on Windows, the session's git is put first again once Git for Windows' bash has started, after any BASH_ENV of the owner's own", () => {
+  assert.deepEqual(hostGitEnvironment("/t/pikibun-git-1/bin", { Path: "C:\\Windows", BASH_ENV: "/u/rc" }, true),
+    { Path: "/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-1", "path.sh"), PIKIBUN_BASH_ENV: "/u/rc" });
+  assert.deepEqual(hostGitEnvironment("/t/bin", { PATH: "/usr/bin" }, false), { PATH: `/t/bin${process.platform === "win32" ? ";" : ":"}/usr/bin` });
+  assert.deepEqual(hostGitEnvironment("/t/bin", {}, false), { PATH: `/t/bin${process.platform === "win32" ? ";" : ":"}/usr/bin:/bin:/usr/sbin:/sbin` });
 });
+
+test("the script BASH_ENV names keeps naming it in nested bashes, and runs the owner's own BASH_ENV in each", { skip: !posix }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "bash-env-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, "path.sh"), hostGitBashScript(join(directory, "bin")));
+  await writeFile(join(directory, "owner.sh"), `echo owner >> ${JSON.stringify(join(directory, "log"))}\n`);
+  const result = spawnSync(bash, ["--noprofile", "--norc", "-c", "bash --noprofile --norc -c 'echo \"$BASH_ENV\"'"], { encoding: "utf8",
+    env: { PATH: process.env.PATH, BASH_ENV: join(directory, "path.sh"), PIKIBUN_BASH_ENV: join(directory, "owner.sh") } });
+  assert.equal(result.stdout.trim(), join(directory, "path.sh"));
+  assert.equal(await readFile(join(directory, "log"), "utf8"), "owner\nowner\n");
+});
+
+test("on this platform, the host fills its repository cache, and a session on the host clones with its own git, borrowing it", { skip: !bashPath() || !spawnSync("git", ["--version"]).stdout }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "host-cache-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const env = { ...process.env, GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@e.test", GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@e.test" };
+  const run = (args: string[], cwd: string) => { const result = spawnSync("git", args, { cwd, env, encoding: "utf8" }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
+  const work = join(directory, "work");
+  await mkdir(work);
+  run(["init", "-q", "-b", "main"], work);
+  await writeFile(join(work, "README.md"), "upstream\n");
+  run(["add", "README.md"], work);
+  run(["commit", "-q", "-m", "initial"], work);
+  await mkdir(join(directory, "projects", "acme"), { recursive: true });
+  run(["clone", "-q", "--bare", work, join(directory, "projects", "acme", "app.git")], directory);
+  const server = await startGitHttpServer(join(directory, "projects"));
+  t.after(() => server.close());
+  const repository = { bindingId: "binding-app", provider: "github", host: "github.com", repositoryId: "1701", fullName: "acme/app" } as const;
+  const cache = new RepositoryCache({ root: join(directory, "cache") });
+  await cache.refresh({ repository, ownerId: "test:alice", sessionId: "host", remote: new GitRemote({ url: server.url("acme/app.git") }) });
+  const mirror = cache.mirrorDirectory(repository, "test:alice");
+  assert.equal(await cache.filled(repository, "test:alice"), true);
+  const asked: string[] = [];
+  const shim = new HostGitShim({ mirror: async remote => { asked.push(remote); return mirror; } });
+  t.after(() => shim.close());
+  const bin = await shim.start();
+  const session = { ...env, ...hostGitEnvironment(bin, env) };
+  const shell = (command: string) => {
+    const result = spawnSync(bashPath()!, ["--noprofile", "--norc", "-c", command], { cwd: directory, env: session, encoding: "utf8" });
+    return { code: result.status, out: `${result.stdout}${result.stderr}` };
+  };
+  assert.match(shell("command -v git").out, /pikibun-git-/, "the session's git comes first, even where bash puts its own directories first");
+  const cloned = await new Promise<{ code: number | null; out: string }>(resolve => {
+    const child = spawn(bashPath()!, ["--noprofile", "--norc", "-c", `git clone -q ${server.url("acme/app.git")} app`], { cwd: directory, env: session });
+    let out = "";
+    child.stdout.on("data", chunk => { out += chunk; });
+    child.stderr.on("data", chunk => { out += chunk; });
+    child.on("close", code => resolve({ code, out }));
+  });
+  assert.equal(cloned.code, 0, cloned.out);
+  assert.deepEqual(asked, [server.url("acme/app.git")]);
+  const alternates = (await readFile(join(directory, "app", ".git", "objects", "info", "alternates"), "utf8")).trim();
+  assert.equal(realpathSync.native(alternates), realpathSync.native(join(mirror, "objects")));
+  assert.match(run(["count-objects", "-v"], join(directory, "app")), /^count: 0$/m);
+  assert.equal((await readFile(join(directory, "app", "README.md"), "utf8")).replace(/\r\n/g, "\n"), "upstream\n");
+  assert.match(shell("git --version").out, /git version/);
+  assert.equal(asked.length, 1, "commands other than clone don't ask");
+});
+
+class Forge extends Unconfined {
+  constructor(name: string, helper: "python" | "node", readonly forge: string) { super(name, true, helper); }
+  override async launch(request: SandboxRequest, context: HelperContext, layout: HelperLayout): Promise<HelperLaunch> {
+    const launch = await super.launch(request, context, layout);
+    Object.assign(launch.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.${this.forge}.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/",
+      GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@example.test", GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@example.test" });
+    return launch;
+  }
+}
+
+for (const helper of ["python", "node"] as const) {
+  const label = helper === "python" ? "the Python helper (macOS)" : "the Node helper (Windows)";
+  test(`${label} backs up a session's clones, and puts their local work back after a restore or move`, { skip: !posix || (helper === "python" && !python) }, async t => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), "native-clones-")));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const work = join(directory, "work");
+    await mkdir(work);
+    const run = (args: string[], cwd: string) => assert.equal(spawnSync("git", args, { cwd, env: { ...process.env, GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@e.test",
+      GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@e.test" } }).status, 0);
+    run(["init", "-q", "-b", "main"], work);
+    await writeFile(join(work, "README.md"), "upstream\n");
+    run(["add", "README.md"], work);
+    run(["commit", "-q", "-m", "initial"], work);
+    await mkdir(join(directory, "projects", "acme"), { recursive: true });
+    run(["clone", "-q", "--bare", work, join(directory, "projects", "acme", "app.git")], directory);
+    const server = await startGitHttpServer(join(directory, "projects"));
+    t.after(() => server.close());
+    const source = await workspace(t, new Forge(`${helper}-source`, helper, server.url("")));
+    await source.execute({ kind: "bash", command: "git clone -q https://github.com/acme/app.git app && cd app && git switch -q -c feature && echo one > one.txt"
+      + " && git add one.txt && git commit -q -m 'Local commit' && echo draft > draft.txt" }, false, allow);
+    const backup = await source.cloneBackup(allow);
+    assert.deepEqual(backup.found, ["app"]);
+    const [clone] = backup.clones;
+    assert.equal(clone!.branch, "feature");
+    assert.equal(clone!.origin, "https://github.com/acme/app.git");
+    assert.match(Buffer.from(clone!.bundle!, "base64").subarray(0, 20).toString("latin1"), /^# v[23] git bundle/);
+
+    const target = await workspace(t, new Forge(`${helper}-target`, helper, server.url("")));
+    await mkdir(join(target.layout.git, "pikibun-clones"));
+    await writeFile(join(target.layout.git, "pikibun-clones", "0.bundle"), Buffer.from(clone!.bundle!, "base64"));
+    const other = { ...clone, path: "other", origin: "https://example.test/café.git", branch: "café", branches: [["café", clone!.branches[0]![1]]], bundle: null };
+    await writeFile(join(target.layout.git, "pikibun-clones", "manifest.json"), JSON.stringify({ version: 1, clones: [{ ...clone, bundle: "0.bundle" }, other] }));
+    assert.deepEqual((await target.clonePending(allow)).map(entry => entry.path), ["app", "other"]);
+    assert.equal((await target.cloneBackup(allow)).clones[0]!.bundle, clone!.bundle, "a clone still pending is backed up as it was");
+    await symlink(join(directory, "nowhere"), join(target.layout.worktree, "app"));
+    await assert.rejects(target.cloneRestore("app", "https://github.com/acme/app.git", null, allow), /something else is already at the clone's path/,
+      "a link at the clone's path, even one that points nowhere, isn't replaced");
+    await rm(join(target.layout.worktree, "app"));
+    await target.cloneRestore("app", "https://github.com/acme/app.git", null, allow);
+    assert.equal(await target.execute({ kind: "bash", command: "cd app && git rev-parse --abbrev-ref HEAD && git log --format=%s -1 && git status --porcelain" }, false, allow),
+      "feature\nLocal commit\n?? draft.txt\n");
+    assert.equal(await target.readFile("app/draft.txt", allow), "draft\n");
+    assert.deepEqual(await target.clonePending(allow), [{ path: "other", origin: "https://example.test/café.git" }]);
+    const kept = JSON.parse(await readFile(join(target.layout.git, "pikibun-clones", "manifest.json"), "utf8")) as { clones: typeof other[] };
+    assert.deepEqual(kept.clones, [other], "the clones still pending are kept as they were, names and all");
+    await assert.rejects(target.cloneRestore("app", "https://github.com/acme/app.git", null, allow), /no restoration is pending/);
+  });
+}
 
 test("without hard limits (macOS), shell commands run only where the host's owner allowed them", { skip: !posix || !python }, async t => {
   const sandbox = await workspace(t, new Unconfined("unlimited", false, "python"));

@@ -531,8 +531,7 @@ export class LocalConnector {
     try {
       if (replacing) await this.retireRuntime();
       if (!this.runtime) {
-        const cacheless = repositoryCache === "off" || process.platform === "win32" || this.options.sandboxBackend?.kind === "windows";
-        const cache = cacheless ? undefined : this.repositoryCacheFor(repositoryCache);
+        const cache = repositoryCache === "off" ? undefined : this.repositoryCacheFor(repositoryCache);
         this.runtime = { value: await (this.options.runtimeFactory ?? defaultRuntime)(this.runnerConfig(cache)), repositoryCache, resumed: false };
       }
       return this.runtime;

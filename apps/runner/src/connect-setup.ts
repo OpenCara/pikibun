@@ -190,7 +190,7 @@ export function unsandboxedWarning(): string {
   return `
 WARNING: running WITHOUT a sandbox (--unsafe-no-sandbox).
 Agent work for sessions on this host runs directly as "${userInfo().username}" on this machine:
-  - Shell commands and commits run with your full user permissions, as soon as the agent
+  - Commands (git, node, python, ...) and commits run with your full user permissions, as soon as the agent
     calls them: nobody approves them one by one. They can read and change anything you can,
     including ~/.ssh, cloud and Git credentials and Pi's auth.
   - Commands have unrestricted network access and no CPU, memory or disk limits.

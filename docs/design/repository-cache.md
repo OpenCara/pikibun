@@ -64,8 +64,9 @@ named, so a mirror never holds what that listing didn't reach, even if the repos
 
 Only the runner writes to the cache, outside any sandbox. The Linux sandbox mounts a mirror read-only; the macOS sandbox
 (Seatbelt) gives the steps that run Git in a clone read access to the session's authorized mirrors at their own paths.
-Sessions on the host run as the runner's user and read mirrors directly. The cache is POSIX-only (the root's owner and
-mode checks, `/dev/null` configuration, process groups), so Windows hosts keep none.
+The Windows sandbox gives them as read-only paths of its container. Sessions on the host run as the runner's user and
+read mirrors directly. On Windows the root's owner and mode aren't checked (the state directory's ACL keeps it
+private), Git runs without a console of its own, and a Git that outlives its time limit is ended with `taskkill /T`.
 
 ## Serialization and progress
 

@@ -98,7 +98,7 @@ async function launch(request: ServerStartRequest): Promise<void> {
         setHost(next);
         if (next === 'disconnected' && reason) log('warning', `This computer's host disconnected: ${reason}`);
       },
-      onWarning: (warning, detail) => log('warning', warning === 'identity-unavailable' ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.` : 'Some resource domains are unavailable; production bash remains fail-closed.'),
+      onWarning: (warning, detail) => log('warning', warning === 'identity-unavailable' ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.` : 'Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.'),
     });
     current.host.started.catch((error: unknown) => {
       if (current.stopping || (error instanceof Error && error.name === 'AbortError')) return;

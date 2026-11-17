@@ -3,7 +3,7 @@ import { FILE_OPERATIONS_CORE, FILE_OPERATIONS_FS, fileOperationLimits } from ".
 import { SNAPSHOT_SKIPPED_HOME } from "./sandbox.js";
 export const NODE_HELPER = String.raw`
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -385,6 +385,266 @@ async function clonePushPack(request) {
   if (code) refuse("push pack failed");
 }
 
+const CLONE_STATE = "pikibun-clones";
+const CLONE_PATH = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+){0,63}$/;
+const MAX_CLONES = 50;
+const MAX_CLONE_BRANCHES = 200;
+const MAX_CLONE_BUNDLES = 16 * 1024 * 1024;
+const MAX_CLONE_SEARCH = 20000;
+const BACKUP_IDENTITY = { GIT_AUTHOR_NAME: "Pikibun", GIT_AUTHOR_EMAIL: "backup@pikibun.invalid", GIT_COMMITTER_NAME: "Pikibun", GIT_COMMITTER_EMAIL: "backup@pikibun.invalid" };
+const RESTORED_MARKER = "pikibun-restored";
+const MIRROR_ROOT = "/repository-mirrors";
+
+const clonePath = value => typeof value === "string" && value.length <= 512 && CLONE_PATH.test(value)
+  && !value.split("/").some(part => [".", "..", ".git"].includes(part.toLowerCase()));
+
+function branchName(value) {
+  return typeof value === "string" && value.length >= 1 && value.length <= 200 && value !== "HEAD" && value !== "@" && !value.startsWith("-") && !value.startsWith("refs/")
+    && !/[\s\x00-\x1f\x7f\\~^:?*[]/.test(value) && !/[\ud800-\udfff]/.test(value) && !value.includes("..") && !value.includes("@{")
+    && !value.endsWith(".") && !value.endsWith("/") && !value.split("/").some(part => !part || part.startsWith(".") || part.endsWith(".lock"));
+}
+
+function cloneRun(directory, args, input = "", extra = {}) {
+  const result = spawnSync(GIT_BINARY, [...GIT_HARDENED, "--literal-pathspecs", "-c", "safe.directory=" + directory, "-C", directory, ...args], {
+    input, cwd: directory, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", ...extra },
+    stdio: ["pipe", "pipe", "ignore"], windowsHide: true, maxBuffer: 64 * 1024 * 1024,
+  });
+  return { code: result.error ? 127 : result.status, output: result.stdout ?? Buffer.alloc(0) };
+}
+
+function cloneChecked(directory, args, reason, input = "", extra = {}) {
+  const result = cloneRun(directory, args, input, extra);
+  if (result.code) refuse(reason);
+  return result.output.toString("utf8").trim();
+}
+
+function findClones() {
+  const found = [];
+  let visited = 0;
+  const visit = (directory, parts) => {
+    for (const name of readdirSync(directory).sort()) {
+      if (name === ".git" || name === "node_modules" || visited >= MAX_CLONE_SEARCH) continue;
+      const child = join(directory, name);
+      const info = lstatSync(child);
+      if (!info.isDirectory() || info.isSymbolicLink()) continue;
+      visited++;
+      let marker;
+      try { marker = lstatSync(join(child, ".git")); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      const path = [...parts, name].join("/");
+      if (marker && marker.isDirectory() && clonePath(path)) {
+        if (found.length >= MAX_CLONES) refuse("the worktree has too many clones to back up");
+        found.push(path);
+      }
+      if (parts.length < 3) visit(child, [...parts, name]);
+    }
+  };
+  visit(WORK, []);
+  return found;
+}
+
+function cloneState() {
+  const directory = join(GITDIR, CLONE_STATE);
+  let data;
+  try { data = readAt(join(directory, "manifest.json"), MAX_FILE).data; }
+  catch (error) { if (error.code === "ENOENT") return { directory: existsSync(directory) ? directory : null, clones: [] }; throw error; }
+  const clones = JSON.parse(data.toString("utf8")).clones;
+  if (!Array.isArray(clones)) refuse("invalid pending clone restorations");
+  return { directory, clones };
+}
+
+function saveCloneState(directory, clones) {
+  const staged = join(directory, "manifest.json.tmp");
+  const fd = openSync(staged, "w", 0o600);
+  try { writeSync(fd, Buffer.from(JSON.stringify({ version: 1, clones }), "utf8")); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(staged, join(directory, "manifest.json"));
+}
+
+function lexists(path) {
+  try { lstatSync(path); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+}
+
+function cloneBackupOne(path, nested, budget) {
+  const directory = join(WORK, ...path.split("/"));
+  const reason = "the clone " + path + " could not be backed up";
+  let result = cloneRun(directory, ["config", "--get", "remote.origin.url"]);
+  const origin = result.code ? null : result.output.toString("utf8").trim().slice(0, 2048);
+  result = cloneRun(directory, ["symbolic-ref", "-q", "HEAD"]);
+  const ref = result.code ? "" : result.output.toString("utf8").trim();
+  let branch = null;
+  if (ref.startsWith("refs/heads/")) {
+    branch = ref.slice("refs/heads/".length);
+    if (!branchName(branch)) refuse("the clone " + path + " is on a branch whose name can't be backed up");
+  }
+  result = cloneRun(directory, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+  const head = result.code ? null : result.output.toString("ascii").trim();
+  if (head === null && existsSync(join(directory, ".git", "objects", "info", "alternates"))) {
+    refuse("the clone " + path + " borrows objects from the host cache that this session can't read now");
+  }
+  if (head !== null && !OID.test(head)) refuse(reason);
+  const branches = [];
+  for (const line of cloneChecked(directory, ["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"], reason).split(/\r?\n/).filter(Boolean)) {
+    const [name, oid] = line.split("\0");
+    if (!name.startsWith("refs/heads/") || !branchName(name.slice("refs/heads/".length)) || !OID.test(oid)) {
+      refuse("the clone " + path + " has a branch whose name can't be backed up");
+    }
+    branches.push([name.slice("refs/heads/".length), oid]);
+  }
+  if (branches.length > MAX_CLONE_BRANCHES) refuse("the clone " + path + " has too many branches to back up");
+  const index = join(directory, ".git", "pikibun-backup-index");
+  const extra = { ...BACKUP_IDENTITY, GIT_INDEX_FILE: index };
+  let tree;
+  try {
+    try { copyFileSync(join(directory, ".git", "index"), index); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      cloneChecked(directory, head ? ["read-tree", head] : ["read-tree", "--empty"], reason, "", extra);
+    }
+    cloneChecked(directory, ["-c", "filter.lfs.process=", "-c", "filter.lfs.clean=", "-c", "filter.lfs.required=false", "add", "-A"], reason, "", extra);
+    if (nested.length) cloneChecked(directory, ["update-index", "--force-remove", "--", ...nested], reason, "", extra);
+    tree = cloneChecked(directory, ["write-tree"], reason, "", extra);
+  } finally { rmSync(index, { force: true }); }
+  if (!OID.test(tree)) refuse(reason);
+  const worktree = head !== null && cloneChecked(directory, ["rev-parse", head + "^{tree}"], reason) === tree ? head
+    : cloneChecked(directory, ["commit-tree", tree, ...(head ? ["-p", head] : [])], reason, "Pikibun backup of the working tree\n", BACKUP_IDENTITY);
+  if (!OID.test(worktree)) refuse(reason);
+  const fresh = ["refs/pikibun/backup", "--branches", "--not", "--remotes=origin"];
+  const target = join(directory, ".git", "pikibun-backup.bundle");
+  let bundle = null;
+  cloneChecked(directory, ["update-ref", "refs/pikibun/backup", worktree], reason);
+  try {
+    if (Number(cloneChecked(directory, ["rev-list", "--count", ...fresh], reason) || "0")) {
+      cloneChecked(directory, ["bundle", "create", target, ...fresh], reason);
+      if (statSync(target).size > budget) refuse("the clones' local work exceeds the backup size limit");
+      bundle = readFileSync(target);
+    }
+  } finally {
+    cloneRun(directory, ["update-ref", "-d", "refs/pikibun/backup"]);
+    rmSync(target, { force: true });
+  }
+  return { path, origin, branch, head, worktree, branches, bundle: bundle === null ? null : bundle.toString("base64") };
+}
+
+function cloneBackup() {
+  const paths = findClones();
+  let budget = MAX_CLONE_BUNDLES;
+  const clones = [];
+  for (const path of paths) {
+    const nested = paths.filter(other => other.startsWith(path + "/")).map(other => other.slice(path.length + 1));
+    const clone = cloneBackupOne(path, nested, budget);
+    if (clone.bundle !== null) budget -= Math.floor(clone.bundle.length * 3 / 4);
+    clones.push(clone);
+  }
+  const state = cloneState();
+  for (const entry of state.clones) {
+    if (!entry || typeof entry !== "object" || !clonePath(entry.path) || paths.includes(entry.path)) continue;
+    const item = { ...entry, bundle: null };
+    if (entry.bundle !== null && entry.bundle !== undefined) {
+      if (typeof entry.bundle !== "string" || !/^[0-9]{1,2}\.bundle$/.test(entry.bundle)) refuse("invalid pending clone restorations");
+      const data = readAt(join(state.directory, entry.bundle), budget).data;
+      budget -= data.length;
+      item.bundle = data.toString("base64");
+    }
+    clones.push(item);
+    if (clones.length > MAX_CLONES) refuse("the worktree has too many clones to back up");
+  }
+  return { clones, found: paths };
+}
+
+function clonePending() {
+  return cloneState().clones.filter(entry => entry && typeof entry === "object")
+    .map(entry => ({ path: entry.path, origin: entry.origin, bundle: entry.bundle }));
+}
+
+function bundlePrerequisites(path) {
+  const data = readFileSync(path).subarray(0, 4 * 1024 * 1024);
+  const end = data.indexOf("\n\n");
+  const header = data.subarray(0, end < 0 ? data.length : end).toString("latin1");
+  return header.split("\n").slice(1).filter(line => line.startsWith("-") && OID.test(line.slice(1, 41))).map(line => line.slice(1, 41));
+}
+
+function cloneRestore(request) {
+  const { path, url, reference } = request;
+  const granted = (process.env.SANDBOX_MIRRORS || "").split("\n").filter(Boolean);
+  if (!clonePath(path) || typeof url !== "string" || !/^https:\/\/[\x21-\x7e]{1,2040}$/.test(url)
+    || (reference !== null && reference !== undefined && (typeof reference !== "string" || !(reference.startsWith(MIRROR_ROOT + "/") || granted.includes(reference))))) {
+    refuse("invalid clone restoration");
+  }
+  const state = cloneState();
+  const entry = state.clones.find(item => item && typeof item === "object" && item.path === path);
+  if (!state.directory || !entry) refuse("no restoration is pending for this clone");
+  const { origin, branch, head, branches, bundle } = entry;
+  const worktree = String(entry.worktree);
+  if (typeof origin !== "string" || !/^[\x21-\x7e]{1,2048}$/.test(origin) || (branch !== null && !branchName(branch))
+    || (head !== null && !OID.test(String(head))) || !OID.test(worktree) || !Array.isArray(branches)
+    || !branches.every(item => Array.isArray(item) && item.length === 2 && branchName(item[0]) && OID.test(String(item[1])))
+    || (bundle !== null && (typeof bundle !== "string" || !/^[0-9]{1,2}\.bundle$/.test(bundle)))) refuse("invalid clone restoration");
+  const remaining = state.clones.filter(item => !(item && typeof item === "object" && item.path === path));
+  const parts = path.split("/");
+  const directory = join(WORK, ...parts);
+  const marker = join(directory, ".git", RESTORED_MARKER);
+  if (lexists(directory)) {
+    let done = false;
+    try { done = readFileSync(marker, "ascii").slice(0, 64).trim() === worktree; } catch {}
+    if (!done || lstatSync(directory).isSymbolicLink()) refuse("something else is already at the clone's path");
+    saveCloneState(state.directory, remaining);
+    unlinkSync(marker);
+    return;
+  }
+  let parent = WORK;
+  for (const part of parts.slice(0, -1)) {
+    parent = join(parent, part);
+    try { mkdirSync(parent, { mode: 0o700 }); }
+    catch (error) { if (error.code !== "EEXIST" || !lstatSync(parent).isDirectory() || lstatSync(parent).isSymbolicLink()) refuse("something else is already at the clone's path"); }
+  }
+  const staging = join(parent, "." + parts.at(-1) + ".pikibun-restore");
+  if (lexists(staging)) {
+    if (lstatSync(staging).isSymbolicLink() || !lstatSync(staging).isDirectory()) refuse("something else is already at the clone's path");
+    rmSync(staging, { recursive: true, force: true });
+  }
+  const cloned = spawnSync(GIT_BINARY, [...GIT_HARDENED, "-c", "protocol.http.allow=always", "clone", "--quiet", "--no-checkout",
+    ...(reference ? ["--reference-if-able", reference] : []), "--", url, staging], {
+    cwd: parent, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, stdio: "ignore", windowsHide: true });
+  if (cloned.error || cloned.status) {
+    rmSync(staging, { recursive: true, force: true });
+    refuse("the clone could not be cloned again from its origin");
+  }
+  const reason = "the clone's local work could not be put back";
+  try {
+    const present = oid => cloneRun(staging, ["cat-file", "-e", oid + "^{commit}"]).code === 0;
+    const fetchMissing = oids => {
+      const wanted = [...new Set(oids)].filter(oid => !present(oid));
+      if (wanted.length > 256) refuse("commits the backup builds on are no longer on the clone's origin");
+      if (wanted.length) cloneChecked(staging, ["-c", "protocol.http.allow=always", "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", url, ...wanted],
+        "commits the backup builds on are no longer on the clone's origin");
+    };
+    if (bundle !== null) {
+      const source = join(state.directory, bundle);
+      fetchMissing(bundlePrerequisites(source));
+      cloneChecked(staging, ["-c", "protocol.file.allow=always", "fetch", "--quiet", "--no-tags", source, "refs/*:refs/pikibun/restore/*"], reason);
+    }
+    fetchMissing([...branches.map(item => String(item[1])), ...(head ? [String(head)] : []), worktree]);
+    if (origin !== url) cloneChecked(staging, ["remote", "set-url", "origin", origin], reason);
+    for (const [name, oid] of branches) cloneChecked(staging, ["update-ref", "refs/heads/" + name, String(oid)], reason);
+    const listed = new Set(branches.map(item => item[0]));
+    for (const line of cloneChecked(staging, ["for-each-ref", "--format=%(refname)", "refs/heads", "refs/pikibun"], reason).split(/\r?\n/).filter(Boolean)) {
+      if (line.startsWith("refs/pikibun/") || !listed.has(line.slice("refs/heads/".length))) cloneChecked(staging, ["update-ref", "-d", line], reason);
+    }
+    if (branch !== null) cloneChecked(staging, ["symbolic-ref", "HEAD", "refs/heads/" + branch], reason);
+    else if (head !== null) cloneChecked(staging, ["update-ref", "--no-deref", "HEAD", String(head)], reason);
+    cloneChecked(staging, ["read-tree", "--reset", "-u", worktree], reason);
+    cloneChecked(staging, head ? ["read-tree", String(head)] : ["read-tree", "--empty"], reason);
+    writeFileSync(join(staging, ".git", RESTORED_MARKER), worktree + "\n");
+    if (lexists(directory)) refuse("something else is already at the clone's path");
+    renameSync(staging, directory);
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+  saveCloneState(state.directory, remaining);
+  unlinkSync(marker);
+  if (bundle !== null) rmSync(join(state.directory, bundle), { force: true });
+}
+
 ${SEARCH_CORE}
 
 ${FILE_OPERATIONS_CORE}
@@ -457,6 +717,9 @@ async function main() {
   if (kind === "clone-head") return print(cloneHead(request));
   if (kind === "clone-push-prepare") return print(clonePushPrepare(request));
   if (kind === "clone-push-pack") return clonePushPack(request);
+  if (kind === "clone-backup") return print(cloneBackup());
+  if (kind === "clone-pending") return print(clonePending());
+  if (kind === "clone-restore") { cloneRestore(request); return print(null); }
   if (kind === "import") return print({ path: importAt(request) });
   if (kind === "move" || kind === "copy" || kind === "delete") {
     try { return print(fileOperation(fileOperationsFs({ lstatSync, statSync, readdirSync, rmdirSync, unlinkSync, renameSync, linkSync, mkdirSync, readlinkSync, symlinkSync, openSync,
@@ -516,4 +779,4 @@ main().catch(error => {
 
 export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "search", "find", "snapshot", "bash",
   "move", "copy", "delete",
-  "clone-head", "clone-push-prepare", "clone-push-pack"]);
+  "clone-head", "clone-push-prepare", "clone-push-pack", "clone-backup", "clone-pending", "clone-restore"]);
