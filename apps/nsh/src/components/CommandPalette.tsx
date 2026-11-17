@@ -35,7 +35,7 @@ export function CommandPalette(props: { registry: CommandRegistry; sessions: () 
   const open = () => props.registry.request() !== null;
   const asking = signal<string | null>(null);
   const query = signal("");
-  const highlighted = signal(-1);
+  const highlightedKey = signal<string | null>(null);
   const list = signal<ListRef>();
   let input: InputRef | undefined;
   const commands = props.registry.commands;
@@ -114,14 +114,20 @@ export function CommandPalette(props: { registry: CommandRegistry; sessions: () 
     return value ? [{ key: "submit", title: ask.submitLabel(value), icon: "check", testID: "palette-submit", act: () => { close(); ask.submit(value); } }] : [];
   });
   const disabledRows = () => rows().map(row => Boolean(row.disabled));
+  const highlighted = computed(() => {
+    const key = highlightedKey();
+    const kept = key === null ? -1 : rows().findIndex(row => row.key === key && !row.disabled);
+    return kept >= 0 ? kept : firstEnabled(disabledRows());
+  });
   effect(() => {
-    const blocked = disabledRows();
-    untracked(() => highlighted.set(firstEnabled(blocked)));
+    query();
+    asking();
+    untracked(() => highlightedKey.set(null));
   });
   function move(by: 1 | -1) {
     const next = nextEnabled(untracked(disabledRows), untracked(highlighted), by);
     if (next < 0) return;
-    highlighted.set(next);
+    highlightedKey.set(untracked(rows)[next]?.key ?? null);
     untracked(list)?.scrollToIndex({ index: next, viewPosition: 0.5, animated: false });
   }
   function choose() {

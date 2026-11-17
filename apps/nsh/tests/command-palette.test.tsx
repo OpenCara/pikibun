@@ -126,6 +126,22 @@ describe("the command palette", () => {
     await app.waitUntil(() => sent(app, "GET", "/api/sessions/s3/view").length > 0);
   });
 
+  test("the highlighted row stays where the keys put it while the lists refresh underneath", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, clock: {}, network: server(threeSessions) });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:chat-model");
+    await app.keyboard.press("mod+o");
+    await app.waitFor("id:palette-choice-s3");
+    await app.keyboard.press("down");
+    const listed = sent(app, "GET", "/api/sessions").length;
+    await app.wait(31_000);
+    await app.waitUntil(() => sent(app, "GET", "/api/sessions").length > listed);
+    await app.wait(100);
+    await app.submit("id:palette-input");
+    await app.waitFor("id:command-palette", { state: "gone" });
+    await app.waitUntil(() => sent(app, "GET", "/api/sessions/s3/view").length > 0);
+  });
+
   test("a slash command goes into the chat box, and is dimmed while the box holds a message", async () => {
     const app = await desktop();
     await app.keyboard.press("mod+k");
