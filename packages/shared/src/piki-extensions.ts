@@ -167,8 +167,7 @@ export function neededExtensions(source: string): PikiExtensionInfo[] {
 }
 
 export function missingNeeds(source: string, workspace: readonly { source: string; enabled: boolean }[]): PikiExtensionInfo[] {
-  return neededExtensions(source).filter(needed => !(needed.sessionTools || needed.core ? pikiExtensionOn(needed, workspace)
-    : workspace.some(item => item.source === needed.source && item.enabled)));
+  return neededExtensions(source).filter(needed => !needed.core && !workspace.some(item => item.source === needed.source && item.enabled));
 }
 
 export function pikiExtension(source: string): PikiExtensionInfo | undefined {

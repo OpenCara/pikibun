@@ -371,8 +371,8 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
         )}
       </If>
       <If when={replacing()}><Note>{`The workspace uses ${replacing()?.source}: this replaces it, in its place.`}</Note></If>
-      <If when={!existing && normalized() ? missingNeeds(normalized()!, props.taken) : []}>
-        {needed => <If when={needed().length}><Note>{`It works through ${needed().map(item => `${item.title} (${item.source})`).join(" and ")}, off here: adding it adds ${needed().length === 1 ? "that" : "those"} too.`}</Note></If>}
+      <If when={!existing && !replacing() && normalized() ? missingNeeds(normalized()!, props.taken) : []}>
+        {needed => <If when={needed().length}><Note>{`It works through ${needed().map(item => `${item.title} (${item.source})`).join(" and ")}, off here: adding it adds ${needed().length === 1 ? "that" : "those"} too, unless this workspace turned ${needed().length === 1 ? "it" : "them"} off itself. Its row then says so, with a button that turns ${needed().length === 1 ? "it" : "them"} on.`}</Note></If>}
       </If>
       <If when={existing && !cli()?.controlPlane}>
         <If when={props.flags !== undefined} else={<Note>Its settings show here once a host that has it installed reports them.</Note>}>

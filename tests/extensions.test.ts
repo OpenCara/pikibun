@@ -399,6 +399,7 @@ test('adding Sub-agents brings Other sessions, whose tool it drives, audited; on
   assert.deepEqual(missingNeeds('piki:sub-agents', [{ source: 'piki:sessions', enabled: false }]).map(item => item.source), ['piki:sessions']);
   assert.deepEqual(missingNeeds('piki:sub-agents', [{ source: 'piki:sessions', enabled: true }]), []);
   assert.deepEqual(missingNeeds('piki:pr-flow', []), []);
+  assert.deepEqual(missingNeeds('piki:sub-agents', []).map(item => item.source), ['piki:sessions'], 'a list without the entry has it off, as the workspace does');
 });
 
 test('a workspace\'s first repository brings piki:git (and piki:github on GitHub), its first source of a kind that kind\'s extension; one turned off stays off', async t => {
