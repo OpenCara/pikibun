@@ -1,8 +1,9 @@
 import { signal, Text, untracked, View } from "nsh";
 import {
-  sessionRoles, type ModelDefinition, type SessionContextView, type SessionGrant, type SessionRecord, type SessionRole, type SessionView,
-  type WorkspaceRole,
+  sessionRoles, type ModelDefinition, type SessionContextView, type SessionGrant, type SessionRecord, type SessionRole, type SessionUsageView, type SessionView,
+  type TokenUsage, type WorkspaceRole,
 } from "../../../../packages/shared/src/types";
+import { cacheHitRate } from "../../../../packages/shared/src/usage";
 import {
   managesSession, sessionRoleAllowed, sessionRoleGrantable, sessionRoleOf, sessionRolePermissions, workspaceManagerRoles, workspaceSessionPermissions,
 } from "../../../../packages/shared/src/policy";
@@ -14,7 +15,7 @@ import type { CrossSessionMessage, SessionConnections } from "../../../../packag
 import { browserUnavailableText, errorMessage, REDACTED, segment, userIdFromInput, usernameWithId, type ConnectorInfo } from "../shared";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
-import { formatTokens, relativeTime, timestamp } from "../lib/format";
+import { formatCost, formatRate, formatTokens, relativeTime, timestamp } from "../lib/format";
 import { openExternal, openServerLink, opensServerPages } from "../lib/links";
 import { createUsername, createWorkspacePeople } from "../lib/people";
 import { createAction, createResource } from "../lib/resource";
@@ -50,6 +51,7 @@ export function Details(props: DetailsProps) {
           <View testID="panel-details" style={{ gap: 32 }}>
             <If when={props.view()?.tunnel}>{() => <TunnelSection {...props} current={current()} canStop={canWrite() && !archived()} />}</If>
             <If when={props.view()?.context}>{usage => <ContextSection usage={usage()} />}</If>
+            <If when={props.view()?.usage}>{usage => <UsageSection usage={usage()} />}</If>
             <HostSection {...props} current={current()} />
             <If when={props.view()?.extensions}>
               {extensions => <ExtensionsSection extensions={extensions()} host={props.hosts()?.find(item => item.id === current().connectorId)} go={props.go} />}
@@ -134,6 +136,34 @@ export function ContextSection(props: { usage: SessionContextView }) {
         </If>
         <Small testID="context-hint">{hint()}</Small>
       </CardBody>
+    </Section>
+  );
+}
+
+export function tokensSpent(usage: TokenUsage): string {
+  const cached = usage.cacheRead ? `, ${formatTokens(usage.cacheRead)} of them from the cache` : "";
+  return `${formatTokens(usage.input + usage.cacheRead + usage.cacheWrite)} tokens in${cached}, ${formatTokens(usage.output)} out`;
+}
+
+export function UsageSection(props: { usage: SessionUsageView }) {
+  const usage = () => props.usage;
+  const breakdown = () => usage().models.length > 1 || (usage().tools !== undefined && usage().models.length > 0);
+  const cache = () => {
+    const last = cacheHitRate(usage().last), overall = cacheHitRate(usage().total);
+    if (last === undefined && overall === undefined) return "No prompt tokens reported yet";
+    return [last !== undefined ? `${formatRate(last)} of the last request's prompt` : "", overall !== undefined ? `${formatRate(overall)} of all prompts` : ""]
+      .filter(Boolean).join(" · ");
+  };
+  return (
+    <Section title="Usage" testID="panel-usage" info="What this session has spent on its models, as Pi prices each response from the host's model catalog: the shared conversation, side asks, compaction summaries and tools that call models, on the host owner's providers. A subscription isn't billed by the request, so its cost here is what the same tokens would cost by the catalog's prices. Prompt cache: the share of prompt tokens the provider read from its cache, cache read / (input + cache read + cache write), for the shared conversation's last answered request and for the whole session.">
+      <Row leading={icon("zap")} title={formatCost(usage().total.cost)} hint={tokensSpent(usage().total)} testID="usage-total" hintTestID="usage-tokens" />
+      <Row leading={icon("database")} title="Prompt cache" hint={cache()} hintTestID="usage-cache" />
+      <If when={breakdown()}>
+        <Each of={usage().models} key={item => item.model}>
+          {item => <Row title={item().model} hint={tokensSpent(item())} trailing={formatCost(item().cost)} />}
+        </Each>
+        <If when={usage().tools}>{tools => <Row title="Tools" hint={tokensSpent(tools())} trailing={formatCost(tools().cost)} />}</If>
+      </If>
     </Section>
   );
 }

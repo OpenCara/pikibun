@@ -33,6 +33,30 @@ describe("a session's view", () => {
     await app.waitUntil(() => app.openedUrls().includes(pull.url));
   });
 
+  test("shows how full its context is, what it cost and its prompt-cache hit rate by the chat box", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server() });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:usage-line");
+    expect(app.shows("text:42% of 200K · $1.84 · cache 97%")).toBe(true);
+    expect(app.shows("label:Session: context 42% full, $1.84 spent, 97% of the last request's prompt from the cache")).toBe(true);
+    expect(app.shows("id:queue-line")).toBe(true);
+    app.dispose();
+    const idle = { ...view, busy: false, activity: "idle", queue: [], context: undefined, usage: { ...view.usage, last: undefined } };
+    const quiet = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: idle, revision: "r1" } },
+    }) });
+    await quiet.press("id:session-row-s1");
+    await quiet.waitFor("text:$1.84 · cache 85%");
+    expect(quiet.shows("id:queue-line")).toBe(false);
+    quiet.dispose();
+    const empty = { ...idle, usage: { ...view.usage, last: { input: 0, cacheRead: 0, cacheWrite: 0 } } };
+    const unasked = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: empty, revision: "r1" } },
+    }) });
+    await unasked.press("id:session-row-s1");
+    await unasked.waitFor("label:Session: $1.84 spent, 85% of the session's prompt from the cache");
+  });
+
   test("takes a queued message of yours back into the chat box to edit", async () => {
     const queued = { ...view, withdrawable: true, queue: [...view.queue, { submissionId: "q5", actorId: "u1", mode: "write", status: "queued" }] };
     const app = await open("../App.tsx", { storage: signedIn, network: server({

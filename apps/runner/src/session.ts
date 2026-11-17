@@ -54,7 +54,7 @@ import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
 import { comparableOptions, holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
-import { activityEntry, contextView, extensionView, sessionView } from "./session/view.js";
+import { activityEntry, contextView, extensionView, sessionView, SessionUsage } from "./session/view.js";
 import { SessionOperations, type OperationConsent } from "./session/operations.js";
 import { ToolCalls } from "./session/tools/calls.js";
 import type { ToolContext } from "./session/tools/context.js";
@@ -197,6 +197,7 @@ export class RunnerSession {
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   #compaction: () => CompactionSettings | undefined = () => undefined;
+  readonly #usage = new SessionUsage(async () => this.harness.usage(context));
   readonly #operations: SessionOperations;
   #failed = false;
   #recovery: Promise<void> | undefined;
@@ -1330,6 +1331,7 @@ export class RunnerSession {
       context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
       commands: async () => (this.#frozen || this.#packed || this.closing ? [] : this.#commands.list()),
+      usage: key => this.#usage.get(key),
     });
   }
 

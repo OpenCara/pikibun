@@ -866,6 +866,29 @@ test("the view tells how full the shared conversation's context window is, and w
   assert.equal(after.compactsAt, 200_000 - 16_384);
 });
 
+test("the view tells what the session spent, from pi-durable's usage, and its last request's prompt", hostMode, async t => {
+  const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow: 200_000 }] });
+  faux.setResponses([fauxAssistantMessage("ok")]);
+  const { service } = await hostFixture(t, { resolveModels: async model => {
+    const models = createModels();
+    models.setProvider(faux.provider);
+    return { models, provider: model.provider, modelId: model.modelId };
+  } });
+  const id = "usage-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  assert.equal((await session.view()).usage, undefined, "nothing spent yet");
+  await session.submit(await ticket(id, "submit"), { content: "x".repeat(4000), requestId: "spend" }, "write");
+  await idle(session);
+  const usage = (await session.view()).usage;
+  assert.ok(usage, "the view has the session's usage");
+  assert.deepEqual(usage.models.map(item => item.model), ["faux/faux-1"]);
+  const { model: _model, ...only } = usage.models[0]!;
+  assert.deepEqual(usage.total, only, "one model: its usage is the session's");
+  assert.ok(usage.total.output > 0 && usage.total.input + usage.total.cacheRead + usage.total.cacheWrite >= 1000, JSON.stringify(usage));
+  assert.equal(typeof usage.total.cost, "number");
+  assert.ok(usage.last && usage.last.input + usage.last.cacheRead + usage.last.cacheWrite > 0, JSON.stringify(usage.last));
+});
+
 test("a run Pi settles without an answer shows as a failed model turn instead of silence", hostMode, async t => {
   const { service } = await hostFixture(t, { resolveModels: async model => {
     const models = createModels();

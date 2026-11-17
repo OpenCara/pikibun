@@ -21,7 +21,7 @@ import type { WithdrawResult } from "../../../../packages/shared/src/types";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { createDraft, forgetSentDraft, restoreDraft, saveDraft } from "../lib/drafts";
-import { randomId } from "../lib/format";
+import { randomId, usageStatus } from "../lib/format";
 import { createLiveSession, type LiveSessionState } from "../lib/live-session";
 import { createUsername, createWorkspacePeople, PeopleContext } from "../lib/people";
 import { createAction, createResource } from "../lib/resource";
@@ -605,6 +605,7 @@ function Conversation(props: {
   const bottomInset = () => (platform.desktop ? 12 : Math.max(keyboardFrame().height, safeArea().bottom, 12));
 
   const statusShown = () => working() || activeQueue().length > 0 || queueOpen();
+  const statusLine = () => usageStatus(view());
   const statusTone = () => (stopPending() ? "warning" : view().busy && view().activity === "waiting" ? "warning" : "running");
 
   return (
@@ -654,15 +655,23 @@ function Conversation(props: {
       {props.dock}
       <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: bottomInset(), backgroundColor: palette().background }}>
         <View style={{ gap: 6, width: "100%", maxWidth: 800, alignSelf: "center" }}>
-          <If when={statusShown()}>
-            <BaseButton testID="queue-line" accessibilityLabel={`${queueLabel()}, ${queueOpen() ? "hide details" : "show details"}`} onPress={() => queueOpen.update(open => !open)}
-              style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", paddingHorizontal: 8, height: 26, borderRadius: radius.pill,
-                backgroundColor: palette().tones[statusTone()].background }}
-              hoverStyle={{ opacity: 0.85 }}>
-              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: palette().tones[statusTone()].text }} />
-              <Text style={{ fontSize: text.caption, color: palette().tones[statusTone()].text }}>{queueLabel()}</Text>
-              <Icon name={queueOpen() ? "chevron-up" : "chevron-down"} size={12} color={palette().tones[statusTone()].text} />
-            </BaseButton>
+          <If when={statusShown() || statusLine()}>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 4, minHeight: 26 }}>
+              <If when={statusShown()}>
+                <BaseButton testID="queue-line" accessibilityLabel={`${queueLabel()}, ${queueOpen() ? "hide details" : "show details"}`} onPress={() => queueOpen.update(open => !open)}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 0, paddingHorizontal: 8, height: 26, borderRadius: radius.pill,
+                    backgroundColor: palette().tones[statusTone()].background }}
+                  hoverStyle={{ opacity: 0.85 }}>
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: palette().tones[statusTone()].text }} />
+                  <Text style={{ fontSize: text.caption, color: palette().tones[statusTone()].text }}>{queueLabel()}</Text>
+                  <Icon name={queueOpen() ? "chevron-up" : "chevron-down"} size={12} color={palette().tones[statusTone()].text} />
+                </BaseButton>
+              </If>
+              <If when={statusLine()}>
+                {line => <Text testID="usage-line" accessibilityLabel={line().label}
+                  style={{ marginLeft: "auto", flexShrink: 0, maxWidth: "100%", numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{line().text}</Text>}
+              </If>
+            </View>
           </If>
           <If when={queueOpen()}>
             <View style={{ gap: 6, padding: 12, borderRadius: radius.large, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
