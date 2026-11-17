@@ -100,12 +100,25 @@ const chosenOf = (schedule: ChildChoice) => ({ ...(schedule.model_id ? { modelId
 async function scheduleChildModel(env: Env, row: SessionRow, actorId: string, schedule: ChildChoice): Promise<Awaited<ReturnType<typeof childModel>> & { fallback?: string }> {
   const chosen = chosenOf(schedule);
   if (chosen.modelId === undefined && chosen.thinkingLevel === undefined) return childModel(env, row, actorId, {}, true);
+  const code = await choiceRefused(() => requireChildChoice(env, row, actorId, chosen));
+  if (typeof code !== 'string') return code;
+  if (code === 'thinking_unsupported' && chosen.modelId !== undefined) {
+    const modelOnly = await choiceRefused(() => requireChildChoice(env, row, actorId, { modelId: chosen.modelId }));
+    if (typeof modelOnly !== 'string') return { ...modelOnly, fallback: code };
+  }
+  return { ...await childModel(env, row, actorId, {}, true), fallback: code === 'child_models_disabled' || code === 'thinking_unsupported' ? code : 'model_unavailable' };
+}
+
+const choiceCodes = ['not_found', 'model_disabled', 'thinking_unsupported', 'child_models_disabled', 'connector_trust_required', 'invalid_binding', 'invalid_input'];
+
+async function choiceRefused<T>(work: () => Promise<T>): Promise<T | string> {
   try {
-    return await requireChildChoice(env, row, actorId, chosen);
+    return await work();
   } catch (error) {
     if (!(error instanceof HTTPException)) throw error;
     const code = await errorCode(error);
-    return { ...await childModel(env, row, actorId, {}, true), fallback: code === 'child_models_disabled' || code === 'thinking_unsupported' ? code : 'model_unavailable' };
+    if (!choiceCodes.includes(code)) throw error;
+    return code;
   }
 }
 
@@ -417,12 +430,16 @@ export async function restorePortableSchedules(env: Env, row: SessionRow, schedu
   for (const schedule of schedules.slice(0, MAX_SCHEDULES_PER_SESSION)) {
     const fields: ScheduleInput = Object.fromEntries(scheduleFields.filter(key => schedule[key] !== undefined).map(key => [key, schedule[key]]));
     const { modelId, thinkingLevel, ...sessionModel } = fields;
-    for (const attempt of modelId !== undefined || thinkingLevel !== undefined ? [fields, sessionModel] : [fields]) {
+    const attempts = modelId === undefined && thinkingLevel === undefined ? [fields]
+      : [fields, ...(modelId !== undefined && thinkingLevel !== undefined ? [{ ...sessionModel, modelId }] : []), sessionModel];
+    for (const [index, attempt] of attempts.entries()) {
       try {
         await createSchedule(env, row, { actorId: row.owner_id }, attempt);
         restored++;
         break;
-      } catch { }
+      } catch (error) {
+        if (index === attempts.length - 1 || !(error instanceof HTTPException) || !choiceCodes.includes(await errorCode(error))) break;
+      }
     }
   }
   return restored;

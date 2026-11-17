@@ -43,7 +43,7 @@ const errorLabels: Record<string, string> = {
   connector_relay_error: "The host didn't answer",
   model_unavailable: "Started a new session on this session's model: the schedule's model is no longer available",
   child_models_disabled: "Started a new session on this session's model: the workspace no longer lets schedules choose one",
-  thinking_unsupported: "Started a new session on this session's model: the schedule's model no longer runs at its reasoning level",
+  thinking_unsupported: "Started a new session without the schedule's reasoning level: its model no longer runs at it",
   forbidden: "You no longer have write access",
   session_frozen: "The session runs nothing",
 };

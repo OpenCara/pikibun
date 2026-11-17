@@ -78,9 +78,11 @@ each sub-task on what suits it. `list` returns, with the models, the reasoning l
   level the new session got, and `session.cross_session.created` records them.
 - Schedules that run in a new child session (`session_schedules.model_id`, `thinking_level`) choose the same way, with
   the same checks (`childModel`), when they are saved and again at each run, as the session's owner. A run whose choice
-  no longer holds starts on the session's current model and level instead of being skipped, and records why as the
-  schedule's `last_error` (`model_unavailable`, `thinking_unsupported`, `child_models_disabled`) and the
-  `session.schedule.child_started` audit's `fallback`.
+  no longer holds is not skipped: it starts on the session's current model and level, or on its chosen model without a
+  level that model no longer offers, and records why as the schedule's `last_error` (`model_unavailable`,
+  `thinking_unsupported`, `child_models_disabled`) and the `session.schedule.child_started` audit's `fallback`. Only
+  those refusals fall back; any other failure fails the run as before. A portable session's schedules are restored
+  with their choice where this server can honour it, else without its level, else without it.
 
 ## Who can see what
 

@@ -438,6 +438,15 @@ test('a schedule that runs in a new session starts it on a model and reasoning l
   const again = await f.owner.request('PATCH', `${base}/${schedule.id}`, { runIn: 'child', modelId: 'hosted-model', thinkingLevel: 'low' });
   assert.equal(again.status, 200, await again.clone().text());
 
+  const offers = (levels: string[]) => f.sqlite.prepare("UPDATE connectors SET models_json = ? WHERE id = 'levels-host'")
+    .run(JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3', thinkingLevels: levels }]));
+  offers(['off', 'high']);
+  const levelGone = await (await f.owner.request('POST', `${base}/${schedule.id}/run`)).json() as { schedule: SessionSchedule; sessionId: string };
+  assert.equal(childModel(levelGone.sessionId), 'hosted-model', 'a model that no longer runs at the chosen level still runs');
+  assert.equal((hosted.at(-1)!.body.options as Record<string, unknown> | undefined)?.thinkingLevel, undefined, 'without that level');
+  assert.equal(levelGone.schedule.lastError, 'thinking_unsupported');
+  offers(['off', 'low', 'high']);
+
   f.sqlite.prepare("UPDATE models SET available = 0 WHERE id = 'hosted-model'").run();
   const gone = await f.owner.request('POST', `${base}/${schedule.id}/run`);
   assert.equal(gone.status, 202, await gone.clone().text());
