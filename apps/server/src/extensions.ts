@@ -8,7 +8,7 @@ import { extensionAvailability, extensionLimits, extensionPackageKey, inReposito
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, AppEnv } from './types.js';
 import {
-  auditStatement, authenticateConnector, automaticTools, isPersonalWorkspace, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
+  addNeededExtensions, auditStatement, authenticateConnector, automaticTools, isPersonalWorkspace, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
   saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
@@ -149,6 +149,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     const sessionTool = sessionToolSources.includes(key);
     if (sessionTool) extension = { ...extension, tools: 'automatic', settings: {} };
     if (coreSources.includes(key) && !extension.enabled) fail(400, 'invalid_extension', `${key} offers the tools every session needs; it can't be turned off.`);
+    const first = !sessionTool && !(await workspaceExtensions(c.env, workspaceId)).some(item => extensionPackageKey(item.source) === key);
     const saved = await saveWorkspaceExtensionStatement(c.env.DB, { workspaceId, extension, actor, at: now() }).first();
     if (!saved) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
@@ -156,7 +157,8 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     }
     await auditStatement(c.env, actor, 'workspace.extension.updated', workspaceId, null,
       { source: extension.source, enabled: extension.enabled, tools: extension.tools, settings: Object.keys(extension.settings) }).run();
-    return c.json({ extensions: await workspaceExtensions(c.env, workspaceId) });
+    const added = first && extension.enabled ? await addNeededExtensions(c.env, workspaceId, key, actor) : [];
+    return c.json({ extensions: await workspaceExtensions(c.env, workspaceId), ...(added.length ? { added } : {}) });
   });
 
   app.delete('/api/workspaces/:id/extensions', async c => {

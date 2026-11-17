@@ -33,8 +33,8 @@ sender's own hosts (and this session's host), as that sender, within the workspa
 ## In Pikibun
 
 Every connector has it built in as `piki:sub-agents`. A workspace's owners and admins add it under **Settings →
-Workspaces →** the workspace **→ Extensions → Add extension → Workflows → Sub-agents**, with **Other sessions**
-(`piki:sessions`), whose `sessions` tool it drives. Placement needs a Pikibun server and connectors from the release
+Workspaces →** the workspace **→ Extensions → Add extension → Workflows → Sub-agents**. Adding it adds **Other sessions**
+(`piki:sessions`) too, whose `sessions` tool it drives; the extensions page warns while that is off. Placement needs a Pikibun server and connectors from the release
 that added it; against an older server the extension leaves placement out and the agent names models instead. See
 [the design](../../docs/design/host-placement.md).
 
