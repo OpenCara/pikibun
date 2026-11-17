@@ -71,7 +71,14 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   the model's title only while the session's title is still the fallback, so a rename meanwhile wins. Hosts without
   `sessionTitles` are never asked. The host adds the answer's usage to the shared conversation's `pi.usage`, so the
   session's usage counts it, and aborts a completion still running when the session closes. Its 20 s limit sits well
-  inside the relay's 30 s, so the host's own limit is the one that ends a slow answer.
+  inside the relay's 30 s, so the host's own limit is the one that ends a slow answer. Its usage adds no entry, so the
+  view's usage shows it at its next 10-second read (below).
+- **The view reads the session's usage once per commit.** A client following a session reads its view four times a
+  second, and pi-durable's `Harness.usage()` reads every conversation's `pi.usage` document to sum them. `SessionUsage`
+  keeps the last sum while no branch has a new entry, and reads it again after 10 seconds anyway, for spend a later
+  feature may record without an entry of the branches the view reads. The view sends the raw counts (each model's and
+  the tools' tokens and cost, and the last answered request's prompt tokens); hit rates and their wording are worked out
+  in the client (`packages/shared/src/usage.ts`), so changing how they read needs no connector release.
 - **The session keeps thin members tests reach by name.** `metadata()`, `tools`, `buildTools()`, `drainQueue()`,
   `agentInstructions(mode)`, `activity()`, `harness` and `hostCommands` stay on `RunnerSession`, delegating where the work
   moved, so the whole-session tests read the same members they always did.

@@ -54,7 +54,8 @@ The desktop app starts `pikibun` through the owner's login shell (`$SHELL -ilc '
 - **No trustd.** `com.apple.trustd.agent` fetches the AIA, OCSP and CRL addresses a certificate names on the host's own network, outside the proxy, so a step could send data the network policy refuses. It is denied; Go and Swift, which verify TLS only through it on macOS, can't make HTTPS connections here (curl, Git, Node and Python use the session's CA bundle).
 - **Processes** inherit the profile and may signal and inspect only each other. The machine's own sysctls are allowed, never `kern.procargs`, which shows other processes' environments.
 - **Only the system's `sandbox-exec`**, never one found on `PATH`. It is deprecated in Apple's headers but still ships, and Chromium and others depend on it.
-- **No hard memory or process limits** (macOS has no cgroups), so shell commands run there only where the host's owner allows commands without them.
+- **No hard memory or process limits** (macOS has no cgroups), so commands run there only where the host's owner allows them without limits: in their own sessions and those of
+  members they grant host commands.
 
 ## Sessions on the host
 

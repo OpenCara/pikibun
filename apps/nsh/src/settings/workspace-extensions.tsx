@@ -1,6 +1,6 @@
 import { signal, Text, untracked, View } from "nsh";
 import {
-  pikiCommandExtensions, pikiControlPlaneExtensions, pikiExtension, pikiSessionToolExtensions, pikiWorkflowExtensions, sessionToolExtensionOn,
+  missingNeeds, pikiCommandExtensions, pikiControlPlaneExtensions, pikiExtension, pikiSessionToolExtensions, pikiWorkflowExtensions, sessionToolExtensionOn,
   type PikiExtensionInfo,
 } from "../../../../packages/shared/src/piki-extensions";
 import {
@@ -188,12 +188,22 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                   const controlPlane = () => cli()?.controlPlane === true;
                   const offer = () => extensionOffer(extension().source, installed());
                   const hostsWithIt = () => current().hosts.filter(host => host.availability?.[extension().source]?.status === "installed").length;
+                  const missing = () => (extension().enabled ? missingNeeds(extension().source, current().extensions) : []);
+                  const needsNote = () => missing().length ? `Does nothing without ${missing().map(item => item.title).join(" and ")}, which ${missing().length === 1 ? "is" : "are"} off here` : undefined;
                   return (
                     <CollapsibleRow leading={<Icon name={controlPlane() ? "sparkles" : "tool"} size={16} color={palette().muted} />} title={cli() ? `${cli()!.title} · ${extension().source}` : extension().source}
                       hint={controlPlane() ? `${descriptionSummary(cli()!.description, 300)}\nRuns in Pikibun itself: hosts install nothing`
                         : extensionHint(offer(), extension().enabled ? shadowedOf(extension().source) : undefined, 300, undefined,
-                        `${cli() ? "On" : "Installed on"} ${hostsWithIt()} of ${current().hosts.length} ${current().hosts.length === 1 ? "host" : "hosts"}`)}
+                        [`${cli() ? "On" : "Installed on"} ${hostsWithIt()} of ${current().hosts.length} ${current().hosts.length === 1 ? "host" : "hosts"}`, needsNote()].filter(Boolean).join("\n"))}
                       trailing={<Badge tone={extension().enabled ? "success" : "neutral"}>{extension().enabled ? "On" : "Off"}</Badge>}>
+                      <Each of={missing()} key={item => item.source}>
+                        {needed => (
+                          <Banner tone="warning" testID={`needs-${needed().name}`} title={`Needs ${needed().title}`} actions={admin() ? <Button small variant="outline" label={`Add ${needed().title}`} disabled={action.busy()}
+                            onPress={() => void save({ source: needed().source, enabled: true, tools: "automatic", settings: {} }, `${needed().title} added. Sessions offer its tools from their next message.`)} /> : undefined}>
+                            {`${cli()?.title ?? extension().source} works through ${needed().title} (${needed().source}), which is off in this workspace, so it does nothing. ${admin() ? "Add it here, or with Add extension." : "A workspace owner or admin adds it."}`}
+                          </Banner>
+                        )}
+                      </Each>
                       <If when={offer()?.tools.length}>
                         <ToolList tools={offer()!.tools.map(tool => ({ ...tool, source: extension().source }))} shadowed={extension().enabled ? shadowedOf(extension().source) : undefined} />
                       </If>
@@ -361,6 +371,9 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
         )}
       </If>
       <If when={replacing()}><Note>{`The workspace uses ${replacing()?.source}: this replaces it, in its place.`}</Note></If>
+      <If when={!existing && !replacing() && normalized() ? missingNeeds(normalized()!, props.taken) : []}>
+        {needed => <If when={needed().length}><Note>{`It works through ${needed().map(item => `${item.title} (${item.source})`).join(" and ")}, off here: adding it adds ${needed().length === 1 ? "that" : "those"} too, unless this workspace turned ${needed().length === 1 ? "it" : "them"} off itself. Its row then says so, with a button that turns ${needed().length === 1 ? "it" : "them"} on.`}</Note></If>}
+      </If>
       <If when={existing && !cli()?.controlPlane}>
         <If when={props.flags !== undefined} else={<Note>Its settings show here once a host that has it installed reports them.</Note>}>
           <If when={props.flags?.length || extra().length} else={<Note>This extension has no settings.</Note>}>

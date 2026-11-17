@@ -20,6 +20,7 @@ export interface PikiExtensionInfo {
   documentKinds?: readonly DocumentKind[];
   workflow?: boolean;
   controlPlane?: boolean;
+  needs?: readonly `piki:${string}`[];
 }
 
 function documentSourceExtension(name: string, kind: DocumentKind, title: string): PikiExtensionInfo {
@@ -135,6 +136,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "workspace", source: "piki:workspace", title: "Workspace management", sessionTools: ["workspace"], optIn: true,
+    description: "The workspace tool: the agent reads the session's workspace (members, join requests, repositories, document sources, extensions, tool groups, network access) and, when asked, changes it (renames it, adds, removes and changes members, accepts join requests, adds and removes repositories and extensions, sets tool groups and network access), as the message's sender, with exactly their workspace role. Off until added here.",
+    providers: [],
+  },
+  {
     name: "prompt-audit", source: "piki:prompt-audit", title: "Prompt audit",
     description: "Has a model of the host check each message from anyone but the host's owner before it reaches the agent, and refuses ones that reach for the host's credentials, files, environment or network. A message it can't check is refused too.",
     providers: [],
@@ -150,8 +156,8 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
-    name: "sub-agents", source: "piki:sub-agents", title: "Sub-agents", workflow: true,
-    description: "Has the agent hand sub-tasks to sub-agents, sessions it starts with the sessions tool (add Other sessions too): independent parts that can run at once, or parts that need hardware or a model its host lacks. Pikibun places each on the least loaded host that meets its conditions (a GPU, CPUs, memory, disk, platform, models), with the workspace's placement and models settings added where the agent sets none; max-sub-agents bounds each message, and each reports back when it finishes.",
+    name: "sub-agents", source: "piki:sub-agents", title: "Sub-agents", workflow: true, needs: ["piki:sessions"],
+    description: "Has the agent hand sub-tasks to sub-agents, sessions it starts with the sessions tool (adding it adds Other sessions too): independent parts that can run at once, or parts that need hardware or a model its host lacks. Pikibun places each on the least loaded host that meets its conditions (a GPU, CPUs, memory, disk, platform, models), with the workspace's placement and models settings added where the agent sets none; max-sub-agents bounds each message, and each reports back when it finishes.",
     providers: [],
   },
   {
@@ -160,6 +166,14 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
 ] as const satisfies readonly PikiExtensionInfo[]);
+
+export function neededExtensions(source: string): PikiExtensionInfo[] {
+  return (pikiExtension(source)?.needs ?? []).flatMap(needed => pikiExtension(needed) ?? []);
+}
+
+export function missingNeeds(source: string, workspace: readonly { source: string; enabled: boolean }[]): PikiExtensionInfo[] {
+  return neededExtensions(source).filter(needed => !needed.core && !workspace.some(item => item.source === needed.source && item.enabled));
+}
 
 export function pikiExtension(source: string): PikiExtensionInfo | undefined {
   return pikiExtensions.find(item => item.source === source);

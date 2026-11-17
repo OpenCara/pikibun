@@ -86,7 +86,7 @@ export const SNAPSHOT_SKIPPED_HOME: readonly string[] = Object.freeze([".tmp", "
 
 const MIRROR_KINDS: ReadonlySet<Request["kind"]> = new Set(["bash", "clone-head", "clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"]);
 
-export const GIT_LFS_PATHS = ["/usr/bin/git-lfs", "/usr/local/bin/git-lfs"] as const;
+export const GIT_LFS_PATHS = ["/usr/bin/git-lfs", "/usr/local/bin/git-lfs", "/opt/homebrew/bin/git-lfs"] as const;
 export function hostGitLfs(): string | undefined {
   return GIT_LFS_PATHS.find(path => { try { accessSync(path, constants.X_OK); return true; } catch { return false; } });
 }
@@ -566,9 +566,9 @@ export class Sandbox implements IsolatedWorkspace {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
         const bounded = options.allowTestShell !== true && (!!this.#resources || options.unbounded !== true);
         if (bounded && !this.#resources) {
-          throw new Error("Production bash unavailable: explicitly provisioned cgroup and bounded filesystem resources are required");
+          throw new Error("Commands can't run here: they need explicitly provisioned cgroup and bounded filesystem resources");
         }
-        return this.#operation({ kind: "bash", command: text(operation.command, "shell command", 64 * 1024, true) }, readOnly, authorize, false, bounded,
+        return this.#operation({ kind: "bash", command: text(operation.command, "command", 64 * 1024, true) }, readOnly, authorize, false, bounded,
           { limits: options.limits, gpu: options.gpu, signal: options.signal });
       }
       case "github.comment":
@@ -586,7 +586,7 @@ export class Sandbox implements IsolatedWorkspace {
     if (!isAbsolute(options.socketDirectory)) throw new Error("Invalid service socket directory");
     for (const bind of options.binds ?? []) if (!serviceBindAllowed(bind, this.#root)) throw new Error(`A service can't be given ${bind}`);
     const bounded = !!this.#resources || !options.unbounded;
-    if (bounded && !this.#resources) throw new Error("Production bash unavailable: explicitly provisioned cgroup and bounded filesystem resources are required");
+    if (bounded && !this.#resources) throw new Error("Commands can't run here: they need explicitly provisioned cgroup and bounded filesystem resources");
     await this.initialize();
     return this.#exclusive(async () => {
       if (this.#closed) throw new Error("Sandbox is closed");
@@ -713,7 +713,7 @@ export class Sandbox implements IsolatedWorkspace {
     const mounts = this.#mounts;
     if (!mounts) return Promise.reject(new Error("Sandbox is not initialized"));
     if (readOnly && gitWritable) return Promise.reject(new Error("Invalid read-only mount request"));
-    if (requireResources && !this.#resources) return Promise.reject(new Error("Production bash resources are unavailable"));
+    if (requireResources && !this.#resources) return Promise.reject(new Error("The resources for commands are unavailable"));
     const mount = readOnly ? "--ro-bind-fd" : "--bind-fd";
     const egress = request.kind === "bash" || request.kind === "clone-restore" ? this.#egressSocket : undefined;
     const gpu = request.kind === "bash" && command.gpu ? gpuMounts(this.#gpuRoot) : undefined;

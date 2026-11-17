@@ -54,7 +54,7 @@ import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
 import { comparableOptions, holdsQueue, RunnerState, tellsActivity, type Metadata, type Run } from "./session/state.js";
-import { activityEntry, contextView, extensionView, sessionView } from "./session/view.js";
+import { activityEntry, contextView, extensionView, sessionView, SessionUsage } from "./session/view.js";
 import { SessionOperations, type OperationConsent } from "./session/operations.js";
 import { ToolCalls } from "./session/tools/calls.js";
 import type { ToolContext } from "./session/tools/context.js";
@@ -70,7 +70,7 @@ import { addTitleUsage, titleRequestInput, titleTimeoutMs, writeTitle } from "./
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
 import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
 import {
-  Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
+  hostGitLfs, Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
 import { thumbnailImage } from "./images.js";
 import type { GitRemote } from "./git-remote.js";
@@ -198,6 +198,7 @@ export class RunnerSession {
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   #compaction: () => CompactionSettings | undefined = () => undefined;
+  readonly #usage = new SessionUsage(async () => this.harness.usage(context));
   readonly #operations: SessionOperations;
   #failed = false;
   #recovery: Promise<void> | undefined;
@@ -234,9 +235,8 @@ export class RunnerSession {
     this.#hostSession = binding.session.hostEnvironment === true && config.unsandboxed !== true;
     this.#inputs = new MessageInputs(join(directory, "inputs"));
     this.#onHost = config.unsandboxed === true || this.#hostSession;
-    const cached = this.#onHost ? process.platform !== "win32" : config.sandboxBackend?.kind !== "windows";
-    const hostPaths = this.#onHost || config.sandboxBackend?.kind === "seatbelt";
-    this.#mirrors = this.#clone && config.repositoryCache && cached ? new SessionMirrors({
+    const hostPaths = this.#onHost || config.sandboxBackend !== undefined;
+    this.#mirrors = this.#clone && config.repositoryCache ? new SessionMirrors({
       cache: config.repositoryCache, ownerId: binding.owner.id, sessionId: binding.session.id, relay: request => this.relay(request),
       grant: () => this.#egress ? this.#egress.grant() : this.requestGrant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
       ...(hostPaths ? { hostPaths: true } : {}),
@@ -272,6 +272,7 @@ export class RunnerSession {
       const workspace: HelperWorkspace = new HelperWorkspace(binding, join(directory, "sandbox"), backend, {
         egressEnvironment: () => { const endpoint = egress.endpoint; return endpoint && egressEnvironment(branch, endpoint, workspace.layout.caBundle); },
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
+        ...(this.#clone && hostGitLfs() ? { gitLfs: true } : {}),
       });
       this.sandbox = workspace;
     } else {
@@ -1352,6 +1353,7 @@ export class RunnerSession {
       context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
       commands: async () => (this.#frozen || this.#packed || this.closing ? [] : this.#commands.list()),
+      usage: key => this.#usage.get(key),
     });
   }
 

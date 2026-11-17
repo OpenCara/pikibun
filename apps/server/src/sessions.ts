@@ -436,7 +436,7 @@ export async function cloneUnavailable(env: Env, capabilities: ConnectorCapabili
   row: Pick<SessionRow, 'connector_id' | 'connector_owner_id' | 'workspace_id' | 'owner_id'>, tools: readonly string[]): Promise<string | undefined> {
   if (!tools.includes('git') && !tools.includes('bash')) return 'This session\'s agent doesn\'t have the git tool, so it can\'t clone the workspace\'s repositories and works in an empty worktree.';
   if (!await runsShellCommands(env, capabilities, row, row.owner_id)) {
-    return 'This session\'s host has no resource limits, so it runs shell commands only for its owner and for members they granted host commands: '
+    return 'This session\'s host has no resource limits, so it runs commands (git, node, python, …) only for its owner and for members they granted host commands: '
       + 'the agent can\'t clone the workspace\'s repositories and works in an empty worktree.';
   }
   return undefined;

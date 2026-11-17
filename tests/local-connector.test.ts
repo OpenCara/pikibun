@@ -622,14 +622,14 @@ test('a host keeps the repository cache its configuration names for the whole co
   assert.equal(fixture.runtimes[0]!.config.repositoryCache?.scope, 'owner');
 });
 
-test('the macOS sandbox keeps the repository cache too; the Windows sandbox, whose cache would need what only POSIX has, keeps none', { timeout: 10000 }, async t => {
+test('the macOS and Windows sandboxes keep the repository cache too', { timeout: 10000 }, async t => {
   const hostConfig = () => Response.json({ config: { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'owner' } });
   const seatbelt = await connectorFixture(t, { hostConfig, sandboxBackend: { kind: 'seatbelt' } });
   await startFixture(seatbelt);
   assert.equal(seatbelt.runtimes[0]!.config.repositoryCache?.scope, 'owner');
   const windows = await connectorFixture(t, { hostConfig, sandboxBackend: { kind: 'windows', runtime: '/nowhere', limits: { memoryBytes: 1 << 30, processes: 64, cpuPercent: 50 } } });
   await startFixture(windows);
-  assert.equal(windows.runtimes[0]!.config.repositoryCache, undefined);
+  assert.equal(windows.runtimes[0]!.config.repositoryCache?.scope, 'owner');
 });
 
 test('a host reads the largest configuration the control plane saves: compaction counts for every model, with the longest names', { timeout: 10000 }, async t => {
@@ -1461,13 +1461,13 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
     return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
   } });
   await startFixture(fixture);
-  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'];
+  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'];
   const first = (await syncs.next()).report;
   assert.deepEqual([first.installed.map(item => item.source), (first.browser as { state: string }).state], [all, 'missing']);
   const second = (await syncs.next()).report;
   assert.deepEqual([second.installed.map(item => item.source), second.browser], [all, undefined], 'tried again at once, without the browser\'s status');
   assert.deepEqual((await syncs.next()).report, { installed: [], remoteInstalls: true }, 'and again, without them');
-  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'],
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'],
     'sessions still have them');
 });
 

@@ -102,6 +102,14 @@ policy, without a tool of its own:
   ([host extensions](host-extensions.md)), and the tool's own checks run on the changed call.
 - `tool_result` notes where the sub-agent runs and how to collect it, or why no host qualified.
 
+It needs `piki:sessions`, a session-tool switch, rather than being merged into it: merging would give that switch
+hooks and settings, which session-tool extensions don't have, change every workspace that already uses the tool
+(delegation guidance and caps on every message), and lose the managed npm updates session-tool extensions can't take.
+The catalogue says so instead (`needs: ["piki:sessions"]`): a workspace's first add of Sub-agents, turned on, adds
+Other sessions where it has no entry (`addNeededExtensions`, audited as `workspace.extension.updated` with `reason:
+needed` and `by`), an entry turned off stays off, and the extensions page shows a warning with an **Add** button while
+a needed extension is off (`missingNeeds`).
+
 It only shapes calls the agent makes with the sender's own `sessions` tool, so it adds no authority: trust, sandboxing
 and the tool's limits apply as above. It degrades with what it talks to: a refusal that names `placement` (a server
 from before it) stops it adding placement for the session, and a `child_models_disabled` refusal stops it adding

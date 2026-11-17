@@ -116,7 +116,7 @@ export class SessionPiki {
     if (inSandbox || automaticTools) return undefined;
     if (await this.options.hostCommands.allowed(actorId)) return true;
     throw new RunnerError(403, sandboxed
-      ? `${what}, which runs in the sandbox but, on this host, without resource limits, as shell commands do here: only in sessions of the `
+      ? `${what}, which runs in the sandbox but, on this host, without resource limits, as the session's commands do here: only in sessions of the `
         + "host's owner and of members they granted host commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran."
       : `${what}, which ${HOST_COMMANDS_RULE}`);
   }
