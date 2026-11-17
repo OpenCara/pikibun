@@ -16,7 +16,7 @@ import type { ClonePushPreparation } from "./push.js";
 import {
   CA_BUNDLE_FILE, importedPath, importRequest, MAX_CONTENT_OUTPUT_BYTES, MAX_FILE_BYTES, MAX_SNAPSHOT_OUTPUT_BYTES, OID, PUSH_TIMEOUT_MS, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig,
   serviceBindAllowed, sessionEnvironment, text, type CloneBackup, type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SandboxRequest,
-  type SnapshotFile,
+  type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
 import { sandboxCertificates } from "./trust-store.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
@@ -39,6 +39,10 @@ export interface HelperContext {
   limits?: CommandLimits;
   deadlineMs: number;
   environment: Readonly<Record<string, string>>;
+  /** The host paths of the repository mirrors this step may read: the session's authorized ones, for steps that run Git in a clone. */
+  mirrors?: readonly string[];
+  /** Commands find the git shim in the layout's bin first, which borrows the host's repository cache for clones. */
+  gitShim?: boolean;
 }
 
 export interface HelperLaunch {
@@ -57,15 +61,24 @@ export interface HelperBackend {
   readonly path: string;
   readonly nodeBin?: string | undefined;
   prepare(layout: HelperLayout): Promise<void>;
+  installGitShim?(layout: HelperLayout): Promise<void>;
   launch(request: SandboxRequest, context: HelperContext, layout: HelperLayout): Promise<HelperLaunch>;
   process?(command: { program: string; args: readonly string[] }, context: HelperContext, layout: HelperLayout, readRoots: readonly string[]): HelperLaunch;
 }
 
 export interface HelperWorkspaceOptions {
   egressEnvironment?: () => Record<string, string> | undefined;
+  /** The session's repository mirrors it may borrow from now, by their host path (source); only backends with a git shim use them. */
+  mirrors?: () => Promise<readonly MirrorMount[]>;
 }
 
 const queues = new Map<string, Promise<void>>();
+const MIRROR_KINDS: ReadonlySet<SandboxRequest["kind"]> = new Set(["bash", "clone-head", "clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"]);
+
+export function helperMirror(path: unknown): path is string {
+  return typeof path === "string" && isAbsolute(path) && path.length <= 4096 && !path.split(/[\\/]/).includes("..")
+    && /[\\/][A-Za-z0-9{}_-]{1,100}\.git$/.test(path) && !/[\x00-\x1f\x7f]/.test(path);
+}
 
 export class HelperWorkspace implements IsolatedWorkspace {
   readonly isolated = true;
@@ -75,6 +88,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
   readonly #environment: Readonly<Record<string, string>>;
   readonly #testProvider: boolean;
   readonly #options: HelperWorkspaceOptions;
+  readonly #cached: boolean;
   #initialization: Promise<void> | undefined;
   #closed = false;
   #cancelActive: (() => void) | undefined;
@@ -92,6 +106,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
     const base = resolve(root);
     this.#backend = backend;
     this.#options = options;
+    this.#cached = options.mirrors !== undefined && backend.installGitShim !== undefined;
     this.#testProvider = binding.model.provider === "faux";
     this.#layout = Object.freeze({
       root: base, home: join(base, "home"), worktree: join(base, "worktree"), git: join(base, "git"),
@@ -164,6 +179,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
       await chmod(this.#layout.caBundle, 0o600).catch(() => undefined);
       await rename(staged, this.#layout.caBundle);
       await this.#backend.prepare(this.#layout);
+      if (this.#cached) await this.#backend.installGitShim!(this.#layout);
       await this.#run({ kind: "initialize" }, { readOnly: false, gitWritable: true, egress: false });
     });
     return this.#initialization;
@@ -269,7 +285,9 @@ export class HelperWorkspace implements IsolatedWorkspace {
   }
 
   async cloneRestore(path: string, url: string, reference: string | null, authorize: SandboxAuthorize): Promise<void> {
-    if (!validCloneDirectory(path) || !/^https:\/\/[\x21-\x7e]{1,2040}$/.test(url) || reference !== null) throw new Error("Invalid clone restoration");
+    if (!validCloneDirectory(path) || !/^https:\/\/[\x21-\x7e]{1,2040}$/.test(url) || (reference !== null && !(this.#cached && helperMirror(reference)))) {
+      throw new Error("Invalid clone restoration");
+    }
     await this.#operation({ kind: "clone-restore", path, url, reference }, { readOnly: false, gitWritable: true, egress: true }, authorize);
   }
 
@@ -343,6 +361,13 @@ export class HelperWorkspace implements IsolatedWorkspace {
     await this.#exclusive(async () => {});
   }
 
+  async #mirrors(): Promise<string[]> {
+    let mounts: readonly MirrorMount[];
+    try { mounts = await this.#options.mirrors!(); }
+    catch { return []; }
+    return [...new Set(mounts.map(mount => mount.source).filter(helperMirror))];
+  }
+
   async #run(request: SandboxRequest, context: { readOnly: boolean; gitWritable: boolean; egress: boolean; limits?: CommandLimits }, signal?: AbortSignal,
     output?: (stdout: Readable, kill: () => void) => void): Promise<string> {
     if (context.readOnly && context.gitWritable) throw new Error("Invalid read-only mount request");
@@ -351,7 +376,9 @@ export class HelperWorkspace implements IsolatedWorkspace {
     const deadlineMs = long ? PUSH_TIMEOUT_MS : (limits ?? commandLimits(TIMEOUT_MS / 1000)).seconds * 1000;
     const egress = context.egress ? this.#options.egressEnvironment?.() : undefined;
     const environment = Object.freeze({ ...this.#environment, ...(egress ?? {}) });
-    const launch = await this.#backend.launch(request, { ...context, egress: egress !== undefined, deadlineMs, environment }, this.#layout);
+    const mirrors = this.#cached && MIRROR_KINDS.has(request.kind) ? await this.#mirrors() : [];
+    const launch = await this.#backend.launch(request, { ...context, egress: egress !== undefined, deadlineMs, environment,
+      ...(mirrors.length ? { mirrors } : {}), ...(this.#cached && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES
       : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     return new Promise<string>((resolveResult, reject) => {

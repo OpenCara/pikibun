@@ -1074,8 +1074,10 @@ def bundle_prerequisites(path):
 
 def clone_restore(request):
     path, url, reference = request['path'], request['url'], request.get('reference')
+    granted = [line for line in os.environ.get('SANDBOX_MIRRORS', '').split('\n') if line.startswith('/')]
     if (not clone_path(path) or not isinstance(url, str) or not re.fullmatch(r'https://[\x21-\x7e]{1,2040}', url)
-            or (reference is not None and (not isinstance(reference, str) or not reference.startswith(MIRROR_ROOT + '/')))):
+            or (reference is not None and (not isinstance(reference, str)
+                                           or not (reference.startswith(MIRROR_ROOT + '/') or reference in granted)))):
         raise ValueError('invalid clone restoration')
     work = os.open(WORK, DIR_FLAGS)
     git = open_gitdir(work)

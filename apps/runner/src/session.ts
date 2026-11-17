@@ -37,6 +37,7 @@ import { confinedLaunch, ProcessChannel, refusedChannel, sandboxLaunch } from ".
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace, hostOwnersSession } from "./host-workspace.js";
+import { HostGitShim } from "./host-git-shim.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { HelperWorkspace } from "./helper-workspace.js";
@@ -48,7 +49,7 @@ import { WholeResults } from "./session/whole-results.js";
 import { entryImages } from "./session/entries.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
 import { MessageInputs, prepareMessageImages } from "./session/inputs.js";
-import { refused, SessionMirrors } from "./session/mirrors.js";
+import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
 import { preparationFailure, SessionRepositories } from "./session/repositories.js";
@@ -80,7 +81,7 @@ import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { configuredCompaction, hostCompaction } from "./compaction.js";
 import { ActivityReporter, sessionActivity } from "./activity.js";
 import type { StoredOperation } from "./operation-record.js";
-import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, type MirrorProgress, type RelayRequest } from "./egress.js";
+import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
 import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
@@ -177,6 +178,8 @@ export class RunnerSession {
   readonly #inputs: MessageInputs;
   readonly #uploads: SessionUploads;
   readonly #mirrors: SessionMirrors | undefined;
+  readonly #hostGit: HostGitShim | undefined;
+  #mirrorsKeptAt = 0;
   readonly #calls: ToolCalls;
   readonly #toolContext: ToolContext;
   readonly #piki: SessionPiki;
@@ -228,11 +231,17 @@ export class RunnerSession {
     this.#frozen = !this.#clone && (binding.session.repositories ?? []).length > 0;
     this.#hostSession = binding.session.hostEnvironment === true && config.unsandboxed !== true;
     this.#inputs = new MessageInputs(join(directory, "inputs"));
-    this.#mirrors = this.#clone && config.repositoryCache ? new SessionMirrors({
-      cache: config.repositoryCache, ownerId: binding.owner.id, sessionId: binding.session.id, relay: request => this.relay(request),
-      grant: () => this.#egress!.grant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
-    }) : undefined;
     this.#onHost = config.unsandboxed === true || this.#hostSession;
+    // The cache serves the Linux sandbox (mounted), the macOS one (read at the mirrors' own paths) and, outside Windows,
+    // sessions on the host, whose Git reads them as the connector's user.
+    const cached = this.#onHost ? process.platform !== "win32" : config.sandboxBackend?.kind !== "windows";
+    const hostPaths = this.#onHost || config.sandboxBackend?.kind === "seatbelt";
+    this.#mirrors = this.#clone && config.repositoryCache && cached ? new SessionMirrors({
+      cache: config.repositoryCache, ownerId: binding.owner.id, sessionId: binding.session.id, relay: request => this.relay(request),
+      grant: () => this.#egress ? this.#egress.grant() : this.requestGrant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
+      ...(hostPaths ? { hostPaths: true } : {}),
+    }) : undefined;
+    this.#hostGit = this.#onHost && this.#mirrors ? new HostGitShim({ mirror: (remote, onProgress) => this.hostMirror(remote, onProgress) }) : undefined;
     if (this.#hostSession && !binding.session.connectorOwnerId) {
       throw new RunnerError(403, "Only sessions of the host's owner, or of members they granted that, run directly on the host");
     }
@@ -252,7 +261,8 @@ export class RunnerSession {
       command: () => (this.sandbox instanceof HostWorkspace ? this.sandbox.activeCommand : undefined),
     }) : undefined;
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
-      { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment, ...(this.#sudo ? { sudo: this.#sudo } : {}) });
+      { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment, ...(this.#sudo ? { sudo: this.#sudo } : {}),
+        ...(this.#hostGit ? { gitShim: () => this.hostGitBin() } : {}) });
     else if (config.sandboxBackend) {
       const egress = this.egressProxy(egressSocketPath(binding.session.id, directory), randomBytes(24).toString("base64url"));
       this.#egress = egress;
@@ -261,6 +271,7 @@ export class RunnerSession {
       const branch = this.#clone ? sessionBranch(binding.session) : undefined;
       const workspace: HelperWorkspace = new HelperWorkspace(binding, join(directory, "sandbox"), backend, {
         egressEnvironment: () => { const endpoint = egress.endpoint; return endpoint && egressEnvironment(branch, endpoint, workspace.layout.caBundle); },
+        ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
       });
       this.sandbox = workspace;
     } else {
@@ -387,6 +398,22 @@ export class RunnerSession {
   private mirror(repository: EgressRepository, onProgress?: (progress: MirrorProgress) => void): Promise<string> {
     if (!this.#mirrors) throw new RunnerError(409, "This host keeps no repository cache");
     return this.#mirrors.mirror(repository, onProgress);
+  }
+
+  /** A clone in a session on the host: the mirror's path on the host, for a workspace repository. */
+  private async hostMirror(remote: string, onProgress: (progress: MirrorProgress) => void): Promise<string | undefined> {
+    const repository = repositoryForRemote((await this.requestGrant()).repositories, remote);
+    return repository ? this.mirror(repository, onProgress) : undefined;
+  }
+
+  /** The directory with this session's git, first on its commands' PATH; mirrors it borrows from are confirmed, and their keep refs dated, now and then. */
+  private async hostGitBin(): Promise<string | undefined> {
+    if (!this.#hostGit || this.closing) return undefined;
+    if (Date.now() - this.#mirrorsKeptAt >= MIRROR_CONFIRM_MS) {
+      this.#mirrorsKeptAt = Date.now();
+      void this.#mirrors?.mounts().catch(() => {});
+    }
+    return this.#hostGit.start();
   }
 
   private assertTicket(ticket: RunnerTicket): void {
@@ -554,6 +581,7 @@ export class RunnerSession {
     if (this.#packed) {
     } else if (this.#clone && !this.#egress) {
       const grant = await this.requestGrant().catch(() => null);
+      await this.#mirrors?.restore(grant?.repositories ?? []);
       this.branchReports()?.useRepositories(grant?.repositories ?? []);
       this.#cloneRepositories = (grant?.repositories ?? []).map(repository => bindingRemote(repository));
       this.#sources = grant?.sources ?? [];
@@ -1501,6 +1529,7 @@ export class RunnerSession {
     this.#tunnel = undefined;
     await tunnel?.close().catch(() => {});
     await this.#sudo?.close().catch(() => {});
+    await this.#hostGit?.close().catch(() => {});
     if (abortPushes) await this.#operations.abortPushes();
     this.generation++;
     const extensions = this.#hostExtensions;
