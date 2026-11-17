@@ -6,7 +6,8 @@ import {
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, selectModel, slashCommand, slashLevel, slashModel, slashSuggestions,
   type ChatSelection, type ConnectorInfo, type EntryView, type SessionRecord, type SlashCommandName, type SubmitResult,
 } from "../shared";
-import { RenameSheet } from "../components/SessionMenu";
+import { RenameSheet, sessionLink } from "../components/SessionMenu";
+import { CommandsContext, useCommands, type AppCommand } from "../lib/commands";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
 import { OfflineHostBanner } from "../components/OfflineHost";
 import { SudoPrompt } from "../components/SudoPrompt";
@@ -31,16 +32,20 @@ import { palette, radius, text } from "../theme";
 import { Badge, Banner, Button, Chip, confirm, DropdownMenu, EmptyState, Feedback, IconButton, Loading, phoneWidth, Picker, Small, type MenuAction } from "../ui";
 import { drawsHeaders, headerInPage, PageFrame, PageHeader, pageStyle } from "./PageHeader";
 import type { PageRoute } from "../lib/page";
-import { SessionPanel } from "../session-panel";
+import { panelTabs, SessionPanel } from "../session-panel";
 import { createSessionActions } from "../lib/session-actions";
 
 const releaseChatBox = platform.desktop ? () => Keyboard.dismiss() : undefined;
 
-export function SessionView(props: { id: string; page: boolean; openSession: (id: string) => void; onBack?: () => void; go: (route: PageRoute) => void }) {
+export function SessionView(props: { id: string; page: boolean; front?: () => boolean; openSession: (id: string) => void; onBack?: () => void; go: (route: PageRoute) => void }) {
   const { user } = untracked(session);
   const data = useAppData();
+  const commands = CommandsContext();
+  const front = () => props.front?.() ?? true;
   const live = createLiveSession(props.id);
   const panelOpen = signal(false);
+  const panelTab = signal(panelTabs[0]!.id);
+  const openPanel = (tab = panelTabs[0]!.id) => { panelTab.set(tab); panelOpen.set(true); };
   const permissions = () => live.session()?.permissions ?? [];
   const archived = () => live.session()?.status === "archived";
   const readOnly = () => archived() || live.session()?.frozen === true;
@@ -78,6 +83,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   };
   const actions = createSessionActions({ session: live.session, manages, backupBlocked,
     onChange: () => { live.refresh(); data.refreshSessions(); } });
+  const actionsFeedback = () => (panelOpen() || renaming() ? { error: "", notice: "" } : { error: actions.action.error(), notice: actions.action.notice() });
   const pullRequest = () => data.sessions().find(item => item.id === props.id)?.pullRequest ?? live.session()?.pullRequest;
   const renaming = signal(false);
   const menu = (): (MenuAction | "separator")[] => {
@@ -134,6 +140,49 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   };
 
   const copyId = () => void action.run(() => Clipboard.writeText(props.id), "Session ID copied");
+  const copyLink = () => void action.run(() => Clipboard.writeText(sessionLink(props.id)), "Link copied");
+
+  const sessionCommands = (): AppCommand[] => {
+    const current = live.session();
+    if (!current) return [];
+    const list: AppCommand[] = [];
+    const add = (command: Omit<AppCommand, "scope">) => list.push({ ...command, scope: "session" });
+    const busy = actions.action.busy() ? "Another action on this session is running" : undefined;
+    const frozen = current.frozen === true;
+    if (manages()) {
+      add({ id: "session-rename", title: "Rename…", group: "Session", icon: "pencil", keywords: ["title", "name"],
+        disabled: archived() ? "The session is archived" : frozen ? "The session is read-only" : busy,
+        input: { kind: "text", placeholder: "The session's new title", initial: current.title, submitLabel: value => `Rename to “${value}”`,
+          submit: value => void actions.rename(value) } });
+      if (!archived()) add({ id: "session-archive", title: "Archive", group: "Session", icon: "archive", disabled: busy, run: actions.archive });
+      else add({ id: "session-unarchive", title: "Unarchive", group: "Session", icon: "archive",
+        disabled: current.detached ? "The session moved to another server" : busy, run: actions.unarchive });
+    }
+    if (isOwner() && !frozen && !archived()) {
+      const backupReason = actions.backupsOff() ? "Backups are off" : backupBlocked() ? "Wait until the session is idle" : actions.backupsPending() ? "Checking backups…" : busy;
+      add({ id: "session-backup", title: "Create backup", group: "Session", icon: "archive", keywords: ["backup"], disabled: backupReason,
+        run: () => actions.createBackup() });
+      add({ id: "session-backup-conversation", title: "Back up conversation only", group: "Session", icon: "archive", keywords: ["backup"],
+        disabled: backupReason ?? (actions.conversationOnlyOff() ? "Update the host's connector" : undefined), run: () => actions.createBackup({ conversationOnly: true }) });
+    }
+    if (isOwner() && archived() && !current.packed && !frozen && !current.hostEnvironment) {
+      add({ id: "session-pack", title: "Pack files", group: "Session", icon: "archive", disabled: busy, run: actions.pack });
+    }
+    add({ id: "session-copy-id", title: "Copy session ID", group: "Session", icon: "copy", run: copyId });
+    add({ id: "session-workspace-settings", title: "Open in workspace settings", group: "Session", icon: "settings",
+      run: () => props.go({ name: "settings", section: "workspaces", id: current.workspaceId }) });
+    add({ id: "panel-open", title: "Session details", group: "Panel", icon: "panel-right", keywords: ["panel"], run: () => openPanel() });
+    for (const tab of panelTabs.slice(1)) {
+      add({ id: `panel-${tab.id}`, title: tab.label, group: "Panel", icon: "panel-right", keywords: ["panel"], run: () => openPanel(tab.id) });
+    }
+    add({ id: "sharing-copy-link", title: "Copy link", group: "Sharing", icon: "link", keywords: ["url", "share"], run: copyLink });
+    if (isOwner() || current.linkShared) {
+      add({ id: "sharing-link", title: "Share link…", group: "Sharing", icon: "link", hint: current.linkShared ? "Anyone with the link can view" : "Link sharing off",
+        keywords: ["public", "anyone"], run: () => openPanel("details") });
+    }
+    return list;
+  };
+  useCommands(sessionCommands, front);
 
   const startFailed = () => !live.view() && Boolean(live.session() && (live.session()!.status === "error" || live.session()!.status === "provisioning"));
   const badge = (): { tone?: "danger" | "running" | "warning" | "success"; text: string; dot: boolean } => {
@@ -156,8 +205,11 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       <If when={live.session() ? pullRequest() : undefined}>
         {pull => <View style={{ paddingRight: 4 }}><PullRequestLink pull={pull()} compact={props.page} /></View>}
       </If>
+      <If when={commands}>
+        {registry => <IconButton testID="session-commands" icon="command" label="Commands" onPress={() => registry().open()} />}
+      </If>
       <DropdownMenu label="Session actions" testID="session-actions" items={menu()} />
-      <IconButton testID="session-details" icon="panel-right" label="Session details" onPress={() => panelOpen.set(true)} active={panelOpen()} />
+      <IconButton testID="session-details" icon="panel-right" label="Session details" onPress={() => openPanel(panelTab())} active={panelOpen()} />
     </View>
   );
   const subtitle = () => {
@@ -222,7 +274,8 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{subtitle()}</Text>
           </View>
         </If>
-        <If when={archived() || live.session()?.frozen || live.session()?.cloneUnavailable || offlineHost() || (live.error() && !startFailed()) || action.error() || action.notice()}>
+        <If when={archived() || live.session()?.frozen || live.session()?.cloneUnavailable || offlineHost() || (live.error() && !startFailed()) || action.error() || action.notice()
+          || actionsFeedback().error || actionsFeedback().notice}>
           <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
             <If when={offlineHost()}>
               {offline => <OfflineHostBanner host={offline()} server={untracked(session).origin} openSettings={() => props.go({ name: "settings", section: "desktop" })} />}
@@ -246,7 +299,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
                 {live.error()}
               </Banner>
             </If>
-            <Feedback error={action.error()} notice={action.notice()} />
+            <Feedback error={action.error() || actionsFeedback().error} notice={action.notice() || actionsFeedback().notice} />
           </View>
         </If>
         <If when={live.view() && live.session()}
@@ -257,11 +310,11 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               </If>
             </If>
           }>
-          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={sudoDock}
+          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={sudoDock} front={front}
             openSession={target => { data.refreshSessions(); props.openSession(target); }}
-            go={props.go} manages={manages} onDetails={() => panelOpen.set(true)} onRename={() => renaming.set(true)} />
+            go={props.go} manages={manages} onDetails={() => openPanel()} onRename={() => renaming.set(true)} />
         </If>
-        <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} sessionId={props.id} session={live.session} view={live.view}
+        <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} tab={panelTab()} onTab={id => panelTab.set(id)} sessionId={props.id} session={live.session} view={live.view}
           refresh={() => { live.refresh(); data.refreshSessions(); }} go={route => { panelOpen.set(false); props.go(route); }}
           actions={actions} hosts={() => hosts.data()?.connectors ?? null} hostsLoading={hosts.loading} />
         <RenameSheet open={renaming()} title={live.session()?.title ?? ""} busy={actions.action.busy()} error={actions.action.error()} onClose={() => renaming.set(false)}
@@ -290,7 +343,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
 }
 
 function Conversation(props: {
-  id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; openSession: (id: string) => void;
+  id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; front: () => boolean; openSession: (id: string) => void;
   go: (route: PageRoute) => void; manages: Accessor<boolean>; onDetails: () => void; onRename: () => void;
 }) {
   const { user } = untracked(session);
@@ -530,6 +583,65 @@ function Conversation(props: {
   ];
   const suggestCommands = (draft: string) => (parseSlashDraft(draft)
     ? slashSuggestions(draft, { commands: offeredCommands(), models: hostModels(), levels: reasoningLevels(), host: hostedCommands() }) : []);
+
+  const chatCommands = (): AppCommand[] => {
+    const list: AppCommand[] = [];
+    const add = (command: Omit<AppCommand, "scope">) => list.push({ ...command, scope: "session" });
+    const refusal = current().status === "archived" ? "The session is archived" : readOnly() ? "The session is read-only"
+      : !permitted() ? (canAsk() ? "Shared messages need write permission: switch to Side ask" : "Sending needs write permission") : undefined;
+    if (hostModels().length) {
+      add({ id: "chat-model", title: "Model…", group: "Chat", icon: "sparkles", keywords: ["model"], disabled: refusal,
+        hint: autoChatOn() ? "Auto" : chosenModel()?.name,
+        input: { kind: "choice", placeholder: "Choose the model for your next messages",
+          choices: () => hostModels().map(model => ({ value: `${model.provider}/${model.modelId}`, label: model.name, hint: `${model.provider}/${model.modelId}`,
+            current: !autoChatOn() && chosenModel()?.provider === model.provider && chosenModel()?.modelId === model.modelId })),
+          choose: value => {
+            const model = hostModels().find(item => `${item.provider}/${item.modelId}` === value);
+            if (!model) return;
+            autoChat.set(false);
+            selection.set(selectModel(selection(), model));
+            void commanding.run(async () => {}, `Model set to ${model.name}, from your next message.`);
+          } } });
+    }
+    if (reasoningLevels().length || autoChatOn()) {
+      add({ id: "chat-reasoning", title: "Reasoning…", group: "Chat", icon: "zap", keywords: ["thinking", "effort"],
+        disabled: autoChatOn() ? "Auto picks the reasoning level for each message" : refusal,
+        hint: autoChatOn() ? undefined : levelLabels[selection().thinkingLevel ?? "off"],
+        input: { kind: "choice", placeholder: "Choose the reasoning level for your next messages",
+          choices: () => reasoningLevels().map(level => ({ value: level, label: levelLabels[level], current: selection().thinkingLevel === level })),
+          choose: value => {
+            const level = reasoningLevels().find(item => item === value);
+            if (!level) return;
+            selection.set({ ...selection(), thinkingLevel: level });
+            void commanding.run(async () => {}, `Reasoning set to ${levelLabels[level]}, from your next message.`);
+          } } });
+    }
+    if (canAsk()) {
+      add(actualMode() === "ask"
+        ? { id: "chat-shared", title: "Send shared messages", group: "Chat", icon: "users", keywords: ["mode", "write"], run: () => mode.set("write") }
+        : { id: "chat-side-ask", title: "Ask on the side", group: "Chat", icon: "message-question", keywords: ["mode", "side ask", "question"], run: () => mode.set("ask") });
+    }
+    if (canWrite() && !readOnly()) {
+      add({ id: "chat-stop", title: "Stop", group: "Chat", icon: "stop", keywords: ["cancel", "interrupt"],
+        disabled: stopPending() ? "Already stopping" : !canStop() ? "Nothing is running" : undefined, run: stop });
+    }
+    add({ id: "chat-copy-reply", title: "Copy latest reply", group: "Chat", icon: "copy",
+      disabled: latestReply() ? undefined : "The agent hasn't replied yet",
+      run: () => { const reply = latestReply(); if (reply) void copying.run(() => Clipboard.writeText(copyText(reply)), "Reply copied"); } });
+    if (!readOnly() && (owner() || canWrite())) {
+      add({ id: "chat-fork", title: "Fork from the latest reply", group: "Chat", icon: "git-fork", keywords: ["clone"],
+        disabled: cloneRefusal() ?? (clonePoint() ? undefined : "The agent has no finished reply to fork from yet"),
+        run: () => { const reply = clonePoint(); if (reply) void fork(reply, reply.id, false, "the agent's latest finished reply"); } });
+    }
+    const draft = content();
+    const occupied = draft.trim() !== "" && !draft.startsWith("/") ? "The chat box has a message in it" : undefined;
+    for (const item of slashSuggestions("/", { commands: offeredCommands(), models: hostModels(), levels: reasoningLevels(), host: hostedCommands() })) {
+      add({ id: `slash-${item.key}`, title: item.label, group: "Slash commands", icon: "terminal", keywords: ["slash"], hint: refusal ?? occupied ?? item.hint,
+        disabled: refusal ?? occupied, run: () => content.set(item.draft) });
+    }
+    return list;
+  };
+  useCommands(chatCommands, props.front);
 
   function runCommand(name: SlashCommandName, argument: string, sent: string) {
     copying.clear();

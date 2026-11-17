@@ -8,6 +8,10 @@ export {
   activeStatuses, createViewCache, liveTiming, startLiveSession, type CachedView, type EventStream, type LiveSession, type LiveSessionDependencies,
   type LiveSessionHandlers, type LocalSessions, type LocalViewReply, type StreamStatus, type ViewCache,
 } from "./live-session";
+export {
+  commandText, firstEnabled, matching, MAX_SESSION_MATCHES, nextEnabled, orderedCommands, paletteRows,
+  type CommandScope, type PaletteCommand, type PaletteRow, type PaletteSession,
+} from "./command-palette";
 export { COMPACTION_FAILED_TITLE, compactionFailureText } from "./compaction";
 export { artifactsHref, createArtifactSource, publishedArtifact, type ArtifactContent, type ArtifactPlace, type ArtifactSource } from "./artifacts";
 export { createEntryImageCache, entryImageCaches, entryImageHref, imageSource, seesEntryImages, shownImages, textBesideImages, type EntryImageCache } from "./entry-images";

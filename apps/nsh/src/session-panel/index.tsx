@@ -83,8 +83,10 @@ export const panelTabs: readonly PanelTab[] = [
 
 const nativeSheet = platform.os === "ios";
 
-export function SessionPanel(props: PanelProps & { open: boolean; onClose: () => void }) {
-  const tab = signal(panelTabs[0]!.id);
+export function SessionPanel(props: PanelProps & { open: boolean; onClose: () => void; tab?: string; onTab?: (id: string) => void }) {
+  const own = signal(panelTabs[0]!.id);
+  const tab = () => props.tab ?? own();
+  const chooseTab = (id: string) => { own.set(id); props.onTab?.(id); };
   const sideways = () => windowSize().width >= 700;
   const wide = () => tab() === "files" || tab() === "artifacts" || tab() === "browser" || tab() === "review" || tab() === "changes";
   const expanded = signal(false);
@@ -100,7 +102,7 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
     <View testID="session-panel" accessibilityLabel="Session details" style={{ flex: 1 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, paddingHorizontal: 12, borderBottomWidth: 1, borderColor: palette().border }}>
         <Scroll horizontal scrollbar={false} style={{ flex: 1 }}>
-          <Segmented small testID="session-panel-tabs" value={tab()} onChange={value => tab.set(value)}
+          <Segmented small testID="session-panel-tabs" value={tab()} onChange={chooseTab}
             options={panelTabs.map(item => ({ value: item.id, label: item.label }))} />
         </Scroll>
         <IconButton testID="session-panel-close" icon="x" label="Close panel" size={28} onPress={props.onClose} />
