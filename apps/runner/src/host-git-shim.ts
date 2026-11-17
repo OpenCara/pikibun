@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import type { MirrorProgress } from "./egress.js";
 import { RunnerError } from "./protocol.js";
 
@@ -242,6 +242,16 @@ export function hostGitProgram(socket: string, token: string): string {
   return gitShimProgram({ socket, token });
 }
 
+export function hostGitEnvironment(bin: string, environment: Readonly<Record<string, string | undefined>>, windows = process.platform === "win32"): Record<string, string> {
+  const key = Object.keys(environment).find(name => name.toUpperCase() === "PATH") ?? "PATH";
+  const path = environment[key] || (windows ? "" : "/usr/bin:/bin:/usr/sbin:/sbin");
+  return { [key]: path ? `${bin}${windows ? ";" : delimiter}${path}` : bin, ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh") } : {}) };
+}
+
+function bashPathScript(bin: string): string {
+  return `if command -v cygpath >/dev/null 2>&1; then PATH="$(cygpath -u ${quote(bin)}):$PATH"; export PATH; fi\n`;
+}
+
 export class HostGitShim {
   readonly #options: HostGitShimOptions;
   readonly #token = randomBytes(24).toString("base64url");
@@ -276,6 +286,7 @@ export class HostGitShim {
         const bin = join(directory, "bin");
         await mkdir(bin, { mode: 0o700 });
         await writeFile(join(bin, "git"), hostGitLauncher(bin, this.#options.node ?? process.execPath, program), { mode: 0o700 });
+        await writeFile(join(directory, "path.sh"), bashPathScript(bin), { mode: 0o600 });
         return bin;
       } catch (error) {
         const server = this.#server;

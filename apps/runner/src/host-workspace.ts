@@ -6,7 +6,8 @@ import { randomUUID } from "node:crypto";
 import type { BigIntStats, Stats } from "node:fs";
 import { lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { hostGitEnvironment } from "./host-git-shim.js";
 import type { Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
 import {
   importRequest, MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, SNAPSHOT_SKIPPED_HOME, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
@@ -280,11 +281,9 @@ export class HostWorkspace implements SessionWorkspace {
           const bash = bashPath();
           if (!bash) throw hostError(windows ? "bash commands need Git for Windows' bash.exe" : "bash commands need /bin/bash");
           const git = await this.#gitShim?.().catch(() => undefined);
-          const key = Object.keys(this.#environment).find(name => name.toUpperCase() === "PATH") ?? "PATH";
-          const path = this.#environment[key] || (windows ? "" : "/usr/bin:/bin:/usr/sbin:/sbin");
           return output(checked(await this.#spawn(bash, hostBashArgs(command), undefined,
             { timeoutMs: (options.limits?.seconds ?? TIMEOUT_MS / 1000) * 1000, signal: options.signal, hostCommand: command,
-              ...(git ? { env: { [key]: path ? `${git}${delimiter}${path}` : git } } : {}) })));
+              ...(git ? { env: hostGitEnvironment(git, this.#environment) } : {}) })));
         });
       }
       case "github.comment":

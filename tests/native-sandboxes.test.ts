@@ -16,8 +16,7 @@ import { egressPort, HelperWorkspace, type HelperBackend, type HelperContext, ty
 import { NODE_HELPER, NODE_HELPER_KINDS } from "../apps/runner/src/node-helper.js";
 import { HELPER, type SandboxRequest } from "../apps/runner/src/sandbox.js";
 import { bashPath, sandboxNodePath } from "../apps/runner/src/platform.js";
-import { HostGitShim } from "../apps/runner/src/host-git-shim.js";
-import { delimiter } from "node:path";
+import { hostGitEnvironment, HostGitShim } from "../apps/runner/src/host-git-shim.js";
 import { realpathSync } from "node:fs";
 import { validWindowsLimits } from "../apps/runner/src/sandbox-backend.js";
 import { SeatbeltBackend, seatbeltGitShim, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
@@ -140,12 +139,14 @@ test("on this platform, the host fills its repository cache, and a session on th
   const shim = new HostGitShim({ mirror: async remote => { asked.push(remote); return mirror; } });
   t.after(() => shim.close());
   const bin = await shim.start();
+  const session = { ...env, ...hostGitEnvironment(bin, env) };
   const shell = (command: string) => {
-    const result = spawnSync(bashPath()!, ["--noprofile", "--norc", "-c", command], { cwd: directory, env: { ...env, PATH: `${bin}${delimiter}${process.env.PATH}` }, encoding: "utf8" });
+    const result = spawnSync(bashPath()!, ["--noprofile", "--norc", "-c", command], { cwd: directory, env: session, encoding: "utf8" });
     return { code: result.status, out: `${result.stdout}${result.stderr}` };
   };
+  assert.match(shell("command -v git").out, /pikibun-git-/, "the session's git comes first, even where bash puts its own directories first");
   const cloned = await new Promise<{ code: number | null; out: string }>(resolve => {
-    const child = spawn(bashPath()!, ["--noprofile", "--norc", "-c", `git clone -q ${server.url("acme/app.git")} app`], { cwd: directory, env: { ...env, PATH: `${bin}${delimiter}${process.env.PATH}` } });
+    const child = spawn(bashPath()!, ["--noprofile", "--norc", "-c", `git clone -q ${server.url("acme/app.git")} app`], { cwd: directory, env: session });
     let out = "";
     child.stdout.on("data", chunk => { out += chunk; });
     child.stderr.on("data", chunk => { out += chunk; });
