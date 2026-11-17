@@ -1,4 +1,4 @@
-import { documentSourceExtensionOf, pikiExtensionsFor, pikiSessionToolExtensions } from '../../../../packages/shared/src/piki-extensions.js';
+import { documentSourceExtensionOf, neededExtensions, pikiExtensionsFor, pikiSessionToolExtensions } from '../../../../packages/shared/src/piki-extensions.js';
 import { defaultWorkspaceExtensions, extensionLimits, extensionPackageKey, withSessionToolsListed, type ExtensionToolMode, type WorkspaceExtension } from '../../../../packages/shared/src/host-extensions.js';
 import type { DocumentKind } from '../../../../packages/shared/src/sources.js';
 import type { Env } from '../types.js';
@@ -52,6 +52,14 @@ export async function addPikiExtensions(env: Env, workspaceId: string, provider:
     const first = { sql: `(SELECT COUNT(*) FROM workspace_repositories WHERE workspace_id = ? AND provider IN (${providers.map(() => '?').join(', ')})) = 1`,
       values: [workspaceId, ...providers] };
     if (await addPikiExtension(env, workspaceId, extension.source, actor, first, { reason: 'repository', provider })) added.push(extension.source);
+  }
+  return added;
+}
+
+export async function addNeededExtensions(env: Env, workspaceId: string, source: string, actor: string): Promise<string[]> {
+  const added: string[] = [];
+  for (const needed of neededExtensions(source)) {
+    if (await addPikiExtension(env, workspaceId, needed.source, actor, { sql: '1 = 1', values: [] }, { reason: 'needed', by: source })) added.push(needed.source);
   }
   return added;
 }
