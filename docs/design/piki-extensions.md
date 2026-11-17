@@ -725,6 +725,7 @@ that kind of task on, among the models that host offers. The member still choose
 | The prompt audit, a Pi package of its own | `extensions/prompt-audit/` (`prompt-audit.ts`, `index.ts`, `package.json`); tests in `tests/prompt-audit.test.ts` |
 | The pull request flow, a Pi package of its own | `extensions/pr-flow/` (`pr-flow.ts`, `index.ts`, `package.json`); tests in `tests/pr-flow.test.ts` |
 | The context files, a Pi package of its own | `extensions/context-files/` (`context-files.ts`, `index.ts`, `package.json`); tests in `tests/context-files.test.ts` |
+| Sub-agents, a Pi package of its own ([host placement](host-placement.md#the-sub-agents-extension-pikisub-agents)) | `extensions/sub-agents/` (`sub-agents.ts`, `index.ts`, `package.json`); tests in `tests/sub-agents.test.ts` |
 | The default workspace extensions | `defaultWorkspaceExtensions` (`packages/shared/src/host-extensions.ts`); migrations sqlite/0049 and 0064 (postgres/0042 and 0057); tests in `tests/extensions.test.ts` |
 | Draft pull requests and marking them ready | `apps/server/src/authority/push/targets.ts` (`openPullRequest`), `broker.ts`; `PullRequestRequest.draft` (types.ts); tests in `tests/pull-request-drafts.test.ts` |
 | The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session/tools/browser.ts` (the `browser` tool), `session/tools/calls.ts` (`browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |

@@ -873,7 +873,7 @@ test('a connector reports its hardware on its own callback, which its host shows
   assert.deepEqual({ ...shown, reportedAt: undefined }, { ...hardware, reportedAt: undefined });
   assert.ok(Date.parse(shown!.reportedAt) > Date.now() - 60_000);
   for (const body of [{ hardware: { ...hardware, token: 'secret' } }, { hardware, extra: 1 }, { hardware: { ...hardware, cpus: 0 } }, {}]) {
-    await denied(await report(body), 400, Object.hasOwn(body, 'extra') ? 'invalid_metadata' : 'invalid_hardware');
+    await denied(await report(body), 400, Object.hasOwn(body, 'extra') || !Object.hasOwn(body, 'hardware') ? 'invalid_hardware' : 'invalid_input');
   }
   await denied(await report({ hardware }, 'stale_connection_token_0123456789abcdef_000'), 401, 'stale_connection');
   assert.equal((await listed())!.cpus, 8, 'a refused report leaves the last one');

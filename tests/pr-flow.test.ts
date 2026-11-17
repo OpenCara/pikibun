@@ -296,7 +296,7 @@ test("the prompt holds the whole flow with the workspace's window, and fixes val
 test("piki:pr-flow is the connector's, offered as a workflow, and adds its prompt with the workspace's settings to each message", async t => {
   assert.equal(connectorPikiExtension("piki:pr-flow")!.factory, (await import("../extensions/pr-flow/index.ts")).default);
   assert.equal(connectorPikiExtension("piki:pr-flow")!.factory, prFlowExtension);
-  assert.deepEqual(pikiWorkflowExtensions().map(item => item.source), ["piki:pr-flow"]);
+  assert.deepEqual(pikiWorkflowExtensions().map(item => item.source), ["piki:pr-flow", "piki:sub-agents"]);
   assert.equal(pikiExtension("piki:pr-flow")!.tool, undefined);
 
   const root = await directory(t);

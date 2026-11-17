@@ -152,7 +152,7 @@ test("in a session, the connector's piki:sub-agents gives the agent's sessions c
   const prompts: string[] = [];
   faux.setResponses([
     async request => {
-      prompts.push(JSON.stringify([request.systemPrompt, request.messages.filter(message => message.role === "system")]));
+      prompts.push(JSON.stringify(request.messages.filter(message => message.role === "system")));
       return fauxAssistantMessage(fauxToolCall("sessions", { action: "create", title: "Render", message: "Render the scene", placement: { min_cpus: 8 } }), { stopReason: "toolUse" });
     },
     fauxAssistantMessage(fauxToolCall("sessions", { action: "create", title: "Again", message: "One more" }), { stopReason: "toolUse" }),

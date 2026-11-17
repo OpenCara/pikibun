@@ -61,7 +61,8 @@ is online, which the agent may start sessions on, and which meet every condition
 load score:
 
 ```
-score = active sessions on the host (working or waiting, every workspace)
+score = active sessions on the host (working or waiting, every workspace, and those started in the last
+        two minutes that haven't reported yet, so sub-tasks started in a row spread out)
       + 1-minute load average / CPUs          (0.5 when unknown or stale)
       + used memory / total memory            (0.5 when unknown or stale)
 ```
@@ -82,6 +83,27 @@ are refused, and placement only moves the parent's current model between hosts.
 - **Sandboxing.** A session the agent starts runs in its host's sandbox, as before; `gpu` asks for a GPU that
   sandbox can reach.
 - **Limits.** The per-session children limit, fan-out, hops and audience checks apply as for any `create`.
+
+## The sub-agents extension: piki:sub-agents
+
+Placement is a parameter the agent may or may not use. `piki:sub-agents` (`extensions/sub-agents/`, a hook package like
+`piki:pr-flow`, workflow, built into the connector and published as `@pikibun/pi-sub-agents`) makes it the workspace's
+policy, without a tool of its own:
+
+- `before_agent_start` adds when to delegate (`delegate`), how to state conditions per task, the workspace's defaults,
+  the per-message limit and how to collect results.
+- `tool_call` on `sessions` `create` fills the workspace's `placement` conditions in where the call leaves them out
+  (the agent's own win), adds its `models` patterns where the call names no model, adds an empty placement with
+  `balance` on so even an unconditioned sub-agent goes to the least loaded host offering its model, sets `notify` for a
+  call with a message, and blocks a create past `max-sub-agents` for the message (counted from successful creates,
+  reset by each message's `before_agent_start`). Pikibun's adapter applies changes to `event.input`
+  ([host extensions](host-extensions.md)), and the tool's own checks run on the changed call.
+- `tool_result` notes where the sub-agent runs and how to collect it, or why no host qualified.
+
+It only shapes calls the agent makes with the sender's own `sessions` tool, so it adds no authority: trust, sandboxing
+and the tool's limits apply as above. It degrades with what it talks to: a refusal that names `placement` (a server
+from before it) stops it adding placement for the session, and a `child_models_disabled` refusal stops it adding
+models; each says so in its note, and the agent calls again. Its state is in memory per session, as `pr-flow`'s.
 
 ## Compatibility
 

@@ -14,6 +14,7 @@ import { gpuKinds, type GpuKind } from '../../../packages/shared/src/host-config
 import { sessionActivities, thinkingLevels, type SessionActivity, type ThinkingLevel } from '../../../packages/shared/src/types.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { hardwareLimits, parseHardware, readReportedHardware } from '../../../packages/shared/src/hardware.js';
+import { body, fields, parsed } from './schemas.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { CONNECTOR_VERSION_HEADER, connectorTooOld, MINIMUM_CONNECTOR_VERSION, validVersion } from '../../../packages/shared/src/version.js';
 import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
@@ -311,11 +312,8 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   });
   app.post('/api/connectors/self/hardware', async c => {
     const row = await authenticateConnector(c);
-    const input = await jsonObject(c, hardwareLimits.reportBytes);
-    onlyFields(input, ['hardware']);
-    let hardware;
-    try { hardware = parseHardware(input.hardware); }
-    catch (error) { fail(400, 'invalid_hardware', error instanceof Error ? error.message : 'Invalid hardware report.'); }
+    const { hardware } = await body(c, fields({ hardware: parsed(parseHardware, 'Invalid hardware report.') }, 'A hardware report takes only hardware.',
+      { required: ['hardware'], code: 'invalid_hardware' }), { maxBytes: hardwareLimits.reportBytes });
     const updated = await c.env.DB.query('UPDATE connectors SET hardware_json = ?, hardware_at = ? WHERE id = ? AND revoked_at IS NULL AND connection_hash = ?')
       .bind(JSON.stringify(hardware), now(), row.id, row.connection_hash).run();
     if (!updated.changes) fail(401, 'stale_connection', 'Connection has been replaced.');
