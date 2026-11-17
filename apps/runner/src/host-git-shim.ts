@@ -6,14 +6,7 @@ import { join } from "node:path";
 import type { MirrorProgress } from "./egress.js";
 import { RunnerError } from "./protocol.js";
 
-// Sessions that run on the host (without the sandbox) clone with the host's own Git. Their commands find this session's
-// `git` first on PATH: a POSIX shell launcher that runs the next git on PATH as it is, except for `git clone`, which it
-// hands to a small Node program. That program asks the runner, over a private Unix socket with this session's token,
-// for the host's mirror of the repository (filling it first if need be, as a sandboxed clone does through its proxy),
-// and adds --reference-if-able with the mirror's own path, so the clone borrows the mirror's objects.
-
 export interface HostGitShimOptions {
-  /** The mirror's path on the host for a clone of this remote, or undefined where it isn't one of the workspace's repositories. */
   mirror(remote: string, onProgress: (progress: MirrorProgress) => void): Promise<string | undefined>;
   node?: string;
   heartbeatMs?: number;
@@ -204,7 +197,6 @@ export class HostGitShim {
     this.#options = options;
   }
 
-  /** The directory to put first on commands' PATH, with this session's git in it. */
   start(): Promise<string> {
     if (this.#starting) return this.#starting;
     const starting = (async () => {

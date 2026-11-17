@@ -38,7 +38,6 @@ export interface HostSudo {
 }
 export type HostWorkspaceOptions = {
   ownerEnvironment?: boolean; privateEnvironment?: readonly string[]; sudo?: HostSudo;
-  /** The directory with the session's git (see host-git-shim.ts), to put first on commands' PATH, when the host keeps a repository cache. */
   gitShim?: () => Promise<string | undefined>;
 };
 const SUDO_RECHECK_MS = 1000;

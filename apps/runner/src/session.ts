@@ -232,8 +232,6 @@ export class RunnerSession {
     this.#hostSession = binding.session.hostEnvironment === true && config.unsandboxed !== true;
     this.#inputs = new MessageInputs(join(directory, "inputs"));
     this.#onHost = config.unsandboxed === true || this.#hostSession;
-    // The cache serves the Linux sandbox (mounted), the macOS one (read at the mirrors' own paths) and, outside Windows,
-    // sessions on the host, whose Git reads them as the connector's user.
     const cached = this.#onHost ? process.platform !== "win32" : config.sandboxBackend?.kind !== "windows";
     const hostPaths = this.#onHost || config.sandboxBackend?.kind === "seatbelt";
     this.#mirrors = this.#clone && config.repositoryCache && cached ? new SessionMirrors({
@@ -400,13 +398,11 @@ export class RunnerSession {
     return this.#mirrors.mirror(repository, onProgress);
   }
 
-  /** A clone in a session on the host: the mirror's path on the host, for a workspace repository. */
   private async hostMirror(remote: string, onProgress: (progress: MirrorProgress) => void): Promise<string | undefined> {
     const repository = repositoryForRemote((await this.requestGrant()).repositories, remote);
     return repository ? this.mirror(repository, onProgress) : undefined;
   }
 
-  /** The directory with this session's git, first on its commands' PATH; mirrors it borrows from are confirmed, and their keep refs dated, now and then. */
   private async hostGitBin(): Promise<string | undefined> {
     if (!this.#hostGit || this.closing) return undefined;
     if (Date.now() - this.#mirrorsKeptAt >= MIRROR_CONFIRM_MS) {

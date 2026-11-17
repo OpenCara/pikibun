@@ -22,7 +22,6 @@ LFS = next((path for path in GIT_LFS_PATHS if os.access(path, os.X_OK)), None)
 
 
 def proxy():
-    # The Linux sandbox reaches its proxy on a fixed port; the macOS one on the session's own port, with its credentials.
     status = urllib.parse.urlsplit(os.environ.get('PIKIBUN_EGRESS_STATUS', ''))
     try:
         port = status.port
@@ -45,7 +44,6 @@ def endpoint(name, url, timeout):
 
 
 def readable(path):
-    # A mirror this command's step wasn't given is missing in the Linux sandbox, and unreadable in the macOS one.
     try:
         os.listdir(os.path.join(path, 'objects'))
         return True

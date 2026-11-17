@@ -39,9 +39,7 @@ export interface HelperContext {
   limits?: CommandLimits;
   deadlineMs: number;
   environment: Readonly<Record<string, string>>;
-  /** The host paths of the repository mirrors this step may read: the session's authorized ones, for steps that run Git in a clone. */
   mirrors?: readonly string[];
-  /** Commands find the git shim in the layout's bin first, which borrows the host's repository cache for clones. */
   gitShim?: boolean;
 }
 
@@ -68,7 +66,6 @@ export interface HelperBackend {
 
 export interface HelperWorkspaceOptions {
   egressEnvironment?: () => Record<string, string> | undefined;
-  /** The session's repository mirrors it may borrow from now, by their host path (source); only backends with a git shim use them. */
   mirrors?: () => Promise<readonly MirrorMount[]>;
 }
 

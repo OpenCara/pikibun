@@ -39,7 +39,6 @@ export interface SessionMirrorsOptions {
   relay(request: RelayRequest): Promise<Response>;
   grant(): Promise<EgressGrant>;
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
-  /** Clones see mirrors at their own path on the host (sessions on the host, the macOS sandbox), not mounted at MIRROR_ROOT. */
   hostPaths?: boolean;
 }
 
