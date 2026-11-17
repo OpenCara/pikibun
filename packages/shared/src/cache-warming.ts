@@ -6,6 +6,11 @@ export interface CacheWarmingSettings {
   mode: CacheWarmingMode;
 }
 
+export interface SessionCacheWarming {
+  mode: CacheWarmingMode;
+  child: boolean;
+}
+
 export function isCacheWarmingMode(value: unknown): value is CacheWarmingMode {
   return typeof value === "string" && (cacheWarmingModes as readonly string[]).includes(value);
 }

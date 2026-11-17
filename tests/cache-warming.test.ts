@@ -5,10 +5,9 @@ import type { Api, AssistantMessage, AssistantMessageEventStream, CacheWarmingPh
 import { createModels, type Models, type ModelsSimpleStreamOptions } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, defineExtension, Harness, MemoryStorage, UsageDoc, type GenerationHooks } from "@earendil-works/pi-durable";
-import { CacheWarmers, rememberRequests, requestOf, sessionWarming, startsWith, type ModelRequest, type WarmingClock, type WarmingSession } from "../apps/runner/src/session/cache-warming.js";
+import { cachedSettings, CacheWarmers, rememberRequests, requestOf, sessionWarming, startsWith, type ModelRequest, type WarmingClock, type WarmingSession } from "../apps/runner/src/session/cache-warming.js";
 import type { Metadata } from "../apps/runner/src/session/state.js";
-import type { CacheWarmingMode } from "../packages/shared/src/cache-warming.js";
-import { parseWorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
+import type { CacheWarmingMode, SessionCacheWarming } from "../packages/shared/src/cache-warming.js";
 
 const MINUTE = 60_000;
 
@@ -271,6 +270,27 @@ test("a generation's request stops warming and aborts a refresh in flight, so th
   warmers.close();
 });
 
+test("a session asks its Pikibun server for its workspace's choice at most every 30 seconds, keeps the last answer 5 minutes, and warms nothing it can't learn", async () => {
+  let time = 0;
+  let answer: SessionCacheWarming | Error = { mode: "streaming", child: true };
+  let asked = 0;
+  const settings = cachedSettings(async () => { asked++; if (answer instanceof Error) throw answer; return answer; }, () => time);
+  assert.deepEqual(await settings(), { mode: "streaming", child: true });
+  answer = { mode: "idle", child: false };
+  time = 29_999;
+  assert.deepEqual(await settings(), { mode: "streaming", child: true });
+  assert.equal(asked, 1);
+  time = 30_000;
+  assert.deepEqual(await settings(), { mode: "idle", child: false });
+  answer = new Error("offline");
+  time = 60_000;
+  assert.deepEqual(await settings(), { mode: "idle", child: false }, "the last answer, while it is recent");
+  time = 30_000 + 5 * MINUTE;
+  assert.deepEqual(await settings(), { mode: "off", child: false });
+  const never = cachedSettings(async () => { throw new Error("an older Pikibun server"); });
+  assert.deepEqual(await never(), { mode: "off", child: false });
+});
+
 test("the context still starts with the sent messages only when every sent message is there, in order", () => {
   const [first] = sent.messages;
   const second = { role: "user" as const, content: "And the other one", timestamp: 2 };
@@ -278,12 +298,6 @@ test("the context still starts with the sent messages only when every sent messa
   assert.equal(startsWith([structuredClone(first!), second], [first!]), true);
   assert.equal(startsWith([second], [first!]), false);
   assert.equal(startsWith([first!], [first!, second]), false);
-});
-
-test("workspaces' cache warming reaches hosts with their extensions answer", () => {
-  assert.equal(parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: false, cacheWarming: "streaming" }).cacheWarming, "streaming");
-  assert.equal(parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: false, cacheWarming: "always" }).cacheWarming, undefined);
-  assert.equal(parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: false }).cacheWarming, undefined);
 });
 
 test("in a session, the shared conversation is warmed between messages with its own requests, its usage added to the session's, until its model changes", async t => {
@@ -302,7 +316,8 @@ test("in a session, the shared conversation is warmed between messages with its 
   let harness: Harness | undefined;
   let metadata = { branches: [] } as unknown as Metadata;
   const reported: unknown[] = [];
-  const source = { harness: () => harness, metadata: async () => metadata, mode: async (): Promise<CacheWarmingMode> => "idle", child: false, report: (error: unknown) => { reported.push(error); } };
+  let settings: SessionCacheWarming = { mode: "idle", child: false };
+  const source = { harness: () => harness, metadata: async () => metadata, settings: async () => settings, report: (error: unknown) => { reported.push(error); } };
   const warmers = new CacheWarmers(sessionWarming(source), clock);
   t.after(() => warmers.close());
   const workspace = defineExtension({ name: "workspace-tools", hooks: [warmers.hooks()] });
@@ -328,6 +343,14 @@ test("in a session, the shared conversation is warmed between messages with its 
   assert.deepEqual(warmers.warming, [], "a superseded conversation is no longer warmed once settled");
 
   metadata = { branches: [{ id: root.id, mode: "write" }] } as unknown as Metadata;
+  settings = { mode: "idle", child: true };
+  assert.equal((await (await root.submit({ type: "input", content: "once more" }, context)).wait(context)).status, "done");
+  await settle();
+  assert.deepEqual(warmers.warming, [root.id]);
+  await clock.advance(270_000);
+  assert.deepEqual(warmers.warming, [], "a sub-task session is no longer warmed once settled");
+
+  settings = { mode: "idle", child: false };
   assert.equal((await (await root.submit({ type: "input", content: "again" }, context)).wait(context)).status, "done");
   await settle();
   assert.deepEqual(warmers.warming, [root.id], "each response starts warming with its own request");

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
+import { cacheWarmingModes } from "../../../../packages/shared/src/cache-warming.js";
 import type { ConnectorCredentials } from "../../../../packages/shared/src/connector.js";
 import type { SessionsToolResult } from "../../../../packages/shared/src/cross-session.js";
 import type { GitHubEffectAuthority, GitHubIssueView, ScheduleToolResult } from "../../../../packages/shared/src/types.js";
@@ -153,6 +154,8 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
     },
     hostConfig: () => hostConfig.current(),
     requiredExtensions: () => hostConfig.required(),
+    cacheWarming: async sessionId => z.object({ mode: z.enum(cacheWarmingModes), child: z.boolean() })
+      .parse(await calls.callback(await source.connection(), "/api/connectors/self/cache-warming", { sessionId })),
     hostGitCredential: async (remote: string, signal?: AbortSignal) => {
       if (!(await hostConfig.current()).gitCredentials) throw new HostCredentialError("This host's owner hasn't turned on its Git credentials in Pikibun (Settings → Hosts → the host → Configuration)");
       return hostGitAuthorization(remote, { signal });

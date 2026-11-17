@@ -32,8 +32,8 @@ import { SessionTunnel } from "./session/tunnel.js";
 import { SudoPrompts } from "./sudo-prompts.js";
 import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
-import { CacheWarmers, rememberRequests, sessionWarming } from "./session/cache-warming.js";
-import { defaultCacheWarmingMode, type CacheWarmingMode } from "../../../packages/shared/src/cache-warming.js";
+import { CacheWarmers, cachedSettings, rememberRequests, sessionWarming } from "./session/cache-warming.js";
+import { defaultCacheWarmingMode, type SessionCacheWarming } from "../../../packages/shared/src/cache-warming.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import { confinedLaunch, ProcessChannel, refusedChannel, sandboxLaunch } from "./extensions/process.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
@@ -154,6 +154,7 @@ export type RunnerConfig = {
   apiCredential?: (sessionId: string, host: string, access: ApiAccessKind) => Promise<unknown>;
   hostConfig?: () => Promise<HostConfig>;
   requiredExtensions?: () => Promise<RequiredExtension[] | undefined>;
+  cacheWarming?: (sessionId: string) => Promise<SessionCacheWarming>;
   extensions?: {
     installed(): readonly LoadedSource[];
     workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>;
@@ -225,6 +226,8 @@ export class RunnerSession {
   readonly #sudo: SudoPrompts | undefined;
   #sudoOffered = false;
   #warmers: CacheWarmers | undefined;
+  readonly #warmingSettings = cachedSettings(async (): Promise<SessionCacheWarming> =>
+    this.config.cacheWarming ? this.config.cacheWarming(this.binding.session.id) : { mode: defaultCacheWarmingMode, child: false });
 
   constructor(readonly binding: RunnerBinding, readonly directory: string, readonly config: RunnerConfig) {
     if (binding.session.connectorId !== config.connectorId || binding.model.connectorId !== config.connectorId)
@@ -602,8 +605,8 @@ export class RunnerSession {
     this.tools = [...own, ...await this.#defined.load(own.map(tool => tool.name))];
     this.#warmers?.close();
     const warmers: CacheWarmers = new CacheWarmers(sessionWarming({
-      harness: (): Harness | undefined => (this.closing || this.#warmers !== warmers ? undefined : this.harness), metadata: () => this.metadata(), mode: () => this.cacheWarmingMode(),
-      child: !!this.binding.session.parentSessionId,
+      harness: (): Harness | undefined => (this.closing || this.#warmers !== warmers ? undefined : this.harness), metadata: () => this.metadata(),
+      settings: this.#warmingSettings,
       report: error => process.stderr.write(`Session ${this.binding.session.id}: cache warming failed: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`),
     }));
     this.#warmers = warmers;
@@ -1192,15 +1195,6 @@ export class RunnerSession {
 
   private testShell(): boolean {
     return this.binding.model.provider === "faux" && this.config.allowFaux === true && this.config.allowTestShell === true;
-  }
-
-  private async cacheWarmingMode(): Promise<CacheWarmingMode> {
-    const extensions = this.config.extensions;
-    if (!extensions) return defaultCacheWarmingMode;
-    const workspaceId = this.binding.session.workspaceId;
-    const answer = await extensions.workspace(workspaceId).catch(() => undefined);
-    const known = extensions.lastKnown ? extensions.lastKnown(workspaceId) : answer;
-    return known ? known.cacheWarming ?? defaultCacheWarmingMode : "off";
   }
 
   private async hostConfig(): Promise<HostConfig> {

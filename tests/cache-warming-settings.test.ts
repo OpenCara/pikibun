@@ -5,8 +5,7 @@ import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
-import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
-import type { Workspace } from '../packages/shared/src/types.js';
+import type { ModelDefinition, SessionRecord, Workspace } from '../packages/shared/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
 
 const origin = 'http://localhost:8787';
@@ -22,11 +21,12 @@ async function json<T>(response: Response, status = 200): Promise<T> {
   return body as T;
 }
 
-test('a workspace\'s owners and admins choose how its hosts warm prompt caches, members see it, and hosts learn it with the workspace\'s extensions', async t => {
+test('a workspace\'s owners and admins choose how its hosts warm prompt caches, members see it, and a host learns it for each session it runs', async t => {
   const { db, sqlite } = await testDatabase();
   t.after(() => db.close());
   const env: Env = { DB: db, APP_ORIGIN: origin, TEST_AUTH_ENABLED: 'true', TEST_AUTH_SECRET: testSecret,
-    TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600000).toISOString(), VAULT_KEY: Buffer.alloc(32, 5).toString('base64url'), CONNECTOR_HUB: fakeHub() };
+    TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600000).toISOString(), VAULT_KEY: Buffer.alloc(32, 5).toString('base64url'),
+    CONNECTOR_HUB: fakeHub({ rpc: () => Response.json({ ok: true }, { status: 201 }) }) };
   const request = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => Promise.resolve(app.request(path, { method,
     headers: { Origin: origin, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body) }, env));
@@ -58,8 +58,15 @@ test('a workspace\'s owners and admins choose how its hosts warm prompt caches, 
   const connectionToken = Buffer.from(randomBytes(32)).toString('base64url');
   sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   const host = { Authorization: `Bearer ${credentials.token}`, 'X-Connection-Token': connectionToken };
-  const answer = async () => parseWorkspaceExtensionsAnswer(await json(await request('POST', '/api/connectors/self/extensions/workspace', { workspaceId: workspace.id }, host)));
-  assert.equal((await answer()).cacheWarming, 'streaming');
+  const { models } = await json<{ models: ModelDefinition[] }>(await alice.request('GET', `/api/workspaces/${workspace.id}/models`));
+  const { session } = await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: models[0]!.id, title: 'Work' }), 201);
+  const answer = (sessionId: string, headers = host) => request('POST', '/api/connectors/self/cache-warming', { sessionId }, headers);
+  assert.deepEqual(await json(await answer(session.id)), { mode: 'streaming', child: false });
   await json(await alice.request('PUT', path, { mode: 'off' }));
-  assert.equal((await answer()).cacheWarming, 'off');
+  assert.deepEqual(await json(await answer(session.id)), { mode: 'off', child: false });
+  sqlite.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?').run(session.id, session.id);
+  assert.equal((await json<{ child: boolean }>(await answer(session.id))).child, true, 'a session with a parent is a sub-task\'s');
+  assert.equal((await answer('missing-session')).status, 404);
+  assert.equal((await answer(session.id, { Authorization: 'Bearer nope', 'X-Connection-Token': connectionToken })).status, 401);
+  assert.equal((await request('POST', '/api/connectors/self/cache-warming', { sessionId: session.id, other: 1 }, host)).status, 400);
 });

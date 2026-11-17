@@ -12,7 +12,7 @@ in [Models and tools](../models-and-tools.md#prompt-cache-warming); this note sa
 | Remembering each request, scheduling refreshes, the generation hooks | `apps/runner/src/session/cache-warming.ts` (`rememberRequests`, `CacheWarmers`) |
 | What the session knows: is the conversation busy, would its next request differ, is it the shared conversation | `sessionWarming` in the same file, over the session's `Harness` and metadata |
 | Wiring | `RunnerSession.openHarness`: the session's `Models` are wrapped, and the hooks sit on its `workspace-tools` extension, which every conversation of the session runs |
-| The workspace setting | `workspace_cache_warming_settings` (`apps/server/src/cache-warming-settings.ts`), sent to hosts as `cacheWarming` in the answer of `POST /api/connectors/self/extensions/workspace`; `packages/shared/src/cache-warming.ts` |
+| The workspace setting | `workspace_cache_warming_settings` (`apps/server/src/cache-warming-settings.ts`); hosts ask for a session's with `POST /api/connectors/self/cache-warming` (`{ sessionId }` → `{ mode, child }`), through `RunnerConfig.cacheWarming` and `cachedSettings`; `packages/shared/src/cache-warming.ts` |
 | Client | **Settings → Workspaces → Prompt cache** (`apps/nsh/src/settings/workspace-options.tsx`) |
 
 ## Decisions
@@ -46,9 +46,12 @@ in [Models and tools](../models-and-tools.md#prompt-cache-warming); this note sa
   response's (pi-durable doesn't export `addUsage`, so the session keeps a copy), so the session's usage includes it.
   Refreshes set `disableContinuation`, so the provider's thread state (such as an OpenAI response ID) stays the
   request's.
-- **A workspace setting, delivered with the extensions answer.** The setting is the workspace's, chosen by its owners
-  and admins, since the refreshes spend the account of whichever host runs a session there. Hosts already ask for the
-  workspace's extensions answer, cached for 30 seconds, before each message; the mode rides on it as `cacheWarming`.
-  A host that has never had an answer for the workspace doesn't warm; one whose server sends no `cacheWarming` (an
-  older server) uses the default, `idle`. The mode is read before each refresh, so a change applies within a minute.
+- **A workspace setting, asked for per session.** The setting is the workspace's, chosen by its owners and admins: the
+  refreshes spend the account of whichever host runs a session there, and a workspace is where people decide what its
+  sessions may do. The host asks the Pikibun server for it with a callback of its own, scoped to a session it runs
+  (`requireCallbackScope`), which also says whether the session has a parent: the runner binding leaves
+  `parentSessionId` out on purpose, as a binding is compared with the stored one on every open. The session keeps the
+  answer for 30 seconds and reads it before each refresh, so a change applies within a minute. When the server can't
+  be asked, the last answer holds for 5 minutes; with none, nothing is warmed, so a host paired with an older Pikibun
+  server, which has no such route, never warms.
 - **Older connectors** know nothing of it and don't warm; nothing on the server depends on it.

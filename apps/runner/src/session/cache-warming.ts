@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { Models, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai/models";
 import { GenerationTask, hook, LiveDoc, UsageDoc, type ConversationId, type Harness, type HookRegistration } from "@earendil-works/pi-durable";
-import type { CacheWarmingMode } from "../../../../packages/shared/src/cache-warming.js";
+import type { CacheWarmingMode, SessionCacheWarming } from "../../../../packages/shared/src/cache-warming.js";
 import type { Metadata } from "./state.js";
 
 export type ModelRequest = {
@@ -193,17 +193,33 @@ export function addUsage(totals: Record<string, Usage>, key: string, usage: Usag
   for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[field] += usage.cost[field];
 }
 
+const SETTINGS_TTL_MS = 30_000;
+const SETTINGS_STALE_MS = 5 * 60_000;
+
+export function cachedSettings(fetch: () => Promise<SessionCacheWarming>, now: () => number = Date.now): () => Promise<SessionCacheWarming> {
+  let known: { value: SessionCacheWarming; at: number } | undefined;
+  return async () => {
+    if (known && now() - known.at < SETTINGS_TTL_MS) return known.value;
+    try {
+      const value = await fetch();
+      known = { value, at: now() };
+      return value;
+    } catch {
+      return known && now() - known.at < SETTINGS_STALE_MS ? known.value : { mode: "off", child: false };
+    }
+  };
+}
+
 export interface SessionWarmingSource {
   harness(): Harness | undefined;
   metadata(): Promise<Metadata>;
-  mode(): Promise<CacheWarmingMode>;
-  child: boolean;
+  settings(): Promise<SessionCacheWarming>;
   report(error: unknown): void;
 }
 
 export function sessionWarming(source: SessionWarmingSource): WarmingSession {
   return {
-    mode: () => source.mode(),
+    mode: async () => (await source.settings()).mode,
     phase: async (id, request) => {
       const harness = source.harness();
       if (!harness) return undefined;
@@ -217,7 +233,7 @@ export function sessionWarming(source: SessionWarmingSource): WarmingSession {
       if (agent.model?.provider !== request.model.provider || agent.model.modelId !== request.model.id || level !== request.options.reasoning) return undefined;
       if (!startsWith((await conversation.context(context)).messages, request.context.messages)) return undefined;
       if (live?.run) return "streaming";
-      if (source.child) return undefined;
+      if ((await source.settings()).child) return undefined;
       const branch = (await source.metadata()).branches.find(item => item.id === id);
       return branch?.mode === "write" && !branch.superseded ? "idle" : undefined;
     },

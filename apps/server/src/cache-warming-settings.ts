@@ -1,15 +1,27 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
-import { cacheWarmingModes, defaultCacheWarmingMode, isCacheWarmingMode, type CacheWarmingMode, type CacheWarmingSettings } from '../../../packages/shared/src/cache-warming.js';
+import { cacheWarmingModes, defaultCacheWarmingMode, isCacheWarmingMode, type CacheWarmingMode, type CacheWarmingSettings, type SessionCacheWarming } from '../../../packages/shared/src/cache-warming.js';
 import type { Database } from './db/types.js';
-import type { AppEnv } from './types.js';
-import { auditStatement, requireMember, workspaceAdminSQL } from './authority/index.js';
+import type { AppEnv, SessionRow } from './types.js';
+import { auditStatement, authenticateConnector, requireCallbackScope, requireMember, workspaceAdminSQL } from './authority/index.js';
 import { fail, identifier, now } from './http.js';
 import { body } from './schemas.js';
 
 export async function workspaceCacheWarming(db: Database, workspaceId: string): Promise<CacheWarmingSettings> {
   const row = await db.query<{ mode: string }>('SELECT mode FROM workspace_cache_warming_settings WHERE workspace_id = ?').bind(workspaceId).first();
   return { mode: isCacheWarmingMode(row?.mode) ? row.mode : defaultCacheWarmingMode };
+}
+
+export function registerConnectorCacheWarming(app: Hono<AppEnv>): void {
+  app.post('/api/connectors/self/cache-warming', async c => {
+    const connector = await authenticateConnector(c);
+    const { sessionId } = await body(c, z.strictObject({ sessionId: z.string() }), { maxBytes: 1024, message: 'Name the session.' });
+    const row = await c.env.DB.query<SessionRow>('SELECT * FROM sessions WHERE id = ?').bind(identifier(sessionId, 'sessionId')).first();
+    if (!row) fail(404, 'not_found', 'Session not found.');
+    await requireCallbackScope(c, row, connector.id);
+    const { mode } = await workspaceCacheWarming(c.env.DB, row.workspace_id);
+    return c.json({ mode, child: !!row.parent_session_id } satisfies SessionCacheWarming);
+  });
 }
 
 export function registerCacheWarmingSettings(app: Hono<AppEnv>): void {

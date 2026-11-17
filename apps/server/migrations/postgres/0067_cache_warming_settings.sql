@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0073_cache_warming_settings.sql.
+-- Postgres translation of sqlite/0074_cache_warming_settings.sql.
 
 -- Prompt-cache warming (apps/runner/src/session/cache-warming.ts, docs/design/cache-warming.md).
 -- A workspace's choice, as its owners and admins made it; no row: the default ('idle').
