@@ -8,6 +8,7 @@ import {
 } from './authority/index.js';
 import { agentSchedules } from './scheduled-prompts.js';
 import { agentSessions } from './cross-session.js';
+import { agentWorkspace } from './workspace-tool.js';
 import { legacyRestoreDownload } from './restore-routes.js';
 import { webSearchRetired } from './connectors.js';
 
@@ -36,6 +37,7 @@ export function registerLegacyRunner(app: Hono<AppEnv>): void {
   app.post('/api/internal/sources/read', c => sourceRead(c, null));
   app.post('/api/internal/schedules', c => agentSchedules(c, null));
   app.post('/api/internal/sessions', c => agentSessions(c, null));
+  app.post('/api/internal/workspace', c => agentWorkspace(c, null));
   app.post('/api/internal/web/search', () => webSearchRetired());
   app.post('/api/internal/git/push/credential', c => pushCredential(c, null));
   app.post('/api/internal/git/push/complete', c => pushComplete(c, null));

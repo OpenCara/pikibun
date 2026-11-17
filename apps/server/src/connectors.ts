@@ -23,6 +23,7 @@ import { appOrigin, fail, id, identifier, jsonObject, now, randomToken, requireO
 import { markSessionChanged } from './session-changes.js';
 import { agentSchedules } from './scheduled-prompts.js';
 import { agentSessions } from './cross-session.js';
+import { agentWorkspace } from './workspace-tool.js';
 import { connectorRestoreDownload } from './restore-routes.js';
 import { connectorHostConfig } from './host-config.js';
 import { disabledModelKeys, hostModelSettings } from './host-models.js';
@@ -334,6 +335,7 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   });
   app.post('/api/connectors/self/schedules', async c => agentSchedules(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sessions', async c => agentSessions(c, (await authenticateConnector(c)).id));
+  app.post('/api/connectors/self/workspace', async c => agentWorkspace(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/web/search', async c => { await authenticateConnector(c); return webSearchRetired(); });
   app.post('/api/connectors/self/git/push/credential', async c => pushCredential(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/git/push/complete', async c => pushComplete(c, (await authenticateConnector(c)).id));
