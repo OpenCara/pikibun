@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 
 EGRESS_PORT = 41080
-GIT_LFS_PATHS = ('/usr/bin/git-lfs', '/usr/local/bin/git-lfs')
+GIT_LFS_PATHS = ('/usr/bin/git-lfs', '/usr/local/bin/git-lfs', '/opt/homebrew/bin/git-lfs')
 GIT = os.environ.get('SANDBOX_GIT') or '/usr/bin/git'
 
 args = sys.argv[1:]

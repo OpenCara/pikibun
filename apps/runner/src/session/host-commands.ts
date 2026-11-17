@@ -32,7 +32,7 @@ export class HostCommandPolicy {
 
   requireShell(operation: Operation, unbounded = false): void {
     if ((operation.kind === "bash" || operation.kind === "program") && !unbounded && !this.shellAllowed()) {
-      throw new RunnerError(403, "Production shell requires a quota-backed runner; bash needs verified resources or explicitly enabled faux test sessions");
+      throw new RunnerError(403, "Commands (what git, node, python and the other program tools run) need verified resource limits on this host, or an explicitly enabled faux test session");
     }
   }
 

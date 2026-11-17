@@ -5,6 +5,9 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { GitProvider } from "../../../packages/shared/src/repositories.js";
 import { GitRemote, GitRemoteError, ProgressLines, parseGitProgress, type GitProgressPhase } from "./git-remote.js";
+import { killTree } from "./platform.js";
+
+const windows = process.platform === "win32";
 
 export type RepositoryCacheScope = "host" | "owner";
 
@@ -238,7 +241,7 @@ export class RepositoryCache {
   async #prepare(directory: string): Promise<void> {
     await mkdir(this.#root, { recursive: true, mode: 0o700 });
     const root = await lstat(this.#root);
-    if (!root.isDirectory() || root.uid !== process.getuid?.() || (root.mode & 0o077) !== 0) {
+    if (!root.isDirectory() || (!windows && (root.uid !== process.getuid?.() || (root.mode & 0o077) !== 0))) {
       throw new RepositoryCacheError("Repository cache root must be a private directory owned by the runner user");
     }
     const parent = resolve(directory, "..");
@@ -464,8 +467,9 @@ function runGit(directory: string, args: string[], options: {
     "-c", "transfer.fsckObjects=false", "-c", "core.bigFileThreshold=64m",
     "-c", `safe.directory=${directory}`,
     ...(args[0] === "init" ? [] : [`--git-dir=${directory}`]), ...args], {
-    cwd: options.cwd ?? directory, detached: true, stdio: ["pipe", "pipe", "pipe"],
-    env: { PATH: process.env.PATH || "/usr/bin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
+    cwd: options.cwd ?? directory, detached: !windows, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
+    env: { PATH: process.env.PATH || "/usr/bin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
+      ...(windows ? { SystemRoot: process.env.SystemRoot ?? "C:\\Windows" } : {}) },
   });
   const { promise, resolve: done, reject } = Promise.withResolvers<{ code: number | null; stdout: Buffer }>();
   const stdout: Buffer[] = [];
@@ -474,6 +478,7 @@ function runGit(directory: string, args: string[], options: {
   const kill = (reason: Error) => {
     failure ??= reason;
     if (!child.pid) return;
+    if (windows) { killTree(child); return; }
     try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
   };
   const timer = setTimeout(() => kill(new RepositoryCacheError("Git exceeded its time limit in the repository cache")), GIT_TIMEOUT_MS);

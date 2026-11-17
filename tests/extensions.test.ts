@@ -5,7 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
 import { addDocumentSourceExtension, addPikiExtensions, sessionExtensionSources, workspaceExtensions } from '../apps/server/src/authority/extension-policy.js';
-import { documentKindsOff, pikiSessionToolExtensions, sessionToolExtensionOn, sessionToolsOff } from '../packages/shared/src/piki-extensions.js';
+import { documentKindsOff, missingNeeds, pikiSessionToolExtensions, sessionToolExtensionOn, sessionToolsOff } from '../packages/shared/src/piki-extensions.js';
 import type { Env } from '../apps/server/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
@@ -370,6 +370,36 @@ test('Pikibun\'s session tools are in no workspace by default: pages and connect
   assert.deepEqual(fresh.filter(item => item.source.startsWith('piki:') && item.enabled), []);
   assert.deepEqual(f.sqlite.prepare("SELECT package_key FROM workspace_extensions WHERE workspace_id = ? AND package_key LIKE 'piki:%' ORDER BY position").all(workspace.id)
     .map(row => row.package_key), ['piki:prompt-audit', 'piki:context-files'], 'none of the session tools, only the default extensions');
+});
+
+test('adding Sub-agents brings Other sessions, whose tool it drives, audited; one turned off stays off, and later saves add nothing', async t => {
+  const f = await fixture(t); const s = await team(f);
+  const path = `/api/workspaces/${s.workspaceId}/extensions`;
+  const on = async () => sessionToolExtensionOn((await json<{ extensions: WorkspaceExtension[] }>(await s.bob.request('GET', path))).extensions, 'piki:sessions');
+  assert.equal(await on(), false);
+  const added = await json<{ extensions: WorkspaceExtension[]; added?: string[] }>(await s.alice.request('PUT', path, { source: 'piki:sub-agents', settings: { placement: 'gpu=true' } }));
+  assert.deepEqual(added.added, ['piki:sessions']);
+  assert.equal(await on(), true);
+  const audits = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.extension.updated' AND workspace_id = ? ORDER BY rowid").all(s.workspaceId)
+    .map(row => JSON.parse(String(row.detail_json)) as Record<string, unknown>);
+  assert.deepEqual(audits.slice(-2).map(detail => [detail.source, detail.reason, detail.by]), [['piki:sub-agents', undefined, undefined], ['piki:sessions', 'needed', 'piki:sub-agents']]);
+
+  await json(await s.alice.request('DELETE', `${path}?source=${encodeURIComponent('piki:sessions')}`));
+  const again = await json<{ added?: string[] }>(await s.alice.request('PUT', path, { source: 'piki:sub-agents', settings: { placement: 'gpu=false' } }));
+  assert.equal(again.added, undefined, 'only its first add brings what it needs');
+  assert.equal(await on(), false);
+
+  const { workspace } = await json<{ workspace: { id: string } }>(await s.alice.request('POST', '/api/workspaces', { name: 'Turned off' }), 201);
+  const other = `/api/workspaces/${workspace.id}/extensions`;
+  await json(await s.alice.request('PUT', other, { source: 'piki:sessions', enabled: false }));
+  assert.equal((await json<{ added?: string[] }>(await s.alice.request('PUT', other, { source: 'piki:sub-agents' }))).added, undefined, 'one the workspace turned off stays off');
+  const { workspace: disabled } = await json<{ workspace: { id: string } }>(await s.alice.request('POST', '/api/workspaces', { name: 'Added off' }), 201);
+  assert.equal((await json<{ added?: string[] }>(await s.alice.request('PUT', `/api/workspaces/${disabled.id}/extensions`, { source: 'piki:sub-agents', enabled: false }))).added, undefined,
+    'added turned off, it brings nothing');
+  assert.deepEqual(missingNeeds('piki:sub-agents', [{ source: 'piki:sessions', enabled: false }]).map(item => item.source), ['piki:sessions']);
+  assert.deepEqual(missingNeeds('piki:sub-agents', [{ source: 'piki:sessions', enabled: true }]), []);
+  assert.deepEqual(missingNeeds('piki:pr-flow', []), []);
+  assert.deepEqual(missingNeeds('piki:sub-agents', []).map(item => item.source), ['piki:sessions'], 'a list without the entry has it off, as the workspace does');
 });
 
 test('a workspace\'s first repository brings piki:git (and piki:github on GitHub), its first source of a kind that kind\'s extension; one turned off stays off', async t => {

@@ -33,6 +33,35 @@ describe("a session's panel", () => {
     expect(app.shows("label:Context: 84.2K of 200K tokens, 42%")).toBe(true);
   });
 
+  test("Details shows what the session cost, its tokens, and how well its prompt cache works", async () => {
+    const app = await openPanel();
+    await app.waitFor("id:panel-usage");
+    await app.waitFor("text:$1.84");
+    expect(app.shows("text:363K tokens in, 310K of them from the cache, 8.9K out")).toBe(true);
+    expect(app.shows("text:97% of the last request's prompt · 85% of all prompts")).toBe(true);
+    expect(app.shows("text:anthropic/claude-sonnet")).toBe(false);
+  });
+
+  test("Details shows each model's cost, and the tools', once the session used more than one", async () => {
+    const sonnet = { model: "anthropic/claude-sonnet", input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, cost: 2.5 };
+    const haiku = { model: "anthropic/claude-haiku", input: 500, output: 100, cacheRead: 1500, cacheWrite: 0, cost: 0.004 };
+    const tools = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    const usage = { total: { input: 1500, output: 300, cacheRead: 1500, cacheWrite: 0, cost: 2.504 }, models: [sonnet, haiku], tools };
+    const app = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, usage }, revision: "r1" } } });
+    await app.waitFor("text:anthropic/claude-haiku");
+    expect(app.shows("text:$2.50")).toBe(true);
+    expect(app.shows("text:<$0.01")).toBe(true);
+    expect(app.shows("text:Tools")).toBe(true);
+    expect(app.shows("text:$0.00")).toBe(true);
+    expect(app.shows("text:50% of all prompts")).toBe(true);
+  });
+
+  test("Details says when no prompt tokens are reported yet", async () => {
+    const none = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    const app = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, usage: { total: none, models: [{ model: "faux/faux-1", ...none }] } }, revision: "r1" } } });
+    await app.waitFor("text:No prompt tokens reported yet");
+  });
+
   test("Details says when compaction is off, and leaves the meter out without a window", async () => {
     const off = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, context: { tokens: 950, window: 8192 } }, revision: "r1" } } });
     await off.waitFor("text:950 of 8.2K tokens");

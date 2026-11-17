@@ -1,12 +1,12 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Message, Models } from "@earendil-works/pi-ai";
-import type { CompactionSettings, Conversation, EntryRecord, Harness } from "@earendil-works/pi-durable";
+import type { CompactionSettings, Conversation, EntryRecord, Harness, UsageState } from "@earendil-works/pi-durable";
 import type { BrowserUnavailableReason } from "../../../../packages/shared/src/browser.js";
 import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
 import type { HostConfig, RequiredExtension } from "../../../../packages/shared/src/host-config.js";
 import { sessionToolsOff } from "../../../../packages/shared/src/piki-extensions.js";
 import type { TunnelUnavailableReason } from "../../../../packages/shared/src/tunnel.js";
-import type { RepositoryPreparationView, RunnerBinding, SessionView, SudoPromptView } from "../../../../packages/shared/src/types.js";
+import type { PromptTokens, RepositoryPreparationView, RunnerBinding, SessionUsageView, SessionView, SudoPromptView, TokenUsage } from "../../../../packages/shared/src/types.js";
 import { sessionActivity, type ActivityEntry } from "../activity.js";
 import { compactionThreshold } from "../compaction.js";
 import { settleToolNames } from "../extensions/adapter.js";
@@ -35,6 +35,7 @@ export interface ViewSource {
   repositories(): RepositoryPreparationView | undefined;
   extensions(): Promise<Pick<SessionView, "extensions">>;
   commands?(): Promise<SessionView["commands"]>;
+  usage?(key: string): Promise<UsageState | undefined>;
 }
 
 export async function sessionView(source: ViewSource): Promise<SessionView> {
@@ -76,6 +77,8 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
   const agent = await source.agent();
   const shared = snapshots.find(snapshot => snapshot.branch.mode === "write");
   const usage = shared && source.context(shared.messages, agent.model);
+  const spent = source.usage && usageView(await source.usage(snapshots.map(snapshot => `${snapshot.branch.id}:${snapshot.entries.at(-1)?.id ?? ""}`).join(",")),
+    shared?.messages);
   const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
   const access = latestWrite && (latestWrite.options?.access === "read" ? "read" : "auto");
   const repositories = source.repositories();
@@ -96,6 +99,7 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
     ...(commands ? { commands } : {}),
     ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
     ...(usage ? { context: usage } : {}),
+    ...(spent ? { usage: spent } : {}),
     ...(access ? { access } : {}),
     ...(repositories ? { repositories } : {}),
     activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
@@ -126,6 +130,59 @@ export function contextView(messages: readonly Message[], model: { provider: str
   catch { window = undefined; }
   const compactsAt = current ? compactionThreshold(source.compaction(), current, window) : undefined;
   return { tokens, ...(window !== undefined ? { window } : {}), ...(compactsAt !== undefined ? { compactsAt } : {}) };
+}
+
+const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
+
+function promptTokens(usage: { input?: unknown; cacheRead?: unknown; cacheWrite?: unknown }): PromptTokens {
+  return { input: count(usage.input), cacheRead: count(usage.cacheRead), cacheWrite: count(usage.cacheWrite) };
+}
+
+function tokenUsage(usage: { input?: unknown; output?: unknown; cacheRead?: unknown; cacheWrite?: unknown; cost?: { total?: unknown } } | undefined): TokenUsage {
+  return { ...promptTokens(usage ?? {}), output: count(usage?.output), cost: count(usage?.cost?.total) };
+}
+
+function addTokens(sum: TokenUsage, usage: TokenUsage): TokenUsage {
+  return { input: sum.input + usage.input, output: sum.output + usage.output, cacheRead: sum.cacheRead + usage.cacheRead,
+    cacheWrite: sum.cacheWrite + usage.cacheWrite, cost: sum.cost + usage.cost };
+}
+
+const noTokens: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+const unanswered: readonly string[] = ["aborted", "error", "deferred"];
+
+export function lastRequest(messages: readonly Message[] | undefined): PromptTokens | undefined {
+  for (const message of [...messages ?? []].reverse()) {
+    if (message.role !== "assistant" || unanswered.includes(message.stopReason) || !message.usage) continue;
+    const tokens = promptTokens(message.usage);
+    if (tokens.input + tokens.cacheRead + tokens.cacheWrite > 0) return tokens;
+  }
+  return undefined;
+}
+
+export function usageView(state: UsageState | undefined, messages: readonly Message[] | undefined): SessionUsageView | undefined {
+  const models = Object.entries(state?.models ?? {}).map(([model, usage]) => ({ model, ...tokenUsage(usage) }))
+    .sort((a, b) => b.cost - a.cost || a.model.localeCompare(b.model));
+  const toolUsage = Object.values(state?.tools ?? {}).map(tokenUsage);
+  const tools = toolUsage.length ? toolUsage.reduce(addTokens, noTokens) : undefined;
+  const last = lastRequest(messages);
+  if (!models.length && !tools && !last) return undefined;
+  const total = [...models.map(({ model: _model, ...usage }) => usage), ...tools ? [tools] : []].reduce(addTokens, noTokens);
+  return { total, models, ...(tools ? { tools } : {}), ...(last ? { last } : {}) };
+}
+
+export class SessionUsage {
+  #key: string | undefined;
+  #at = 0;
+  #value: Promise<UsageState | undefined> | undefined;
+
+  constructor(private readonly read: () => Promise<UsageState>, private readonly maxAgeMs = 10_000, private readonly now: () => number = Date.now) {}
+
+  get(key: string): Promise<UsageState | undefined> {
+    if (this.#value && key === this.#key && this.now() - this.#at < this.maxAgeMs) return this.#value;
+    this.#key = key;
+    this.#at = this.now();
+    return this.#value = this.read().catch(() => undefined);
+  }
 }
 
 export interface ExtensionViewSource {

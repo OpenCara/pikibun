@@ -31,7 +31,7 @@ import { SessionDefinitions, type SessionDefinitionsOptions } from "../apps/runn
 import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/src/tool-definitions.js";
 import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session/piki.js";
 import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
-import { contextView, extensionView, sessionView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
+import { contextView, extensionView, lastRequest, sessionView, SessionUsage, usageView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
 import { INPUT_EMPTY, RunQueue, steersInto, submissionRequestId, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
 import { ConversationIdle, type ConversationId } from "@earendil-works/pi-durable";
 import { ToolAvailability, type ToolAvailabilityOptions } from "../apps/runner/src/session/availability.js";
@@ -262,7 +262,7 @@ test("a command runs on the host in a host session, or unbounded in a session a 
 });
 
 test("the shell needs a limited sandbox, the host, a Windows sandbox or a test session, unless the command is unbounded", () => {
-  assert.throws(() => hostPolicy().policy.requireShell(bash), /quota-backed runner/);
+  assert.throws(() => hostPolicy().policy.requireShell(bash), /need verified resource limits on this host/);
   hostPolicy().policy.requireShell(bash, true);
   hostPolicy().policy.requireShell({ kind: "git.push" } as Operation);
   for (const options of [{ limitedSandbox: true }, { onHost: true }, { windowsSandbox: true }, { testShell: true }]) {
@@ -751,6 +751,37 @@ test("view: context usage counts the conversation's tokens against its model's w
   assert.equal(broken.window, undefined);
 });
 
+test("view: usage sums each model's and the tools' spend, and takes the prompt of the conversation's last answered request", () => {
+  const spend = (input: number, output: number, cacheRead: number, cacheWrite: number, total: number) =>
+    ({ input, output, cacheRead, cacheWrite, totalTokens: input + output + cacheRead + cacheWrite, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total } });
+  const state = { models: { "p/cheap": spend(10, 5, 90, 0, 0.01), "p/dear": spend(100, 50, 0, 20, 2) }, tools: { search: spend(1, 1, 0, 0, 0.5), broken: { input: Number.NaN } } } as never;
+  const assistant = (usage: unknown, stopReason = "stop") => ({ role: "assistant", content: [], usage, stopReason, provider: "p", model: "m", api: "x", timestamp: 0 });
+  const messages = [assistant(spend(3, 1, 7, 0, 0)), { role: "user", content: "hi", timestamp: 0 }, assistant(spend(0, 0, 0, 0, 0)), assistant(spend(50, 0, 0, 0, 0), "error")] as never;
+  const view = usageView(state, messages)!;
+  assert.deepEqual(view.models.map(item => [item.model, item.cost]), [["p/dear", 2], ["p/cheap", 0.01]], "the dearest model first");
+  assert.deepEqual(view.tools, { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.5 }, "a count that isn't one counts as nothing");
+  assert.deepEqual(view.total, { input: 111, output: 56, cacheRead: 90, cacheWrite: 20, cost: 2.51 });
+  assert.deepEqual(view.last, { input: 3, cacheRead: 7, cacheWrite: 0 }, "failed requests and requests with no prompt are passed over");
+  assert.equal(lastRequest([]), undefined);
+  assert.equal(usageView({ models: {}, tools: {} }, []), undefined, "nothing spent and nothing asked: no usage");
+  assert.deepEqual(usageView(undefined, messages)?.total, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+});
+
+test("view: the session's usage is read again once an entry is committed, or after a while, and a failed read shows none", async () => {
+  let now = 0, reads = 0, fail = false;
+  const usage = new SessionUsage(async () => { reads++; if (fail) throw new Error("closed"); return { models: {}, tools: { [String(reads)]: {} } } as never; }, 1000, () => now);
+  const first = await usage.get("1:5");
+  assert.equal(await usage.get("1:5"), first);
+  assert.equal(reads, 1);
+  await usage.get("1:6");
+  assert.equal(reads, 2, "a new entry reads it again");
+  now = 1000;
+  await usage.get("1:6");
+  assert.equal(reads, 3, "and so does time, for spend recorded without an entry");
+  fail = true;
+  assert.equal(await usage.get("1:7"), undefined);
+});
+
 test("view: the queue, who is busy, the access of the latest write, the preparation, and the tunnel come from what the session gives it", async () => {
   const state = toolState({ status: "queued", sequence: 1, options: { access: "read" } });
   state.runs.r0 = { ...state.runs.r1!, key: "r0", sequence: 0, status: "interrupted", stopped: { by: "github:1" } };
@@ -774,6 +805,11 @@ test("view: the queue, who is busy, the access of the latest write, the preparat
   const preparing = await sessionView({ ...source, repositories: () => ({ status: "preparing", items: [] }) });
   assert.deepEqual([preparing.activity, preparing.busy], ["working", true]);
   assert.equal((await sessionView({ ...source, repositories: () => ({ status: "failed", items: [], error: "x" }) })).activity, "failed");
+  assert.equal(view.usage, undefined);
+  const keys: string[] = [];
+  const spent = await sessionView({ ...source, usage: async key => { keys.push(key); return { models: { "p/m": { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: { total: 0.25 } } }, tools: {} } as never; } });
+  assert.deepEqual(keys, ["1:"], "keyed by each branch's latest entry");
+  assert.deepEqual(spent.usage, { total: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.25 }, models: [{ model: "p/m", input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.25 }] });
 });
 
 test("view: extensions show what runs, what is missing, the built-ins, and tools the host can't offer", async () => {

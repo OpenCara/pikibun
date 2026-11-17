@@ -637,6 +637,7 @@ export interface SessionView {
   commands?: SessionCommand[];
   agent?: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
   context?: SessionContextView;
+  usage?: SessionUsageView;
   access?: AccessMode;
   repositories?: RepositoryPreparationView;
   activity?: SessionActivity;
@@ -657,6 +658,21 @@ export interface SessionContextView {
   tokens: number;
   window?: number;
   compactsAt?: number;
+}
+export interface PromptTokens {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+export interface TokenUsage extends PromptTokens {
+  output: number;
+  cost: number;
+}
+export interface SessionUsageView {
+  total: TokenUsage;
+  models: (TokenUsage & { model: string })[];
+  tools?: TokenUsage;
+  last?: PromptTokens;
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
