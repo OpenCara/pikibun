@@ -588,7 +588,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (!url.pathname.startsWith(prefix) || url.search) throw new RunnerError(400, "Invalid path");
     const route = url.pathname.slice(prefix.length);
     const since = /^view\/([0-9a-f]{32})$/.exec(route)?.[1];
-    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", changes: "changes", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image", sudo: "sudo", attach: "attach", portable: "portable", title: "title" };
+    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", changes: "changes", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image", sudo: "sudo", attach: "attach", portable: "portable", artifacts: "artifacts", title: "title" };
     const action = since ? "view" : actions[route];
     if (!action) throw new RunnerError(404, "Unknown runner endpoint");
     if (c.req.method !== (action === "view" || action === "events" ? "GET" : "POST")) throw new RunnerError(405, "Method not allowed");
@@ -610,7 +610,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     }
     const session = await service.get(id);
     if (ticket.ownerId !== session.binding.owner.id) throw new RunnerError(403, "Ticket owner mismatch");
-    if (session.packed && action !== "view" && action !== "events") throw new RunnerError(409, "This session's files are packed. Unarchive it to use them");
+    if (session.packed && action !== "view" && action !== "events" && action !== "artifacts") throw new RunnerError(409, "This session's files are packed. Unarchive it to use them");
     await session.authorize(ticket.actorId, permissionFor(action), ticket.policyVersion);
     if (action === "restart" || action === "backup" || action === "upload") await session.consumeTicket(ticket);
     if (action === "view") {
@@ -659,6 +659,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (action === "changes") return c.json({ changes: await session.changes(ticket, input) });
     if (action === "upload") return c.json(await session.upload(ticket, input));
     if (action === "image") return c.json(await session.entryImage(ticket, input));
+    if (action === "artifacts") return c.json(await session.artifacts(ticket, input));
     if (action === "restart") {
       if (ticket.actorId !== session.binding.owner.id) throw new RunnerError(403, "Only the owner can restart a session");
       await session.restart();

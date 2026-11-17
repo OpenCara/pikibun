@@ -3,5 +3,5 @@ import type {} from "../../../packages/shared/src/local-changes.js";
 
 export function withHostToolCapabilities(capabilities: ConnectorCapabilities): ConnectorCapabilities {
   return { ...capabilities, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true,
-    approvalFree: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, ...(process.platform === "linux" ? { hostMigration: true } : {}) };
+    approvalFree: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, ...(process.platform === "linux" ? { hostMigration: true } : {}) };
 }

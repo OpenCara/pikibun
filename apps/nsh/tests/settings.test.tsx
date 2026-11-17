@@ -319,12 +319,26 @@ describe("settings", () => {
     const app = await openSettings("workspaces");
     await app.waitFor("id:workspace-w1");
     await app.press("id:workspace-w1");
-    for (const part of ["workspace-sources", "workspace-connections", "workspace-push-access", "workspace-network", "workspace-extensions", "workspace-database", "workspace-members", "workspace-invite"]) {
+    for (const part of ["workspace-sources", "workspace-connections", "workspace-push-access", "workspace-network", "workspace-extensions", "workspace-cache-warming", "workspace-database", "workspace-members", "workspace-invite"]) {
       await app.waitFor(`id:${part}`);
     }
     await app.waitFor("text:OpenCara/pikibun");
     await app.press("id:workspaces-back");
     await app.waitFor("id:workspace-w1");
+  });
+
+  test("Workspaces lets an admin choose when hosts keep the workspace's prompt caches warm", async () => {
+    const app = await openSettings("workspaces", {
+      [`PUT ${ORIGIN}/api/workspaces/w1/cache-warming`]: { body: { settings: { mode: "streaming" } } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:cache-warming-mode");
+    expect(app.texts().join(" ")).toContain("Working and waiting");
+    await app.press("id:cache-warming-mode");
+    await app.press("text:While working");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/cache-warming`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/cache-warming`)).toEqual({ mode: "streaming" });
   });
 
   test("Workspaces shows each role's tools and creates a tool group with the tools an admin picks", async () => {

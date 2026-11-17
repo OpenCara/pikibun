@@ -27,7 +27,7 @@ import { SectionPage, type SectionProps } from "./parts";
 import { WorkspaceDatabaseSection } from "./workspace-database";
 import { WorkspaceExtensions } from "./workspace-extensions";
 import { ToolGroups } from "./workspace-tool-groups";
-import { AttachmentSettings, ChildSessionSettings, NetworkAccess, PackingSettings, TranscriptSettings } from "./workspace-options";
+import { AttachmentSettings, CacheWarmingSettings, ChildSessionSettings, NetworkAccess, PackingSettings, TranscriptSettings } from "./workspace-options";
 import {
   connectionLabel, createWorkspaceConnections, DocumentSources, gitConnectionFor, gitProviderLabel, PushAccess, ReadAsControl, WorkspaceConnections,
 } from "./workspace-sources";
@@ -112,6 +112,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
       <ToolGroups workspace={workspace()} owner={role() === "owner"} />
       <TranscriptSettings workspace={workspace()} admin={admin()} />
       <ChildSessionSettings workspace={workspace()} admin={admin()} />
+      <CacheWarmingSettings workspace={workspace()} admin={admin()} />
       <AttachmentSettings workspace={workspace()} admin={admin()} />
       <PackingSettings workspace={workspace()} admin={admin()} />
       <WorkspaceDatabaseSection workspace={workspace()} owner={role() === "owner"} />

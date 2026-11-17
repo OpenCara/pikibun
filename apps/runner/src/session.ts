@@ -32,6 +32,8 @@ import { SessionTunnel } from "./session/tunnel.js";
 import { SudoPrompts } from "./sudo-prompts.js";
 import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
+import { CacheWarmers, cachedSettings, rememberRequests, sessionWarming } from "./session/cache-warming.js";
+import { defaultCacheWarmingMode, type SessionCacheWarming } from "../../../packages/shared/src/cache-warming.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import { confinedLaunch, ProcessChannel, refusedChannel, sandboxLaunch } from "./extensions/process.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
@@ -47,6 +49,8 @@ import { BranchReports } from "./session/branch-reports.js";
 import { HostCommandPolicy } from "./session/host-commands.js";
 import { WholeResults } from "./session/whole-results.js";
 import { entryImages } from "./session/entries.js";
+import { ArtifactContent, ArtifactIndex, listArtifacts, readArtifact } from "./session/artifacts.js";
+import { artifactRequest, type Artifact, type ArtifactSummary } from "../../../packages/shared/src/artifacts.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
 import { MessageInputs, prepareMessageImages } from "./session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "./session/mirrors.js";
@@ -153,6 +157,7 @@ export type RunnerConfig = {
   apiCredential?: (sessionId: string, host: string, access: ApiAccessKind) => Promise<unknown>;
   hostConfig?: () => Promise<HostConfig>;
   requiredExtensions?: () => Promise<RequiredExtension[] | undefined>;
+  cacheWarming?: (sessionId: string) => Promise<SessionCacheWarming>;
   extensions?: {
     installed(): readonly LoadedSource[];
     workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>;
@@ -225,6 +230,9 @@ export class RunnerSession {
   readonly #sudo: SudoPrompts | undefined;
   #sudoOffered = false;
   readonly #titles = new Set<AbortController>();
+  #warmers: CacheWarmers | undefined;
+  readonly #warmingSettings = cachedSettings(async (): Promise<SessionCacheWarming> =>
+    this.config.cacheWarming ? this.config.cacheWarming(this.binding.session.id) : { mode: defaultCacheWarmingMode, child: false });
 
   constructor(readonly binding: RunnerBinding, readonly directory: string, readonly config: RunnerConfig) {
     if (binding.session.connectorId !== config.connectorId || binding.model.connectorId !== config.connectorId)
@@ -600,7 +608,14 @@ export class RunnerSession {
     const registry = createRegistry();
     const own = this.buildTools();
     this.tools = [...own, ...await this.#defined.load(own.map(tool => tool.name))];
-    const extension = defineExtension({ name: "workspace-tools", tools: this.tools, hooks: [renamedToolsHook()] });
+    this.#warmers?.close();
+    const warmers: CacheWarmers = new CacheWarmers(sessionWarming({
+      harness: (): Harness | undefined => (this.closing || this.#warmers !== warmers ? undefined : this.harness), metadata: () => this.metadata(),
+      settings: this.#warmingSettings,
+      report: error => process.stderr.write(`Session ${this.binding.session.id}: cache warming failed: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`),
+    }));
+    this.#warmers = warmers;
+    const extension = defineExtension({ name: "workspace-tools", tools: this.tools, hooks: [renamedToolsHook(), warmers.hooks()] });
     this.#extension = extension;
     registry.install(extension);
     this.#registry = registry;
@@ -615,7 +630,7 @@ export class RunnerSession {
     const resolved = this.config.resolveModels ? await this.config.resolveModels(this.binding.model)
       : { models: runnerModels(this.binding.model, this.config.allowFaux), provider: this.binding.model.provider, modelId: this.binding.model.modelId };
     this.modelRef = { provider: resolved.provider, modelId: resolved.modelId };
-    this.models = resolved.models;
+    this.models = rememberRequests(resolved.models);
     const models = this.models;
     await this.hostConfig();
     const catalog = models.getModels();
@@ -1480,6 +1495,16 @@ export class RunnerSession {
     return { image: checked };
   }
 
+  async artifacts(ticket: RunnerTicket, input: unknown): Promise<{ artifacts: ArtifactSummary[] } | { artifact: Artifact }> {
+    this.assertTicket(ticket);
+    const request = artifactRequest(input);
+    if (!request) throw new RunnerError(400, "Invalid artifact request");
+    await this.authorize(ticket.actorId, "read", ticket.policyVersion);
+    const reader = { index: () => this.harness.snapshot(ArtifactIndex, context), content: (key: string) => this.harness.snapshot(ArtifactContent, key, context) };
+    if (request.name === undefined) return { artifacts: await listArtifacts(reader) };
+    return { artifact: await readArtifact(reader, request.name, request.version) };
+  }
+
   async browse(ticket: RunnerTicket, path: string): Promise<SessionFiles> {
     this.assertTicket(ticket);
     await this.authorize(ticket.actorId, "write", ticket.policyVersion);
@@ -1546,6 +1571,7 @@ export class RunnerSession {
     this.#opened = false;
     this.#resumed = false;
     this.#activity?.stop();
+    this.#warmers?.close();
     const tunnel = this.#tunnel;
     this.#tunnel = undefined;
     await tunnel?.close().catch(() => {});

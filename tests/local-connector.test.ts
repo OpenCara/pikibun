@@ -161,7 +161,7 @@ test('pairing posts only to the fixed origin and strips extra model/capability s
   assert.equal(request.redirect, 'error');
   assert.equal(request.credentials, 'omit');
   assert.equal(request.headers.get('authorization'), null);
-  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   for (const secret of [providerSecret, credentials.token, 'fixture_pairing_code']) assert.equal(request.url.includes(secret), false);
 });
 
@@ -210,6 +210,7 @@ test('relay accepts exactly the supported action/method/path combinations and lo
     attach: JSON.stringify({ binding: binding() }),
     portable: JSON.stringify({ title: 'Kept', schedules: [] }),
     title: JSON.stringify({ system: 'Name it.', message: 'Fix the login test' }),
+    artifacts: JSON.stringify({ name: 'chart', version: 1 }),
   };
   for (const action of Object.keys(bodies) as (keyof typeof bodies)[]) {
     await t.test(action, async () => {
@@ -551,7 +552,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   socket.welcome();
   const call = await fixture.workerCalls.next();
   assert.equal(call.request.url, `${origin}/api/connectors/self/manifest`);
-  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   assert.equal(call.request.headers.get('x-connection-token'), connectionToken);
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(ready, false);
@@ -579,7 +580,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.deepEqual(fixture.statuses, ['connecting', 'connected', 'stopped']);
 });
 
-const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, ...hostMigration, hostConfig: true, compactionConfig: true };
+const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, ...hostMigration, hostConfig: true, compactionConfig: true };
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
@@ -1461,13 +1462,13 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
     return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
   } });
   await startFixture(fixture);
-  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'];
+  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:artifacts', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'];
   const first = (await syncs.next()).report;
   assert.deepEqual([first.installed.map(item => item.source), (first.browser as { state: string }).state], [all, 'missing']);
   const second = (await syncs.next()).report;
   assert.deepEqual([second.installed.map(item => item.source), second.browser], [all, undefined], 'tried again at once, without the browser\'s status');
   assert.deepEqual((await syncs.next()).report, { installed: [], remoteInstalls: true }, 'and again, without them');
-  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'],
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:artifacts', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'],
     'sessions still have them');
 });
 

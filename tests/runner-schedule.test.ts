@@ -172,14 +172,17 @@ test("piki:schedule: the workspace turns the schedule tool off, and a call by na
 });
 
 test("sessionToolsOff: only a session-tool extension the workspace lists turned off turns its tools off, but an opt-in one is off unless listed on", () => {
-  assert.deepEqual([...sessionToolsOff([])], ["tunnel", "workspace"]);
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: true }])], ["tunnel", "workspace"]);
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule", "tunnel", "workspace"]);
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:gh", enabled: false }, { source: "npm:pi-web-access@0.46.0", enabled: false }])], ["tunnel", "workspace"], "other extensions offer no session tools");
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: true }, { source: "piki:workspace", enabled: true }])], []);
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: false }, { source: "piki:workspace", enabled: true }])], ["tunnel"]);
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: false }], { failClosedOnly: true })], ["tunnel", "workspace"], "and fails closed: an answer that doesn't turn it on leaves it off");
+  const optIn = ["tunnel", "workspace", "publish_artifact"];
+  const on = [{ source: "piki:workspace", enabled: true }, { source: "piki:artifacts", enabled: true }];
+  assert.deepEqual([...sessionToolsOff([])], optIn);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: true }])], optIn);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule", ...optIn]);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:gh", enabled: false }, { source: "npm:pi-web-access@0.46.0", enabled: false }])], optIn, "other extensions offer no session tools");
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: true }, ...on])], []);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: false }, ...on])], ["tunnel"]);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: false }], { failClosedOnly: true })], optIn, "and fails closed: an answer that doesn't turn it on leaves it off");
   assert.equal(sessionToolExtensionOn([], "piki:workspace"), false, "workspace management is opt-in too");
+  assert.equal(sessionToolExtensionOn([], "piki:artifacts"), false, "and artifacts");
   assert.equal(sessionToolExtensionOn([], "piki:tunnel"), false);
   assert.equal(sessionToolExtensionOn([{ source: "piki:tunnel", enabled: true }], "piki:tunnel"), true);
   assert.equal(sessionToolExtensionOn([], "piki:schedule"), true);
