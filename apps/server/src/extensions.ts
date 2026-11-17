@@ -12,6 +12,7 @@ import {
   saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
+import { workspaceCacheWarming } from './cache-warming-settings.js';
 
 const RECENT_REQUESTS = 20;
 const MAX_PENDING = 20;
@@ -110,8 +111,9 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
       ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed, options) : extensions;
     const toolGroups = await memberToolGroups(c.env, workspaceId);
     const ownerPrivate = await isPersonalWorkspace(c.env, workspaceId, row.owner_id);
+    const { mode: cacheWarming } = await workspaceCacheWarming(c.env.DB, workspaceId);
     return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id), ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
-      ...(ownerPrivate ? { ownerPrivate: true } : {}) });
+      ...(ownerPrivate ? { ownerPrivate: true } : {}), cacheWarming });
   });
 }
 

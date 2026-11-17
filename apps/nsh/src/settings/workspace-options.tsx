@@ -3,6 +3,7 @@ import type { Workspace } from "../shared";
 import { segment } from "../shared";
 import { transcriptPage, type ToolOutput } from "../../../../packages/shared/src/transcript-display";
 import type { ChildSessionSettings as ChildSettings } from "../../../../packages/shared/src/cross-session";
+import { cacheWarmingModes, type CacheWarmingMode, type CacheWarmingSettings as CacheWarming } from "../../../../packages/shared/src/cache-warming";
 import { automaticPackingDays, type PackingSettings as Packing } from "../../../../packages/shared/src/packing";
 import { fileUploadLimits, formatBytes } from "../../../../packages/shared/src/file-uploads";
 import { networkLimits, type NetworkMode, type NetworkPolicy } from "../../../../packages/shared/src/network";
@@ -77,6 +78,46 @@ export function ChildSessionSettings(props: { workspace: Workspace; admin: boole
               hint={data().settings.childModels ? "Each session an agent starts runs on the model and reasoning level it chose for its task" : "Sessions agents start run on their parent's model and reasoning level"}
               onChange={next => put(path(), action, resource.refresh, { childModels: next }, next ? "Agents now choose the model and reasoning level of each session they start, to suit its task."
                 : "Sessions that agents start now run on their parent session's model and reasoning level.")} />
+          )}
+        </If>
+      </ResourceState>
+      <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+    </Section>
+  );
+}
+
+const warmingLabel: Record<CacheWarmingMode, string> = { idle: "Working and waiting", streaming: "While working", off: "Off" };
+const warmingHint: Record<CacheWarmingMode, string> = {
+  idle: "While an agent works, and for up to 30 minutes after it answered, when the saving is worth it",
+  streaming: "Only while an agent is still working on a message",
+  off: "Hosts never refresh a session's prompt cache",
+};
+const warmingNotice: Record<CacheWarmingMode, string> = {
+  idle: "Hosts now keep sessions' prompt caches warm while their agents work and for up to 30 minutes after they answer.",
+  streaming: "Hosts now keep sessions' prompt caches warm only while their agents work.",
+  off: "Hosts no longer refresh sessions' prompt caches.",
+};
+
+export function CacheWarmingSettings(props: { workspace: Workspace; admin: boolean }) {
+  const path = () => `/api/workspaces/${segment(props.workspace.id)}/cache-warming`;
+  const resource = createResource<{ settings: CacheWarming }>(path);
+  const action = createAction();
+  const mode = () => resource.data()?.settings.mode;
+  return (
+    <Section title="Prompt cache" info={<View style={{ gap: 8 }}>
+      <If when={!props.admin}>{adminOnly}</If>
+      <Note>Model providers keep the start of a conversation cached for a few minutes, and read it far cheaper than they write it again. A host can refresh a session's cache shortly before it expires, with a request of one output token, so the next message after a pause or a slow tool reads it instead of writing it again.</Note>
+      <Note>A refresh is sent only for models with a known cache lifetime, and only when it is expected to save at least $0.05; its usage counts as the session's own. Sessions that agents start for sub-tasks are refreshed only while they work.</Note>
+    </View>}>
+      <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>
+        <If when={mode()}>
+          {current => (
+            <Row title="Keep prompt caches warm" hint={warmingHint[current()]}
+              trailing={props.admin
+                ? <Select<CacheWarmingMode> compact label="Keep prompt caches warm" value={current()} disabled={action.busy()}
+                  options={cacheWarmingModes.map(value => ({ value, label: warmingLabel[value] }))}
+                  onChange={next => { if (next !== current()) put(path(), action, resource.refresh, { mode: next }, warmingNotice[next]); }} />
+                : <Badge tone={current() === "off" ? "neutral" : "success"}>{warmingLabel[current()]}</Badge>} />
           )}
         </If>
       </ResourceState>
