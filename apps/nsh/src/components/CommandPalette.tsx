@@ -73,6 +73,7 @@ export function CommandPalette(props: { registry: CommandRegistry; sessions: () 
     untracked(() => {
       asking.set(null);
       query.set("");
+      highlightedKey.set(null);
       const command = request?.commandId ? commands().find(item => item.id === request.commandId) : undefined;
       if (command) start(command);
     });

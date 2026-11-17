@@ -142,6 +142,20 @@ describe("the command palette", () => {
     await app.waitUntil(() => sent(app, "GET", "/api/sessions/s3/view").length > 0);
   });
 
+  test("opened again, the palette highlights its first row, not the one left highlighted", async () => {
+    const app = await desktop();
+    await app.keyboard.press("mod+k");
+    await app.waitFor("id:palette-command-session-archive");
+    await app.keyboard.press("down");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:command-palette", { state: "gone" });
+    await app.keyboard.press("mod+k");
+    await app.waitFor("id:palette-input");
+    await app.submit("id:palette-input");
+    await app.waitUntil(() => app.value("id:palette-input") === "Fix the flaky login test");
+    expect(app.dialogs()).toHaveLength(0);
+  });
+
   test("a slash command goes into the chat box, and is dimmed while the box holds a message", async () => {
     const app = await desktop();
     await app.keyboard.press("mod+k");
