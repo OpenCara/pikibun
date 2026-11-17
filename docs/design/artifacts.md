@@ -7,8 +7,8 @@ and fitted to Pikibun's host, Pikibun server and client.
 ## The tool
 
 `publish_artifact { name, kind, content, title? }` (`apps/runner/src/session/tools/artifacts.ts`) is one of the
-session's own tools, switched by `piki:artifacts` like the other Pikibun tools, so it is off until a workspace adds it
-and runs under the session's rules: it needs a shared message that may act (`calls.actor(api, true)`,
+session's own tools, switched by `piki:artifacts`, opt-in as `piki:tunnel` is: off until a workspace adds it, also in
+workspaces whose extensions were settled before it existed and on hosts that can't read the workspace's choice. It runs under the session's rules: it needs a shared message that may act (`calls.actor(api, true)`,
 `calls.check(..., { write: true })`), so a side ask or a **Read only** message can't publish. It isn't one of the tool
 groups' tools: it writes nothing in the worktree and reaches nothing outside the session, and a new group tool would be
 dropped by apps from before it whenever they save a group. Whoever may send a message that acts may have the agent

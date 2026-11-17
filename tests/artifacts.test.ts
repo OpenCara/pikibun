@@ -178,13 +178,17 @@ test("the agent publishes versions of an artifact into the session's own store; 
     fauxAssistantMessage("Refused."),
     fauxAssistantMessage([fauxToolCall("publish_artifact", { name: "notes", kind: "markdown", content: "# Notes" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Not in a Read-only message."),
+    fauxAssistantMessage([fauxToolCall("publish_artifact", { name: "notes", kind: "markdown", content: "# Notes" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Turned off."),
   ]);
+  let artifactsOn = true;
   const models = createModels();
   models.setProvider(faux.provider);
   const service = new RunnerService({
     dataDir: directory, sharedSecret: "runner-artifacts-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [{ source: "piki:artifacts", enabled: artifactsOn, tools: "approval" as const, settings: {} }], automaticTools: false }) },
   });
   await service.initialize();
   t.after(() => service.close());
@@ -207,6 +211,9 @@ test("the agent publishes versions of an artifact into the session's own store; 
   assert.match((await results()).at(-1)!.text, /name must be lowercase letters/);
   await send("Only look.", { access: "read" });
   assert.match((await results()).at(-1)!.text, /Read-only message/);
+  artifactsOn = false;
+  await send("Publish the notes.");
+  assert.match((await results()).at(-1)!.text, /publish_artifact is not available|publish_artifact is turned off/, "piki:artifacts switches it");
 
   const listed = await read({}) as { artifacts: ArtifactSummary[] };
   assert.deepEqual(listed.artifacts.map(item => [item.name, item.versions.map(version => [version.version, version.kind, version.title, version.size])]),

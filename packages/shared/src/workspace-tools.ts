@@ -31,6 +31,7 @@ export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.
   source_read: "Reads an item of the workspace's document sources, as the session owner.",
   schedule: "Lists, creates, changes and deletes the session's scheduled prompts.",
   sessions: "Lists, reads, messages, starts, stops and archives the workspace's other sessions, as the message's sender.",
+  publish_artifact: "Publishes a versioned HTML, SVG, Markdown or text artifact beside the session, for its readers to look at.",
   codemode: "Runs JavaScript that calls the session's tools, to batch, chain and filter their calls.",
 });
 
