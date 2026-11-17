@@ -38,3 +38,14 @@ There is no shell tool: `bash` and `host_bash` were removed (#163). Sessions run
 Nothing waits for anyone's approval: a call runs, or is refused with its reason. Whatever a message's access, a session runs only the tools both its owner's [tool group](workspaces.md#tool-groups) and the message's sender's have; see [What a session may do](approvals.md). Side asks offer only the read-only tools.
 
 Sessions started from a saved agent, before agents were removed, keep that agent's instructions and tools; any other tool they call runs as the session's other tools do.
+
+## Prompt cache warming
+
+Model providers keep the start of a conversation in a prompt cache for a few minutes (Anthropic: 5 minutes, an hour with long retention), and read it far cheaper than they write it. A message after a longer pause, or a run that waits on a slow tool, writes the whole conversation again at full price. To spare the host's account that, a host re-sends a session's last model request with a cap of one output token shortly before its cache entry expires:
+
+- **When**: at 90% of the cache lifetime (and at least 10 seconds before it ends), counted from when the request, then each refresh, was sent; for up to 60 minutes after the request while the agent still works, and up to 30 minutes after it answered.
+- **Only where it pays**: for models whose prompt cache has a known lifetime, and only when the refresh is expected to save at least $0.05: while the agent works the next request is certain, after it answered Pi counts on one in about seven. Anthropic models that think with a token budget are never refreshed: the replay would change the budget, and so the cache entry.
+- **Never in the way**: nothing is refreshed while the session's model request is under way, and a refresh still under way when the agent sends its next request is cancelled. Refreshing stops once the next request would differ: another model or reasoning level, a compaction, a rewind, or a conversation that no longer starts with what was sent. Side asks, and sessions that agents start for sub-tasks, are refreshed only while they work.
+- **Counted as the session's own**: a refresh's usage is added to its conversation's, and it leaves the provider's conversation state (such as an OpenAI response thread) as it was.
+
+A workspace's owners and admins choose under **Settings → Workspaces →** the workspace **→ Prompt cache** (`GET`/`PUT /api/workspaces/:id/cache-warming` with `{"mode": "idle" | "streaming" | "off"}`): **Working and waiting** (`idle`, the default), **While working** (`streaming`) or **Off**. Hosts learn a change within a minute. Hosts need a connector with cache warming to refresh at all; older ones ignore the setting. How it works: [Prompt cache warming](design/cache-warming.md).

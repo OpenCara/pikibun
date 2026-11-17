@@ -603,7 +603,7 @@ export class RunnerSession {
     this.#warmers?.close();
     const warmers: CacheWarmers = new CacheWarmers(sessionWarming({
       harness: (): Harness | undefined => (this.closing || this.#warmers !== warmers ? undefined : this.harness), metadata: () => this.metadata(), mode: () => this.cacheWarmingMode(),
-      child: this.binding.session.parentSessionId !== undefined,
+      child: !!this.binding.session.parentSessionId,
       report: error => process.stderr.write(`Session ${this.binding.session.id}: cache warming failed: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`),
     }));
     this.#warmers = warmers;

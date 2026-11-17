@@ -104,7 +104,7 @@ export function CacheWarmingSettings(props: { workspace: Workspace; admin: boole
   const action = createAction();
   const mode = () => resource.data()?.settings.mode;
   return (
-    <Section title="Prompt cache" info={<View style={{ gap: 8 }}>
+    <Section title="Prompt cache" testID="workspace-cache-warming" info={<View style={{ gap: 8 }}>
       <If when={!props.admin}>{adminOnly}</If>
       <Note>Model providers keep the start of a conversation cached for a few minutes, and read it far cheaper than they write it again. A host can refresh a session's cache shortly before it expires, with a request of one output token, so the next message after a pause or a slow tool reads it instead of writing it again.</Note>
       <Note>A refresh is sent only for models with a known cache lifetime, and only when it is expected to save at least $0.05; its usage counts as the session's own. Sessions that agents start for sub-tasks are refreshed only while they work.</Note>
@@ -114,7 +114,7 @@ export function CacheWarmingSettings(props: { workspace: Workspace; admin: boole
           {current => (
             <Row title="Keep prompt caches warm" hint={warmingHint[current()]}
               trailing={props.admin
-                ? <Select<CacheWarmingMode> compact label="Keep prompt caches warm" value={current()} disabled={action.busy()}
+                ? <Select<CacheWarmingMode> compact testID="cache-warming-mode" label="Keep prompt caches warm" value={current()} disabled={action.busy()}
                   options={cacheWarmingModes.map(value => ({ value, label: warmingLabel[value] }))}
                   onChange={next => { if (next !== current()) put(path(), action, resource.refresh, { mode: next }, warmingNotice[next]); }} />
                 : <Badge tone={current() === "off" ? "neutral" : "success"}>{warmingLabel[current()]}</Badge>} />
