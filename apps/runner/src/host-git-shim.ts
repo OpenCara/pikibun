@@ -165,6 +165,7 @@ export function hostGitProgram(socket: string, token: string): string {
     "    if (url && !borrowing) {",
     "      const found = await mirror(url);",
     "      if (found && fs.existsSync(path.join(found, \"objects\"))) extra.push(\"--reference-if-able\", found);",
+    "      else if (found) note(\"the host's repository cache of \" + url + \" has no objects to borrow; cloning without it\");",
     "    }",
     "    args = [...args.slice(0, index + 1), ...extra, ...rest];",
     "  }",

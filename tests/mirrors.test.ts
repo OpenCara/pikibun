@@ -545,6 +545,13 @@ test("the host's git hands only clones to the runner, borrows the mirror it answ
     answer = async () => undefined;
     assert.equal((await gitShim("clone", "-q", u.bare, "four")).code, 0);
     assert.equal(alternates("four"), "", "not a workspace repository");
+    const empty = join(u.directory, "empty.git");
+    await mkdir(empty);
+    answer = async () => empty;
+    const hollow = await gitShim("clone", "-q", u.bare, "hollow");
+    assert.equal(hollow.code, 0);
+    assert.match(hollow.stderr, /pikibun: the host's repository cache of .* has no objects to borrow; cloning without it/);
+    assert.equal(alternates("hollow"), "");
     answer = async () => { throw new RunnerError(502, "This host's Git credentials can't read acme/app"); };
     const unfilled = await gitShim("clone", "-q", u.bare, "five");
     assert.equal(unfilled.code, 0);

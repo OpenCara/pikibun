@@ -280,10 +280,10 @@ export class HostWorkspace implements SessionWorkspace {
           const bash = bashPath();
           if (!bash) throw hostError(windows ? "bash commands need Git for Windows' bash.exe" : "bash commands need /bin/bash");
           const git = await this.#gitShim?.().catch(() => undefined);
-          const path = this.#environment.PATH;
+          const path = this.#environment.PATH || "/usr/bin:/bin:/usr/sbin:/sbin";
           return output(checked(await this.#spawn(bash, hostBashArgs(command), undefined,
             { timeoutMs: (options.limits?.seconds ?? TIMEOUT_MS / 1000) * 1000, signal: options.signal, hostCommand: command,
-              ...(git ? { env: { PATH: path ? `${git}:${path}` : git } } : {}) })));
+              ...(git ? { env: { PATH: `${git}:${path}` } } : {}) })));
         });
       }
       case "github.comment":
