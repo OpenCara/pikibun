@@ -656,7 +656,7 @@ function Conversation(props: {
       <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: bottomInset(), backgroundColor: palette().background }}>
         <View style={{ gap: 6, width: "100%", maxWidth: 800, alignSelf: "center" }}>
           <If when={statusShown() || statusLine()}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 26 }}>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 4, minHeight: 26 }}>
               <If when={statusShown()}>
                 <BaseButton testID="queue-line" accessibilityLabel={`${queueLabel()}, ${queueOpen() ? "hide details" : "show details"}`} onPress={() => queueOpen.update(open => !open)}
                   style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 0, paddingHorizontal: 8, height: 26, borderRadius: radius.pill,
@@ -669,7 +669,7 @@ function Conversation(props: {
               </If>
               <If when={statusLine()}>
                 {line => <Text testID="usage-line" accessibilityLabel={line().label}
-                  style={{ marginLeft: "auto", flexShrink: 1, minWidth: 0, numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{line().text}</Text>}
+                  style={{ marginLeft: "auto", flexShrink: 0, maxWidth: "100%", numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{line().text}</Text>}
               </If>
             </View>
           </If>
