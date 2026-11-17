@@ -54,7 +54,8 @@ Where the implementation departs from the decision above:
   AIA, OCSP and CRL URLs a certificate names on the host's own network, outside the egress proxy: a step could send
   data the network policy refuses. The profile doesn't allow it, so the only way out stays the proxy; curl, Git, Node
   and Python use the session's CA bundle and work. (The first macOS run allowed it; that was reverted.)
-- **Not yet:** the repository cache and GPU on both, and clone-session backups and moves on Windows (the Node helper
+- **Not yet:** the GPU on both, the repository cache on Windows (macOS has it: Seatbelt read grants for the session's
+  mirrors, and the Python git shim; see [egress.md](egress.md), phase 3), and clone-session backups and moves on Windows (the Node helper
   has no `clone-backup`/`clone-restore`; the workspace refuses them by name).
 
 What the first runs must check, beyond [Spikes](#spikes-before-committing):

@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
+import { chmod, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { GIT_SHIM } from "./sandbox-python.generated.js";
 import { HELPER, type SandboxRequest } from "./sandbox.js";
 import { egressPort, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "./helper-workspace.js";
 import { connectorNode, toolchainPaths, type NodeToolchain } from "./node-toolchain.js";
@@ -61,6 +63,16 @@ export interface SeatbeltPolicy {
   gitWritable: boolean;
   egressPort?: number;
   toolRoots: readonly string[];
+  mirrors?: readonly string[];
+}
+
+export function seatbeltMirror(path: string): boolean {
+  return path.startsWith("/") && !path.split("/").includes("..") && /\/[A-Za-z0-9{}_-]{1,100}\.git$/.test(path) && !/[\x00-\x1f\x7f"\\]/.test(path);
+}
+
+export function seatbeltGitShim(python: string): string {
+  if (!python.startsWith("/") || /[\s\x00-\x1f\x7f]/.test(python)) throw new Error("Invalid Python path for the git shim");
+  return GIT_SHIM.replace(/^#![^\n]*\n/, `#!${python} -I\n`);
 }
 
 export function seatbeltProfile(policy: SeatbeltPolicy): { profile: string; parameters: Record<string, string> } {
@@ -71,6 +83,9 @@ export function seatbeltProfile(policy: SeatbeltPolicy): { profile: string; para
   };
   policy.toolRoots.forEach((root, index) => { parameters[`TOOL_${index}`] = root; });
   const tools = policy.toolRoots.map((_, index) => `(subpath (param "TOOL_${index}"))`).join(" ");
+  const mirrors = policy.mirrors ?? [];
+  if (!mirrors.every(seatbeltMirror)) throw new Error("Invalid repository mirror path");
+  mirrors.forEach((mirror, index) => { parameters[`MIRROR_${index}`] = mirror; });
   const lines = [
     "(version 1)",
     "(deny default)",
@@ -91,6 +106,7 @@ export function seatbeltProfile(policy: SeatbeltPolicy): { profile: string; para
     "(allow file-read* (subpath (param \"HOME_DIR\")) (subpath (param \"WORKTREE\")) (subpath (param \"GIT_DIR\")) (subpath (param \"BIN\"))"
       + " (literal (param \"OWNER_CONFIG\")) (literal (param \"CA_BUNDLE\"))"
       + " (literal (param \"ROOT\")))",
+    ...(mirrors.length ? [`(allow file-read* ${mirrors.map((_, index) => `(subpath (param "MIRROR_${index}"))`).join(" ")})`] : []),
   ];
   if (!policy.readOnly) {
     lines.push("(allow file-write* (subpath (param \"HOME_DIR\")) (subpath (param \"WORKTREE\")))");
@@ -136,6 +152,14 @@ export class SeatbeltBackend implements HelperBackend {
 
   async prepare(_layout: HelperLayout): Promise<void> {}
 
+  async installGitShim(layout: HelperLayout): Promise<void> {
+    const path = join(layout.bin, "git");
+    await chmod(path, 0o600).catch(() => undefined);
+    await rm(path, { force: true });
+    await writeFile(path, seatbeltGitShim(this.#tools.python), { mode: 0o500 });
+    await chmod(path, 0o500);
+  }
+
   process(command: { program: string; args: readonly string[] }, context: HelperContext, layout: HelperLayout, readRoots: readonly string[]): HelperLaunch {
     const port = egressPort(context);
     const { profile, parameters } = seatbeltProfile({
@@ -156,8 +180,10 @@ export class SeatbeltBackend implements HelperBackend {
 
   async launch(request: SandboxRequest, context: HelperContext, layout: HelperLayout): Promise<HelperLaunch> {
     const port = egressPort(context);
+    const mirrors = (context.mirrors ?? []).filter(seatbeltMirror);
+    const resolved = [...new Set(mirrors.flatMap(path => { try { return [realpathSync(path)]; } catch { return []; } }).filter(seatbeltMirror))];
     const { profile, parameters } = seatbeltProfile({
-      layout, readOnly: context.readOnly, gitWritable: context.gitWritable, toolRoots: this.#tools.roots,
+      layout, readOnly: context.readOnly, gitWritable: context.gitWritable, toolRoots: this.#tools.roots, mirrors: resolved,
       ...(port !== undefined ? { egressPort: port } : {}),
     });
     void request;
@@ -167,6 +193,8 @@ export class SeatbeltBackend implements HelperBackend {
       cwd: layout.worktree,
       env: {
         ...context.environment,
+        ...(context.gitShim && port !== undefined ? { PATH: `${layout.bin}:${context.environment.PATH ?? this.#tools.path}` } : {}),
+        ...(mirrors.length ? { SANDBOX_MIRRORS: mirrors.join("\n") } : {}),
         SANDBOX_GITDIR: layout.git, SANDBOX_GIT: this.#tools.git, SANDBOX_BASH: this.#tools.bash, SANDBOX_OWNER_CONFIG: layout.ownerConfig,
         TMPDIR: join(layout.home, ".tmp"),
         CLANG_MODULE_CACHE_PATH: join(layout.home, ".cache", "clang", "ModuleCache"),

@@ -36,7 +36,10 @@ export interface HostSudo {
   waitedSince(start: number): number;
   track?(): { redact(text: string, cut?: boolean): string; end(): void };
 }
-export type HostWorkspaceOptions = { ownerEnvironment?: boolean; privateEnvironment?: readonly string[]; sudo?: HostSudo };
+export type HostWorkspaceOptions = {
+  ownerEnvironment?: boolean; privateEnvironment?: readonly string[]; sudo?: HostSudo;
+  gitShim?: () => Promise<string | undefined>;
+};
 const SUDO_RECHECK_MS = 1000;
 
 export { CONNECTOR_ENVIRONMENT };
@@ -84,6 +87,7 @@ export class HostWorkspace implements SessionWorkspace {
   #closed = false;
   #cancelActive: (() => void) | undefined;
   readonly #sudo: HostSudo | undefined;
+  readonly #gitShim: (() => Promise<string | undefined>) | undefined;
   #activeCommand: string | undefined;
 
   constructor(binding: RunnerBinding, root: string, options: HostWorkspaceOptions = {}) {
@@ -106,6 +110,7 @@ export class HostWorkspace implements SessionWorkspace {
     });
     this.ownerEnvironment = options.ownerEnvironment === true;
     this.#sudo = windows ? undefined : options.sudo;
+    this.#gitShim = windows ? undefined : options.gitShim;
     this.#isolated = Object.freeze({
       ...(windows ? windowsSystemEnvironment() : {}),
       ...sessionEnvironment(this.#identity, { path: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin", gitConfig: join(this.#root, "owner.gitconfig") }),
@@ -274,8 +279,11 @@ export class HostWorkspace implements SessionWorkspace {
           if (options.signal?.aborted) throw new SandboxProcessError("Command stopped before it started", null, null, "", "");
           const bash = bashPath();
           if (!bash) throw hostError(windows ? "bash commands need Git for Windows' bash.exe" : "bash commands need /bin/bash");
+          const git = await this.#gitShim?.().catch(() => undefined);
+          const path = this.#environment.PATH || "/usr/bin:/bin:/usr/sbin:/sbin";
           return output(checked(await this.#spawn(bash, hostBashArgs(command), undefined,
-            { timeoutMs: (options.limits?.seconds ?? TIMEOUT_MS / 1000) * 1000, signal: options.signal, hostCommand: command })));
+            { timeoutMs: (options.limits?.seconds ?? TIMEOUT_MS / 1000) * 1000, signal: options.signal, hostCommand: command,
+              ...(git ? { env: { PATH: `${git}:${path}` } } : {}) })));
         });
       }
       case "github.comment":

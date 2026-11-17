@@ -97,7 +97,9 @@ Nobody approves commands one by one: they run at once for you and the members yo
 
 Every session starts with an empty worktree, and its agent clones the workspace repositories it needs. With **Repository cache** set to **Shared** (one cache for every session on this host) or **Per owner** (a separate cache for each session owner) in the host's configuration, the connector keeps a full mirror of each repository on the host, so clones borrow its objects instead of downloading everything again. A change applies when the connector next connects.
 
-- `git clone` of a workspace repository in a sandboxed session borrows the cached objects (`--reference-if-able`) after bringing the mirror up to date through Pikibun, with the session owner's own account. The host uses no Git credential of its own for this. A session sees a mirror, read-only, only while Pikibun lets its owner read the repository.
+- `git clone` of a workspace repository borrows the cached objects (`--reference-if-able`) once Pikibun confirms, with the session owner's own account, that they can read it; the host brings its mirror up to date itself, with the credentials Git on the host would use. A sandboxed session sees a mirror, read-only, only while Pikibun lets its owner read the repository: the Linux sandbox mounts it, the macOS sandbox lets the session's Git steps read it.
+- Sessions that run on the host borrow it too, through a `git` of the session's own first on their `PATH`; their clones fetch what a mirror lacks with the host's own Git. They run as the connector's user, who owns the cache.
+- Windows hosts keep no cache yet.
 - `npx pikibun@latest cache list` shows the cached repositories and their sizes; `npx pikibun@latest cache prune --older-than 30` forgets clone sessions idle for longer and collects what nothing reaches any more (their clones lose the objects they borrowed). Pins of sessions from before every session cloned are kept.
 - It needs a Pikibun server that supports the repository cache; older servers refuse the connector's manifest.
 
