@@ -103,7 +103,7 @@ export function checkArtifact(value: unknown, request: { name: string; version: 
   const artifact = record(value);
   const info = checkVersionInfo(artifact);
   if (!artifact || !info || artifact.name !== request.name || info.version !== request.version || typeof artifact.content !== "string"
-    || artifactBytes(artifact.content) > artifactLimits.bytes) return undefined;
+    || artifactBytes(artifact.content) !== info.size) return undefined;
   return { name: request.name, ...info, content: artifact.content };
 }
 

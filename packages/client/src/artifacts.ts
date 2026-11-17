@@ -21,8 +21,18 @@ export interface ArtifactSource {
   read(name: string, version: number): Promise<{ artifact: ArtifactContent }>;
 }
 
-export function createArtifactSource(place: ArtifactPlace, load: <T>(href: string) => Promise<T>, limit = 16): ArtifactSource {
-  const kept = new Map<string, Promise<{ artifact: ArtifactContent }>>();
+export const artifactCacheBytes = 2 * 1024 * 1024;
+
+export function createArtifactSource(place: ArtifactPlace, load: <T>(href: string) => Promise<T>, budget = artifactCacheBytes): ArtifactSource {
+  const kept = new Map<string, { loading: Promise<{ artifact: ArtifactContent }>; bytes: number }>();
+  const trim = () => {
+    let total = [...kept.values()].reduce((sum, item) => sum + item.bytes, 0);
+    while (total > budget && kept.size > 1) {
+      const [oldest, item] = kept.entries().next().value!;
+      kept.delete(oldest);
+      total -= item.bytes;
+    }
+  };
   return {
     list: () => load<{ artifacts: ArtifactSummary[] }>(artifactsHref(place)),
     read(name, version) {
@@ -31,13 +41,16 @@ export function createArtifactSource(place: ArtifactPlace, load: <T>(href: strin
       if (known) {
         kept.delete(key);
         kept.set(key, known);
-        return known;
+        return known.loading;
       }
-      const loading = load<{ artifact: ArtifactContent }>(artifactsHref(place, { name, version }));
-      kept.set(key, loading);
-      while (kept.size > limit) kept.delete(kept.keys().next().value!);
-      loading.catch(() => { if (kept.get(key) === loading) kept.delete(key); });
-      return loading;
+      const item = { loading: load<{ artifact: ArtifactContent }>(artifactsHref(place, { name, version })), bytes: 0 };
+      kept.set(key, item);
+      item.loading.then(result => {
+        if (kept.get(key) !== item) return;
+        item.bytes = result.artifact.content.length * 2;
+        trim();
+      }, () => { if (kept.get(key) === item) kept.delete(key); });
+      return item.loading;
     },
   };
 }

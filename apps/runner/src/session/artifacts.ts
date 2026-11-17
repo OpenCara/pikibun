@@ -37,7 +37,7 @@ export async function publishArtifact(commit: <T>(change: (tx: Tx) => Promise<T>
   if (size > artifactLimits.bytes) throw new RunnerError(413, `An artifact holds at most ${artifactLimits.bytes / 1024 / 1024} MiB of UTF-8; this one is ${size} bytes. Make it smaller.`);
   return commit(async tx => {
     const index = await tx.doc(ArtifactIndex);
-    const versions = index.artifacts[input.name] ?? [];
+    const versions = Object.hasOwn(index.artifacts, input.name) ? index.artifacts[input.name]! : [];
     const again = versions.find(item => item.callId === input.callId);
     if (again) return { name: input.name, ...shown(again) };
     if (!versions.length && Object.keys(index.artifacts).length >= artifactLimits.names) {

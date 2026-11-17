@@ -43,11 +43,13 @@ test("artifact names, requests and answers are checked; a version's result line 
     [{ name: "chart", versions: [{ ...info, size: artifactLimits.bytes + 1 }] }]]) {
     assert.equal(checkArtifactList(bad), undefined, JSON.stringify(bad));
   }
-  const artifact: Artifact = { name: "chart", ...info, content: "<p>hi</p>" };
+  const artifact: Artifact = { name: "chart", ...info, size: 9, content: "<p>hi</p>" };
   assert.deepEqual(checkArtifact({ ...artifact, extra: 1 }, { name: "chart", version: 1 }), artifact);
   assert.equal(checkArtifact(artifact, { name: "chart", version: 2 }), undefined, "the version asked for, and no other");
   assert.equal(checkArtifact(artifact, { name: "other", version: 1 }), undefined);
   assert.equal(checkArtifact({ ...artifact, content: "x".repeat(artifactLimits.bytes + 1) }, { name: "chart", version: 1 }), undefined);
+  assert.equal(checkArtifact({ ...artifact, size: 13 }, { name: "chart", version: 1 }), undefined, "its size is its content's, in UTF-8 bytes");
+  assert.ok(checkArtifact({ ...artifact, size: 12, content: "é".repeat(6) }, { name: "chart", version: 1 }));
 
   const text = artifactResultText({ name: "chart", version: 3, kind: "markdown", title: "Sales" });
   assert.deepEqual(artifactResult(text), { name: "chart", version: 3, kind: "markdown", title: "Sales" });
@@ -83,7 +85,7 @@ test("the client finds the card's artifact in a publish_artifact result and keep
   const source = createArtifactSource({ sessionId: "s" }, async <T,>(href: string) => {
     loaded.push(href);
     if (href.includes("version=9")) throw new Error("gone");
-    return { artifact: { name: "chart" }, artifacts: [] } as T;
+    return { artifact: { name: "chart", content: "x" }, artifacts: [] } as T;
   });
   await source.read("chart", 1);
   await source.read("chart", 1);
@@ -93,6 +95,13 @@ test("the client finds the card's artifact in a publish_artifact result and keep
   await assert.rejects(source.read("chart", 9), /gone/);
   assert.deepEqual(loaded, ["/api/sessions/s/artifacts?name=chart&version=1", "/api/sessions/s/artifacts", "/api/sessions/s/artifacts",
     "/api/sessions/s/artifacts?name=chart&version=9", "/api/sessions/s/artifacts?name=chart&version=9"], "a list is read again each time; a failure isn't kept");
+  const big: string[] = [];
+  const budgeted = createArtifactSource({ shared: true }, async <T,>(href: string) => {
+    big.push(href);
+    return { artifact: { name: "chart", content: "x".repeat(400) } } as T;
+  }, 2000);
+  for (const version of [1, 2, 3, 1]) await budgeted.read("chart", version);
+  assert.deepEqual(big.map(href => href.slice(-1)), ["1", "2", "3", "1"], "it keeps what fits its budget in bytes, the oldest going first");
 });
 
 test("piki:artifacts switches the tool: off until a workspace adds it, as the other Pikibun tools are", () => {
@@ -138,6 +147,9 @@ test("publishing keeps each version once, counts versions up, and refuses past t
   const before = JSON.stringify([...filled.docs]);
   await assert.rejects(publishArtifact(filled.commit, { name: "more", kind: "text", title: "More", content: "x", callId: "c-more", now }), /16 MiB together/);
   assert.equal(JSON.stringify([...filled.docs]), before, "a refused version writes nothing");
+  assert.equal((await publish("constructor", "a name like an object's own", "call-4")).version, 1, "a name is never read from the index's prototype");
+  assert.equal((await publish("constructor", "again", "call-5")).version, 2);
+  assert.equal((await readArtifact(store.reader, "constructor", 2)).content, "again");
   await assert.rejects(readArtifact(store.reader, "big", 1), /not in this session/);
   await assert.rejects(readArtifact(store.reader, "__proto__", 1), /not in this session/);
 });

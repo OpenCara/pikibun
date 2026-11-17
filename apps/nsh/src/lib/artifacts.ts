@@ -9,7 +9,7 @@ export function sessionArtifacts(sessionId: string): ArtifactSource {
   if (known) return known;
   const source = createArtifactSource({ sessionId }, <T,>(href: string) => untracked(session).api<T>(href));
   sources.set(sessionId, source);
-  while (sources.size > 8) sources.delete(sources.keys().next().value!);
+  while (sources.size > 4) sources.delete(sources.keys().next().value!);
   return source;
 }
 

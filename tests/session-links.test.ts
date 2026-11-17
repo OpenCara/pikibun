@@ -472,9 +472,10 @@ test('artifacts: whoever may read the session, and a share link, list and read t
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}/artifacts`;
   const secret = `github_pat_${'A1b2'.repeat(8)}`;
-  const info = { version: 1, kind: 'html', title: 'Sales chart', size: 64, createdAt: '2026-01-01T00:00:00.000Z' };
+  const content = `<p>Token ${secret}</p>`;
+  const info = { version: 1, kind: 'html', title: 'Sales chart', size: Buffer.byteLength(content), createdAt: '2026-01-01T00:00:00.000Z' };
   const listed = [{ name: 'chart', versions: [info] }];
-  const artifact = { name: 'chart', ...info, content: `<p>Token ${secret}</p>` };
+  const artifact = { name: 'chart', ...info, content };
   let answer: (body: Record<string, unknown>) => unknown = body => (body.name ? { artifact } : { artifacts: listed });
   const requests = rpcHub(f, s.connector, envelope => {
     assert.equal(envelope.request.ticket.action, 'artifacts');
