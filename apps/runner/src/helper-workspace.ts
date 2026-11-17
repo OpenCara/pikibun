@@ -254,7 +254,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
         if (!this.#backend.limitedShell && options.allowTestShell !== true && options.unbounded !== true) {
           throw new Error(`Commands can't run in this session: the ${this.#backend.name} sandbox has no hard per-session resource limits, so they run only in sessions of the host's owner and of members they granted host commands`);
         }
-        return this.#operation({ kind: "bash", command: text(operation.command, "shell command", 64 * 1024, true) },
+        return this.#operation({ kind: "bash", command: text(operation.command, "command", 64 * 1024, true) },
           { readOnly, egress: true, limits: options.limits }, authorize, options.signal);
       }
       case "github.comment":

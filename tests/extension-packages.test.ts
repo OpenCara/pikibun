@@ -8,7 +8,7 @@ import { extensionNames, packageProblems, packedFiles } from "../scripts/check-e
 const extensions = resolve(import.meta.dirname, "..", "extensions");
 
 test("every Pi extension in extensions/ is a package release-extensions.yml can publish", () => {
-  assert.deepEqual(extensionNames(), ["context-files", "pr-flow", "prompt-audit"]);
+  assert.deepEqual(extensionNames(), ["context-files", "pr-flow", "prompt-audit", "sub-agents"]);
   for (const name of extensionNames()) {
     assert.deepEqual(packageProblems(join(extensions, name)), [], `extensions/${name}`);
   }

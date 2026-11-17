@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { int, obj, opt, str } from "@earendil-works/pi-schema";
 import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, githubMergeMethods, type GitHubIssueView, type GitHubReadRequest } from "../../../../../packages/shared/src/types.js";
-import { githubWaitLimits, githubWaits, waitForGitHub } from "../../github-wait.js";
+import { githubWaitLimits, githubWaits, ownChanges, waitForGitHub } from "../../github-wait.js";
 import { RunnerError } from "../../protocol.js";
 import { githubRepository } from "../operations.js";
 import { approvalText, text, type ToolContext } from "./context.js";
@@ -13,7 +13,7 @@ export function githubTools(context: ToolContext): ToolRegistration[] {
   return [
     defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of curl. Each read spends the session owner's own GitHub rate limit: "
       + "where the session has the gh tool, read and wait for checks with gh instead, and use this to wait for any other change. Read-only; no credentials enter tools. "
-      + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
+      + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state, but for this session's own comments and pushes and the checks on a commit it pushed. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
       parameters: obj({ repository: str(), issue: int({ minimum: 1 }), wait: opt(StringEnum(githubWaits)),
         timeout_seconds: opt(int({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }, { open: true }), execute: async (args, api, call) => {
       await context.requireSessionTool("github_read");
@@ -31,7 +31,8 @@ export function githubTools(context: ToolContext): ToolRegistration[] {
       const first = await read();
       if (!args.wait) return text({ ...attribution, ...first });
       const { view, waited } = await waitForGitHub({ wait: args.wait, first, read, timeoutMs: (args.timeout_seconds ?? githubWaitLimits.defaultSeconds) * 1000,
-        pollMs: config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000, now: Date.now, sleep: ms => sleep(ms, undefined, { signal: call.abortSignal }) });
+        pollMs: config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000, now: Date.now, sleep: ms => sleep(ms, undefined, { signal: call.abortSignal }),
+        own: async () => ownChanges((await context.metadata()).approvals) });
       return text({ ...attribution, ...view, waited });
     } }),
     defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker. Use this where the gh tool can't write (gh pr comment, gh issue comment). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, _call) => {

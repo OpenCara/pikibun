@@ -77,6 +77,10 @@ jobs:
         run: node packages/cli/scripts/shrinkwrap.mjs --check
       # oxlint's correctness rules, as .oxlintrc.json sets them; any finding fails.
       - run: pnpm lint
+      # Comments in sources and drifting pins, the most common failures: checked here as well as in the tests job, so they
+      # fail within minutes. `pnpm check:fast` runs the same before a push.
+      - run: pnpm check:comments
+      - run: node --import tsx --test tests/pinned-dependencies.test.ts
       - run: pnpm typecheck
       # The sandbox's Python programs: Ruff and Pyright, from npm (embedded as checked by tests/sandbox-python.test.ts).
       - run: pnpm python:check

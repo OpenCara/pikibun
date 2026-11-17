@@ -568,7 +568,7 @@ export class Sandbox implements IsolatedWorkspace {
         if (bounded && !this.#resources) {
           throw new Error("Commands can't run here: they need explicitly provisioned cgroup and bounded filesystem resources");
         }
-        return this.#operation({ kind: "bash", command: text(operation.command, "shell command", 64 * 1024, true) }, readOnly, authorize, false, bounded,
+        return this.#operation({ kind: "bash", command: text(operation.command, "command", 64 * 1024, true) }, readOnly, authorize, false, bounded,
           { limits: options.limits, gpu: options.gpu, signal: options.signal });
       }
       case "github.comment":

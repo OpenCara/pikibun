@@ -5,24 +5,26 @@ import type { ToolDefinition } from "../../../../../packages/shared/src/tool-def
 import { brokeredArguments, programCommand, programRequest, type ProgramRequest } from "../../defined-tools.js";
 import { callTimeout } from "../../host-config.js";
 import { programLimits } from "../../program-command.js";
+import { callEnvironment, defaultedTimeout } from "../../program-defaults.js";
 import { RunnerError } from "../../protocol.js";
 import { text, type ToolContext } from "./context.js";
-import { callTimeoutParameter } from "./programs.js";
+import { callEnvironmentParameter, callTimeoutParameter, programHints } from "./programs.js";
 
 export function definedTool(context: ToolContext, definition: ToolDefinition): ToolRegistration {
   const { binding, calls, config, hostCommands, sandbox } = context;
   if (definition.kind === "program") {
     return defineTool({ name: definition.name, description: definition.description, executionMode: "sequential",
       parameters: obj({ program: StringEnum([...definition.programs]), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
-        timeout_seconds: callTimeoutParameter() }, { open: true }),
+        timeout_seconds: callTimeoutParameter(), env: callEnvironmentParameter() }, { open: true }),
       execute: async (args, api, call) => {
         await context.requireSessionTool(definition.name);
         let request: ProgramRequest;
         let command: string;
-        let timeoutSeconds: number | undefined;
+        let timeout: { seconds?: number; defaulted: boolean };
         try {
-          request = programRequest(definition, args); command = programCommand(definition, request, sandbox.nodeBin ? { nodeBin: sandbox.nodeBin } : {});
-          timeoutSeconds = callTimeout(args.timeout_seconds);
+          request = programRequest(definition, args);
+          command = programCommand(definition, request, { ...(sandbox.nodeBin ? { nodeBin: sandbox.nodeBin } : {}), environment: callEnvironment(args.env) });
+          timeout = defaultedTimeout(request.program, request.args, callTimeout(args.timeout_seconds));
         }
         catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${definition.name} call`}. Nothing ran.`); }
         const missing = context.programMissing(definition, request.program);
@@ -30,8 +32,9 @@ export function definedTool(context: ToolContext, definition: ToolDefinition): T
         const attribution = await calls.actor(api, true);
         await hostCommands.requireHostEnvironment();
         const { unbounded } = await calls.check(api, definition.name, { write: true, shell: true });
-        const approval = await context.operations.run(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal);
-        return text(await calls.shownApproval(approval, api, definition.name));
+        const approval = await context.operations.run(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId),
+          { unbounded, ...(timeout.seconds !== undefined ? { timeoutSeconds: timeout.seconds } : {}) }, call.abortSignal);
+        return text(await calls.shownApproval(programHints(context, approval, request.directory, timeout.defaulted), api, definition.name));
       } });
   }
   const parameters = Object.fromEntries(Object.entries(definition.parameters).map(([name, parameter]) => {

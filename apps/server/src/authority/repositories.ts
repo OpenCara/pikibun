@@ -16,7 +16,7 @@ import {
 import { collectRepositories, gitProviderAdapters, listBytes, listPageSize } from './git/providers.js';
 import { workspaceGitAccess } from './workspace-connections.js';
 import { addPikiExtensions } from './extension-policy.js';
-import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, rememberRead } from './github-reads.js';
+import { conditionalHeaders, forgetRead, githubRateLimited, rateLimitedUntil, rateLimitText, recallRead, rememberRateLimit, rememberRead } from './github-reads.js';
 import { failGitHubSignInExpired, forgetDeadGitHubToken } from './github-sign-in.js';
 
 export interface GitHubAccess { token: string; ciphertext: string; userId: string; githubId: string; expired?: (reason: string) => Promise<void> }
@@ -159,6 +159,8 @@ export async function boundedRepositoryBody(response: Response, limit: number): 
 }
 async function githubJSON(access: GitHubAccess, path: string, limit = jsonBytes): Promise<unknown> {
   const url = `${apiOrigin}${path}`;
+  const limited = rateLimitedUntil(access.token);
+  if (limited !== undefined) fail(429, 'github_rate_limited', rateLimitText(limited));
   const remembered = recallRead(access.token, url);
   const response = await remoteFetch(url, { headers: { ...headers(access), ...conditionalHeaders(remembered) } });
   const parse = (bytes: Uint8Array): unknown => {
@@ -176,9 +178,7 @@ async function githubJSON(access: GitHubAccess, path: string, limit = jsonBytes)
       await access.expired?.('repository check').catch(() => {});
       failGitHubSignInExpired();
     }
-    if (githubRateLimited(response)) {
-      fail(429, 'github_rate_limited', 'The session owner\'s GitHub rate limit is used up, so Pikibun can\'t check their access to the repository now. Try again after it resets.');
-    }
+    if (githubRateLimited(response)) fail(429, 'github_rate_limited', rateLimitText(rememberRateLimit(access.token, response)));
     fail(response.status === 403 || response.status === 404 || response.status === 401 ? 403 : 502,
       'github_repository_unavailable', 'GitHub repository access could not be verified. Check repository access and try again.');
   }

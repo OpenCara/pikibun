@@ -27,8 +27,7 @@ if (process.argv.includes("--check")) {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_config_/i.test(key)));
     const npm = (...args) => execFileSync("npm", args, { cwd: scratch, stdio: "inherit", env });
     npm("install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund");
-    npm("shrinkwrap");
-    copyFileSync(join(scratch, "npm-shrinkwrap.json"), shrinkwrapPath);
+    copyFileSync(join(scratch, "package-lock.json"), shrinkwrapPath);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

@@ -26,7 +26,9 @@ import type { ConnectorSocket, Generation } from "./connector/generation.js";
 import { connectorRunnerConfig } from "./connector/runner-config.js";
 import { RelayFrames } from "./connector/frames.js";
 import { validateRelayRequest } from "./connector/relay-request.js";
-import { boundedBody, CALLBACK_LIMIT, decodeJson, encoder, IDENTIFIER, refusedReport, TOKEN } from "./connector/wire.js";
+import { boundedBody, CALLBACK_LIMIT, CallbackRefused, decodeJson, encoder, IDENTIFIER, refusedReport, TOKEN } from "./connector/wire.js";
+import { HardwareProbe } from "./hardware.js";
+import { hardwareLimits, type HostHardware } from "../../../packages/shared/src/hardware.js";
 import type { RunnerConfig } from "./session.js";
 import { HostExtensions } from "./extensions/host.js";
 import { helperDescribe, sandboxDescribe } from "./extensions/describe.js";
@@ -202,6 +204,8 @@ export interface ConnectorOptions {
   browser?: Partial<Omit<HostBrowserOptions, "root" | "signal">>;
   tunnel?: Partial<Omit<HostTunnelOptions, "root" | "signal">>;
   acquireLease?: typeof acquireRunnerLease;
+  hardware?: { report(): Promise<HostHardware> } | null;
+  hardwareReportMs?: number;
   reconnectDelayMs?: number;
   extensions?: HostExtensions;
   remoteExtensionInstalls?: boolean;
@@ -239,6 +243,7 @@ export class LocalConnector {
   private readonly gpu?: GpuKind;
   private hostExtensions?: HostExtensions;
   private identity?: IdentityStore;
+  private hardwareProbe?: HardwareProbe;
 
   constructor(private readonly options: ConnectorOptions) {
     this.ready = this.readiness.promise;
@@ -410,6 +415,7 @@ export class LocalConnector {
       generation.runtimeReady.resolve();
       void this.syncExtensions(generation);
       void this.syncIdentity(generation);
+      void this.syncHardware(generation);
       this.options.onStatus?.("connected");
       this.readiness.resolve();
       if (!runtime.resumed) {
@@ -490,6 +496,20 @@ export class LocalConnector {
     if (answer.sign) {
       const settings = await identity.signSettings(answer.sign.version, parseSettings(answer.sign.settings));
       await this.calls.callback(generation, "/api/connectors/self/identity/settings", { settings });
+    }
+  }
+
+  private async syncHardware(generation: Generation): Promise<void> {
+    const probe = this.options.hardware === undefined ? (this.hardwareProbe ??= new HardwareProbe(this.options.dataDir)) : this.options.hardware;
+    if (!probe) return;
+    const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
+    while (!signal.aborted) {
+      try {
+        await this.calls.callback(generation, "/api/connectors/self/hardware", { hardware: await probe.report() });
+      } catch (error) {
+        if (error instanceof CallbackRefused && error.status < 500 && error.status !== 408 && error.status !== 429) return;
+      }
+      await delay(this.options.hardwareReportMs ?? hardwareLimits.reportSeconds * 1000, undefined, { signal }).catch(() => {});
     }
   }
 

@@ -147,8 +147,12 @@ export class SessionOperations {
         result = await this.#githubEffect(operation, { sessionId: binding.session.id, actorId, approvalId: id, admissionId: approval.admissionId! });
         status = "executed";
       } catch (error) {
-        if (error instanceof RunnerError && error.status === 422 && operation.kind !== "github.comment") { status = "failed"; result = error.message; }
-        else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
+        if (error instanceof RunnerError && error.status >= 400 && error.status < 500 && error.status !== 409 && error.message) { status = "failed"; result = error.message; }
+        else {
+          status = "interrupted";
+          const said = error instanceof RunnerError && error.message ? ` ${error.message.replace(/\s+$/, "")}` : "";
+          result = `Effect failed or outcome is ambiguous.${said} Inspect external state; automatic retry is prohibited.`;
+        }
       }
       await this.options.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: wholeResults.kept(id, result) }); });
       return (await this.options.metadata()).approvals[id]!;

@@ -1,0 +1,20 @@
+{
+  "name": "@pikibun/pi-sub-agents",
+  "version": "0.1.0",
+  "description": "A Pi extension that has the agent hand sub-tasks to sub-agents, sessions it starts with Pikibun's sessions tool, each placed on the least loaded host that meets its conditions: a GPU, CPUs, memory, disk, platform, models.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi-extension", "sub-agents", "delegation", "load-balancing"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OpenCara/pikibun.git",
+    "directory": "extensions/sub-agents"
+  },
+  "files": ["index.ts", "sub-agents.ts", "README.md"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

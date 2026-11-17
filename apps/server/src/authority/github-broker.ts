@@ -16,7 +16,7 @@ import { requireCallbackScope } from './hosts.js';
 import { requireOperationTool, requireToolCall } from './tool-checks.js';
 import { cloneSessionRepository, recheckAccess, verifyRepository, type GitHubAccess } from './repositories.js';
 import { requireBinding, requireNoRestore } from './push/broker.js';
-import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, rememberRead } from './github-reads.js';
+import { conditionalHeaders, forgetRead, githubRateLimited, rateLimitedUntil, rateLimitText, recallRead, rememberRateLimit, rememberRead } from './github-reads.js';
 import { failGitHubSignInExpired, forgetDeadGitHubToken } from './github-sign-in.js';
 
 const githubApi = 'https://api.github.com';
@@ -192,9 +192,21 @@ export async function githubMerge(c: AppContext, connectorId: string | null): Pr
     return pinned;
   });
   const detail = { approvalId, repository: pin.fullName, pull: operation.pull };
-  const ambiguous = async (): Promise<never> => {
+  const url = `https://github.com/${pin.fullName}/pull/${operation.pull}`;
+  const unknown = async (): Promise<never> => {
     await auditStatement(c.env, actorId, 'github.merge.ambiguous', row.workspace_id, sessionId, detail).run();
     return fail(502, 'github_outcome_unknown', 'GitHub could not confirm the outcome. The capability remains consumed; inspect the pull request before requesting another merge.');
+  };
+  const ambiguous = async (): Promise<Response> => {
+    const settled = await mergeState(github, pin.fullName, operation.pull);
+    if (!settled || (settled.merged && settled.head !== operation.sha)) return unknown();
+    if (settled.merged) {
+      await auditStatement(c.env, actorId, 'github.merge.completed', row.workspace_id, sessionId, { ...detail, sha: settled.sha, actingAs: github.userId, settled: true }).run();
+      return c.json({ sha: settled.sha, url } satisfies GitHubMergeResult);
+    }
+    await auditStatement(c.env, actorId, 'github.merge.failed', row.workspace_id, sessionId, { ...detail, settled: true }).run();
+    return fail(422, 'github_merge_refused', `GitHub didn't confirm the merge of ${pin.fullName}#${operation.pull}, and reading it again shows it isn't merged: `
+      + `it is ${settled.state === 'open' ? 'still open' : 'closed'}${settled.head ? ` at ${settled.head.slice(0, 12)}` : ''}. Read it again before another merge.`);
   };
   let response: Response;
   try {
@@ -211,12 +223,41 @@ export async function githubMerge(c: AppContext, connectorId: string | null): Pr
     const sha = result?.sha;
     if (result?.merged !== true || typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) return ambiguous();
     await auditStatement(c.env, actorId, 'github.merge.completed', row.workspace_id, sessionId, { ...detail, sha, actingAs: github.userId }).run();
-    return c.json({ sha, url: `https://github.com/${pin.fullName}/pull/${operation.pull}` } satisfies GitHubMergeResult);
+    return c.json({ sha, url } satisfies GitHubMergeResult);
   }
   if (response.status < 400 || response.status >= 500) return ambiguous();
   await auditStatement(c.env, actorId, 'github.merge.failed', row.workspace_id, sessionId, { ...detail, status: response.status }).run();
   const reason = typeof result?.message === 'string' ? result.message.replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, 300).replace(/\.+$/, '') : '';
   return fail(422, 'github_merge_refused', `GitHub did not merge ${pin.fullName}#${operation.pull}: ${reason || `HTTP ${response.status}`}.`);
+}
+
+async function mergeState(github: GitHubAccess, fullName: string, pull: number): Promise<{ merged: true; sha: string; head: string } | { merged: false; state: string; head: string } | undefined> {
+  try {
+    const value = record((await githubGet(github, `/repos/${fullName}/pulls/${pull}`)).value);
+    const sha = value.merge_commit_sha;
+    const found = value.head && typeof value.head === 'object' ? (value.head as Record<string, unknown>).sha : undefined;
+    const head = typeof found === 'string' ? found : '';
+    if (value.merged === true) return typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha) ? { merged: true, sha, head } : undefined;
+    if (value.merged !== false || (value.state !== 'open' && value.state !== 'closed')) return undefined;
+    return { merged: false, state: value.state, head };
+  } catch { return undefined; }
+}
+
+const duplicateIssueMinutes = 15;
+
+async function ownIssues(github: GitHubAccess, fullName: string, title: string, sinceMs: number): Promise<{ number: number; url: string; createdAt: number }[]> {
+  const since = new Date(sinceMs).toISOString();
+  const { value } = await githubGet(github, `/repos/${fullName}/issues?state=open&sort=created&direction=desc&per_page=${listItems}&since=${encodeURIComponent(since)}`);
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => {
+    if (!item || typeof item !== 'object') return [];
+    const issue = item as Record<string, unknown>;
+    const author = issue.user && typeof issue.user === 'object' ? (issue.user as Record<string, unknown>).id : undefined;
+    const createdAt = Date.parse(typeof issue.created_at === 'string' ? issue.created_at : '');
+    if (issue.pull_request !== undefined || String(author) !== github.githubId || issue.title !== title || !(createdAt >= sinceMs)
+      || !Number.isSafeInteger(issue.number) || (issue.number as number) < 1) return [];
+    return [{ number: issue.number as number, url: `https://github.com/${fullName}/issues/${issue.number}`, createdAt }];
+  });
 }
 
 export async function githubIssue(c: AppContext, connectorId: string | null): Promise<Response> {
@@ -231,10 +272,22 @@ export async function githubIssue(c: AppContext, connectorId: string | null): Pr
   const { row, github, prepared: pin } = await approvedEffect(c, connectorId, approval, operation, 'github.issue', async (session, access) => {
     const pinned = await pinnedGitHubRepository(c, session, operation.repository);
     await verifyPin(c.env, access, pinned);
+    const recent = await ownIssues(access, pinned.fullName, operation.title, Date.now() - duplicateIssueMinutes * 60_000).catch(() => []);
+    if (recent[0]) {
+      const minutes = Math.max(1, Math.round((Date.now() - recent[0].createdAt) / 60_000));
+      fail(422, 'github_issue_duplicate', `The session owner opened ${pinned.fullName}#${recent[0].number} with this exact title ${minutes} minute${minutes === 1 ? '' : 's'} ago: `
+        + `${recent[0].url}. Nothing was opened: add to that issue, or give this one a title of its own if it is another issue.`);
+    }
     return pinned;
   });
   const detail = { approvalId, repository: pin.fullName };
-  const ambiguous = async (): Promise<never> => {
+  const started = Date.now();
+  const ambiguous = async (): Promise<Response> => {
+    const found = await ownIssues(github, pin.fullName, operation.title, started - 60_000).catch(() => []);
+    if (found.length === 1) {
+      await auditStatement(c.env, actorId, 'github.issue.completed', row.workspace_id, sessionId, { ...detail, issue: found[0]!.number, actingAs: github.userId, settled: true }).run();
+      return c.json({ number: found[0]!.number, url: found[0]!.url } satisfies GitHubIssueResult);
+    }
     await auditStatement(c.env, actorId, 'github.issue.ambiguous', row.workspace_id, sessionId, detail).run();
     return fail(502, 'github_outcome_unknown', `GitHub could not confirm the outcome. The capability remains consumed; look for the issue in ${pin.fullName} before requesting another.`);
   };
@@ -263,6 +316,8 @@ export async function githubIssue(c: AppContext, connectorId: string | null): Pr
 
 export async function githubGet(github: GitHubAccess, path: string, limit = pageBytes): Promise<{ value: unknown; last: number | null }> {
   const url = `${githubApi}${path}`;
+  const limited = rateLimitedUntil(github.token);
+  if (limited !== undefined) return fail(429, 'github_rate_limited', rateLimitText(limited));
   const remembered = recallRead(github.token, url);
   let response: Response;
   try {
@@ -280,9 +335,7 @@ export async function githubGet(github: GitHubAccess, path: string, limit = page
       await github.expired?.('github_read').catch(() => {});
       failGitHubSignInExpired();
     }
-    if (githubRateLimited(response)) {
-      fail(429, 'github_rate_limited', 'The session owner\'s GitHub rate limit is used up. Try again later.');
-    }
+    if (githubRateLimited(response)) fail(429, 'github_rate_limited', rateLimitText(rememberRateLimit(github.token, response)));
     if (response.status === 404 || response.status === 410) fail(404, 'github_not_found', 'GitHub has no such issue or pull request in this repository.');
     if (response.status === 401 || response.status === 403) fail(403, 'github_repository_unavailable', 'The session owner\'s GitHub account cannot read this repository.');
     fail(502, 'github_unavailable', 'GitHub could not complete the read. Try again later.');
