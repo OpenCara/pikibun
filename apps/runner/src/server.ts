@@ -588,7 +588,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (!url.pathname.startsWith(prefix) || url.search) throw new RunnerError(400, "Invalid path");
     const route = url.pathname.slice(prefix.length);
     const since = /^view\/([0-9a-f]{32})$/.exec(route)?.[1];
-    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", changes: "changes", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image", sudo: "sudo", attach: "attach", portable: "portable", artifacts: "artifacts" };
+    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", changes: "changes", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image", sudo: "sudo", attach: "attach", portable: "portable", artifacts: "artifacts", title: "title" };
     const action = since ? "view" : actions[route];
     if (!action) throw new RunnerError(404, "Unknown runner endpoint");
     if (c.req.method !== (action === "view" || action === "events" ? "GET" : "POST")) throw new RunnerError(405, "Method not allowed");
@@ -647,6 +647,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (action === "withdraw") return c.json(await session.withdraw(ticket, input));
     if (action === "tunnel") return c.json(await session.tunnelAction(ticket, input));
     if (action === "sudo") return c.json(await session.sudoAction(ticket, input));
+    if (action === "title") return c.json(await session.title(ticket, input));
     if (action === "portable") return c.json(await service.keep(session, ticket, input));
     if (action === "revert") return c.json(await session.revert(ticket, input));
     if (action === "fork") return c.json(await service.fork(session, ticket, input));

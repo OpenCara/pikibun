@@ -35,6 +35,7 @@ import { packDueAfterArchiving } from './automatic-packing.js';
 import { autoModeEnabled } from './auto-mode.js';
 import { keepPortable, portableKeyFor } from './portable-sessions.js';
 import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
+import { nameSessionLater } from './session-titles.js';
 
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown, content = ''): Promise<ChatOptions | undefined> {
   if (value === undefined) return undefined;
@@ -176,6 +177,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect): sessions now clone their repositories with plain Git.');
   }
   if (input.hostEnvironment !== undefined && typeof input.hostEnvironment !== 'boolean') fail(400, 'invalid_input', 'hostEnvironment must be true or false.');
+  if (input.generateTitle !== undefined && typeof input.generateTitle !== 'boolean') fail(400, 'invalid_input', 'generateTitle must be true or false.');
   const onHost = input.hostEnvironment === true;
   const granted = session.connector_owner_id !== ownerId;
   const needsConsent = onHost && hostSessionsNeedConsent(capabilities, granted);
@@ -241,6 +243,10 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       needsConsent ? 1 : 0, row.connector_id ?? null).first();
   if (!inserted) fail(409, 'session_configuration_changed', 'Workspace repositories, Git account access, membership, or connector authority changed. Try again.');
   link.inserted?.(row.id);
+  if (input.generateTitle === true && !link.parentSessionId) {
+    await c.env.DB.query('UPDATE sessions SET title_fallback = title WHERE id = ?').bind(row.id).run();
+    row.title_fallback = row.title;
+  }
   const portableKey = await portableKeyFor(c.env, row, resolved.sourceIds === '[]');
   if (portableKey) {
     await c.env.DB.query('UPDATE sessions SET portable_key = ? WHERE id = ?').bind(portableKey, row.id).run();
@@ -491,7 +497,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
       if (!manages) fail(403, 'owner_required', 'Only the session owner, or the workspace\'s owner or an admin, can rename it.');
       const title = text(input.title, 'title', 200).trim();
       if (!title || /[\r\n]/.test(title)) fail(400, 'invalid_title', 'The title must be a single non-empty line.');
-      const renamed = await c.env.DB.query<SessionRow>(`UPDATE sessions SET title = ?
+      const renamed = await c.env.DB.query<SessionRow>(`UPDATE sessions SET title = ?, title_fallback = NULL
         WHERE id = ? AND owner_id = ? AND status <> 'archived' AND ${sessionManagerSQL('sessions')}
         RETURNING *`).bind(title, row.id, row.owner_id, actorId).first();
       if (!renamed) fail(409, 'policy_changed', 'Session membership or status changed; reload and retry.');
@@ -559,6 +565,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
       const input = await jsonObject(c, connectorLimits.requestBytes + 256 * 1024);
       const result = await submitMessage(c, row, mode, input);
       if (mode === 'ask') await recordSideAsk(c, row.id, result.conversationId, input.content, Array.isArray(input.images) ? input.images.length : 0);
+      else nameSessionLater(c, row, typeof input.content === 'string' ? input.content : '');
       return c.json(result, 202);
     });
   }

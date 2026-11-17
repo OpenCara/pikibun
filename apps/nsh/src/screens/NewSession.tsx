@@ -1,7 +1,7 @@
 import { computed, effect, Scroll, signal, Text, untracked, View, type JSX } from "nsh";
 import { Switch } from "nsh/base";
 import {
-  autoChatOptionsBody, canCreateSessions, chatOptionsBody, preferredSelection, segment, type ChatSelection, type ConnectorInfo, type ModelDefinition,
+  autoChatOptionsBody, canCreateSessions, chatOptionsBody, fallbackTitle, preferredSelection, segment, type ChatSelection, type ConnectorInfo, type ModelDefinition,
   type SessionRecord, type Workspace, type WorkspaceRepositoryList,
 } from "../shared";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
@@ -22,11 +22,8 @@ import { control, palette, radius, text } from "../theme";
 import { Logo } from "../logo";
 import { Banner, Button, Chip, EmptyState, Feedback, IconButton, Loading, Note, Picker, Small } from "../ui";
 
-const TITLE_LIMIT = 80;
-
 function deriveTitle(content: string, fallback: string): string {
-  const firstLine = content.trim().split("\n")[0]?.trim() ?? "";
-  return Array.from(firstLine).slice(0, TITLE_LIMIT).join("").trim() || fallback;
+  return fallbackTitle(content) || fallback;
 }
 
 const sameModel = (a: { provider: string; modelId: string }, b: { provider: string; modelId: string }) => a.provider === b.provider && a.modelId === b.modelId;
@@ -172,7 +169,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       const { api } = session();
       const images = await encodeImages(pasted);
       const result = await api<{ session: SessionRecord }>("/api/sessions", { method: "POST", body: {
-        workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name),
+        workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name), generateTitle: true,
         ...(foreign() ? { trustedConnectorId: current.id } : {}), ...(hostEnvironment ? { hostEnvironment: true } : {}),
       } });
       const sessionId = result.session.id;

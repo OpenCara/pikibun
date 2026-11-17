@@ -26,7 +26,7 @@ export function requestKey(actorId: string, mode: "write" | "ask", requestId: st
   return sha256(JSON.stringify([actorId, mode, requestId]));
 }
 export function permissionFor(action: RunnerAction): Permission {
-  if (action === "submit" || action === "create" || action === "stop" || action === "files" || action === "changes" || action === "revert" || action === "fork" || action === "upload" || action === "tunnel" || action === "image" || action === "sudo") return "write";
+  if (action === "submit" || action === "create" || action === "stop" || action === "files" || action === "changes" || action === "revert" || action === "fork" || action === "upload" || action === "tunnel" || action === "image" || action === "sudo" || action === "title") return "write";
   if (action === "ask" || action === "withdraw") return "ask";
   if (action === "restart" || action === "backup" || action === "restore" || action === "pack" || action === "unpack" || action === "attach" || action === "portable") return "manage";
   return "read";
