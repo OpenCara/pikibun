@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { EgressProxy, relayFetch, type RelayRequest } from "../apps/runner/src/egress.js";
+import { EgressProxy, endpointUrl, relayFetch, type RelayRequest } from "../apps/runner/src/egress.js";
+import { GIT_SHIM } from "../apps/runner/src/sandbox-python.generated.js";
 import { GitRemote } from "../apps/runner/src/git-remote.js";
+import { HostGitShim } from "../apps/runner/src/host-git-shim.js";
 import { RepositoryCache } from "../apps/runner/src/repo-cache.js";
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
@@ -451,6 +454,151 @@ test("a session asks the relay again for its owner's refs after a failure that m
   refusing = true;
   await assert.rejects(mirror(repository), (error: unknown) => error instanceof RunnerError && error.status === 403);
 });
+
+test("a session on the host clones a workspace repository with its own git, borrowing the host's mirror; other clones and commands run git as it is",
+  { skip: process.platform === "win32" }, async t => {
+    const u = await upstream(t);
+    const { RunnerSession } = await import("../apps/runner/src/session.js");
+    const forge = await startGitHttpServer(join(u.directory, "projects"));
+    t.after(() => forge.close());
+    const cache = new RepositoryCache({ root: join(u.directory, "cache") });
+    const grant: EgressGrant = { policy: { mode: "off", domains: [], packageRegistries: true }, repositories: [repository] };
+    const hosted = binding("host-clone");
+    hosted.session.hostEnvironment = true;
+    hosted.session.connectorOwnerId = "test:host-owner";
+    hosted.owner.env = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.${forge.url("")}.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/" };
+    const root = join(u.directory, "host-clone");
+    const session = new RunnerSession(hosted, root, { dataDir: root, controlPlaneUrl: "https://control.example.test", sharedSecret: "s".repeat(32), allowFaux: true,
+      authorize: async request => ({ allowed: true, ownerId: request.ownerId, policyVersion: 1 }), repositoryCache: cache, cacheRemote: u.cacheRemote,
+      egressGrant: async () => grant, gitRelay: async (_sessionId, request) => u.relay(request), resolveModels: async () => { throw new Error("model boundary"); } });
+    t.after(async () => { await session.close().catch(() => {}); await session.sandbox.close(); });
+    await assert.rejects(session.open(), /model boundary/);
+    assert.equal(session.sandbox.isolated, false, "the session runs on the host");
+    const allow = async () => {};
+    const shell = (command: string) => session.sandbox.execute({ kind: "bash", command }, false, allow, { allowTestShell: true });
+    const mirror = cache.mirrorDirectory(repository, "test:alice");
+
+    assert.doesNotMatch(await shell("git clone -q https://github.com/acme/app.git app"), /pikibun:/);
+    assert.equal(await session.sandbox.readFile("app/README.md", allow), "from upstream\n");
+    const borrowed = join(realpathSync(mirror), "objects");
+    assert.equal((await session.sandbox.readFile("app/.git/objects/info/alternates", allow)).trim(), borrowed);
+    assert.equal((await shell("cd app && git count-objects -v | grep '^count\\|^in-pack'")).trim(), "count: 0\nin-pack: 0");
+    assert.equal(await cache.filled(repository, "test:alice"), true);
+    assert.ok(u.fetched.some(path => path.endsWith("/git-upload-pack")), "the host filled its mirror with its own credential");
+    assert.equal(u.relayedPack(), false, "no pack went through the relay");
+    assert.equal(git(["--git-dir", mirror, "for-each-ref", "--format=%(refname)", "refs/pikibun/sessions/"], u.directory).split("\n").length, 1,
+      "the session keeps what its clone borrows");
+
+    await shell("git -c core.quotePath=false -C . clone -q --origin upstream https://github.com/acme/app.git second");
+    assert.equal((await session.sandbox.readFile("second/.git/objects/info/alternates", allow)).trim(), borrowed);
+    await shell("git clone -q --dissociate https://github.com/acme/app.git plain");
+    await assert.rejects(session.sandbox.readFile("plain/.git/objects/info/alternates", allow));
+    await shell(`git clone -q ${u.bare} local`);
+    await assert.rejects(session.sandbox.readFile("local/.git/objects/info/alternates", allow), "not a workspace repository: cloned as it is");
+    assert.match(await shell("git --version"), /^git version/);
+    assert.match(await shell("command -v git"), /pikibun-git-/);
+    assert.match(await shell("cd app && git log --oneline"), /initial/);
+  });
+
+function run(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout: Buffer[] = [], stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.once("error", reject);
+    child.once("close", code => resolve({ code, stdout: Buffer.concat(stdout).toString(), stderr: Buffer.concat(stderr).toString() }));
+  });
+}
+
+test("the host's git hands only clones to the runner, borrows the mirror it answers, and stops a clone whose mirror isn't available right now",
+  { skip: process.platform === "win32" }, async t => {
+    const u = await upstream(t);
+    const { RunnerError } = await import("../apps/runner/src/protocol.js");
+    const asked: string[] = [];
+    let answer: (onProgress: (progress: { phase: string; percent: number | null; done: number | null; total: number | null; bytes: number }) => void) => Promise<string | undefined>
+      = async () => u.bare;
+    const shim = new HostGitShim({ mirror: async (remote, onProgress) => { asked.push(remote); return answer(onProgress); }, heartbeatMs: 100 });
+    t.after(() => shim.close());
+    const bin = await shim.start();
+    assert.equal(await shim.start(), bin);
+    const work = join(u.directory, "shim");
+    await mkdir(work);
+    const env = { ...environment, PATH: `${bin}:${process.env.PATH}` };
+    const gitShim = (...args: string[]) => run("git", args, { cwd: work, env });
+    const alternates = (path: string) => spawnSync("cat", [join(work, path, ".git", "objects", "info", "alternates")], { encoding: "utf8" }).stdout.trim();
+    const borrowed = join(realpathSync(u.bare), "objects");
+
+    const missing = join(u.directory, "missing.git");
+    assert.equal((await gitShim("clone", "-q", "--", missing, "one")).code, 128, "there is no such repository; the clone still asked first");
+    assert.deepEqual(asked, [missing]);
+    asked.length = 0;
+    assert.equal((await gitShim("-c", "core.quotePath=false", "clone", "-q", "--origin", "up", u.bare, "two")).code, 0);
+    assert.deepEqual(asked, [u.bare]);
+    assert.equal(alternates("two"), borrowed);
+    asked.length = 0;
+    assert.equal((await gitShim("clone", "-q", "--reference-if-able", u.bare, u.bare, "three")).code, 0);
+    assert.match((await gitShim("--version")).stdout, /^git version/);
+    assert.equal((await gitShim("-C", "two", "status", "--short")).code, 0);
+    assert.deepEqual(asked, [], "clones that already borrow, and other commands, run git without asking");
+
+    answer = async () => undefined;
+    assert.equal((await gitShim("clone", "-q", u.bare, "four")).code, 0);
+    assert.equal(alternates("four"), "", "not a workspace repository");
+    answer = async () => { throw new RunnerError(502, "This host's Git credentials can't read acme/app"); };
+    const unfilled = await gitShim("clone", "-q", u.bare, "five");
+    assert.equal(unfilled.code, 0);
+    assert.match(unfilled.stderr, /pikibun: the host cannot fill its repository cache \(This host's Git credentials can't read acme\/app\); cloning without it/);
+    answer = async onProgress => {
+      onProgress({ phase: "receiving", percent: 50, done: 1, total: 2, bytes: 4096 });
+      await new Promise(resolve => setTimeout(resolve, 3_300));
+      return u.bare;
+    };
+    const waited = await gitShim("clone", "-q", u.bare, "six");
+    assert.equal(waited.code, 0);
+    assert.match(waited.stderr, /waiting for the host to fill its repository cache of /);
+    assert.match(waited.stderr, /repository cache: receiving 50%, 4\.0 KiB received/);
+    assert.match(waited.stderr, /the repository cache is ready; cloning from it/);
+    assert.equal(alternates("six"), borrowed);
+    asked.length = 0;
+    answer = async () => { throw new RunnerError(503, "Pikibun could not confirm right now that this session's owner can read acme/app"); };
+    const busy = await gitShim("clone", "-q", u.bare, "seven");
+    assert.equal(busy.code, 128);
+    assert.match(busy.stderr, /is not available right now \(Pikibun could not confirm right now that this session's owner can read acme\/app\); run the clone again/);
+    assert.equal(asked.length, 3);
+    assert.equal(spawnSync("test", ["-e", join(work, "seven")]).status, 1, "nothing was cloned");
+    await shim.close();
+    assert.equal(spawnSync("test", ["-e", bin]).status, 1, "closing removes the session's git");
+  });
+
+const python = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
+
+test("the sandbox's git shim asks a proxy that wants credentials (as macOS's does) with those in PIKIBUN_EGRESS_STATUS, and runs the git SANDBOX_GIT names",
+  { skip: !python || process.platform === "win32" }, async t => {
+    const u = await upstream(t);
+    const grant: EgressGrant = { policy: { mode: "off", domains: [], packageRegistries: true }, repositories: [repository] };
+    const asked: string[] = [];
+    const proxy = new EgressProxy({ socketPath: join(u.directory, "unused.sock"), tcp: { token: "session-token" }, grant: async () => grant, relay: u.relay,
+      mirror: async value => { asked.push(value.fullName); return u.bare; } });
+    await proxy.start();
+    t.after(() => proxy.close());
+    const shim = join(u.directory, "git-shim");
+    await writeFile(shim, GIT_SHIM, { mode: 0o700 });
+    const real = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    const env = { ...environment, SANDBOX_GIT: real, PIKIBUN_EGRESS_STATUS: `${endpointUrl(proxy.endpoint!)}/__pikibun/status`,
+      GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.${join(u.directory, "projects")}/.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/" };
+    const alternates = (path: string) => spawnSync("cat", [join(u.directory, path, ".git", "objects", "info", "alternates")], { encoding: "utf8" }).stdout.trim();
+    const cloned = await run(python, [shim, "clone", "-q", "https://github.com/acme/app.git", "app"], { cwd: u.directory, env });
+    assert.equal(cloned.code, 0, cloned.stderr);
+    assert.deepEqual(asked, ["acme/app"]);
+    assert.equal(alternates("app"), join(realpathSync(u.bare), "objects"));
+    const refused = await run(python, [shim, "clone", "-q", "https://github.com/acme/app.git", "refused"],
+      { cwd: u.directory, env: { ...env, PIKIBUN_EGRESS_STATUS: `http://pikibun:wrong@127.0.0.1:${proxy.endpoint!.port}/__pikibun/status` } });
+    assert.equal(refused.code, 0, "a proxy that refuses the shim leaves the clone to go ahead without the cache");
+    assert.equal(asked.length, 1);
+    assert.equal(alternates("refused"), "");
+    assert.match((await run(python, [shim, "--version"], { cwd: u.directory, env })).stdout, /^git version/);
+  });
 
 test("a relayed read its caller gives up on fails at once, and an answer that comes after is closed unread", async () => {
   let answer: ((response: Response) => void) | undefined;
