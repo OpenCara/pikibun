@@ -1,19 +1,21 @@
 import type { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { hostCapabilities } from './authority/index.js';
 import {
-  accessModes, scheduleRunIns, scheduleToolActions, type AccessMode, type ChatOptions, type ScheduleRunIn, type ScheduleToolAction, type ScheduleToolResult,
-  type SessionSchedule, type SubmitResult,
+  accessModes, scheduleRunIns, scheduleToolActions, thinkingLevels, type AccessMode, type ChatOptions, type ScheduleRunIn, type ScheduleToolAction,
+  type ScheduleToolResult, type SessionSchedule, type SubmitResult, type ThinkingLevel,
 } from '../../../packages/shared/src/types.js';
 import { CronError, isTimeZone, nextCronTime, parseCron } from '../../../packages/shared/src/cron.js';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import { admissionExpired, auditStatement, requireCallbackScope, requireSession, requireToolCall, sessionAccess } from './authority/index.js';
-import { childThinkingLevel, sessionCurrentModel } from './cross-session.js';
+import { requireModel } from './catalog.js';
+import { childModel, childModelChoices, childModelTrusted } from './cross-session.js';
 import { requireUnfrozen } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
 import { archiveSession, createSession, submitMessage } from './sessions.js';
 import { keepPortable } from './portable-sessions.js';
-import type { AppContext, Env, ModelRow, SessionRow, AppEnv } from './types.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 
 export const MAX_SCHEDULES_PER_SESSION = 20;
 export const MAX_SCHEDULED_CHILDREN = 20;
@@ -24,13 +26,15 @@ const busyHosts = new WeakMap<Env['DB'], Set<string>>();
 
 interface ScheduleRow {
   id: string; session_id: string; created_by: string; name: string; cron: string; time_zone: string; content: string;
-  access: AccessMode; run_in: ScheduleRunIn; one_shot: number; enabled: number; next_run_at: string | null; last_run_at: string | null; last_submission_id: string | null;
-  last_session_id: string | null; last_error: string | null; created_at: string; updated_at: string;
+  access: AccessMode; run_in: ScheduleRunIn; one_shot: number; model_id: string | null; thinking_level: ThinkingLevel | null; enabled: number; next_run_at: string | null;
+  last_run_at: string | null; last_submission_id: string | null; last_session_id: string | null; last_error: string | null; created_at: string; updated_at: string;
 }
 
 export function scheduleRecord(row: ScheduleRow): SessionSchedule {
   return { id: row.id, sessionId: row.session_id, name: row.name, cron: row.cron, timeZone: row.time_zone, content: row.content,
-    access: row.access, runIn: row.run_in ?? 'session', oneShot: Number(row.one_shot ?? 1) === 1, enabled: Number(row.enabled) === 1, nextRunAt: row.next_run_at, lastRunAt: row.last_run_at,
+    access: row.access, runIn: row.run_in ?? 'session', oneShot: Number(row.one_shot ?? 1) === 1,
+    ...(row.model_id ? { modelId: row.model_id } : {}), ...(row.thinking_level ? { thinkingLevel: row.thinking_level } : {}),
+    enabled: Number(row.enabled) === 1, nextRunAt: row.next_run_at, lastRunAt: row.last_run_at,
     lastSubmissionId: row.last_submission_id, lastSessionId: row.last_session_id ?? null, lastError: row.last_error, createdBy: row.created_by,
     createdAt: row.created_at, updatedAt: row.updated_at };
 }
@@ -79,6 +83,46 @@ function validOneShot(value: unknown): boolean {
   return value;
 }
 
+function validModelId(value: unknown): string | null {
+  return value === null ? null : identifier(value, 'modelId');
+}
+
+function validThinking(value: unknown): ThinkingLevel | null {
+  if (value !== null && !thinkingLevels.includes(value as ThinkingLevel)) fail(400, 'invalid_input', `Thinking is ${thinkingLevels.join(', ')}, or null.`);
+  return value as ThinkingLevel | null;
+}
+
+type ChildChoice = Pick<ScheduleRow, 'model_id' | 'thinking_level'>;
+
+const chosenOf = (schedule: ChildChoice) => ({ ...(schedule.model_id ? { modelId: schedule.model_id } : {}),
+  ...(schedule.thinking_level ? { thinkingLevel: schedule.thinking_level } : {}) });
+
+async function scheduleChildModel(env: Env, row: SessionRow, actorId: string, schedule: ChildChoice): Promise<Awaited<ReturnType<typeof childModel>> & { fallback?: string }> {
+  const chosen = chosenOf(schedule);
+  if (chosen.modelId === undefined && chosen.thinkingLevel === undefined) return childModel(env, row, actorId, {}, true);
+  try {
+    return await requireChildChoice(env, row, actorId, chosen);
+  } catch (error) {
+    if (!(error instanceof HTTPException)) throw error;
+    const code = await errorCode(error);
+    return { ...await childModel(env, row, actorId, {}, true), fallback: code === 'child_models_disabled' || code === 'thinking_unsupported' ? code : 'model_unavailable' };
+  }
+}
+
+async function requireChildChoice(env: Env, row: SessionRow, actorId: string, chosen: ReturnType<typeof chosenOf>, inheritThinking = true):
+  Promise<Awaited<ReturnType<typeof childModel>>> {
+  if (chosen.modelId !== undefined && (await requireModel(env, chosen.modelId, actorId)).workspace_id !== row.workspace_id) fail(404, 'not_found', 'Model not found.');
+  return childModel(env, row, actorId, chosen, inheritThinking);
+}
+
+async function validChildChoice(env: Env, row: SessionRow, actorId: string, schedule: ChildChoice & Pick<ScheduleRow, 'run_in'>): Promise<void> {
+  if (schedule.model_id === null && schedule.thinking_level === null) return;
+  if (schedule.run_in !== 'child') {
+    fail(400, 'invalid_input', 'A model and reasoning level choose what each run in a new session starts on: run it in a child session, or leave them out.');
+  }
+  await requireChildChoice(env, row, actorId, chosenOf(schedule), false);
+}
+
 async function ownSession(c: AppContext): Promise<SessionRow> {
   const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
   if (row.owner_id !== c.get('auth').userId) fail(403, 'owner_required', 'Only the session owner can schedule prompts.');
@@ -107,7 +151,7 @@ async function findSchedule(env: Env, row: SessionRow, scheduleId: string): Prom
   return { ...schedule, enabled: Number(schedule.enabled), one_shot: Number(schedule.one_shot ?? 1) };
 }
 
-type Sent = SubmitResult & { childSessionId?: string };
+type Sent = SubmitResult & { childSessionId?: string; fallback?: string };
 
 async function send(env: Env, schedule: ScheduleRow, ownerId: string, at: number, trigger: 'schedule' | 'manual'): Promise<Sent> {
   return asSessionOwner(env, { owner_id: ownerId }, async c => {
@@ -141,21 +185,16 @@ async function startChild(c: AppContext, parent: SessionRow, schedule: ScheduleR
   requireUnfrozen(parent);
   const ownerId = c.get('auth').userId;
   if (await openScheduledChildren(c.env, parent.id) >= MAX_SCHEDULED_CHILDREN) tooManyChildren();
-  const current = await sessionCurrentModel(c.env, parent, ownerId);
-  if (!current.modelId) fail(409, 'invalid_binding', 'This session\'s model is unavailable.');
-  const model = await c.env.DB.query<Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id'>>(
-    'SELECT id, provider, model_id, connector_id FROM models WHERE id = ? AND workspace_id = ?').bind(current.modelId, parent.workspace_id).first();
-  if (!model) fail(404, 'not_found', 'Model not found.');
-  const thinkingLevel = await childThinkingLevel(c.env, model, undefined, current.thinkingLevel);
+  const { model, thinkingLevel, fallback } = await scheduleChildModel(c.env, parent, ownerId, schedule);
   const started: { id?: string } = {};
   try {
     const { row: child } = await createSession(c, { workspaceId: parent.workspace_id, title: `${schedule.name} · ${runLabel(at, schedule.time_zone)}`,
       modelId: model.id,
-      ...(model.connector_id && model.connector_id === parent.connector_id ? { trustedConnectorId: model.connector_id } : {}),
+      ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}),
     }, { parentSessionId: parent.id, scheduleId: schedule.id, inserted: sessionId => { started.id = sessionId; } });
     if (await openScheduledChildren(c.env, parent.id) > MAX_SCHEDULED_CHILDREN) tooManyChildren();
     await auditStatement(c.env, ownerId, 'session.schedule.child_started', parent.workspace_id, parent.id,
-      { scheduleId: schedule.id, childSessionId: child.id, trigger }).run();
+      { scheduleId: schedule.id, childSessionId: child.id, trigger, modelId: model.id, ...(thinkingLevel ? { thinkingLevel } : {}), ...(fallback ? { fallback } : {}) }).run();
     if (Number(schedule.one_shot ?? 1) === 1) await c.env.DB.query('UPDATE sessions SET one_shot = 1 WHERE id = ?').bind(child.id).run();
     const options: ChatOptions = { ...(schedule.access === 'read' ? { access: 'read' } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
     const submission = await submitMessage(c, child, 'submit', {
@@ -163,7 +202,7 @@ async function startChild(c: AppContext, parent: SessionRow, schedule: ScheduleR
       requestId: `schedule:${schedule.id}:${at}`,
       ...(Object.keys(options).length ? { options } : {}),
     }, { scheduleId: schedule.id, trigger, parentSessionId: parent.id }, { currentModel: true });
-    return { ...submission, childSessionId: child.id };
+    return { ...submission, childSessionId: child.id, ...(fallback ? { fallback } : {}) };
   } catch (error) {
     if (started.id) await archiveSession(c, started.id, { scheduleId: schedule.id }).catch(() => undefined);
     throw error;
@@ -192,7 +231,7 @@ export async function archiveFinishedOneShots(env: Env): Promise<OneShotOutcome[
   return outcomes;
 }
 
-export type ScheduledPromptOutcome = { scheduleId: string; sessionId: string; submissionId: string; childSessionId?: string }
+export type ScheduledPromptOutcome = { scheduleId: string; sessionId: string; submissionId: string; childSessionId?: string; fallback?: string }
   | { scheduleId: string; sessionId: string; error: string };
 
 type DueSchedule = ScheduleRow & { owner_id: string; connector_id: string | null };
@@ -258,19 +297,19 @@ async function runDueSchedule(env: Env, schedule: DueSchedule, at: number, times
       const result = await send(env, schedule, schedule.owner_id, at, 'schedule');
       if (!child) sent.add(schedule.session_id);
       outcome = { scheduleId: schedule.id, sessionId: schedule.session_id, submissionId: result.submissionId,
-        ...(result.childSessionId ? { childSessionId: result.childSessionId } : {}) };
+        ...(result.childSessionId ? { childSessionId: result.childSessionId } : {}), ...(result.fallback ? { fallback: result.fallback } : {}) };
     } catch (error) {
       outcome = { scheduleId: schedule.id, sessionId: schedule.session_id, error: await errorCode(error) };
     }
   }
   await env.DB.query('UPDATE session_schedules SET last_submission_id = ?, last_session_id = ?, last_error = ? WHERE id = ?')
     .bind('submissionId' in outcome ? outcome.submissionId : null, 'childSessionId' in outcome ? outcome.childSessionId ?? null : null,
-      'error' in outcome ? outcome.error : null, schedule.id).run();
+      'error' in outcome ? outcome.error : outcome.fallback ?? null, schedule.id).run();
   await refreshNextScheduled(env, schedule.session_id);
   return outcome;
 }
 
-const scheduleFields = ['name', 'cron', 'timeZone', 'content', 'access', 'runIn', 'oneShot', 'enabled'] as const;
+const scheduleFields = ['name', 'cron', 'timeZone', 'content', 'access', 'runIn', 'oneShot', 'modelId', 'thinkingLevel', 'enabled'] as const;
 type ScheduleInput = Partial<Record<(typeof scheduleFields)[number], unknown>>;
 
 function scheduleInput(input: Record<string, unknown>): ScheduleInput {
@@ -289,8 +328,11 @@ async function createSchedule(env: Env, row: SessionRow, change: ScheduleChange,
   const access = input.access === undefined ? 'auto' : validAccess(input.access);
   const runIn = input.runIn === undefined ? 'session' : validRunIn(input.runIn);
   const oneShot = input.oneShot === undefined ? true : validOneShot(input.oneShot);
+  const modelId = input.modelId === undefined ? null : validModelId(input.modelId);
+  const thinkingLevel = input.thinkingLevel === undefined ? null : validThinking(input.thinkingLevel);
   const enabled = input.enabled === undefined ? true : validEnabled(input.enabled);
   await requireAccessSupported(env, row, access);
+  await validChildChoice(env, row, change.actorId, { run_in: runIn, model_id: modelId, thinking_level: thinkingLevel });
   const at = Date.now();
   const nextRunAt = enabled ? nextRun(cron, timeZone, at) : null;
   if (enabled && nextRunAt === null) fail(400, 'invalid_cron', 'This schedule never comes round.');
@@ -298,14 +340,15 @@ async function createSchedule(env: Env, row: SessionRow, change: ScheduleChange,
   if (Number(count) >= MAX_SCHEDULES_PER_SESSION) fail(409, 'too_many_schedules', `A session keeps at most ${MAX_SCHEDULES_PER_SESSION} schedules.`);
   const timestamp = now();
   const schedule: ScheduleRow = { id: id(), session_id: row.id, created_by: change.actorId, name, cron, time_zone: timeZone, content, access, run_in: runIn, one_shot: oneShot ? 1 : 0,
-    enabled: enabled ? 1 : 0, next_run_at: nextRunAt, last_run_at: null, last_submission_id: null, last_session_id: null, last_error: null, created_at: timestamp,
-    updated_at: timestamp };
+    model_id: modelId, thinking_level: thinkingLevel, enabled: enabled ? 1 : 0, next_run_at: nextRunAt, last_run_at: null, last_submission_id: null, last_session_id: null,
+    last_error: null, created_at: timestamp, updated_at: timestamp };
   await env.DB.batch([
-    env.DB.query(`INSERT INTO session_schedules (id, session_id, created_by, name, cron, time_zone, content, access, run_in, one_shot, enabled, next_run_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(schedule.id, row.id, schedule.created_by, name, cron, timeZone, content, access, runIn, schedule.one_shot, schedule.enabled,
-      nextRunAt, timestamp, timestamp),
-    auditStatement(env, change.actorId, 'session.schedule.created', row.workspace_id, row.id, { scheduleId: schedule.id, cron, timeZone, access, runIn, oneShot, enabled,
-      ...changedBy(change) }),
+    env.DB.query(`INSERT INTO session_schedules (id, session_id, created_by, name, cron, time_zone, content, access, run_in, one_shot, model_id, thinking_level, enabled,
+        next_run_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(schedule.id, row.id, schedule.created_by, name, cron, timeZone, content, access, runIn, schedule.one_shot,
+      modelId, thinkingLevel, schedule.enabled, nextRunAt, timestamp, timestamp),
+    auditStatement(env, change.actorId, 'session.schedule.created', row.workspace_id, row.id, { scheduleId: schedule.id, cron, timeZone, access, runIn, oneShot,
+      ...chosenOf(schedule), enabled, ...changedBy(change) }),
   ]);
   await refreshNextScheduled(env, row.id);
   return schedule;
@@ -320,23 +363,33 @@ async function updateSchedule(env: Env, row: SessionRow, change: ScheduleChange,
     ...(input.access !== undefined ? { access: validAccess(input.access) } : {}),
     ...(input.runIn !== undefined ? { run_in: validRunIn(input.runIn) } : {}),
     ...(input.oneShot !== undefined ? { one_shot: validOneShot(input.oneShot) ? 1 : 0 } : {}),
+    ...(input.modelId !== undefined ? { model_id: validModelId(input.modelId) } : {}),
+    ...(input.thinkingLevel !== undefined ? { thinking_level: validThinking(input.thinkingLevel) } : {}),
     ...(input.enabled !== undefined ? { enabled: validEnabled(input.enabled) ? 1 : 0 } : {}),
     updated_at: now() };
+  next.model_id ??= null;
+  next.thinking_level ??= null;
+  if (next.run_in === 'session') {
+    if (input.modelId === undefined) next.model_id = null;
+    if (input.thinkingLevel === undefined) next.thinking_level = null;
+  }
   if (next.access !== current.access) await requireAccessSupported(env, row, next.access);
+  if (input.modelId !== undefined || input.thinkingLevel !== undefined) await validChildChoice(env, row, change.actorId, next);
   const timing = next.cron !== current.cron || next.time_zone !== current.time_zone || next.enabled !== current.enabled;
   if (timing) next.next_run_at = next.enabled ? nextRun(next.cron, next.time_zone, Date.now()) : null;
   if (next.enabled && next.next_run_at === null) fail(400, 'invalid_cron', 'This schedule never comes round.');
   const update = timing
-    ? env.DB.query(`UPDATE session_schedules SET name = ?, cron = ?, time_zone = ?, content = ?, access = ?, run_in = ?, one_shot = ?, enabled = ?, next_run_at = ?, updated_at = ?
-        WHERE id = ? AND ${current.next_run_at === null ? 'next_run_at IS NULL' : 'next_run_at = ?'}`)
-      .bind(next.name, next.cron, next.time_zone, next.content, next.access, next.run_in, next.one_shot, next.enabled, next.next_run_at, next.updated_at, next.id,
-        ...(current.next_run_at === null ? [] : [current.next_run_at]))
-    : env.DB.query('UPDATE session_schedules SET name = ?, content = ?, access = ?, run_in = ?, one_shot = ?, updated_at = ? WHERE id = ?')
-      .bind(next.name, next.content, next.access, next.run_in, next.one_shot, next.updated_at, next.id);
+    ? env.DB.query(`UPDATE session_schedules SET name = ?, cron = ?, time_zone = ?, content = ?, access = ?, run_in = ?, one_shot = ?, model_id = ?, thinking_level = ?, enabled = ?,
+        next_run_at = ?, updated_at = ? WHERE id = ? AND ${current.next_run_at === null ? 'next_run_at IS NULL' : 'next_run_at = ?'}`)
+      .bind(next.name, next.cron, next.time_zone, next.content, next.access, next.run_in, next.one_shot, next.model_id, next.thinking_level, next.enabled, next.next_run_at,
+        next.updated_at, next.id, ...(current.next_run_at === null ? [] : [current.next_run_at]))
+    : env.DB.query('UPDATE session_schedules SET name = ?, content = ?, access = ?, run_in = ?, one_shot = ?, model_id = ?, thinking_level = ?, updated_at = ? WHERE id = ?')
+      .bind(next.name, next.content, next.access, next.run_in, next.one_shot, next.model_id, next.thinking_level, next.updated_at, next.id);
   const [updated] = await env.DB.batch([
     update,
     auditStatement(env, change.actorId, 'session.schedule.updated', row.workspace_id, row.id,
-      { scheduleId: next.id, cron: next.cron, timeZone: next.time_zone, access: next.access, runIn: next.run_in, oneShot: next.one_shot === 1, enabled: next.enabled === 1, ...changedBy(change) }),
+      { scheduleId: next.id, cron: next.cron, timeZone: next.time_zone, access: next.access, runIn: next.run_in, oneShot: next.one_shot === 1, ...chosenOf(next),
+        enabled: next.enabled === 1, ...changedBy(change) }),
   ]);
   if (updated!.changes !== 1) fail(409, 'schedule_changed', 'This schedule ran or changed meanwhile. Reload it and try again.');
   await refreshNextScheduled(env, row.id);
@@ -363,10 +416,14 @@ export async function restorePortableSchedules(env: Env, row: SessionRow, schedu
   let restored = 0;
   for (const schedule of schedules.slice(0, MAX_SCHEDULES_PER_SESSION)) {
     const fields: ScheduleInput = Object.fromEntries(scheduleFields.filter(key => schedule[key] !== undefined).map(key => [key, schedule[key]]));
-    try {
-      await createSchedule(env, row, { actorId: row.owner_id }, fields);
-      restored++;
-    } catch { }
+    const { modelId, thinkingLevel, ...sessionModel } = fields;
+    for (const attempt of modelId !== undefined || thinkingLevel !== undefined ? [fields, sessionModel] : [fields]) {
+      try {
+        await createSchedule(env, row, { actorId: row.owner_id }, attempt);
+        restored++;
+        break;
+      } catch { }
+    }
   }
   return restored;
 }
@@ -395,6 +452,8 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
     if (fields[key] !== undefined && typeof fields[key] !== 'string') fail(400, 'invalid_input', `${key} is text.`);
   }
   if (fields.runIn !== undefined) validRunIn(fields.runIn);
+  if (fields.modelId !== undefined) validModelId(fields.modelId);
+  if (fields.thinkingLevel !== undefined) validThinking(fields.thinkingLevel);
   if (fields.oneShot !== undefined) validOneShot(fields.oneShot);
   if (fields.enabled !== undefined) validEnabled(fields.enabled);
   const access = await sessionAccess(c.env, sessionId, actorId);
@@ -440,7 +499,9 @@ export function registerScheduledPrompts(app: Hono<AppEnv>) {
   app.get('/api/sessions/:id/schedules', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');
     const rows = await c.env.DB.query<ScheduleRow>('SELECT * FROM session_schedules WHERE session_id = ? ORDER BY created_at, id').bind(row.id).all();
-    return c.json({ schedules: rows.map(scheduleRecord), canManage: row.owner_id === c.get('auth').userId && row.status !== 'archived' });
+    const canManage = row.owner_id === c.get('auth').userId && row.status !== 'archived';
+    const choices = canManage ? await childModelChoices(c.env, row.workspace_id, row.owner_id, model => childModelTrusted(model, row, row.owner_id)) : undefined;
+    return c.json({ schedules: rows.map(scheduleRecord), canManage, ...choices });
   });
 
   app.post('/api/sessions/:id/schedules', async c => {
@@ -471,11 +532,11 @@ export function registerScheduledPrompts(app: Hono<AppEnv>) {
     const at = Date.now();
     const timestamp = new Date(at).toISOString();
     try {
-      const { childSessionId, ...submission } = await send(c.env, schedule, row.owner_id, at, 'manual');
-      await c.env.DB.query('UPDATE session_schedules SET last_run_at = ?, last_submission_id = ?, last_session_id = ?, last_error = NULL WHERE id = ?')
-        .bind(timestamp, submission.submissionId, childSessionId ?? null, schedule.id).run();
+      const { childSessionId, fallback, ...submission } = await send(c.env, schedule, row.owner_id, at, 'manual');
+      await c.env.DB.query('UPDATE session_schedules SET last_run_at = ?, last_submission_id = ?, last_session_id = ?, last_error = ? WHERE id = ?')
+        .bind(timestamp, submission.submissionId, childSessionId ?? null, fallback ?? null, schedule.id).run();
       return c.json({ schedule: scheduleRecord({ ...schedule, last_run_at: timestamp, last_submission_id: submission.submissionId, last_session_id: childSessionId ?? null,
-        last_error: null }), submission, ...(childSessionId ? { sessionId: childSessionId } : {}) }, 202);
+        last_error: fallback ?? null }), submission, ...(childSessionId ? { sessionId: childSessionId } : {}) }, 202);
     } catch (error) {
       await c.env.DB.query('UPDATE session_schedules SET last_run_at = ?, last_submission_id = NULL, last_session_id = NULL, last_error = ? WHERE id = ?')
         .bind(timestamp, await errorCode(error), schedule.id).run();

@@ -167,7 +167,7 @@ export function nextCronTime(schedule: CronSchedule | string, timeZone: string, 
 
 const SCHEDULE_TARGET_LIMIT = 4000;
 
-export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" | "scheduleId" | "name" | "cron" | "timeZone" | "content" | "access" | "runIn" | "oneShot" | "enabled">): string {
+export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" | "scheduleId" | "name" | "cron" | "timeZone" | "content" | "access" | "runIn" | "oneShot" | "modelId" | "thinkingLevel" | "enabled">): string {
   const parts: string[] = [request.action];
   if (request.scheduleId !== undefined) parts.push(request.scheduleId);
   if (request.cron !== undefined) parts.push(`cron ${request.cron}`);
@@ -175,6 +175,8 @@ export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" |
   if (request.access !== undefined) parts.push(`access ${request.access}`);
   if (request.runIn !== undefined) parts.push(request.runIn === "child" ? "each run in a new child session" : "runs in this session");
   if (request.oneShot !== undefined) parts.push(request.oneShot ? "each child archived once its run is done" : "each child kept open");
+  if (request.modelId !== undefined) parts.push(request.modelId === null ? "on this session's model" : `model ${request.modelId}`);
+  if (request.thinkingLevel !== undefined) parts.push(request.thinkingLevel === null ? "at this session's reasoning level" : `thinking ${request.thinkingLevel}`);
   if (request.enabled !== undefined) parts.push(request.enabled ? "enabled" : "paused");
   if (request.name !== undefined) parts.push(`name ${JSON.stringify(request.name)}`);
   let target = parts.join(" ");

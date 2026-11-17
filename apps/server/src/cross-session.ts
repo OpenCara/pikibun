@@ -186,15 +186,21 @@ async function audienceConsent(call: Call, other: (SessionRow & Party) | { id: n
 async function list(call: Call): Promise<SessionsToolResult> {
   const { c, origin, actorId } = call;
   const sessions = (await workspaceSessionAccess(c.env, origin.workspace_id, actorId)).slice(0, 200).map(access => summary(access, origin.id));
-  const usable = await usableModels(c.env, origin.workspace_id, actorId);
+  return { sessions, ...await childModelChoices(c.env, origin.workspace_id, actorId) };
+}
+
+export type ChildModelChoices = Omit<Extract<SessionsToolResult, { childModels: boolean }>, 'sessions'>;
+
+export async function childModelChoices(env: Env, workspaceId: string, actorId: string, keep: (model: ModelRow) => boolean = () => true): Promise<ChildModelChoices> {
+  const usable = (await usableModels(env, workspaceId, actorId)).filter(keep);
   const offers = new Map<string, HostOffer | null>();
   const models = [];
   for (const model of usable) {
-    const levels = (await advertised(c.env, model, offers))?.thinkingLevels;
+    const levels = (await advertised(env, model, offers))?.thinkingLevels;
     models.push({ id: model.id, name: model.name, provider: model.provider, modelId: model.model_id, ...(levels?.length ? { thinkingLevels: levels } : {}) });
   }
-  const { childModels } = await workspaceChildSessionSettings(c.env.DB, origin.workspace_id);
-  return { sessions, models, childModels };
+  const { childModels } = await workspaceChildSessionSettings(env.DB, workspaceId);
+  return { models, childModels };
 }
 
 async function read(call: Call, targetId: string, messageId: string | undefined, limit: number): Promise<SessionsToolResult> {
@@ -289,23 +295,9 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ? AND schedule_id IS NULL').bind(origin.id).first();
   if (Number(children?.n ?? 0) >= crossSessionLimits.children) fail(429, 'cross_session_limit', `A session starts at most ${crossSessionLimits.children} sessions.`);
   if (options.message !== undefined) await requireSendable(call, null);
-  const { childModels } = await workspaceChildSessionSettings(c.env.DB, origin.workspace_id);
-  if (!childModels && (options.modelId !== undefined || options.thinkingLevel !== undefined)) {
-    fail(403, 'child_models_disabled', 'This workspace runs the sessions agents start on their parent\'s model and reasoning level. Leave out model and thinking.');
-  }
-  const inheritsModel = options.modelId === undefined;
-  const inheritsThinking = options.thinkingLevel === undefined && options.message !== undefined;
-  const parent = inheritsModel || inheritsThinking ? await parentModel(call) : undefined;
-  const modelId = options.modelId ?? parent?.modelId;
-  if (!modelId) fail(409, 'invalid_binding', 'This session\'s model is unavailable; name a model that list returns.');
-  const model = await c.env.DB.query<Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>>(
-    'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(modelId, origin.workspace_id).first();
-  if (!model) fail(404, 'not_found', 'Model not found.');
-  const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
-  const trusted = model.connector_id && (model.connector_owner_id === actorId || (model.connector_id === origin.connector_id && actorId === origin.owner_id));
-  if (model.connector_id && !trusted) {
-    fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
-  }
+  const { model, thinkingLevel, inheritsModel, inheritsThinking } = await childModel(c.env, origin, actorId,
+    { modelId: options.modelId, thinkingLevel: options.thinkingLevel }, options.message !== undefined);
+  const modelId = model.id;
   if (options.message !== undefined && options.notify) {
     const members = await c.env.DB.query<{ user_id: string }>(`SELECT member.user_id FROM workspace_members member
       JOIN users u ON u.id = member.user_id WHERE member.workspace_id = ? AND u.suspended_at IS NULL`).bind(origin.workspace_id).all();
@@ -355,8 +347,31 @@ export async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provid
   return chosen;
 }
 
-async function parentModel(call: Call): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
-  return sessionCurrentModel(call.c.env, call.origin, call.actorId);
+export type ChildModel = Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>;
+
+export function childModelTrusted(model: Pick<ModelRow, 'connector_id' | 'connector_owner_id'>, origin: Pick<SessionRow, 'connector_id' | 'owner_id'>, actorId: string): boolean {
+  return !model.connector_id || model.connector_owner_id === actorId || (model.connector_id === origin.connector_id && actorId === origin.owner_id);
+}
+
+export async function childModel(env: Env, origin: SessionRow, actorId: string, chosen: { modelId?: string; thinkingLevel?: ThinkingLevel }, inheritThinking: boolean):
+  Promise<{ model: ChildModel; thinkingLevel?: ThinkingLevel; inheritsModel: boolean; inheritsThinking: boolean }> {
+  const { childModels } = await workspaceChildSessionSettings(env.DB, origin.workspace_id);
+  if (!childModels && (chosen.modelId !== undefined || chosen.thinkingLevel !== undefined)) {
+    fail(403, 'child_models_disabled', 'This workspace runs the sessions agents start on their parent\'s model and reasoning level. Leave out model and thinking.');
+  }
+  const inheritsModel = chosen.modelId === undefined;
+  const inheritsThinking = chosen.thinkingLevel === undefined && inheritThinking;
+  const parent = inheritsModel || inheritsThinking ? await sessionCurrentModel(env, origin, actorId) : undefined;
+  const modelId = chosen.modelId ?? parent?.modelId;
+  if (!modelId) fail(409, 'invalid_binding', 'This session\'s model is unavailable; name a model that list returns.');
+  const model = await env.DB.query<ChildModel>(
+    'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(modelId, origin.workspace_id).first();
+  if (!model) fail(404, 'not_found', 'Model not found.');
+  const thinkingLevel = await childThinkingLevel(env, model, chosen.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
+  if (!childModelTrusted(model, origin, actorId)) {
+    fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
+  }
+  return { model, ...(thinkingLevel ? { thinkingLevel } : {}), inheritsModel, inheritsThinking };
 }
 
 export async function sessionCurrentModel(env: Env, origin: SessionRow, actorId: string): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
