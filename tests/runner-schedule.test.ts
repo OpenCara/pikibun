@@ -55,6 +55,10 @@ test("the agent schedules prompts from the chat for the session owner at once, n
     fauxAssistantMessage("Not allowed."),
     fauxAssistantMessage([fauxToolCall("schedule", { action: "update", id: "schedule-1", enabled: false })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Paused."),
+    fauxAssistantMessage([fauxToolCall("schedule", { action: "update", id: "schedule-1", model: "model-2", thinking: "high" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("On its own model."),
+    fauxAssistantMessage([fauxToolCall("schedule", { action: "update", id: "schedule-1", model: "", thinking: "" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Back on the session's."),
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
@@ -97,6 +101,17 @@ test("the agent schedules prompts from the chat for the session owner at once, n
   assert.equal(requests.length, 3);
   assert.deepEqual({ ...requests[2], callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "update", scheduleId: "schedule-1", enabled: false });
   assert.deepEqual((await session.view()).approvals, []);
+
+  await session.submit(await ticket(id, "submit"), { content: "Run it on the big model, thinking hard.", requestId: "model", admissionId, options: { access: "auto" } }, "write");
+  await idle(session);
+  await session.submit(await ticket(id, "submit"), { content: "Run it on this session's model again.", requestId: "unmodel", admissionId, options: { access: "auto" } }, "write");
+  await idle(session);
+  assert.equal(requests.length, 5);
+  assert.deepEqual([requests[3]!.modelId, requests[3]!.thinkingLevel], ["model-2", "high"], "model and thinking pass as the schedule's modelId and thinkingLevel");
+  assert.deepEqual([requests[4]!.modelId, requests[4]!.thinkingLevel], [null, null], "an empty string clears them");
+  assert.equal(scheduleToolTarget({ action: "update", scheduleId: "schedule-1", modelId: "model-2", thinkingLevel: "high" }), "update schedule-1 model model-2 thinking high");
+  assert.equal(scheduleToolTarget({ action: "update", scheduleId: "schedule-1", modelId: null, thinkingLevel: null }),
+    "update schedule-1 on this session's model at this session's reasoning level");
 });
 
 test("piki:schedule: the workspace turns the schedule tool off, and a call by name is refused; it stays on where the workspace never chose or can't be read", async t => {
