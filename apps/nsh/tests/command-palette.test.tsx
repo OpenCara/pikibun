@@ -84,6 +84,8 @@ describe("the command palette", () => {
   test("Escape in a command's input goes back to the commands", async () => {
     const app = await desktop();
     await app.keyboard.press("mod+k");
+    await app.waitFor("id:palette-rows");
+    await app.scroll("id:palette-rows", 200);
     await app.waitFor("id:palette-command-chat-reasoning");
     await app.press("id:palette-command-chat-reasoning");
     await app.waitFor("id:palette-choice-high");

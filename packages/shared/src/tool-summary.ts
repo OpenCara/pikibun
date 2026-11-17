@@ -95,6 +95,11 @@ export function callTarget(name: string, args: Fields | undefined): string {
       if (url || actions) return [url, actions ? plural(actions, "action") : ""].filter(Boolean).join(" · ");
       break;
     }
+    case "publish_artifact": {
+      const artifact = string(args, "name");
+      if (artifact) return oneLine([artifact, string(args, "kind")].filter(Boolean).join(" · "));
+      break;
+    }
     case "web_search": {
       const queries = Array.isArray(args.queries) ? args.queries.filter(query => typeof query === "string") : [];
       const query = string(args, "query") ?? queries.join(" | ");

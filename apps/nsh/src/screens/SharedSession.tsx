@@ -3,6 +3,7 @@ import type { SharedSession as SharedRecord, SharedSessionView } from "../../../
 import { ApiError, createApi, errorMessage, pairToolResults } from "../shared";
 import { timestamp } from "../lib/format";
 import { inBackground } from "../lib/resource";
+import { sharedArtifacts } from "../lib/artifacts";
 import { TranscriptEntry } from "../components/TranscriptEntry";
 import { layout, palette, text, weight } from "../theme";
 import { Logo } from "../logo";
@@ -63,6 +64,7 @@ export function SharedSession(props: { token: string; origin?: string }) {
     void load();
     return () => { controller.abort(); clearTimeout(timer); };
   });
+  const artifacts = computed(() => sharedArtifacts(props.token, props.origin));
   const transcript = computed(() => pairToolResults((view()?.entries ?? []).filter(entry => entry.role !== "system" || entry.text.trim())));
   const entries = () => transcript().entries;
   const toggle = (id: string) => expanded.update(current => {
@@ -107,7 +109,7 @@ export function SharedSession(props: { token: string; origin?: string }) {
             empty={() => <EmptyState title="The conversation begins here">Messages and tool results appear here as the work goes on</EmptyState>}>
             {entry => (
               <View style={{ width: "100%", maxWidth: layout.chat, alignSelf: "center" }}>
-                <TranscriptEntry entry={entry()} userId="" shared expanded={id => expanded().has(id)} toggle={toggle} results={transcript().results.get(entry().id)} />
+                <TranscriptEntry entry={entry()} userId="" shared expanded={id => expanded().has(id)} toggle={toggle} results={transcript().results.get(entry().id)} artifacts={artifacts()} />
               </View>
             )}
           </List>

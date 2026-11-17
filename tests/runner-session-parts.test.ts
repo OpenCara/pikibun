@@ -542,7 +542,7 @@ test("tools: the families keep their order, git_push comes last and only for a c
   const names = buildTools(context, false).map(tool => tool.name);
   const python = process.platform === "win32" ? [] : ["python"];
   assert.deepEqual(names, ["identity", "read", "ls", "grep", "find", "write", "edit", "move_file", "copy_file", "delete_file", "git", ...python, "browser",
-    "tunnel", "github_read", "github_comment", "github_merge", "github_issue", "schedule", "sessions"]);
+    "tunnel", "github_read", "github_comment", "github_merge", "github_issue", "schedule", "sessions", "publish_artifact"]);
   assert.deepEqual(buildTools(context, true).map(tool => tool.name), [...names, "git_push"]);
 });
 
@@ -1089,7 +1089,8 @@ test("view: a message that steered a run continues it, so the run's end shows on
 });
 
 function availability(options: Partial<ToolAvailabilityOptions> = {}, answer?: Partial<WorkspaceExtensionsAnswer>, last?: Partial<WorkspaceExtensionsAnswer>) {
-  const workspace: WorkspaceExtensionsAnswer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "approval", settings: {} }], automaticTools: false, ...answer } as WorkspaceExtensionsAnswer;
+  const workspace: WorkspaceExtensionsAnswer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "approval", settings: {} },
+    { source: "piki:artifacts", enabled: true, tools: "approval", settings: {} }], automaticTools: false, ...answer } as WorkspaceExtensionsAnswer;
   return new ToolAvailability({
     binding: { session: { workspaceId: "w" }, owner: { id: "github:1" } } as unknown as RunnerBinding,
     config: { extensions: { workspace: async () => workspace, ...(last ? { lastKnown: () => ({ ...workspace, ...last }) } : {}) } },

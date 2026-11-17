@@ -1,5 +1,6 @@
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { wholeForScripts } from "../../script-output.js";
+import { publishArtifactTool } from "./artifacts.js";
 import { browserTool, tunnelTool } from "./browser.js";
 import type { ToolContext } from "./context.js";
 import { fileTools } from "./files.js";
@@ -18,6 +19,7 @@ export function sessionTools(context: ToolContext): ToolRegistration[] {
     ...githubTools(context),
     scheduleTool(context),
     sessionsTool(context),
+    publishArtifactTool(context),
   ];
 }
 

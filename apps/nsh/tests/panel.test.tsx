@@ -158,6 +158,58 @@ describe("a session's panel", () => {
     expect(Object.keys(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`) as object)).not.toContain("runIn");
   });
 
+  test("Artifacts lists what the agent published and shows each version, sanitized", async () => {
+    const info = { kind: "markdown", title: "Release notes", size: 40, createdAt: "2026-11-06T09:00:00.000Z" };
+    const app = await openPanel({
+      [`GET ${ORIGIN}/api/sessions/s1/artifacts`]: { body: { artifacts: [{ name: "notes", versions: [{ ...info, version: 1, kind: "text", title: "Draft" }, { ...info, version: 2 }] }] } },
+      [`GET ${ORIGIN}/api/sessions/s1/artifacts?name=notes&version=2`]: { body: { artifact: { name: "notes", ...info, version: 2,
+        content: "# Shipped\n\nThe login fix.\n\n<script>alert(1)</script>\n\n![tracker](https://tracker.example/pixel.png)" } } },
+      [`GET ${ORIGIN}/api/sessions/s1/artifacts?name=notes&version=1`]: { body: { artifact: { name: "notes", ...info, version: 1, kind: "text", title: "Draft", content: "plain draft text" } } },
+    });
+    await app.press("text:Artifacts");
+    await app.waitFor("id:artifact-notes");
+    await app.press("id:artifact-notes");
+    await app.waitFor("text:Version 2 of 2");
+    await app.waitFor("text:The login fix.");
+    expect(app.texts().join(" ")).toContain("<script>alert(1)</script>");
+    await app.waitFor("text:[image: tracker]");
+    await app.press("label:Earlier version");
+    await app.waitFor("text:Version 1 of 2");
+    await app.waitFor("text:plain draft text");
+    await app.press("text:All artifacts");
+    await app.waitFor("id:artifact-notes");
+  });
+
+  test("a published artifact is a card in the transcript that shows it in a sandboxed frame", async () => {
+    const entries = [
+      { id: "0:1", kind: "message", role: "assistant", text: 'publish_artifact({"name":"chart","kind":"svg","content":"<svg/>","title":"Sales chart"})',
+        toolCalls: [{ id: "c1", name: "publish_artifact" }], conversationId: "0" },
+      { id: "0:2", kind: "message", role: "toolResult", text: "Published artifact chart version 1 (svg).\nTitle: Sales chart\nPeople see it in the transcript and in the session panel's Artifacts tab.",
+        toolResult: { tool: "publish_artifact", callId: "c1" }, conversationId: "0" },
+    ];
+    const app = await open("../App.tsx", { network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, entries, approvals: [], busy: false, queue: [] }, revision: "r1" } },
+      [`GET ${ORIGIN}/api/sessions/s1/artifacts?name=chart&version=1`]: { body: { artifact: { name: "chart", version: 1, kind: "svg", title: "Sales chart", size: 6,
+        createdAt: "2026-11-06T09:00:00.000Z", content: "<svg/>" } } },
+    }), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:artifact-card-chart-1");
+    expect(app.shows("text:Sales chart")).toBe(true);
+    await app.press("text:Show");
+    await app.waitFor("id:artifact-frame");
+    expect(app.requests().some(item => item.url === `${ORIGIN}/api/sessions/s1/artifacts?name=chart&version=1`)).toBe(true);
+  });
+
+  test("Artifacts says when there are none, and when the host is too old to show them", async () => {
+    const none = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/artifacts`]: { body: { artifacts: [] } } });
+    await none.press("text:Artifacts");
+    await none.waitFor("text:No artifacts yet");
+    none.dispose();
+    const old = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/artifacts`]: { status: 409, body: { error: "This session's host can't show artifacts yet. Its owner can update the pikibun connector there.", code: "artifacts_unsupported" } } });
+    await old.press("text:Artifacts");
+    await old.waitFor("text:This session's host can't show artifacts yet. Its owner can update the pikibun connector there.");
+  });
+
   test("Schedules starts each run of a schedule in a new session on the model and reasoning level chosen for it", async () => {
     const models = [{ id: "m2", name: "Claude Opus", provider: "anthropic", modelId: "claude-opus", thinkingLevels: ["off", "low", "high"] }];
     const schedule = { id: "sc1", sessionId: "s1", name: "Review", cron: "0 9 * * 1", timeZone: "UTC", content: "Review the architecture", access: "auto", runIn: "child",
