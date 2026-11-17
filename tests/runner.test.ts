@@ -25,6 +25,7 @@ import { defaultHostConfig } from "../packages/shared/src/host-config.js";
 import { acquireRunnerLease } from "../apps/runner/src/lease.js";
 import { runnerModels, testCommandArgs } from "../apps/runner/src/provider.js";
 import { nodeRequest, nodeShellCommand } from "../apps/runner/src/node-command.js";
+import { sessionTitleRequest } from "../packages/shared/src/session-titles.js";
 
 const SECRET = "runner-test-secret-not-a-production-secret-123456";
 const allowTestOperation = async (): Promise<void> => {};
@@ -767,6 +768,25 @@ test("a round's calls of a tool outside the agent's pinned list all run", hostMo
   const results = view.entries.filter(entry => entry.role === "toolResult");
   assert.equal(results.length, 2);
   assert.ok(results.every(entry => !/denied|not allowed|refused/i.test(entry.text)), JSON.stringify(results.map(entry => entry.text)));
+});
+
+test("a title request asks the session's model once, and its usage counts toward the session's", hostMode, async t => {
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([fauxAssistantMessage("Fix the flaky login test")]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const { service } = await hostFixture(t, { resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }) });
+  const id = "title-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const request = sessionTitleRequest("fix the flaky login test, it fails on every second run");
+  assert.deepEqual(await session.title(await ticket(id, "title"), request), { text: "Fix the flaky login test" });
+  assert.equal(faux.state.callCount, 1);
+  const usage = await (session as unknown as { harness: Harness }).harness.usage(context);
+  assert.ok((usage.models["faux/faux-1"]?.output ?? 0) > 0, JSON.stringify(usage));
+  const status = (code: number) => (error: unknown) => error instanceof RunnerError && error.status === code;
+  await assert.rejects(session.title(await ticket(id, "title"), { ...request, extra: true }), status(400));
+  await assert.rejects(session.title(await ticket(id, "title", "test:carol"), request));
+  assert.equal(faux.state.callCount, 1, "a refused request asks no model");
 });
 
 test("chat options are validated against owner, mode, model and request idempotency", hostMode, async t => {

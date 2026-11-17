@@ -18,6 +18,7 @@ export interface ConnectorCapabilities {
   chatOptions?: boolean;
   chatImages?: boolean;
   autoModel?: boolean;
+  sessionTitles?: boolean;
   gitProviders?: boolean;
   gitPush?: boolean;
   gitServers?: boolean;

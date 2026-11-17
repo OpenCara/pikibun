@@ -329,7 +329,7 @@ describe("on a phone", () => {
     await app.waitUntil(() => app.enabled("id:new-start"));
     await app.press("id:new-start");
     await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/sessions`) !== undefined);
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toMatchObject({ workspaceId: "w1", modelId: "m1", title: "Add a dark mode" });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toMatchObject({ workspaceId: "w1", modelId: "m1", title: "Add a dark mode", generateTitle: true });
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`).visibility).toBeUndefined();
     await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`) !== undefined);
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`).content).toBe("Add a dark mode");

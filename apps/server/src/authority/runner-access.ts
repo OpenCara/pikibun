@@ -10,14 +10,14 @@ const actionPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write', changes: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write', sudo: 'write',
-  attach: 'manage', portable: 'manage',
+  attach: 'manage', portable: 'manage', title: 'write',
 };
 
 export const connectorPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write', changes: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write', sudo: 'write',
-  attach: 'manage', portable: 'manage',
+  attach: 'manage', portable: 'manage', title: 'write',
 };
 export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack', 'sudo', 'attach', 'portable'];
 

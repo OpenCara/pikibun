@@ -5,7 +5,7 @@ import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
-import { ConversationIdle, createRegistry, defineExtension, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
+import { ConversationIdle, createRegistry, defineExtension, Harness, InboxDoc, UsageDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
 import { accessModes, sessionToolNames, thinkingLevels } from "../../../packages/shared/src/types.js";
@@ -66,6 +66,7 @@ import { SessionPiki } from "./session/piki.js";
 import { requeue, RunQueue, submissionRequestId } from "./session/run-queue.js";
 import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, SessionCommands, type ExtensionCommand } from "./session/commands.js";
 import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
+import { addTitleUsage, titleRequestInput, titleTimeoutMs, writeTitle } from "./session/titles.js";
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
 import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
 import {
@@ -222,6 +223,7 @@ export class RunnerSession {
   #tunnel: SessionTunnel | undefined;
   readonly #sudo: SudoPrompts | undefined;
   #sudoOffered = false;
+  readonly #titles = new Set<AbortController>();
 
   constructor(readonly binding: RunnerBinding, readonly directory: string, readonly config: RunnerConfig) {
     if (binding.session.connectorId !== config.connectorId || binding.model.connectorId !== config.connectorId)
@@ -943,6 +945,26 @@ export class RunnerSession {
     return { answered: this.#sudo.answer(answer.id, answer.password) };
   }
 
+  async title(ticket: RunnerTicket, input: unknown): Promise<{ text: string }> {
+    this.assertTicket(ticket);
+    const request = titleRequestInput(input);
+    if (!request) throw new RunnerError(400, "Invalid title request");
+    await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    if (this.closing) throw new RunnerError(503, "Session is closing");
+    const shared = this.#shared;
+    const model = (await shared.agent(context).catch(() => undefined))?.model ?? this.modelRef;
+    const controller = new AbortController();
+    this.#titles.add(controller);
+    try {
+      const reply = await writeTitle(this.models, model, request, AbortSignal.any([controller.signal, AbortSignal.timeout(titleTimeoutMs)]));
+      const used = reply.usage;
+      if (used && !controller.signal.aborted) await shared.commit(async tx => { addTitleUsage((await tx.doc(UsageDoc, shared.id)).models, used.key, used.usage); }, context);
+      return { text: controller.signal.aborted ? "" : reply.text };
+    } finally {
+      this.#titles.delete(controller);
+    }
+  }
+
   async tunnelAction(ticket: RunnerTicket, input: unknown): Promise<{ stopped: boolean; url?: string }> {
     this.assertTicket(ticket);
     if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => key !== "action" && key !== "reason")
@@ -1516,6 +1538,7 @@ export class RunnerSession {
 
   async close({ abortPushes = true }: { abortPushes?: boolean } = {}): Promise<void> {
     this.closing = true;
+    for (const title of this.#titles) title.abort();
     this.#wholeResults.dropResults();
     this.#repositories.reset();
     this.#opened = false;

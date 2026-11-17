@@ -84,7 +84,7 @@ export interface AgentRow {
   name: string; description: string; instructions: string; tools_json: string; model_id: string; created_at: string;
 }
 export interface SessionRow {
-  id: string; workspace_id: string; owner_id: string; agent_version_id: string; title: string;
+  id: string; workspace_id: string; owner_id: string; agent_version_id: string; title: string; title_fallback?: string | null;
   policy_version: number; status: 'provisioning' | 'ready' | 'error' | 'archived'; created_at: string;
   connector_id?: string | null; connector_owner_id?: string | null;
   repositories_json?: string;

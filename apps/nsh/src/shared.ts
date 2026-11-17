@@ -10,4 +10,5 @@ export { canCreateSessions, managesSession } from "../../../packages/shared/src/
 export { nestSessions } from "../../../packages/client/src/session-tree";
 export { containsRedaction, redactSecrets, REDACTED } from "../../../packages/shared/src/redaction";
 export { browserUnavailableText } from "../../../packages/shared/src/browser";
+export { fallbackTitle } from "../../../packages/shared/src/session-titles";
 export { pullRequestLabel, pullRequestRepository, pullRequestStateLabels, pullRequestStateTones } from "../../../packages/shared/src/pull-requests";

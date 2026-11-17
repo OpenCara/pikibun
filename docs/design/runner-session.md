@@ -33,6 +33,7 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
 | `session/availability.ts` | Which tools a session offers and refuses: the workspace's switches, tool groups, the host's programs |
 | `session/piki.ts` | The host extensions' view of the session, their tool calls, and the CLIs they run in the sandbox |
 | `session/view.ts` | What a session's view shows (functions over the state the session gives them) |
+| `session/titles.ts` | The `title` action: one completion with the session's model that names the session, its usage added to the shared conversation's |
 | `session/run-queue.ts` | Running queued shared messages one at a time (a sender's next shared message, with the same options, steers their run at work instead) and side asks beside them, screening them with extensions, and settling their runs |
 | `session/uploads.ts`, `inputs.ts`, `mirrors.ts`, `whole-results.ts`, `branch-reports.ts`, `host-commands.ts`, `tunnel.ts`, `entries.ts` | As before: uploads, queued images, cache mirrors, whole results, branch reports, the host-command policy, tunnels, transcript entries |
 | `connector/control-plane.ts` | The connector's calls to the control plane, each tied to the connection it was made on |
@@ -61,6 +62,14 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   the app offers it only on one's own side asks. The server tells a side ask's message by its conversation's number, as
   the runner does, and starts such a fork as a child of the session (`parentSessionId`), titled `Side ask: …`, and only
   where the view says `askForks`, so a host whose connector predates it refuses nothing it never offered.
+- **The server names a session; the host only answers.** Which sessions are named, the prompt, cleaning the reply and
+  the fallback title are the Pikibun server's (`apps/server/src/session-titles.ts`, `packages/shared/src/session-titles.ts`),
+  as they may change and hosts update slowly. The server claims the naming once, with the person's first message
+  (`sessions.title_fallback`, set only for a session the app started with a title it made, and cleared by a rename),
+  sets the fallback, asks the host's `title` action, which only runs the completion the server describes, and writes
+  the model's title only while the session's title is still the fallback, so a rename meanwhile wins. Hosts without
+  `sessionTitles` are never asked. The host adds the answer's usage to the shared conversation's `pi.usage`, so the
+  session's usage counts it, and aborts a completion still running when the session closes.
 - **The session keeps thin members tests reach by name.** `metadata()`, `tools`, `buildTools()`, `drainQueue()`,
   `agentInstructions(mode)`, `activity()`, `harness` and `hostCommands` stay on `RunnerSession`, delegating where the work
   moved, so the whole-session tests read the same members they always did.
