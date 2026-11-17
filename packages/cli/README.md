@@ -60,7 +60,7 @@ The app starts `pikibun host --stdio` itself, through your login shell (cmd.exe 
 
 Everything else about how the host runs sessions is set in the web app, on the host's page under **Settings → Hosts → the host → Configuration**, and reaches running sessions within a minute:
 
-- **Command time limit**: how long a shell command may run, from 30 seconds (the default) to an hour. A longer limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB per file, 256 open files) so builds fit. Set by the host's owner or its admins.
+- **Command time limit**: how long a command (what `git`, `node`, `python` and the other program tools run) may run, from 30 seconds (the default) to an hour. A longer limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB per file, 256 open files) so builds fit. Set by the host's owner or its admins.
 - **GPU**: sandboxed commands get the host's GPU render device for offscreen rendering and compute: `/dev/dxg` on WSL2 (install Mesa's `vulkan-dzn` there for Vulkan), or Linux DRM render nodes. Never the screen, windows or input. Offered only where the connector found such a device. Set by the host's owner or its admins.
 - **Git credentials** and **Repository cache**: see below. Only the host's owner changes them.
 - **Sessions on the host**: the host's owner may start sessions that run directly on this machine, without the sandbox, by choosing **Where it runs → On this host** when starting one. Members' sessions run in the sandbox unless the owner's host command grant to them includes **Sessions on the host**. Only the owner changes it.
@@ -87,7 +87,7 @@ npx pikibun@latest connect --unsafe-no-sandbox
 
 This needs only Git on your `PATH` (on macOS: `xcode-select --install` or `brew install git`). The connector prints the risks and asks you to type `unsandboxed` before starting:
 
-- Shell commands run directly as your user, as soon as the agent calls them, with access to your files, credentials (`~/.ssh`, cloud and Git config, Pi's auth) and network, and no CPU, memory or disk limits.
+- Commands (`git`, `node`, `python`, ...) run directly as your user, as soon as the agent calls them, with access to your files, credentials (`~/.ssh`, cloud and Git config, Pi's auth) and network, and no CPU, memory or disk limits.
 - File tools are confined to each session folder by path checks only.
 - Only your own sessions, and those of members you grant host commands, run commands on it; everyone else's are refused.
 
@@ -97,9 +97,8 @@ Nobody approves commands one by one: they run at once for you and the members yo
 
 Every session starts with an empty worktree, and its agent clones the workspace repositories it needs. With **Repository cache** set to **Shared** (one cache for every session on this host) or **Per owner** (a separate cache for each session owner) in the host's configuration, the connector keeps a full mirror of each repository on the host, so clones borrow its objects instead of downloading everything again. A change applies when the connector next connects.
 
-- `git clone` of a workspace repository borrows the cached objects (`--reference-if-able`) once Pikibun confirms, with the session owner's own account, that they can read it; the host brings its mirror up to date itself, with the credentials Git on the host would use. A sandboxed session sees a mirror, read-only, only while Pikibun lets its owner read the repository: the Linux sandbox mounts it, the macOS sandbox lets the session's Git steps read it.
-- Sessions that run on the host borrow it too, through a `git` of the session's own first on their `PATH`; their clones fetch what a mirror lacks with the host's own Git. They run as the connector's user, who owns the cache.
-- Windows hosts keep no cache yet.
+- `git clone` of a workspace repository borrows the cached objects (`--reference-if-able`) once Pikibun confirms, with the session owner's own account, that they can read it; the host brings its mirror up to date itself, with the credentials Git on the host would use. A sandboxed session sees a mirror, read-only, only while Pikibun lets its owner read the repository: the Linux sandbox mounts it, the macOS and Windows sandboxes let the session's Git steps read it.
+- Sessions that run on the host borrow it too, through a `git` of the session's own first on their `PATH`; their clones fetch what a mirror lacks with the host's own Git. They run as the connector's user, who owns the cache. On Windows that `git` runs in Git for Windows' bash.
 - `npx pikibun@latest cache list` shows the cached repositories and their sizes; `npx pikibun@latest cache prune --older-than 30` forgets clone sessions idle for longer and collects what nothing reaches any more (their clones lose the objects they borrowed). Pins of sessions from before every session cloned are kept.
 - It needs a Pikibun server that supports the repository cache; older servers refuse the connector's manifest.
 

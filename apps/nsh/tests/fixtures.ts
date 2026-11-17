@@ -46,6 +46,11 @@ export const view = {
   rewindable: true,
   agent: { provider: "anthropic", modelId: "claude-sonnet", thinkingLevel: "medium" },
   context: { tokens: 84_210, window: 200_000, compactsAt: 183_616 },
+  usage: {
+    total: { input: 12_400, output: 8_900, cacheRead: 310_000, cacheWrite: 41_000, cost: 1.84 },
+    models: [{ model: "anthropic/claude-sonnet", input: 12_400, output: 8_900, cacheRead: 310_000, cacheWrite: 41_000, cost: 1.84 }],
+    last: { input: 1_200, cacheRead: 82_000, cacheWrite: 1_000 },
+  },
 };
 
 type Request = { method: string; url: string; body?: string | null };

@@ -27,13 +27,13 @@ export { parseOperation } from './operations.js';
 export { audienceSharing, registerAudienceSharing, requireOperationTool, requireToolCall, sessionsNeedGranted, setAudienceSharing } from './tool-checks.js';
 export { admissionExpired, issueRunAdmission } from './run-admissions.js';
 export {
-  automaticTools, defaultWorkspaceExtensionStatements, removeWorkspaceExtensionStatement, saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
+  addNeededExtensions, automaticTools, defaultWorkspaceExtensionStatements, removeWorkspaceExtensionStatement, saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
 } from './extension-policy.js';
 export { createToolGroup, deleteToolGroup, memberToolGroup, memberToolGroups, requireSessionTool, setMemberToolGroup, updateToolGroup } from './tool-groups.js';
 
 export { assertVaultConfigured, decryptToken, encryptToken } from './vault.js';
 export {
-  cloneRepositories, legacyRepositoryFixture, publicRepository, registerRepositories, type RepositorySettingsRow, repositorySettingsSelect,
+  cloneRepositories, githubRepositoryIdentity, legacyRepositoryFixture, publicRepository, registerRepositories, type RepositorySettingsRow, repositorySettingsSelect,
   requireConfiguredWorkspace,
 } from './repositories.js';
 export { registerGitAccounts } from './git/accounts.js';

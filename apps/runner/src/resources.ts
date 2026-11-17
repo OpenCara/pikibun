@@ -18,7 +18,7 @@ export interface ResourceAvailability {
 }
 
 export function validateResourceConfig(config: ResourceConfig): Readonly<ResourceConfig> {
-  if (!config || typeof config !== "object") throw new Error("Production bash requires provisioned ResourceConfig");
+  if (!config || typeof config !== "object") throw new Error("Limited commands require a provisioned ResourceConfig");
   for (const field of ["cgroupRoot", "controlRoot"] as const) {
     const value = config[field];
     if (typeof value !== "string" || !isAbsolute(value) || resolve(value) !== value || value === "/" || /[\0\r\n]/.test(value)) {
@@ -400,7 +400,7 @@ async function controlCommand(config: ResourceConfig, mode: "probe" | "recover",
 }
 
 export async function probeResources(config?: ResourceConfig, storageRoot?: string): Promise<ResourceAvailability> {
-  if (!config) return { available: false, reason: "Production bash requires explicitly provisioned cgroup and filesystem resources" };
+  if (!config) return { available: false, reason: "Limited commands require explicitly provisioned cgroup and filesystem resources" };
   if (!storageRoot) return { available: false, reason: "A provisioned per-session filesystem must be supplied for verification" };
   try {
     await controlCommand(config, "probe", storageRoot);

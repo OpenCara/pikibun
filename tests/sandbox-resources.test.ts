@@ -62,7 +62,7 @@ test("bare Sandbox never executes production bash without verified resources", {
   realBinding.model = { ...realBinding.model, provider: "anthropic" };
   const realSandbox = new Sandbox(realBinding, root);
   try {
-    await assert.rejects(sandbox.execute({ kind: "bash", command: "printf must-not-run" }, false, authorize), /Production bash unavailable/);
+    await assert.rejects(sandbox.execute({ kind: "bash", command: "printf must-not-run" }, false, authorize), /Commands can't run here/);
     assert.deepEqual(await readdir(root), [], "denial precedes namespace launch and storage initialization");
     assert.equal((await sandbox.identity(authorize)).ownerId, binding().owner.id, "bounded identity API stays available");
     await assert.rejects(realSandbox.execute({ kind: "bash", command: "printf must-not-run" }, false, authorize, { allowTestShell: true }), /restricted.*faux/);

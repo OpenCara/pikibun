@@ -387,6 +387,36 @@ describe("settings", () => {
     expect(app.texts().join(" ")).not.toContain("0 of 1 host");
   });
 
+  test("Extensions warns that Sub-agents does nothing while Other sessions is off, and adds it from there", async () => {
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [], extensions: [
+        { source: "piki:sub-agents", enabled: true, tools: "automatic", settings: {} }, { source: "piki:sessions", enabled: false, tools: "automatic", settings: {} }] } },
+      [`PUT ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("text:Sub-agents · piki:sub-agents");
+    expect(app.texts().join(" ")).toContain("Does nothing without Other sessions, which is off here");
+    await app.press("text:Sub-agents · piki:sub-agents");
+    await app.waitFor("id:needs-sessions");
+    await app.press("text:Add Other sessions");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`)).toEqual({ source: "piki:sessions", enabled: true, tools: "automatic", settings: {} });
+  });
+
+  test("Extensions says that adding Sub-agents adds Other sessions too", async () => {
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [], extensions: [{ source: "piki:sessions", enabled: false, tools: "automatic", settings: {} }] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:workspace-extensions");
+    await app.press("text:Add extension");
+    await app.waitFor("text:Workflows");
+    await app.press("text:Sub-agents");
+    await app.waitUntil(() => app.texts().some(item => item.startsWith("It works through Other sessions (piki:sessions), off here: adding it adds that too")));
+  });
+
   test("a new workspace is created and its first session starts there", async () => {
     const app = await openSettings("workspaces");
     await app.waitFor("id:new-workspace");

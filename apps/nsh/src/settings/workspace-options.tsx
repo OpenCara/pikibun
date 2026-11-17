@@ -210,7 +210,7 @@ export function NetworkAccess(props: { workspace: Workspace; admin: boolean }) {
   return (
     <Section title="Network access" testID="workspace-network" info={<View style={{ gap: 8 }}>
       <If when={!props.admin}>{adminOnly}</If>
-      <Note>Sandboxed shell commands have no direct network. Everything goes through the host's egress proxy: Git reads of this workspace's repositories always work, with the session owner's own account, which never leaves Pikibun.</Note>
+      <Note>Sandboxed commands have no direct network. Everything goes through the host's egress proxy: Git reads of this workspace's repositories always work, with the session owner's own account, which never leaves Pikibun.</Note>
       <Note>This setting decides what else is reachable over HTTPS. Addresses inside the host's own networks are never reachable. Hosts running without the sandbox aren't confined by it.</Note>
       <Note>Web search and page reading come from the workspace's extensions, which run on the host outside the sandbox: this setting doesn't confine them.</Note>
     </View>}>

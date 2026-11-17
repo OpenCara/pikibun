@@ -7,6 +7,7 @@ import type { BigIntStats, Stats } from "node:fs";
 import { lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { hostGitEnvironment } from "./host-git-shim.js";
 import type { Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
 import {
   importRequest, MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, SNAPSHOT_SKIPPED_HOME, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
@@ -110,7 +111,7 @@ export class HostWorkspace implements SessionWorkspace {
     });
     this.ownerEnvironment = options.ownerEnvironment === true;
     this.#sudo = windows ? undefined : options.sudo;
-    this.#gitShim = windows ? undefined : options.gitShim;
+    this.#gitShim = options.gitShim;
     this.#isolated = Object.freeze({
       ...(windows ? windowsSystemEnvironment() : {}),
       ...sessionEnvironment(this.#identity, { path: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin", gitConfig: join(this.#root, "owner.gitconfig") }),
@@ -273,17 +274,16 @@ export class HostWorkspace implements SessionWorkspace {
       case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
-        if (readOnly) throw new Error("Unsandboxed hosts cannot run read-only shell commands");
-        const command = text(operation.command, "shell command", 64 * 1024, true);
+        if (readOnly) throw new Error("Sessions on the host can't run commands in read-only messages");
+        const command = text(operation.command, "command", 64 * 1024, true);
         return this.#operation(authorize, async () => {
           if (options.signal?.aborted) throw new SandboxProcessError("Command stopped before it started", null, null, "", "");
           const bash = bashPath();
           if (!bash) throw hostError(windows ? "bash commands need Git for Windows' bash.exe" : "bash commands need /bin/bash");
           const git = await this.#gitShim?.().catch(() => undefined);
-          const path = this.#environment.PATH || "/usr/bin:/bin:/usr/sbin:/sbin";
           return output(checked(await this.#spawn(bash, hostBashArgs(command), undefined,
             { timeoutMs: (options.limits?.seconds ?? TIMEOUT_MS / 1000) * 1000, signal: options.signal, hostCommand: command,
-              ...(git ? { env: { PATH: `${git}:${path}` } } : {}) })));
+              ...(git ? { env: hostGitEnvironment(git, this.#environment) } : {}) })));
         });
       }
       case "github.comment":

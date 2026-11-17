@@ -8,7 +8,7 @@ if (Number(process.versions.node.split(".")[0]) < 24) throw new Error("This runn
 let resources: Readonly<ResourceConfig> | undefined;
 if (process.env.RUNNER_RESOURCES_FILE) {
   try { resources = validateResourceConfig(JSON.parse(await readFile(process.env.RUNNER_RESOURCES_FILE, "utf8"))); }
-  catch { console.error("Invalid resource configuration; production shell remains unavailable."); }
+  catch { console.error("Invalid resource configuration; commands run only where they may run without limits."); }
 }
 const service = new RunnerService({
   dataDir: process.env.DATA_DIR ?? ".local/runner",
@@ -25,7 +25,7 @@ const releaseLease = await acquireRunnerLease(service.dataDir, () => {
 });
 if (resources) {
   try { await recoverResourceOrphans(resources); }
-  catch { console.error("Resource recovery requires operator attention; every production shell still requires its own verified resource domain."); }
+  catch { console.error("Resource recovery requires operator attention; every limited command still requires its own verified resource domain."); }
 }
 const app = createRunnerApp(service);
 const port = Number(process.env.PORT ?? 8788);

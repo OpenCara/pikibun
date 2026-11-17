@@ -133,7 +133,7 @@ async function start(request: StartRequest): Promise<void> {
       status("stopped");
       if (!expected) emit({ type: "failed", error: { code: "failed", message: "The host stopped unexpectedly: it lost its lock on this computer's pairing. Start it again." } });
     },
-    onWarning: (warning, detail) => log("warning", warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.` : "Some resource domains are unavailable; production bash remains fail-closed."),
+    onWarning: (warning, detail) => log("warning", warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.` : "Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits."),
   });
   const current = { connector, stopRequested: false };
   running = current;
@@ -141,7 +141,7 @@ async function start(request: StartRequest): Promise<void> {
   log("info", unsandboxed
     ? "Running unsandboxed: commands execute directly on this machine."
     : backend ? `Experimental ${backend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.`
-    : "Sandbox capability is verified per session; production shell stays disabled without provisioned, verified limits.");
+    : "Sandbox capability is verified per session; without provisioned, verified limits, commands run only where they may run without them.");
   log("info", "Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings › Hosts › this host.");
   void connector.start().then(
     () => log("info", `Connected to ${server}.`),

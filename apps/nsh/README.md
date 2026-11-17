@@ -58,6 +58,11 @@ needs a decision stand out:
   along its bottom edge: on a phone one line of them, tighter, that scrolls sideways where it doesn't fit, and any hint
   but "Runs as … (you)" on a line under it; a `/` typed first lists its
   [slash commands](../../docs/sessions.md#slash-commands) inside the box, above the text. Details (owner, host, visibility, ID) are in the session's panel.
+- **Commands**: the [command palette](../../docs/sessions.md#command-palette) (Ctrl/⌘ K, Ctrl/⌘ O for Switch session…, a
+  button in the session's header) lists every action by name. Screens contribute their commands as data to one
+  registry (`src/lib/commands.ts`, `useCommands`) while they are in front, and `src/components/CommandPalette.tsx`
+  draws them all: a dialog on wider windows, a sheet on phones, with choices and a line of text asked in the same box.
+  The matcher is `packages/client/src/command-palette.ts`; see [the design](../../docs/design/command-palette.md).
 - **Review**: the panel's Review tab (`src/session-panel/Review.tsx`) is drawn after JetBrains IDEA's pull request
   window, which the React client had no counterpart of: the title, branches and state, then the changed files in NSH's
   `Tree`, grouped by directory and coloured as IDEA colours file statuses (blue modified, green added, grey deleted,

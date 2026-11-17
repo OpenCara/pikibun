@@ -40,8 +40,8 @@ Each member's sessions get the tools of their role, unless an owner or admin put
 | Role | Tools of their sessions |
 |---|---|
 | Owner, admin | Every tool |
-| Collaborator | Every tool but merging pull requests (`github_merge`) and putting web apps online (`tunnel`) |
-| Member | Work in the sandbox: the file tools, `git` (commits and pushes to the session branch), `node`, `python`, `rust`, `go`, `dotnet`, `make`, `browser`, reading GitHub (`github_read`) and document sources (`source_read`). No `git_push` to other branches or pull requests, GitHub comments, issues or merges, `schedule`, `sessions` or `tunnel` |
+| Collaborator | Every tool but merging pull requests (`github_merge`), putting web apps online (`tunnel`) and managing the workspace (`workspace`) |
+| Member | Work in the sandbox: the file tools, `git` (commits and pushes to the session branch), `node`, `python`, `rust`, `go`, `dotnet`, `make`, `browser`, reading GitHub (`github_read`) and document sources (`source_read`). No `git_push` to other branches or pull requests, GitHub comments, issues or merges, `schedule`, `sessions`, `workspace` or `tunnel` |
 | Viewer | Reading files (viewers don't start sessions) |
 
 Owners and admins create groups under **Settings → Workspaces →** the workspace **→ Tool groups → New group**: a name and the tools it has, from Pikibun's own session tools. They then pick each member's group under **Members' tools**, or **(role)** to go back to the role's tools. A group replaces the role's tools: it can give a member more than their role, or less. Admins choose the group of collaborators, members and viewers; only the owner chooses admins', and only the owner changes or deletes a group with an admin in it, as it limits what admins run. The workspace's owner always has every tool. Deleting a group sends its members back to their role's tools, and a member who leaves the workspace leaves their group. A member's group stays when their role changes, as it replaces the role's tools: put them back on **(role)** to follow their new role. `find` has no box of its own: a group with **Search files** (`grep`) finds files too, and one without it doesn't. Pikibun's retired tools, such as `bash`, which sessions pinned to old agent versions may still have, stay only in sessions whose owner has every tool. Each change is recorded in the workspace's activity (`workspace.tool_group.created`, `.updated`, `.deleted`, `workspace.member.tool_group`).
@@ -51,6 +51,10 @@ The API is `GET /api/workspaces/:id/tool-groups` (every member), `POST /api/work
 Tool groups cover Pikibun's own tools. The tools of other extensions are switched for everyone under **Extensions**. A host learns each member's group with the workspace's extensions and keeps the last answer it read, so a failed fetch lifts nothing; until it has read one, its sessions only read their files. A connector from before tool groups doesn't hide the left-out tools from the agent or refuse them in the sandbox (files and commands), and one from before senders' groups counted hides and refuses there only what the owner's group leaves out; Pikibun still refuses the actions it brokers (pushes, GitHub, schedules, other sessions, document sources) for both, so update connectors (`npx pikibun@latest connect`) before relying on groups for sandboxed tools.
 
 For collaborators, members and viewers, managing someone else's session takes a session role from its owner.
+
+## Managing the workspace from a session
+
+With [Workspace management](extensions.md#workspace-management-pikiworkspace) (`piki:workspace`) added under **Extensions**, a session's agent can read the workspace and, when asked, change it: "add acme/api to this workspace", "make Dan a collaborator", "allow pypi.org". It acts as the person whose message it is working on, with exactly their role, through the same routes as this page, so whatever the table above doesn't let their role do, the agent can't either. It is off until added, and by default only owners' and admins' tool groups have it.
 
 ## Your private workspace
 
