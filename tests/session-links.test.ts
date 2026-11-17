@@ -467,3 +467,47 @@ test('new sessions start with the tool output their workspace sets', async t => 
   const { session: last } = await json<{ session: SessionRecord }>(await s.owner.request('POST', '/api/sessions', s.input), 201);
   assert.equal(last.toolOutput, undefined);
 });
+
+test('artifacts: whoever may read the session, and a share link, list and read them through its host, with secrets hidden', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const path = `/api/sessions/${s.session.id}/artifacts`;
+  const secret = `github_pat_${'A1b2'.repeat(8)}`;
+  const info = { version: 1, kind: 'html', title: 'Sales chart', size: 64, createdAt: '2026-01-01T00:00:00.000Z' };
+  const listed = [{ name: 'chart', versions: [info] }];
+  const artifact = { name: 'chart', ...info, content: `<p>Token ${secret}</p>` };
+  let answer: (body: Record<string, unknown>) => unknown = body => (body.name ? { artifact } : { artifacts: listed });
+  const requests = rpcHub(f, s.connector, envelope => {
+    assert.equal(envelope.request.ticket.action, 'artifacts');
+    return Response.json(answer(JSON.parse(envelope.request.body) as Record<string, unknown>));
+  });
+  await denied(await s.owner.request('GET', path), 409, 'artifacts_unsupported');
+  assert.equal(requests.length, 0, 'a host that predates artifacts is never asked');
+  f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify({ ...manifest.capabilities, artifacts: true }), s.connector.connectorId);
+
+  assert.deepEqual(await json(await s.owner.request('GET', path)), { artifacts: listed });
+  const read = await json<{ artifact: typeof artifact & { redacted?: true } }>(await s.member.request('GET', `${path}?name=chart&version=1`));
+  assert.ok(!read.artifact.content.includes(secret) && read.artifact.content.includes(REDACTED) && read.artifact.redacted === true);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body), { name: 'chart', version: 1 });
+  assert.equal(requests.at(-1)!.request.ticket.actorId, s.member.user.id, 'a reader asks as themselves');
+  await denied(await s.outsider.request('GET', path), 404, 'not_found');
+  for (const query of ['name=chart', 'version=1', 'name=Chart&version=1', 'name=chart&version=0', 'name=chart&version=x']) {
+    await denied(await s.owner.request('GET', `${path}?${query}`), 400, 'invalid_artifact');
+  }
+  answer = () => ({ artifact: { ...artifact, name: 'other' } });
+  await denied(await s.owner.request('GET', `${path}?name=chart&version=1`), 502, 'invalid_runner_response');
+  answer = body => (body.name ? { artifact } : { artifacts: listed });
+
+  const { link } = await json<{ link: SessionLink }>(await s.owner.request('PUT', `/api/sessions/${s.session.id}/link`), 201);
+  const shareToken = link.url.split('/').at(-1)!;
+  const shared = (query = '', value = shareToken) => f.request('GET', `/api/shared/artifacts${query}`, undefined, { 'X-Share-Token': value });
+  assert.deepEqual(await json(await shared()), { artifacts: listed });
+  assert.equal(requests.at(-1)!.request.ticket.actorId, s.owner.user.id, 'a share link reads as the owner, as its view does');
+  const sharedRead = await json<{ artifact: { content: string } }>(await shared('?name=chart&version=1'));
+  assert.ok(!sharedRead.artifact.content.includes(secret));
+  await denied(await shared('', changedToken(shareToken)), 404, 'not_found');
+  await json(await s.owner.request('POST', `/api/sessions/${s.session.id}/archive`));
+  assert.deepEqual(await json(await shared()), { artifacts: listed }, 'an archived session keeps its artifacts');
+  assert.deepEqual(await json(await s.member.request('GET', path)), { artifacts: listed });
+  assert.deepEqual(await json(await s.owner.request('DELETE', `/api/sessions/${s.session.id}/link`)), { ok: true });
+  await denied(await shared(), 404, 'not_found');
+});

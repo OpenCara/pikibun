@@ -17,6 +17,27 @@ describe("a share link", () => {
     expect(request?.headers?.["X-Share-Token"] ?? request?.headers?.["x-share-token"]).toBe("share-token");
   });
 
+  test("shows a published artifact's card, and the artifact through the link", async () => {
+    const entries = [
+      { id: "0:1", kind: "message", role: "assistant", text: 'publish_artifact({"name":"notes","kind":"markdown","content":"# Notes","title":"Release notes"})', conversationId: "0" },
+      { id: "0:2", kind: "message", role: "toolResult", text: "Published artifact notes version 2 (markdown).\nTitle: Release notes\nPeople see it in the transcript and in the session panel's Artifacts tab.",
+        toolResult: { tool: "publish_artifact", callId: "c1" }, conversationId: "0" },
+    ];
+    const app = await shared({
+      [`GET ${ORIGIN}/api/shared`]: { body: { session: { id: "s1", title: "Fix the flaky login test", ownerName: "ada", status: "ready", createdAt: sessionRecord.createdAt } } },
+      [`GET ${ORIGIN}/api/shared/view`]: { body: { view: { busy: false, entries } } },
+      [`GET ${ORIGIN}/api/shared/artifacts?name=notes&version=2`]: { body: { artifact: { name: "notes", version: 2, kind: "markdown", title: "Release notes", size: 7,
+        createdAt: sessionRecord.createdAt, content: "# Notes\n\nShipped the fix." } } },
+    });
+    await app.waitFor("id:artifact-card-notes-2");
+    expect(app.shows("text:Release notes")).toBe(true);
+    expect(app.shows("text:notes · version 2")).toBe(true);
+    await app.press("text:Show");
+    await app.waitFor("text:Shipped the fix.");
+    const request = app.requests().find(item => item.url.endsWith("/api/shared/artifacts?name=notes&version=2"));
+    expect(request?.headers?.["X-Share-Token"] ?? request?.headers?.["x-share-token"]).toBe("share-token");
+  });
+
   test("that was turned off says so", async () => {
     const app = await shared({ [`GET ${ORIGIN}/api/shared`]: { status: 404, body: { error: "Not found", code: "not_found" } } });
     await app.waitFor("text:This link doesn't work");
