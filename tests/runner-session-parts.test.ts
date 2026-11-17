@@ -1118,9 +1118,9 @@ test("availability: why the browser or a tunnel isn't offered, from where the se
 test("availability: a message runs the tools both its sender and the session's owner have, while the workspace keeps them on", async () => {
   const groups = { "github:1": { name: "Owners", off: ["github_merge"] }, "github:2": { name: "Guests", off: ["tunnel"] } };
   const tools = availability({}, { toolGroups: groups });
-  assert.deepEqual([...await tools.sessionToolsOff()].sort(), ["github_merge"]);
-  assert.deepEqual([...await tools.sessionToolsOff("github:2")].sort(), ["github_merge", "tunnel"]);
-  assert.deepEqual([...await tools.sessionToolsOff("github:1")].sort(), ["github_merge"]);
+  assert.deepEqual([...await tools.sessionToolsOff()].sort(), ["github_merge", "workspace"], "workspace management is off until the workspace adds it");
+  assert.deepEqual([...await tools.sessionToolsOff("github:2")].sort(), ["github_merge", "tunnel", "workspace"]);
+  assert.deepEqual([...await tools.sessionToolsOff("github:1")].sort(), ["github_merge", "workspace"]);
   await tools.requireSenderTool("tunnel", "github:1");
   await tools.requireSenderTool("git", "github:2");
   await assert.rejects(tools.requireSenderTool("tunnel", "github:2"), (error: unknown) => error instanceof RunnerError && error.status === 403
@@ -1144,7 +1144,7 @@ test("availability: a message runs the tools both its sender and the session's o
   const unknown = availability({ config: { extensions: { workspace: async () => ({ extensions: [], automaticTools: false }), lastKnown: () => undefined } } });
   assert.ok((await unknown.sessionToolsOff()).has("git"), "a connector that never heard its owner's group gives only the read tools");
   const heard = availability({}, { toolGroups: groups }, { toolGroups: groups });
-  assert.deepEqual([...await heard.sessionToolsOff("github:2")].sort(), ["github_merge", "tunnel"], "once heard, the last answer's groups hold");
+  assert.deepEqual([...await heard.sessionToolsOff("github:2")].sort(), ["github_merge", "tunnel", "workspace"], "once heard, the last answer's groups hold");
   assert.deepEqual([...await availability({ config: {} }).documentKindsOff()], []);
 });
 

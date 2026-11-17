@@ -136,6 +136,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "workspace", source: "piki:workspace", title: "Workspace management", sessionTools: ["workspace"], optIn: true,
+    description: "The workspace tool: the agent reads the session's workspace (members, join requests, repositories, document sources, extensions, tool groups, network access) and, when asked, changes it (renames it, adds, removes and changes members, accepts join requests, adds and removes repositories and extensions, sets tool groups and network access), as the message's sender, with exactly their workspace role. Off until added here.",
+    providers: [],
+  },
+  {
     name: "artifacts", source: "piki:artifacts", title: "Artifacts", sessionTools: ["publish_artifact"], optIn: true,
     description: "The publish_artifact tool: the agent publishes something people should look at (a report, a chart, a UI mock, a diagram) as a versioned HTML, SVG, Markdown or text artifact kept with the session, shown as a card in the transcript and in the session panel's Artifacts tab to whoever may read the session. HTML and SVG run sandboxed, with no network. Off until added here.",
     providers: [],

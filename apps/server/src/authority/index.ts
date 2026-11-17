@@ -33,7 +33,7 @@ export { createToolGroup, deleteToolGroup, memberToolGroup, memberToolGroups, re
 
 export { assertVaultConfigured, decryptToken, encryptToken } from './vault.js';
 export {
-  cloneRepositories, legacyRepositoryFixture, publicRepository, registerRepositories, type RepositorySettingsRow, repositorySettingsSelect,
+  cloneRepositories, githubRepositoryIdentity, legacyRepositoryFixture, publicRepository, registerRepositories, type RepositorySettingsRow, repositorySettingsSelect,
   requireConfiguredWorkspace,
 } from './repositories.js';
 export { registerGitAccounts } from './git/accounts.js';

@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import type { Operation, ToolName } from '../../../../packages/shared/src/types.js';
+import type { AnyToolName, Operation, ToolName } from '../../../../packages/shared/src/types.js';
 import { fail, identifier, jsonObject, now } from '../http.js';
 import type { AppEnv, Env, SessionRow } from '../types.js';
 import { requireSessionTool } from './tool-groups.js';
@@ -18,7 +18,7 @@ export async function requireOperationTool(env: Env, row: SessionRow, actorId: s
   await requireSessionTool(env, row, actorId, operation.kind === 'program' ? operation.tool : operationTools[operation.kind]);
 }
 
-export async function requireToolCall(env: Env, row: SessionRow, actorId: string, tool: ToolName): Promise<void> {
+export async function requireToolCall(env: Env, row: SessionRow, actorId: string, tool: AnyToolName): Promise<void> {
   await requireSessionTool(env, row, actorId, tool);
 }
 

@@ -3,7 +3,7 @@ import { canonicalToolName, canonicalToolNames, groupedToolNames, legacyToolName
 export const groupTools = [
   "identity", "ls", "read", "grep", "write", "edit", "move_file", "copy_file", "delete_file",
   "git", "git_push", "node", "python", "rust", "go", "dotnet", "make", "browser", "tunnel",
-  "github_read", "github_comment", "github_issue", "github_merge", "source_read", "schedule", "sessions",
+  "github_read", "github_comment", "github_issue", "github_merge", "source_read", "schedule", "sessions", "workspace",
 ] as const;
 export type GroupTool = (typeof groupTools)[number];
 
@@ -36,6 +36,7 @@ export const groupToolInfo: Record<GroupTool, { label: string; kind: "files" | "
   source_read: { label: "Read document sources", kind: "workspace" },
   schedule: { label: "Scheduled prompts", kind: "workspace" },
   sessions: { label: "Work with other sessions", kind: "workspace" },
+  workspace: { label: "Manage the workspace (with the sender's role)", kind: "workspace" },
 };
 
 const readTools: readonly GroupTool[] = ["identity", "ls", "read", "grep"];
@@ -45,7 +46,7 @@ const sandboxTools: readonly GroupTool[] = [...readTools, "write", "edit", "move
 export const roleTools: Readonly<Record<WorkspaceRole, readonly GroupTool[]>> = {
   owner: groupTools,
   admin: groupTools,
-  collaborator: groupTools.filter(tool => tool !== "github_merge" && tool !== "tunnel"),
+  collaborator: groupTools.filter(tool => tool !== "github_merge" && tool !== "tunnel" && tool !== "workspace"),
   member: sandboxTools,
   viewer: readTools,
 };
