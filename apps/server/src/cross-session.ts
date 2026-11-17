@@ -18,6 +18,8 @@ import { entryError, isLinkShared } from './session-links.js';
 import { sessionView, transcriptDisplay } from './view-feed.js';
 import { usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
+import { parsePlacement, type PlacementRequirements } from '../../../packages/shared/src/hardware.js';
+import { agentMayStartOn, hostSummary, placeChild, placementHosts } from './placement.js';
 import type { AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
 
 interface MessageRow {
@@ -78,10 +80,10 @@ async function audienceCovered(env: Env, self: Party, other: Party, direction: '
   return true;
 }
 
-const inputFields = ['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'targetSessionId', 'message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'visibility', 'messageId', 'limit'];
+const inputFields = ['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'targetSessionId', 'message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'placement', 'visibility', 'messageId', 'limit'];
 const actionFields: Record<SessionsBrokerAction, readonly string[]> = {
   list: [], read: ['targetSessionId', 'messageId', 'limit'], ask: ['targetSessionId', 'message', 'notify'], send: ['targetSessionId', 'message', 'access', 'notify'],
-  create: ['message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'visibility'], stop: ['targetSessionId'], archive: ['targetSessionId'],
+  create: ['message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'placement', 'visibility'], stop: ['targetSessionId'], archive: ['targetSessionId'],
 };
 
 interface Call {
@@ -118,13 +120,18 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   if (input.thinkingLevel !== undefined && !thinkingLevels.includes(input.thinkingLevel as ThinkingLevel)) fail(400, 'invalid_input', `Thinking is ${thinkingLevels.join(', ')}.`);
   const thinkingLevel = input.thinkingLevel as ThinkingLevel | undefined;
   if (thinkingLevel !== undefined && message === undefined) fail(400, 'invalid_input', 'A reasoning level goes with the opening message: send one, or leave thinking out.');
+  let placement: PlacementRequirements | undefined;
+  if (input.placement !== undefined) {
+    try { placement = parsePlacement(input.placement); }
+    catch (error) { fail(400, 'invalid_input', error instanceof Error ? error.message : 'Invalid placement.'); }
+  }
   if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'workspace') fail(400, 'invalid_input', 'Sessions are visible to the workspace\'s members; leave visibility out.');
   const messageId = input.messageId === undefined ? undefined : identifier(input.messageId, 'messageId');
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > crossSessionLimits.readEntries)) {
     fail(400, 'invalid_input', `The limit is 1 to ${crossSessionLimits.readEntries}.`);
   }
   const limit = (input.limit as number | undefined) ?? crossSessionLimits.defaultEntries;
-  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, messageId });
+  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, placement, messageId });
 
   const originAccess = await sessionAccess(c.env, sessionId, actorId);
   if (!originAccess || originAccess.row.status === 'archived' || !hasPermission(originAccess.permissions, 'write')) {
@@ -152,7 +159,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
     if (consent) return c.json(consent);
     return c.json({ message: await deliver(call, other, action, message!, access, notify) } satisfies SessionsToolResult, 202);
   }
-  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel });
+  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel, placement });
   const other = await requireOther(call, targetSessionId!, action === 'stop' ? 'write' : 'manage');
   const audit = { crossSession: true, originSessionId: origin.id, callId };
   if (action === 'stop') {
@@ -186,18 +193,21 @@ async function audienceConsent(call: Call, other: (SessionRow & Party) | { id: n
 async function list(call: Call): Promise<SessionsToolResult> {
   const { c, origin, actorId } = call;
   const sessions = (await workspaceSessionAccess(c.env, origin.workspace_id, actorId)).slice(0, 200).map(access => summary(access, origin.id));
-  return { sessions, ...await childModelChoices(c.env, origin.workspace_id, actorId) };
+  const usable = await usableModels(c.env, origin.workspace_id, actorId);
+  const { models, childModels } = await childModelChoices(c.env, origin.workspace_id, usable);
+  const hosts = [...(await placementHosts(c.env, origin, actorId, usable)).values()].map(host => hostSummary(host, actorId));
+  return { sessions, models, ...(hosts.length ? { hosts } : {}), childModels };
 }
 
-export type ChildModelChoices = Omit<Extract<SessionsToolResult, { childModels: boolean }>, 'sessions'>;
+export type ChildModelChoices = Pick<Extract<SessionsToolResult, { childModels: boolean }>, 'models' | 'childModels'>;
 
-export async function childModelChoices(env: Env, workspaceId: string, actorId: string, keep: (model: ModelRow) => boolean = () => true): Promise<ChildModelChoices> {
-  const usable = (await usableModels(env, workspaceId, actorId)).filter(keep);
+export async function childModelChoices(env: Env, workspaceId: string, usable: ModelRow[]): Promise<ChildModelChoices> {
   const offers = new Map<string, HostOffer | null>();
   const models = [];
   for (const model of usable) {
     const levels = (await advertised(env, model, offers))?.thinkingLevels;
-    models.push({ id: model.id, name: model.name, provider: model.provider, modelId: model.model_id, ...(levels?.length ? { thinkingLevels: levels } : {}) });
+    models.push({ id: model.id, name: model.name, provider: model.provider, modelId: model.model_id, ...(levels?.length ? { thinkingLevels: levels } : {}),
+      ...(model.connector_id ? { host: model.connector_id } : {}) });
   }
   const { childModels } = await workspaceChildSessionSettings(env.DB, workspaceId);
   return { models, childModels };
@@ -289,15 +299,37 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
   return messageRecord(row);
 }
 
-async function createChild(call: Call, options: { message?: string; access?: AccessMode; notify: boolean; title?: string; modelId?: string; thinkingLevel?: ThinkingLevel }): Promise<Response> {
+async function createChild(call: Call, options: { message?: string; access?: AccessMode; notify: boolean; title?: string; modelId?: string; thinkingLevel?: ThinkingLevel;
+  placement?: PlacementRequirements }): Promise<Response> {
   const { c, origin, actorId } = call;
   await requireSessionCreator(c.env, origin.workspace_id, actorId);
   const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ? AND schedule_id IS NULL').bind(origin.id).first();
   if (Number(children?.n ?? 0) >= crossSessionLimits.children) fail(429, 'cross_session_limit', `A session starts at most ${crossSessionLimits.children} sessions.`);
   if (options.message !== undefined) await requireSendable(call, null);
-  const { model, thinkingLevel, inheritsModel, inheritsThinking } = await childModel(c.env, origin, actorId,
-    { modelId: options.modelId, thinkingLevel: options.thinkingLevel }, options.message !== undefined);
+  const { childModels } = await workspaceChildSessionSettings(c.env.DB, origin.workspace_id);
+  const patterns = options.placement?.models;
+  if (patterns && options.modelId !== undefined) fail(400, 'invalid_input', 'Name a model, or models in placement, not both.');
+  if (!childModels && (options.modelId !== undefined || options.thinkingLevel !== undefined || patterns)) {
+    fail(403, 'child_models_disabled', 'This workspace runs the sessions agents start on their parent\'s model and reasoning level. Leave out model, thinking and placement models.');
+  }
+  const inheritsModel = options.modelId === undefined && !patterns;
+  const inheritsThinking = options.thinkingLevel === undefined && options.message !== undefined;
+  const parent = inheritsModel || inheritsThinking ? await parentModel(call) : undefined;
+  const namedId = patterns ? undefined : options.modelId ?? parent?.modelId;
+  if (!patterns && !namedId) fail(409, 'invalid_binding', 'This session\'s model is unavailable; name a model that list returns.');
+  const named = namedId === undefined ? null : await c.env.DB.query<Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>>(
+    'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(namedId, origin.workspace_id).first();
+  if (!patterns && !named) fail(404, 'not_found', 'Model not found.');
+  const placing = options.placement && (patterns || Object.keys(options.placement).length > 0 || named?.connector_id) ? options.placement : undefined;
+  const placed = placing ? await placeChild(c.env, origin, actorId, await usableModels(c.env, origin.workspace_id, actorId), {
+    requirements: placing, ...(named && !patterns ? { model: named } : {}), ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}) }) : undefined;
+  const model = placed?.model ?? named;
+  if (!model) fail(404, 'not_found', 'Model not found.');
   const modelId = model.id;
+  const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
+  if (model.connector_id && !agentMayStartOn(origin, actorId, model)) {
+    fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
+  }
   if (options.message !== undefined && options.notify) {
     const members = await c.env.DB.query<{ user_id: string }>(`SELECT member.user_id FROM workspace_members member
       JOIN users u ON u.id = member.user_id WHERE member.workspace_id = ? AND u.suspended_at IS NULL`).bind(origin.workspace_id).all();
@@ -310,12 +342,13 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
     ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}) }, { parentSessionId: origin.id }));
   await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId, modelId,
     ...(thinkingLevel ? { thinkingLevel } : {}), ...(inheritsModel ? { inheritedModel: true } : {}),
-    ...(inheritsThinking && thinkingLevel ? { inheritedThinking: true } : {}) }).run();
+    ...(inheritsThinking && thinkingLevel ? { inheritedThinking: true } : {}),
+    ...(placed ? { placement: { hostId: placed.result.host.id, conditions: placed.result.conditions, load: placed.result.load, qualified: placed.result.qualified } } : {}) }).run();
   const created = await sessionAccess(c.env, row.id, actorId);
   if (!created) fail(409, 'policy_changed', 'The new session is no longer available.');
   const message = options.message === undefined ? undefined : await deliver(call, created.row, 'create', options.message, options.access, options.notify, thinkingLevel);
   return c.json({ session: summary(created), model: { id: modelId, provider: model.provider, modelId: model.model_id, ...(thinkingLevel ? { thinkingLevel } : {}) },
-    ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
+    ...(placed ? { placement: placed.result } : {}), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
 }
 
 type HostOffer = { chatOptions: boolean; models: LocalModelSummary[] };
@@ -347,11 +380,11 @@ export async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provid
   return chosen;
 }
 
-export type ChildModel = Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>;
-
-export function childModelTrusted(model: Pick<ModelRow, 'connector_id' | 'connector_owner_id'>, origin: Pick<SessionRow, 'connector_id' | 'owner_id'>, actorId: string): boolean {
-  return !model.connector_id || model.connector_owner_id === actorId || (model.connector_id === origin.connector_id && actorId === origin.owner_id);
+async function parentModel(call: Call): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
+  return sessionCurrentModel(call.c.env, call.origin, call.actorId);
 }
+
+export type ChildModel = Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>;
 
 export async function childModel(env: Env, origin: SessionRow, actorId: string, chosen: { modelId?: string; thinkingLevel?: ThinkingLevel }, inheritThinking: boolean):
   Promise<{ model: ChildModel; thinkingLevel?: ThinkingLevel; inheritsModel: boolean; inheritsThinking: boolean }> {
@@ -368,7 +401,7 @@ export async function childModel(env: Env, origin: SessionRow, actorId: string, 
     'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(modelId, origin.workspace_id).first();
   if (!model) fail(404, 'not_found', 'Model not found.');
   const thinkingLevel = await childThinkingLevel(env, model, chosen.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
-  if (!childModelTrusted(model, origin, actorId)) {
+  if (model.connector_id && !agentMayStartOn(origin, actorId, model)) {
     fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
   }
   return { model, ...(thinkingLevel ? { thinkingLevel } : {}), inheritsModel, inheritsThinking };

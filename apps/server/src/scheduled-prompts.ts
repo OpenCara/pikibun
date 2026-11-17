@@ -9,8 +9,9 @@ import { CronError, isTimeZone, nextCronTime, parseCron } from '../../../package
 import { hasPermission } from '../../../packages/shared/src/policy.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import { admissionExpired, auditStatement, requireCallbackScope, requireSession, requireToolCall, sessionAccess } from './authority/index.js';
-import { requireModel } from './catalog.js';
-import { childModel, childModelChoices, childModelTrusted } from './cross-session.js';
+import { requireModel, usableModels } from './catalog.js';
+import { childModel, childModelChoices } from './cross-session.js';
+import { agentMayStartOn } from './placement.js';
 import { requireUnfrozen } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
 import { archiveSession, createSession, submitMessage } from './sessions.js';
@@ -517,7 +518,8 @@ export function registerScheduledPrompts(app: Hono<AppEnv>) {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');
     const rows = await c.env.DB.query<ScheduleRow>('SELECT * FROM session_schedules WHERE session_id = ? ORDER BY created_at, id').bind(row.id).all();
     const canManage = row.owner_id === c.get('auth').userId && row.status !== 'archived';
-    const choices = canManage ? await childModelChoices(c.env, row.workspace_id, row.owner_id, model => childModelTrusted(model, row, row.owner_id)) : undefined;
+    const choices = canManage ? await childModelChoices(c.env, row.workspace_id,
+      (await usableModels(c.env, row.workspace_id, row.owner_id)).filter(model => !model.connector_id || agentMayStartOn(row, row.owner_id, model))) : undefined;
     return c.json({ schedules: rows.map(scheduleRecord), canManage, ...choices });
   });
 

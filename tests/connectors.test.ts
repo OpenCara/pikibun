@@ -270,7 +270,7 @@ async function mergePayload(f: Fixture, session: SessionRecord, repository = 'ow
     repository, pull: operation.pull, sha: operation.sha, method: operation.method };
 }
 
-function mergeFetch(t: TestContext, merge: () => Response) {
+function mergeFetch(t: TestContext, merge: () => Response, pull: () => Response = () => new Response('unavailable', { status: 503 })) {
   const calls: string[] = [];
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -280,6 +280,10 @@ function mergeFetch(t: TestContext, merge: () => Response) {
     if (url === 'https://api.github.com/repos/owner/repo') {
       assert.equal(init?.method ?? 'GET', 'GET');
       return Response.json({ id: 7, full_name: 'owner/repo', default_branch: 'main', private: true });
+    }
+    if (url === 'https://api.github.com/repos/owner/repo/pulls/5') {
+      assert.equal(init?.method ?? 'GET', 'GET');
+      return pull();
     }
     assert.equal(url, 'https://api.github.com/repos/owner/repo/pulls/5/merge');
     assert.equal(init?.method, 'PUT');
@@ -295,16 +299,23 @@ async function issuePayload(f: Fixture, session: SessionRecord, repository = 'ow
     repository, title: operation.title, body: operation.body };
 }
 
-function issueFetch(t: TestContext, open: () => Response) {
+function issueFetch(t: TestContext, open: () => Response, listed: () => unknown[] = () => []) {
   const calls: string[] = [];
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    calls.push(`${init?.method ?? 'GET'} ${url}`);
+    calls.push(`${init?.method ?? 'GET'} ${url.replace(/\?.*$/, '?…')}`);
     assert.equal(init?.redirect, 'manual');
     assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${githubToken}`);
     if (url === 'https://api.github.com/repos/owner/repo') {
       assert.equal(init?.method ?? 'GET', 'GET');
       return Response.json({ id: 7, full_name: 'owner/repo', default_branch: 'main', private: true });
+    }
+    if (url.startsWith('https://api.github.com/repos/owner/repo/issues?')) {
+      assert.equal(init?.method ?? 'GET', 'GET');
+      const query = new URL(url).searchParams;
+      assert.equal(query.get('state'), 'open');
+      assert.ok(Date.parse(query.get('since')!) > Date.now() - 16 * 60_000, 'only recent issues are listed');
+      return Response.json(listed());
     }
     assert.equal(url, 'https://api.github.com/repos/owner/repo/issues');
     assert.equal(init?.method, 'POST');
@@ -860,6 +871,27 @@ test('a connector names its version in its manifest, which its host lists, and t
   assert.equal(await health(), '0.24.0');
 });
 
+test('a connector reports its hardware on its own callback, which its host shows until it is revoked', async t => {
+  const f = await fixture(t); const owner = await f.client('owner'); const connector = await connect(f, owner);
+  const hardware = { platform: 'linux', release: '6.8.0', arch: 'x64', cpuModel: 'Fixture CPU', cpus: 8, memoryBytes: 32 * 1024 ** 3, freeMemoryBytes: 16 * 1024 ** 3,
+    load: [1, 0.5, 0.25], gpus: [{ vendor: 'nvidia', name: 'Fixture GPU', memoryBytes: 24 * 1024 ** 3 }] };
+  const report = (body: unknown, token = connector.connectionToken) => f.request('POST', '/api/connectors/self/hardware', body,
+    { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': token });
+  const listed = async () => (await json<{ connectors: ConnectorInfo[] }>(await owner.request('GET', '/api/connectors'))).connectors[0]!.hardware;
+  assert.equal(await listed(), undefined);
+  await json(await report({ hardware }));
+  const shown = await listed();
+  assert.deepEqual({ ...shown, reportedAt: undefined }, { ...hardware, reportedAt: undefined });
+  assert.ok(Date.parse(shown!.reportedAt) > Date.now() - 60_000);
+  for (const body of [{ hardware: { ...hardware, token: 'secret' } }, { hardware, extra: 1 }, { hardware: { ...hardware, cpus: 0 } }, {}]) {
+    await denied(await report(body), 400, Object.hasOwn(body, 'extra') || !Object.hasOwn(body, 'hardware') ? 'invalid_hardware' : 'invalid_input');
+  }
+  await denied(await report({ hardware }, 'stale_connection_token_0123456789abcdef_000'), 401, 'stale_connection');
+  assert.equal((await listed())!.cpus, 8, 'a refused report leaves the last one');
+  assert.equal((await owner.request('DELETE', `/api/connectors/${connector.connectorId}`)).status, 204);
+  assert.equal(f.sqlite.prepare('SELECT hardware_json FROM connectors WHERE id = ?').get(connector.connectorId)!.hardware_json, null);
+});
+
 async function socketDenied(f: Fixture, headers: Headers, url: URL, status: number, code: string) {
   let response: Response | undefined;
   await assert.rejects(authenticateConnectorSocket(f.env, headers, url), (error: unknown) => {
@@ -1110,7 +1142,8 @@ test('broker callbacks also need the tool among the tools of the message\'s send
 test('github merges need a pinned repository, run once per tool call, and tell GitHub refusals apart from unknown outcomes', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_merge']);
   let answer = () => Response.json({ merged: true, sha: mergedSha, message: 'Pull Request successfully merged' });
-  const calls = mergeFetch(t, () => answer());
+  let pull = () => new Response('unavailable', { status: 503 });
+  const calls = mergeFetch(t, () => answer(), () => pull());
   const consumed = (approvalId: string) => f.sqlite.prepare('SELECT created_at FROM automatic_github_effects WHERE approval_id = ?').get(approvalId)?.created_at ?? null;
   const audits = (action: string) => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM audit WHERE action = ?').get(action)!.n);
 
@@ -1143,7 +1176,27 @@ test('github merges need a pinned repository, run once per tool call, and tell G
   await denied(await self(f, s.connector, 'github/merge', unknown), 502, 'github_outcome_unknown');
   assert.ok(consumed(unknown.approvalId));
   assert.equal(audits('github.merge.ambiguous'), 1);
-  assert.equal(calls.length, 6);
+  assert.deepEqual(calls.slice(4), ['GET https://api.github.com/repos/owner/repo', 'PUT https://api.github.com/repos/owner/repo/pulls/5/merge',
+    'GET https://api.github.com/repos/owner/repo/pulls/5'], 'an unclear outcome reads the pull request again before saying it is unknown');
+
+  pull = () => Response.json({ state: 'closed', merged: true, merge_commit_sha: 'e'.repeat(40), head: { sha: headSha } });
+  const settled = await mergePayload(f, s.session);
+  assert.deepEqual(await json(await self(f, s.connector, 'github/merge', settled)), { sha: 'e'.repeat(40), url: 'https://github.com/owner/repo/pull/5' },
+    'reading it again shows it merged');
+  assert.equal(audits('github.merge.completed'), 2);
+
+  pull = () => Response.json({ state: 'closed', merged: true, merge_commit_sha: 'f'.repeat(40), head: { sha: 'a'.repeat(40) } });
+  const others = await mergePayload(f, s.session);
+  await denied(await self(f, s.connector, 'github/merge', others), 502, 'github_outcome_unknown');
+  assert.equal(audits('github.merge.completed'), 2, 'a merge of another head is not this call\'s');
+
+  pull = () => Response.json({ state: 'open', merged: false, merge_commit_sha: null, head: { sha: headSha } });
+  const open = await mergePayload(f, s.session);
+  const notMerged = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/merge', open), 422);
+  assert.equal(notMerged.code, 'github_merge_refused');
+  assert.match(notMerged.error, /didn't confirm the merge of owner\/repo#5, and reading it again shows it isn't merged: it is still open at c{12}\./);
+  assert.equal(audits('github.merge.ambiguous'), 2);
+  assert.equal(calls.length, 16);
   assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
 });
 
@@ -1165,12 +1218,12 @@ test('github issues need a workspace repository, run once per tool call, and tel
 
   const payload = await issuePayload(f, s.session);
   assert.deepEqual(await json(await self(f, s.connector, 'github/issue', payload)), { number: 63, url: 'https://github.com/owner/repo/issues/63' });
-  assert.deepEqual(calls, ['GET https://api.github.com/repos/owner/repo', 'POST https://api.github.com/repos/owner/repo/issues']);
+  assert.deepEqual(calls, ['GET https://api.github.com/repos/owner/repo', 'GET https://api.github.com/repos/owner/repo/issues?…', 'POST https://api.github.com/repos/owner/repo/issues']);
   assert.ok(consumed(payload.approvalId));
   assert.equal(audits('github.issue.attempted'), 1);
   assert.equal(audits('github.issue.completed'), 1);
   await denied(await self(f, s.connector, 'github/issue', payload), 409, 'capability_consumed');
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
 
   answer = () => Response.json({ message: 'Issues are disabled for this repo' }, { status: 410 });
   const refused = await issuePayload(f, s.session);
@@ -1180,7 +1233,7 @@ test('github issues need a workspace repository, run once per tool call, and tel
   assert.ok(refusal.error.includes('owner/repo'), refusal.error);
   assert.ok(consumed(refused.approvalId));
   assert.equal(audits('github.issue.failed'), 1);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
 
   for (const unclear of [() => Response.json({ message: 'Server Error' }, { status: 502 }), () => Response.json({}, { status: 201 })]) {
     answer = unclear;
@@ -1189,7 +1242,31 @@ test('github issues need a workspace repository, run once per tool call, and tel
     assert.ok(consumed(unknown.approvalId));
   }
   assert.equal(audits('github.issue.ambiguous'), 2);
-  assert.equal(calls.length, 8);
+  assert.equal(calls.length, 14, "an unclear outcome looks for the owner's new issue before saying it is unknown");
+  assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
+});
+
+test('a github issue whose outcome was unclear is found by its title, and one the owner just opened with the same title is not opened again', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_issue']);
+  const title = 'Sandbox has no CA certificates';
+  const issue = (number: number, overrides: Record<string, unknown> = {}) => ({ number, title, user: { id: 7, login: 'creator' }, state: 'open',
+    created_at: new Date().toISOString(), ...overrides });
+  let listing: unknown[] = [];
+  const calls = issueFetch(t, () => { listing = [issue(64)]; return Response.json({ message: 'Server Error' }, { status: 502 }); }, () => listing);
+  const consumed = (approvalId: string) => f.sqlite.prepare('SELECT created_at FROM automatic_github_effects WHERE approval_id = ?').get(approvalId)?.created_at ?? null;
+
+  listing = [issue(60, { user: { id: 8 } }), issue(61, { title: 'Another' }), issue(62, { pull_request: {} }), issue(59, { created_at: '2020-01-01T00:00:00Z' })];
+  const settled = await issuePayload(f, s.session);
+  assert.deepEqual(await json(await self(f, s.connector, 'github/issue', settled)), { number: 64, url: 'https://github.com/owner/repo/issues/64' },
+    "others' issues, other titles, pull requests and old issues aren't it; the owner's new one is");
+  assert.deepEqual(calls.slice(-2), ['POST https://api.github.com/repos/owner/repo/issues', 'GET https://api.github.com/repos/owner/repo/issues?…']);
+
+  const again = await issuePayload(f, s.session);
+  const refusal = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/issue', again), 422);
+  assert.equal(refusal.code, 'github_issue_duplicate', 'a definite refusal, which the runner reports as failed with its reason');
+  assert.match(refusal.error, /opened owner\/repo#64 with this exact title 1 minute ago: https:\/\/github\.com\/owner\/repo\/issues\/64\. Nothing was opened/);
+  assert.equal(consumed(again.approvalId), null, 'a refused duplicate leaves the tool call unspent');
+  assert.equal(calls.filter(call => call.startsWith('POST')).length, 1);
   assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
 });
 

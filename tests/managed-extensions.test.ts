@@ -116,8 +116,8 @@ test("a bundled copy's version is the one committed in its package, which the ex
     const manifest = JSON.parse(await readFile(join(import.meta.dirname, "..", "extensions", extension.info.name, "package.json"), "utf8"));
     assert.equal(extension.version, manifest.version, extension.info.source);
   }
-  assert.deepEqual(connectorPikiExtensions.filter(item => item.version !== undefined).map(item => item.info.source), ["piki:prompt-audit", "piki:pr-flow", "piki:context-files"]);
-  assert.deepEqual(connectorPikiExtensions.filter(item => managedSource(item.info.source)).map(item => item.info.source), ["piki:pr-flow", "piki:context-files"],
+  assert.deepEqual(connectorPikiExtensions.filter(item => item.version !== undefined).map(item => item.info.source), ["piki:prompt-audit", "piki:pr-flow", "piki:context-files", "piki:sub-agents"]);
+  assert.deepEqual(connectorPikiExtensions.filter(item => managedSource(item.info.source)).map(item => item.info.source), ["piki:pr-flow", "piki:context-files", "piki:sub-agents"],
     "the prompt audit runs only as built in until it can run in the extension process");
 });
 

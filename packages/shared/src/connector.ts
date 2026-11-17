@@ -1,5 +1,6 @@
 import type { HostCommandLevel, RunnerBinding, RunnerTicket, ThinkingLevel } from "./types.js";
 import type { GpuKind, HostConfig } from "./host-config.js";
+import type { ReportedHardware } from "./hardware.js";
 
 export interface LocalModelSummary {
   provider: string;
@@ -79,6 +80,7 @@ export interface ConnectorInfo {
   revokedAt: string | null;
   online: boolean;
   version?: string;
+  hardware?: ReportedHardware;
   models: LocalModelSummary[];
   workspaceIds: string[];
   connectedWorkspaceIds?: string[];

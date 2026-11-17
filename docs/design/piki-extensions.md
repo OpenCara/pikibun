@@ -610,7 +610,7 @@ fixes the review points it judges valid, then the merge.
     the call singles out (GitHub's #4 and GitLab's !4 are different pull requests). `github_read` of a pull request
     merged or closed by someone else ends its flow. A change
     after its merge is new work, with a new draft. Notes go on results the agent reads anyway, so nothing interrupts a
-    message, and they never refuse or change what ran. The person's words come first: the prompt leaves the flow out
+    message, and they never change what ran; the one call the extension refuses is a push before its `pre-push-check` passed (note 40). The person's words come first: the prompt leaves the flow out
     where they ask for no pull request or no merge.
 40. **The review window is the agent's to keep.** `review-minutes` (a string flag, as settings are strings or
     booleans; whole minutes, 0 to a week, 30 otherwise) is how long it waits once the pull request is ready, and again
@@ -630,6 +630,17 @@ fixes the review points it judges valid, then the merge.
     `github_merge` call is named nowhere. A window of 0 then hands over as soon as the pull request is ready. It is
     guidance, like the rest of the flow: the workspace's tool groups, not the extension, decide whether a session can
     merge at all. A merge it still sees (the person asked, say) ends the flow as before.
+
+    **A check before each push.** `pre-push-check` (a string flag, empty by default) turns the lesson "run the check CI
+    most often fails on before pushing" into a refusal (`tool_call` with `block`): once the session changed files in a
+    clone, a `git_push` or `git push` of it (never a tag, `--tags`, `--delete` or `--dry-run`) is refused until a
+    program tool's call in that clone, whose program and arguments hold the setting's words, ended executed (exit 0).
+    What counts as a change is what the extension can see change files: the file tools by path, and the Git
+    subcommands that rewrite the working tree (merge, rebase, reset, checkout, switch, restore, stash, pull, ...). A
+    commit changes no file, so a check run before committing still counts. It runs nothing itself: the extension runs
+    on the host, outside the sandbox, and a repository's check is the repository's code, so it only reads what the
+    session's own calls did. A program tool that changes files (a formatter) doesn't reset it: the extension can't see
+    what such a call wrote, and asking again after every program call would refuse pushes after the check itself.
 
 ## The context files: piki:context-files
 
@@ -725,6 +736,7 @@ that kind of task on, among the models that host offers. The member still choose
 | The prompt audit, a Pi package of its own | `extensions/prompt-audit/` (`prompt-audit.ts`, `index.ts`, `package.json`); tests in `tests/prompt-audit.test.ts` |
 | The pull request flow, a Pi package of its own | `extensions/pr-flow/` (`pr-flow.ts`, `index.ts`, `package.json`); tests in `tests/pr-flow.test.ts` |
 | The context files, a Pi package of its own | `extensions/context-files/` (`context-files.ts`, `index.ts`, `package.json`); tests in `tests/context-files.test.ts` |
+| Sub-agents, a Pi package of its own ([host placement](host-placement.md#the-sub-agents-extension-pikisub-agents)) | `extensions/sub-agents/` (`sub-agents.ts`, `index.ts`, `package.json`); tests in `tests/sub-agents.test.ts` |
 | The default workspace extensions | `defaultWorkspaceExtensions` (`packages/shared/src/host-extensions.ts`); migrations sqlite/0049 and 0064 (postgres/0042 and 0057); tests in `tests/extensions.test.ts` |
 | Draft pull requests and marking them ready | `apps/server/src/authority/push/targets.ts` (`openPullRequest`), `broker.ts`; `PullRequestRequest.draft` (types.ts); tests in `tests/pull-request-drafts.test.ts` |
 | The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session/tools/browser.ts` (the `browser` tool), `session/tools/calls.ts` (`browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |

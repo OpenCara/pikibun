@@ -13,6 +13,8 @@ import type { ConnectorCapabilities, ConnectorInfo, ConnectorPairing, LocalModel
 import { gpuKinds, type GpuKind } from '../../../packages/shared/src/host-config.js';
 import { sessionActivities, thinkingLevels, type SessionActivity, type ThinkingLevel } from '../../../packages/shared/src/types.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
+import { hardwareLimits, parseHardware, readReportedHardware } from '../../../packages/shared/src/hardware.js';
+import { body, fields, parsed } from './schemas.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { CONNECTOR_VERSION_HEADER, connectorTooOld, MINIMUM_CONNECTOR_VERSION, validVersion } from '../../../packages/shared/src/version.js';
 import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
@@ -167,8 +169,10 @@ async function connectorInfo(env: Env, row: ConnectorInfoRow, viewer?: InfoViewe
   const hostCommandAccess = authority?.level;
   const hostSessions = (owner || authority?.sessions === true) && !row.revoked_at
     && (config?.hostSessions === true || !hostSessionsNeedConsent(capabilities, !owner)) && hostSessionsSupported(capabilities, !owner);
+  const hardware = row.revoked_at ? undefined : readReportedHardware(row.hardware_json, row.hardware_at);
   return { id: row.id, ownerId: row.owner_id, ownerName, name: row.name,
     createdAt: row.created_at, revokedAt: row.revoked_at, online, models, ...(row.connector_version ? { version: row.connector_version } : {}),
+    ...(hardware ? { hardware } : {}),
     workspaceIds: workspaceIds.filter(visible), connectedWorkspaceIds: connectedWorkspaceIds.filter(visible), capabilities,
     ...(viewer?.role ? { role: viewer.role, admins, hostGrants, disabledModels, config } : {}), ...(hostCommandAccess ? { hostCommandAccess } : {}),
     ...(hostSessions ? { hostSessions: true as const } : {}) };
@@ -306,6 +310,15 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
     await syncModels(c.env, updated, null);
     return c.json({ ok: true });
   });
+  app.post('/api/connectors/self/hardware', async c => {
+    const row = await authenticateConnector(c);
+    const { hardware } = await body(c, fields({ hardware: parsed(parseHardware, 'Invalid hardware report.') }, 'A hardware report takes only hardware.',
+      { required: ['hardware'], code: 'invalid_hardware' }), { maxBytes: hardwareLimits.reportBytes });
+    const updated = await c.env.DB.query('UPDATE connectors SET hardware_json = ?, hardware_at = ? WHERE id = ? AND revoked_at IS NULL AND connection_hash = ?')
+      .bind(JSON.stringify(hardware), now(), row.id, row.connection_hash).run();
+    if (!updated.changes) fail(401, 'stale_connection', 'Connection has been replaced.');
+    return c.json({ ok: true });
+  });
   app.post('/api/connectors/self/authorize', async c => authorizeSession(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/activity', async c => reportSessionActivity(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/branches', async c => reportSessionBranches(c, (await authenticateConnector(c)).id));
@@ -418,7 +431,8 @@ export function registerConnectors(app: Hono<AppEnv>): void {
     const timestamp = now();
     await c.env.DB.batch([
       c.env.DB.query(`UPDATE connectors SET removed_at = ?, revoked_at = COALESCE(revoked_at, ?),
-        connection_hash = NULL, credential_hash = ?, name = 'Removed host', models_json = '[]', capabilities_json = '{}', connector_version = NULL
+        connection_hash = NULL, credential_hash = ?, name = 'Removed host', models_json = '[]', capabilities_json = '{}', connector_version = NULL,
+        hardware_json = NULL, hardware_at = NULL
         WHERE id = ?`).bind(timestamp, timestamp, await sha256(randomToken()), row.id),
       ...removedHostStatements(c.env.DB, row.id),
       c.env.DB.query('DELETE FROM connector_disabled_models WHERE connector_id = ?').bind(row.id),
@@ -437,7 +451,7 @@ export function registerConnectors(app: Hono<AppEnv>): void {
   app.delete('/api/connectors/:id', async c => {
     const row = await ownedConnector(c);
     await c.env.DB.batch([
-      c.env.DB.query('UPDATE connectors SET revoked_at = COALESCE(revoked_at, ?), connection_hash = NULL WHERE id = ?').bind(now(), row.id),
+      c.env.DB.query('UPDATE connectors SET revoked_at = COALESCE(revoked_at, ?), connection_hash = NULL, hardware_json = NULL, hardware_at = NULL WHERE id = ?').bind(now(), row.id),
       c.env.DB.query('UPDATE sessions SET policy_version = policy_version + 1 WHERE connector_id = ?').bind(row.id),
     ]);
     if (c.env.CONNECTOR_HUB) {
