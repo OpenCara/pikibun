@@ -9,6 +9,7 @@ export interface ConnectorRow {
   created_at: string; last_seen_at: string | null; connection_hash: string | null;
   models_json: string; capabilities_json: string; removed_at: string | null;
   connector_version?: string | null;
+  hardware_json?: string | null; hardware_at?: string | null;
 }
 
 export async function hostCapabilities(env: Env, connectorId: string | null | undefined, options: { active?: boolean } = {}): Promise<ConnectorCapabilities | null> {

@@ -19,6 +19,7 @@ import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { ExtensionStore } from '../apps/runner/src/extensions/store.js';
 import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
 import { verifiedSigned } from '../packages/shared/src/identity.js';
+import type { HostHardware } from '../packages/shared/src/hardware.js';
 
 const hostMigration = process.platform === 'linux' ? { hostMigration: true } : {};
 
@@ -35,6 +36,8 @@ const verifierSecret = 'fixture-local-verifier-not-a-worker-secret';
 const summary: LocalModelSummary = { provider: 'native.fixture', modelId: 'region/model', name: 'Local fixture model' };
 const model: ModelDefinition = { ...summary, id: 'model', workspaceId: 'workspace', connectorId: credentials.connectorId };
 const publicCapabilities: ConnectorCapabilities = { platform: 'linux', sandbox: false, productionShell: false };
+const fixtureHardware: HostHardware = { platform: 'linux', release: '6.8.0', arch: 'x64', cpuModel: 'Fixture CPU', cpus: 8, memoryBytes: 32 * 1024 ** 3,
+  freeMemoryBytes: 16 * 1024 ** 3, load: [1, 0.5, 0.25], gpus: [{ vendor: 'nvidia', name: 'Fixture GPU', memoryBytes: 24 * 1024 ** 3 }] };
 const authorizationRequest: AuthorizationRequest = { sessionId: 'session', actorId: 'owner', ownerId: 'owner', permission: 'write' };
 function localModels(entries: LocalModelSummary[] = [summary]): LocalModels {
   return {
@@ -380,6 +383,8 @@ type FixtureOptions = {
   identityDir?: string;
   portable?: ConnectorRuntime['portable'];
   identity?: (path: string, body: unknown) => Response | Promise<Response>;
+  hardware?: (body: unknown) => Response | Promise<Response>;
+  hardwareReport?: () => Promise<HostHardware>;
   sandboxBackend?: NonNullable<Parameters<typeof createConnector>[0]['sandboxBackend']>;
 };
 
@@ -399,6 +404,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
   const connector = createConnector({
     dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
+    hardware: { report: options.hardwareReport ?? (() => Promise.resolve(fixtureHardware)) }, hardwareReportMs: 20,
     ...(options.version ? { version: options.version } : {}), ...(options.identityDir ? { identityDir: options.identityDir } : {}),
     ...(options.sandboxBackend ? { sandboxBackend: options.sandboxBackend } : {}),
     browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
@@ -440,6 +446,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
       }
       if (request.url === `${origin}/api/connectors/self/extensions`) return options.extensionsSync?.(JSON.parse(call.body)) ?? Response.json({ requests: [] });
       if (request.url.startsWith(`${origin}/api/connectors/self/identity`) && options.identity) return options.identity(new URL(request.url).pathname, JSON.parse(call.body));
+      if (request.url === `${origin}/api/connectors/self/hardware`) return options.hardware?.(JSON.parse(call.body)) ?? Response.json({ error: 'Not found' }, { status: 404 });
       workerCalls.push(call);
       if (request.url === `${origin}/api/connectors/self/manifest`) {
         return options.manifest?.(manifests++) ?? Response.json({ ok: true });
@@ -1453,13 +1460,13 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
     return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
   } });
   await startFixture(fixture);
-  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files'];
+  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'];
   const first = (await syncs.next()).report;
   assert.deepEqual([first.installed.map(item => item.source), (first.browser as { state: string }).state], [all, 'missing']);
   const second = (await syncs.next()).report;
   assert.deepEqual([second.installed.map(item => item.source), second.browser], [all, undefined], 'tried again at once, without the browser\'s status');
   assert.deepEqual((await syncs.next()).report, { installed: [], remoteInstalls: true }, 'and again, without them');
-  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files'],
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'],
     'sessions still have them');
 });
 
@@ -1512,6 +1519,29 @@ test('a host with an identity says it keeps portable sessions, sends its delegat
   const settings = await verifiedSigned((await signed.next()).settings, 'settings');
   assert.equal(settings.statement.key, delegation.statement.key);
   assert.deepEqual([settings.statement.version, settings.statement.settings], [3, { name: 'Mine', paging: true }]);
+});
+
+test('a connected host reports its hardware after its manifest and again later, on the connection it came with', { timeout: 10000 }, async t => {
+  const reports = mailbox<{ hardware: HostHardware }>();
+  const fixture = await connectorFixture(t, { hardware: body => { reports.push(body as { hardware: HostHardware }); return Response.json({ ok: true }); } });
+  await startFixture(fixture);
+  assert.deepEqual((await reports.next()).hardware, fixtureHardware);
+  assert.deepEqual((await reports.next()).hardware, fixtureHardware, 'reported again on its interval');
+  const order = fixture.allCalls.map(call => new URL(call.request.url).pathname);
+  assert.ok(order.indexOf('/api/connectors/self/manifest') < order.indexOf('/api/connectors/self/hardware'), 'the manifest goes first');
+  const call = fixture.allCalls.find(item => item.request.url === `${origin}/api/connectors/self/hardware`)!;
+  assert.equal(call.request.headers.get('x-connection-token'), connectionToken);
+});
+
+test('a host stops reporting hardware to a server that refuses it, and stays connected; a failed probe is tried again', { timeout: 10000 }, async t => {
+  let probes = 0;
+  const fixture = await connectorFixture(t, { hardwareReport: async () => { if (++probes === 1) throw new Error('probe failed'); return fixtureHardware; } });
+  await startFixture(fixture);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  const reports = fixture.allCalls.filter(call => call.request.url === `${origin}/api/connectors/self/hardware`);
+  assert.equal(reports.length, 1, 'one refused report, and none after it');
+  assert.equal(probes, 2);
+  assert.deepEqual(fixture.statuses.filter(status => status === 'disconnected'), []);
 });
 
 test('a host whose identity can\'t be made still connects, without portable sessions', { timeout: 10000 }, async t => {

@@ -1,4 +1,5 @@
 import type { AccessMode, EntryView, Permission, SessionActivity, SessionRecord, SessionView, ThinkingLevel } from "./types.js";
+import { placementTarget, type GpuVendor, type PlacementRequirements } from "./hardware.js";
 
 export const sessionsToolActions = ["list", "read", "ask", "send", "wait", "create", "stop", "archive"] as const;
 export type SessionsToolAction = (typeof sessionsToolActions)[number];
@@ -33,6 +34,32 @@ export interface CrossSessionSummary {
   parentSessionId?: string;
   self?: true;
   createdAt: string;
+}
+
+export interface PlacementHostSummary {
+  id: string;
+  name: string;
+  owner: string;
+  yours?: true;
+  online: boolean;
+  agentMayStart: boolean;
+  sandbox: "sandbox" | "unsandboxed" | "unverified";
+  gpu: boolean;
+  activeSessions: number;
+  load: number;
+  hardware?: {
+    platform: string; arch: string; wsl?: true; cpus: number; cpuModel?: string; memoryGb: number; freeMemoryGb?: number; freeDiskGb?: number; load1?: number;
+    gpus: { vendor: GpuVendor; name?: string; memoryGb?: number }[]; reportedAt: string;
+  };
+}
+
+export interface PlacementResult {
+  host: { id: string; name: string };
+  conditions: string;
+  load: number;
+  activeSessions: number;
+  qualified: number;
+  considered: number;
 }
 
 export interface CrossSessionMessage {
@@ -78,28 +105,31 @@ export interface SessionsToolRequest {
   title?: string;
   modelId?: string;
   thinkingLevel?: ThinkingLevel;
+  placement?: PlacementRequirements;
   messageId?: string;
   limit?: number;
 }
 
 export type SessionsToolResult =
-  | { sessions: CrossSessionSummary[]; models: { id: string; name: string; provider: string; modelId: string; thinkingLevels?: ThinkingLevel[] }[]; childModels: boolean }
+  | { sessions: CrossSessionSummary[]; models: { id: string; name: string; provider: string; modelId: string; thinkingLevels?: ThinkingLevel[]; host?: string }[];
+    hosts?: PlacementHostSummary[]; childModels: boolean }
   | { session: CrossSessionSummary; busy: boolean; entries: Pick<EntryView, "id" | "role" | "kind" | "actorId" | "text" | "error">[];
     message?: CrossSessionMessage; outcome?: CrossSessionOutcome }
   | { message: CrossSessionMessage }
-  | { session: CrossSessionSummary; model?: { id: string; provider: string; modelId: string; thinkingLevel?: ThinkingLevel }; message?: CrossSessionMessage }
+  | { session: CrossSessionSummary; model?: { id: string; provider: string; modelId: string; thinkingLevel?: ThinkingLevel }; placement?: PlacementResult; message?: CrossSessionMessage }
   | { stopped: number }
   | { archived: string }
   | { consent: "audience"; target: string; reason: string };
 
 export function sessionsToolTarget(request: { action: SessionsToolAction; targetSessionId?: string; message?: string; access?: AccessMode; notify?: boolean;
-  title?: string; modelId?: string; thinkingLevel?: string; messageId?: string }): string {
+  title?: string; modelId?: string; thinkingLevel?: string; placement?: PlacementRequirements; messageId?: string }): string {
   const parts: string[] = [request.action];
   if (request.targetSessionId) parts.push(`session ${request.targetSessionId}`);
   if (request.messageId) parts.push(`message ${request.messageId}`);
   if (request.title !== undefined) parts.push(`title ${JSON.stringify(request.title)}`);
   if (request.modelId) parts.push(`model ${request.modelId}`);
   if (request.thinkingLevel) parts.push(`thinking ${request.thinkingLevel}`);
+  if (request.placement) parts.push(`placement ${placementTarget(request.placement)}`);
   if (request.access) parts.push(`access ${request.access}`);
   if (request.notify) parts.push("notify");
   const head = parts.join(" · ");

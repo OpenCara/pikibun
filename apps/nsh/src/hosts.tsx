@@ -1,5 +1,6 @@
 import { View } from "nsh";
 import type { ConnectorInfo } from "../../../packages/shared/src/connector";
+import { hardwareSummary } from "../../../packages/shared/src/hardware";
 import { createResource, type Resource } from "./lib/resource";
 import type { Tone } from "./theme";
 import { Badge, Banner, CollapsibleRow, Note } from "./ui";
@@ -48,6 +49,7 @@ export function HostDetails(props: { connector: ConnectorInfo }) {
   return (
     <>
       <Note>{`Platform: ${capabilities().platform || "Unknown"}.${!props.connector.online ? " Offline: it must reconnect before work can run." : ""}`}</Note>
+      <Note>{props.connector.hardware ? `Hardware: ${hardwareSummary(props.connector.hardware)}.` : "Hardware: not reported; connectors report it from this release on."}</Note>
       <Note>{`Sandbox: ${capabilities().unsandboxed ? "disabled by the host owner." : !capabilities().sandbox ? "unverified (not necessarily unavailable); the runner checks isolation when preparing each session." : "reported by the host; not a security attestation."} Production shell limits: ${capabilities().productionShell ? "reported; still verified per session." : "not confirmed."}`}</Note>
       <If when={config()?.gitCredentials || capabilities().gitCredentials}><Note>Git credentials: offered by the host owner for pushes in their own sessions, where a workspace's push access uses the host's Git credentials.</Note></If>
       <If when={capabilities().repositoryCache}><Note>Repository cache: this host fetches repositories into its own cache with the host owner's Git credentials, after Pikibun confirms that the session's owner can read them with their own account.</Note></If>

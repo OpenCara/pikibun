@@ -7,15 +7,18 @@ import { glabSpec } from "./glab.js";
 import { promptAuditExtension } from "../../../../../extensions/prompt-audit/prompt-audit.js";
 import { prFlowExtension } from "../../../../../extensions/pr-flow/pr-flow.js";
 import { contextFilesExtension } from "../../../../../extensions/context-files/context-files.js";
+import { subAgentsExtension } from "../../../../../extensions/sub-agents/sub-agents.js";
 import promptAuditPackage from "../../../../../extensions/prompt-audit/package.json" with { type: "json" };
 import prFlowPackage from "../../../../../extensions/pr-flow/package.json" with { type: "json" };
 import contextFilesPackage from "../../../../../extensions/context-files/package.json" with { type: "json" };
+import subAgentsPackage from "../../../../../extensions/sub-agents/package.json" with { type: "json" };
 
 const specs: Record<string, CliSpec> = { gh: ghSpec, glab: glabSpec, "azure-cli": azureCliSpec };
 const packages: Record<string, { factory: ExtensionFactory; version: string }> = {
   "prompt-audit": { factory: promptAuditExtension, version: promptAuditPackage.version },
   "pr-flow": { factory: prFlowExtension, version: prFlowPackage.version },
   "context-files": { factory: contextFilesExtension, version: contextFilesPackage.version },
+  "sub-agents": { factory: subAgentsExtension, version: subAgentsPackage.version },
 };
 
 export const bundledOnlySources: ReadonlySet<string> = new Set(["piki:prompt-audit"]);

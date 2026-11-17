@@ -95,6 +95,7 @@ export function programRequest(definition: ProgramToolDefinition, input: { progr
 export interface ProgramHost {
   nodeBin?: string;
   exists?: (path: string) => boolean;
+  environment?: string;
 }
 
 export function programCommand(definition: ProgramToolDefinition, request: ProgramRequest, host: ProgramHost = {}): string {
@@ -102,6 +103,7 @@ export function programCommand(definition: ProgramToolDefinition, request: Progr
   const prefix = [
     ...definition.environment.map(([name, value]) => `${name}=${value}`),
     ...(definition.systemDefaults ?? []).filter(item => exists(item.value)).map(item => `${item.variable}="\${${item.variable}:-${item.value}}"`),
+    ...(host.environment ? [host.environment] : []),
   ].join(" ");
   return programShellCommand({ directory: request.directory, path: definition.path, ...(definition.toolchain === "node" && host.nodeBin ? { first: host.nodeBin } : {}),
     ...(prefix ? { prefix } : {}), program: request.program, args: request.args });

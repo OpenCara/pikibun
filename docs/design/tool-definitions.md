@@ -97,6 +97,25 @@ So the connector is now an engine for both kinds, and the control plane describe
     minutes, not the host's whole limit. It is part of the call, not of its operation: the operation, the card and what the
     control plane checks stay `{ kind: "program", tool, command }`, so a connector with it needs no newer control plane.
 
+    A call without `timeout_seconds` that runs a test suite or a server (`longRun` in
+    `apps/runner/src/program-defaults.ts`: `npm test`, `pnpm dev`, `node --test`, `pytest`, `cargo test`, `make test`
+    and the like) gets 20 minutes, CI's own job limit, instead of the host's whole limit; its result's `hint` says so when
+    it stops there. Agents were told to give one and forgot, and a hung suite then held a session for an hour. It is a
+    guess from the command's words, so it only lowers a limit the call didn't name, and a call that names one keeps it.
+    The parameter's description, from the connector, says it, not the shared definition's: a control plane's newer
+    description would otherwise promise older connectors a default they don't have.
+
+12. **A call's environment.** The program tools and `python` take `env`, variables set for the program as quoted
+    assignments before it in the command, so the card shows them. A call can run any code in its sandbox already, so
+    `env` grants nothing new; it only spares agents a `node -e` wrapper. `PATH` (the tool's own) and `LD_`/`DYLD_` ones
+    are refused, and at most 16, each at most 4096 characters. Like the timeout, it is the connector's parameter: an
+    older connector's open schema would take it and ignore it, so the shared description never names it.
+
+13. **Where to run.** Agents left out `directory` and ran `pnpm test` at the worktree's top, which holds clones, not a
+    project. A failed call there whose output says a `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod` or
+    `Makefile` is missing, which the top lacks and a clone has, gets a `hint` naming the clones that have one. Nothing
+    picks the directory for it: a call that meant the top (`npm init`) must still run there.
+
 ## Adding a tool
 
 - A program tool or brokered tool the engine can express: add its definition to `bundledToolDefinitions`, its switch
