@@ -43,7 +43,8 @@ in [Models and tools](../models-and-tools.md#prompt-cache-warming); this note sa
   warming stops rather than schedule from a refresh that didn't happen; a thrown error is written to the connector's
   log. The next real request starts again.
 - **Usage.** A refresh's usage is added to the conversation's `pi.usage` under its model, as pi-durable adds a
-  response's (pi-durable doesn't export `addUsage`, so the session keeps a copy), so the session's usage includes it.
+  response's (pi-durable doesn't export `addUsage`, so the session keeps a copy), so the session's usage in its status
+  includes it. It adds no entry, so the status shows it once its usage is next read (within 10 seconds of a view).
   Refreshes set `disableContinuation`, so the provider's thread state (such as an OpenAI response ID) stays the
   request's.
 - **A workspace setting, asked for per session.** The setting is the workspace's, chosen by its owners and admins: the
