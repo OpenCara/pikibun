@@ -1,24 +1,40 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
-import { bool, int, obj, opt, str } from "@earendil-works/pi-schema";
+import { arr, bool, int, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { crossSessionLimits, sessionsToolActions, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../../../packages/shared/src/cross-session.js";
 import { accessModes, thinkingLevels } from "../../../../../packages/shared/src/types.js";
+import { gpuVendors, placementWireFields } from "../../../../../packages/shared/src/hardware.js";
 import { RunnerError } from "../../protocol.js";
 import { text, type ToolContext } from "./context.js";
 
 const WAIT_POLL_MS = 3000;
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
-  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
+  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers and the host each runs on, the hosts (online, whether you may start sessions there, GPU, CPUs, memory, disk, active sessions, load), and whether this workspace lets create choose models (childModels). "
   + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells); with message_id, also the outcome of a message this session sent it (status, done, reply). "
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access read: inspect only; left out, it acts as that session's tools allow); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
-  + "create {message?, title?, model?, thinking?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
+  + "create {message?, title?, model?, thinking?, placement?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
+  + "placement lets Pikibun choose the host: the least loaded online host you may start sessions on that meets every condition given, among hosts offering model (any host offering its provider/model, not only its own), or one of placement models (model ids, provider/model, or globs such as anthropic/*), or else this session's model: "
+  + "{hosts?, models?, gpu?, gpu_vendor?, gpu_memory_gb?, min_cpus?, min_memory_gb?, min_free_memory_gb?, min_free_disk_gb?, platform?, arch?}, such as {gpu: true, min_memory_gb: 32} for a task that needs a GPU, or {} to spread work over the hosts offering the same model. The result names the host chosen. "
   + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
   + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
   + "chains of messages stop after 3 hops and never loop back to a session they came from. "
   + "Involve other sessions only when the user asked for it or clearly expects it.";
+
+export function placementRequest(value: unknown): SessionsToolRequest["placement"] | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new RunnerError(400, "placement is an object of conditions");
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (item === undefined) continue;
+    const field = (placementWireFields as Record<string, string>)[key];
+    if (!field) throw new RunnerError(400, `placement takes no ${key}; it takes ${Object.keys(placementWireFields).join(", ")}`);
+    result[field] = item;
+  }
+  return result as SessionsToolRequest["placement"];
+}
 
 export function sessionsTool(context: ToolContext): ToolRegistration {
   const { binding, calls, config } = context;
@@ -27,13 +43,19 @@ export function sessionsTool(context: ToolContext): ToolRegistration {
     action: StringEnum(sessionsToolActions), session: opt(str()), message: opt(str()),
     access: opt(StringEnum(accessModes)), notify: opt(bool()), title: opt(str()), model: opt(str()),
     thinking: opt(StringEnum(thinkingLevels)), message_id: opt(str()),
+    placement: opt(obj({
+      hosts: opt(arr(str())), models: opt(arr(str())), gpu: opt(bool()), gpu_vendor: opt(StringEnum(gpuVendors)), gpu_memory_gb: opt(num({ minimum: 0 })),
+      min_cpus: opt(int({ minimum: 1 })), min_memory_gb: opt(num({ minimum: 0 })), min_free_memory_gb: opt(num({ minimum: 0 })), min_free_disk_gb: opt(num({ minimum: 0 })),
+      platform: opt(str()), arch: opt(str()),
+    })),
     limit: opt(int({ minimum: 1, maximum: crossSessionLimits.readEntries })),
     timeout_seconds: opt(int({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
   }, { open: true }), execute: async (args, api, call) => {
     await context.requireSessionTool("sessions");
     const attribution = await calls.actor(api, true);
     const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-      modelId: args.model, thinkingLevel: args.thinking, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
+      modelId: args.model, thinkingLevel: args.thinking, placement: placementRequest(args.placement), messageId: args.message_id, limit: args.limit })
+      .filter(([, value]) => value !== undefined)) as
       Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
     if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");
     const wait = args.action === "wait";

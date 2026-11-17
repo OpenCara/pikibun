@@ -860,6 +860,27 @@ test('a connector names its version in its manifest, which its host lists, and t
   assert.equal(await health(), '0.24.0');
 });
 
+test('a connector reports its hardware on its own callback, which its host shows until it is revoked', async t => {
+  const f = await fixture(t); const owner = await f.client('owner'); const connector = await connect(f, owner);
+  const hardware = { platform: 'linux', release: '6.8.0', arch: 'x64', cpuModel: 'Fixture CPU', cpus: 8, memoryBytes: 32 * 1024 ** 3, freeMemoryBytes: 16 * 1024 ** 3,
+    load: [1, 0.5, 0.25], gpus: [{ vendor: 'nvidia', name: 'Fixture GPU', memoryBytes: 24 * 1024 ** 3 }] };
+  const report = (body: unknown, token = connector.connectionToken) => f.request('POST', '/api/connectors/self/hardware', body,
+    { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': token });
+  const listed = async () => (await json<{ connectors: ConnectorInfo[] }>(await owner.request('GET', '/api/connectors'))).connectors[0]!.hardware;
+  assert.equal(await listed(), undefined);
+  await json(await report({ hardware }));
+  const shown = await listed();
+  assert.deepEqual({ ...shown, reportedAt: undefined }, { ...hardware, reportedAt: undefined });
+  assert.ok(Date.parse(shown!.reportedAt) > Date.now() - 60_000);
+  for (const body of [{ hardware: { ...hardware, token: 'secret' } }, { hardware, extra: 1 }, { hardware: { ...hardware, cpus: 0 } }, {}]) {
+    await denied(await report(body), 400, Object.hasOwn(body, 'extra') ? 'invalid_metadata' : 'invalid_hardware');
+  }
+  await denied(await report({ hardware }, 'stale_connection_token_0123456789abcdef_000'), 401, 'stale_connection');
+  assert.equal((await listed())!.cpus, 8, 'a refused report leaves the last one');
+  assert.equal((await owner.request('DELETE', `/api/connectors/${connector.connectorId}`)).status, 204);
+  assert.equal(f.sqlite.prepare('SELECT hardware_json FROM connectors WHERE id = ?').get(connector.connectorId)!.hardware_json, null);
+});
+
 async function socketDenied(f: Fixture, headers: Headers, url: URL, status: number, code: string) {
   let response: Response | undefined;
   await assert.rejects(authenticateConnectorSocket(f.env, headers, url), (error: unknown) => {
