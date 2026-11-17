@@ -129,6 +129,51 @@ describe("a session's panel", () => {
     expect(Object.keys(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`) as object)).not.toContain("runIn");
   });
 
+  test("Schedules starts each run of a schedule in a new session on the model and reasoning level chosen for it", async () => {
+    const models = [{ id: "m2", name: "Claude Opus", provider: "anthropic", modelId: "claude-opus", thinkingLevels: ["off", "low", "high"] }];
+    const schedule = { id: "sc1", sessionId: "s1", name: "Review", cron: "0 9 * * 1", timeZone: "UTC", content: "Review the architecture", access: "auto", runIn: "child",
+      oneShot: true, modelId: "m2", thinkingLevel: "high", enabled: true, nextRunAt: null, lastRunAt: "2026-11-16T09:00:00.000Z", lastSubmissionId: "sub1",
+      lastSessionId: "s2", lastError: "model_unavailable", createdBy: "u1", createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-01T00:00:00.000Z" };
+    const app = await openPanel({
+      [`GET ${ORIGIN}/api/sessions/s1/schedules`]: { body: { schedules: [schedule], canManage: true, models, childModels: true } },
+      [`PATCH ${ORIGIN}/api/sessions/s1/schedules/sc1`]: { body: { schedule } },
+    });
+    await app.press("text:Schedules");
+    await app.waitFor("id:schedule-sc1");
+    expect(app.texts().join(" ")).toContain("on Claude Opus, High reasoning");
+    expect(app.texts().join(" ")).toContain("the schedule's model is no longer available");
+
+    await app.press("text:Edit");
+    await app.waitFor("id:schedule-model");
+    await app.press("id:schedule-thinking");
+    await app.press("text:Low");
+    await app.press("id:schedule-save");
+    await app.waitUntil(() => Boolean(bodyOf(app, "PATCH", `${ORIGIN}/api/sessions/s1/schedules/sc1`)));
+    const edited = bodyOf(app, "PATCH", `${ORIGIN}/api/sessions/s1/schedules/sc1`);
+    expect(edited.thinkingLevel).toBe("low");
+    expect(Object.keys(edited)).not.toContain("modelId");
+  });
+
+  test("Schedules creates a schedule that runs in a new session on a model of its own", async () => {
+    const models = [{ id: "m2", name: "Claude Opus", provider: "anthropic", modelId: "claude-opus", thinkingLevels: ["off", "low", "high"] }];
+    const app = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/schedules`]: { body: { schedules: [], canManage: true, models, childModels: true } } });
+    await app.press("text:Schedules");
+    await app.waitFor("id:schedule-new");
+    await app.press("id:schedule-new");
+    await app.type("id:schedule-content", "Triage the issues");
+    expect(app.shows("id:schedule-model")).toBe(false);
+    await app.press("id:schedule-run-in");
+    await app.press("text:A new session each run");
+    await app.waitFor("id:schedule-model");
+    await app.press("id:schedule-model");
+    await app.press("text:Claude Opus");
+    await app.press("id:schedule-thinking");
+    await app.press("text:High");
+    await app.press("id:schedule-save");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)));
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)).toMatchObject({ content: "Triage the issues", runIn: "child", modelId: "m2", thinkingLevel: "high" });
+  });
+
   test("Activity shows the audit log", async () => {
     const app = await openPanel();
     await app.press("text:Activity");
