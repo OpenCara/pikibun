@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { egressPort, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "./helper-workspace.js";
+import { egressPort, helperMirror, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "./helper-workspace.js";
+import { gitShimProgram, sandboxGitLauncher } from "./host-git-shim.js";
 import { NODE_HELPER, NODE_HELPER_KINDS } from "./node-helper.js";
 import { gitForWindowsRoot, SANDBOX_SHELL_HINT, sandboxNodePath, sandboxShellPath } from "./platform.js";
 import { mxcEntry, mxcInstallHint, validWindowsLimits, type WindowsJobLimits } from "./sandbox-backend.js";
@@ -184,13 +185,25 @@ export class WindowsBackend implements HelperBackend {
     }
   }
 
+  async installGitShim(layout: HelperLayout): Promise<void> {
+    const program = join(layout.bin, "git-shim.cjs");
+    for (const [path, source] of [[program, gitShimProgram({ proxy: true })], [join(layout.bin, "git"), sandboxGitLauncher(this.#node, program)]] as const) {
+      await chmod(path, 0o600).catch(() => undefined);
+      await rm(path, { force: true });
+      await writeFile(path, source, { mode: 0o500 });
+      await chmod(path, 0o500);
+    }
+  }
+
   async launch(request: SandboxRequest, context: HelperContext, layout: HelperLayout): Promise<HelperLaunch> {
     const system = process.env.SystemRoot ?? "C:\\Windows";
     const port = egressPort(context);
+    const mirrors = (context.mirrors ?? []).filter(helperMirror);
     const environment: Record<string, string> = {
       ...context.environment,
       SANDBOX_GITDIR: layout.git, SANDBOX_GIT: this.#git, SANDBOX_BASH: this.#bash, SANDBOX_OWNER_CONFIG: layout.ownerConfig,
-      SystemRoot: system, windir: system, PATH: this.path,
+      ...(mirrors.length ? { SANDBOX_MIRRORS: mirrors.join("\n") } : {}),
+      SystemRoot: system, windir: system, PATH: context.gitShim && port !== undefined ? `${layout.bin};${this.path}` : this.path,
       TEMP: join(layout.home, ".tmp"), TMP: join(layout.home, ".tmp"), USERPROFILE: layout.home,
       LOCALAPPDATA: join(layout.home, "AppData", "Local"), APPDATA: join(layout.home, "AppData", "Roaming"),
       MSYSTEM: "MINGW64", CHERE_INVOKING: "1",
@@ -198,7 +211,7 @@ export class WindowsBackend implements HelperBackend {
       ...(port !== undefined ? { SANDBOX_EGRESS_PROXY: context.environment.HTTPS_PROXY!, SANDBOX_EGRESS_NO_PROXY: context.environment.NO_PROXY ?? "" } : {}),
     };
     const readonly = [system, dirname(this.#node), this.#gitRoot, this.#bash, layout.bin, layout.ownerConfig, layout.caBundle, join(layout.worktree, ".git"),
-      ...(context.gitWritable ? [] : [layout.git])];
+      ...(context.gitWritable ? [] : [layout.git]), ...mirrors];
     const readwrite = context.readOnly ? [] : [layout.home, layout.worktree, ...(context.gitWritable ? [layout.git] : [])];
     if (context.readOnly) readonly.push(layout.home, layout.worktree);
     const containerRequest = {

@@ -232,9 +232,8 @@ export class RunnerSession {
     this.#hostSession = binding.session.hostEnvironment === true && config.unsandboxed !== true;
     this.#inputs = new MessageInputs(join(directory, "inputs"));
     this.#onHost = config.unsandboxed === true || this.#hostSession;
-    const cached = this.#onHost ? process.platform !== "win32" : config.sandboxBackend?.kind !== "windows";
-    const hostPaths = this.#onHost || config.sandboxBackend?.kind === "seatbelt";
-    this.#mirrors = this.#clone && config.repositoryCache && cached ? new SessionMirrors({
+    const hostPaths = this.#onHost || config.sandboxBackend !== undefined;
+    this.#mirrors = this.#clone && config.repositoryCache ? new SessionMirrors({
       cache: config.repositoryCache, ownerId: binding.owner.id, sessionId: binding.session.id, relay: request => this.relay(request),
       grant: () => this.#egress ? this.#egress.grant() : this.requestGrant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
       ...(hostPaths ? { hostPaths: true } : {}),

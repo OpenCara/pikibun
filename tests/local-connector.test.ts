@@ -614,14 +614,14 @@ test('a host keeps the repository cache its configuration names for the whole co
   assert.equal(fixture.runtimes[0]!.config.repositoryCache?.scope, 'owner');
 });
 
-test('the macOS sandbox keeps the repository cache too; the Windows sandbox, whose cache would need what only POSIX has, keeps none', { timeout: 10000 }, async t => {
+test('the macOS and Windows sandboxes keep the repository cache too', { timeout: 10000 }, async t => {
   const hostConfig = () => Response.json({ config: { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'owner' } });
   const seatbelt = await connectorFixture(t, { hostConfig, sandboxBackend: { kind: 'seatbelt' } });
   await startFixture(seatbelt);
   assert.equal(seatbelt.runtimes[0]!.config.repositoryCache?.scope, 'owner');
   const windows = await connectorFixture(t, { hostConfig, sandboxBackend: { kind: 'windows', runtime: '/nowhere', limits: { memoryBytes: 1 << 30, processes: 64, cpuPercent: 50 } } });
   await startFixture(windows);
-  assert.equal(windows.runtimes[0]!.config.repositoryCache, undefined);
+  assert.equal(windows.runtimes[0]!.config.repositoryCache?.scope, 'owner');
 });
 
 test('a host reads the largest configuration the control plane saves: compaction counts for every model, with the longest names', { timeout: 10000 }, async t => {

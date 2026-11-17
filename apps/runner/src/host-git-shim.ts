@@ -12,6 +12,8 @@ export interface HostGitShimOptions {
   heartbeatMs?: number;
 }
 
+export type GitShimTransport = { socket: string; token: string } | { proxy: true };
+
 const REQUEST_BYTES = 8192;
 const HEARTBEAT_MS = 5_000;
 const PROGRESS_MS = 1_000;
@@ -20,6 +22,19 @@ const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 export const HOST_GIT_SHIM_VALUED: readonly string[] = Object.freeze(["-o", "--origin", "-b", "--branch", "-u", "--upload-pack", "--template", "-c", "--config",
   "--depth", "--shallow-since", "--shallow-exclude", "--separate-git-dir", "-j", "--jobs", "--filter", "--bundle-uri", "--server-option", "--ref-format",
   "--reference", "--reference-if-able", "--revision"]);
+
+const CLONE_ONLY = (exec: string) => [
+  "skip=",
+  "for arg in \"$@\"; do",
+  "  if [ -n \"$skip\" ]; then skip=; continue; fi",
+  "  case $arg in",
+  "    -C|-c) skip=1 ;;",
+  "    -*) ;;",
+  `    clone) ${exec} ;;`,
+  "    *) break ;;",
+  "  esac",
+  "done",
+];
 
 export function hostGitLauncher(bin: string, node: string, program: string): string {
   return [
@@ -39,149 +54,192 @@ export function hostGitLauncher(bin: string, node: string, program: string): str
     "set +f",
     "IFS=$saved",
     "if [ -z \"$real\" ]; then echo 'git: command not found' >&2; exit 127; fi",
-    "skip=",
-    "for arg in \"$@\"; do",
-    "  if [ -n \"$skip\" ]; then skip=; continue; fi",
-    "  case $arg in",
-    "    -C|-c) skip=1 ;;",
-    "    -*) ;;",
-    `    clone) PIKIBUN_HOST_GIT=$real; export PIKIBUN_HOST_GIT; exec ${quote(node)} ${quote(program)} "$@" ;;`,
-    "    *) break ;;",
-    "  esac",
-    "done",
+    "if command -v cygpath >/dev/null 2>&1; then real=$(cygpath -w \"$real\"); fi",
+    ...CLONE_ONLY(`PIKIBUN_HOST_GIT=$real; export PIKIBUN_HOST_GIT; exec ${quote(node)} ${quote(program)} "$@"`),
     "exec \"$real\" \"$@\"",
     "",
   ].join("\n");
 }
 
-export function hostGitProgram(socket: string, token: string): string {
+export function sandboxGitLauncher(node: string, program: string): string {
+  const path = (value: string) => {
+    if (/["$`\\\x00-\x1f]/.test(value.replaceAll("\\", "/"))) throw new Error("Invalid path for the sandbox's git");
+    return `"${value.replaceAll("\\", "/")}"`;
+  };
   return [
-    "\"use strict\";",
-    "const net = require(\"node:net\");",
-    "const fs = require(\"node:fs\");",
-    "const path = require(\"node:path\");",
-    "const { spawn } = require(\"node:child_process\");",
-    "const { constants } = require(\"node:os\");",
-    `const SOCKET = ${JSON.stringify(socket)};`,
-    `const TOKEN = ${JSON.stringify(token)};`,
-    `const VALUED = new Set(${JSON.stringify(HOST_GIT_SHIM_VALUED)});`,
-    "const git = process.env.PIKIBUN_HOST_GIT;",
-    "delete process.env.PIKIBUN_HOST_GIT;",
-    "if (!git) { process.stderr.write(\"git: command not found\\n\"); process.exit(127); }",
-    "const started = Date.now();",
-    "let shown;",
-    "",
-    "function note(text) { try { process.stderr.write(\"pikibun: \" + text + \"\\n\"); } catch {} }",
-    "",
-    "function described(progress) {",
-    "  let text = typeof progress.phase === \"string\" && /^[a-z]+$/i.test(progress.phase) ? progress.phase : \"filling\";",
-    "  if (Number.isInteger(progress.percent)) text += \" \" + progress.percent + \"%\";",
-    "  if (Number.isInteger(progress.bytes) && progress.bytes > 0) {",
-    "    let size = progress.bytes, unit = \"bytes\";",
-    "    for (const bigger of [\"KiB\", \"MiB\", \"GiB\"]) { if (size < 1024) break; size /= 1024; unit = bigger; }",
-    "    text += \", \" + (unit === \"bytes\" ? progress.bytes + \" bytes\" : size.toFixed(1) + \" \" + unit) + \" received\";",
-    "  }",
-    "  return text;",
-    "}",
-    "",
-    "function progressed(url, progress) {",
-    "  const now = Date.now();",
-    "  if (!progress || typeof progress !== \"object\" || now - started < 3000 || (shown !== undefined && now - shown < 30000)) return;",
-    "  if (shown === undefined) note(\"waiting for the host to fill its repository cache of \" + url + \": it downloads the repository once,\"",
-    "    + \" then every clone borrows from it, and it goes on if this command stops\");",
-    "  note(\"repository cache: \" + described(progress));",
-    "  shown = now;",
-    "}",
-    "",
-    "function ask(url) {",
-    "  return new Promise(resolve => {",
-    "    let buffer = \"\", settled = false, moved = false;",
-    "    const socket = net.connect(SOCKET);",
-    "    const done = answer => { if (settled) return; settled = true; socket.destroy(); resolve(answer); };",
-    "    socket.setEncoding(\"utf8\");",
-    "    socket.setTimeout(120000, () => done({ kind: \"failed\", moved }));",
-    "    socket.on(\"connect\", () => socket.write(JSON.stringify({ token: TOKEN, remote: url }) + \"\\n\"));",
-    "    socket.on(\"data\", chunk => {",
-    "      buffer += chunk;",
-    "      if (buffer.length > 1048576) return done({ kind: \"failed\", moved });",
-    "      for (let end = buffer.indexOf(\"\\n\"); end >= 0; end = buffer.indexOf(\"\\n\")) {",
-    "        const line = buffer.slice(0, end);",
-    "        buffer = buffer.slice(end + 1);",
-    "        let answer;",
-    "        try { answer = JSON.parse(line); } catch { continue; }",
-    "        if (!answer || typeof answer !== \"object\") continue;",
-    "        if (typeof answer.path === \"string\" && answer.path) return done({ kind: \"path\", path: answer.path });",
-    "        if (answer.none === true) return done({ kind: \"none\" });",
-    "        if (\"error\" in answer) return done({ kind: \"error\", reason: String(answer.error).slice(0, 300), retry: answer.retry === true, moved });",
-    "        moved = true;",
-    "        progressed(url, answer.progress);",
-    "      }",
-    "    });",
-    "    socket.on(\"error\", () => done({ kind: \"failed\", moved }));",
-    "    socket.on(\"close\", () => done({ kind: \"failed\", moved }));",
-    "  });",
-    "}",
-    "",
-    "async function mirror(url) {",
-    "  let failures = 0;",
-    "  for (;;) {",
-    "    const answer = await ask(url);",
-    "    if (answer.kind === \"path\") {",
-    "      if (shown !== undefined) note(\"the repository cache is ready; cloning from it\");",
-    "      return answer.path;",
-    "    }",
-    "    if (answer.kind === \"none\") return undefined;",
-    "    let reason = \"it did not answer\", transient = false;",
-    "    if (answer.kind === \"error\") {",
-    "      reason = answer.reason;",
-    "      if (!answer.retry) { note(\"the host cannot fill its repository cache (\" + reason + \"); cloning without it\"); return undefined; }",
-    "      transient = true;",
-    "    }",
-    "    failures = transient || !answer.moved ? failures + 1 : 0;",
-    "    if (failures >= 3) {",
-    "      note(\"the repository cache of \" + url + \" is not available right now (\" + reason + \"); run the clone again\");",
-    "      process.exit(128);",
-    "    }",
-    "    await new Promise(resolve => setTimeout(resolve, (failures || 1) * 1000));",
-    "  }",
-    "}",
-    "",
-    "async function main() {",
-    "  let args = process.argv.slice(2);",
-    "  let index = 0;",
-    "  while (index < args.length && args[index].startsWith(\"-\")) index += args[index] === \"-C\" || args[index] === \"-c\" ? 2 : 1;",
-    "  if (args[index] === \"clone\") {",
-    "    const rest = args.slice(index + 1);",
-    "    let url;",
-    "    for (let position = 0; position < rest.length;) {",
-    "      const argument = rest[position];",
-    "      if (argument === \"--\") { url = rest[position + 1]; break; }",
-    "      if (argument.startsWith(\"-\")) { position += VALUED.has(argument) ? 2 : 1; continue; }",
-    "      url = argument;",
-    "      break;",
-    "    }",
-    "    const borrowing = rest.some(argument => argument.startsWith(\"--reference\") || [\"-s\", \"--shared\", \"--dissociate\"].includes(argument));",
-    "    const extra = [];",
-    "    if (url && !borrowing) {",
-    "      const found = await mirror(url);",
-    "      if (found && fs.existsSync(path.join(found, \"objects\"))) extra.push(\"--reference-if-able\", found);",
-    "      else if (found) note(\"the host's repository cache of \" + url + \" has no objects to borrow; cloning without it\");",
-    "    }",
-    "    args = [...args.slice(0, index + 1), ...extra, ...rest];",
-    "  }",
-    "  const child = spawn(git, args, { stdio: \"inherit\" });",
-    "  const forward = signal => () => { try { child.kill(signal); } catch {} };",
-    "  for (const signal of [\"SIGINT\", \"SIGTERM\", \"SIGHUP\"]) process.on(signal, forward(signal));",
-    "  child.on(\"error\", () => { process.stderr.write(\"git: could not be started\\n\"); process.exit(127); });",
-    "  child.on(\"exit\", (code, signal) => {",
-    "    if (signal) { process.removeAllListeners(signal); try { process.kill(process.pid, signal); } catch {} }",
-    "    process.exit(code === null ? 128 + (constants.signals[signal] || 0) : code);",
-    "  });",
-    "}",
-    "",
-    "main().catch(() => process.exit(128));",
+    "#!/bin/sh",
+    ...CLONE_ONLY(`exec ${path(node)} ${path(program)} "$@"`),
+    "exec \"$SANDBOX_GIT\" \"$@\"",
     "",
   ].join("\n");
+}
+
+export function gitShimProgram(transport: GitShimTransport): string {
+  return String.raw`"use strict";
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
+const { constants } = require("node:os");
+const TRANSPORT = ${JSON.stringify(transport)};
+const VALUED = new Set(${JSON.stringify(HOST_GIT_SHIM_VALUED)});
+let git = process.env.PIKIBUN_HOST_GIT || process.env.SANDBOX_GIT;
+delete process.env.PIKIBUN_HOST_GIT;
+if (!git) { process.stderr.write("git: command not found\n"); process.exit(127); }
+if (process.platform === "win32" && !path.extname(git) && fs.existsSync(git + ".exe")) git += ".exe";
+const started = Date.now();
+let shown;
+
+function note(text) { try { process.stderr.write("pikibun: " + text + "\n"); } catch {} }
+
+function described(progress) {
+  let text = typeof progress.phase === "string" && /^[a-z]+$/i.test(progress.phase) ? progress.phase : "filling";
+  if (Number.isInteger(progress.percent)) text += " " + progress.percent + "%";
+  if (Number.isInteger(progress.bytes) && progress.bytes > 0) {
+    let size = progress.bytes, unit = "bytes";
+    for (const bigger of ["KiB", "MiB", "GiB"]) { if (size < 1024) break; size /= 1024; unit = bigger; }
+    text += ", " + (unit === "bytes" ? progress.bytes + " bytes" : size.toFixed(1) + " " + unit) + " received";
+  }
+  return text;
+}
+
+function progressed(url, progress) {
+  const now = Date.now();
+  if (!progress || typeof progress !== "object" || now - started < 3000 || (shown !== undefined && now - shown < 30000)) return;
+  if (shown === undefined) note("waiting for the host to fill its repository cache of " + url + ": it downloads the repository once,"
+    + " then every clone borrows from it, and it goes on if this command stops");
+  note("repository cache: " + described(progress));
+  shown = now;
+}
+
+function answerOf(line, url, state) {
+  let answer;
+  try { answer = JSON.parse(line); } catch { return undefined; }
+  if (!answer || typeof answer !== "object") return undefined;
+  if (typeof answer.path === "string" && answer.path) return { kind: "path", path: answer.path };
+  if (answer.none === true) return { kind: "none" };
+  if ("error" in answer) return { kind: "error", reason: String(answer.error).slice(0, 300), retry: answer.retry === true, moved: state.moved };
+  state.moved = true;
+  progressed(url, answer.progress);
+  return undefined;
+}
+
+function proxyEndpoint() {
+  let status = null;
+  try { status = new URL(process.env.PIKIBUN_EGRESS_STATUS || ""); } catch {}
+  if (!status || status.protocol !== "http:" || status.hostname !== "127.0.0.1" || !status.port) return { port: 41080, headers: {} };
+  const credentials = decodeURIComponent(status.username) + ":" + decodeURIComponent(status.password);
+  return { port: Number(status.port), headers: status.username ? { authorization: "Basic " + Buffer.from(credentials).toString("base64") } : {} };
+}
+
+function ask(url) {
+  return new Promise(resolve => {
+    const state = { moved: false };
+    let buffer = "", settled = false, stream;
+    const done = answer => { if (settled) return; settled = true; if (stream) stream.destroy(); resolve(answer); };
+    const failed = () => done({ kind: "failed", moved: state.moved });
+    const take = chunk => {
+      buffer += chunk;
+      if (buffer.length > 1048576) return failed();
+      for (let end = buffer.indexOf("\n"); end >= 0 && !settled; end = buffer.indexOf("\n")) {
+        const answer = answerOf(buffer.slice(0, end), url, state);
+        buffer = buffer.slice(end + 1);
+        if (answer) done(answer);
+      }
+    };
+    if (TRANSPORT.socket) {
+      stream = require("node:net").connect(TRANSPORT.socket);
+      stream.setEncoding("utf8");
+      stream.setTimeout(120000, failed);
+      stream.on("connect", () => stream.write(JSON.stringify({ token: TRANSPORT.token, remote: url }) + "\n"));
+      stream.on("data", take);
+      stream.on("error", failed);
+      stream.on("close", failed);
+      return;
+    }
+    const { port, headers } = proxyEndpoint();
+    stream = require("node:http").get({ host: "127.0.0.1", port, path: "/__pikibun/mirror?remote=" + encodeURIComponent(url), headers, agent: false }, response => {
+      if (response.statusCode !== 200) { response.resume(); return done({ kind: "none" }); }
+      response.setEncoding("utf8");
+      response.on("data", take);
+      response.on("error", failed);
+      response.on("end", failed);
+    });
+    stream.setTimeout(120000, failed);
+    stream.on("error", failed);
+  });
+}
+
+async function mirror(url) {
+  let failures = 0;
+  for (;;) {
+    const answer = await ask(url);
+    if (answer.kind === "path") {
+      if (shown !== undefined) note("the repository cache is ready; cloning from it");
+      return answer.path;
+    }
+    if (answer.kind === "none") return undefined;
+    let reason = "it did not answer", transient = false;
+    if (answer.kind === "error") {
+      reason = answer.reason;
+      if (!answer.retry) { note("the host cannot fill its repository cache (" + reason + "); cloning without it"); return undefined; }
+      transient = true;
+    }
+    failures = transient || !answer.moved ? failures + 1 : 0;
+    if (failures >= 3) {
+      note("the repository cache of " + url + " is not available right now (" + reason + "); run the clone again");
+      process.exit(128);
+    }
+    await new Promise(resolve => setTimeout(resolve, (failures || 1) * 1000));
+  }
+}
+
+function readable(found) {
+  try { fs.readdirSync(path.join(found, "objects")); return true; } catch { return false; }
+}
+
+async function main() {
+  let args = process.argv.slice(2);
+  let index = 0;
+  while (index < args.length && args[index].startsWith("-")) index += args[index] === "-C" || args[index] === "-c" ? 2 : 1;
+  if (args[index] === "clone") {
+    const rest = args.slice(index + 1);
+    let url;
+    for (let position = 0; position < rest.length;) {
+      const argument = rest[position];
+      if (argument === "--") { url = rest[position + 1]; break; }
+      if (argument.startsWith("-")) { position += VALUED.has(argument) ? 2 : 1; continue; }
+      url = argument;
+      break;
+    }
+    const borrowing = rest.some(argument => argument.startsWith("--reference") || ["-s", "--shared", "--dissociate"].includes(argument));
+    const extra = [];
+    if (url && !borrowing) {
+      const found = await mirror(url);
+      if (found && readable(found)) extra.push("--reference-if-able", found);
+      else if (found && TRANSPORT.socket) note("the host's repository cache of " + url + " has no objects to borrow; cloning without it");
+      else if (found) {
+        note("the repository cache of " + url + " is ready, but this command started before it could see it; run the clone again");
+        process.exit(128);
+      }
+    }
+    args = [...args.slice(0, index + 1), ...extra, ...rest];
+  }
+  const child = spawn(git, args, { stdio: "inherit", windowsHide: true });
+  const forward = signal => () => { try { child.kill(signal); } catch {} };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, forward(signal));
+  child.on("error", () => { process.stderr.write("git: could not be started\n"); process.exit(127); });
+  child.on("exit", (code, signal) => {
+    if (signal) { process.removeAllListeners(signal); try { process.kill(process.pid, signal); } catch {} }
+    process.exit(code === null ? 128 + (constants.signals[signal] || 0) : code);
+  });
+}
+
+main().catch(() => process.exit(128));
+`;
+}
+
+export function hostGitProgram(socket: string, token: string): string {
+  return gitShimProgram({ socket, token });
 }
 
 export class HostGitShim {
@@ -194,7 +252,6 @@ export class HostGitShim {
   readonly #connections = new Set<Socket>();
 
   constructor(options: HostGitShimOptions) {
-    if (process.platform === "win32") throw new Error("The host's git shim needs a POSIX shell");
     this.#options = options;
   }
 
@@ -206,7 +263,7 @@ export class HostGitShim {
       this.#directory = directory;
       try {
         await chmod(directory, 0o700);
-        const socket = join(directory, "s");
+        const socket = process.platform === "win32" ? `\\\\.\\pipe\\pikibun-git-${randomBytes(16).toString("hex")}` : join(directory, "s");
         const server = createServer(connection => this.#connection(connection));
         await new Promise<void>((resolve, reject) => {
           server.once("error", reject);

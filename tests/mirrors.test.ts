@@ -9,7 +9,7 @@ import test, { type TestContext } from "node:test";
 import { EgressProxy, endpointUrl, relayFetch, type RelayRequest } from "../apps/runner/src/egress.js";
 import { GIT_SHIM } from "../apps/runner/src/sandbox-python.generated.js";
 import { GitRemote } from "../apps/runner/src/git-remote.js";
-import { HostGitShim } from "../apps/runner/src/host-git-shim.js";
+import { gitShimProgram, HostGitShim, sandboxGitLauncher } from "../apps/runner/src/host-git-shim.js";
 import { RepositoryCache } from "../apps/runner/src/repo-cache.js";
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
@@ -605,6 +605,38 @@ test("the sandbox's git shim asks a proxy that wants credentials (as macOS's doe
     assert.equal(asked.length, 1);
     assert.equal(alternates("refused"), "");
     assert.match((await run(python, [shim, "--version"], { cwd: u.directory, env })).stdout, /^git version/);
+  });
+
+test("the Windows sandbox's git asks the session's proxy with its credentials, borrows a mirror its step can read, and stops a clone whose mirror it can't",
+  { skip: process.platform === "win32" }, async t => {
+    const u = await upstream(t);
+    const grant: EgressGrant = { policy: { mode: "off", domains: [], packageRegistries: true }, repositories: [repository] };
+    let answer = u.bare;
+    const proxy = new EgressProxy({ socketPath: join(u.directory, "unused.sock"), tcp: { token: "session-token" }, grant: async () => grant, relay: u.relay,
+      mirror: async () => answer });
+    await proxy.start();
+    t.after(() => proxy.close());
+    const bin = join(u.directory, "bin");
+    await mkdir(bin);
+    const program = join(bin, "git-shim.cjs");
+    await writeFile(program, gitShimProgram({ proxy: true }));
+    await writeFile(join(bin, "git"), sandboxGitLauncher(process.execPath, program), { mode: 0o700 });
+    const real = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    const env = { ...environment, PATH: `${bin}:${process.env.PATH}`, SANDBOX_GIT: real, PIKIBUN_EGRESS_STATUS: `${endpointUrl(proxy.endpoint!)}/__pikibun/status`,
+      GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.${join(u.directory, "projects")}/.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/" };
+    const shell = (command: string, extra: Record<string, string> = {}) => run("sh", ["-c", command], { cwd: u.directory, env: { ...env, ...extra } });
+    const alternates = (path: string) => spawnSync("cat", [join(u.directory, path, ".git", "objects", "info", "alternates")], { encoding: "utf8" }).stdout.trim();
+    const cloned = await shell("git clone -q https://github.com/acme/app.git app");
+    assert.equal(cloned.code, 0, cloned.stderr);
+    assert.equal(alternates("app"), join(realpathSync(u.bare), "objects"));
+    assert.match((await shell("git -C app log --oneline")).stdout, /initial/);
+    const refused = await shell("git clone -q https://github.com/acme/app.git refused", { PIKIBUN_EGRESS_STATUS: `http://pikibun:wrong@127.0.0.1:${proxy.endpoint!.port}/__pikibun/status` });
+    assert.equal(refused.code, 0, "a proxy that refuses it leaves the clone to go ahead without the cache");
+    assert.equal(alternates("refused"), "");
+    answer = join(u.directory, "not-granted.git");
+    const unseen = await shell("git clone -q https://github.com/acme/app.git unseen");
+    assert.equal(unseen.code, 128);
+    assert.match(unseen.stderr, /this command started before it could see it; run the clone again/);
   });
 
 test("a relayed read its caller gives up on fails at once, and an answer that comes after is closed unread", async () => {
