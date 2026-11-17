@@ -289,6 +289,14 @@ test("a session asks its Pikibun server for its workspace's choice at most every
   assert.deepEqual(await settings(), { mode: "off", child: false });
   const never = cachedSettings(async () => { throw new Error("an older Pikibun server"); });
   assert.deepEqual(await never(), { mode: "off", child: false });
+
+  let release: (value: SessionCacheWarming) => void = () => {};
+  let calls = 0;
+  const shared = cachedSettings(() => { calls++; return new Promise(resolve => { release = resolve; }); });
+  const together = [shared(), shared(), shared()];
+  release({ mode: "idle", child: false });
+  assert.deepEqual(await Promise.all(together), [0, 1, 2].map(() => ({ mode: "idle", child: false })));
+  assert.equal(calls, 1, "refreshes due together share one question");
 });
 
 test("the context still starts with the sent messages only when every sent message is there, in order", () => {

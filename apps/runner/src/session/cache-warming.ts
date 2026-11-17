@@ -198,15 +198,22 @@ const SETTINGS_STALE_MS = 5 * 60_000;
 
 export function cachedSettings(fetch: () => Promise<SessionCacheWarming>, now: () => number = Date.now): () => Promise<SessionCacheWarming> {
   let known: { value: SessionCacheWarming; at: number } | undefined;
-  return async () => {
-    if (known && now() - known.at < SETTINGS_TTL_MS) return known.value;
+  let pending: Promise<SessionCacheWarming> | undefined;
+  const ask = async (): Promise<SessionCacheWarming> => {
     try {
       const value = await fetch();
       known = { value, at: now() };
       return value;
     } catch {
       return known && now() - known.at < SETTINGS_STALE_MS ? known.value : { mode: "off", child: false };
+    } finally {
+      pending = undefined;
     }
+  };
+  return () => {
+    if (known && now() - known.at < SETTINGS_TTL_MS) return Promise.resolve(known.value);
+    pending ??= ask();
+    return pending;
   };
 }
 
