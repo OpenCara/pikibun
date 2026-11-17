@@ -1,9 +1,11 @@
-import { effect, safeArea, signal, untracked, View, windowSize } from "nsh";
+import { computed, effect, keymap, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
 import { HomeUpdate } from "./components/AppUpdate";
+import { CommandPalette } from "./components/CommandPalette";
 import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
 import { startUpdateChecks } from "./lib/app-update";
+import { CommandsContext, createCommandRegistry, type AppCommand, type CommandRegistry } from "./lib/commands";
 import { addServer, auth, restore, servers, session, switchServer } from "./lib/auth";
 import { createAction, type Action } from "./lib/resource";
 import { createNotificationDelivery } from "./lib/notifications";
@@ -23,7 +25,8 @@ import { SharedSession } from "./screens/SharedSession";
 import { SignIn } from "./screens/SignIn";
 import { UsernameSetup } from "./screens/UsernameSetup";
 import { applyStoredAppearance } from "./settings/Appearance";
-import { findSection, SectionList } from "./settings";
+import { findSection, SectionList, visibleSections } from "./settings";
+import { canCreateSessions, type PaletteSession } from "./shared";
 import { layout, palette } from "./theme";
 import { Logo } from "./logo";
 import { DropdownMenu, IconButton, IdentityBadge, Loading, NavItem, Small, type MenuAction } from "./ui";
@@ -84,6 +87,7 @@ function Shell() {
   const homeKey = signal(0);
   const settingsAt = signal<{ section?: string; id?: string }>({});
   const creatingWorkspace = signal(false);
+  const commands = createCommandRegistry();
 
   function openSession(id: string) {
     if (wide()) {
@@ -182,10 +186,33 @@ function Shell() {
     });
   });
 
+  const currentSession = () => {
+    const top = nav.routes().at(-1);
+    if (wide()) return nav.routes().length === 1 ? selected() : null;
+    return top?.name === "session" ? top.id : null;
+  };
+  const sessionInFront = (id: string) => currentSession() === id;
+  function openFromPalette(id: string) {
+    const top = untracked(nav.routes).at(-1);
+    if (!wide() && top?.name === "session") {
+      if (top.id !== id) nav.replace({ name: "session", id });
+    } else {
+      openSession(id);
+    }
+  }
+  const workspaceName = (id: string) => data.workspaces().find(workspace => workspace.id === id)?.name;
+  const paletteSessions = computed((): PaletteSession[] => data.sessions().map(item => ({
+    id: item.id, title: item.title, hint: [workspaceName(item.workspaceId), item.status === "archived" ? "Archived" : undefined].filter(Boolean).join(" · ") || undefined,
+  })));
+  commands.contribute(() => shellCommands({ data, current: currentSession(), startNew, openSession: openFromPalette, openSettings,
+    allSessions: () => go({ name: "sessions" }), openById: () => nav.push({ name: "open" }), newWorkspace: () => creatingWorkspace.set(true) }));
+  bindCommandKeys(commands);
+
   const back = () => nav.pop();
   const workspaceSettings = (workspaceId: string) => openSettings("workspaces", workspaceId);
   const listActions = () => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+      <IconButton testID="open-commands" icon="command" label="Commands" onPress={() => commands.open()} />
       <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
       <IconButton testID="new-session" icon="plus" label="New session" onPress={() => startNew()} />
     </View>
@@ -194,6 +221,7 @@ function Shell() {
 
   return (
     <AppDataContext.Provider value={data}>
+      <CommandsContext.Provider value={commands}>
       <NavStack state={nav} style={{ flex: 1 }} testID="nav">
         {route => {
           switch (route.name) {
@@ -211,7 +239,7 @@ function Shell() {
                   }>
                   <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
                     <View style={{ flex: 1, flexDirection: "row" }}>
-                      <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()}
+                      <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()} onCommands={() => commands.open()}
                         onOpenById={() => nav.push({ name: "open" })} onAll={() => nav.push({ name: "all-sessions" })} onSettings={section => openSettings(section)}
                         onNewIn={startNew} onWorkspaceSettings={workspaceSettings} onNewWorkspace={() => creatingWorkspace.set(true)} />
                       <View style={{ flex: 1, paddingTop: headerInPage ? safeArea().top : 0, backgroundColor: palette().background }}>
@@ -225,7 +253,7 @@ function Shell() {
                             </>
                           }>
                           <Each of={selected() ? [selected()!] : []} key={id => id}>
-                            {id => <SessionView id={id()} page={false} openSession={openSession} go={go} />}
+                            {id => <SessionView id={id()} page={false} front={() => sessionInFront(id())} openSession={openSession} go={go} />}
                           </Each>
                         </If>
                       </View>
@@ -234,7 +262,7 @@ function Shell() {
                 </If>
               );
             case "session":
-              return <SessionView id={route.id} page openSession={openSession} onBack={back} go={go} />;
+              return <SessionView id={route.id} page front={() => sessionInFront(route.id)} openSession={openSession} onBack={back} go={go} />;
             case "new":
               return (
                 <Page title="New session" onBack={back}>
@@ -277,12 +305,77 @@ function Shell() {
         }}
       </NavStack>
       <NewWorkspaceSheet open={creatingWorkspace()} onClose={() => creatingWorkspace.set(false)} created={created => startNew(created.id)} />
+      <CommandPalette registry={commands} sessions={paletteSessions} openSession={openFromPalette} />
+      </CommandsContext.Provider>
     </AppDataContext.Provider>
   );
 }
 
+function shellCommands(options: {
+  data: ReturnType<typeof createAppData>; current: string | null; startNew: (workspaceId?: string) => void; openSession: (id: string) => void;
+  openSettings: (section?: string, id?: string) => void; allSessions: () => void; openById: () => void; newWorkspace: () => void;
+}): AppCommand[] {
+  const { data } = options;
+  const workspaces = data.workspaces();
+  const creatable = workspaces.filter(workspace => canCreateSessions(workspace.role));
+  const workspaceName = (id: string) => workspaces.find(workspace => workspace.id === id)?.name;
+  const sections = visibleSections().filter(section => section.id !== "workspaces");
+  return [
+    { id: "new-session", title: "New session", group: "Sessions", scope: "global", icon: "plus", keywords: ["start", "create"], run: () => options.startNew() },
+    ...(creatable.length > 1 ? [{
+      id: "new-session-in", title: "New session in…", group: "Sessions", scope: "global", icon: "plus", keywords: ["workspace", "start", "create"],
+      input: { kind: "choice", placeholder: "Choose a workspace", choices: () => creatable.map(workspace => ({ value: workspace.id, label: workspace.name })),
+        choose: id => options.startNew(id) },
+    } satisfies AppCommand] : []),
+    {
+      id: "switch-session", title: "Switch session…", group: "Sessions", scope: "global", icon: "history", binding: "mod+o", keywords: ["open", "go to"],
+      input: { kind: "choice", placeholder: "Type a session's title", empty: "No sessions yet",
+        choices: () => data.sessions().filter(item => item.status !== "archived").map(item => ({
+          value: item.id, label: item.title, hint: workspaceName(item.workspaceId), current: item.id === options.current,
+        })),
+        choose: id => options.openSession(id) },
+    },
+    { id: "all-sessions", title: "All sessions", group: "Sessions", scope: "global", icon: "list", keywords: ["archived", "search"], run: options.allSessions },
+    { id: "open-by-id", title: "Open a session by ID", group: "Sessions", scope: "global", icon: "hash", run: options.openById },
+    { id: "settings", title: "Settings", group: "Settings", scope: "global", icon: "settings", keywords: ["preferences"], run: () => options.openSettings() },
+    ...sections.map((section): AppCommand => ({
+      id: `settings-${section.id}`, title: section.label, group: "Settings", scope: "global", icon: section.icon, run: () => options.openSettings(section.id),
+    })),
+    {
+      id: "workspaces", title: "Workspaces…", group: "Settings", scope: "global", icon: "users", keywords: ["workspace settings", "members"],
+      input: { kind: "choice", placeholder: "Choose a workspace", empty: "No workspaces yet",
+        choices: () => [{ value: "", label: "All workspaces" }, ...workspaces.map(workspace => ({ value: workspace.id, label: workspace.name, hint: workspace.role }))],
+        choose: id => options.openSettings("workspaces", id || undefined) },
+    },
+    { id: "new-workspace", title: "New workspace", group: "Settings", scope: "global", icon: "plus", keywords: ["create workspace"], run: options.newWorkspace },
+  ];
+}
+
+function bindCommandKeys(registry: CommandRegistry) {
+  effect(() => {
+    try {
+      return keymap.bind("mod+k", () => (untracked(registry.request) ? registry.close() : registry.open()));
+    } catch {
+      return undefined;
+    }
+  });
+  const bindings = computed(() => [...new Set(registry.commands().flatMap(command => (command.binding ? [command.binding] : [])))].sort().join("\n"));
+  effect(() => {
+    const keys = bindings().split("\n").filter(Boolean);
+    if (!keys.length) return;
+    try {
+      return keymap.bind(Object.fromEntries(keys.map(key => [key, () => {
+        const command = untracked(registry.commands).find(item => item.binding === key);
+        if (command) registry.open(command.id);
+      }])));
+    } catch {
+      return undefined;
+    }
+  });
+}
+
 function Sidebar(props: {
-  selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void;
+  selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onCommands: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void;
   onNewIn: (workspaceId: string) => void; onWorkspaceSettings: (workspaceId: string) => void; onNewWorkspace: () => void;
 }) {
   const user = () => session().user;
@@ -294,6 +387,7 @@ function Sidebar(props: {
         <NavItem testID="new-session" icon="plus" label="New session" active={props.home} onPress={props.onNew} />
         <NavItem testID="all-sessions" icon="history" label="Sessions" onPress={props.onAll} />
         <NavItem testID="open-by-id" icon="hash" label="Open by ID" onPress={props.onOpenById} />
+        <NavItem testID="open-commands" icon="command" label="Commands" onPress={props.onCommands} />
       </View>
       <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} onNewIn={props.onNewIn} onWorkspaceSettings={props.onWorkspaceSettings}
         onNewWorkspace={props.onNewWorkspace} />

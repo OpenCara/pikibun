@@ -110,6 +110,23 @@ Text that starts with `/` but names no command is a message like any other and g
 
 Pi's other commands aren't here: some have no meaning in Pikibun (`/quit`, `/login`, `/hotkeys`, `/reload`), and others are done elsewhere (`/fork` and `/tree` by a message's **Fork** and **Go back**, `/resume` by the session list, `/export` and `/share` in the session's panel). The prompts and skills in the host owner's own Pi folder (`~/.pi/agent`) aren't read, as they are that person's and not the workspace's. See [the design](design/slash-commands.md).
 
+## Command palette
+
+Every action of the app is also in one list, the command palette: **Ctrl+K** (**⌘K** on a Mac), the ⌘ button in a session's header, the one beside **New session** on a phone's session list, or **Commands** in the sidebar. Type to narrow it; on a desktop **↑** and **↓** move, **Return** runs the highlighted command and **Esc** closes it. **Ctrl+O** (**⌘O**) opens **Switch session…** directly.
+
+- With nothing typed it lists the commands for the session in front, by group, then the app's own:
+  - **Session**: **Rename…**, **Archive** (or **Unarchive**), **Create backup**, **Back up conversation only**, **Pack files**, **Copy session ID** and **Open in workspace settings**, as the session's menu has them.
+  - **Panel**: **Session details** and each of the panel's tabs, opening the panel there.
+  - **Sharing**: **Copy link**, and **Share link…**, which opens the panel's link sharing.
+  - **Chat**: **Model…**, **Reasoning…**, **Ask on the side** (or **Send shared messages**), **Stop**, **Copy latest reply** and **Fork from the latest reply**.
+  - **Slash commands**: the chat box's [slash commands](#slash-commands) for this session; choosing one puts it in the chat box, to finish and send there.
+  - **Sessions** and **Settings**: **New session**, **New session in…**, **Switch session…**, **All sessions**, **Open a session by ID**, **Settings** and each of its sections, **Workspaces…** and **New workspace**.
+- Typing lists the matching commands first, a title that starts with what you typed before the rest, then the sessions whose title matches: choose one to open it.
+- A command that can't run right now is dimmed, with why (the session is busy, archived or read-only, nothing is running, the chat box holds a message). One that you can never use on this session, such as **Rename…** on a session you don't manage, isn't listed.
+- A command that needs something asks for it in the same box: **Model…**, **Reasoning…**, **Switch session…** and **Workspaces…** a choice from a list, which typing narrows (the current one checked), and **Rename…** a line of text, starting from the session's title. **Back** (or **Esc**) returns to the commands.
+
+See [the design](design/command-palette.md).
+
 ## Status, menu and panel
 
 Session lists show what each session's agent is doing: **Starting**, **Not started**, **In progress**, **Done**, **Failed**, **Idle** or **Archived**. A session at rest with a [scheduled prompt](#scheduled-prompts) shows **Scheduled**, with a clock in place of its status dot. A session whose web server is online through its [tunnel](extensions.md#the-tunnel-pikitunnel) is marked **Online**. The **Sessions** page groups sessions by workspace, with a search box, **Show archived** and **Open by ID** (for a session ID someone gave you).
