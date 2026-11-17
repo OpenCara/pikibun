@@ -95,6 +95,7 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/workspaces/w1/transcripts`]: { body: { settings: { paging: true, toolOutput: "full" } } },
     [`GET ${ORIGIN}/api/workspaces/w1/approvals`]: { body: { settings: { requesterAutoApprove: false } } },
     [`GET ${ORIGIN}/api/workspaces/w1/child-sessions`]: { body: { settings: { childModels: true } } },
+    [`GET ${ORIGIN}/api/workspaces/w1/cache-warming`]: { body: { settings: { mode: "idle" } } },
     [`GET ${ORIGIN}/api/workspaces/w1/attachments`]: { body: { settings: { maxFileBytes: 10485760 } } },
     [`GET ${ORIGIN}/api/workspaces/w1/packing`]: { body: { settings: { automatic: true } } },
     [`GET ${ORIGIN}/api/workspaces/w1/database`]: { body: { available: false, privateHosts: false, backupStorage: true, database: null, automaticBackups: null } },
