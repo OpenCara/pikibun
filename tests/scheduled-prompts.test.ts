@@ -8,7 +8,7 @@ import type { SessionConnections } from '../packages/shared/src/cross-session.js
 import { CronError, nextCronTime, parseCron } from '../packages/shared/src/cron.js';
 import { sessionStatus } from '../packages/client/src/session-status.js';
 import type { SessionRecord, SessionSchedule } from '../packages/shared/src/types.js';
-import { seedAgentVersion, testDatabase } from './helpers/control-plane.js';
+import { fakeHub, seedAgentVersion, testDatabase } from './helpers/control-plane.js';
 
 const iso = (value: number | null) => value === null ? null : new Date(value).toISOString();
 const at = (value: string) => Date.parse(value);
@@ -104,7 +104,7 @@ async function fixture(t: TestContext) {
   };
   const session = async (client: typeof owner) =>
     (await (await client.request('GET', '/api/sessions')).json() as { sessions: SessionRecord[] }).sessions.find(item => item.id === 'scheduled-session')!;
-  return { env, sqlite, setBeforeQuery, owner, collaborator, submitted, session };
+  return { env, sqlite, setBeforeQuery, owner, collaborator, submitted, session, workspace, model };
 }
 
 const base = '/api/sessions/scheduled-session/schedules';
@@ -357,6 +357,128 @@ test('a child session is one-shot by default: archived once its run is done, unl
   assert.equal(state(open).status, 'ready');
 });
 
+test('a schedule that runs in a new session starts it on a model and reasoning level of its own, checked as sessions create checks them, and on the session\'s once its model is gone', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const at = new Date().toISOString();
+  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('levels-host', ownerId, 'Levels', 'h'.repeat(43), 'c'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, approvalFree: true, chatOptions: true,
+      plainGit: true }), JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3', thinkingLevels: ['off', 'low', 'high'] }]), at);
+  f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('levels-host', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run('hosted-model', f.workspace.id, 'Faux 3', 'faux', 'faux-3', at, 'levels-host', ownerId);
+  const hosted: { sessionId: string; body: Record<string, unknown> }[] = [];
+  f.env.CONNECTOR_HUB = fakeHub({ rpc(_connectorId, envelope) {
+    const { action, sessionId } = envelope.request.ticket;
+    if (action === 'create') return Response.json({ ok: true }, { status: 201 });
+    if (action === 'view') return Response.json({ view: { sessionId, entries: [], approvals: [], conversations: [{ id: '0', mode: 'write' }], busy: false, queue: [] } });
+    if (action === 'submit') {
+      hosted.push({ sessionId, body: JSON.parse(envelope.request.body) as Record<string, unknown> });
+      return Response.json({ submissionId: `hosted-${hosted.length}`, conversationId: '0', status: 'queued' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 503 });
+  } });
+  const childModel = (sessionId: string) => f.sqlite.prepare('SELECT a.model_id FROM sessions s JOIN agent_versions a ON a.id = s.agent_version_id WHERE s.id = ?').get(sessionId)!.model_id;
+  const fields = { cron: '0 9 * * *', timeZone: 'UTC', name: 'Review', content: 'Review the architecture' };
+
+  for (const [bad, status, code] of [
+    [{ ...fields, modelId: 'hosted-model' }, 400, 'invalid_input'],
+    [{ ...fields, runIn: 'session', thinkingLevel: 'high' }, 400, 'invalid_input'],
+    [{ ...fields, runIn: 'child', modelId: 'not a model' }, 400, 'invalid_input'],
+    [{ ...fields, runIn: 'child', modelId: 7 }, 400, 'invalid_input'],
+    [{ ...fields, runIn: 'child', thinkingLevel: 'huge' }, 400, 'invalid_input'],
+    [{ ...fields, runIn: 'child', modelId: 'missing-model' }, 404, 'not_found'],
+    [{ ...fields, runIn: 'child', modelId: 'hosted-model', thinkingLevel: 'max' }, 400, 'thinking_unsupported'],
+    [{ ...fields, runIn: 'child', thinkingLevel: 'low' }, 409, 'thinking_unsupported'],
+  ] as const) {
+    const response = await f.owner.request('POST', base, bad);
+    assert.equal(response.status, status, JSON.stringify(bad));
+    assert.equal((await response.json() as { code: string }).code, code, JSON.stringify(bad));
+  }
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules').get()!.n, 0, 'nothing refused was kept');
+
+  const plain = (await (await f.owner.request('POST', base, { ...fields, runIn: 'child', enabled: false })).json() as { schedule: SessionSchedule }).schedule;
+  assert.deepEqual([plain.modelId, plain.thinkingLevel, 'modelId' in plain], [undefined, undefined, false], 'left out, its runs start on the session\'s model');
+  assert.deepEqual({ ...f.sqlite.prepare('SELECT model_id, thinking_level FROM session_schedules WHERE id = ?').get(plain.id)! }, { model_id: null, thinking_level: null });
+  const created = await f.owner.request('POST', base, { ...fields, runIn: 'child', modelId: 'hosted-model', thinkingLevel: 'high' });
+  assert.equal(created.status, 201, await created.clone().text());
+  const { schedule } = await created.json() as { schedule: SessionSchedule };
+  assert.deepEqual([schedule.modelId, schedule.thinkingLevel], ['hosted-model', 'high']);
+  assert.deepEqual({ ...f.sqlite.prepare('SELECT model_id, thinking_level FROM session_schedules WHERE id = ?').get(schedule.id)! }, { model_id: 'hosted-model', thinking_level: 'high' });
+  const createdAudit = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.schedule.created' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
+  assert.deepEqual([createdAudit.modelId, createdAudit.thinkingLevel], ['hosted-model', 'high']);
+
+  const listing = await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[]; childModels: boolean; models: { id: string; thinkingLevels?: string[] }[] };
+  assert.deepEqual(listing.schedules.map(item => [item.modelId, item.thinkingLevel]), [[undefined, undefined], ['hosted-model', 'high']]);
+  assert.equal(listing.childModels, true);
+  assert.deepEqual(listing.models.find(model => model.id === 'hosted-model')?.thinkingLevels, ['off', 'low', 'high'], 'the owner is offered the models to choose from');
+  const seen = await (await f.collaborator.request('GET', base)).json() as Record<string, unknown> & { schedules: SessionSchedule[] };
+  assert.deepEqual([seen.models, seen.childModels, seen.schedules[1]!.modelId], [undefined, undefined, 'hosted-model'], 'others see the choice, not the owner\'s models');
+
+  const ran = await f.owner.request('POST', `${base}/${schedule.id}/run`);
+  assert.equal(ran.status, 202, await ran.clone().text());
+  const result = await ran.json() as { schedule: SessionSchedule; sessionId: string };
+  assert.equal(childModel(result.sessionId), 'hosted-model', 'the new session runs on the schedule\'s model');
+  assert.equal(f.sqlite.prepare('SELECT connector_id FROM sessions WHERE id = ?').get(result.sessionId)!.connector_id, 'levels-host', 'on its host');
+  assert.deepEqual([hosted.at(-1)!.sessionId, hosted.at(-1)!.body.content, (hosted.at(-1)!.body.options as Record<string, unknown>).thinkingLevel],
+    [result.sessionId, 'Review the architecture', 'high'], 'its opening message runs at the schedule\'s reasoning level');
+  assert.equal(result.schedule.lastError, null);
+  const started = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.schedule.child_started' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
+  assert.deepEqual([started.modelId, started.thinkingLevel, started.fallback], ['hosted-model', 'high', undefined]);
+  const [swept] = await runScheduledPrompts(f.env, Date.parse(schedule.nextRunAt!) + 1000);
+  assert.ok(swept && 'childSessionId' in swept && !swept.fallback, JSON.stringify(swept));
+  assert.equal(childModel(swept.childSessionId!), 'hosted-model', 'and so does each run the sweep starts');
+
+  const unchosen = await (await f.owner.request('PATCH', `${base}/${schedule.id}`, { thinkingLevel: null })).json() as { schedule: SessionSchedule };
+  assert.deepEqual([unchosen.schedule.modelId, unchosen.schedule.thinkingLevel], ['hosted-model', undefined], 'null clears a choice');
+  const refused = await f.owner.request('PATCH', `${base}/${schedule.id}`, { runIn: 'session', modelId: 'hosted-model' });
+  assert.equal((await refused.json() as { code: string }).code, 'invalid_input', 'a run in the session itself takes no model');
+  const inSession = await (await f.owner.request('PATCH', `${base}/${schedule.id}`, { runIn: 'session' })).json() as { schedule: SessionSchedule };
+  assert.deepEqual([inSession.schedule.runIn, inSession.schedule.modelId], ['session', undefined], 'running in the session itself clears the model');
+  const again = await f.owner.request('PATCH', `${base}/${schedule.id}`, { runIn: 'child', modelId: 'hosted-model', thinkingLevel: 'low' });
+  assert.equal(again.status, 200, await again.clone().text());
+
+  const offers = (levels: string[]) => f.sqlite.prepare("UPDATE connectors SET models_json = ? WHERE id = 'levels-host'")
+    .run(JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3', thinkingLevels: levels }]));
+  offers(['off', 'high']);
+  const levelGone = await (await f.owner.request('POST', `${base}/${schedule.id}/run`)).json() as { schedule: SessionSchedule; sessionId: string };
+  assert.equal(childModel(levelGone.sessionId), 'hosted-model', 'a model that no longer runs at the chosen level still runs');
+  assert.equal((hosted.at(-1)!.body.options as Record<string, unknown> | undefined)?.thinkingLevel, undefined, 'without that level');
+  assert.equal(levelGone.schedule.lastError, 'thinking_unsupported');
+  offers(['off', 'low', 'high']);
+
+  f.sqlite.prepare("UPDATE models SET available = 0 WHERE id = 'hosted-model'").run();
+  const gone = await f.owner.request('POST', `${base}/${schedule.id}/run`);
+  assert.equal(gone.status, 202, await gone.clone().text());
+  const fallen = await gone.json() as { schedule: SessionSchedule; sessionId: string };
+  assert.equal(childModel(fallen.sessionId), f.model.id, 'a run whose model is gone starts on the session\'s model, rather than not at all');
+  assert.equal(fallen.schedule.lastError, 'model_unavailable', 'and says so');
+  assert.equal(f.submitted.at(-1)!.path, `/v1/sessions/${fallen.sessionId}/submit`);
+  assert.equal((f.submitted.at(-1)!.body.options as Record<string, unknown> | undefined)?.thinkingLevel, undefined, 'without the level of the model it was chosen for');
+  const due = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
+  assert.equal(due.lastError, 'model_unavailable');
+  const [fallback] = await runScheduledPrompts(f.env, Date.parse(due.nextRunAt!) + 1000);
+  assert.ok(fallback && 'childSessionId' in fallback, JSON.stringify(fallback));
+  assert.equal(fallback.fallback, 'model_unavailable');
+  assert.equal(childModel(fallback.childSessionId!), f.model.id);
+  const afterSweep = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
+  assert.deepEqual([afterSweep.lastSessionId, afterSweep.lastError, afterSweep.modelId], [fallback.childSessionId, 'model_unavailable', 'hosted-model'], 'the choice stays, for when it is back');
+  const fellBack = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.schedule.child_started' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
+  assert.deepEqual([fellBack.modelId, fellBack.fallback], [f.model.id, 'model_unavailable']);
+  f.sqlite.prepare("UPDATE models SET available = 1 WHERE id = 'hosted-model'").run();
+
+  assert.equal((await f.owner.request('PUT', `/api/workspaces/${f.workspace.id}/child-sessions`, { childModels: false })).status, 200);
+  const disabled = await f.owner.request('PATCH', `${base}/${schedule.id}`, { thinkingLevel: 'high' });
+  assert.deepEqual([disabled.status, (await disabled.json() as { code: string }).code], [403, 'child_models_disabled'], 'where the workspace lets nobody choose, a schedule doesn\'t');
+  const off = (await (await f.owner.request('GET', base)).json() as { childModels: boolean }).childModels;
+  assert.equal(off, false);
+  const parentOnly = await (await f.owner.request('POST', `${base}/${schedule.id}/run`)).json() as { schedule: SessionSchedule; sessionId: string };
+  assert.deepEqual([childModel(parentOnly.sessionId), parentOnly.schedule.lastError], [f.model.id, 'child_models_disabled']);
+  const cleared = await f.owner.request('PATCH', `${base}/${schedule.id}`, { modelId: null, thinkingLevel: null });
+  assert.equal(cleared.status, 200, 'a choice can still be cleared');
+  assert.equal((await cleared.json() as { schedule: SessionSchedule }).schedule.modelId, undefined);
+});
+
 test('schedules due together for one session send one message; the rest find it busy', async t => {
   const f = await fixture(t);
   const first = (await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'One' })).json() as { schedule: SessionSchedule }).schedule;
@@ -508,7 +630,8 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   for (const [bad, code] of [[{ ...create, cron: '* * * * *' }, 'invalid_cron'], [{ ...create, timeZone: 'Mars/Olympus' }, 'invalid_time_zone'],
     [{ ...create, extra: 1 }, 'invalid_input'], [{ ...create, action: 'run' }, 'invalid_input'], [{ action: 'update' }, 'invalid_input'],
     [{ action: 'list', cron: '0 9 * * *' }, 'invalid_input'], [{ ...create, enabled: 'yes' }, 'invalid_input'], [{ ...create, runIn: 'elsewhere' }, 'invalid_input'], [{ ...create, oneShot: 'yes' }, 'invalid_input'],
-    [{ ...create, runIn: 1 }, 'invalid_input']] as const) {
+    [{ ...create, runIn: 1 }, 'invalid_input'], [{ ...create, modelId: 1 }, 'invalid_input'], [{ ...create, thinkingLevel: 'huge' }, 'invalid_input'],
+    [{ ...create, modelId: f.model.id }, 'invalid_input'], [{ ...create, runIn: 'session', thinkingLevel: 'low' }, 'invalid_input']] as const) {
     await refused(tool(write, bad), 400, code);
   }
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules').get()!.n, 0);

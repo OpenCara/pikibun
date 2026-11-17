@@ -194,16 +194,23 @@ async function list(call: Call): Promise<SessionsToolResult> {
   const { c, origin, actorId } = call;
   const sessions = (await workspaceSessionAccess(c.env, origin.workspace_id, actorId)).slice(0, 200).map(access => summary(access, origin.id));
   const usable = await usableModels(c.env, origin.workspace_id, actorId);
+  const { models, childModels } = await childModelChoices(c.env, origin.workspace_id, usable);
+  const hosts = [...(await placementHosts(c.env, origin, actorId, usable)).values()].map(host => hostSummary(host, actorId));
+  return { sessions, models, ...(hosts.length ? { hosts } : {}), childModels };
+}
+
+export type ChildModelChoices = Pick<Extract<SessionsToolResult, { childModels: boolean }>, 'models' | 'childModels'>;
+
+export async function childModelChoices(env: Env, workspaceId: string, usable: ModelRow[]): Promise<ChildModelChoices> {
   const offers = new Map<string, HostOffer | null>();
   const models = [];
   for (const model of usable) {
-    const levels = (await advertised(c.env, model, offers))?.thinkingLevels;
+    const levels = (await advertised(env, model, offers))?.thinkingLevels;
     models.push({ id: model.id, name: model.name, provider: model.provider, modelId: model.model_id, ...(levels?.length ? { thinkingLevels: levels } : {}),
       ...(model.connector_id ? { host: model.connector_id } : {}) });
   }
-  const hosts = [...(await placementHosts(c.env, origin, actorId, usable)).values()].map(host => hostSummary(host, actorId));
-  const { childModels } = await workspaceChildSessionSettings(c.env.DB, origin.workspace_id);
-  return { sessions, models, ...(hosts.length ? { hosts } : {}), childModels };
+  const { childModels } = await workspaceChildSessionSettings(env.DB, workspaceId);
+  return { models, childModels };
 }
 
 async function read(call: Call, targetId: string, messageId: string | undefined, limit: number): Promise<SessionsToolResult> {
@@ -375,6 +382,29 @@ export async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provid
 
 async function parentModel(call: Call): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
   return sessionCurrentModel(call.c.env, call.origin, call.actorId);
+}
+
+export type ChildModel = Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>;
+
+export async function childModel(env: Env, origin: SessionRow, actorId: string, chosen: { modelId?: string; thinkingLevel?: ThinkingLevel }, inheritThinking: boolean):
+  Promise<{ model: ChildModel; thinkingLevel?: ThinkingLevel; inheritsModel: boolean; inheritsThinking: boolean }> {
+  const { childModels } = await workspaceChildSessionSettings(env.DB, origin.workspace_id);
+  if (!childModels && (chosen.modelId !== undefined || chosen.thinkingLevel !== undefined)) {
+    fail(403, 'child_models_disabled', 'This workspace runs the sessions agents start on their parent\'s model and reasoning level. Leave out model and thinking.');
+  }
+  const inheritsModel = chosen.modelId === undefined;
+  const inheritsThinking = chosen.thinkingLevel === undefined && inheritThinking;
+  const parent = inheritsModel || inheritsThinking ? await sessionCurrentModel(env, origin, actorId) : undefined;
+  const modelId = chosen.modelId ?? parent?.modelId;
+  if (!modelId) fail(409, 'invalid_binding', 'This session\'s model is unavailable; name a model that list returns.');
+  const model = await env.DB.query<ChildModel>(
+    'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(modelId, origin.workspace_id).first();
+  if (!model) fail(404, 'not_found', 'Model not found.');
+  const thinkingLevel = await childThinkingLevel(env, model, chosen.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
+  if (model.connector_id && !agentMayStartOn(origin, actorId, model)) {
+    fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
+  }
+  return { model, ...(thinkingLevel ? { thinkingLevel } : {}), inheritsModel, inheritsThinking };
 }
 
 export async function sessionCurrentModel(env: Env, origin: SessionRow, actorId: string): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {

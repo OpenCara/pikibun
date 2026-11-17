@@ -208,6 +208,44 @@ test("a program call's timeout_seconds ends it sooner than the host's command ti
   assert.match((await session.view()).entries.map(entry => entry.text).join("\n"), /timeout_seconds: expected >= 1/);
 });
 
+test("a program call sets the environment variables it names, and one run at the worktree's top for want of a clone's manifest is told which directory to give", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-call-env-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("node", { program: "node", args: ["--version"], env: { PATH: "/elsewhere" } })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("git", { args: ["init", "-q", "app"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("node", { program: "node", args: ["-e", "require('fs').writeFileSync('app/package.json', JSON.stringify({ scripts: { test: 'node -e 0' } })); console.log(process.env.GREETING)"],
+      env: { GREETING: "it's set" } })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("node", { program: "npm", args: ["test"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Done."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-call-env-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "call-env-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "env", admissionId: await sha256("call env admission") }, "write");
+  for (let count = 0; count < 1500 && (await records(session)).filter(record => record.status !== "executing").length < 3; count++) await delay(20);
+  await idle(session);
+  const ran = await records(session);
+  assert.equal(ran.length, 3, "the call that sets PATH ran nothing");
+  assert.equal(ran[1]!.operation.kind === "program" && ran[1]!.operation.command.includes("GREETING='it'\\''s set' node"), true, JSON.stringify(ran[1]!.operation));
+  assert.match(ran[1]!.result!, /it's set/);
+  assert.equal(ran[2]!.status, "failed");
+  const results = (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
+  assert.match(results[0]!, /env can't set PATH/);
+  assert.match(results.at(-1)!, /"hint":"It ran at the worktree's top, which has no package\.json: run it again with directory, the clone to run in, such as directory: \\"app\\"\."/);
+  assert.equal(ran[2]!.operation.kind === "program" && "hint" in ran[2]!, false, "the hint is for the agent, not the stored card");
+});
+
 test("the python tool runs Python without a shell, in a virtual environment it names; piki:python turns it off", { skip: process.platform === "win32" }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-python-tool-")));
   t.after(() => rm(directory, { recursive: true, force: true }));

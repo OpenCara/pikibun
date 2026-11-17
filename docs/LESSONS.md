@@ -1,6 +1,6 @@
 # Lessons from recent sessions
 
-This file is maintained by a daily scheduled session, which distils lessons from the workspace's recent sessions. It is not loaded into new sessions automatically: read it at the start of a task. For the commands and layout, see [development.md](development.md).
+This file is maintained by a daily scheduled session, which distils lessons from the workspace's recent sessions. It is not loaded into new sessions automatically (a workspace can add it to `piki:context-files`' `context-files` setting): read it at the start of a task. For the commands and layout, see [development.md](development.md). Lessons a check, a tool or a hook can enforce move into code; [Lessons enforced in code](design/enforced-lessons.md) lists them, and the lines below that name a check only say what enforces them.
 
 ## Words and architecture
 
@@ -13,19 +13,18 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - A rendering or runtime bug in the client may be in NSH (Native Shell) itself. Check its source before changing ours; if it is upstream, add a small workaround, a row for it in `docs/design/upstream-workarounds.md` (a test checks that list) and a tracking issue for removing it.
 - Native Shell is pinned in `scripts/nsh.mjs` by version, commit and a SHA-256 per asset, and `tests/nsh-download.test.ts` expects that version. Only stable releases are pinned, so an upstream fix that is only in a nightly can't be picked up yet: say so on the issue and leave it open.
 - The server stores what a client sent at sign-in (such as the app's name) as it arrived. Changing it in the client alone leaves the stored rows and older app builds as they were: when everyone should see the change, map the old value on the server too.
-- Sources carry no comments, tests included, and `tests/no-comments.test.ts` fails on one: run it before pushing, as this is the most common CI failure. Put the reason for a change in a design note under `docs/design` (security decisions in `security-rationale.md`), and update the user docs in the same pull request as the behaviour.
+- Sources carry no comments, tests included, and `tests/no-comments.test.ts` fails on one. `pnpm check:fast` runs it with lint in seconds, and CI's fast `checks` job runs it too; a workspace's `piki:pr-flow` can refuse a push before it passed (`pre-push-check`). Put the reason for a change in a design note under `docs/design` (security decisions in `security-rationale.md`), and update the user docs in the same pull request as the behaviour.
 - The file tools carry Pi's names: `read`, `write`, `edit`, `ls`, `grep` and `find`. The older `read_file`, `write_file`, `edit_file`, `list_files` and `search` are gone.
-- A schema change needs a migration for both SQLite and Postgres, under `apps/server/migrations`.
+- A schema change needs a migration for both SQLite and Postgres, under `apps/server/migrations` (`tests/migrations.test.ts` checks).
 
 ## Building and testing
 
 - For one test, run `node --import tsx --test --test-name-pattern "<words>" tests/<file>.test.ts` instead of the whole suite. For the client's tests, run `node scripts/nsh.mjs test tests/<file>.test.tsx --filter "<words>"` from the repository's root; it takes one path, and without one runs the whole client suite in about two minutes.
 - The client's first typecheck or test run downloads Native Shell, and that download fails now and then in the sandbox. Run it again before treating it as an error.
-- Give the node and python tools `directory: "<the clone>"`: run from the worktree's top, they fail for want of a `package.json`.
+- Give the program tools `directory: "<the clone>"`. A call that failed at the worktree's top for want of a clone's `package.json` (or `pyproject.toml`, `Cargo.toml`, ...) gets a `hint` naming the clone.
 - The repository installs with pnpm (`pnpm install --frozen-lockfile`); `npm ci` fails in it.
-- The `@earendil-works` packages (Pi, pi-durable and the rest) pin each other exactly: upgrade all of them together, in the root and `packages/cli` manifests, and regenerate both lockfiles.
-- `pnpm --filter pikibun run shrinkwrap` fails under npm 12, which dropped `npm shrinkwrap`. Regenerate `packages/cli/npm-shrinkwrap.json` with npm 11, following that script's steps.
-- Give `timeout_seconds` to any run that could hang, such as a test suite or a server: without it a hung test holds the session until the host's command time limit.
+- The `@earendil-works` packages (Pi, pi-durable and the rest) pin each other exactly: upgrade all of them together, in the root and `packages/cli` manifests, and regenerate both lockfiles (`tests/pinned-dependencies.test.ts` checks; the shrinkwrap script works with any npm).
+- A test suite or server run without `timeout_seconds` stops after 20 minutes (on connectors with the default). Give one to a longer run, and to any other run that could hang.
 - The whole suite can't pass inside a session's sandbox: dozens of tests fail there on nested sandboxes and temporary paths. Run the files around your change, and when you do run everything, compare the set of failing tests with unmodified `main`'s rather than their number. CI is the full run.
 - When CI is green, check in the job's log that a new test which needs a real sandbox or a real dependency ran there, and wasn't skipped.
 - Output too long to return is saved under `tool-output/` at the worktree's root, not in the clone. Search it there for the failing lines (`^✖`) instead of rerunning.
@@ -37,7 +36,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - Commands in the Linux and macOS sandboxes run with a low limit on open files. Code that walks directories there must not keep a handle open per level or recurse without bound, and must say when a walk was cut short.
 - To show that a new test covers a fix, run it once with the fix removed and see it fail.
 - Chromium needs `--no-sandbox` inside a session's sandbox. Python Playwright downloads its own browser unless it is given the system Chromium's path.
-- The node tool can't set environment variables. When a script needs one, start it from a `node -e` wrapper that sets the variable and spawns it, or from Python where the host has the python tool.
+- The program tools take `env` for environment variables (not `PATH`), such as a short `TMPDIR`. On an older connector without it, start the script from a `node -e` wrapper that sets the variable and spawns it.
 - A codemode script that chains edits stops at the first one that fails (text not found, or found twice), so the later ones never land. Check what was applied before rerunning the tests.
 - Hosts differ in their tools: one may have no python tool, or a sandbox that can't reach the network. When handing a task to a session on another host, don't assume a tool is there.
 - When a clone fails, the repository can still be read through `gh api` (trees and raw file contents). This also works for public repositories outside the workspace; git can clone those on GitHub, GitLab, Bitbucket and Codeberg too, where the network access allows their host.
@@ -47,7 +46,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 
 - Wait for CI with `gh pr checks <n> --watch` and a long timeout. If the watch stops on a proxy or authentication error, that is not a failed check: wait with `github_read` and `wait: "checks"`, or poll the run's status from a codemode script that prints only the result, at most once a minute. In such a loop, look at each result: a tool can report a failure as its result without throwing. Every read counts against GitHub rate limits that all of the owner's sessions share, and `gh run watch` on its own reads every 3 seconds (the gh tool makes it 30).
 - A check may not be registered right after a push. Find the run with `gh run list` and watch that.
-- `github_read` with `wait: "change"` also returns on your own comments and pushes. Look at what changed, and wait again until the review window ends.
+- `github_read` with `wait: "change"` leaves out the session's own comments and pushes, and the checks on a commit it pushed (older connectors return on them: look at what changed, and wait again). Wait for those checks with `wait: "checks"`.
 - Long tool output is cut, and `gh run view --log-failed` can end before the failure. Filter the log for the failing lines in a codemode script, or fetch the job's log through `gh api`.
 - GitHub runs no pull request checks on a branch that conflicts with `main`. Merge `main` in and resolve the conflicts first.
 - The browser driver test and the web smoke test fail now and then on CI. Before blaming your change, see whether the same commit passed in another run, and say in your reply that the failure was intermittent.
@@ -60,19 +59,19 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - After fixing review points, update the pull request's description too: it often still says what couldn't be run or describes the first version. Where `gh pr edit` fails for want of a token scope, set the title and body with `gh api -X PATCH repos/<owner>/<name>/pulls/<n>`.
 - If `main` moved while a pull request waited, merge it in and rerun the checks before merging: a rule or test added on `main` since the branch was cut applies to it too.
 - `github_read`, `github_merge` and `git_push` act for an hour after the person's last message, and past that for as long as that message's run goes on, up to 8 hours from the message (`ADMISSION_RENEWAL_MAX_SECONDS`). A run that outlives that, or whose message a later one followed, stops being able to: report the pull request's state and say that a new message lets the session finish.
-- When a merge call ends with an unclear result, read the pull request's state before anything else. If it is still open, say so and let the person decide, rather than retry on your own.
+- A merge whose outcome GitHub didn't confirm is read again by the Pikibun server, which reports it merged or not merged. If it still says the outcome is unknown, read the pull request's state before anything else; if it is still open, say so and let the person decide, rather than retry on your own.
 - Issues can be opened only in the workspace's repositories. For an upstream project, draft the report and give it to the person to file.
-- Search the existing issues before opening one. If creating an issue returns an unclear result, search again before retrying, so no duplicate is filed.
+- Search the existing issues before opening one. The Pikibun server refuses an issue with the exact title of one the owner opened in the last 15 minutes, and finds the issue an unclear creation opened; a different title gets neither check.
 - There is no "web" release line: the `server-v` tag ships the web client with the backend. Installed apps get a client change only from an `app-v` tag, and hosts get a connector change only from a `cli-v` tag: say which releases a merged fix still needs before it reaches people.
 - A release is a tag on a commit already in `main`, pushed with `git_push {directory, branch: "main", tag}`: for the server, the connector and the app the workflow takes the version from the tag, so there is no commit and no pull request. Check that CI passed on that commit first, then watch each release run, and the server deploy that follows a `server-v` release.
 - Before tagging, look at what changed since each line's last tag to decide which lines need a release, and follow the earlier bumps (a minor version for a feature). npm shows a new version a few minutes after its run ends.
 - Each extension under `extensions/` has its own `ext-<name>-v` line, and its tag must repeat the version committed in `extensions/<name>/package.json`. So an extension release starts with a version bump merged through a pull request; don't release one that hasn't changed since its last tag. Once npm has it, update its pin in `packages/shared/src/managed-extensions.ts`, as `docs/development.md` describes.
-- When the server's minimum connector version went up, release the connector first and tag the server once npm has it.
+- When the server's minimum connector version went up, release the connector first and tag the server once npm has it (`release-server.yml`'s `prerequisites` job fails otherwise, and for an extension pin npm doesn't have).
 - A release step that succeeds may not have delivered: an upload can be accepted and still be held by the store. Check the outcome where it lands before saying it shipped.
 - When git, `gh` and `github_read` all fail with "access could not be verified", the session's GitHub access is stale and the session can't repair it. Keep the commit, save any drafted text in the worktree, and tell the person to reconnect their GitHub account.
 - When they say GitHub no longer accepts Pikibun's sign-in, or that the owner has no GitHub connection, only the owner can fix it, by signing in to Pikibun with GitHub again. Say so and stop retrying. A "rate limit" that never lifts, with requests going "without a credential", is the same thing on servers from before #288.
 - When every tool fails with an authorization error, local file reads included, nothing can be done in that turn. Say so, with what is still unconfirmed, rather than describe work as done.
-- When they fail because the owner's GitHub rate limit is used up, nothing in the session can fix it either: retrying only spends the next hour's quota. Stop reading GitHub, say when it resets (`gh api rate_limit` shows `reset`, in Unix seconds), and carry on with work that doesn't need it.
+- When they fail because the owner's GitHub rate limit is used up, nothing in the session can fix it either. The refusal says when it resets, and until then the Pikibun server sends GitHub nothing with the owner's account, so retrying gets the same answer. Stop reading GitHub, say when it resets, and carry on with work that doesn't need it.
 
 ## Sessions and schedules
 

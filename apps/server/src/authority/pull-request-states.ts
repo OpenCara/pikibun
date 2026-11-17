@@ -1,6 +1,6 @@
 import type { PullRequestState } from '../../../../packages/shared/src/types.js';
 import { boundedBytes } from './github-broker.js';
-import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, rememberRead } from './github-reads.js';
+import { conditionalHeaders, forgetRead, githubRateLimited, rateLimitedUntil, recallRead, rememberRateLimit, rememberRead } from './github-reads.js';
 import { now } from '../http.js';
 import type { Env } from '../types.js';
 import { decryptToken } from './vault.js';
@@ -65,6 +65,7 @@ const string = (value: unknown): string => typeof value === 'string' ? value : '
 
 async function githubGet(token: string, path: string): Promise<unknown> {
   const url = `${githubApi}${path}`;
+  if (rateLimitedUntil(token) !== undefined) throw new ReadError('GitHub rate limit used up', 429);
   const remembered = recallRead(token, url);
   const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout), headers: {
     Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'OpenCara-Agent-Workspace',
@@ -76,7 +77,8 @@ async function githubGet(token: string, path: string): Promise<unknown> {
     return parse(remembered.bytes);
   }
   if (response.status !== 200) {
-    if (!githubRateLimited(response)) forgetRead(token, url);
+    if (githubRateLimited(response)) rememberRateLimit(token, response);
+    else forgetRead(token, url);
     await response.body?.cancel();
     throw new ReadError(`GitHub answered ${response.status}`, response.status);
   }

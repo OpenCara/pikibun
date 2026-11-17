@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { HTTPException } from 'hono/http-exception';
-import { forgetGitHubReads, recallRead, rememberRead } from '../apps/server/src/authority/github-reads.js';
+import { forgetGitHubReads, forgetRateLimits, rateLimitedUntil, rateLimitText, recallRead, rememberRateLimit, rememberRead } from '../apps/server/src/authority/github-reads.js';
 import { readPullRequestState } from '../apps/server/src/authority/pull-request-states.js';
 import { verifyRepository } from '../apps/server/src/authority/repositories.js';
 import { failureCode } from '../apps/server/src/authority/github-sign-in.js';
@@ -58,9 +58,11 @@ test('a changed or refused read replaces or forgets what was remembered', async 
 
   answer = () => Response.json({ message: 'API rate limit exceeded' }, { status: 403, headers: { 'x-ratelimit-remaining': '0' } });
   await assert.rejects(verifyRepository(access, expected), (error: unknown) => error instanceof HTTPException && error.status === 429);
+  forgetRateLimits();
   answer = () => Response.json({ message: 'You have exceeded a secondary rate limit' }, { status: 403, headers: { 'retry-after': '60' } });
   await assert.rejects(verifyRepository(access, expected), (error: unknown) => error instanceof HTTPException && error.status === 429);
   assert.equal(recallRead('gho_owner', api)?.etag, '"b"', 'a rate-limited read keeps what was remembered, for when the limit resets');
+  forgetRateLimits();
   answer = () => Response.json({ message: 'Not Found' }, { status: 404 });
   await assert.rejects(verifyRepository(access, expected), (error: unknown) => error instanceof HTTPException && error.status === 403);
   assert.equal(recallRead('gho_owner', api), undefined);
@@ -72,6 +74,33 @@ test('a changed or refused read replaces or forgets what was remembered', async 
   try { await verifyRepository(dead, expected); } catch (caught) { error = caught; }
   assert.equal(await failureCode(error), 'github_sign_in_expired');
   assert.deepEqual(expired, ['repository check'], 'a token GitHub rejects is forgotten');
+});
+
+test('once GitHub says a token\'s rate limit is used up, nothing asks GitHub with it again until the limit resets, and the refusal says when', async t => {
+  const reset = Math.floor(Date.now() / 1000) + 25 * 60;
+  let answer = () => Response.json({ message: 'API rate limit exceeded' }, { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) } });
+  const calls = github(t, { [api]: () => answer() });
+  const access = { provider: 'github' as const, github: { token: 'gho_limited', ciphertext: 'x', userId: 'u', githubId: '1' } };
+  const expected = { repositoryId: '7', fullName: 'acme/app' };
+  const refusal = async () => {
+    try { await verifyRepository(access, expected); } catch (error) { assert.ok(error instanceof HTTPException && error.status === 429); return (await error.getResponse().json() as { error: string }).error; }
+    return assert.fail('the read was refused');
+  };
+  const first = await refusal();
+  assert.match(first, new RegExp(`^The session owner's GitHub rate limit is used up until ${new Date(reset * 1000).toISOString().slice(11, 16)} UTC, in about 2[56] minutes\\. `));
+  assert.match(first, /makes no GitHub requests with their account, so retrying sooner gets nothing/);
+  answer = () => Response.json({ id: 7, full_name: 'acme/app', default_branch: 'main', private: true });
+  assert.equal(await refusal(), first, 'the second read is refused without asking GitHub');
+  assert.equal(calls.length, 1);
+  assert.equal(rateLimitedUntil('gho_other'), undefined, 'another token is not limited');
+
+  const now = Date.now();
+  assert.equal(rememberRateLimit('t', new Response(null, { headers: { 'retry-after': '90' } }), now), now + 90_000);
+  assert.equal(rememberRateLimit('t', new Response(null, { headers: { 'x-ratelimit-reset': String(Math.floor(now / 1000) + 7200) } }), now), now + 3_600_000, 'at most an hour');
+  assert.equal(rememberRateLimit('t', new Response(null), now), now + 60_000, 'a minute when GitHub says nothing');
+  assert.equal(rateLimitedUntil('t', now + 60_001), undefined, 'the limit lifts at its time');
+  assert.equal(rateLimitText(undefined), 'The session owner\'s GitHub rate limit is used up. Try again later.');
+  assert.match(rateLimitText(now + 30_000, now), /in about 1 minute\./);
 });
 
 test('only well-formed tags and bounded bodies are remembered, the least recently used going first', t => {

@@ -21,8 +21,25 @@ jobs:
     needs: check
     uses: ./.github/workflows/ci.yml
 
+  # What the release refers to on npm must already be there: the connector at the server's MINIMUM_CONNECTOR_VERSION
+  # (hosts that update to the newest connector must meet it), and each managed extension pin, with its integrity.
+  prerequisites:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: npm has the connector and the extensions this release needs
+        run: node --import tsx scripts/release-prerequisites.ts
+
   docker:
-    needs: [check, ci]
+    needs: [check, ci, prerequisites]
     runs-on: ubuntu-latest
     environment: release
     permissions:
