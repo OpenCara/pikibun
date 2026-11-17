@@ -46,10 +46,11 @@ export function usageStatus(view: Pick<SessionView, "context" | "usage"> | undef
   if (usage) {
     text.push(formatCost(usage.total.cost));
     label.push(`${formatCost(usage.total.cost)} spent`);
-    const hit = cacheHitRate(usage.last) ?? cacheHitRate(usage.total);
+    const last = cacheHitRate(usage.last);
+    const hit = last ?? cacheHitRate(usage.total);
     if (hit !== undefined) {
       text.push(`cache ${formatRate(hit)}`);
-      label.push(`${formatRate(hit)} of the ${usage.last ? "last request's" : "session's"} prompt from the cache`);
+      label.push(`${formatRate(hit)} of the ${last !== undefined ? "last request's" : "session's"} prompt from the cache`);
     }
   }
   return text.length ? { text: text.join(" · "), label: `Session: ${label.join(", ")}` } : undefined;

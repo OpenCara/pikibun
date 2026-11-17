@@ -48,6 +48,13 @@ describe("a session's view", () => {
     await quiet.press("id:session-row-s1");
     await quiet.waitFor("text:$1.84 · cache 85%");
     expect(quiet.shows("id:queue-line")).toBe(false);
+    quiet.dispose();
+    const empty = { ...idle, usage: { ...view.usage, last: { input: 0, cacheRead: 0, cacheWrite: 0 } } };
+    const unasked = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: empty, revision: "r1" } },
+    }) });
+    await unasked.press("id:session-row-s1");
+    await unasked.waitFor("label:Session: $1.84 spent, 85% of the session's prompt from the cache");
   });
 
   test("takes a queued message of yours back into the chat box to edit", async () => {
