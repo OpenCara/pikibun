@@ -105,9 +105,9 @@ export function pythonRequest(input: { program: unknown; args?: unknown; directo
   return { program, directory: workDirectory(input.directory), args, ...(venv ? { venv } : {}) };
 }
 
-export function pythonShellCommand(request: PythonRequest, platform: NodeJS.Platform = process.platform): string {
+export function pythonShellCommand(request: PythonRequest, platform: NodeJS.Platform = process.platform, environment = ""): string {
   const venv = request.venv ? { firstHere: `${request.venv}/${platform === "win32" ? "Scripts" : "bin"}`, prefix: `VIRTUAL_ENV="$PWD"/${shellQuote(request.venv)} ` } : undefined;
   const program = platform === "win32" && request.program === "python3" ? "python" : request.program;
   return programShellCommand({ directory: request.directory, path: "/usr/local/bin", ...(venv ? { firstHere: venv.firstHere } : {}),
-    prefix: `${venv?.prefix ?? ""}${PYTHON_ENVIRONMENT}`, program, args: request.args });
+    prefix: `${venv?.prefix ?? ""}${PYTHON_ENVIRONMENT}${environment ? ` ${environment}` : ""}`, program, args: request.args });
 }

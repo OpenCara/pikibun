@@ -7,6 +7,7 @@ import { listSessionAccess, sessionAccess } from '../apps/server/src/authority/a
 import { runnerSessionRecord, sessionPullRequest, sessionRecord } from '../apps/server/src/db.js';
 import { settlePushCredentials } from '../apps/server/src/authority/push/broker.js';
 import { forgetRepositoryReadTokens } from '../apps/server/src/authority/push/mint.js';
+import { forgetRateLimits } from '../apps/server/src/authority/github-reads.js';
 import { refreshPullRequestStates } from '../apps/server/src/authority/pull-request-states.js';
 import type { Env } from '../apps/server/src/types.js';
 import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
@@ -1202,6 +1203,7 @@ test('sandboxed GitHub API reads follow SANDBOX_GITHUB_API and the session\'s au
     globalThis.fetch = async (input, init) => new URL(String(input)).pathname === '/repos/owner/repo'
       ? Response.json({ message: 'API rate limit exceeded' }, { status: 403, headers: { 'x-ratelimit-remaining': '0' } }) : previousFetch(input, init);
     assert.match((await apiCredential(f)).body.reason, /^The session owner's GitHub rate limit is used up/);
+    forgetRateLimits();
     globalThis.fetch = async (input, init) => new URL(String(input)).pathname === '/repos/owner/repo'
       ? Response.json({ message: 'Bad credentials' }, { status: 401 }) : previousFetch(input, init);
     assert.match((await apiCredential(f)).body.reason, /^GitHub no longer accepts Pikibun's sign-in for the session owner .*they sign in to Pikibun with GitHub again$/);

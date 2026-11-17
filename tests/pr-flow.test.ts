@@ -11,7 +11,7 @@ import { pullRequestLine } from "../apps/runner/src/push.js";
 import { pikiExtension, pikiWorkflowExtensions } from "../packages/shared/src/piki-extensions.js";
 import {
   asksDraft, autoMerge, cloneOf, createdBranch, DEFAULT_REVIEW_MINUTES, forgeOwns, forgeStep, githubRepository, MAX_REVIEW_MINUTES, mergeMethod, operationOutcome, prFlowExtension, prFlowPrompt, PrFlowState,
-  pullRequestAddress, pushedBranches, pushedPullRequest, reviewMinutes, type ObservedCall, type PrFlowSettings,
+  prePushCheck, pullRequestAddress, pushedBranches, pushedPullRequest, PushGate, reviewMinutes, type ObservedCall, type PrFlowSettings,
 } from "../extensions/pr-flow/pr-flow.js";
 
 async function directory(t: test.TestContext): Promise<string> {
@@ -318,6 +318,78 @@ test("piki:pr-flow is the connector's, offered as a workflow, and adds its promp
   const handedOver = await session.beforeAgentStart("Fix the parser", undefined);
   assert.match(handedOver["piki:pr-flow"]!, /4\. Hand it over at once/);
   assert.doesNotMatch(handedOver["piki:pr-flow"]!, /github_merge/);
+});
+
+test("a pre-push check: a push of a clone the session changed waits until a program run holding the check passed there since", () => {
+  const check = prePushCheck("  tests/no-comments.test.ts\n");
+  assert.equal(check, "tests/no-comments.test.ts");
+  assert.equal(prePushCheck(undefined), "");
+  const gate = new PushGate();
+  const push = { directory: "app", branch: "pikibun/s" };
+  const observe = (observed: ObservedCall) => gate.observe(observed, check, "/w", isClone);
+  const run = (args: string[], result = executed("ok"), more: Record<string, unknown> = {}) => call("node", { program: "node", args, directory: "app", ...more }, result);
+  const passing = ["--import", "tsx", "--test", "tests/no-comments.test.ts"];
+  assert.equal(gate.refusal("git_push", push, check, isClone), undefined, "nothing changed yet");
+
+  observe(call("edit", { path: "app/src/x.ts" }));
+  const refused = gate.refusal("git_push", push, check, isClone)!;
+  assert.match(refused, /^\[pr-flow\] Not pushed: this workspace has `tests\/no-comments\.test\.ts` pass in a clone before each push/);
+  assert.match(refused, /Run it there \(directory: "app"\)/);
+  assert.ok(gate.refusal("git", { args: ["push", "origin", "HEAD:pikibun/s"], directory: "app" }, check, isClone), "git push too");
+  assert.equal(gate.refusal("git", { args: ["push", "--tags"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git", { args: ["push", "origin", "--tags"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git", { args: ["push", "origin", "refs/tags/v1"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git", { args: ["push", "origin", "--delete", "old"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git", { args: ["push", "--dry-run"], directory: "app" }, check, isClone), undefined);
+  assert.ok(gate.refusal("git", { args: ["push", "origin", "HEAD:feature", "--tags"], directory: "app" }, check, isClone), "a branch pushed with the tags still needs the check");
+  assert.ok(gate.refusal("git", { args: ["push", "-o", "ci.skip", "origin", "HEAD:feature"], directory: "app" }, check, isClone));
+  assert.ok(gate.refusal("git", { args: ["push", "origin", "refs/tags/v1:refs/heads/feature"], directory: "app" }, check, isClone), "a tag pushed to a branch is judged by where it goes");
+  assert.ok(gate.refusal("git", { args: ["push", "origin", "+refs/tags/*:refs/heads/*"], directory: "app" }, check, isClone));
+  assert.equal(gate.refusal("git", { args: ["push", "origin", "HEAD:refs/tags/v2", "+:old"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git_push", { ...push, tag: "v1" }, check, isClone), undefined, "a tag pushes what is already on a branch");
+  assert.equal(gate.refusal("git_push", { directory: "libs/core", branch: "b" }, check, isClone), undefined, "another clone");
+  assert.equal(gate.refusal("git_push", push, "", isClone), undefined, "no check set");
+
+  observe(run(passing, [{ type: "text", text: JSON.stringify({ status: "failed", result: "✖ comments" }) }]));
+  observe(run(passing, executed("ok"), { directory: "libs/core" }));
+  observe(run(["--test", "tests/other.test.ts"]));
+  observe(call("python", { program: "python3", args: ["tests/no-comments.test.ts"], directory: "app" }, executed("ok"), true));
+  assert.ok(gate.refusal("git_push", push, check, isClone), "a failed run, a run elsewhere, another command and an error pass nothing");
+
+  observe(run(passing, executed("ok"), { directory: "app/packages/cli" }));
+  observe(call("git", { args: ["commit", "-m", "x"], directory: "app" }, executed("[main 1] x")));
+  assert.equal(gate.refusal("git_push", push, check, isClone), undefined, "it passed in the clone, and a commit changes no file");
+  observe(call("git", { args: ["clean", "-fd"], directory: "app" }, executed("ok")));
+  assert.ok(gate.refusal("git_push", push, check, isClone), "a clean changes files");
+  observe(run(passing));
+  observe(call("git", { args: ["rebase", "origin/main"], directory: "app" }, executed("ok")));
+  assert.ok(gate.refusal("git_push", push, check, isClone), "a rebase changes files");
+  observe(run(passing));
+  assert.equal(gate.refusal("git_push", push, check, isClone), undefined);
+  const prompt = prFlowPrompt(settings(30, { prePushCheck: check }));
+  assert.match(prompt, /7\. Before each push of a clone you changed, run `tests\/no-comments\.test\.ts` there/);
+  assert.doesNotMatch(prFlowPrompt(settings()), /7\. Before each push/);
+});
+
+test("its tool_call handler refuses a push before the pre-push check passed", async t => {
+  const root = await directory(t);
+  await mkdir(join(root, "app", ".git"), { recursive: true });
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+  const flags = new Map<string, unknown>([["review-minutes", "30"], ["pre-push-check", "pnpm check:fast"]]);
+  prFlowExtension({
+    registerFlag: () => {}, getFlag: (name: string) => flags.get(name),
+    on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => { handlers.set(event, handler); },
+  } as never);
+  const toolCall = handlers.get("tool_call")!;
+  const toolResult = handlers.get("tool_result")!;
+  const push = { toolName: "git_push", input: { directory: "app", branch: "pikibun/s" } };
+  await toolResult({ toolName: "write", input: { path: "app/x.ts" }, content: [{ type: "text", text: "{}" }], isError: false }, { cwd: root });
+  assert.match((await toolCall(push, { cwd: root }) as { block: boolean; reason: string }).reason, /`pnpm check:fast`/);
+  await toolResult({ toolName: "node", input: { program: "pnpm", args: ["check:fast"], directory: "app" }, content: executed("ok"), isError: false }, { cwd: root });
+  assert.equal(await toolCall(push, { cwd: root }), undefined);
+  flags.set("pre-push-check", "");
+  await toolResult({ toolName: "write", input: { path: "app/y.ts" }, content: [{ type: "text", text: "{}" }], isError: false }, { cwd: root });
+  assert.equal(await toolCall(push, { cwd: root }), undefined, "without the setting, nothing is refused");
 });
 
 test("its tool_result handler adds the note to the result, finding clones by their .git in the session's worktree", async t => {

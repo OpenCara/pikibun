@@ -43,7 +43,7 @@ async function records(session: RunnerSession): Promise<OperationRecord[]> {
   return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, OperationRecord> }> }).metadata()).approvals);
 }
 
-test("agents read GitHub pull requests through the broker and merge at once for their message, failing definitely only on GitHub's refusal", hostMode, async t => {
+test("agents read GitHub pull requests through the broker and merge at once for their message, failing definitely where GitHub refused or nothing reached it", hostMode, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-github-session-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const reads: GitHubReadRequest[] = [];
@@ -61,6 +61,8 @@ test("agents read GitHub pull requests through the broker and merge at once for 
     fauxAssistantMessage([fauxToolCall("github_merge", { repository: "acme/alpha", pull: 7, sha: head, method: "rebase" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Merge tried."),
     fauxAssistantMessage([fauxToolCall("github_merge", { repository: "acme/alpha", pull: 7, sha: head, method: "merge" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Merge tried."),
+    fauxAssistantMessage([fauxToolCall("github_merge", { repository: "acme/alpha", pull: 7, sha: head, method: "squash" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Merge tried."),
   ]);
   const models = createModels();
@@ -103,7 +105,8 @@ test("agents read GitHub pull requests through the broker and merge at once for 
 
   for (const [requestId, failure, status, result] of [
     ["refused", new RunnerError(422, "GitHub did not merge acme/alpha#7: Head branch was modified. Review and try the merge again."), "failed", "GitHub did not merge acme/alpha#7: Head branch was modified. Review and try the merge again."],
-    ["unknown", new RunnerError(502, "GitHub could not confirm the outcome."), "interrupted", "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."],
+    ["unknown", new RunnerError(502, "GitHub could not confirm the outcome."), "interrupted", "Effect failed or outcome is ambiguous. GitHub could not confirm the outcome. Inspect external state; automatic retry is prohibited."],
+    ["limited", new RunnerError(429, "The session owner's GitHub rate limit is used up until 11:30 UTC, in about 20 minutes."), "failed", "The session owner's GitHub rate limit is used up until 11:30 UTC, in about 20 minutes."],
   ] as const) {
     merge = async () => { throw failure; };
     await session.submit(await ticket(id, "submit"), { content: "Merge again.", requestId, admissionId }, "write");
@@ -111,7 +114,7 @@ test("agents read GitHub pull requests through the broker and merge at once for 
     const tried = (await records(session)).at(-1)!;
     assert.deepEqual([tried.status, tried.result], [status, result]);
   }
-  assert.equal(merges.length, 3);
+  assert.equal(merges.length, 4);
 });
 
 test("agents open GitHub issues through the broker at once, with the exact title and body", hostMode, async t => {
@@ -129,6 +132,8 @@ test("agents open GitHub issues through the broker at once, with the exact title
     fauxAssistantMessage([fauxToolCall("github_issue", { repository: "acme/alpha", title: "Again", body: "" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Issue tried."),
     fauxAssistantMessage([fauxToolCall("github_issue", { repository: "acme/alpha", title: "Once more", body: "" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Issue tried."),
+    fauxAssistantMessage([fauxToolCall("github_issue", { repository: "acme/alpha", title: "Later", body: "" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Issue tried."),
   ]);
   const models = createModels();
@@ -163,7 +168,8 @@ test("agents open GitHub issues through the broker at once, with the exact title
 
   for (const [requestId, failure, status, result] of [
     ["refused", new RunnerError(422, "GitHub did not open an issue in acme/alpha: Issues are disabled for this repo."), "failed", "GitHub did not open an issue in acme/alpha: Issues are disabled for this repo."],
-    ["unknown", new RunnerError(502, "GitHub could not confirm the outcome."), "interrupted", "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."],
+    ["unknown", new RunnerError(502, "GitHub could not confirm the outcome."), "interrupted", "Effect failed or outcome is ambiguous. GitHub could not confirm the outcome. Inspect external state; automatic retry is prohibited."],
+    ["limited", new RunnerError(429, "The session owner's GitHub rate limit is used up until 11:30 UTC, in about 20 minutes."), "failed", "The session owner's GitHub rate limit is used up until 11:30 UTC, in about 20 minutes."],
   ] as const) {
     open = async () => { throw failure; };
     await session.submit(await ticket(id, "submit"), { content: "File another.", requestId, admissionId }, "write");
@@ -171,7 +177,7 @@ test("agents open GitHub issues through the broker at once, with the exact title
     const tried = (await records(session)).at(-1)!;
     assert.deepEqual([tried.status, tried.result], [status, result]);
   }
-  assert.equal(issues.length, 3);
+  assert.equal(issues.length, 4);
 });
 
 test("bash and host_bash are gone: an agent that names them gets neither, and nothing runs a command on the host", hostMode, async t => {

@@ -24,6 +24,8 @@
     "test:client-macos": "node --import tsx scripts/nsh-macos-smoke.ts",
     "typecheck": "tsc --noEmit && node scripts/nsh.mjs check",
     "lint": "oxlint --deny-warnings",
+    "check:comments": "node --import tsx --test tests/no-comments.test.ts",
+    "check:fast": "pnpm lint && pnpm check:comments && node --import tsx --test tests/pinned-dependencies.test.ts",
     "python:embed": "node scripts/embed-python.mjs",
     "python:check": "node scripts/check-python.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
