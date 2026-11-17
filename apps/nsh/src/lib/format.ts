@@ -1,3 +1,5 @@
+import type { SessionView } from "../../../../packages/shared/src/types";
+import { cacheHitRate } from "../../../../packages/shared/src/usage";
 import type { EntryView } from "../shared";
 
 export function formatDuration(ms: number): string {
@@ -21,6 +23,36 @@ export function formatTokens(tokens: number): string {
     return `${tenths < 1000 ? tenths / 10 : Math.round(value)}${unit}`;
   }
   return String(tokens);
+}
+
+export function formatCost(dollars: number): string {
+  if (!Number.isFinite(dollars) || dollars < 0) return "?";
+  if (dollars > 0 && dollars < 0.01) return "<$0.01";
+  return `$${dollars.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function formatRate(rate: number | undefined): string {
+  return rate === undefined || !Number.isFinite(rate) ? "?" : `${Math.round(rate * 100)}%`;
+}
+
+export function usageStatus(view: Pick<SessionView, "context" | "usage"> | undefined): { text: string; label: string } | undefined {
+  const context = view?.context, usage = view?.usage;
+  const text: string[] = [], label: string[] = [];
+  if (context?.window) {
+    const percent = Math.round(context.tokens / context.window * 100);
+    text.push(`${percent}% of ${formatTokens(context.window)}`);
+    label.push(`context ${percent}% full`);
+  }
+  if (usage) {
+    text.push(formatCost(usage.total.cost));
+    label.push(`${formatCost(usage.total.cost)} spent`);
+    const hit = cacheHitRate(usage.last) ?? cacheHitRate(usage.total);
+    if (hit !== undefined) {
+      text.push(`cache ${formatRate(hit)}`);
+      label.push(`${formatRate(hit)} of the ${usage.last ? "last request's" : "session's"} prompt from the cache`);
+    }
+  }
+  return text.length ? { text: text.join(" · "), label: `Session: ${label.join(", ")}` } : undefined;
 }
 
 const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
