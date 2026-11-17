@@ -1,0 +1,64 @@
+# Lessons enforced in code
+
+`docs/LESSONS.md` collects what sessions learned the hard way. A lesson is text an agent must remember to read and
+follow; where a check, a tool or a hook can do the same, it is cheaper and surer to have it done. This note maps the
+lessons that moved into code to what now enforces them, and why each took the form it did. The lessons file keeps a
+line for each, naming the mechanism, so an agent that meets the refusal knows why.
+
+## The repository's own checks
+
+| Lesson | Now |
+|---|---|
+| Sources carry no comments; run `tests/no-comments.test.ts` before pushing | CI's fast `checks` job runs it (`pnpm check:comments`) besides the `tests` job, so it fails within minutes; `pnpm check:fast` runs it with lint locally; `piki:pr-flow`'s `pre-push-check` can refuse a push before it passed |
+| The `@earendil-works` packages pin each other exactly: upgrade them together, in both manifests and both lockfiles | `tests/pinned-dependencies.test.ts`, in `checks` too |
+| `pnpm --filter pikibun run shrinkwrap` fails under npm 12 | `packages/cli/scripts/shrinkwrap.mjs` copies `package-lock.json` to `npm-shrinkwrap.json` instead of running `npm shrinkwrap`, which npm 12 dropped. The two are the same file under another name since npm 7 |
+| Release the connector before the server that raises `MINIMUM_CONNECTOR_VERSION`; pin only an extension version npm has | `release-server.yml`'s `prerequisites` job (`scripts/release-prerequisites.ts`) fails the release while npm lacks either, before the image is built |
+
+The prerequisites check runs only for a server release, not on pull requests: a pull request that raises the minimum
+is merged before the connector it names is released, and that order is right.
+
+Already enforced before this note, so their lessons only point at the check: migrations for both providers
+(`tests/migrations.test.ts`), an extension tag repeating its committed version (`scripts/set-release-version.mjs`), the
+upstream workarounds list (`tests/upstream-workarounds.test.ts`), the Native Shell pin (`tests/nsh-download.test.ts`) and
+the old file tool names (`tests/pi-tool-names.test.ts`).
+
+## The program tools
+
+See [Tool definitions](tool-definitions.md), notes 11 to 13: a default time limit for test suites and servers, `env`,
+and the hint to give `directory` when a call failed at the worktree's top for want of a clone's manifest. Each is the
+connector's, so it reaches hosts with a `cli-v` release.
+
+## GitHub
+
+- **An unclear merge settles itself.** When GitHub doesn't confirm a merge (a timeout, a 5xx, an answer without
+  `merged`), the broker reads the pull request again before saying anything. Merged: it reports the merge, with the
+  merge commit. Not merged, open or closed: a definite refusal (422), so the agent knows nothing was merged and can read
+  it and try again. Only a read that fails too leaves the outcome unknown. The capability stays consumed either way: the
+  settled answer describes that attempt.
+- **An unclear issue settles itself, and a duplicate isn't filed.** An issue's unclear outcome looks for an open issue
+  with the exact title, opened by the owner since a minute before the attempt; one found is the answer. Before
+  opening, the broker refuses (409 `github_issue_duplicate`, the tool call not consumed) when the owner opened an open
+  issue with the same title in that repository in the last 15 minutes, naming it. Together they make a retry after an
+  unclear answer safe, which the lesson "search again before retrying" asked agents to do by hand. An exact title and a
+  short window keep it from refusing a different issue.
+- **The runner keeps the broker's words.** A GitHub effect the broker refused before reaching GitHub (4xx but 409) is
+  `failed` with the broker's reason, such as the rate limit, rather than "outcome is ambiguous", which sent agents
+  inspecting GitHub for an effect that never left Pikibun. A 409 (already attempted) and a 5xx stay `interrupted`, now
+  with the broker's message.
+- **A used-up rate limit is remembered.** When GitHub answers an owner's request with its rate limit (`429`, or `403`
+  with `x-ratelimit-remaining: 0` or `retry-after`), the server remembers, per token, until `retry-after`, else
+  `x-ratelimit-reset`, else a minute, and at most an hour. Until then its reads with that token (`github_read`, the
+  repository checks behind `git` and `gh`, pull request states) are refused at once with the reset time, without asking
+  GitHub. Agents kept retrying, which spent nothing but a model turn each time and told them nothing new; now each
+  refusal says when to come back. It is in memory, like the reads cache, so a restart forgets it.
+- **`wait: "change"` past the session's own changes.** A wait returned at once after the agent's own comment or push,
+  and agents were told to look and wait again. The waiter now leaves out comments the session posted (`github_comment`,
+  `gh pr comment`) and, while the head is a commit it pushed (`git_push`, `git push`), the head and its checks, from
+  both the first read and the current one. Anyone else's comment, review or push still ends the wait; checks on the
+  session's own push are what `wait: "checks"` is for. What the session did is read from its own operation records, so
+  nothing new is stored.
+
+## What stays text
+
+Lessons that need judgement stay in `docs/LESSONS.md`: how to word things for people, which release lines a fix needs,
+when to stop for a decision, what to say was checked and what wasn't.
