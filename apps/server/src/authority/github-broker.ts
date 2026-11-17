@@ -199,7 +199,7 @@ export async function githubMerge(c: AppContext, connectorId: string | null): Pr
   };
   const ambiguous = async (): Promise<Response> => {
     const settled = await mergeState(github, pin.fullName, operation.pull);
-    if (!settled) return unknown();
+    if (!settled || (settled.merged && settled.head !== operation.sha)) return unknown();
     if (settled.merged) {
       await auditStatement(c.env, actorId, 'github.merge.completed', row.workspace_id, sessionId, { ...detail, sha: settled.sha, actingAs: github.userId, settled: true }).run();
       return c.json({ sha: settled.sha, url } satisfies GitHubMergeResult);
@@ -231,14 +231,15 @@ export async function githubMerge(c: AppContext, connectorId: string | null): Pr
   return fail(422, 'github_merge_refused', `GitHub did not merge ${pin.fullName}#${operation.pull}: ${reason || `HTTP ${response.status}`}.`);
 }
 
-async function mergeState(github: GitHubAccess, fullName: string, pull: number): Promise<{ merged: true; sha: string } | { merged: false; state: string; head: string } | undefined> {
+async function mergeState(github: GitHubAccess, fullName: string, pull: number): Promise<{ merged: true; sha: string; head: string } | { merged: false; state: string; head: string } | undefined> {
   try {
     const value = record((await githubGet(github, `/repos/${fullName}/pulls/${pull}`)).value);
     const sha = value.merge_commit_sha;
-    if (value.merged === true) return typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha) ? { merged: true, sha } : undefined;
+    const found = value.head && typeof value.head === 'object' ? (value.head as Record<string, unknown>).sha : undefined;
+    const head = typeof found === 'string' ? found : '';
+    if (value.merged === true) return typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha) ? { merged: true, sha, head } : undefined;
     if (value.merged !== false || (value.state !== 'open' && value.state !== 'closed')) return undefined;
-    const head = value.head && typeof value.head === 'object' ? (value.head as Record<string, unknown>).sha : undefined;
-    return { merged: false, state: value.state, head: typeof head === 'string' ? head : '' };
+    return { merged: false, state: value.state, head };
   } catch { return undefined; }
 }
 
@@ -274,7 +275,7 @@ export async function githubIssue(c: AppContext, connectorId: string | null): Pr
     const recent = await ownIssues(access, pinned.fullName, operation.title, Date.now() - duplicateIssueMinutes * 60_000).catch(() => []);
     if (recent[0]) {
       const minutes = Math.max(1, Math.round((Date.now() - recent[0].createdAt) / 60_000));
-      fail(409, 'github_issue_duplicate', `The session owner opened ${pinned.fullName}#${recent[0].number} with this exact title ${minutes} minute${minutes === 1 ? '' : 's'} ago: `
+      fail(422, 'github_issue_duplicate', `The session owner opened ${pinned.fullName}#${recent[0].number} with this exact title ${minutes} minute${minutes === 1 ? '' : 's'} ago: `
         + `${recent[0].url}. Nothing was opened: add to that issue, or give this one a title of its own if it is another issue.`);
     }
     return pinned;

@@ -398,7 +398,8 @@ export class PrFlowState {
 }
 
 const programTools = new Set(["node", "python", "rust", "go", "dotnet", "make"]);
-const contentGit = new Set(["merge", "rebase", "cherry-pick", "revert", "am", "apply", "pull", "reset", "restore", "checkout", "switch", "stash", "mv", "rm"]);
+const contentGit = new Set(["merge", "rebase", "cherry-pick", "revert", "am", "apply", "pull", "reset", "restore", "checkout", "switch", "stash", "mv", "rm", "clean"]);
+const pushValued = new Set(["--repo", "--receive-pack", "--exec", "-o", "--push-option", "--signed", "--force-with-lease"]);
 
 function cloneDirectory(value: unknown, isClone: (directory: string) => boolean): string | undefined {
   const first = directoryOf(value)?.split("/")[0];
@@ -413,8 +414,16 @@ export function commandLine(input: Record<string, unknown>): string {
 function pushedClone(toolName: string, input: Record<string, unknown>, isClone: (directory: string) => boolean): string | undefined {
   if (toolName === "git_push") return input.tag === undefined ? cloneDirectory(input.directory, isClone) : undefined;
   if (toolName !== "git" || !Array.isArray(input.args) || input.args[0] !== "push") return undefined;
-  const words = input.args.filter((arg): arg is string => typeof arg === "string");
-  if (words.some(word => ["--tags", "--delete", "-d", "--dry-run", "-n"].includes(word))) return undefined;
+  const words = input.args.slice(1).filter((arg): arg is string => typeof arg === "string");
+  if (words.some(word => ["--delete", "-d", "--dry-run", "-n"].includes(word))) return undefined;
+  const positional: string[] = [];
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index]!;
+    if (word.startsWith("-")) { if (!word.includes("=") && pushValued.has(word)) index++; continue; }
+    positional.push(word);
+  }
+  const branches = positional.slice(1).filter(refspec => !refspec.startsWith(":") && !/^\+?refs\/tags\//.test(refspec));
+  if (!branches.length && (words.includes("--tags") || positional.length > 1)) return undefined;
   return cloneDirectory(input.directory, isClone);
 }
 

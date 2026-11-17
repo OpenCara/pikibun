@@ -28,7 +28,7 @@ request made ready (with the time its review window ends), a push after that, a 
 | `review-minutes` | `30` | How long to wait for reviews once the pull request is ready, and again after each pushed fix, in minutes (up to a week). `0` merges it as soon as it is ready (with `auto-merge` off, hands it over) |
 | `merge-method` | `squash` | `squash`, `merge` or `rebase`; unused with `auto-merge` off |
 | `wait-for-checks` | on | Let the pull request's checks finish, and fix failing ones, before merging. Turn it off with a `review-minutes` of 0 to merge the moment it is ready |
-| `pre-push-check` | empty | Words of a check's command, such as `tests/no-comments.test.ts` or `pnpm check:fast`. Once the session changed files in a clone, a push of it is refused (a `tool_call` block) until a program tool's call in that clone whose program and arguments hold those words passed. Empty refuses nothing |
+| `pre-push-check` | empty | Words of a check's command, such as `tests/no-comments.test.ts` or `pnpm check:fast`. Once the session changed files in a clone, a push of it (one pushing only tags or deletions, or a dry run, excepted) is refused (a `tool_call` block) until a program tool's call in that clone whose program and arguments hold those words passed. Empty refuses nothing |
 | `auto-merge` | on | Merge once approved, or once the review window ends with nothing left to address. Off, the agent never merges (nor queues an automatic merge) unless the person asks: it tells them the pull request is ready for them to merge |
 
 ## In Pikibun

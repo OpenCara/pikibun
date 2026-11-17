@@ -1164,13 +1164,18 @@ test('github merges need a pinned repository, run once per tool call, and tell G
     'reading it again shows it merged');
   assert.equal(audits('github.merge.completed'), 2);
 
+  pull = () => Response.json({ state: 'closed', merged: true, merge_commit_sha: 'f'.repeat(40), head: { sha: 'a'.repeat(40) } });
+  const others = await mergePayload(f, s.session);
+  await denied(await self(f, s.connector, 'github/merge', others), 502, 'github_outcome_unknown');
+  assert.equal(audits('github.merge.completed'), 2, 'a merge of another head is not this call\'s');
+
   pull = () => Response.json({ state: 'open', merged: false, merge_commit_sha: null, head: { sha: headSha } });
   const open = await mergePayload(f, s.session);
   const notMerged = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/merge', open), 422);
   assert.equal(notMerged.code, 'github_merge_refused');
   assert.match(notMerged.error, /didn't confirm the merge of owner\/repo#5, and reading it again shows it isn't merged: it is still open at c{12}\./);
-  assert.equal(audits('github.merge.ambiguous'), 1);
-  assert.equal(calls.length, 13);
+  assert.equal(audits('github.merge.ambiguous'), 2);
+  assert.equal(calls.length, 16);
   assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
 });
 
@@ -1236,8 +1241,8 @@ test('a github issue whose outcome was unclear is found by its title, and one th
   assert.deepEqual(calls.slice(-2), ['POST https://api.github.com/repos/owner/repo/issues', 'GET https://api.github.com/repos/owner/repo/issues?…']);
 
   const again = await issuePayload(f, s.session);
-  const refusal = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/issue', again), 409);
-  assert.equal(refusal.code, 'github_issue_duplicate');
+  const refusal = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/issue', again), 422);
+  assert.equal(refusal.code, 'github_issue_duplicate', 'a definite refusal, which the runner reports as failed with its reason');
   assert.match(refusal.error, /opened owner\/repo#64 with this exact title 1 minute ago: https:\/\/github\.com\/owner\/repo\/issues\/64\. Nothing was opened/);
   assert.equal(consumed(again.approvalId), null, 'a refused duplicate leaves the tool call unspent');
   assert.equal(calls.filter(call => call.startsWith('POST')).length, 1);

@@ -45,9 +45,23 @@ function words(args: readonly string[]): string[] {
   return found;
 }
 
+const NODE_VALUED = new Set(["--import", "--require", "-r", "--loader", "--experimental-loader", "--env-file", "--env-file-if-exists", "--conditions", "-C",
+  "--input-type", "--test-name-pattern", "--test-skip-pattern", "--test-reporter", "--test-reporter-destination", "--test-concurrency", "--test-timeout", "--watch-path"]);
+
+function nodeOptions(args: readonly string[]): string[] {
+  const options: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (!arg.startsWith("-") || arg === "--" || arg === "-e" || arg === "--eval" || arg === "-p" || arg === "--print") break;
+    options.push(arg);
+    if (!arg.includes("=") && NODE_VALUED.has(arg)) index++;
+  }
+  return options;
+}
+
 export function longRun(program: string, args: readonly string[]): boolean {
   const positional = words(args);
-  if (program === "node") return args.some(arg => arg === "--test" || arg.startsWith("--test=") || arg === "--watch" || arg.startsWith("--watch="));
+  if (program === "node") return nodeOptions(args).some(arg => arg === "--test" || arg.startsWith("--test=") || arg === "--watch" || arg.startsWith("--watch="));
   if (program === "npm" || program === "pnpm" || program === "yarn") {
     const [first, second] = positional;
     if (first === "run" || first === "run-script") return !!second && LONG_SCRIPT.test(second);
@@ -67,7 +81,7 @@ export function defaultedTimeout(program: string, args: readonly string[], given
 }
 
 export function timedOutHint(result: string | undefined): string | undefined {
-  if (!result || !/exceeded \d+ms time limit/.test(result)) return undefined;
+  if (!result || !/exceeded (?:\d+ms|its) time limit/.test(result)) return undefined;
   return `It stopped at its time limit: a test suite or a server run without timeout_seconds gets at most ${LONG_RUN_DEFAULT_SECONDS} seconds. `
     + "Give timeout_seconds to one that needs longer.";
 }

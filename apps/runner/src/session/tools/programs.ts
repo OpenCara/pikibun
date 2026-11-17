@@ -17,10 +17,12 @@ export const callTimeoutParameter = () => opt(int({ minimum: 1, maximum: CALL_TI
 export const callEnvironmentParameter = () => opt(map(str(), {
   description: `Environment variables for the program, such as {"TMPDIR": "/tmp"} (at most ${callEnvironmentLimits.variables}; not PATH, LD_ or DYLD_ ones)` }));
 
-export function programHints(context: ToolContext, approval: StoredOperation, directory: string, defaulted: boolean): StoredOperation {
+export type HintedOperation = StoredOperation & { hint?: string };
+
+export function programHints(context: ToolContext, approval: StoredOperation, directory: string, defaulted: boolean): HintedOperation {
   const hints = [directoryHint({ worktree: context.sandbox.worktree, directory, status: approval.status, result: approval.result }),
     defaulted && approval.status === "failed" ? timedOutHint(approval.result) : undefined].filter(Boolean);
-  return hints.length ? { ...approval, hint: hints.join(" ") } as StoredOperation : approval;
+  return hints.length ? { ...approval, hint: hints.join(" ") } : approval;
 }
 
 export function programTools(context: ToolContext): ToolRegistration[] {

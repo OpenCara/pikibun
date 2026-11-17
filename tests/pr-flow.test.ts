@@ -337,6 +337,12 @@ test("a pre-push check: a push of a clone the session changed waits until a prog
   assert.match(refused, /Run it there \(directory: "app"\)/);
   assert.ok(gate.refusal("git", { args: ["push", "origin", "HEAD:pikibun/s"], directory: "app" }, check, isClone), "git push too");
   assert.equal(gate.refusal("git", { args: ["push", "--tags"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git", { args: ["push", "origin", "--tags"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git", { args: ["push", "origin", "refs/tags/v1"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git", { args: ["push", "origin", "--delete", "old"], directory: "app" }, check, isClone), undefined);
+  assert.equal(gate.refusal("git", { args: ["push", "--dry-run"], directory: "app" }, check, isClone), undefined);
+  assert.ok(gate.refusal("git", { args: ["push", "origin", "HEAD:feature", "--tags"], directory: "app" }, check, isClone), "a branch pushed with the tags still needs the check");
+  assert.ok(gate.refusal("git", { args: ["push", "-o", "ci.skip", "origin", "HEAD:feature"], directory: "app" }, check, isClone));
   assert.equal(gate.refusal("git_push", { ...push, tag: "v1" }, check, isClone), undefined, "a tag pushes what is already on a branch");
   assert.equal(gate.refusal("git_push", { directory: "libs/core", branch: "b" }, check, isClone), undefined, "another clone");
   assert.equal(gate.refusal("git_push", push, "", isClone), undefined, "no check set");
@@ -350,6 +356,9 @@ test("a pre-push check: a push of a clone the session changed waits until a prog
   observe(run(passing, executed("ok"), { directory: "app/packages/cli" }));
   observe(call("git", { args: ["commit", "-m", "x"], directory: "app" }, executed("[main 1] x")));
   assert.equal(gate.refusal("git_push", push, check, isClone), undefined, "it passed in the clone, and a commit changes no file");
+  observe(call("git", { args: ["clean", "-fd"], directory: "app" }, executed("ok")));
+  assert.ok(gate.refusal("git_push", push, check, isClone), "a clean changes files");
+  observe(run(passing));
   observe(call("git", { args: ["rebase", "origin/main"], directory: "app" }, executed("ok")));
   assert.ok(gate.refusal("git_push", push, check, isClone), "a rebase changes files");
   observe(run(passing));

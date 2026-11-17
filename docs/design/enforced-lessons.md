@@ -14,6 +14,9 @@ line for each, naming the mechanism, so an agent that meets the refusal knows wh
 | `pnpm --filter pikibun run shrinkwrap` fails under npm 12 | `packages/cli/scripts/shrinkwrap.mjs` copies `package-lock.json` to `npm-shrinkwrap.json` instead of running `npm shrinkwrap`, which npm 12 dropped. The two are the same file under another name since npm 7 |
 | Release the connector before the server that raises `MINIMUM_CONNECTOR_VERSION`; pin only an extension version npm has | `release-server.yml`'s `prerequisites` job (`scripts/release-prerequisites.ts`) fails the release while npm lacks either, before the image is built |
 
+`pre-push-check` gates a `git_push` or `git push` that pushes a branch; one of only tags or deletions, or a dry run,
+passes ([its design](piki-extensions.md), note 40).
+
 The prerequisites check runs only for a server release, not on pull requests: a pull request that raises the minimum
 is merged before the connector it names is released, and that order is right.
 
@@ -32,19 +35,24 @@ connector's, so it reaches hosts with a `cli-v` release.
 
 - **An unclear merge settles itself.** When GitHub doesn't confirm a merge (a timeout, a 5xx, an answer without
   `merged`), the broker reads the pull request again before saying anything. Merged: it reports the merge, with the
-  merge commit. Not merged, open or closed: a definite refusal (422), so the agent knows nothing was merged and can read
+  merge commit, but only when the merged head is the commit this call named (a person may have merged another head
+  meanwhile, which stays unknown). Not merged, open or closed: a definite refusal (422), so the agent knows nothing was merged and can read
   it and try again. Only a read that fails too leaves the outcome unknown. The capability stays consumed either way: the
   settled answer describes that attempt.
 - **An unclear issue settles itself, and a duplicate isn't filed.** An issue's unclear outcome looks for an open issue
   with the exact title, opened by the owner since a minute before the attempt; one found is the answer. Before
-  opening, the broker refuses (409 `github_issue_duplicate`, the tool call not consumed) when the owner opened an open
+  opening, the broker refuses (422 `github_issue_duplicate`, a definite refusal, the tool call not consumed) when the owner opened an open
   issue with the same title in that repository in the last 15 minutes, naming it. Together they make a retry after an
   unclear answer safe, which the lesson "search again before retrying" asked agents to do by hand. An exact title and a
   short window keep it from refusing a different issue.
 - **The runner keeps the broker's words.** A GitHub effect the broker refused before reaching GitHub (4xx but 409) is
   `failed` with the broker's reason, such as the rate limit, rather than "outcome is ambiguous", which sent agents
   inspecting GitHub for an effect that never left Pikibun. A 409 (already attempted) and a 5xx stay `interrupted`, now
-  with the broker's message.
+  with the broker's message. So a refusal the agent should act on, such as a duplicate issue, is a 422, never a 409.
+- **What it doesn't see.** A program tool's `git push` of a new branch prints no commit, so that first push isn't
+  recognised as the session's own and still ends a `wait: "change"`. Reading the clone's remote-tracking ref instead
+  would also take in commits fetched from others; `git_push` names its commit, and a pull request's branch has
+  usually been pushed before the wait.
 - **A used-up rate limit is remembered.** When GitHub answers an owner's request with its rate limit (`429`, or `403`
   with `x-ratelimit-remaining: 0` or `retry-after`), the server remembers, per token, until `retry-after`, else
   `x-ratelimit-reset`, else a minute, and at most an hour. Until then its reads with that token (`github_read`, the

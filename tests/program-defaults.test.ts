@@ -32,7 +32,7 @@ test("test suites and servers get a default time limit when the call gives none;
     ["cargo", ["test", "--quiet"]], ["cargo", ["+nightly", "run"]], ["go", ["test", "./..."]], ["dotnet", ["test"]], ["make", ["test"]], ["make", ["-C", "build", "check", "serve"]],
   ];
   const short: [string, string[]][] = [
-    ["node", ["-e", "console.log(1)"]], ["node", ["--check", "a.js"]], ["npm", ["install"]], ["pnpm", ["install", "--frozen-lockfile"]], ["pnpm", ["run", "build"]],
+    ["node", ["-e", "console.log(1)"]], ["node", ["--check", "a.js"]], ["node", ["app.js", "--test"]], ["node", ["--import", "tsx", "scripts/x.ts", "--watch"]], ["npm", ["install"]], ["pnpm", ["install", "--frozen-lockfile"]], ["pnpm", ["run", "build"]],
     ["pnpm", ["--filter", "test", "build"]], ["npx", ["tsc", "--noEmit"]], ["python3", ["-m", "venv", ".venv"]], ["pip", ["install", "pytest"]],
     ["cargo", ["build"]], ["go", ["vet", "./..."]], ["make", []], ["make", ["all"]], ["rustfmt", ["src/main.rs"]],
   ];
@@ -42,6 +42,7 @@ test("test suites and servers get a default time limit when the call gives none;
   assert.deepEqual(defaultedTimeout("npm", ["test"], 3600), { seconds: 3600, defaulted: false }, "a call's own timeout comes first, longer or not");
   assert.deepEqual(defaultedTimeout("npm", ["install"], undefined), { defaulted: false });
   assert.match(timedOutHint("Sandbox exceeded 1200000ms time limit\nRunning 300 tests")!, /at most 1200 seconds\. Give timeout_seconds/);
+  assert.match(timedOutHint("Host command exceeded its time limit")!, /at most 1200 seconds/);
   assert.equal(timedOutHint("Command failed with exit code 1"), undefined);
 });
 
