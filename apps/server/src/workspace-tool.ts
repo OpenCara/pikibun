@@ -21,6 +21,7 @@ import { registerExtensions } from './extensions.js';
 import { registerToolGroups } from './tool-groups.js';
 import { registerWorkspaceInvites } from './workspace-invites.js';
 import { fail, identifier } from './http.js';
+import { errorText, serverLog } from './log.js';
 import { body, fields as requestShape, identifier as identifierField, text, userIdentifier as userField } from './schemas.js';
 import type { AppContext, AppEnv, Env, SessionRow } from './types.js';
 
@@ -153,7 +154,7 @@ async function run(env: Env, row: SessionRow, actorId: string, action: Workspace
       const key = extensionKey(input.extension!);
       const { extensions } = await call<{ extensions: WorkspaceExtension[] }>('GET', `${workspace}/extensions`);
       const current = extensions.find(item => extensionPackageKey(item.source) === key);
-      const extension = { source: input.extension, enabled: input.enabled ?? true, tools: current?.tools ?? 'automatic',
+      const extension = { source: input.extension, enabled: input.enabled ?? current?.enabled ?? true, tools: current?.tools ?? 'automatic',
         settings: input.settings !== undefined ? settingsInput(input.settings) : current?.settings ?? {} };
       const saved = await call<{ extensions: WorkspaceExtension[] }>('PUT', `${workspace}/extensions`, extension);
       return { extension: saved.extensions.find(item => extensionPackageKey(item.source) === key) ?? null, ...(current ? {} : { added: true }) };
@@ -212,9 +213,13 @@ export async function agentWorkspace(c: AppContext, connectorId: string | null):
   const row = await authorize();
   const result = await run(c.env, row, actorId, action, given);
   if (write) {
-    const target = Object.fromEntries((['user', 'role', 'name', 'repository', 'provider', 'extension', 'enabled', 'group', 'domain', 'mode'] as const)
+    const target = Object.fromEntries((['user', 'role', 'name', 'repository', 'repository_id', 'provider', 'host', 'ref', 'extension', 'enabled', 'group', 'domain', 'mode'] as const)
       .filter(name => given[name] !== undefined).map(name => [name, given[name]]));
-    await auditStatement(c.env, actorId, 'session.workspace_tool.changed', row.workspace_id, row.id, { action, callId, ...target }).run();
+    try {
+      await auditStatement(c.env, actorId, 'session.workspace_tool.changed', row.workspace_id, row.id, { action, callId, ...target }).run();
+    } catch (error) {
+      serverLog(c.env)(`workspace tool: ${action} in session ${row.id} was applied, but its session audit entry failed: ${errorText(error)}`);
+    }
   }
   return c.json({ action, ...result });
 }

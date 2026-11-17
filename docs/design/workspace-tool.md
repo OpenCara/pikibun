@@ -47,10 +47,12 @@ button is. The `workspace` tool lets the agent make the change, within the same 
    from it (every change needs an admin) and keep the default narrow. Custom tool groups saved before it existed don't
    have it.
 
-7. **Changes keep what they don't name.** `set_extension` reads the extension first and keeps its `tools` mode and
-   settings unless the call gives new settings, because the extensions route replaces the whole entry: turning an
-   extension off from a session must not wipe what an admin configured. The network actions read the policy and change
-   one thing (the mode, or one domain).
+7. **Changes keep what they don't name.** `set_extension` reads the extension first and keeps whether it is on, its
+   `tools` mode and its settings unless the call names them, because the extensions route replaces the whole entry:
+   changing an extension's settings from a session must not turn it on, and turning it off must not wipe what an admin
+   configured. An extension the workspace doesn't have yet is added on. The network actions read the policy and change
+   one thing (the mode, or one domain), then save the whole policy as the settings page does, so two saves at the same
+   moment keep the later one, as two saves from the page would.
 
 8. **Adding a GitHub repository by name.** The repositories route wants the provider's repository id, which the agent
    rarely knows. For GitHub the tool looks it up with the sender's GitHub sign-in (`githubRepositoryIdentity`), the
@@ -59,11 +61,21 @@ button is. The `workspace` tool lets the agent make the change, within the same 
 
 9. **Recorded with the session.** Besides the route's own entry, each change adds `session.workspace_tool.changed` with
    the session, the call id, the action and the values it named, never an extension's settings, which may hold
-   anything an admin typed.
+   anything an admin typed. It is written once the route has made the change, and the route's own entry is already
+   recorded then; if this second entry fails, the server logs it and the call still answers with the change it made,
+   so the agent doesn't retry a change that happened.
 
 10. **What it leaves out.** Hosts and their sharing, invite links, Git accounts and workspace connections, push
     identities, the workspace database, exports and deleting the workspace. They hand out access or credentials, move
     data out, or can't be undone, and a prompt-injected agent with an admin's message would otherwise reach them.
+
+11. **The gates are the controls, not the wording.** The tool's description and instructions tell the agent to change
+    the workspace only when asked. That is guidance a crafted message or file could talk an agent out of: a prompt
+    injection in an owner's or admin's session could steer it to widen network access or add a member. What actually
+    bounds it is decision 5's gates: the extension is opt-in, both tool groups must have `workspace` (owners and admins
+    only by default), the sender's role limits every change through the routes, a Read-only message changes nothing, and
+    the most sensitive settings aren't reachable at all (decision 10). Workspaces that turn it on should keep it to the
+    people they would trust to make those changes by hand, and every change is in the workspace's activity.
 
 ## Where things are
 

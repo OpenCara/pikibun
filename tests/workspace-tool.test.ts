@@ -224,6 +224,9 @@ test('an agent reads and manages its workspace as its message\'s sender, through
   const off = await f.ok<{ extension: { enabled: boolean; settings: Record<string, unknown> } }>(
     f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:pr-flow', enabled: false }));
   assert.deepEqual([off.extension.enabled, off.extension.settings], [false, { 'review-minutes': '5' }], 'turning it off keeps its settings');
+  const changed = await f.ok<{ extension: { enabled: boolean; settings: Record<string, unknown> } }>(
+    f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:pr-flow', settings: '{"review-minutes":"10"}' }));
+  assert.deepEqual([changed.extension.enabled, changed.extension.settings], [false, { 'review-minutes': '10' }], 'changing its settings leaves it off');
   await f.refused(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:pr-flow', settings: '[1]' }), 400, 'invalid_input');
   await f.refused(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'not a source' }), 400, 'invalid_extension');
   assert.equal((await f.ok<{ removed: string }>(f.tool('owner-session', ownerId, write, { action: 'remove_extension', extension: 'piki:pr-flow' }))).removed, 'piki:pr-flow');

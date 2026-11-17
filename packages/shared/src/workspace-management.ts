@@ -50,8 +50,8 @@ export const workspaceToolDescription = "Manage this Pikibun workspace (the one 
   + "set_tool_group {user, group} (a tool group's id from tool_groups, or role to follow their role's tools); "
   + "add_repository {repository, provider?, host?, repository_id?, ref?} (repository as owner/name; provider github by default, which looks up its id; other providers need repository_id) "
   + "and remove_repository {repository} (its id or owner/name); "
-  + "set_extension {extension, enabled?, settings?} (an extension's source, such as piki:node or npm:<package>@<version>; enabled true by default; settings a JSON object of its options, never secrets, "
-  + "kept as they are when left out) and remove_extension {extension}; "
+  + "set_extension {extension, enabled?, settings?} (an extension's source, such as piki:node or npm:<package>@<version>; enabled and settings, a JSON object of its options, never secrets, "
+  + "are kept as they are when left out, and a new extension is added on) and remove_extension {extension}; "
   + "set_network_mode {mode} (off, allowlist or open), allow_domain {domain} and disallow_domain {domain} (a host name, or *.example.com; they matter in allowlist mode). "
   + "user is a member's id (such as github:123) as members or join_requests list it. "
   + "Change the workspace only when the person asked for it, and say what you changed.";
@@ -72,7 +72,7 @@ export const workspaceToolDefinition: BrokeredToolDefinition = {
     host: { type: "string", pattern: "^[A-Za-z0-9.-]{1,253}(?::[0-9]{1,5})?$", description: "The Git server's host name, for self-hosted providers.", invalid: "host is a host name" },
     ref: { type: "string", line: true, maxLength: 255, description: "The branch sessions clone, the repository's default branch when left out.", invalid: "ref is a branch, tag or commit of one line" },
     extension: { type: "string", line: true, maxLength: 512, description: "An extension's source: piki:<name>, npm:<package>@<version> or git:<https URL>@<commit>.", invalid: "extension is an extension's source, such as piki:node or npm:<package>@<version>" },
-    enabled: { type: "boolean", description: "Whether the extension is on; true when left out." },
+    enabled: { type: "boolean", description: "Whether the extension is on; when left out, as it is, or on for an extension the workspace doesn't have yet." },
     settings: { type: "string", maxLength: workspaceToolLimits.settingsChars, description: "The extension's settings as a JSON object of true, false or text values; never secrets.", invalid: "settings is a JSON object of the extension's options" },
     group: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$", description: "A tool group's id from tool_groups, or role for the member's role's tools.", invalid: "group is a tool group's id, or role" },
     domain: { type: "string", pattern: "^(?:\\*\\.)?[A-Za-z0-9.-]{1,253}$", description: "A host name the sandbox may reach, or *.example.com for its subdomains.", invalid: "domain is a host name, or *.example.com" },
