@@ -1,4 +1,4 @@
-import { computed, effect, keymap, List, platform, signal, Text, untracked, View, type InputRef, type ListRef } from "nsh";
+import { computed, effect, keymap, List, platform, signal, Text, untracked, View, windowSize, type InputRef, type ListRef } from "nsh";
 import { Button as BaseButton, Dialog, Input, Sheet } from "nsh/base";
 import { firstEnabled, matching, nextEnabled, paletteRows, type PaletteSession } from "../shared";
 import type { AppCommand, CommandChoice, CommandRegistry } from "../lib/commands";
@@ -145,9 +145,10 @@ export function CommandPalette(props: { registry: CommandRegistry; sessions: () 
     return query().trim() ? "No command or session matches" : "No commands here";
   };
   const narrow = phoneWidth;
+  const listHeight = () => (narrow() ? Math.max(200, windowSize().height * 0.8 - 110) : Math.max(160, Math.min(340, windowSize().height * 0.6)));
 
   const body = () => (
-    <View testID="command-palette" accessibilityLabel="Commands" style={{ flex: 1, minHeight: 0 }}>
+    <View testID="command-palette" accessibilityLabel="Commands">
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 }}>
         <If when={asked()} else={<Icon name="command" size={16} color={palette().muted} />}>
           <IconButton testID="palette-back" icon="chevron-left" label="Back to the commands" size={control.xsmall} onPress={back} />
@@ -166,11 +167,11 @@ export function CommandPalette(props: { registry: CommandRegistry; sessions: () 
       </View>
       <If when={rows().length > 0}
         else={
-          <View style={{ flex: 1, padding: 20 }}>
+          <View style={{ height: listHeight(), padding: 20 }}>
             <Text testID="palette-empty" style={{ fontSize: text.small, color: palette().muted, textAlign: "center" }}>{empty()}</Text>
           </View>
         }>
-        <List each={rows()} keyExtractor={row => row.key} ref={list} testID="palette-rows" style={{ flex: 1 }} contentStyle={{ paddingHorizontal: 8, paddingVertical: 8 }}>
+        <List each={rows()} keyExtractor={row => row.key} ref={list} testID="palette-rows" style={{ height: listHeight() }} contentStyle={{ paddingHorizontal: 8, paddingVertical: 8 }}>
           {(row, index) => (
             <View>
               <If when={row().heading}>
@@ -212,13 +213,13 @@ export function CommandPalette(props: { registry: CommandRegistry; sessions: () 
     <If when={narrow()}
       else={
         <Dialog open={open()} animation="fade" onOpenChange={event => { if (!event.open) close(); }} backdropStyle={{ backgroundColor: palette().backdrop }}
-          style={{ alignSelf: "center", marginTop: "12%", width: 600, maxWidth: "94%", height: 460, maxHeight: "80%", borderRadius: radius.large, borderWidth: 1,
+          style={{ alignSelf: "center", marginTop: "12%", width: 600, maxWidth: "94%", borderRadius: radius.large, borderWidth: 1,
             borderColor: palette().border, backgroundColor: palette().surface, boxShadow: palette().shadow, overflow: "hidden" }}>
           {body()}
         </Dialog>
       }>
       <Sheet open={open()} side="bottom" closeOnSwipe onOpenChange={event => { if (!event.open) close(); }} backdropStyle={{ backgroundColor: palette().backdrop }}
-        popupStyle={{ width: "100%", height: "80%", paddingBottom: 16, borderTopWidth: 1, borderColor: palette().border, borderTopLeftRadius: radius.large,
+        popupStyle={{ width: "100%", paddingBottom: 16, borderTopWidth: 1, borderColor: palette().border, borderTopLeftRadius: radius.large,
           borderTopRightRadius: radius.large, backgroundColor: palette().surface }}>
         {body()}
       </Sheet>
