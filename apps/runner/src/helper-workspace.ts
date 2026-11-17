@@ -66,6 +66,7 @@ export interface HelperBackend {
 
 export interface HelperWorkspaceOptions {
   egressEnvironment?: () => Record<string, string> | undefined;
+  gitLfs?: boolean;
   mirrors?: () => Promise<readonly MirrorMount[]>;
 }
 
@@ -86,6 +87,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
   readonly #testProvider: boolean;
   readonly #options: HelperWorkspaceOptions;
   readonly #cached: boolean;
+  readonly #shim: boolean;
   #initialization: Promise<void> | undefined;
   #closed = false;
   #cancelActive: (() => void) | undefined;
@@ -104,6 +106,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
     this.#backend = backend;
     this.#options = options;
     this.#cached = options.mirrors !== undefined && backend.installGitShim !== undefined;
+    this.#shim = (options.mirrors !== undefined || options.gitLfs === true) && backend.installGitShim !== undefined;
     this.#testProvider = binding.model.provider === "faux";
     this.#layout = Object.freeze({
       root: base, home: join(base, "home"), worktree: join(base, "worktree"), git: join(base, "git"),
@@ -176,7 +179,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
       await chmod(this.#layout.caBundle, 0o600).catch(() => undefined);
       await rename(staged, this.#layout.caBundle);
       await this.#backend.prepare(this.#layout);
-      if (this.#cached) await this.#backend.installGitShim!(this.#layout);
+      if (this.#shim) await this.#backend.installGitShim!(this.#layout);
       await this.#run({ kind: "initialize" }, { readOnly: false, gitWritable: true, egress: false });
     });
     return this.#initialization;
@@ -375,7 +378,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
     const environment = Object.freeze({ ...this.#environment, ...(egress ?? {}) });
     const mirrors = this.#cached && MIRROR_KINDS.has(request.kind) ? await this.#mirrors() : [];
     const launch = await this.#backend.launch(request, { ...context, egress: egress !== undefined, deadlineMs, environment,
-      ...(mirrors.length ? { mirrors } : {}), ...(this.#cached && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
+      ...(mirrors.length ? { mirrors } : {}), ...(this.#shim && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES
       : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     return new Promise<string>((resolveResult, reject) => {

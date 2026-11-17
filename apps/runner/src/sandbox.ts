@@ -86,7 +86,7 @@ export const SNAPSHOT_SKIPPED_HOME: readonly string[] = Object.freeze([".tmp", "
 
 const MIRROR_KINDS: ReadonlySet<Request["kind"]> = new Set(["bash", "clone-head", "clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"]);
 
-export const GIT_LFS_PATHS = ["/usr/bin/git-lfs", "/usr/local/bin/git-lfs"] as const;
+export const GIT_LFS_PATHS = ["/usr/bin/git-lfs", "/usr/local/bin/git-lfs", "/opt/homebrew/bin/git-lfs"] as const;
 export function hostGitLfs(): string | undefined {
   return GIT_LFS_PATHS.find(path => { try { accessSync(path, constants.X_OK); return true; } catch { return false; } });
 }

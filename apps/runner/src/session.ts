@@ -69,7 +69,7 @@ import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-m
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
 import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
 import {
-  Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
+  hostGitLfs, Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
 import { thumbnailImage } from "./images.js";
 import type { GitRemote } from "./git-remote.js";
@@ -270,6 +270,7 @@ export class RunnerSession {
       const workspace: HelperWorkspace = new HelperWorkspace(binding, join(directory, "sandbox"), backend, {
         egressEnvironment: () => { const endpoint = egress.endpoint; return endpoint && egressEnvironment(branch, endpoint, workspace.layout.caBundle); },
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
+        ...(this.#clone && hostGitLfs() ? { gitLfs: true } : {}),
       });
       this.sandbox = workspace;
     } else {
