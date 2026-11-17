@@ -372,8 +372,9 @@ async function identityReport(key: Awaited<ReturnType<typeof keyPair>>, sessions
 
 test('a server lists the portable sessions its owner\'s host reports, brings one here, and archives it when the host takes it away', async t => {
   const calls: { action: string; body: { binding: RunnerBinding; sourceSessionId?: string } & Record<string, unknown> }[] = [];
+  const triage = { name: 'Triage', cron: '0 4 * * *', timeZone: 'UTC', content: 'Triage the issues', access: 'auto', runIn: 'child', oneShot: true, enabled: true };
   const kept = { title: 'From the other server', schedules: [{ name: 'Nightly', cron: '0 3 * * *', timeZone: 'UTC', content: 'Check the build', access: 'auto', runIn: 'session',
-    oneShot: true, enabled: true }] };
+    oneShot: true, enabled: true }, { ...triage, modelId: 'model-elsewhere', thinkingLevel: 'high' }, { ...triage, name: 'Here', modelId: 'model', thinkingLevel: 'high' }] };
   const f = await server(t, (action, body) => {
     calls.push({ action, body: JSON.parse(body) });
     return Response.json(action === 'attach' ? { session: JSON.parse(body).binding.session, kept } : { kept: true });
@@ -405,7 +406,10 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   assert.equal(attached.session.portable, true);
   assert.equal(attached.session.workspaceId, f.workspaceId);
   assert.equal(attached.session.status, 'ready');
-  assert.equal(attached.schedules, 1, 'its schedules come with it');
+  assert.equal(attached.schedules, 3, 'its schedules come with it');
+  const restored = (name: string) => ({ ...f.sqlite.prepare('SELECT run_in, model_id, thinking_level FROM session_schedules WHERE session_id = ? AND name = ?').get(sessionId, name) as object });
+  assert.deepEqual(restored('Triage'), { run_in: 'child', model_id: null, thinking_level: null }, 'one whose model this server lacks comes on the session\'s model');
+  assert.deepEqual(restored('Here'), { run_in: 'child', model_id: 'model', thinking_level: null }, 'one whose model it has keeps it, without a level the model\'s host can\'t set');
   assert.equal(calls[0]!.action, 'attach');
   assert.equal(calls[0]!.body.binding.session.portable, true);
   assert.equal(calls[0]!.body.binding.session.hostEnvironment, true);
@@ -418,7 +422,7 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   await json(await f.alice.request('PATCH', `/api/sessions/${sessionId}`, { title: 'Renamed here' }));
   const keptCall = calls.at(-1)!;
   assert.equal(keptCall.action, 'portable');
-  assert.deepEqual(keptCall.body, { title: 'Renamed here', schedules: kept.schedules.map(schedule => ({ ...schedule })) });
+  assert.deepEqual(keptCall.body, { title: 'Renamed here', schedules: [kept.schedules[0], triage, { ...triage, name: 'Here', modelId: 'model' }] });
 
   await json(await f.host('/api/connectors/self/portable/detached', { sessionId }));
   const archived = f.sqlite.prepare('SELECT status, detached_at FROM sessions WHERE id = ?').get(sessionId) as { status: string; detached_at: string | null };
@@ -433,7 +437,7 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   assert.equal(returned.session.status, 'ready');
   assert.equal(returned.session.title, 'Back again');
   assert.equal(returned.session.detached, undefined);
-  assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules WHERE session_id = ?').get(sessionId) as { n: number }).n, 1, 'schedules it kept here aren\'t doubled');
+  assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules WHERE session_id = ?').get(sessionId) as { n: number }).n, 3, 'schedules it kept here aren\'t doubled');
 
   const paired = await f.pair('host-again', 'd'.repeat(43), 'e'.repeat(43), 'model-again');
   await json(await paired('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Paired again', attached: false }], {}, 'host-again')));
