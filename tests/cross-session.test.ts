@@ -530,6 +530,8 @@ test('placement starts a sub-task on the least loaded host that meets its condit
   const audit = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.cross_session.created' AND detail_json LIKE ?")
     .get(`%${(gpu.body.session as CrossSessionSummary).id}%`)!.detail_json)) as Record<string, unknown>;
   assert.deepEqual(audit.placement, { hostId: 'gpu-host', conditions: 'gpu true, gpu_vendor nvidia, min_memory_gb 32', load: 0.438, qualified: 1 });
+  const relisted = (await f.tool('session-p', ownerId, write, { action: 'list' })).body.hosts as { id: string; activeSessions: number }[];
+  assert.equal(relisted.find(item => item.id === 'gpu-host')!.activeSessions, 1, 'a sub-task just started counts before its host reports it at work, so the next goes elsewhere');
 
   const spread = await f.tool('session-p', ownerId, write, { action: 'create', title: 'Spread', placement: {} });
   assert.equal(spread.status, 201, JSON.stringify(spread.body));

@@ -11,6 +11,7 @@ import type { Env, ModelRow, SessionRow } from './types.js';
 
 const GiB = 1024 ** 3;
 const busyActivities = ['working', 'waiting'];
+const STARTING_MS = 2 * 60_000;
 
 export interface PlacementHost {
   id: string;
@@ -49,7 +50,8 @@ export async function placementHosts(env: Env, origin: SessionRow, actorId: stri
     env.DB.query<HostRow>(`SELECT c.id, c.name, c.owner_id, u.display_name AS owner_name, c.capabilities_json, c.models_json, c.hardware_json, c.hardware_at
       FROM connectors c LEFT JOIN users u ON u.id = c.owner_id WHERE c.id IN (${marks}) AND c.revoked_at IS NULL`).bind(...ids).all(),
     env.DB.query<{ connector_id: string; n: number }>(`SELECT connector_id, COUNT(*) AS n FROM sessions WHERE connector_id IN (${marks})
-      AND activity IN (${busyActivities.map(() => '?').join(',')}) AND status <> 'archived' GROUP BY connector_id`).bind(...ids, ...busyActivities).all(),
+      AND (activity IN (${busyActivities.map(() => '?').join(',')}) OR (activity IS NULL AND created_at >= ?)) AND status <> 'archived' GROUP BY connector_id`)
+      .bind(...ids, ...busyActivities, new Date(now - STARTING_MS).toISOString()).all(),
   ]);
   const counts = new Map(active.map(row => [row.connector_id, Number(row.n)]));
   await Promise.all(rows.map(async row => {
