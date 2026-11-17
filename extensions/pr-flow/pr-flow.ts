@@ -422,7 +422,11 @@ function pushedClone(toolName: string, input: Record<string, unknown>, isClone: 
     if (word.startsWith("-")) { if (!word.includes("=") && pushValued.has(word)) index++; continue; }
     positional.push(word);
   }
-  const branches = positional.slice(1).filter(refspec => !refspec.startsWith(":") && !/^\+?refs\/tags\//.test(refspec));
+  const branches = positional.slice(1).filter(refspec => {
+    const spec = refspec.replace(/^\+/, "");
+    if (spec.startsWith(":")) return false;
+    return !spec.slice(spec.lastIndexOf(":") + 1).startsWith("refs/tags/");
+  });
   if (!branches.length && (words.includes("--tags") || positional.length > 1)) return undefined;
   return cloneDirectory(input.directory, isClone);
 }

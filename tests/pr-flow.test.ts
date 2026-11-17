@@ -343,6 +343,9 @@ test("a pre-push check: a push of a clone the session changed waits until a prog
   assert.equal(gate.refusal("git", { args: ["push", "--dry-run"], directory: "app" }, check, isClone), undefined);
   assert.ok(gate.refusal("git", { args: ["push", "origin", "HEAD:feature", "--tags"], directory: "app" }, check, isClone), "a branch pushed with the tags still needs the check");
   assert.ok(gate.refusal("git", { args: ["push", "-o", "ci.skip", "origin", "HEAD:feature"], directory: "app" }, check, isClone));
+  assert.ok(gate.refusal("git", { args: ["push", "origin", "refs/tags/v1:refs/heads/feature"], directory: "app" }, check, isClone), "a tag pushed to a branch is judged by where it goes");
+  assert.ok(gate.refusal("git", { args: ["push", "origin", "+refs/tags/*:refs/heads/*"], directory: "app" }, check, isClone));
+  assert.equal(gate.refusal("git", { args: ["push", "origin", "HEAD:refs/tags/v2", "+:old"], directory: "app" }, check, isClone), undefined);
   assert.equal(gate.refusal("git_push", { ...push, tag: "v1" }, check, isClone), undefined, "a tag pushes what is already on a branch");
   assert.equal(gate.refusal("git_push", { directory: "libs/core", branch: "b" }, check, isClone), undefined, "another clone");
   assert.equal(gate.refusal("git_push", push, "", isClone), undefined, "no check set");
