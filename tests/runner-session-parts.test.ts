@@ -1089,7 +1089,8 @@ test("view: a message that steered a run continues it, so the run's end shows on
 });
 
 function availability(options: Partial<ToolAvailabilityOptions> = {}, answer?: Partial<WorkspaceExtensionsAnswer>, last?: Partial<WorkspaceExtensionsAnswer>) {
-  const workspace: WorkspaceExtensionsAnswer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "approval", settings: {} }], automaticTools: false, ...answer } as WorkspaceExtensionsAnswer;
+  const workspace: WorkspaceExtensionsAnswer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "approval", settings: {} },
+    { source: "piki:artifacts", enabled: true, tools: "approval", settings: {} }], automaticTools: false, ...answer } as WorkspaceExtensionsAnswer;
   return new ToolAvailability({
     binding: { session: { workspaceId: "w" }, owner: { id: "github:1" } } as unknown as RunnerBinding,
     config: { extensions: { workspace: async () => workspace, ...(last ? { lastKnown: () => ({ ...workspace, ...last }) } : {}) } },
