@@ -10,7 +10,7 @@ import type { Env } from '../apps/server/src/types.js';
 import { addTitleUsage, titleRequestInput, writeTitle, type TitleModels } from '../apps/runner/src/session/titles.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
-import { cleanTitle, fallbackTitle, sessionTitleLimits, sessionTitleRequest } from '../packages/shared/src/session-titles.js';
+import { cleanTitle, fallbackTitle, namesSession, sessionTitleLimits, sessionTitleRequest } from '../packages/shared/src/session-titles.js';
 import type { ModelDefinition, SessionRecord, Workspace } from '../packages/shared/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
 
@@ -21,6 +21,11 @@ test('the fallback title is the first message on one line, cut at a word near 50
   assert.equal(fallbackTitle('修'.repeat(60)), `${'修'.repeat(50)}…`);
   assert.equal(fallbackTitle('tab\there\u0000and\u007fthere'), 'tab here and there');
   assert.equal(fallbackTitle(' \n '), '');
+});
+
+test('only a message with text that is not a slash command names a session', () => {
+  for (const content of ['fix the login test', ' /usr/bin is missing', '/ alone', 'see /compact']) assert.ok(namesSession(content), content);
+  for (const content of ['', ' \n ', '/compact', '/name Login fix', '/pr-flow:status now']) assert.ok(!namesSession(content), content);
 });
 
 test('a model\'s reply is cleaned to its title: no labels, quotes, marks or final period', () => {
@@ -179,6 +184,13 @@ test('a session started without a message takes its first message as its fallbac
   assert.equal(await f.title(empty.id), 'fix:', 'an empty answer leaves the fallback');
   await f.submit(empty.id, 'the login test');
   assert.equal(f.asked.length, 2, 'no retry follows a failure');
+  const later = await f.start({ title: 'Local model', generateTitle: true });
+  f.answer(() => Response.json({ text: 'Login test fix' }));
+  await f.submit(later.id, '/compact');
+  assert.equal(await f.title(later.id), 'Local model', 'a slash command names nothing');
+  await f.submit(later.id, 'fix the login test');
+  assert.equal(await f.title(later.id), 'Login test fix', 'the first message with words names it');
+  assert.equal(f.asked.length, 3);
 });
 
 test('a rename while the model works wins over its title', async t => {

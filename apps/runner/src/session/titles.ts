@@ -4,7 +4,7 @@ import type { UsageState } from "@earendil-works/pi-durable";
 import { sessionTitleLimits, type SessionTitleRequest } from "../../../../packages/shared/src/session-titles.js";
 
 export type TitleModels = Pick<Models, "getModel" | "completeSimple">;
-export const titleTimeoutMs = 25_000;
+export const titleTimeoutMs = 20_000;
 
 export interface TitleReply { text: string; usage?: { key: string; usage: Usage } }
 

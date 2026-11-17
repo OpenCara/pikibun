@@ -10,6 +10,10 @@ export function fallbackTitle(content: string): string {
   return `${atWord.trimEnd()}…`;
 }
 
+export function namesSession(content: string): boolean {
+  return content.trim() !== "" && !/^\/[A-Za-z0-9][A-Za-z0-9:._-]{0,127}(?:\s|$)/.test(content);
+}
+
 export interface SessionTitleRequest { system: string; message: string }
 
 export function sessionTitleRequest(content: string): SessionTitleRequest {

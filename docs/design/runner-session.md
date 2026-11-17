@@ -66,10 +66,12 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   the fallback title are the Pikibun server's (`apps/server/src/session-titles.ts`, `packages/shared/src/session-titles.ts`),
   as they may change and hosts update slowly. The server claims the naming once, with the person's first message
   (`sessions.title_fallback`, set only for a session the app started with a title it made, and cleared by a rename),
+  skipping messages without words and slash commands (`namesSession`) so they don't use up its one chance,
   sets the fallback, asks the host's `title` action, which only runs the completion the server describes, and writes
   the model's title only while the session's title is still the fallback, so a rename meanwhile wins. Hosts without
   `sessionTitles` are never asked. The host adds the answer's usage to the shared conversation's `pi.usage`, so the
-  session's usage counts it, and aborts a completion still running when the session closes.
+  session's usage counts it, and aborts a completion still running when the session closes. Its 20 s limit sits well
+  inside the relay's 30 s, so the host's own limit is the one that ends a slow answer.
 - **The session keeps thin members tests reach by name.** `metadata()`, `tools`, `buildTools()`, `drainQueue()`,
   `agentInstructions(mode)`, `activity()`, `harness` and `hostCommands` stay on `RunnerSession`, delegating where the work
   moved, so the whole-session tests read the same members they always did.

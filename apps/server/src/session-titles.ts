@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import { cleanTitle, fallbackTitle, sessionTitleRequest } from '../../../packages/shared/src/session-titles.js';
+import { cleanTitle, fallbackTitle, namesSession, sessionTitleRequest } from '../../../packages/shared/src/session-titles.js';
 import { auditStatement, hostCapabilities } from './authority/index.js';
 import { errorText, serverLog } from './log.js';
 import { keepPortable } from './portable-sessions.js';
@@ -9,7 +9,7 @@ import type { AppContext, SessionRow } from './types.js';
 const namings = new Set<Promise<void>>();
 
 export function nameSessionLater(c: AppContext, row: SessionRow, content: string): void {
-  if (!row.title_fallback) return;
+  if (!row.title_fallback || !namesSession(content)) return;
   const naming: Promise<void> = nameSession(c, row, content)
     .catch(error => { if (!(error instanceof HTTPException)) serverLog(c.env)(`naming session ${row.id} failed: ${errorText(error)}`); })
     .finally(() => { namings.delete(naming); });
@@ -21,7 +21,8 @@ export async function sessionNamings(): Promise<void> {
 }
 
 export async function nameSession(c: AppContext, row: SessionRow, content: string): Promise<void> {
-  const fallback = fallbackTitle(content) || row.title;
+  if (!namesSession(content)) return;
+  const fallback = fallbackTitle(content);
   const claimed = await c.env.DB.query<SessionRow>(`UPDATE sessions SET title = ?, title_fallback = NULL
     WHERE id = ? AND title_fallback IS NOT NULL AND title = title_fallback AND status <> 'archived'
     RETURNING *`).bind(fallback, row.id).first();
@@ -30,7 +31,7 @@ export async function nameSession(c: AppContext, row: SessionRow, content: strin
     return;
   }
   if (claimed.title !== row.title) await keepPortable(c, claimed);
-  if (!content.trim() || !claimed.connector_id || (await hostCapabilities(c.env, claimed.connector_id))?.sessionTitles !== true) return;
+  if (!claimed.connector_id || (await hostCapabilities(c.env, claimed.connector_id))?.sessionTitles !== true) return;
   const reply = await runnerJSON<{ text?: unknown }>(await runnerRequest(c, claimed, 'title', '', sessionTitleRequest(content)), 64 * 1024);
   const title = typeof reply?.text === 'string' ? cleanTitle(reply.text) : '';
   if (!title || title === fallback) return;
