@@ -42,9 +42,9 @@ test("the session's own comments and pushes are found in its operations: github_
     ({ id, sessionId: "s", requestedBy: "u", operation, createdAt: "2026-11-04T00:00:00Z", status, result });
   const own = ownChanges({
     a: record("a", { kind: "github.comment", repository: "acme/app", issue: 7, body: "Fixed." }, JSON.stringify({ id: 501, url: "https://github.com/acme/app/pull/7#issuecomment-501" })),
-    b: record("b", { kind: "extension.tool", source: "piki:gh", tool: "gh", arguments: JSON.stringify({ args: ["pr", "comment", "7", "--body", "Done."] }) },
+    b: record("b", { kind: "extension.tool", source: "piki:gh", tool: "gh", arguments: JSON.stringify({ args: ["pr", "comment", "7", "--body", "Done."] }), digest: "x" },
       "https://github.com/acme/app/pull/7#issuecomment-502\n"),
-    c: record("c", { kind: "extension.tool", source: "piki:gh", tool: "gh", arguments: JSON.stringify({ args: ["api", "repos/acme/app/issues/7/comments"] }) },
+    c: record("c", { kind: "extension.tool", source: "piki:gh", tool: "gh", arguments: JSON.stringify({ args: ["api", "repos/acme/app/issues/7/comments"] }), digest: "x" },
       "[{\"html_url\": \"https://github.com/acme/app/pull/7#issuecomment-900\"}]"),
     d: record("d", { kind: "git.push", repository: "acme/app", directory: "app", branch: "feature" } as Operation,
       "Pushed 1 commit to feature (aaaaaaaaaaaa..cccccccccccc), based on bbbbbbbbbbbb.\n- cccccccccccc Fix"),

@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import type { ExtensionContext, ExtensionFactory, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ExtensionFactory, ToolCallEvent, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 
 export const prFlowFlags = Object.freeze({
   "review-minutes": "How long to wait for reviews once a pull request is ready for review, and again for a re-review after pushed fixes, in minutes. 0 merges it (or, with auto-merge off, hands it over) as soon as it is ready, without waiting for reviews",
   "merge-method": "How to merge: squash (default), merge or rebase",
   "wait-for-checks": "Wait for the pull request's checks to finish, and fix failing ones, before merging",
   "auto-merge": "Merge the pull request once it is approved, or once its review window ends with nothing left to address. Off leaves the merge to people: the agent tells the person it is ready to merge instead",
+  "pre-push-check": "A check that must pass in a clone before the session pushes it, after it changed files there: words of the command, such as tests/no-comments.test.ts or pnpm check:fast. A push before a run of a program tool (node, python, rust, go, dotnet, make) whose command holds them passed in that clone is refused. Empty checks nothing",
 });
 
 export const DEFAULT_REVIEW_MINUTES = 30;
@@ -14,7 +15,11 @@ export const MAX_REVIEW_MINUTES = 7 * 24 * 60;
 const GITHUB_WAIT_SECONDS = 1800;
 
 export type MergeMethod = "squash" | "merge" | "rebase";
-export interface PrFlowSettings { reviewMinutes: number; mergeMethod: MergeMethod; waitForChecks: boolean; autoMerge: boolean }
+export interface PrFlowSettings { reviewMinutes: number; mergeMethod: MergeMethod; waitForChecks: boolean; autoMerge: boolean; prePushCheck?: string }
+
+export function prePushCheck(setting: unknown): string {
+  return typeof setting === "string" ? setting.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+}
 
 export function reviewMinutes(setting: unknown): number {
   const text = typeof setting === "number" ? String(setting) : typeof setting === "string" ? setting.trim() : "";
@@ -392,6 +397,60 @@ export class PrFlowState {
   }
 }
 
+const programTools = new Set(["node", "python", "rust", "go", "dotnet", "make"]);
+const contentGit = new Set(["merge", "rebase", "cherry-pick", "revert", "am", "apply", "pull", "reset", "restore", "checkout", "switch", "stash", "mv", "rm"]);
+
+function cloneDirectory(value: unknown, isClone: (directory: string) => boolean): string | undefined {
+  const first = directoryOf(value)?.split("/")[0];
+  return first && isClone(first) ? first : undefined;
+}
+
+export function commandLine(input: Record<string, unknown>): string {
+  const args = Array.isArray(input.args) ? input.args.filter((arg): arg is string => typeof arg === "string") : [];
+  return [typeof input.program === "string" ? input.program : "", ...args].join(" ").replace(/\s+/g, " ").trim();
+}
+
+function pushedClone(toolName: string, input: Record<string, unknown>, isClone: (directory: string) => boolean): string | undefined {
+  if (toolName === "git_push") return input.tag === undefined ? cloneDirectory(input.directory, isClone) : undefined;
+  if (toolName !== "git" || !Array.isArray(input.args) || input.args[0] !== "push") return undefined;
+  const words = input.args.filter((arg): arg is string => typeof arg === "string");
+  if (words.some(word => ["--tags", "--delete", "-d", "--dry-run", "-n"].includes(word))) return undefined;
+  return cloneDirectory(input.directory, isClone);
+}
+
+export class PushGate {
+  #tick = 0;
+  readonly #changed = new Map<string, number>();
+  readonly #passed = new Map<string, number>();
+
+  observe(call: ObservedCall, check: string, worktree: string | undefined, isClone: (directory: string) => boolean): void {
+    if (!check || call.isError) return;
+    const changing = changingTools[call.toolName];
+    if (changing) {
+      for (const key of changing) { const clone = cloneOf(call.input[key], worktree, isClone); if (clone) this.#changed.set(clone, ++this.#tick); }
+      return;
+    }
+    if (operationOutcome(call.content).status !== "executed") return;
+    const clone = cloneDirectory(call.input.directory, isClone);
+    if (!clone) return;
+    if (call.toolName === "git") {
+      const subcommand = Array.isArray(call.input.args) && typeof call.input.args[0] === "string" ? call.input.args[0] : "";
+      if (contentGit.has(subcommand)) this.#changed.set(clone, ++this.#tick);
+      return;
+    }
+    if (programTools.has(call.toolName) && commandLine(call.input).includes(check)) this.#passed.set(clone, ++this.#tick);
+  }
+
+  refusal(toolName: string, input: Record<string, unknown>, check: string, isClone: (directory: string) => boolean): string | undefined {
+    if (!check) return undefined;
+    const clone = pushedClone(toolName, input, isClone);
+    const changed = clone ? this.#changed.get(clone) : undefined;
+    if (!clone || changed === undefined || (this.#passed.get(clone) ?? 0) > changed) return undefined;
+    return `[pr-flow] Not pushed: this workspace has \`${check}\` pass in a clone before each push (its pre-push-check), and it hasn't passed in ${clone} `
+      + `since this session last changed files there. Run it there (directory: "${clone}"), fix what it finds, then push again.`;
+  }
+}
+
 function flowLine(flow: PullRequestFlow, settings: PrFlowSettings, now: number): string {
   if (!flow.pull) return `- ${flow.directory}: changed, no pull request yet: open its draft now.`;
   const pull = `#${flow.pull.number} (${flow.pull.url})`;
@@ -454,6 +513,8 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
       : "5. Never merge it yourself, nor queue an automatic merge (gh pr merge --auto, glab mr merge --auto-merge, az repos pr update --auto-complete), "
         + "unless the person asks you to: this workspace leaves merges to people.",
     "6. Tell the person the pull request's link when it opens, when it is ready, and when it is merged or left open.",
+    ...(settings.prePushCheck ? [`7. Before each push of a clone you changed, run \`${settings.prePushCheck}\` there (directory: the clone) with the program tool it needs, and fix what it finds: `
+      + "a push before it passed is refused."] : []),
     "",
     settings.autoMerge
       ? "Where there is no git_push (a host whose sessions push with git itself), do the same with the forge's tool: gh pr create --draft, gh pr ready and "
@@ -471,20 +532,30 @@ export const prFlowExtension: ExtensionFactory = pi => {
   pi.registerFlag("merge-method", { type: "string", default: "squash", description: prFlowFlags["merge-method"] });
   pi.registerFlag("wait-for-checks", { type: "boolean", default: true, description: prFlowFlags["wait-for-checks"] });
   pi.registerFlag("auto-merge", { type: "boolean", default: true, description: prFlowFlags["auto-merge"] });
+  pi.registerFlag("pre-push-check", { type: "string", default: "", description: prFlowFlags["pre-push-check"] });
   const settings = (): PrFlowSettings => ({
     reviewMinutes: reviewMinutes(pi.getFlag("review-minutes")),
     mergeMethod: mergeMethod(pi.getFlag("merge-method")),
     waitForChecks: pi.getFlag("wait-for-checks") !== false,
     autoMerge: autoMerge(pi.getFlag("auto-merge")),
+    prePushCheck: prePushCheck(pi.getFlag("pre-push-check")),
   });
   const state = new PrFlowState();
+  const gate = new PushGate();
+  const clones = (worktree: string | undefined) => (directory: string) => !!worktree && existsSync(join(worktree, directory, ".git"));
 
   pi.on("before_agent_start", event => ({ systemPrompt: `${event.systemPrompt}\n\n${prFlowPrompt(settings(), state.flows)}` }));
 
+  pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
+    const reason = gate.refusal(event.toolName, (event.input ?? {}) as Record<string, unknown>, settings().prePushCheck ?? "", clones(ctx?.cwd));
+    return reason ? { block: true, reason } : undefined;
+  });
+
   pi.on("tool_result", (event: ToolResultEvent, ctx: ExtensionContext) => {
     const worktree = ctx?.cwd;
-    const note = state.observe({ toolName: event.toolName, input: (event.input ?? {}) as Record<string, unknown>, content: event.content ?? [], isError: event.isError === true },
-      settings(), worktree, directory => !!worktree && existsSync(join(worktree, directory, ".git")), Date.now());
+    const call = { toolName: event.toolName, input: (event.input ?? {}) as Record<string, unknown>, content: event.content ?? [], isError: event.isError === true };
+    gate.observe(call, settings().prePushCheck ?? "", worktree, clones(worktree));
+    const note = state.observe(call, settings(), worktree, clones(worktree), Date.now());
     if (!note) return undefined;
     return { content: [...(event.content ?? []), { type: "text" as const, text: note }] };
   });
