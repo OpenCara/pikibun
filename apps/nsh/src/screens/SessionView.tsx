@@ -19,6 +19,7 @@ import type { ChatImage } from "../../../../packages/shared/src/chat-images";
 import { createAutoMode } from "../lib/auto-mode";
 import type { WithdrawResult } from "../../../../packages/shared/src/types";
 import { useAppData } from "../lib/app-data";
+import { sessionArtifacts } from "../lib/artifacts";
 import { session } from "../lib/auth";
 import { createDraft, forgetSentDraft, restoreDraft, saveDraft } from "../lib/drafts";
 import { randomId } from "../lib/format";
@@ -635,7 +636,7 @@ function Conversation(props: {
         {entry => (
           <View style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}>
             <TranscriptEntry entry={entry()} userId={user.id} imagesOf={imagesOf()} expanded={id => expanded().has(id)} onCopy={copyMessage} actions={messageActions}
-              results={transcript().results.get(entry().id)}
+              results={transcript().results.get(entry().id)} artifacts={sessionArtifacts(props.id)}
               toggle={id => expanded.update(set => { const next = new Set(set); if (!next.delete(id)) next.add(id); return next; })} />
           </View>
         )}

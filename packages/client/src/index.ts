@@ -9,6 +9,7 @@ export {
   type LiveSessionHandlers, type LocalSessions, type LocalViewReply, type StreamStatus, type ViewCache,
 } from "./live-session";
 export { COMPACTION_FAILED_TITLE, compactionFailureText } from "./compaction";
+export { artifactsHref, createArtifactSource, publishedArtifact, type ArtifactContent, type ArtifactPlace, type ArtifactSource } from "./artifacts";
 export { createEntryImageCache, entryImageCaches, entryImageHref, imageSource, seesEntryImages, shownImages, textBesideImages, type EntryImageCache } from "./entry-images";
 export { copyText, messageCut, resendText, restoredDraft, rewindable, type MessageCut } from "./message-actions";
 export type { CompactionFailure } from "../../shared/src/types";

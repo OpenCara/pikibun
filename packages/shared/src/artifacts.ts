@@ -29,7 +29,7 @@ export interface Artifact extends ArtifactVersionInfo {
   content: string;
 }
 
-export type ArtifactRequest = Record<string, never> | { name: string; version: number };
+export type ArtifactRequest = { name?: undefined; version?: undefined } | { name: string; version: number };
 
 export interface ArtifactRef {
   name: string;

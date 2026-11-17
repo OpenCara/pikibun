@@ -1,9 +1,11 @@
 import { computed, effect, platform, signal, Text, View, type JSX } from "nsh";
 import { Button as BaseButton, TextView, Tooltip } from "nsh/base";
 import {
-  callHeadline, COMPACTION_FAILED_TITLE, compactionFailureText, copyText, resultOutcome, resultOutput, shownImages, splitToolCalls, textBesideImages, toolCallRows,
-  type EntryView,
+  callHeadline, COMPACTION_FAILED_TITLE, compactionFailureText, copyText, publishedArtifact, resultOutcome, resultOutput, shownImages, splitToolCalls, textBesideImages, toolCallRows,
+  type ArtifactSource, type EntryView,
 } from "../shared";
+import type { ArtifactRef } from "../../../../packages/shared/src/artifacts";
+import { ArtifactCard } from "./Artifact";
 import { EntryImages } from "./EntryImages";
 import { formatDuration, modelFailure } from "../lib/format";
 import { openMessageLink } from "../lib/links";
@@ -24,7 +26,7 @@ const toolIcons: Record<string, IconName> = {
   delete_file: "trash", identity: "user", web_search: "search", fetch_content: "globe", gh: "github",
   browser: "globe", git: "branch", git_commit: "branch", git_push: "branch", git_repin: "branch",
   github_comment: "pull-request", github_merge: "pull-request", github_issue: "pull-request", github_read: "pull-request",
-  schedule: "clock", sessions: "list", tunnel: "link",
+  schedule: "clock", sessions: "list", tunnel: "link", publish_artifact: "image",
 };
 const toolIcon = (name: string): IconName => toolIcons[name] ?? "terminal";
 
@@ -38,6 +40,7 @@ type ToolItem = {
   output?: string;
   trimmed?: EntryView["trimmed"];
   imageEntry?: EntryView;
+  artifact?: ArtifactRef;
 };
 
 type Shown =
@@ -58,12 +61,14 @@ function callItems(entry: EntryView, results: readonly (EntryView | undefined)[]
     const result = row.result;
     const shown = result ? besideImages(result, sees) : undefined;
     const took = result?.durationMs !== undefined ? formatDuration(result.durationMs) : "";
+    const artifact = row.name === "publish_artifact" ? publishedArtifact(result) : undefined;
     return {
       key: row.key, icon: row.outcome?.failed ? "alert" : toolIcon(row.name), failed: row.outcome?.failed === true, input: row.args,
       label: `${callHeadline(row.name, row.target)}${row.outcome?.text ? ` → ${row.outcome.text}` : ""}`,
       meta: [took, actor, autoApprovedSuffix(row.autoApproved ? [row.autoApproved] : undefined).replace(/^ · /, "")].filter(Boolean).join(" · "),
       ...(result && shown ? { output: resultOutput(result, shown.text), ...(shown.images ? { imageEntry: result } : {}) } : {}),
       ...(result?.trimmed ? { trimmed: result.trimmed } : index === rows.length - 1 && entry.trimmed ? { trimmed: entry.trimmed } : {}),
+      ...(artifact ? { artifact } : {}),
     };
   });
 }
@@ -80,10 +85,12 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
     const shown = besideImages(entry, sees);
     const tool = entry.toolResult?.tool;
     const took = entry.durationMs !== undefined ? formatDuration(entry.durationMs) : "";
+    const artifact = publishedArtifact(entry);
     return { kind: "tools", tools: [{
       key: entry.id, icon: outcome.failed ? "alert" : tool ? toolIcon(tool) : "file", failed: outcome.failed, input: "",
       label: `${tool ?? "Output"}${outcome.text ? ` · ${outcome.text}` : ""}`, meta: [took, other].filter(Boolean).join(" · "),
       output: resultOutput(entry, shown.text), ...(shown.images ? { imageEntry: entry } : {}), ...(entry.trimmed ? { trimmed: entry.trimmed } : {}),
+      ...(artifact ? { artifact } : {}),
     }] };
   }
   if (entry.role === "system") {
@@ -215,6 +222,7 @@ export function TranscriptEntry(props: {
   actions?: MessageActions;
   imagesOf?: string;
   results?: readonly (EntryView | undefined)[];
+  artifacts?: ArtifactSource;
 }) {
   const name = createUsername();
   const images = () => shownImages(props.entry, props.imagesOf !== undefined);
@@ -235,7 +243,12 @@ export function TranscriptEntry(props: {
   };
   const toolRows = () => (
     <Each of={tools()} key={item => item.key}>
-      {item => <ToolRow item={item()} open={props.expanded(item().key)} onToggle={() => props.toggle(item().key)} images={resultThumbnails(item())} />}
+      {item => (
+        <View style={{ gap: 8 }}>
+          <ToolRow item={item()} open={props.expanded(item().key)} onToggle={() => props.toggle(item().key)} images={resultThumbnails(item())} />
+          <If when={item().artifact}>{artifact => <ArtifactCard reference={artifact()} source={props.artifacts} />}</If>
+        </View>
+      )}
     </Each>
   );
   const gapAfter = () => (shown().kind === "tools" ? 8 : 16);

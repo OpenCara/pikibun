@@ -14,7 +14,7 @@ export function ownerViewRequest(c: AppContext, row: SessionRow): Promise<Respon
   return actorRequest(c, row.owner_id, row, 'view');
 }
 
-export function ownerRequest(c: AppContext, row: SessionRow, action: 'unpack' | 'restart' | 'portable', body: unknown = {}): Promise<Response> {
+export function ownerRequest(c: AppContext, row: SessionRow, action: 'unpack' | 'restart' | 'portable' | 'artifacts', body: unknown = {}): Promise<Response> {
   return actorRequest(c, row.owner_id, row, action, '', body);
 }
 
@@ -37,7 +37,7 @@ async function actorRequest(c: AppContext, actorId: string, row: SessionRow, act
     revert: `/v1/sessions/${row.id}/revert`, fork: `/v1/sessions/${row.id}/fork`, pack: `/v1/sessions/${row.id}/pack`, unpack: `/v1/sessions/${row.id}/unpack`,
     withdraw: `/v1/sessions/${row.id}/withdraw`, upload: `/v1/sessions/${row.id}/upload`, tunnel: `/v1/sessions/${row.id}/tunnel`,
     image: `/v1/sessions/${row.id}/image`, sudo: `/v1/sessions/${row.id}/sudo`, attach: `/v1/sessions/${row.id}/attach`,
-    portable: `/v1/sessions/${row.id}/portable`,
+    portable: `/v1/sessions/${row.id}/portable`, artifacts: `/v1/sessions/${row.id}/artifacts`,
   };
   const serialized = body === undefined ? '' : JSON.stringify(body);
   const issuedAt = Math.floor(Date.now() / 1000);

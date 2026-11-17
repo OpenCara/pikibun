@@ -11,7 +11,8 @@ import {
 } from './authority/index.js';
 import { getUser } from './db.js';
 import { appOrigin, fail, identifier, now, randomToken } from './http.js';
-import { ownerViewRequest, runnerJSON } from './runner.js';
+import { ownerRequest, ownerViewRequest, runnerJSON } from './runner.js';
+import { artifactAnswer, artifactQuery, requireArtifacts } from './session-artifacts.js';
 
 const SHARE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const INVALID_LINK = 'This share link doesn\'t work. It may have been turned off.';
@@ -118,6 +119,18 @@ export function registerSharedSessions(app: Hono<AppEnv>): void {
     if (!fresh || fresh.id !== row.id) fail(404, 'not_found', INVALID_LINK);
     if (fresh.connector_id) await requireConnectorSession(c.env, fresh.connector_id, fresh);
     return c.json({ view: sharedView(result.view, fresh.tool_output === 'brief' ? 'brief' : 'full') });
+  });
+  app.get('/api/shared/artifacts', async c => {
+    const token = c.req.header('x-share-token');
+    const row = await requireLinkedSession(c, token);
+    const request = artifactQuery(c);
+    await requireArtifacts(c.env, row);
+    const result = await runnerJSON<{ artifacts?: unknown; artifact?: unknown }>(await ownerRequest(c, row, 'artifacts', request));
+    const fresh = await linkedSession(c.env, token);
+    if (!fresh || fresh.id !== row.id) fail(404, 'not_found', INVALID_LINK);
+    if (fresh.connector_id) await requireConnectorSession(c.env, fresh.connector_id, fresh);
+    c.header('Cache-Control', 'no-store');
+    return c.json(artifactAnswer(result, request));
   });
 }
 

@@ -10,19 +10,19 @@ const actionPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write', changes: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write', sudo: 'write',
-  attach: 'manage', portable: 'manage',
+  attach: 'manage', portable: 'manage', artifacts: 'read',
 };
 
 export const connectorPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write', changes: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write', sudo: 'write',
-  attach: 'manage', portable: 'manage',
+  attach: 'manage', portable: 'manage', artifacts: 'read',
 };
 export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack', 'sudo', 'attach', 'portable'];
 
 export function requireArchivedAction(row: SessionRow, action: RunnerAction): void {
-  if (action === 'view' || action === 'events') return;
+  if (action === 'view' || action === 'events' || action === 'artifacts') return;
   if (action === 'pack' || action === 'unpack') {
     if (row.status !== 'archived') fail(409, 'session_not_archived', 'Only an archived session\'s files are packed or unpacked.');
     return;
@@ -37,12 +37,12 @@ export async function requireRunnerAccess(c: AppContext, actorId: string, row: S
     fail(403, 'permission_revoked', 'Session access is no longer authorized.');
   }
   requireArchivedAction(access.row, action);
-  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'changes', 'image', 'unpack', 'portable'].includes(action)) requireUnfrozen(access.row);
+  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'changes', 'image', 'unpack', 'portable', 'artifacts'].includes(action)) requireUnfrozen(access.row);
   if (ownerActions.includes(action) && actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
   if (action !== 'restore' && await c.env.DB.query("SELECT 1 FROM restore_jobs WHERE target_session_id = ? AND status <> 'completed'").bind(row.id).first()) {
     fail(409, 'restore_pending', 'Session restoration is not complete.');
   }
-  if (action !== 'view' && action !== 'events') await requireNoMigration(c.env, row.id, action === 'restore');
+  if (action !== 'view' && action !== 'events' && action !== 'artifacts') await requireNoMigration(c.env, row.id, action === 'restore');
   return access.row;
 }
 

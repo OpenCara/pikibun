@@ -209,6 +209,7 @@ test('relay accepts exactly the supported action/method/path combinations and lo
     sudo: JSON.stringify({ id: 'prompt1', decline: true }),
     attach: JSON.stringify({ binding: binding() }),
     portable: JSON.stringify({ title: 'Kept', schedules: [] }),
+    artifacts: JSON.stringify({ name: 'chart', version: 1 }),
   };
   for (const action of Object.keys(bodies) as (keyof typeof bodies)[]) {
     await t.test(action, async () => {

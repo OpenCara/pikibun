@@ -47,6 +47,8 @@ import { BranchReports } from "./session/branch-reports.js";
 import { HostCommandPolicy } from "./session/host-commands.js";
 import { WholeResults } from "./session/whole-results.js";
 import { entryImages } from "./session/entries.js";
+import { ArtifactContent, ArtifactIndex, listArtifacts, readArtifact } from "./session/artifacts.js";
+import { artifactRequest, type Artifact, type ArtifactSummary } from "../../../packages/shared/src/artifacts.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
 import { MessageInputs, prepareMessageImages } from "./session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "./session/mirrors.js";
@@ -1454,6 +1456,16 @@ export class RunnerSession {
     const checked = thumbnail && checkEntryImage(thumbnail, "thumbnail");
     if (!checked) throw new RunnerError(422, "That image can't be shown");
     return { image: checked };
+  }
+
+  async artifacts(ticket: RunnerTicket, input: unknown): Promise<{ artifacts: ArtifactSummary[] } | { artifact: Artifact }> {
+    this.assertTicket(ticket);
+    const request = artifactRequest(input);
+    if (!request) throw new RunnerError(400, "Invalid artifact request");
+    await this.authorize(ticket.actorId, "read", ticket.policyVersion);
+    const reader = { index: () => this.harness.snapshot(ArtifactIndex, context), content: (key: string) => this.harness.snapshot(ArtifactContent, key, context) };
+    if (request.name === undefined) return { artifacts: await listArtifacts(reader) };
+    return { artifact: await readArtifact(reader, request.name, request.version) };
   }
 
   async browse(ticket: RunnerTicket, path: string): Promise<SessionFiles> {
