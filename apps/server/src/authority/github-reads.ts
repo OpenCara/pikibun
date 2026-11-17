@@ -54,7 +54,47 @@ export function githubRateLimited(response: Response): boolean {
     && (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after')));
 }
 
+const limits = new Map<string, number>();
+const limitEntries = 1000;
+const longestLimitMs = 60 * 60 * 1000;
+const unknownLimitMs = 60 * 1000;
+
+function tokenKey(token: string): string {
+  return createHash('sha256').update(token).digest('base64url');
+}
+
+export function rememberRateLimit(token: string, response: Response, now = Date.now()): number {
+  const retry = Number(response.headers.get('retry-after'));
+  const reset = Number(response.headers.get('x-ratelimit-reset')) * 1000;
+  const until = Math.min(retry > 0 ? now + retry * 1000 : reset > now ? reset : now + unknownLimitMs, now + longestLimitMs);
+  for (const [id, end] of limits) if (end <= now) limits.delete(id);
+  if (limits.size >= limitEntries) limits.delete(limits.keys().next().value!);
+  limits.set(tokenKey(token), until);
+  return until;
+}
+
+export function rateLimitedUntil(token: string, now = Date.now()): number | undefined {
+  const id = tokenKey(token);
+  const until = limits.get(id);
+  if (until === undefined) return undefined;
+  if (until > now) return until;
+  limits.delete(id);
+  return undefined;
+}
+
+export function rateLimitText(until: number | undefined, now = Date.now()): string {
+  if (until === undefined) return 'The session owner\'s GitHub rate limit is used up. Try again later.';
+  const minutes = Math.max(1, Math.ceil((until - now) / 60_000));
+  return `The session owner's GitHub rate limit is used up until ${new Date(until).toISOString().slice(11, 16)} UTC, in about ${minutes} minute${minutes === 1 ? '' : 's'}. `
+    + 'Until then Pikibun makes no GitHub requests with their account, so retrying sooner gets nothing: carry on with work that doesn\'t need GitHub.';
+}
+
+export function forgetRateLimits(): void {
+  limits.clear();
+}
+
 export function forgetGitHubReads(): void {
   reads.clear();
   held = 0;
+  forgetRateLimits();
 }

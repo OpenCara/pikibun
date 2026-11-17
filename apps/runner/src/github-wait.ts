@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { GitHubIssueView } from "../../../packages/shared/src/types.js";
+import type { GitHubIssueView, OperationRecord } from "../../../packages/shared/src/types.js";
 
 export const githubWaits = Object.freeze(["checks", "change"] as const);
 export type GitHubWait = (typeof githubWaits)[number];
@@ -27,22 +27,69 @@ export function githubInstructions(tools: { github: boolean; gh: boolean }): str
 
 export type GitHubWaitOutcome = "checks-completed" | "no-checks" | "changed" | "closed" | "timeout" | "stopped";
 
-export function viewFingerprint(view: GitHubIssueView): string {
+export interface OwnChanges { comments: ReadonlySet<number>; heads: readonly string[] }
+
+export const noOwnChanges: OwnChanges = Object.freeze({ comments: new Set<number>(), heads: [] });
+
+function gitPushTips(text: string): string[] {
+  return [...text.matchAll(/\b[0-9a-f]{7,40}\.{2,3}([0-9a-f]{7,40})\s/g)].map(match => match[1]!);
+}
+
+function ghComment(argumentsJson: string): boolean {
+  try {
+    const args = (JSON.parse(argumentsJson) as { args?: unknown }).args;
+    if (!Array.isArray(args)) return false;
+    const words = args.filter((arg): arg is string => typeof arg === "string" && !arg.startsWith("-"));
+    return (words[0] === "pr" || words[0] === "issue") && words[1] === "comment";
+  } catch { return false; }
+}
+
+export function ownChanges(approvals: Readonly<Record<string, OperationRecord>>): OwnChanges {
+  const comments = new Set<number>();
+  const heads: string[] = [];
+  for (const record of Object.values(approvals)) {
+    if (record.status !== "executed" || typeof record.result !== "string") continue;
+    const operation = record.operation;
+    if (operation.kind === "github.comment") {
+      try { const id = (JSON.parse(record.result) as { id?: unknown }).id; if (Number.isSafeInteger(id)) comments.add(id as number); } catch { }
+    } else if (operation.kind === "extension.tool" && operation.tool === "gh" && ghComment(operation.arguments)) {
+      for (const match of record.result.matchAll(/#issuecomment-(\d{1,19})\b/g)) comments.add(Number(match[1]));
+    } else if (operation.kind === "git.push") {
+      for (const match of record.result.matchAll(/(?:\.\.|new branch at )([0-9a-f]{12})\)/g)) heads.push(match[1]!);
+    } else if (operation.kind === "program" && operation.tool === "git" && /^(?:.* )?git --no-pager 'push'/.test(operation.command)) {
+      heads.push(...gitPushTips(record.result));
+    }
+  }
+  return { comments, heads };
+}
+
+export function ownHead(view: GitHubIssueView, own: OwnChanges): boolean {
+  const sha = view.pullRequest?.head.sha;
+  return !!sha && own.heads.some(prefix => sha.startsWith(prefix));
+}
+
+export function viewFingerprint(view: GitHubIssueView, own: OwnChanges = noOwnChanges, sameHead = false): string {
   const pull = view.pullRequest;
+  const others = <T extends { id: number }>(items: readonly T[]) => items.filter(item => !own.comments.has(item.id));
   return createHash("sha256").update(JSON.stringify([view.state, view.title, view.body, view.labels, view.omitted ?? {},
-    view.comments.map(comment => [comment.id, comment.body]),
-    pull ? [pull.merged, pull.draft, pull.head.sha, pull.reviews.map(review => [review.id, review.state, review.body]),
-      pull.reviewComments.map(comment => [comment.id, comment.body]), pull.checks.map(check => [check.name, check.status, check.conclusion])] : null])).digest("hex");
+    others(view.comments).map(comment => [comment.id, comment.body]),
+    pull ? [pull.merged, pull.draft, sameHead ? null : pull.head.sha, pull.reviews.map(review => [review.id, review.state, review.body]),
+      others(pull.reviewComments).map(comment => [comment.id, comment.body]),
+      sameHead ? null : pull.checks.map(check => [check.name, check.status, check.conclusion])] : null])).digest("hex");
 }
 
 const passed = (check: { status: string; conclusion: string | null }) => check.status === "completed" && ["success", "neutral", "skipped"].includes(check.conclusion ?? "");
 
-export function githubWaiter(wait: GitHubWait, first: GitHubIssueView, startedSeconds: number): (view: GitHubIssueView, nowSeconds: number) => GitHubWaitOutcome | undefined {
-  const fingerprint = viewFingerprint(first);
+export function githubWaiter(wait: GitHubWait, first: GitHubIssueView, startedSeconds: number,
+  own: () => OwnChanges = () => noOwnChanges): (view: GitHubIssueView, nowSeconds: number) => GitHubWaitOutcome | undefined {
   let head = first.pullRequest?.head.sha;
   let headSince = startedSeconds;
   return (view, nowSeconds) => {
-    if (wait === "change") return viewFingerprint(view) !== fingerprint ? "changed" : undefined;
+    if (wait === "change") {
+      const ours = own();
+      const sameHead = ownHead(view, ours);
+      return viewFingerprint(view, ours, sameHead) !== viewFingerprint(first, ours, sameHead) ? "changed" : undefined;
+    }
     const pull = view.pullRequest;
     if (!pull) return "no-checks";
     if (view.state !== "open") return "closed";
@@ -59,11 +106,12 @@ export interface GitHubWaitResult {
 }
 
 export async function waitForGitHub(options: { wait: GitHubWait; first: GitHubIssueView; read: () => Promise<GitHubIssueView>; timeoutMs: number;
-  pollMs: number; now: () => number; sleep: (ms: number) => Promise<void> }): Promise<GitHubWaitResult> {
+  pollMs: number; now: () => number; sleep: (ms: number) => Promise<void>; own?: () => OwnChanges | Promise<OwnChanges> }): Promise<GitHubWaitResult> {
   const started = options.now();
   const deadline = started + options.timeoutMs;
   const seconds = () => (options.now() - started) / 1000;
-  const over = githubWaiter(options.wait, options.first, 0);
+  let own = noOwnChanges;
+  const over = githubWaiter(options.wait, options.first, 0, () => own);
   let view = options.first;
   let outcome = over(view, 0);
   let reason: string | undefined;
@@ -71,7 +119,7 @@ export async function waitForGitHub(options: { wait: GitHubWait; first: GitHubIs
     const left = deadline - options.now();
     if (left <= 0) { outcome = "timeout"; break; }
     await options.sleep(Math.min(options.pollMs, left));
-    try { view = await options.read(); }
+    try { view = await options.read(); own = options.own ? await options.own() : noOwnChanges; }
     catch (error) {
       outcome = "stopped";
       reason = error instanceof Error ? error.message.slice(0, 500) : "the read failed";

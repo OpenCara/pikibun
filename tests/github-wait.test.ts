@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { githubInstructions, githubWaiter, githubWaitLimits, viewFingerprint, waitForGitHub, type GitHubWait } from "../apps/runner/src/github-wait.js";
-import type { GitHubIssueView, GitHubPullRequestView } from "../packages/shared/src/types.js";
+import { githubInstructions, githubWaiter, githubWaitLimits, ownChanges, viewFingerprint, waitForGitHub, type GitHubWait } from "../apps/runner/src/github-wait.js";
+import type { GitHubIssueView, GitHubPullRequestView, Operation, OperationRecord } from "../packages/shared/src/types.js";
 
 const pull = (change: Partial<GitHubPullRequestView> = {}): GitHubPullRequestView => ({
   draft: false, merged: false, mergeable: true, mergeableState: "clean", head: { ref: "feature", sha: "a".repeat(40), repository: "acme/app" },
@@ -35,6 +35,43 @@ test("waiting for checks: until every check of the head commit completes, the pu
   assert.equal(waiting(pushedLate, 300 + githubWaitLimits.noChecksSeconds), "no-checks");
   const issue = view({}, null);
   assert.equal(waitOutcome("checks", issue, issue, 0), "no-checks", "an issue has no checks");
+});
+
+test("the session's own comments and pushes are found in its operations: github_comment, gh pr comment, git_push and git push", () => {
+  const record = (id: string, operation: Operation, result: string, status: OperationRecord["status"] = "executed"): OperationRecord =>
+    ({ id, sessionId: "s", requestedBy: "u", operation, createdAt: "2026-11-04T00:00:00Z", status, result });
+  const own = ownChanges({
+    a: record("a", { kind: "github.comment", repository: "acme/app", issue: 7, body: "Fixed." }, JSON.stringify({ id: 501, url: "https://github.com/acme/app/pull/7#issuecomment-501" })),
+    b: record("b", { kind: "extension.tool", source: "piki:gh", tool: "gh", arguments: JSON.stringify({ args: ["pr", "comment", "7", "--body", "Done."] }) },
+      "https://github.com/acme/app/pull/7#issuecomment-502\n"),
+    c: record("c", { kind: "extension.tool", source: "piki:gh", tool: "gh", arguments: JSON.stringify({ args: ["api", "repos/acme/app/issues/7/comments"] }) },
+      "[{\"html_url\": \"https://github.com/acme/app/pull/7#issuecomment-900\"}]"),
+    d: record("d", { kind: "git.push", repository: "acme/app", directory: "app", branch: "feature" } as Operation,
+      "Pushed 1 commit to feature (aaaaaaaaaaaa..cccccccccccc), based on bbbbbbbbbbbb.\n- cccccccccccc Fix"),
+    e: record("e", { kind: "program", tool: "git", command: "cd -- './app' && GIT_EDITOR=true git --no-pager 'push' 'origin' 'HEAD:feature' </dev/null 2>&1" },
+      "To http://127.0.0.1/git/github.com/acme/app.git\n   cccccccc..dddddddd  HEAD -> feature\n"),
+    f: record("f", { kind: "github.comment", repository: "acme/app", issue: 7, body: "Never." }, "Effect failed or outcome is ambiguous.", "interrupted"),
+    g: record("g", { kind: "program", tool: "git", command: "git --no-pager 'log' '--oneline' </dev/null 2>&1" }, "1111111..2222222 x\n"),
+  });
+  assert.deepEqual([...own.comments].sort(), [501, 502], "comments it posted, not those another command printed");
+  assert.deepEqual(own.heads, ["cccccccccccc", "dddddddd"]);
+});
+
+test("waiting for a change ignores the session's own comments, its pushes and the checks on a commit it pushed, and nobody else's", () => {
+  const mine = "d".repeat(40);
+  const own = { comments: new Set([501]), heads: ["dddddddd"] };
+  const first = view({}, pull({ checks: [check("completed", "success")] }));
+  const at = (sha: string, change: Partial<GitHubPullRequestView> = {}) => pull({ head: { ref: "feature", sha, repository: "acme/app" }, ...change });
+  const outcome = (next: GitHubIssueView) => githubWaiter("change", first, 0, () => own)(next, 60);
+  assert.equal(outcome(view({}, at(mine))), undefined, "its own push");
+  assert.equal(outcome(view({}, at(mine, { checks: [check("in_progress")] }))), undefined, "checks starting on its own push");
+  assert.equal(outcome(view({}, at(mine, { checks: [check("completed", "failure")] }))), undefined, "checks ending on its own push: wait for checks to see them");
+  const comment = { id: 501, author: "alice", createdAt: "2026-11-04T01:00:00Z", body: "Fixed in dddddddd.", url: "https://github.com/acme/app/pull/7#issuecomment-501" };
+  assert.equal(outcome(view({ comments: [comment] }, at(mine))), undefined, "its own comment");
+  assert.equal(outcome(view({ comments: [comment, { ...comment, id: 502, author: "bob", body: "Thanks!" }] }, at(mine))), "changed", "someone else's comment");
+  assert.equal(outcome(view({}, at(mine, { reviews: [{ id: 1, author: "bob", state: "APPROVED", submittedAt: null, commit: mine, body: "", url: "" }] }))), "changed", "a review");
+  assert.equal(outcome(view({}, at("e".repeat(40)))), "changed", "someone else's push");
+  assert.equal(githubWaiter("change", first, 0)(view({}, at(mine)), 60), "changed", "without the session's operations, a push is a change");
 });
 
 test("waiting for a change: a comment, review, review comment, push, check or state; not GitHub's own mergeable state", () => {

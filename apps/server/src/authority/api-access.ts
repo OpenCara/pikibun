@@ -9,6 +9,7 @@ import { recheckAccess, repositoryAccess, verifyRepository, type RepositoryAcces
 import { credentialOrganization, loadCredential, recheckCredential, type LoadedCredential } from './git/accounts.js';
 import { mintGitHubApiReadTokens } from './push/mint.js';
 import { failureCode, githubSignInExpired } from './github-sign-in.js';
+import { rateLimitedUntil, rateLimitText } from './github-reads.js';
 import { memberToolGroup } from './tool-groups.js';
 import { forgeWriteTools } from '../../../../packages/shared/src/tool-groups.js';
 
@@ -123,7 +124,7 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
   }
   if (expired) return unavailable(signInExpired);
   if (!readable.length) {
-    return unavailable(limited ? 'The session owner\'s GitHub rate limit is used up, so Pikibun can\'t check their access to this workspace\'s repositories now; try again after it resets'
+    return unavailable(limited ? rateLimitText(owner.provider === 'github' ? rateLimitedUntil(owner.github.token) : undefined)
       : 'The session owner can read none of this workspace\'s github.com repositories');
   }
   await recheckAccess(c.env, owner);
