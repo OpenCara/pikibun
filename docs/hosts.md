@@ -67,6 +67,12 @@ This is how a team shares one model subscription or set of API keys. Sign Pi in 
 
 The host's page shows its **Status** (online or offline, owner, capabilities), **Models** (where its owner and admins [enable or disable](#models) each one), **Sharing**, **[Configuration](#host-configuration)**, **Host command access**, **Admins**, **Details** (the connection ID) and **Danger zone**. **Revoke host** disconnects it and blocks work in every workspace, your own sessions included; session records are kept, and the machine needs a new pairing to come back.
 
+## Hardware
+
+A connector tells Pikibun what machine it runs on once it connects, and again every five minutes: its operating system and architecture, CPU model and count, total and free memory, total and free disk where the connector keeps its sessions, load average (not on Windows), and GPUs with their vendor, name and memory where it can tell (Linux's `/sys/class/drm`, `nvidia-smi` there and under WSL, `system_profiler` on macOS). The host's page shows it under **Status → Host details**, to everyone who can see the host. It holds no credential, file or process name.
+
+Agents read it with the `sessions` tool's `list` and use it to [choose hosts for sub-tasks](sessions.md#working-across-sessions): a sandboxed host counts as having a GPU only while its [GPU setting](#host-configuration) lends it to sandboxed commands. Free memory and load are trusted for 15 minutes after a report, so a host that stopped reporting doesn't look idle. Revoking or removing a host forgets it. Connectors from before this release report none; a server from before it refuses the report, and the connector carries on without sending it.
+
 ## Host admins and host command grants
 
 By default only a host's owner manages its sharing and models and decides its host commands (its extensions' tools, and the commands of sessions that run on it), which run outside the sandbox on their machine. The owner can hand some of that out on the host's page:

@@ -150,6 +150,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "sub-agents", source: "piki:sub-agents", title: "Sub-agents", workflow: true,
+    description: "Has the agent hand sub-tasks to sub-agents, sessions it starts with the sessions tool (add Other sessions too): independent parts that can run at once, or parts that need hardware or a model its host lacks. Pikibun places each on the least loaded host that meets its conditions (a GPU, CPUs, memory, disk, platform, models), with the workspace's placement and models settings added where the agent sets none; max-sub-agents bounds each message, and each reports back when it finishes.",
+    providers: [],
+  },
+  {
     name: "auto-mode", source: "piki:auto-mode", title: "Auto mode", controlPlane: true, optIn: true,
     description: "Adds Auto to the host and model dropdowns: Pikibun picks the session's host, model and reasoning level for the task, from how complex it looks (simple ones get a light model, complex ones a frontier model with more reasoning) and the hosts' details (online, shared here, yours, sandboxed, with a GPU where the task needs one, how busy). Pikibun runs it itself: hosts install nothing. Without it, the dropdowns have no Auto.",
     providers: [],

@@ -461,6 +461,117 @@ test('a session an agent starts, messages or notifies acts, unless the agent cho
 });
 
 
+test('placement starts a sub-task on the least loaded host that meets its conditions, among hosts the agent may start sessions on', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const collaboratorId = f.collaborator.user.id;
+  const GiB = 1024 ** 3;
+  const at = new Date().toISOString();
+  const machine = (cpus: number, memoryGb: number, freeGb: number, load: number, gpus: unknown[] = []) => JSON.stringify({ platform: 'linux', release: '6.8.0', arch: 'x64',
+    cpuModel: 'Fixture CPU', cpus, memoryBytes: memoryGb * GiB, freeMemoryBytes: freeGb * GiB, diskBytes: 500 * GiB, freeDiskBytes: 200 * GiB, load: [load, load, load], gpus });
+  const nvidia = [{ vendor: 'nvidia', name: 'Fixture RTX', memoryBytes: 24 * GiB }];
+  const host = (id: string, owner: string, hardware: string | null, capabilities: Record<string, unknown> = {}, models = [{ provider: 'faux', modelId: 'faux-9', name: 'Faux 9', thinkingLevels: ['off', 'low'] }]) => {
+    f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at, hardware_json, hardware_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(id, owner, `Host ${id}`, id.padEnd(43, 'h'), id.padEnd(43, 'c'), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, approvalFree: true, chatOptions: true, plainGit: true, ...capabilities }),
+        JSON.stringify(models), at, hardware, hardware ? at : null);
+    f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run(id, f.workspace.id, at);
+    for (const model of models) {
+      f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+        .run(`${id}-${model.modelId}`, f.workspace.id, model.name, model.provider, model.modelId, at, id, owner);
+    }
+  };
+  host('gpu-host', ownerId, machine(32, 64, 40, 2, nvidia), { gpu: 'render' });
+  f.sqlite.prepare('INSERT INTO connector_configs (connector_id, gpu, updated_at) VALUES (?,?,?)').run('gpu-host', 1, at);
+  host('unlent-gpu-host', ownerId, machine(64, 256, 200, 0, nvidia), { gpu: 'render' });
+  host('busy-host', ownerId, machine(8, 16, 8, 1));
+  host('idle-host', ownerId, null, {}, [{ provider: 'faux', modelId: 'faux-9', name: 'Faux 9', thinkingLevels: ['off', 'low'] }, { provider: 'other', modelId: 'big-1', name: 'Big', thinkingLevels: ['off'] }]);
+  host('offline-host', ownerId, machine(128, 512, 500, 0));
+  host('teammate-host', collaboratorId, machine(128, 512, 500, 0, nvidia), { gpu: 'render' });
+  f.sqlite.prepare('INSERT INTO connector_shares (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('teammate-host', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO connector_configs (connector_id, gpu, updated_at) VALUES (?,?,?)').run('teammate-host', 1, at);
+  for (const id of ['busy-1', 'busy-2']) {
+    f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,repository_mode,connector_id,connector_owner_id,activity) VALUES (?,?,?,?,?,?,?,'workspace','clone',?,?,?)")
+      .run(id, f.workspace.id, ownerId, f.agent.id, id, 'ready', at, 'busy-host', ownerId, 'working');
+  }
+  const parentAgent = seedAgentVersion(f.sqlite, { authorId: ownerId, modelId: 'busy-host-faux-9', tools: ['identity'] });
+  f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,repository_mode) VALUES (?,?,?,?,?,?,?,'workspace','clone')")
+    .run('session-p', f.workspace.id, ownerId, parentAgent.id, 'Planner', 'ready', at);
+  f.allow('session-p', 'sessions');
+  const created: { connectorId: string; sessionId: string }[] = [];
+  f.env.CONNECTOR_HUB = { ...fakeHub({ rpc(connectorId, envelope) {
+    const { action, sessionId } = envelope.request.ticket;
+    if (action === 'create') { created.push({ connectorId, sessionId }); return Response.json({ ok: true }, { status: 201 }); }
+    if (action === 'view') return Response.json({ view: { ...f.fake(sessionId).view, sessionId } });
+    if (action === 'submit') return Response.json({ submissionId: `placed-${sessionId}`, conversationId: '0', status: 'queued' });
+    return Response.json({ error: 'unexpected' }, { status: 503 });
+  } }), async status(connectorId: string) { return connectorId !== 'offline-host'; } };
+  const write = f.admit('session-p', ownerId);
+  const childHost = (body: Record<string, unknown>) => f.sqlite.prepare('SELECT connector_id FROM sessions WHERE id = ?').get((body.session as CrossSessionSummary).id)!.connector_id;
+  const childModel = (sessionId: string) => f.sqlite.prepare('SELECT a.model_id FROM sessions s JOIN agent_versions a ON a.id = s.agent_version_id WHERE s.id = ?').get(sessionId)!.model_id;
+
+  const listed = await f.tool('session-p', ownerId, write, { action: 'list' });
+  const hosts = listed.body.hosts as { id: string; online: boolean; agentMayStart: boolean; gpu: boolean; activeSessions: number; yours?: true; hardware?: { cpus: number; gpus: unknown[] } }[];
+  const byId = new Map(hosts.map(item => [item.id, item]));
+  assert.deepEqual([...byId.keys()].sort(), ['busy-host', 'gpu-host', 'idle-host', 'offline-host', 'teammate-host', 'unlent-gpu-host']);
+  assert.deepEqual(byId.get('gpu-host'), { ...byId.get('gpu-host'), online: true, agentMayStart: true, gpu: true, yours: true, activeSessions: 0 });
+  assert.equal(byId.get('unlent-gpu-host')!.gpu, false, 'a GPU the host doesn\'t lend to sandboxed commands');
+  assert.equal(byId.get('busy-host')!.activeSessions, 2);
+  assert.equal(byId.get('offline-host')!.online, false);
+  assert.deepEqual([byId.get('teammate-host')!.agentMayStart, byId.get('teammate-host')!.yours], [false, undefined]);
+  assert.equal(byId.get('idle-host')!.hardware, undefined);
+  assert.equal(byId.get('gpu-host')!.hardware!.cpus, 32);
+  assert.equal((listed.body.models as { id: string; host?: string }[]).find(model => model.id === 'gpu-host-faux-9')!.host, 'gpu-host');
+
+  const gpu = await f.tool('session-p', ownerId, write, { action: 'create', title: 'Render', message: 'Go', placement: { gpu: true, gpuVendor: 'nvidia', minMemoryGb: 32 } });
+  assert.equal(gpu.status, 201, JSON.stringify(gpu.body));
+  assert.equal(childHost(gpu.body), 'gpu-host');
+  assert.deepEqual(gpu.body.model, { id: 'gpu-host-faux-9', provider: 'faux', modelId: 'faux-9' });
+  assert.deepEqual(gpu.body.placement, { host: { id: 'gpu-host', name: 'Host gpu-host' }, conditions: 'gpu true, gpu_vendor nvidia, min_memory_gb 32',
+    load: 0.438, activeSessions: 0, qualified: 1, considered: 6 });
+  const audit = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.cross_session.created' AND detail_json LIKE ?")
+    .get(`%${(gpu.body.session as CrossSessionSummary).id}%`)!.detail_json)) as Record<string, unknown>;
+  assert.deepEqual(audit.placement, { hostId: 'gpu-host', conditions: 'gpu true, gpu_vendor nvidia, min_memory_gb 32', load: 0.438, qualified: 1 });
+  const relisted = (await f.tool('session-p', ownerId, write, { action: 'list' })).body.hosts as { id: string; activeSessions: number }[];
+  assert.equal(relisted.find(item => item.id === 'gpu-host')!.activeSessions, 1, 'a sub-task just started counts before its host reports it at work, so the next goes elsewhere');
+
+  const spread = await f.tool('session-p', ownerId, write, { action: 'create', title: 'Spread', placement: {} });
+  assert.equal(spread.status, 201, JSON.stringify(spread.body));
+  assert.equal(childHost(spread.body), 'unlent-gpu-host', 'the same model as this session, on the least loaded host offering it');
+  const named = await f.tool('session-p', ownerId, write, { action: 'create', title: 'Named', modelId: 'busy-host-faux-9', placement: { hosts: ['busy-host', 'idle-host'] } });
+  assert.equal(named.status, 201, JSON.stringify(named.body));
+  assert.equal(childHost(named.body), 'idle-host', 'a named model moves to whichever listed host offering it is less loaded');
+  const patterned = await f.tool('session-p', ownerId, write, { action: 'create', title: 'Big', placement: { models: ['other/*'] } });
+  assert.equal(patterned.status, 201, JSON.stringify(patterned.body));
+  assert.deepEqual([childHost(patterned.body), (patterned.body.model as { modelId: string }).modelId], ['idle-host', 'big-1']);
+
+  const before = f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
+  const unsatisfied = await f.tool('session-p', ownerId, write, { action: 'create', title: 'Huge', placement: { minCpus: 100 } });
+  assert.deepEqual([unsatisfied.status, unsatisfied.body.code], [409, 'placement_unsatisfied']);
+  assert.match(String(unsatisfied.body.error), /of 6 hosts offering a matching model, 1 offline; 1 another member's host, where only a person can start a session; 4 failing min_cpus/);
+  await f.refused(f.tool('session-p', ownerId, write, { action: 'create', placement: { models: ['nothing/*'] } }), 409, 'placement_unsatisfied');
+  await f.refused(f.tool('session-p', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'high', placement: {} }), 409, 'placement_unsatisfied');
+  await f.refused(f.tool('session-p', ownerId, write, { action: 'create', modelId: 'busy-host-faux-9', placement: { models: ['faux/*'] } }), 400, 'invalid_input');
+  await f.refused(f.tool('session-p', ownerId, write, { action: 'create', placement: { ram: 8 } }), 400, 'invalid_input');
+  await f.refused(f.tool('session-p', ownerId, write, { action: 'list', placement: {} }), 400, 'invalid_input');
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, before, 'a refused placement starts nothing');
+  assert.equal(sessionsToolTarget({ action: 'create', placement: { gpu: true, models: ['a/*'] }, message: 'Go' }), 'create · placement models a/*, gpu true · message:\nGo');
+  assert.ok(!created.some(item => item.connectorId === 'teammate-host' || item.connectorId === 'offline-host'));
+
+  f.allow('session-a', 'sessions');
+  const hostless = f.admit('session-a', ownerId);
+  const unplaced = await f.tool('session-a', ownerId, hostless, { action: 'create', title: 'Hostless model', placement: {} });
+  assert.equal(unplaced.status, 201, `an empty placement leaves a model without a host where it is: ${JSON.stringify(unplaced.body)}`);
+  assert.equal(childModel((unplaced.body.session as CrossSessionSummary).id), f.model.id);
+  assert.equal(unplaced.body.placement, undefined);
+  await f.refused(f.tool('session-a', ownerId, hostless, { action: 'create', placement: { gpu: true } }), 409, 'placement_unsatisfied');
+
+  await f.owner.request('PUT', `/api/workspaces/${f.workspace.id}/child-sessions`, { childModels: false });
+  await f.refused(f.tool('session-p', ownerId, write, { action: 'create', placement: { models: ['other/*'] } }), 403, 'child_models_disabled');
+  const parentModel = await f.tool('session-p', ownerId, write, { action: 'create', title: 'Parent model elsewhere', placement: { gpu: true } });
+  assert.equal(parentModel.status, 201, JSON.stringify(parentModel.body));
+  assert.equal(childHost(parentModel.body), 'gpu-host');
+});
+
 test('lists nest the sessions an agent started under the session that started them', () => {
   const sessions = [{ id: 'c', parentSessionId: 'a' }, { id: 'b' }, { id: 'a' }, { id: 'd', parentSessionId: 'c' }, { id: 'e', parentSessionId: 'gone' },
     { id: 'x', parentSessionId: 'y' }, { id: 'y', parentSessionId: 'x' }];
