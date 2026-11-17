@@ -385,6 +385,7 @@ type FixtureOptions = {
   identity?: (path: string, body: unknown) => Response | Promise<Response>;
   hardware?: (body: unknown) => Response | Promise<Response>;
   hardwareReport?: () => Promise<HostHardware>;
+  sandboxBackend?: NonNullable<Parameters<typeof createConnector>[0]['sandboxBackend']>;
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -405,6 +406,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
     hardware: { report: options.hardwareReport ?? (() => Promise.resolve(fixtureHardware)) }, hardwareReportMs: 20,
     ...(options.version ? { version: options.version } : {}), ...(options.identityDir ? { identityDir: options.identityDir } : {}),
+    ...(options.sandboxBackend ? { sandboxBackend: options.sandboxBackend } : {}),
     browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
     tunnel: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.tunnel },
     acquireLease: path => {
@@ -617,6 +619,16 @@ test('a host keeps the repository cache its configuration names for the whole co
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
   assert.deepEqual(JSON.parse(manifest.body).capabilities, { ...advertisedBase, repositoryCache: true });
   assert.equal(fixture.runtimes[0]!.config.repositoryCache?.scope, 'owner');
+});
+
+test('the macOS sandbox keeps the repository cache too; the Windows sandbox, whose cache would need what only POSIX has, keeps none', { timeout: 10000 }, async t => {
+  const hostConfig = () => Response.json({ config: { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'owner' } });
+  const seatbelt = await connectorFixture(t, { hostConfig, sandboxBackend: { kind: 'seatbelt' } });
+  await startFixture(seatbelt);
+  assert.equal(seatbelt.runtimes[0]!.config.repositoryCache?.scope, 'owner');
+  const windows = await connectorFixture(t, { hostConfig, sandboxBackend: { kind: 'windows', runtime: '/nowhere', limits: { memoryBytes: 1 << 30, processes: 64, cpuPercent: 50 } } });
+  await startFixture(windows);
+  assert.equal(windows.runtimes[0]!.config.repositoryCache, undefined);
 });
 
 test('a host reads the largest configuration the control plane saves: compaction counts for every model, with the longest names', { timeout: 10000 }, async t => {

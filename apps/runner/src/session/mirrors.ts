@@ -39,6 +39,7 @@ export interface SessionMirrorsOptions {
   relay(request: RelayRequest): Promise<Response>;
   grant(): Promise<EgressGrant>;
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
+  hostPaths?: boolean;
 }
 
 export class SessionMirrors {
@@ -95,7 +96,7 @@ export class SessionMirrors {
   #allow(repository: MirrorRepository & { bindingId: string }, confirmedAt: number): string {
     const mount = { source: this.options.cache.mirrorDirectory(repository, this.options.ownerId), target: `${MIRROR_ROOT}/${mirrorPath(repository)}` };
     this.#mirrors.set(mount.target, { mount, repository, confirmedAt });
-    return mount.target;
+    return this.options.hostPaths ? mount.source : mount.target;
   }
 
   async mounts(): Promise<MirrorMount[]> {

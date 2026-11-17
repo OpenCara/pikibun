@@ -7,13 +7,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { assertConnectorPlatform } from "../apps/runner/src/connect-setup.js";
-import { EgressProxy, egressEnvironment, type EgressEndpoint } from "../apps/runner/src/egress.js";
+import { EgressProxy, egressEnvironment, type EgressEndpoint, type RelayRequest } from "../apps/runner/src/egress.js";
+import { GitRemote } from "../apps/runner/src/git-remote.js";
+import { RepositoryCache } from "../apps/runner/src/repo-cache.js";
+import { GIT_SHIM } from "../apps/runner/src/sandbox-python.generated.js";
+import { startGitHttpServer } from "./helpers/git-http.js";
 import { egressPort, HelperWorkspace, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "../apps/runner/src/helper-workspace.js";
 import { NODE_HELPER, NODE_HELPER_KINDS } from "../apps/runner/src/node-helper.js";
 import { HELPER, type SandboxRequest } from "../apps/runner/src/sandbox.js";
 import { sandboxNodePath } from "../apps/runner/src/platform.js";
 import { validWindowsLimits } from "../apps/runner/src/sandbox-backend.js";
-import { SeatbeltBackend, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
+import { SeatbeltBackend, seatbeltGitShim, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
 import { WINDOWS_RUNNER, WINDOWS_SUPPORT_CHECK, WindowsBackend, windowsSandboxSupport } from "../apps/runner/src/windows-sandbox.js";
 import { confinedLaunch, ProcessChannel } from "../apps/runner/src/extensions/process.js";
 import { helperDescribe } from "../apps/runner/src/extensions/describe.js";
@@ -206,6 +210,115 @@ test("the Seatbelt profile denies by default, passes paths as parameters, and op
   assert.match(gitStep.profile, /\(allow file-write\* \(subpath \(param "GIT_DIR"\)\)\)/);
   assert.ok(!gitStep.profile.includes('(deny file-write* (subpath (param "GIT_DIR")))'));
   assert.throws(() => seatbeltProfile({ layout, readOnly: false, gitWritable: false, egressPort: 70000, toolRoots: [] }), /Invalid egress port/);
+});
+
+test("the Seatbelt profile lets a step read only the repository mirrors it was given, by parameter, and the git shim runs on the sandbox's Python", () => {
+  const plain = seatbeltProfile({ layout, readOnly: false, gitWritable: false, toolRoots: [] });
+  assert.ok(!plain.profile.includes("MIRROR_"));
+  const mirror = "/state/repo-cache/github/github.com/1701.git";
+  const given = seatbeltProfile({ layout, readOnly: false, gitWritable: false, toolRoots: [], mirrors: [mirror, "/state/repo-cache/owners/ab/github/github.com/1702.git"] });
+  assert.equal(given.parameters.MIRROR_0, mirror);
+  assert.match(given.profile, /\(allow file-read\* \(subpath \(param "MIRROR_0"\)\) \(subpath \(param "MIRROR_1"\)\)\)/);
+  assert.ok(!given.profile.includes("/state/"), "no mirror path is spliced into the profile");
+  assert.ok(!/file-write\*[^\n]*MIRROR_/.test(given.profile), "mirrors are only read");
+  for (const bad of ["relative/1701.git", "/state/../etc/1701.git", "/state/repo-cache/not-a-mirror", "/state/\"quoted\"/1701.git"]) {
+    assert.throws(() => seatbeltProfile({ layout, readOnly: false, gitWritable: false, toolRoots: [], mirrors: [bad] }), /Invalid repository mirror path/);
+  }
+  const shim = seatbeltGitShim("/Library/Developer/CommandLineTools/usr/bin/python3");
+  assert.ok(shim.startsWith("#!/Library/Developer/CommandLineTools/usr/bin/python3 -I\n"));
+  assert.equal(shim.slice(shim.indexOf("\n")), GIT_SHIM.slice(GIT_SHIM.indexOf("\n")));
+  assert.throws(() => seatbeltGitShim("python3"), /Invalid Python path/);
+});
+
+test("with the host's cache, the helper workspace installs its backend's git shim and gives the steps that run Git in a clone the session's mirrors",
+  { skip: !posix || !python }, async t => {
+    class Cached extends Unconfined {
+      installed = 0;
+      async installGitShim(): Promise<void> { this.installed++; }
+      override async launch(request: SandboxRequest, context: HelperContext, layout: HelperLayout): Promise<HelperLaunch> {
+        const launch = await super.launch(request, context, layout);
+        if (context.mirrors?.length) launch.env.SANDBOX_MIRRORS = context.mirrors.join("\n");
+        return launch;
+      }
+    }
+    const backend = new Cached("cached", true, "python");
+    const source = "/state/repo-cache/github/github.com/1701.git";
+    let mounts = [{ source, target: "/repository-mirrors/github/github.com/1701.git" }, { source: "../escape.git", target: "/repository-mirrors/x/y/1.git" }];
+    const directory = await realpath(await mkdtemp(join(tmpdir(), "native-cached-")));
+    const sandbox = new HelperWorkspace(binding("native-cached"), join(directory, "sandbox"), backend, { mirrors: async () => mounts });
+    t.after(async () => { await sandbox.close(); await rm(directory, { recursive: true, force: true }); });
+    await sandbox.initialize();
+    assert.equal(backend.installed, 1);
+    await sandbox.readFile(".git", allow).catch(() => undefined);
+    await sandbox.execute({ kind: "bash", command: "git init -q -b main app && git -C app commit -q --allow-empty -m first" }, false, allow);
+    await sandbox.cloneHead("app", allow);
+    const by = (kind: string) => backend.launched.filter(entry => entry.request.kind === kind).map(entry => entry.context);
+    assert.deepEqual(by("bash")[0]!.mirrors, [source]);
+    assert.equal(by("bash")[0]!.gitShim, undefined, "without a proxy, no shim on PATH");
+    assert.deepEqual(by("clone-head")[0]!.mirrors, [source]);
+    assert.equal(by("read")[0]!.mirrors, undefined);
+    assert.equal(by("initialize")[0]!.mirrors, undefined);
+    await assert.rejects(sandbox.cloneRestore("app", "https://github.com/acme/app.git", "/etc/passwd", allow), /Invalid clone restoration/);
+    await assert.rejects(sandbox.cloneRestore("app", "https://github.com/acme/app.git", "/elsewhere/github/github.com/1702.git", allow), /invalid clone restoration/,
+      "the helper takes only a mirror its step was given");
+    await assert.rejects(sandbox.cloneRestore("app", "https://github.com/acme/app.git", source, allow), /no restoration is pending/);
+    mounts = [];
+    await sandbox.execute({ kind: "bash", command: "true" }, false, allow);
+    assert.equal(by("bash").at(-1)!.mirrors, undefined);
+    const plain = await workspace(t, new Unconfined("plain", true, "python"));
+    await assert.rejects(plain.cloneRestore("app", "https://github.com/acme/app.git", source, allow), /Invalid clone restoration/, "no cache, no reference");
+  });
+
+test("in the macOS sandbox, a clone borrows the host's mirror through the git shim, and reads it only in steps that were given it", { skip: seatbeltMissing() }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "seatbelt-cache-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const environment = { ...process.env, GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@example.test", GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@example.test" };
+  const run = (args: string[], cwd: string) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", env: environment });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  const work = join(directory, "work");
+  await mkdir(work);
+  run(["init", "-q", "-b", "main"], work);
+  await writeFile(join(work, "README.md"), "from upstream\n");
+  run(["add", "README.md"], work);
+  run(["commit", "-q", "-m", "initial"], work);
+  await mkdir(join(directory, "projects", "acme"), { recursive: true });
+  run(["clone", "-q", "--bare", work, join(directory, "projects", "acme", "app.git")], directory);
+  const server = await startGitHttpServer(join(directory, "projects"));
+  t.after(() => server.close());
+  const repository = { bindingId: "binding-app", provider: "github", host: "github.com", repositoryId: "1701", fullName: "acme/app" } as const;
+  const cache = new RepositoryCache({ root: join(directory, "cache") });
+  await cache.refresh({ repository, ownerId: "test:alice", sessionId: "earlier", remote: new GitRemote({ url: server.url("acme/app.git") }) });
+  const source = cache.mirrorDirectory(repository, "test:alice");
+  const relay = async (request: RelayRequest) => fetch(request.service === "info-refs"
+    ? `${server.url("acme/app.git")}/info/refs?service=git-upload-pack` : `${server.url("acme/app.git")}/git-upload-pack`, {
+    method: request.body ? "POST" : "GET", body: request.body,
+    headers: { ...(request.contentType ? { "content-type": request.contentType } : {}), ...(request.gitProtocol ? { "git-protocol": request.gitProtocol } : {}) },
+  });
+  const grant: EgressGrant = { policy: { mode: "off", domains: [], packageRegistries: true }, repositories: [repository] };
+  const proxy = new EgressProxy({ socketPath: join(directory, "unused.sock"), tcp: { token: "session-token" }, grant: async () => grant, relay, mirror: async () => source });
+  await proxy.start();
+  t.after(() => proxy.close());
+  let given = true;
+  const sandbox: HelperWorkspace = new HelperWorkspace(binding("seatbelt-cache"), join(directory, "sandbox"), new SeatbeltBackend(), {
+    egressEnvironment: () => egressEnvironment(undefined, proxy.endpoint!, sandbox.layout.caBundle),
+    mirrors: async () => given ? [{ source, target: "/repository-mirrors/github/github.com/1701.git" }] : [],
+  });
+  t.after(() => sandbox.close());
+  await sandbox.initialize();
+  const shell = (command: string) => sandbox.execute({ kind: "bash", command }, false, allow, { unbounded: true });
+  assert.doesNotMatch(await shell("git clone -q https://github.com/acme/app.git app"), /pikibun:/);
+  assert.equal(await sandbox.readFile("app/README.md", allow), "from upstream\n");
+  assert.equal((await sandbox.readFile("app/.git/objects/info/alternates", allow)).trim().replace(/^\/private\//, "/"), join(source, "objects").replace(/^\/private\//, "/"));
+  assert.equal((await shell("cd app && git count-objects -v | grep '^count\\|^in-pack'")).trim(), "count: 0\nin-pack: 0");
+  assert.match(await shell("cd app && git log --oneline"), /initial/);
+  const head = await sandbox.cloneHead("app", allow);
+  assert.match(head.commit, /^[0-9a-f]{40}$/);
+  given = false;
+  await assert.rejects(shell("git clone -q https://github.com/acme/app.git again"),
+    (error: { stderr?: string; message?: string }) => /this command started before it could see it; run the clone again/.test(`${error.stderr ?? ""}${error.message ?? ""}`));
+  await assert.rejects(shell("cd app && git log --oneline"), "a step not given the mirror can't read what the clone borrows");
 });
 
 test("the platform sandboxes refuse to start anywhere but their own platform, never falling back", { skip: process.platform === "darwin" || process.platform === "win32" }, () => {

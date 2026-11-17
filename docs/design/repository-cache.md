@@ -62,7 +62,10 @@ named, so a mirror never holds what that listing didn't reach, even if the repos
 - **Created up front** (`RepositoryCache.prepare`). A session creates the empty mirror of each workspace repository when
   it opens, so the command that first clones one already mounts the mirror its clone waits to fill.
 
-Only the runner writes to the cache, outside any sandbox. Sandboxes mount a mirror read-only.
+Only the runner writes to the cache, outside any sandbox. The Linux sandbox mounts a mirror read-only; the macOS sandbox
+(Seatbelt) gives the steps that run Git in a clone read access to the session's authorized mirrors at their own paths.
+Sessions on the host run as the runner's user and read mirrors directly. The cache is POSIX-only (the root's owner and
+mode checks, `/dev/null` configuration, process groups), so Windows hosts keep none.
 
 ## Serialization and progress
 

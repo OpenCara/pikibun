@@ -1,4 +1,5 @@
 #!/usr/bin/python3 -I
+import base64
 import json
 import os
 import sys
@@ -9,6 +10,7 @@ import urllib.request
 
 EGRESS_PORT = 41080
 GIT_LFS_PATHS = ('/usr/bin/git-lfs', '/usr/local/bin/git-lfs')
+GIT = os.environ.get('SANDBOX_GIT') or '/usr/bin/git'
 
 args = sys.argv[1:]
 VALUED = {'-o', '--origin', '-b', '--branch', '-u', '--upload-pack', '--template', '-c', '--config', '--depth', '--shallow-since',
@@ -19,10 +21,34 @@ VALUED = {'-o', '--origin', '-b', '--branch', '-u', '--upload-pack', '--template
 LFS = next((path for path in GIT_LFS_PATHS if os.access(path, os.X_OK)), None)
 
 
+def proxy():
+    status = urllib.parse.urlsplit(os.environ.get('PIKIBUN_EGRESS_STATUS', ''))
+    try:
+        port = status.port
+    except ValueError:
+        port = None
+    if status.scheme != 'http' or status.hostname != '127.0.0.1' or port is None:
+        return EGRESS_PORT, {}
+    if status.username is None or status.password is None:
+        return port, {}
+    credentials = urllib.parse.unquote(status.username) + ':' + urllib.parse.unquote(status.password)
+    return port, {'Authorization': 'Basic ' + base64.b64encode(credentials.encode('utf-8')).decode('ascii')}
+
+
 def endpoint(name, url, timeout):
     query = urllib.parse.urlencode({'remote': url})
+    port, headers = proxy()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    return opener.open('http://127.0.0.1:' + str(EGRESS_PORT) + '/__pikibun/' + name + '?' + query, timeout=timeout)
+    request = urllib.request.Request('http://127.0.0.1:' + str(port) + '/__pikibun/' + name + '?' + query, headers=headers)
+    return opener.open(request, timeout=timeout)
+
+
+def readable(path):
+    try:
+        os.listdir(os.path.join(path, 'objects'))
+        return True
+    except OSError:
+        return False
 
 
 def ask(name, url, timeout):
@@ -123,7 +149,7 @@ if index < len(args) and args[index] == 'clone':
     extra = []
     if url and not borrowing:
         path = mirror(url)
-        if path and not os.path.isdir(path):
+        if path and not readable(path):
             note('the repository cache of ' + url + ' is ready, but this command started before it could see it; run the clone again')
             sys.exit(128)
         if path:
@@ -132,4 +158,4 @@ if index < len(args) and args[index] == 'clone':
         extra += ['-c', 'filter.lfs.process=' + LFS + ' filter-process', '-c', 'filter.lfs.smudge=' + LFS + ' smudge -- %f',
                   '-c', 'filter.lfs.clean=' + LFS + ' clean -- %f', '-c', 'filter.lfs.required=true']
     args = args[:index + 1] + extra + rest
-os.execv('/usr/bin/git', ['git'] + args)
+os.execv(GIT, ['git'] + args)

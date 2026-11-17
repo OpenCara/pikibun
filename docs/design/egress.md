@@ -210,6 +210,22 @@ which pinned sessions were checked out of until phase 5. Clone sessions borrow f
   --older-than DAYS` drops keep refs older than that and runs `git gc` with the same cutoff; pins are never dropped.
   `pikibun cache list` shows sizes and how many sessions and pins each mirror keeps.
 - **Older control planes.** A grant without provider repository ids still works; its repositories just get no mirror.
+- **The macOS sandbox** (Seatbelt) has no bind mounts. Its clone sessions get the same Python shim, in the layout's
+  `bin` first on `PATH`, with the developer tools' Python in its `#!` line; it finds the session's proxy port and
+  credentials in `PIKIBUN_EGRESS_STATUS` and runs the developer tools' Git (`SANDBOX_GIT`). The proxy answers a mirror's
+  path on the host (`SessionMirrors` with `hostPaths`), and each step that runs Git in a clone gets a read grant for
+  every authorized mirror (`MIRROR_<n>` profile parameters, resolved with `realpath`, as Seatbelt matches real paths),
+  fixed when the step starts as a mount is. A mirror the step wasn't given is unreadable rather than missing, so the
+  shim checks that it can list the mirror's objects. A clone restoration takes a host path only if the step was
+  given it (`SANDBOX_MIRRORS`).
+- **Sessions on the host** run the host's Git as the connector's user, with no proxy. Their commands find
+  `HostGitShim`'s `git` first on `PATH`: a POSIX shell launcher that runs the next `git` on `PATH`, except for
+  `git clone`, which goes to a Node program. That program asks the runner over a private Unix socket, with the session's
+  token, for the mirror (the same `SessionMirrors.mirror`: the owner's listing through the relay, then the fill), and
+  adds `--reference-if-able` with the mirror's host path. Its answers and messages are the proxy's. The session
+  confirms its mirrors and moves their keep refs now and then while commands run. Nothing confines such a session, so
+  the cache's read-only rule doesn't hold for it; it holds nothing the connector's user can't reach anyway. Windows,
+  whose hosts keep no cache, gets no launcher.
 
 ### Not in phase 3
 
