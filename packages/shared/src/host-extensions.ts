@@ -3,6 +3,7 @@ import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
 import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 import { parseMemberToolGroups, type MemberToolGroup } from "./tool-groups.js";
 import { parseManagedExtensions, type ManagedExtensionPin } from "./managed-extensions.js";
+import { isCacheWarmingMode, type CacheWarmingMode } from "./cache-warming.js";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -319,6 +320,7 @@ export interface WorkspaceExtensionsAnswer {
   automaticTools: boolean;
   toolGroups?: Record<string, MemberToolGroup>;
   ownerPrivate?: true;
+  cacheWarming?: CacheWarmingMode;
 }
 
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -336,7 +338,7 @@ export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensi
   if (!isPlainObject(value) || typeof value.automaticTools !== "boolean") throw new Error("Invalid workspace extensions");
   const toolGroups = parseMemberToolGroups(value.toolGroups);
   return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools, ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
-    ...(value.ownerPrivate === true ? { ownerPrivate: true as const } : {}) };
+    ...(value.ownerPrivate === true ? { ownerPrivate: true as const } : {}), ...(isCacheWarmingMode(value.cacheWarming) ? { cacheWarming: value.cacheWarming } : {}) };
 }
 
 export function parseExtensionsSync(value: unknown): ExtensionsSync {
