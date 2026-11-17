@@ -507,6 +507,7 @@ test('placement starts a sub-task on the least loaded host that meets its condit
   } }), async status(connectorId: string) { return connectorId !== 'offline-host'; } };
   const write = f.admit('session-p', ownerId);
   const childHost = (body: Record<string, unknown>) => f.sqlite.prepare('SELECT connector_id FROM sessions WHERE id = ?').get((body.session as CrossSessionSummary).id)!.connector_id;
+  const childModel = (sessionId: string) => f.sqlite.prepare('SELECT a.model_id FROM sessions s JOIN agent_versions a ON a.id = s.agent_version_id WHERE s.id = ?').get(sessionId)!.model_id;
 
   const listed = await f.tool('session-p', ownerId, write, { action: 'list' });
   const hosts = listed.body.hosts as { id: string; online: boolean; agentMayStart: boolean; gpu: boolean; activeSessions: number; yours?: true; hardware?: { cpus: number; gpus: unknown[] } }[];
@@ -555,6 +556,14 @@ test('placement starts a sub-task on the least loaded host that meets its condit
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, before, 'a refused placement starts nothing');
   assert.equal(sessionsToolTarget({ action: 'create', placement: { gpu: true, models: ['a/*'] }, message: 'Go' }), 'create · placement models a/*, gpu true · message:\nGo');
   assert.ok(!created.some(item => item.connectorId === 'teammate-host' || item.connectorId === 'offline-host'));
+
+  f.allow('session-a', 'sessions');
+  const hostless = f.admit('session-a', ownerId);
+  const unplaced = await f.tool('session-a', ownerId, hostless, { action: 'create', title: 'Hostless model', placement: {} });
+  assert.equal(unplaced.status, 201, `an empty placement leaves a model without a host where it is: ${JSON.stringify(unplaced.body)}`);
+  assert.equal(childModel((unplaced.body.session as CrossSessionSummary).id), f.model.id);
+  assert.equal(unplaced.body.placement, undefined);
+  await f.refused(f.tool('session-a', ownerId, hostless, { action: 'create', placement: { gpu: true } }), 409, 'placement_unsatisfied');
 
   await f.owner.request('PUT', `/api/workspaces/${f.workspace.id}/child-sessions`, { childModels: false });
   await f.refused(f.tool('session-p', ownerId, write, { action: 'create', placement: { models: ['other/*'] } }), 403, 'child_models_disabled');

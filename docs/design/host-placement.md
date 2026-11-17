@@ -45,7 +45,7 @@ use a GPU, its hardware and its active sessions. Each model names its `host`.
 | Condition | Meaning |
 |---|---|
 | `hosts` | Choose only among these host ids |
-| `models` | Model patterns, any of which the model must match: a model id `list` returns, `provider/modelId`, or a glob over `provider/modelId` such as `anthropic/*`, as Pi's `enabledModels` take them |
+| `models` | Model patterns, any of which the model must match: a model id `list` returns, `provider/modelId`, or a glob over `provider/modelId` such as `anthropic/*`, as Pi's `enabledModels` take them. A filter, not a preference: every match qualifies and load decides among them; their order only breaks ties between equally loaded hosts. To insist on one model, name it alone |
 | `gpu` | A GPU sandboxed sessions there can use: the host reports one and lends it to sandboxed commands (its GPU setting), or the host is unsandboxed |
 | `gpu_vendor`, `gpu_memory_gb` | One of its GPUs is of that vendor, or has that much memory |
 | `min_cpus`, `min_memory_gb`, `min_free_memory_gb`, `min_free_disk_gb` | At least that many CPUs, memory, free memory (from a fresh report), free disk |
@@ -67,7 +67,7 @@ score = active sessions on the host (working or waiting, every workspace, and th
       + used memory / total memory            (0.5 when unknown or stale)
 ```
 
-Ties go to this session's own host, then to the host's id, so the same state always gives the same answer. A host
+Ties go to this session's own host, then to the earlier `models` pattern, then to the host's id, so the same state always gives the same answer. Load deciding before the patterns' order is deliberate: placement is load balancing among what qualifies, and an agent that prefers one model names that one (and relaxes to more if it is refused). An empty placement for a model with no host (test fixtures' workspace models) is ignored rather than refused, so `placement: {}` never turns a create that would work into one that fails. A host
 with no hardware report can still be chosen when no hardware condition is set. When nothing qualifies, the call is
 refused (`placement_unsatisfied`) with how many hosts each condition ruled out, so the agent can relax them or tell
 the person. The result names the chosen host and why (`placement`: candidates, the chosen score, and the conditions).
@@ -95,8 +95,10 @@ policy, without a tool of its own:
 - `tool_call` on `sessions` `create` fills the workspace's `placement` conditions in where the call leaves them out
   (the agent's own win), adds its `models` patterns where the call names no model, adds an empty placement with
   `balance` on so even an unconditioned sub-agent goes to the least loaded host offering its model, sets `notify` for a
-  call with a message, and blocks a create past `max-sub-agents` for the message (counted from successful creates,
-  reset by each message's `before_agent_start`). Pikibun's adapter applies changes to `event.input`
+  call with a message, and blocks a create past `max-sub-agents` for the message (counting successful creates and
+  those still under way, so creates the runtime started together can't pass it; reset by each message's
+  `before_agent_start`). A refusal that no host offers the model, of a placement only the extension added, stops it
+  adding one for the session. Pikibun's adapter applies changes to `event.input`
   ([host extensions](host-extensions.md)), and the tool's own checks run on the changed call.
 - `tool_result` notes where the sub-agent runs and how to collect it, or why no host qualified.
 

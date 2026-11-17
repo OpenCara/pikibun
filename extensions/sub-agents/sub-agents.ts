@@ -5,7 +5,7 @@ export const subAgentsFlags = Object.freeze({
     + "\"min_free_memory_gb=4, platform=linux\". Keys: gpu (true or false), gpu_vendor, gpu_memory_gb, min_cpus, min_memory_gb, min_free_memory_gb, "
     + "min_free_disk_gb, platform, arch, hosts and models (lists separated by |)",
   models: "Model patterns for sub-agents that name no model, separated by commas: model ids, provider/model, or globs such as anthropic/*. "
-    + "Empty runs them on the session's own model, on whichever host offers it",
+    + "Any of them may run a sub-agent, and load decides among them (their order only breaks ties). Empty runs them on the session's own model, on whichever host offers it",
   balance: "Let Pikibun place every sub-agent on the least loaded host that meets its conditions, even when neither the agent nor the placement setting names any. "
     + "Off, a sub-agent with no conditions runs on the host of the model it names",
   "max-sub-agents": "How many sub-agents one message may start, 0 to 10. 0 lets the agent start none",
@@ -95,18 +95,22 @@ export class SubAgentsState {
   started = 0;
   placementUnsupported = false;
   modelsRefused = false;
+  balanceRefused = false;
+  readonly #pending = new Map<string, { balanced: boolean }>();
 
   newMessage(): void {
     this.started = 0;
+    this.#pending.clear();
   }
 
-  prepare(input: Record<string, unknown>, settings: SubAgentsSettings): { block?: string } {
+  prepare(input: Record<string, unknown>, settings: SubAgentsSettings, callId = ""): { block?: string } {
     if (input.action !== "create") return {};
     if (settings.maxSubAgents === 0) return { block: "This workspace's sub-agents setting (max-sub-agents 0) lets no message start sub-agents: do the work in this session." };
-    if (this.started >= settings.maxSubAgents) {
-      return { block: `This message already started ${this.started} sub-agents, the most the workspace's max-sub-agents allows. `
+    if (this.started + this.#pending.size >= settings.maxSubAgents) {
+      return { block: `This message already started ${this.started} sub-agents${this.#pending.size ? ` and is starting ${this.#pending.size} more` : ""}, the most the workspace's max-sub-agents allows. `
         + "Collect their results (sessions wait or read), then do the rest in this session or in a later message." };
     }
+    let balanced = false;
     if (!this.placementUnsupported) {
       const given = record(input.placement) ? { ...input.placement } : undefined;
       const namesModel = typeof input.model === "string" && input.model !== "";
@@ -114,17 +118,26 @@ export class SubAgentsState {
       if (namesModel || this.modelsRefused || (given && "models" in given)) delete defaults.models;
       const merged: Record<string, unknown> = { ...defaults, ...given };
       if (!namesModel && !this.modelsRefused && !("models" in merged) && settings.models.length) merged.models = [...settings.models];
-      if (given || Object.keys(merged).length || settings.balance) input.placement = merged;
+      balanced = !given && !Object.keys(merged).length;
+      if (given || Object.keys(merged).length || (settings.balance && !this.balanceRefused)) input.placement = merged;
+      else balanced = false;
     }
     if (settings.notify && typeof input.message === "string" && input.notify === undefined) input.notify = true;
+    this.#pending.set(callId, { balanced });
     return {};
   }
 
-  observe(call: { toolName: string; input: Record<string, unknown>; content: readonly { type: string; text?: string }[]; isError: boolean },
+  observe(call: { toolName: string; toolCallId?: string; input: Record<string, unknown>; content: readonly { type: string; text?: string }[]; isError: boolean },
     settings: SubAgentsSettings): string | undefined {
     if (call.toolName !== "sessions" || call.input.action !== "create") return undefined;
+    const pending = this.#pending.get(call.toolCallId ?? "");
+    this.#pending.delete(call.toolCallId ?? "");
     const text = call.content.map(item => item.type === "text" ? item.text ?? "" : "").join("\n");
     if (call.isError) {
+      if (pending?.balanced && /No host offers/.test(text) && !this.balanceRefused) {
+        this.balanceRefused = true;
+        return "[sub-agents] Pikibun couldn't place this sub-agent by load: no host offers its model. The extension stops adding a placement of its own for this session: call create again.";
+      }
       if (/takes no placement|Unexpected sessions tool field/.test(text) && !this.placementUnsupported) {
         this.placementUnsupported = true;
         return "[sub-agents] This Pikibun server can't place sessions by host conditions yet, so placement is left out from now on: "
@@ -160,7 +173,7 @@ export class SubAgentsState {
   }
 }
 
-export function subAgentsPrompt(settings: SubAgentsSettings, state: Pick<SubAgentsState, "placementUnsupported" | "modelsRefused">): string {
+export function subAgentsPrompt(settings: SubAgentsSettings, state: Pick<SubAgentsState, "placementUnsupported" | "modelsRefused"> & { balanceRefused?: boolean }): string {
   if (settings.maxSubAgents === 0) return "## Sub-agents\n\nThis workspace lets no message start sub-agent sessions: do the work in this session.";
   const defaults = placementText(state.modelsRefused ? Object.fromEntries(Object.entries(settings.placement).filter(([key]) => key !== "models")) : settings.placement);
   const models = !state.modelsRefused && settings.models.length ? settings.models.join(", ") : "";
@@ -174,10 +187,10 @@ export function subAgentsPrompt(settings: SubAgentsSettings, state: Pick<SubAgen
       : "- When: split work into sub-agents where its parts are independent and can run at once (a module each, a test matrix, research on several questions), or where a part needs hardware or a model this session's host lacks (a GPU, more memory or CPUs, another platform, a stronger or cheaper model). Keep small or tightly coupled work in this session, and involve sub-agents only where the person would expect it.",
     state.placementUnsupported
       ? "- Where: this Pikibun server can't place by host conditions; name a model sessions list returns, which runs on that model's host."
-      : `- Where: Pikibun places each sub-agent on the least loaded online host you may start sessions on that meets its placement: {gpu: true} for rendering, ML or CUDA work, min_cpus and min_memory_gb for heavy builds, min_free_disk_gb for large data, platform and arch for platform-specific work${state.modelsRefused ? "" : ", models for the model a task needs (a strong one for hard work, a fast one for simple work)"}. sessions list shows each host's hardware, active sessions and load. The result names the host it chose.`,
-    ...(defaults || models || settings.balance ? [`- This workspace's defaults, added to each create that leaves them out (yours win): ${[
+      : `- Where: Pikibun places each sub-agent on the least loaded online host you may start sessions on that meets its placement: {gpu: true} for rendering, ML or CUDA work, min_cpus and min_memory_gb for heavy builds, min_free_disk_gb for large data, platform and arch for platform-specific work${state.modelsRefused ? "" : ", models for the models a task may run on (a strong one for hard work, a fast one for simple work; any match qualifies and load decides, so name one alone to insist on it)"}. sessions list shows each host's hardware, active sessions and load. The result names the host it chose.`,
+    ...(defaults || models || (settings.balance && !state.placementUnsupported && !state.balanceRefused) ? [`- This workspace's defaults, added to each create that leaves them out (yours win): ${[
       defaults ? `conditions ${defaults}` : "", models ? `models ${models} for sub-agents that name no model` : "",
-      settings.balance && !state.placementUnsupported ? "placement on the least loaded qualifying host for every sub-agent" : "",
+      settings.balance && !state.placementUnsupported && !state.balanceRefused ? "placement on the least loaded qualifying host for every sub-agent" : "",
     ].filter(Boolean).join("; ")}.`] : []),
     `- How many: at most ${settings.maxSubAgents} sub-agent${settings.maxSubAgents === 1 ? "" : "s"} per message.`,
     "- Each sub-agent starts knowing nothing of this conversation: its message carries the whole task: the goal, the repository and branch to work on, the files concerned, the constraints, what to report back and when it is done. Have each work on a branch of its own where several change one repository.",
@@ -205,12 +218,13 @@ export const subAgentsExtension: ExtensionFactory = pi => {
 
   pi.on("tool_call", (event: ToolCallEvent) => {
     if (event.toolName !== "sessions" || !record(event.input)) return undefined;
-    const { block } = state.prepare(event.input as Record<string, unknown>, settings());
+    const { block } = state.prepare(event.input as Record<string, unknown>, settings(), event.toolCallId);
     return block ? { block: true, reason: block } : undefined;
   });
 
   pi.on("tool_result", (event: ToolResultEvent) => {
-    const note = state.observe({ toolName: event.toolName, input: (event.input ?? {}) as Record<string, unknown>, content: event.content ?? [], isError: event.isError === true }, settings());
+    const note = state.observe({ toolName: event.toolName, toolCallId: event.toolCallId, input: (event.input ?? {}) as Record<string, unknown>, content: event.content ?? [],
+      isError: event.isError === true }, settings());
     if (!note) return undefined;
     return { content: [...(event.content ?? []), { type: "text" as const, text: note }] };
   });

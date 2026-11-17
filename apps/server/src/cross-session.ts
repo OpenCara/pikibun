@@ -313,8 +313,9 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const named = namedId === undefined ? null : await c.env.DB.query<Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>>(
     'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(namedId, origin.workspace_id).first();
   if (!patterns && !named) fail(404, 'not_found', 'Model not found.');
-  const placed = options.placement ? await placeChild(c.env, origin, actorId, await usableModels(c.env, origin.workspace_id, actorId), {
-    requirements: options.placement, ...(named && !patterns ? { model: named } : {}), ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}) }) : undefined;
+  const placing = options.placement && (patterns || Object.keys(options.placement).length > 0 || named?.connector_id) ? options.placement : undefined;
+  const placed = placing ? await placeChild(c.env, origin, actorId, await usableModels(c.env, origin.workspace_id, actorId), {
+    requirements: placing, ...(named && !patterns ? { model: named } : {}), ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}) }) : undefined;
   const model = placed?.model ?? named;
   if (!model) fail(404, 'not_found', 'Model not found.');
   const modelId = model.id;

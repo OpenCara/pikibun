@@ -26,12 +26,13 @@ function load(flags: Record<string, string | boolean> = {}) {
     getFlag: (name: string) => flags[name] ?? registered.find(([flag]) => flag === name)?.[1],
     on: (event: string, handler: (event: unknown, ctx?: unknown) => unknown) => { handlers.set(event, handler); },
   } as never);
+  let calls = 0;
   const call = (input: Record<string, unknown>, toolName = "sessions") => {
-    const event = { type: "tool_call", toolCallId: "c", toolName, input };
-    return { answer: handlers.get("tool_call")!(event) as { block: true; reason: string } | undefined, input: event.input };
+    const event = { type: "tool_call", toolCallId: `call-${++calls}`, toolName, input };
+    return { answer: handlers.get("tool_call")!(event) as { block: true; reason: string } | undefined, input: event.input, id: event.toolCallId };
   };
-  const result = (input: Record<string, unknown>, text: string, isError = false) =>
-    handlers.get("tool_result")!({ toolName: "sessions", input, content: [{ type: "text", text }], isError }) as { content: { text: string }[] } | undefined;
+  const result = (input: Record<string, unknown>, text: string, isError = false, toolCallId?: string) =>
+    handlers.get("tool_result")!({ toolName: "sessions", toolCallId, input, content: [{ type: "text", text }], isError }) as { content: { text: string }[] } | undefined;
   const start = () => (handlers.get("before_agent_start")!({ systemPrompt: "Base." }) as { systemPrompt: string }).systemPrompt;
   return { handlers, registered, call, result, start };
 }
@@ -81,16 +82,21 @@ test("a message starts at most max-sub-agents, counting those that started; the 
   const { call, result, start } = load({ "max-sub-agents": "2" });
   start();
   for (const id of ["a", "b"]) {
-    const { answer, input } = call({ action: "create", message: "Go" });
+    const { answer, input, id: callId } = call({ action: "create", message: "Go" });
     assert.equal(answer, undefined);
-    result(input, created(id));
+    result(input, created(id), false, callId);
   }
   const refused = call({ action: "create", message: "Go" }).answer!;
   assert.equal(refused.block, true);
   assert.match(refused.reason, /already started 2 sub-agents, the most the workspace's max-sub-agents allows/);
   result({ action: "create" }, "No host qualifies for placement (gpu true)", true);
   start();
-  assert.equal(call({ action: "create", message: "Go" }).answer, undefined, "a new message, a new count");
+  const first = call({ action: "create", message: "Go" });
+  assert.equal(first.answer, undefined, "a new message, a new count");
+  assert.equal(call({ action: "create", message: "Go" }).answer, undefined);
+  assert.match(call({ action: "create", message: "Go" }).answer!.reason, /already started 0 sub-agents and is starting 2 more/, "creates under way count before their results");
+  result(first.input, "No host qualifies for placement (gpu true)", true, first.id);
+  assert.equal(call({ action: "create", message: "Go" }).answer, undefined, "a create that failed gives its place back");
   const none = load({ "max-sub-agents": "0" });
   assert.match(none.call({ action: "create" }).answer!.reason, /lets no message start sub-agents/);
   assert.match(none.start(), /lets no message start sub-agent sessions/);
@@ -127,6 +133,24 @@ test("against a server without placement, or a workspace that keeps sub-agents o
   assert.match(off.content[1]!.text, /models are left out of placement from now on/);
   assert.deepEqual(kept.call({ action: "create", message: "Go" }).input.placement, { min_cpus: 4 });
   assert.doesNotMatch(kept.start(), /models|anthropic|openai/);
+});
+
+test("a placement only the extension added, refused because no host offers the model, isn't added again", () => {
+  const { call, result, start } = load();
+  start();
+  const balanced = call({ action: "create", message: "Go" });
+  assert.deepEqual(balanced.input.placement, {});
+  const note = result(balanced.input, "No host offers faux/faux-1 to you. Name models in placement, or a model list returns.", true, balanced.id)!;
+  assert.match(note.content[1]!.text, /stops adding a placement of its own for this session: call create again/);
+  assert.equal(call({ action: "create", message: "Go" }).input.placement, undefined);
+  assert.deepEqual(call({ action: "create", message: "Go", placement: { gpu: true } }).input.placement, { gpu: true }, "the agent's own conditions still go");
+  assert.doesNotMatch(start(), /placement on the least loaded qualifying host/);
+
+  const own = load();
+  own.start();
+  const conditioned = own.call({ action: "create", message: "Go", placement: { min_cpus: 4 } });
+  assert.match(own.result(conditioned.input, "No host offers faux/faux-1 to you.", true, conditioned.id)!.content[1]!.text, /No host met this sub-agent's conditions/);
+  assert.deepEqual(own.call({ action: "create", message: "Go" }).input.placement, {}, "a refusal of the agent's own conditions keeps balance on");
 });
 
 test("each message's prompt carries the policy and the workspace's settings", () => {

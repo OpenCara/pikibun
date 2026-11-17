@@ -24,7 +24,7 @@ sender's own hosts (and this session's host), as that sender, within the workspa
 | Setting | Default | What it does |
 |---|---|---|
 | `placement` | empty | Conditions for every sub-agent's host: `key=value` pairs separated by commas, such as `min_free_memory_gb=4, platform=linux`. Keys: `gpu`, `gpu_vendor`, `gpu_memory_gb`, `min_cpus`, `min_memory_gb`, `min_free_memory_gb`, `min_free_disk_gb`, `platform`, `arch`, `hosts` and `models` (lists separated by `\|`) |
-| `models` | empty | Model patterns for sub-agents that name no model, separated by commas: model ids, `provider/model`, or globs such as `anthropic/*`. Empty runs them on the session's own model, on whichever host offers it |
+| `models` | empty | Model patterns for sub-agents that name no model, separated by commas: model ids, `provider/model`, or globs such as `anthropic/*`. Any of them may run a sub-agent and load decides among them; their order only breaks ties. Empty runs them on the session's own model, on whichever host offers it |
 | `balance` | on | Place every sub-agent on the least loaded qualifying host, even with no conditions |
 | `max-sub-agents` | `5` | How many sub-agents one message may start, 0 to 10; 0 starts none |
 | `notify` | on | Send each sub-agent's outcome back to the session that started it |
