@@ -54,6 +54,9 @@ test("the agent works with other sessions through the control plane at once; a R
     fauxAssistantMessage("Sent."),
     fauxAssistantMessage([fauxToolCall("sessions", { action: "create", title: "Docs", message: "Write the docs", model: "model-2", thinking: "low" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Started."),
+    fauxAssistantMessage([fauxToolCall("sessions", { action: "create", title: "Render", message: "Render it",
+      placement: { gpu: true, gpu_vendor: "nvidia", min_memory_gb: 32, models: ["faux/*"] } })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Placed."),
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
@@ -112,4 +115,13 @@ test("the agent works with other sessions through the control plane at once; a R
   assert.deepEqual(strip(requests[5]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "create", title: "Docs", message: "Write the docs",
     modelId: "model-2", thinkingLevel: "low" });
   assert.match(await transcript(), /"thinkingLevel": ?"low"/);
+
+  answers.push({ session: { id: "render", title: "Render", ownerId: "test:alice", status: "ready", permissions: ["read"], parentSessionId: id, createdAt: "" },
+    model: { id: "gpu-model", provider: "faux", modelId: "faux-2" },
+    placement: { host: { id: "gpu-host", name: "GPU box" }, conditions: "models faux/*, gpu true", load: 0.4, activeSessions: 0, qualified: 1, considered: 2 } });
+  await session.submit(await ticket(id, "submit"), { content: "Render it where there is a GPU.", requestId: "placed", admissionId }, "write");
+  await idle(session);
+  assert.deepEqual(strip(requests[6]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "create", title: "Render", message: "Render it",
+    placement: { gpu: true, gpuVendor: "nvidia", minMemoryGb: 32, models: ["faux/*"] } });
+  assert.match(await transcript(), /GPU box/);
 });
