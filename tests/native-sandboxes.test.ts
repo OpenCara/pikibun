@@ -16,7 +16,7 @@ import { egressPort, HelperWorkspace, type HelperBackend, type HelperContext, ty
 import { NODE_HELPER, NODE_HELPER_KINDS } from "../apps/runner/src/node-helper.js";
 import { HELPER, type SandboxRequest } from "../apps/runner/src/sandbox.js";
 import { bashPath, sandboxNodePath } from "../apps/runner/src/platform.js";
-import { hostGitEnvironment, HostGitShim } from "../apps/runner/src/host-git-shim.js";
+import { hostGitBashScript, hostGitEnvironment, HostGitShim } from "../apps/runner/src/host-git-shim.js";
 import { realpathSync } from "node:fs";
 import { validWindowsLimits } from "../apps/runner/src/sandbox-backend.js";
 import { SeatbeltBackend, seatbeltGitShim, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
@@ -122,6 +122,17 @@ test("on Windows, the session's git is put first again once Git for Windows' bas
   assert.deepEqual(hostGitEnvironment("/t/bin", {}, false), { PATH: `/t/bin${process.platform === "win32" ? ";" : ":"}/usr/bin:/bin:/usr/sbin:/sbin` });
 });
 
+test("the script BASH_ENV names keeps naming it in nested bashes, and runs the owner's own BASH_ENV in each", { skip: !posix }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "bash-env-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, "path.sh"), hostGitBashScript(join(directory, "bin")));
+  await writeFile(join(directory, "owner.sh"), `echo owner >> ${JSON.stringify(join(directory, "log"))}\n`);
+  const result = spawnSync(bash, ["--noprofile", "--norc", "-c", "bash --noprofile --norc -c 'echo \"$BASH_ENV\"'"], { encoding: "utf8",
+    env: { PATH: process.env.PATH, BASH_ENV: join(directory, "path.sh"), PIKIBUN_BASH_ENV: join(directory, "owner.sh") } });
+  assert.equal(result.stdout.trim(), join(directory, "path.sh"));
+  assert.equal(await readFile(join(directory, "log"), "utf8"), "owner\nowner\n");
+});
+
 test("on this platform, the host fills its repository cache, and a session on the host clones with its own git, borrowing it", { skip: !bashPath() || !spawnSync("git", ["--version"]).stdout }, async t => {
   const directory = await mkdtemp(join(tmpdir(), "host-cache-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -209,8 +220,9 @@ for (const helper of ["python", "node"] as const) {
     const target = await workspace(t, new Forge(`${helper}-target`, helper, server.url("")));
     await mkdir(join(target.layout.git, "pikibun-clones"));
     await writeFile(join(target.layout.git, "pikibun-clones", "0.bundle"), Buffer.from(clone!.bundle!, "base64"));
-    await writeFile(join(target.layout.git, "pikibun-clones", "manifest.json"), JSON.stringify({ version: 1, clones: [{ ...clone, bundle: "0.bundle" }] }));
-    assert.deepEqual(await target.clonePending(allow), [{ path: "app", origin: "https://github.com/acme/app.git" }]);
+    const other = { ...clone, path: "other", origin: "https://example.test/café.git", branch: "café", branches: [["café", clone!.branches[0]![1]]], bundle: null };
+    await writeFile(join(target.layout.git, "pikibun-clones", "manifest.json"), JSON.stringify({ version: 1, clones: [{ ...clone, bundle: "0.bundle" }, other] }));
+    assert.deepEqual((await target.clonePending(allow)).map(entry => entry.path), ["app", "other"]);
     assert.equal((await target.cloneBackup(allow)).clones[0]!.bundle, clone!.bundle, "a clone still pending is backed up as it was");
     await symlink(join(directory, "nowhere"), join(target.layout.worktree, "app"));
     await assert.rejects(target.cloneRestore("app", "https://github.com/acme/app.git", null, allow), /something else is already at the clone's path/,
@@ -220,7 +232,9 @@ for (const helper of ["python", "node"] as const) {
     assert.equal(await target.execute({ kind: "bash", command: "cd app && git rev-parse --abbrev-ref HEAD && git log --format=%s -1 && git status --porcelain" }, false, allow),
       "feature\nLocal commit\n?? draft.txt\n");
     assert.equal(await target.readFile("app/draft.txt", allow), "draft\n");
-    assert.deepEqual(await target.clonePending(allow), []);
+    assert.deepEqual(await target.clonePending(allow), [{ path: "other", origin: "https://example.test/café.git" }]);
+    const kept = JSON.parse(await readFile(join(target.layout.git, "pikibun-clones", "manifest.json"), "utf8")) as { clones: typeof other[] };
+    assert.deepEqual(kept.clones, [other], "the clones still pending are kept as they were, names and all");
     await assert.rejects(target.cloneRestore("app", "https://github.com/acme/app.git", null, allow), /no restoration is pending/);
   });
 }

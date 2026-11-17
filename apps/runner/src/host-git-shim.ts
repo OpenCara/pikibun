@@ -250,9 +250,9 @@ export function hostGitEnvironment(bin: string, environment: Readonly<Record<str
     ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh"), ...(previous ? { PIKIBUN_BASH_ENV: previous } : {}) } : {}) };
 }
 
-function bashPathScript(bin: string): string {
+export function hostGitBashScript(bin: string): string {
   return `if command -v cygpath >/dev/null 2>&1; then PATH="$(cygpath -u ${quote(bin)}):$PATH"; export PATH; fi\n`
-    + "if [ -n \"$PIKIBUN_BASH_ENV\" ]; then BASH_ENV=$PIKIBUN_BASH_ENV; export BASH_ENV; unset PIKIBUN_BASH_ENV; . \"$BASH_ENV\"; fi\n";
+    + "if [ -n \"$PIKIBUN_BASH_ENV\" ]; then . \"$PIKIBUN_BASH_ENV\"; fi\n";
 }
 
 export class HostGitShim {
@@ -289,7 +289,7 @@ export class HostGitShim {
         const bin = join(directory, "bin");
         await mkdir(bin, { mode: 0o700 });
         await writeFile(join(bin, "git"), hostGitLauncher(bin, this.#options.node ?? process.execPath, program), { mode: 0o700 });
-        await writeFile(join(directory, "path.sh"), bashPathScript(bin), { mode: 0o600 });
+        await writeFile(join(directory, "path.sh"), hostGitBashScript(bin), { mode: 0o600 });
         return bin;
       } catch (error) {
         const server = this.#server;

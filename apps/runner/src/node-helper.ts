@@ -455,7 +455,7 @@ function cloneState() {
 function saveCloneState(directory, clones) {
   const staged = join(directory, "manifest.json.tmp");
   const fd = openSync(staged, "w", 0o600);
-  try { writeSync(fd, Buffer.from(JSON.stringify({ version: 1, clones }), "ascii")); fsyncSync(fd); } finally { closeSync(fd); }
+  try { writeSync(fd, Buffer.from(JSON.stringify({ version: 1, clones }), "utf8")); fsyncSync(fd); } finally { closeSync(fd); }
   renameSync(staged, join(directory, "manifest.json"));
 }
 
