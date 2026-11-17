@@ -157,7 +157,7 @@ test("on this platform, the host fills its repository cache, and a session on th
   const alternates = (await readFile(join(directory, "app", ".git", "objects", "info", "alternates"), "utf8")).trim();
   assert.equal(realpathSync.native(alternates), realpathSync.native(join(mirror, "objects")));
   assert.match(run(["count-objects", "-v"], join(directory, "app")), /^count: 0$/m);
-  assert.equal(await readFile(join(directory, "app", "README.md"), "utf8"), "upstream\n");
+  assert.equal((await readFile(join(directory, "app", "README.md"), "utf8")).replace(/\r\n/g, "\n"), "upstream\n");
   assert.match(shell("git --version").out, /git version/);
   assert.equal(asked.length, 1, "commands other than clone don't ask");
 });
