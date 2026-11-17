@@ -1499,7 +1499,7 @@ test('owner runs a session on an unshared host and the default session is listed
 test('a session starts from a model and gets its own chat agent with every tool its host carries', async t => {
   const f = await fixture(t); const s = await privateWorkspace(f);
   const start = (client: Client, body: Record<string, unknown>) => client.request('POST', '/api/sessions', { workspaceId: s.team.id, ...body });
-  const offered = toolNames.filter(tool => !retiredToolNames.includes(tool));
+  const offered: string[] = [...toolNames.filter(tool => !retiredToolNames.includes(tool)), 'workspace'];
   const startedAgent = () => (JSON.parse(s.hub.requests.at(-1)!.request.body) as RunnerBinding).agent;
 
   await denied(await start(s.owner, {}), 400, 'invalid_input');
@@ -3530,7 +3530,7 @@ test('a connector reads the tools this server defines as data, only with its own
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
   const { tools } = await json<{ tools: unknown[] }>(await self(f, s.connector, 'tools', {}));
   assert.deepEqual(parseToolDefinitions({ tools }), bundledToolDefinitions, 'they parse as a connector parses them, unchanged');
-  assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read']);
+  assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read', 'workspace']);
   await denied(await s.creator.request('POST', '/api/connectors/self/tools', {}), 401, 'connector_authentication_required');
 });
 

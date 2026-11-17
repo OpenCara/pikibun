@@ -3,10 +3,6 @@ import { assignableWorkspaceRoles } from "./types.js";
 import { gitProviders } from "./repositories.js";
 import { networkModes } from "./network.js";
 
-// The workspace tool: a session's agent manages its own workspace through Pikibun, as the message's sender,
-// with exactly their workspace role. Each action is one of the workspace's REST routes, which the control plane
-// calls as that person, so the route's own checks decide (an admin route refuses a member).
-
 export const workspaceReadActions = ["get", "members", "repositories", "sources", "extensions", "tool_groups", "network", "join_requests"] as const;
 export const workspaceWriteActions = [
   "rename", "add_member", "set_role", "remove_member", "accept_join_request", "decline_join_request", "set_tool_group",
@@ -25,7 +21,6 @@ export const workspaceToolParameters = ["action", "user", "role", "name", "repos
   "settings", "group", "domain", "mode"] as const;
 export type WorkspaceToolParameter = (typeof workspaceToolParameters)[number];
 
-// What each action takes, besides action itself; required ones first in each list.
 export const workspaceActionFields: Readonly<Record<WorkspaceToolAction, { required: readonly WorkspaceToolParameter[]; optional?: readonly WorkspaceToolParameter[] }>> = {
   get: { required: [] }, members: { required: [] }, repositories: { required: [] }, sources: { required: [] }, extensions: { required: [] },
   tool_groups: { required: [] }, network: { required: [] }, join_requests: { required: [] },
@@ -88,10 +83,3 @@ export const workspaceToolDefinition: BrokeredToolDefinition = {
   instructions: "The workspace tool manages this session's own workspace (members, repositories, extensions, tool groups, network access) as the person whose message you are working on, "
     + "with their workspace role. Read with it freely; change the workspace only when the person asks for that change, and tell them what changed.",
 };
-
-export interface WorkspaceToolSummary {
-  id: string;
-  name: string;
-  role: string;
-  personal: boolean;
-}

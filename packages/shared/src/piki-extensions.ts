@@ -135,6 +135,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "workspace", source: "piki:workspace", title: "Workspace management", sessionTools: ["workspace"], optIn: true,
+    description: "The workspace tool: the agent reads the session's workspace (members, join requests, repositories, document sources, extensions, tool groups, network access) and, when asked, changes it (renames it, adds, removes and changes members, accepts join requests, adds and removes repositories and extensions, sets tool groups and network access), as the message's sender, with exactly their workspace role. Off until added here.",
+    providers: [],
+  },
+  {
     name: "prompt-audit", source: "piki:prompt-audit", title: "Prompt audit",
     description: "Has a model of the host check each message from anyone but the host's owner before it reaches the agent, and refuses ones that reach for the host's credentials, files, environment or network. A message it can't check is refused too.",
     providers: [],

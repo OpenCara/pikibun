@@ -196,7 +196,7 @@ test('a host\'s sessions get their workspace\'s extensions and its owner\'s swit
     { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'automatic', settings: {} },
     { source: 'npm:off@1.0.0', enabled: false, tools: 'automatic', settings: {} },
   ], automaticTools: false, toolGroups: {
-    'test:bob': { name: 'Members', off: ['git_push', 'tunnel', 'github_comment', 'github_issue', 'github_merge', 'schedule', 'sessions', ...retiredGroupTools] },
+    'test:bob': { name: 'Members', off: ['git_push', 'tunnel', 'github_comment', 'github_issue', 'github_merge', 'schedule', 'sessions', 'workspace', ...retiredGroupTools] },
   } }, 'a member\'s sessions lack the tools their role leaves out, which the host learns with the extensions');
   await denied(await s.carol.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }), 404, 'not_found');
   await json(await s.alice.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }));

@@ -5,7 +5,7 @@ import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { memberToolGroups, requireSessionTool } from '../apps/server/src/authority/tool-groups.js';
 import {
-  groupTools, memberTools, parseGroupTools, parseMemberToolGroups, retiredGroupTools, roleTools, toolsLeftOut, toolsOff, unknownToolGroup, type ToolGroupSettings,
+  canonicalGroupTools, groupTools, memberTools, parseGroupTools, parseMemberToolGroups, retiredGroupTools, roleTools, toolsLeftOut, toolsOff, unknownToolGroup, type ToolGroupSettings,
 } from '../packages/shared/src/tool-groups.js';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import { testDatabase } from './helpers/control-plane.js';
@@ -13,8 +13,8 @@ import { testDatabase } from './helpers/control-plane.js';
 test('each role\'s sessions get their tools, and a group\'s own tools replace them', () => {
   assert.deepEqual(roleTools.owner, groupTools);
   assert.deepEqual(roleTools.admin, groupTools);
-  assert.deepEqual(toolsLeftOut(roleTools.collaborator), ['tunnel', 'github_merge'], 'collaborators neither merge nor put apps online');
-  assert.deepEqual(toolsLeftOut(roleTools.member), ['git_push', 'tunnel', 'github_comment', 'github_issue', 'github_merge', 'schedule', 'sessions'],
+  assert.deepEqual(toolsLeftOut(roleTools.collaborator), ['tunnel', 'github_merge', 'workspace'], 'collaborators neither merge, put apps online nor manage the workspace');
+  assert.deepEqual(toolsLeftOut(roleTools.member), ['git_push', 'tunnel', 'github_comment', 'github_issue', 'github_merge', 'schedule', 'sessions', 'workspace'],
     'members work in the sandbox: files, commands, the session branch and reading GitHub');
   assert.deepEqual(roleTools.viewer, ['identity', 'ls', 'read', 'grep']);
   assert.deepEqual(memberTools('member', { tools: ['github_merge', 'read_file', 'unknown'] }), ['read', 'github_merge'], 'a group replaces the role\'s tools, and a saved read_file is read');
@@ -33,7 +33,7 @@ test('each role\'s sessions get their tools, and a group\'s own tools replace th
   assert.equal(parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: false }).toolGroups, undefined);
   assert.ok(retiredGroupTools.includes('bash') && retiredGroupTools.includes('host_bash'));
   assert.deepEqual(toolsOff(groupTools), [], 'a session with every tool keeps the retired ones old agents may pin');
-  assert.deepEqual(toolsOff(roleTools.collaborator), ['tunnel', 'github_merge', ...retiredGroupTools], 'any other session runs without them');
+  assert.deepEqual(toolsOff(roleTools.collaborator), ['tunnel', 'github_merge', 'workspace', ...retiredGroupTools], 'any other session runs without them');
   assert.deepEqual(unknownToolGroup.off, toolsOff(roleTools.viewer), 'a host that has never heard of the workspace only reads files');
 });
 
@@ -122,8 +122,9 @@ test('workspace owners and admins create tool groups and put members in them; th
     'the answer keeps the spellings apps from before the rename know');
   const before = ['identity', 'list_files', 'read_file', 'search', 'write_file', 'edit_file', 'move_file', 'copy_file', 'delete_file', 'git', 'git_push', 'node', 'python', 'rust',
     'go', 'dotnet', 'make', 'browser', 'tunnel', 'github_read', 'github_comment', 'github_issue', 'github_merge', 'source_read', 'schedule', 'sessions'];
-  assert.deepEqual(initial.tools.filter(tool => !before.includes(tool)), [], 'an app from before the rename knows every name the answer holds');
-  assert.ok(Object.values(initial.roles).flat().every(tool => before.includes(tool)));
+  assert.deepEqual(initial.tools.filter(tool => !before.includes(tool)), ['workspace'], 'an app from before the rename knows every name the answer holds, but tools added since');
+  assert.deepEqual(canonicalGroupTools(['workspace', 'read_file']), ['read', 'workspace'], 'and an app passes over a tool it doesn\'t know, as its own catalogue lists them');
+  assert.ok(Object.values(initial.roles).flat().every(tool => before.includes(tool) || tool === 'workspace'));
   assert.deepEqual(initial.members.map(item => [item.userId, item.role, item.groupId]),
     [[f.owner.user.id, 'owner', null], [f.admin.user.id, 'admin', null], [f.member.user.id, 'member', null], [f.other.user.id, 'member', null]]);
   await requireSessionTool(f.env, row(f.owner.user.id), f.owner.user.id, 'github_merge');
