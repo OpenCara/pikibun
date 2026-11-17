@@ -454,8 +454,13 @@ function cloneState() {
 
 function saveCloneState(directory, clones) {
   const staged = join(directory, "manifest.json.tmp");
-  writeFileSync(staged, JSON.stringify({ version: 1, clones }), { mode: 0o600 });
+  const fd = openSync(staged, "w", 0o600);
+  try { writeSync(fd, Buffer.from(JSON.stringify({ version: 1, clones }), "ascii")); fsyncSync(fd); } finally { closeSync(fd); }
   renameSync(staged, join(directory, "manifest.json"));
+}
+
+function lexists(path) {
+  try { lstatSync(path); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; }
 }
 
 function cloneBackupOne(path, nested, budget) {
@@ -577,7 +582,7 @@ function cloneRestore(request) {
   const parts = path.split("/");
   const directory = join(WORK, ...parts);
   const marker = join(directory, ".git", RESTORED_MARKER);
-  if (existsSync(directory)) {
+  if (lexists(directory)) {
     let done = false;
     try { done = readFileSync(marker, "ascii").slice(0, 64).trim() === worktree; } catch {}
     if (!done || lstatSync(directory).isSymbolicLink()) refuse("something else is already at the clone's path");
@@ -592,7 +597,7 @@ function cloneRestore(request) {
     catch (error) { if (error.code !== "EEXIST" || !lstatSync(parent).isDirectory() || lstatSync(parent).isSymbolicLink()) refuse("something else is already at the clone's path"); }
   }
   const staging = join(parent, "." + parts.at(-1) + ".pikibun-restore");
-  if (existsSync(staging)) {
+  if (lexists(staging)) {
     if (lstatSync(staging).isSymbolicLink() || !lstatSync(staging).isDirectory()) refuse("something else is already at the clone's path");
     rmSync(staging, { recursive: true, force: true });
   }
@@ -629,7 +634,7 @@ function cloneRestore(request) {
     cloneChecked(staging, ["read-tree", "--reset", "-u", worktree], reason);
     cloneChecked(staging, head ? ["read-tree", String(head)] : ["read-tree", "--empty"], reason);
     writeFileSync(join(staging, ".git", RESTORED_MARKER), worktree + "\n");
-    if (existsSync(directory)) refuse("something else is already at the clone's path");
+    if (lexists(directory)) refuse("something else is already at the clone's path");
     renameSync(staging, directory);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });

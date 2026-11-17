@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,6 +115,13 @@ for (const helper of ["python", "node"] as const) {
   });
 }
 
+test("on Windows, the session's git is put first again once Git for Windows' bash has started, after any BASH_ENV of the owner's own", () => {
+  assert.deepEqual(hostGitEnvironment("/t/pikibun-git-1/bin", { Path: "C:\\Windows", BASH_ENV: "/u/rc" }, true),
+    { Path: "/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-1", "path.sh"), PIKIBUN_BASH_ENV: "/u/rc" });
+  assert.deepEqual(hostGitEnvironment("/t/bin", { PATH: "/usr/bin" }, false), { PATH: `/t/bin${process.platform === "win32" ? ";" : ":"}/usr/bin` });
+  assert.deepEqual(hostGitEnvironment("/t/bin", {}, false), { PATH: `/t/bin${process.platform === "win32" ? ";" : ":"}/usr/bin:/bin:/usr/sbin:/sbin` });
+});
+
 test("on this platform, the host fills its repository cache, and a session on the host clones with its own git, borrowing it", { skip: !bashPath() || !spawnSync("git", ["--version"]).stdout }, async t => {
   const directory = await mkdtemp(join(tmpdir(), "host-cache-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -205,6 +212,10 @@ for (const helper of ["python", "node"] as const) {
     await writeFile(join(target.layout.git, "pikibun-clones", "manifest.json"), JSON.stringify({ version: 1, clones: [{ ...clone, bundle: "0.bundle" }] }));
     assert.deepEqual(await target.clonePending(allow), [{ path: "app", origin: "https://github.com/acme/app.git" }]);
     assert.equal((await target.cloneBackup(allow)).clones[0]!.bundle, clone!.bundle, "a clone still pending is backed up as it was");
+    await symlink(join(directory, "nowhere"), join(target.layout.worktree, "app"));
+    await assert.rejects(target.cloneRestore("app", "https://github.com/acme/app.git", null, allow), /something else is already at the clone's path/,
+      "a link at the clone's path, even one that points nowhere, isn't replaced");
+    await rm(join(target.layout.worktree, "app"));
     await target.cloneRestore("app", "https://github.com/acme/app.git", null, allow);
     assert.equal(await target.execute({ kind: "bash", command: "cd app && git rev-parse --abbrev-ref HEAD && git log --format=%s -1 && git status --porcelain" }, false, allow),
       "feature\nLocal commit\n?? draft.txt\n");

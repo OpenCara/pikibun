@@ -245,11 +245,14 @@ export function hostGitProgram(socket: string, token: string): string {
 export function hostGitEnvironment(bin: string, environment: Readonly<Record<string, string | undefined>>, windows = process.platform === "win32"): Record<string, string> {
   const key = Object.keys(environment).find(name => name.toUpperCase() === "PATH") ?? "PATH";
   const path = environment[key] || (windows ? "" : "/usr/bin:/bin:/usr/sbin:/sbin");
-  return { [key]: path ? `${bin}${windows ? ";" : delimiter}${path}` : bin, ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh") } : {}) };
+  const previous = Object.entries(environment).find(([name]) => name.toUpperCase() === "BASH_ENV")?.[1];
+  return { [key]: path ? `${bin}${windows ? ";" : delimiter}${path}` : bin,
+    ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh"), ...(previous ? { PIKIBUN_BASH_ENV: previous } : {}) } : {}) };
 }
 
 function bashPathScript(bin: string): string {
-  return `if command -v cygpath >/dev/null 2>&1; then PATH="$(cygpath -u ${quote(bin)}):$PATH"; export PATH; fi\n`;
+  return `if command -v cygpath >/dev/null 2>&1; then PATH="$(cygpath -u ${quote(bin)}):$PATH"; export PATH; fi\n`
+    + "if [ -n \"$PIKIBUN_BASH_ENV\" ]; then BASH_ENV=$PIKIBUN_BASH_ENV; export BASH_ENV; unset PIKIBUN_BASH_ENV; . \"$BASH_ENV\"; fi\n";
 }
 
 export class HostGitShim {
