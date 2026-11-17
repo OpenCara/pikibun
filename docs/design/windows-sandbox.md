@@ -54,9 +54,12 @@ Where the implementation departs from the decision above:
   AIA, OCSP and CRL URLs a certificate names on the host's own network, outside the egress proxy: a step could send
   data the network policy refuses. The profile doesn't allow it, so the only way out stays the proxy; curl, Git, Node
   and Python use the session's CA bundle and work. (The first macOS run allowed it; that was reverted.)
-- **Not yet:** the GPU on both, the repository cache on Windows (macOS has it: Seatbelt read grants for the session's
-  mirrors, and the Python git shim; see [egress.md](egress.md), phase 3), and clone-session backups and moves on Windows (the Node helper
-  has no `clone-backup`/`clone-restore`; the workspace refuses them by name).
+- **Repository cache and clone backups on both.** macOS: Seatbelt read grants for the session's mirrors and the Python
+  git shim. Windows: read-only container paths for them and the Node git shim behind a busybox launcher (see
+  [egress.md](egress.md), phase 3). The Node helper backs up clones, lists pending restorations and restores them as
+  the Python helper does, without pack mode (packing is Linux-only).
+- **Not yet:** the GPU on both, and Git LFS on Windows: Git runs a filter with arguments (`git-lfs filter-process`)
+  through its `sh`, Git for Windows' MSYS2 one, which can't start in the container (microsoft/mxc#1061).
 
 What the first runs must check, beyond [Spikes](#spikes-before-committing):
 

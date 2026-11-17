@@ -273,7 +273,7 @@ export class HostWorkspace implements SessionWorkspace {
       case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
-        if (readOnly) throw new Error("Unsandboxed hosts cannot run read-only shell commands");
+        if (readOnly) throw new Error("Sessions on the host can't run commands in Read only messages");
         const command = text(operation.command, "shell command", 64 * 1024, true);
         return this.#operation(authorize, async () => {
           if (options.signal?.aborted) throw new SandboxProcessError("Command stopped before it started", null, null, "", "");

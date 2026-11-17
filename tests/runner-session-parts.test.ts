@@ -262,7 +262,7 @@ test("a command runs on the host in a host session, or unbounded in a session a 
 });
 
 test("the shell needs a limited sandbox, the host, a Windows sandbox or a test session, unless the command is unbounded", () => {
-  assert.throws(() => hostPolicy().policy.requireShell(bash), /quota-backed runner/);
+  assert.throws(() => hostPolicy().policy.requireShell(bash), /need verified resource limits on this host/);
   hostPolicy().policy.requireShell(bash, true);
   hostPolicy().policy.requireShell({ kind: "git.push" } as Operation);
   for (const options of [{ limitedSandbox: true }, { onHost: true }, { windowsSandbox: true }, { testShell: true }]) {

@@ -77,9 +77,10 @@ connected in the web app (Settings > Profile > Connected accounts) with personal
 the connector never receives those tokens. Each git_push gets a credential for
 that push only, held in connector memory and sent only to the repository's Git host; the
 sandbox never sees it.
-Production bash additionally requires verified per-session aggregate cgroups and a
-bounded private filesystem; --resources does not provision these. Missing resource
-limits never enable host shell.
+Commands in everyone's sessions (what git, node, python and the other program tools
+run) additionally require verified per-session aggregate cgroups and a bounded private
+filesystem; --resources does not provision these. Missing resource limits never run
+anything on the host itself.
 Pi model/auth configuration is used locally, including Pi's OAuth refresh. Provider
 credentials, private history and personal Pi extensions are not uploaded or shared: sessions
 run only the extensions installed with "pikibun extensions" (or from Pikibun) that their
@@ -261,12 +262,12 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
     capabilities: { platform: process.platform, sandbox: false, productionShell: false },
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },
-    onWarning: (warning, detail) => { process.stderr.write(warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : "Some resource domains are unavailable; production bash remains fail-closed.\n"); },
+    onWarning: (warning, detail) => { process.stderr.write(warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : "Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.\n"); },
   });
   process.stderr.write(unsandboxed
     ? "Running unsandboxed: commands execute directly on this machine.\n"
     : sandboxBackend ? `Experimental ${sandboxBackend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.\n`
-    : "Sandbox capability is verified per session; production shell stays disabled without provisioned, verified limits.\n");
+    : "Sandbox capability is verified per session; without provisioned, verified limits, commands run only where they may run without them.\n");
   process.stderr.write("Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings > Hosts > this host.\n");
   const stopped = Promise.withResolvers<void>();
   const stop = () => { void connector.stop().then(() => stopped.resolve(), () => stopped.reject(new Error("Connector shutdown failed"))); };

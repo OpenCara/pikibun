@@ -380,7 +380,7 @@ test("queued sandbox effects recheck authority after admission and fail closed o
 test("generic shell requires both explicit test flags and a faux binding", { skip: process.platform !== "linux" }, async t => {
   const { service, directory } = await fixture(t);
   const operation = { kind: "bash" as const, command: "true" };
-  const refuses = (session: RunnerSession) => assert.throws(() => (session as unknown as { hostCommands: HostCommandPolicy }).hostCommands.requireShell(operation), /quota-backed/);
+  const refuses = (session: RunnerSession) => assert.throws(() => (session as unknown as { hostCommands: HostCommandPolicy }).hostCommands.requireShell(operation), /need verified resource limits/);
   refuses(new RunnerSession(binding("shell-disabled"), join(directory, "shell-disabled"), { ...service.config, allowTestShell: false }));
   const realBinding = binding("shell-real");
   realBinding.model.provider = "openai";

@@ -48,7 +48,7 @@ export function HostDetails(props: { connector: ConnectorInfo }) {
   return (
     <>
       <Note>{`Platform: ${capabilities().platform || "Unknown"}.${!props.connector.online ? " Offline: it must reconnect before work can run." : ""}`}</Note>
-      <Note>{`Sandbox: ${capabilities().unsandboxed ? "disabled by the host owner." : !capabilities().sandbox ? "unverified (not necessarily unavailable); the runner checks isolation when preparing each session." : "reported by the host; not a security attestation."} Production shell limits: ${capabilities().productionShell ? "reported; still verified per session." : "not confirmed."}`}</Note>
+      <Note>{`Sandbox: ${capabilities().unsandboxed ? "disabled by the host owner." : !capabilities().sandbox ? "unverified (not necessarily unavailable); the runner checks isolation when preparing each session." : "reported by the host; not a security attestation."} Resource limits for commands: ${capabilities().productionShell ? "reported; still verified per session." : "not confirmed."}`}</Note>
       <If when={config()?.gitCredentials || capabilities().gitCredentials}><Note>Git credentials: offered by the host owner for pushes in their own sessions, where a workspace's push access uses the host's Git credentials.</Note></If>
       <If when={capabilities().repositoryCache}><Note>Repository cache: this host fetches repositories into its own cache with the host owner's Git credentials, after Pikibun confirms that the session's owner can read them with their own account.</Note></If>
       <If when={(config()?.hostSessions || capabilities().ownerHostSessions) && capabilities().hostConfig && !capabilities().unsandboxed}>
@@ -61,7 +61,7 @@ export function HostDetails(props: { connector: ConnectorInfo }) {
         <Note>{`Commands: stopped after ${config()?.commandTimeoutSeconds} seconds${config()?.gpu && capabilities().gpu ? `, with the host's GPU (${capabilities().gpu === "dxg" ? "WSL /dev/dxg" : "render nodes"})` : ""}.`}</Note>
       </If>
       <If when={capabilities().hostMigration}><Note>Moves: this host accepts sessions moved to it from another connected host.</Note></If>
-      <Note>The runner verifies prerequisites for every session and stops work that fails. Production shell needs verified CPU, memory, process and storage limits. Without them, only the host's owner can let a command run unlimited, in their own sessions and still inside the sandbox.</Note>
+      <Note>The runner verifies prerequisites for every session and stops work that fails. Commands (what git, node, python and the other program tools run) need verified CPU, memory, process and storage limits in everyone's sessions. Without them, commands run unlimited, still inside the sandbox, only in the host owner's own sessions and those of members they grant host commands.</Note>
       <Note>Native Windows is unsupported: use Linux or WSL2 with Pi configured there, or macOS without isolation.</Note>
     </>
   );
