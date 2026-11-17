@@ -400,7 +400,8 @@ export async function keepPortable(c: AppContext, row: SessionRow): Promise<void
   if (!row.portable_key || !row.connector_id || row.status === 'archived') return;
   try {
     const schedules = (await sessionSchedules(c.env, row.id)).map((schedule: SessionSchedule) => ({ name: schedule.name, cron: schedule.cron, timeZone: schedule.timeZone,
-      content: schedule.content, access: schedule.access, runIn: schedule.runIn ?? 'session', oneShot: schedule.oneShot !== false, enabled: schedule.enabled }));
+      content: schedule.content, access: schedule.access, runIn: schedule.runIn ?? 'session', oneShot: schedule.oneShot !== false,
+      ...(schedule.modelId ? { modelId: schedule.modelId } : {}), ...(schedule.thinkingLevel ? { thinkingLevel: schedule.thinkingLevel } : {}), enabled: schedule.enabled }));
     const response = await ownerRequest(c, row, 'portable', { title: row.title, schedules });
     await response.body?.cancel();
   } catch { }

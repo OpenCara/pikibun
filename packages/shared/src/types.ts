@@ -186,6 +186,8 @@ export interface SessionSchedule {
   access: AccessMode;
   runIn?: ScheduleRunIn;
   oneShot?: boolean;
+  modelId?: string;
+  thinkingLevel?: ThinkingLevel;
   enabled: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
@@ -381,6 +383,8 @@ export interface ScheduleToolRequest {
   access?: AccessMode;
   runIn?: ScheduleRunIn;
   oneShot?: boolean;
+  modelId?: string | null;
+  thinkingLevel?: ThinkingLevel | null;
   enabled?: boolean;
 }
 export type ScheduleToolResult = { schedules: SessionSchedule[] } | { schedule: SessionSchedule } | { deleted: string };
