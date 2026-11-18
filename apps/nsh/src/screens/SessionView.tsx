@@ -423,9 +423,6 @@ function Conversation(props: {
     loadingOlder.set(true);
     void Promise.all(olderConversations().map(conversation => props.live.loadOlder(conversation.id))).finally(() => loadingOlder.set(false));
   }
-  // Jump to the latest message only when the shown thread changes (mode or side ask) or the list first appears:
-  // actualMode() reads the session's permissions in ask mode, so a plain effect on it ran again at every session
-  // update and pulled a reader of earlier side-ask messages back to the bottom.
   let scrolledFor: { list: ListRef; thread: string } | undefined;
   effect(() => {
     const ref = list();
