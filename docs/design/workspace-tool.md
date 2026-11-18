@@ -32,7 +32,7 @@ button is. The `workspace` tool lets the agent make the change, within the same 
 
 4. **The sender, not the session's owner.** Like `sessions`, it acts as the person whose message the agent is working
    on (`actorId`, the run's `initiatedBy`). An admin writing in a member's session acts as the admin; a member writing
-   in the owner's session acts as the member. Scheduled prompts run as the session's owner, as they always do.
+   in the owner's session acts as the member. Scheduled prompts run as the schedule's owner ([workspace-schedules.md](workspace-schedules.md)).
 
 5. **Gates before any route runs.** In order: the sender can still write to the session; the call comes from the
    session's own host (`requireCallbackScope`); the admission is the sender's, a write message, and live

@@ -50,7 +50,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "schedule", source: "piki:schedule", title: "Scheduled prompts", sessionTools: ["schedule"],
-    description: "The schedule tool: the agent lists, creates, changes and deletes the session's scheduled prompts when its owner asks, such as a nightly check. Off until added here.",
+    description: "The schedule tool: the agent lists, creates, changes and deletes scheduled prompts when its owner asks, such as a nightly check: ones that wake the session, and the workspace's that start a new session each run. Off until added here.",
     providers: [],
   },
   {

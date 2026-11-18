@@ -823,3 +823,28 @@ test('a workspace schedule on another member\'s host needs its owner to trust th
   const takeover = await f.owner.request('PATCH', `${path}/${schedule.id}`, { name: 'Mine now' });
   assert.equal(takeover.status, 200, 'taken over by the host\'s owner, it needs no trust');
 });
+
+test('the owner\'s agent lists the owner\'s workspace schedules beside the session\'s, and changes only those it may', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const admission = randomBytes(32).toString('base64url');
+  f.sqlite.prepare('INSERT INTO run_admissions (id,session_id,actor_id,mode,access,request_id,content_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(admission, 'scheduled-session', ownerId, 'write', null, `request-${admission}`, 'h'.repeat(43), Math.floor(Date.now() / 1000) + 3600, new Date().toISOString());
+  const tool = async (body: Record<string, unknown>) => {
+    const response = await app.request('/api/internal/schedules', { method: 'POST',
+      headers: { Authorization: `Bearer ${f.env.RUNNER_SHARED_SECRET}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'scheduled-session', actorId: ownerId, admissionId: admission, callId: 'call-1', ...body }) }, f.env);
+    return { status: response.status, body: await response.json() as Record<string, unknown> & { code?: string } };
+  };
+  const path = workspacePath(f);
+  const mine = (await (await f.owner.request('POST', path, { cron: '0 9 * * *', content: 'Mine', modelId: f.model.id })).json() as { schedule: Schedule }).schedule;
+  const theirs = (await (await f.collaborator.request('POST', path, { cron: '0 9 * * *', content: 'Theirs', modelId: f.model.id })).json() as { schedule: Schedule }).schedule;
+  const listed = (await tool({ action: 'list' })).body.schedules as Schedule[];
+  assert.deepEqual(listed.map(item => item.id), [mine.id], 'the owner\'s, not another member\'s');
+  const refused = await tool({ action: 'update', scheduleId: theirs.id, enabled: false });
+  assert.deepEqual([refused.status, refused.body.code], [404, 'not_found']);
+  const renamed = await tool({ action: 'update', scheduleId: mine.id, name: 'Morning' });
+  assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+  assert.equal((renamed.body.schedule as Schedule).name, 'Morning');
+  assert.deepEqual((await tool({ action: 'delete', scheduleId: mine.id })).body, { deleted: mine.id });
+});
