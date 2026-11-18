@@ -91,26 +91,20 @@ describe("the session list", () => {
   });
 });
 
-describe("portable sessions", () => {
-  const offer = { id: "p1", title: "Kept on my laptop", createdAt: sessionRecord.createdAt, connectorId: "c1", hostName: "Ada's laptop", hostEnvironment: true,
-    working: false, attachedElsewhere: true, model: { provider: "anthropic", modelId: "claude-sonnet" }, modelId: "m1" };
-  const brought = { ...sessionRecord, id: "p1", title: "Kept on my laptop", portable: true };
-
-  test("another server's session from this computer is listed in the private workspace, and Bring here brings it", async () => {
-    let attached = false;
+describe("private sessions on a computer", () => {
+  test("each computer's private sessions are listed in the private workspace as any other, by computer, and marked offline while it is", async () => {
+    const laptop = { ...sessionRecord, id: "p1", title: "Kept on my laptop", forwarded: { hostName: "Ada's laptop", online: false } };
+    const desktop = { ...sessionRecord, id: "p2", title: "On the desktop", forwarded: { hostName: "Ada's desktop", online: true } };
     const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1280, height: 820, network: server({
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, personal: true, name: "Private" }] } },
-      [`GET ${ORIGIN}/api/sessions`]: () => ({ body: { sessions: attached ? [sessionRecord, brought] : [sessionRecord] } }),
-      [`GET ${ORIGIN}/api/portable-sessions`]: () => ({ body: { sessions: attached ? [] : [offer] } }),
-      [`POST ${ORIGIN}/api/portable-sessions/p1/attach`]: () => { attached = true; return { status: 201, body: { session: brought } }; },
+      [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [sessionRecord, laptop, desktop] } },
     }) });
-    await app.waitFor("id:portable-row-p1");
-    expect(app.texts()).toContain("On another server · Ada's laptop");
-    await app.press("id:portable-bring-p1");
     await app.waitFor("id:session-row-p1");
-    await app.waitUntil(() => !app.shows("id:portable-row-p1"));
-    const request = app.requests().find(item => item.method === "POST" && item.url.endsWith("/api/portable-sessions/p1/attach"));
-    expect(JSON.parse(request?.body ?? "{}")).toEqual({ connectorId: "c1" });
+    const texts = app.texts().join("\n");
+    expect(texts).toContain("Ada's laptop · Offline");
+    expect(texts).toContain("Ada's desktop\n");
+    expect(texts).not.toContain("Bring here");
+    expect(app.requests().some(item => item.url.includes("/api/portable-sessions"))).toBe(false);
   });
 });
 

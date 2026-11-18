@@ -130,7 +130,7 @@ export function SessionView(props: { id: string; page: boolean; front?: () => bo
   const archivedText = () => {
     const current = live.session();
     if (current?.detached) {
-      return "This session moved to another server its host is paired with, and its history here is read-only. To work on it here again, bring it back from your private workspace's list, where its host offers it.";
+      return "This session moved to another server its host is paired with, and carries on there. Its history here is read-only.";
     }
     if (current?.packed) {
       return manages() ? "This session is read-only. Its files are packed on its host. Unarchiving unpacks them and clones its repositories again, so its host must be online."

@@ -5,8 +5,7 @@ import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../compone
 import { createSessionMenu, RenameSheet, type SessionMenu } from "../components/SessionMenu";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
-import { createAction, createResource, type Action } from "../lib/resource";
-import type { PortableSessionOffer } from "../../../../packages/shared/src/types";
+import { type Action } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
 import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, StatusDot, SwipeRow, swipesRows, type MenuAction } from "../ui";
@@ -15,10 +14,7 @@ type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; archived: number; showArchived: boolean; canCreate: boolean }
   | { kind: "session"; key: string; session: SessionRecord; depth: number }
   | { kind: "ask"; key: string; session: SessionRecord; ask: SideAskSummary; depth: number }
-  | { kind: "start"; key: string; workspaceId: string }
-  | { kind: "portable"; key: string; offer: PortableSessionOffer };
-
-const PORTABLE_POLL_MS = 30_000;
+  | { kind: "start"; key: string; workspaceId: string };
 
 export function sessionRows(sessions: readonly SessionRecord[]): Extract<Row, { kind: "session" | "ask" }>[] {
   return nestSessions(sessions).flatMap(({ session: item, depth }) => [
@@ -46,6 +42,12 @@ export function sessionOwnerLabel(item: Pick<SessionRecord, "ownerId" | "ownerNa
   return owner ? `${owner}${viewer ? " · Viewer" : ""}` : viewer ? "Viewer" : "Shared";
 }
 
+export function forwardedLabel(item: Pick<SessionRecord, "forwarded">, severalComputers: boolean): string {
+  const forwarded = item.forwarded;
+  if (!forwarded) return "";
+  return [...(severalComputers ? [forwarded.hostName] : []), ...(forwarded.online ? [] : ["Offline"])].join(" · ");
+}
+
 export function matchesSession(item: Pick<SessionRecord, "title" | "ownerName">, needle: string): boolean {
   return !needle || item.title.toLowerCase().includes(needle) || Boolean(item.ownerName?.toLowerCase().includes(needle));
 }
@@ -61,16 +63,7 @@ export function SessionList(props: {
   const collapsed = signal<readonly string[]>([]);
   const swiped = signal<string | null>(null);
   const swipe = (id: string, open: boolean) => swiped.update(current => (open ? id : current === id ? null : current));
-  const portable = createResource<{ sessions: PortableSessionOffer[] }>(() => "/api/portable-sessions", PORTABLE_POLL_MS);
-  const bringing = createAction();
-  function bringHere(offer: PortableSessionOffer) {
-    void bringing.run(async () => {
-      const result = await session().api<{ session: SessionRecord }>(`/api/portable-sessions/${encodeURIComponent(offer.id)}/attach`,
-        { method: "POST", body: { connectorId: offer.connectorId } });
-      await Promise.all([data.refreshSessions(), portable.refresh()]);
-      props.onOpen(result.session.id);
-    }, `${offer.title} is here now.`);
-  }
+  const severalComputers = computed(() => new Set(data.sessions().flatMap(item => (item.forwarded ? [item.forwarded.hostName] : []))).size > 1);
   const rows = computed<Row[]>(() => {
     const needle = query().trim().toLowerCase();
     const byWorkspace = new Map<string, SessionRecord[]>();
@@ -92,13 +85,11 @@ export function SessionList(props: {
       const workspace = data.workspaces().find(item => item.id === id);
       const canCreate = Boolean(workspace && canCreateSessions(workspace.role));
       const folded = collapsed().includes(id) && !needle;
-      const offers = workspace?.personal ? (portable.data()?.sessions ?? []).filter(offer => matchesSession(offer, needle)) : [];
       return [
         { kind: "workspace", key: `workspace:${id}`, id, count: sessions.length, archived: archived.get(id) ?? 0, showArchived: showArchived().includes(id), canCreate,
           title: workspace?.name ?? "Other workspace" },
         ...(folded ? [] : sessionRows(sessions)),
-        ...(!folded && !needle && !sessions.length && !offers.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
-        ...(folded ? [] : offers.map((offer): Row => ({ kind: "portable", key: `portable:${offer.connectorId}:${offer.id}`, offer }))),
+        ...(!folded && !needle && !sessions.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
       ];
     });
   });
@@ -114,7 +105,7 @@ export function SessionList(props: {
   function pullToRefresh() {
     const pull = ++pulls;
     refreshing.set(true);
-    void Promise.all([data.refreshSessions(), data.refreshWorkspaces(), portable.refresh()]).finally(() => { if (pull === pulls) refreshing.set(false); });
+    void Promise.all([data.refreshSessions(), data.refreshWorkspaces()]).finally(() => { if (pull === pulls) refreshing.set(false); });
   }
   const inset = () => (props.compact ? 8 : 12);
 
@@ -136,9 +127,6 @@ export function SessionList(props: {
             </If>
             <If when={!menu.renaming() && (menu.action.error() || menu.action.notice())}>
               <View testID="session-list-feedback" style={{ paddingHorizontal: 4 }}><Feedback error={menu.action.error()} notice={menu.action.notice()} /></View>
-            </If>
-            <If when={bringing.error() || bringing.notice()}>
-              <View testID="portable-feedback" style={{ paddingHorizontal: 4 }}><Feedback error={bringing.error()} notice={bringing.notice()} /></View>
             </If>
           </View>
         )}
@@ -171,10 +159,6 @@ export function SessionList(props: {
         )}>
         {row => (
           <View style={{ paddingHorizontal: inset() }}>
-            <If when={row().kind === "portable" ? row() as Extract<Row, { kind: "portable" }> : null}>
-              {item => <PortableRow offer={item().offer} compact={props.compact} busy={bringing.busy()} onBring={bringHere} />}
-            </If>
-            <If when={row().kind !== "portable"}>
             <If when={row().kind === "session" ? row() as Extract<Row, { kind: "session" }> : null}
               else={
                 <If when={row().kind === "ask" ? row() as Extract<Row, { kind: "ask" }> : null}
@@ -200,11 +184,10 @@ export function SessionList(props: {
                 </If>
               }>
               {item => (
-                <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId}
+                <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId} severalComputers={severalComputers()}
                   onOpen={id => { data.requestSideAsk({ sessionId: id, conversationId: null }); props.onOpen(id); }} compact={props.compact} menu={menu}
                   swiped={swiped() === item().session.id} onSwipe={open => swipe(item().session.id, open)} />
               )}
-            </If>
             </If>
           </View>
         )}
@@ -250,26 +233,6 @@ function WorkspaceRow(props: {
   );
 }
 
-export function portableHint(offer: Pick<PortableSessionOffer, "hostName" | "attachedElsewhere" | "working">): string {
-  return `${offer.working ? "Working on another server" : offer.attachedElsewhere ? "On another server" : "Not attached here"} · ${offer.hostName}`;
-}
-
-function PortableRow(props: { offer: PortableSessionOffer; compact?: boolean; busy: boolean; onBring: (offer: PortableSessionOffer) => void }) {
-  return (
-    <View testID={`portable-row-${props.offer.id}`} accessibilityLabel={`${props.offer.title}, ${portableHint(props.offer)}`}
-      style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8, paddingLeft: 32,
-        borderRadius: radius.medium }}>
-      <Icon name="arrow-down" size={11} color={palette().faint} />
-      <View style={{ flex: 1, gap: 1 }}>
-        <Text style={{ numberOfLines: 1, fontSize: text.body, color: palette().muted }}>{props.offer.title}</Text>
-        <Text style={{ numberOfLines: 1, fontSize: text.caption, color: palette().faint }}>{portableHint(props.offer)}</Text>
-      </View>
-      <Button small variant="outline" label="Bring here" testID={`portable-bring-${props.offer.id}`} disabled={props.busy || props.offer.working}
-        onPress={() => props.onBring(props.offer)} />
-    </View>
-  );
-}
-
 function SideAskRow(props: { session: SessionRecord; ask: SideAskSummary; depth: number; compact?: boolean; onOpen: (sessionId: string, conversationId: string) => void }) {
   const id = () => `side-ask-row-${props.session.id}-${props.ask.conversationId}`;
   return (
@@ -288,7 +251,7 @@ const statusColors: Partial<Record<Tone, Tone>> = { running: "info", info: "info
 
 function SessionRow(props: {
   item: SessionRecord; depth: number; selected: boolean; onOpen: (id: string) => void; compact?: boolean; menu: SessionMenu;
-  swiped: boolean; onSwipe: (open: boolean) => void;
+  swiped: boolean; onSwipe: (open: boolean) => void; severalComputers?: boolean;
 }) {
   const data = useAppData();
   const { user } = untracked(session);
@@ -299,7 +262,7 @@ function SessionRow(props: {
     const live = data.liveActivity();
     return sessionStatus(props.item, live?.sessionId === props.item.id ? live.activity : undefined);
   };
-  const relation = () => sessionOwnerLabel(props.item, user.id);
+  const relation = () => [sessionOwnerLabel(props.item, user.id), forwardedLabel(props.item, props.severalComputers === true)].filter(Boolean).join(" · ");
   const pullColor = () => (props.item.pullRequest ? pullRequestColor(props.item.pullRequest) : palette().muted);
   const statusColor = () => {
     const tone = statusColors[status().tone];

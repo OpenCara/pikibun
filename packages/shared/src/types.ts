@@ -160,19 +160,6 @@ export interface SideAskSummary {
   preview: string;
   createdAt: string;
 }
-export interface PortableSessionOffer {
-  id: string;
-  title: string;
-  createdAt: string;
-  connectorId: string;
-  hostName: string;
-  hostEnvironment: boolean;
-  working: boolean;
-  attachedElsewhere: boolean;
-  model: { provider: string; modelId: string };
-  modelId?: string;
-  existing?: boolean;
-}
 export type PullRequestState = "draft" | "open" | "failing" | "changes_requested" | "merged" | "closed";
 export interface SessionPullRequest {
   url: string;
