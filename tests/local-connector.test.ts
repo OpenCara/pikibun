@@ -161,7 +161,7 @@ test('pairing posts only to the fixed origin and strips extra model/capability s
   assert.equal(request.redirect, 'error');
   assert.equal(request.credentials, 'omit');
   assert.equal(request.headers.get('authorization'), null);
-  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   for (const secret of [providerSecret, credentials.token, 'fixture_pairing_code']) assert.equal(request.url.includes(secret), false);
 });
 
@@ -211,6 +211,7 @@ test('relay accepts exactly the supported action/method/path combinations and lo
     portable: JSON.stringify({ title: 'Kept', schedules: [] }),
     title: JSON.stringify({ system: 'Name it.', message: 'Fix the login test' }),
     artifacts: JSON.stringify({ name: 'chart', version: 1 }),
+    resources: '{}',
   };
   for (const action of Object.keys(bodies) as (keyof typeof bodies)[]) {
     await t.test(action, async () => {
@@ -384,6 +385,7 @@ type FixtureOptions = {
   localEntries?: ConnectorRuntime['entries'];
   identityDir?: string;
   portable?: ConnectorRuntime['portable'];
+  portableArchived?: ConnectorRuntime['portableArchived'];
   identity?: (path: string, body: unknown) => Response | Promise<Response>;
   hardware?: (body: unknown) => Response | Promise<Response>;
   hardwareReport?: () => Promise<HostHardware>;
@@ -436,6 +438,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
         ...(options.localView ? { view: options.localView } : {}),
         ...(options.localEntries ? { entries: options.localEntries } : {}),
         ...(options.portable ? { portable: options.portable } : {}),
+        ...(options.portableArchived ? { portableArchived: options.portableArchived } : {}),
       };
       return Promise.resolve(runtime);
     },
@@ -552,7 +555,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   socket.welcome();
   const call = await fixture.workerCalls.next();
   assert.equal(call.request.url, `${origin}/api/connectors/self/manifest`);
-  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   assert.equal(call.request.headers.get('x-connection-token'), connectionToken);
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(ready, false);
@@ -580,7 +583,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.deepEqual(fixture.statuses, ['connecting', 'connected', 'stopped']);
 });
 
-const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, ...hostMigration, hostConfig: true, compactionConfig: true };
+const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true };
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
@@ -1500,12 +1503,13 @@ test('a host with an identity says it keeps portable sessions, sends its delegat
   t.after(() => rm(identityDir, { recursive: true, force: true }));
   const reports = mailbox<Record<string, unknown>>();
   const signed = mailbox<Record<string, unknown>>();
+  const archived = mailbox<readonly string[]>();
   let answered = 0;
-  const fixture = await connectorFixture(t, { identityDir, portable: async () => [],
+  const fixture = await connectorFixture(t, { identityDir, portable: async () => [], portableArchived: async ids => { archived.push(ids); },
     identity: (path, body) => {
       if (path === '/api/connectors/self/identity/settings') { signed.push(body as Record<string, unknown>); return Response.json({ ok: true }); }
       reports.push(body as Record<string, unknown>);
-      return Response.json(answered++ ? {} : { sign: { version: 3, settings: { name: 'Mine', paging: true } } });
+      return Response.json(answered++ ? {} : { sign: { version: 3, settings: { name: 'Mine', paging: true } }, archived: ['session-archived'] });
     } });
   await startFixture(fixture);
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
@@ -1521,6 +1525,7 @@ test('a host with an identity says it keeps portable sessions, sends its delegat
   const settings = await verifiedSigned((await signed.next()).settings, 'settings');
   assert.equal(settings.statement.key, delegation.statement.key);
   assert.deepEqual([settings.statement.version, settings.statement.settings], [3, { name: 'Mine', paging: true }]);
+  assert.deepEqual(await archived.next(), ['session-archived'], 'the sessions its server says are archived there are kept as archived');
 });
 
 test('a connected host reports its hardware after its manifest and again later, on the connection it came with', { timeout: 10000 }, async t => {

@@ -17,6 +17,7 @@ export interface CliSpec {
   passEnv: (name: string) => boolean;
   tokenEnv: readonly string[];
   setEnv: Record<string, string>;
+  sandboxRoots?: readonly string[];
   refused(args: readonly string[]): string | undefined;
   writes(args: readonly string[]): string | undefined;
   prepare?(args: readonly string[]): readonly string[];
@@ -173,6 +174,11 @@ export function runCli(spec: Pick<CliSpec, "command" | "windowsCommand" | "passE
   });
 }
 
+export function sandboxMissingFile(command: string, output: string): string | undefined {
+  const match = /^[^\n:]*: (?:line )?\d+: (?:exec: )?(\/[^\n:]+): (?:No such file or directory|not found)$/m.exec(output);
+  return match && match[1] !== command && !match[1]!.endsWith(`/${command}`) ? match[1] : undefined;
+}
+
 export class MissingCommandError extends Error {
   constructor(readonly command: string) { super(`${command} isn't installed on this host, or isn't on its PATH`); }
 }
@@ -198,6 +204,7 @@ export interface PikiSandboxRun {
   directory?: string;
   env: Record<string, string>;
   tokenEnv: readonly string[];
+  binds: readonly string[];
   readOnly: boolean;
   signal: AbortSignal;
   timeoutSeconds: number;
@@ -279,9 +286,19 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
               + `the API through Pikibun; on the host it runs only in the host owner's own sessions, where the host's owner allows that. Nothing ran.`);
           }
           const run = await session.sandbox({ callId: toolCallId, command: spec.command, args, ...(params.directory !== undefined ? { directory: sandboxDirectory(params.directory) } : {}),
-            env: spec.setEnv, tokenEnv: spec.tokenEnv, readOnly, signal: signal ?? new AbortController().signal, timeoutSeconds });
-          if (run.exitCode === 127 && new RegExp(`${spec.command}: (?:command )?not found|No such file`).test(run.output)) {
-            throw new Error(`${spec.command} isn't installed where the session's sandbox finds it (the host's /usr/bin or /usr/local/bin). The host's owner installs it (${spec.info.install}).`);
+            env: spec.setEnv, tokenEnv: spec.tokenEnv, binds: spec.sandboxRoots ?? [], readOnly, signal: signal ?? new AbortController().signal, timeoutSeconds });
+          if (run.exitCode === 127) {
+            const missing = sandboxMissingFile(spec.command, run.output);
+            if (missing) {
+              const seen = ["/usr", ...spec.sandboxRoots ?? []].some(root => missing.startsWith(`${root}/`));
+              throw new Error(seen
+                ? `${spec.command} is installed, but ${missing}, which it starts, is missing: its install looks incomplete. The host's owner installs it again (${spec.info.install}).`
+                : `${spec.command} is installed, but it starts ${missing}, which isn't in the session's sandbox: it sees the host's /usr`
+                  + `${spec.sandboxRoots?.length ? ` (and, in the Linux sandbox, ${spec.sandboxRoots.join(", ")})` : ""}. The host's owner installs ${spec.command} where the sandbox sees it (${spec.info.install}).`);
+            }
+            if (new RegExp(`${spec.command}: (?:command )?not found|No such file`).test(run.output)) {
+              throw new Error(`${spec.command} isn't installed where the session's sandbox finds it (the host's /usr/bin or /usr/local/bin). The host's owner installs it (${spec.info.install}).`);
+            }
           }
           return await outcome(run);
         }

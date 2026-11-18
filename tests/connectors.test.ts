@@ -1083,6 +1083,19 @@ test('a message sent with Auto gives the runner the host\'s usable models to cho
     'the runner chooses among the models the host offers and hasn\'t disabled');
   const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.submit' ORDER BY created_at DESC, rowid DESC LIMIT 1").get() as { detail_json: string };
   assert.deepEqual(JSON.parse(audit.detail_json).options, { access: 'read', auto: true }, 'the audit keeps the choice, not the list');
+
+  await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'piki:auto-mode', settings: { models: 'anthropic/claude-haiku-*' } }));
+  await json(await send('limited', { auto: true }), 202);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { auto: { candidates: [haiku] } }, 'only the models auto mode\'s models setting allows');
+  await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/models`, { provider: opus.provider, modelId: opus.modelId, enabled: true }));
+  await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'piki:auto-mode', settings: { models: 'openai/*' } }));
+  const before2 = requests.length;
+  await denied(await send('none-allowed', { auto: true }), 409, 'auto_mode_unavailable');
+  assert.equal(requests.length, before2, 'a message Auto can\'t place never reaches the host');
+  await json(await self(f, s.connector, 'manifest', { models, capabilities: { ...manifest.capabilities, chatOptions: true } }));
+  await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'piki:auto-mode', settings: { models: 'claude-sonnet-4-5, claude-haiku-4-5' } }));
+  await json(await send('limited-rules', { auto: true }, 'Rewrite the scheduler across the whole codebase: a major refactor of several modules'), 202);
+  assert.equal(JSON.parse(requests.at(-1)!.request.body).options.model.modelId === opus.modelId, false, 'the rules choose among the allowed models too');
 });
 
 test('pasted images are checked and go only to a host whose connector gives them to the model', async t => {

@@ -64,7 +64,7 @@ function SignedInServers(props: { except?: string; busy: boolean; onSwitch: (ori
         <Small>Servers this app is signed in to</Small>
         <Each of={others()} key={item => item.origin}>
           {item => (
-            <Button testID={`switch-server-${displayOrigin(item().origin)}`} block variant="outline" icon="server" disabled={props.busy}
+            <Button testID={`switch-server-${displayOrigin(item().origin)}`} block variant="outline" icon="cloud" disabled={props.busy}
               label={`${displayOrigin(item().origin)} · ${item().account}`} onPress={() => props.onSwitch(item().origin)} />
           )}
         </Each>
@@ -233,7 +233,7 @@ function SignInForm(props: { inviteToken?: string }) {
             <Small>or</Small>
             <View style={{ flex: 1, height: 1, backgroundColor: palette().border }} />
           </View>
-          <Button testID="own-first-other" block variant="outline" icon="server" label="Sign in to another server" disabled={action.busy()} onPress={signInElsewhere} />
+          <Button testID="own-first-other" block variant="outline" icon="cloud" label="Sign in to another server" disabled={action.busy()} onPress={signInElsewhere} />
         </View>
       </If>
       <If when={!ownFirst()}>

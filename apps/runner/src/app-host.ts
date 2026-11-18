@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { createConnector, controlPlaneOrigin, LocalViewUnavailable, type LocalConnector } from "./connector.js";
-import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, unsandboxedWarning, type HostIsolation } from "./connect-setup.js";
+import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, unsandboxedWarning, verifySandboxIsolation, isolationMessage, type HostIsolation } from "./connect-setup.js";
 import { stdioTransport, type Transport } from "./app-host-transport.js";
 import { pairingCodePattern, pairingIdPattern, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "../../../packages/shared/src/app-host-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
@@ -117,10 +117,11 @@ async function start(request: StartRequest): Promise<void> {
   if (paired && paired !== server) throw new HostFailure("server-mismatch", `This computer is paired with ${paired}, not ${server}. Pair it again with a code from ${server}, or switch the server back in Settings.`);
   if (running) throw new HostFailure("already-running", "The host is already running.");
   const pairing = request.pairing && { id: request.pairing.id, code: request.pairing.code };
+  const verified = !unsandboxed && !backend ? await verifySandboxIsolation() : undefined;
   const connector = createConnector({
     dataDir: stateDir, identityDir, server, pairing, replacePairing: replace, localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}),
     allowInsecureLoopback: request.allowInsecureLoopback, allowFaux: request.allowFaux,
-    capabilities: { platform: process.platform, sandbox: false, productionShell: false },
+    capabilities: { platform: process.platform, sandbox: verified?.ok === true, productionShell: false },
     onStatus: state => {
       if (running?.connector !== connector) return;
       if (state !== "stopped") {
@@ -141,7 +142,7 @@ async function start(request: StartRequest): Promise<void> {
   log("info", unsandboxed
     ? "Running unsandboxed: commands execute directly on this machine."
     : backend ? `Experimental ${backend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.`
-    : "Sandbox capability is verified per session; without provisioned, verified limits, commands run only where they may run without them.");
+    : isolationMessage(verified));
   log("info", "Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings › Hosts › this host.");
   void connector.start().then(
     () => log("info", `Connected to ${server}.`),

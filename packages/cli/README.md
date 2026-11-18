@@ -155,7 +155,7 @@ They live in the connector's state directory; npm runs none of their install scr
 
 Installed extensions run in a process of their own. In a sandboxed session on Linux or macOS that process runs in the session's sandbox, and its tools run for anyone who may send the session messages. Elsewhere it runs as this machine's user, with your files, credentials and network, outside the sandbox, and its tool calls run like host commands: for you and members you grant host commands, or for every session where you let them. Install only code you trust. Pikibun's own `web_fetch` and `web_search` tools are retired: web search comes from extensions.
 
-Three extensions are built into the connector, so there is nothing to install: `piki:gh`, `piki:glab` and `piki:azure-cli` give sessions the GitHub, GitLab and Azure CLIs (`gh`, `glab`, `az`) where their workspace uses them. Install those commands on this machine and sign in to them (`gh auth login`, `glab auth login`, `az login` and `az extension add --name azure-devops`); their tool calls act as you. `pikibun extensions list` shows them.
+Three extensions are built into the connector, so there is nothing to install: `piki:gh`, `piki:glab` and `piki:azure-cli` give sessions the GitHub, GitLab and Azure CLIs (`gh`, `glab`, `az`) where their workspace uses them. Install those commands on this machine and sign in to them (`gh auth login`, `glab auth login`, `az login` and `sudo az extension add --name azure-devops --system`, as sandboxed sessions don't see your own `~/.azure`); their tool calls act as you. `pikibun extensions list` shows them.
 
 ## Chat options
 

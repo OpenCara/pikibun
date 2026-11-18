@@ -9,7 +9,6 @@ import { palette } from "../theme";
 import { Checkbox, Field, Select, TextField } from "../form";
 import { Badge, Button, CardBody, Feedback, IconButton, Note, Row, Section, Small } from "../ui";
 import { Card } from "../settings/accounts";
-import { CodeView } from "../session-panel/Files";
 
 export type ScheduleKind = "session" | "workspace";
 
@@ -111,7 +110,6 @@ export function ScheduleCard(props: {
         trailing={schedule().enabled ? schedule().nextRunAt ? <Badge tone="info">{`Next ${untilText(schedule().nextRunAt!)}`}</Badge> : <Badge tone="warning">Never runs</Badge>
           : <Badge>Paused</Badge>} />
       <CardBody>
-        <CodeView text={schedule().content} />
         <Small>
           {`${schedule().enabled && schedule().nextRunAt ? `Next run ${timestamp(schedule().nextRunAt!)}. ` : ""}${schedule().lastRunAt
             ? `Last run ${timestamp(schedule().lastRunAt!)}${schedule().lastError ? `: ${errorText(schedule())}`

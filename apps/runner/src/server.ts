@@ -21,6 +21,7 @@ import { PortableLeases } from "./portable-lease.js";
 export const MOVED_SESSION = "This session was moved to another server this computer is paired with";
 const KEPT_FILE = "portable.json";
 const KEPT_BYTES = 256 * 1024;
+const ARCHIVED_FILE = "portable-archived.json";
 const PORTABLE_SWEEP_MS = 1000;
 const OWNER_CONFIG = "owner.gitconfig";
 const RELEASE_WAIT_MS = 10_000;
@@ -28,8 +29,15 @@ const RELEASED_WATCH_MS = 60_000;
 
 export interface PortableKept { title?: string; schedules: unknown[] }
 export interface PortableReport {
-  id: string; title: string; createdAt: string; attached: boolean; hostEnvironment: boolean; working: boolean;
+  id: string; title: string; createdAt: string; attached: boolean; hostEnvironment: boolean; working: boolean; archived: boolean | null;
   model: { provider: string; modelId: string }; mark: Signed<SessionMarkStatement>;
+}
+
+async function archivedBy(directory: string): Promise<{ connectorId: string; archived: boolean } | null> {
+  try {
+    const value = JSON.parse(await readFile(join(directory, ARCHIVED_FILE), "utf8")) as { connectorId?: unknown; archived?: unknown };
+    return typeof value?.connectorId === "string" && typeof value.archived === "boolean" ? { connectorId: value.connectorId, archived: value.archived } : null;
+  } catch { return null; }
 }
 
 function parseKept(value: unknown): PortableKept {
@@ -335,11 +343,30 @@ export class RunnerService {
       catch { continue; }
       if (binding?.session?.id !== entry.sessionId || typeof binding.model?.provider !== "string" || typeof binding.model.modelId !== "string") continue;
       const kept = await this.kept(entry.directory);
+      const marked = await archivedBy(entry.directory);
       reports.push({ id: entry.sessionId, title: reportedTitle(kept.title ?? binding.session.title), createdAt: binding.session.createdAt,
         attached: binding.session.connectorId === this.config.connectorId, hostEnvironment: binding.session.hostEnvironment === true,
-        working: await exists(join(entry.directory, WORK_MARKER)), model: { provider: binding.model.provider, modelId: binding.model.modelId }, mark: entry.mark });
+        working: await exists(join(entry.directory, WORK_MARKER)), archived: marked && marked.connectorId === binding.session.connectorId ? marked.archived : null,
+        model: { provider: binding.model.provider, modelId: binding.model.modelId }, mark: entry.mark });
     }
     return reports;
+  }
+
+  async portableArchived(archived: readonly string[]): Promise<void> {
+    const portable = this.config.portable;
+    if (!portable) return;
+    const connectorId = this.config.connectorId;
+    const ids = new Set(archived);
+    for (const entry of await portable.store.entries()) {
+      let binding: RunnerBinding;
+      try { binding = JSON.parse(await readFile(join(entry.directory, "binding.json"), "utf8")) as RunnerBinding; }
+      catch { continue; }
+      if (binding?.session?.id !== entry.sessionId || binding.session.connectorId !== connectorId) continue;
+      const state = { connectorId, archived: ids.has(entry.sessionId) };
+      const current = await archivedBy(entry.directory);
+      if (current && current.connectorId === state.connectorId && current.archived === state.archived) continue;
+      await replaceFile(join(entry.directory, ARCHIVED_FILE), JSON.stringify(state)).catch(() => {});
+    }
   }
 
   private async kept(directory: string): Promise<PortableKept> {
@@ -588,7 +615,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (!url.pathname.startsWith(prefix) || url.search) throw new RunnerError(400, "Invalid path");
     const route = url.pathname.slice(prefix.length);
     const since = /^view\/([0-9a-f]{32})$/.exec(route)?.[1];
-    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", changes: "changes", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image", sudo: "sudo", attach: "attach", portable: "portable", artifacts: "artifacts", title: "title" };
+    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", changes: "changes", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image", sudo: "sudo", attach: "attach", portable: "portable", artifacts: "artifacts", title: "title", resources: "resources" };
     const action = since ? "view" : actions[route];
     if (!action) throw new RunnerError(404, "Unknown runner endpoint");
     if (c.req.method !== (action === "view" || action === "events" ? "GET" : "POST")) throw new RunnerError(405, "Method not allowed");
@@ -610,7 +637,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     }
     const session = await service.get(id);
     if (ticket.ownerId !== session.binding.owner.id) throw new RunnerError(403, "Ticket owner mismatch");
-    if (session.packed && action !== "view" && action !== "events" && action !== "artifacts") throw new RunnerError(409, "This session's files are packed. Unarchive it to use them");
+    if (session.packed && action !== "view" && action !== "events" && action !== "artifacts" && action !== "resources") throw new RunnerError(409, "This session's files are packed. Unarchive it to use them");
     await session.authorize(ticket.actorId, permissionFor(action), ticket.policyVersion);
     if (action === "restart" || action === "backup" || action === "upload") await session.consumeTicket(ticket);
     if (action === "view") {
@@ -660,6 +687,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (action === "upload") return c.json(await session.upload(ticket, input));
     if (action === "image") return c.json(await session.entryImage(ticket, input));
     if (action === "artifacts") return c.json(await session.artifacts(ticket, input));
+    if (action === "resources") return c.json({ resources: await session.resources() });
     if (action === "restart") {
       if (ticket.actorId !== session.binding.owner.id) throw new RunnerError(403, "Only the owner can restart a session");
       await session.restart();

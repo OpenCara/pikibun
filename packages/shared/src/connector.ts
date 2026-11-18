@@ -53,6 +53,7 @@ export interface ConnectorCapabilities {
   compactionConfig?: boolean;
   portableSessions?: boolean;
   artifacts?: boolean;
+  sessionResources?: boolean;
   gpu?: GpuKind;
 }
 

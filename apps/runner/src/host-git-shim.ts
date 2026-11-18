@@ -18,6 +18,7 @@ const REQUEST_BYTES = 8192;
 const HEARTBEAT_MS = 5_000;
 const PROGRESS_MS = 1_000;
 const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+export const GIT_SHIM_MAX_DEPTH = 8;
 
 export const HOST_GIT_SHIM_VALUED: readonly string[] = Object.freeze(["-o", "--origin", "-b", "--branch", "-u", "--upload-pack", "--template", "-c", "--config",
   "--depth", "--shallow-since", "--shallow-exclude", "--separate-git-dir", "-j", "--jobs", "--filter", "--bundle-uri", "--server-option", "--ref-format",
@@ -49,6 +50,8 @@ export function hostGitLauncher(bin: string, node: string, program: string): str
     "  [ -n \"$dir\" ] || dir=.",
     "  [ \"$dir\" = \"$here\" ] && continue",
     "  [ \"$dir/git\" -ef \"$here/git\" ] 2>/dev/null && continue",
+    "  [ -f \"$dir/../git-clone.cjs\" ] && continue",
+    "  [ -f \"$dir/git-shim.cjs\" ] && continue",
     "  if [ -f \"$dir/git\" ] && [ -x \"$dir/git\" ]; then real=$dir/git; break; fi",
     "done",
     "set +f",
@@ -85,6 +88,12 @@ const VALUED = new Set(${JSON.stringify(HOST_GIT_SHIM_VALUED)});
 let git = process.env.PIKIBUN_HOST_GIT || process.env.SANDBOX_GIT;
 delete process.env.PIKIBUN_HOST_GIT;
 if (!git) { process.stderr.write("git: command not found\n"); process.exit(127); }
+const depth = Number.parseInt(process.env.PIKIBUN_GIT_SHIM_DEPTH || "0", 10) || 0;
+if (depth >= ${GIT_SHIM_MAX_DEPTH}) {
+  process.stderr.write("pikibun: git's wrapper is running inside itself " + depth + " times over: another git wrapper on PATH leads back to it\n");
+  process.exit(127);
+}
+process.env.PIKIBUN_GIT_SHIM_DEPTH = String(depth + 1);
 if (process.platform === "win32" && !path.extname(git) && fs.existsSync(git + ".exe")) git += ".exe";
 const started = Date.now();
 let shown;
@@ -242,12 +251,18 @@ export function hostGitProgram(socket: string, token: string): string {
   return gitShimProgram({ socket, token });
 }
 
+const PIKIBUN_PATH_SCRIPT = /pikibun-git-[^/\\]+[/\\]path\.sh$/;
+
 export function hostGitEnvironment(bin: string, environment: Readonly<Record<string, string | undefined>>, windows = process.platform === "win32"): Record<string, string> {
   const key = Object.keys(environment).find(name => name.toUpperCase() === "PATH") ?? "PATH";
   const path = environment[key] || (windows ? "" : "/usr/bin:/bin:/usr/sbin:/sbin");
-  const previous = Object.entries(environment).find(([name]) => name.toUpperCase() === "BASH_ENV")?.[1];
+  const named = (wanted: string) => Object.entries(environment).find(([name]) => name.toUpperCase() === wanted);
+  const own = (value: string | undefined) => value && !PIKIBUN_PATH_SCRIPT.test(value) ? value : undefined;
+  const inherited = named("PIKIBUN_BASH_ENV");
+  const owner = own(inherited?.[1]) ?? own(named("BASH_ENV")?.[1]);
+  const ownerKey = inherited?.[0] ?? "PIKIBUN_BASH_ENV";
   return { [key]: path ? `${bin}${windows ? ";" : delimiter}${path}` : bin,
-    ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh"), ...(previous ? { PIKIBUN_BASH_ENV: previous } : {}) } : {}) };
+    ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh"), ...(owner ? { [ownerKey]: owner } : inherited ? { [ownerKey]: "" } : {}) } : {}) };
 }
 
 export function hostGitBashScript(bin: string): string {

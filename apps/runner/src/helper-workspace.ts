@@ -9,6 +9,7 @@ import { checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser
 import { checkedFind, checkedSearch, type FindRequest, type FindResult, type SearchRequest, type SearchResult } from "./search.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
 import { runHostShell } from "./host-shell.js";
+import { ProcessRoots } from "./session-resources.js";
 import { imageType, type FileContent } from "./images.js";
 import { killTree, privateEntry } from "./platform.js";
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
@@ -80,6 +81,7 @@ export function helperMirror(path: unknown): path is string {
 
 export class HelperWorkspace implements IsolatedWorkspace {
   readonly isolated = true;
+  readonly processes = new ProcessRoots();
   readonly #backend: HelperBackend;
   readonly #layout: HelperLayout;
   readonly #identity: Readonly<SandboxIdentity>;
@@ -348,7 +350,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
       try {
         return await runHostShell(operation, {
           worktree: this.#layout.worktree, git: this.#layout.git, gitConfig: this.#layout.ownerConfig,
-          gitName: this.#identity.gitName, gitEmail: this.#identity.gitEmail, signal: AbortSignal.any([signal, controller.signal]),
+          gitName: this.#identity.gitName, gitEmail: this.#identity.gitEmail, signal: AbortSignal.any([signal, controller.signal]), processes: this.processes,
         });
       } finally { if (this.#cancelActive === cancel) this.#cancelActive = undefined; }
     });
@@ -383,6 +385,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
       : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     return new Promise<string>((resolveResult, reject) => {
       const child = spawn(launch.command, launch.args, { cwd: launch.cwd, env: launch.env, detached: process.platform !== "win32", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      const untrack = this.processes.add(child.pid);
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let bytes = 0;
@@ -410,6 +413,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
         if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") { failure ??= "Could not send sandbox request"; kill(); }
       });
       child.once("close", (code, exitSignal) => {
+        untrack();
         clearTimeout(timer);
         signal?.removeEventListener("abort", stop);
         if (this.#cancelActive === cancel) this.#cancelActive = undefined;

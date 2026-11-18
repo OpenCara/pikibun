@@ -40,7 +40,8 @@ and your private sessions there can be brought along. Their conversation and fil
   page (**Settings → Hosts →** the host), and **Continue** for more than fifty; sessions working at the time are left as they are.
 - **Bring here:** each portable session the computer has that isn't on this server is listed in your private workspace,
   with **Bring here**. Its record here takes its title and its scheduled prompts with it, and the server it came from
-  shows it as **Moved to another server**, read-only. Bring it back the same way.
+  shows it as **Moved to another server**, read-only. Bring it back the same way. Archived sessions aren't listed:
+  unarchive one where it is to bring it here.
 - **When:** a session moves only while it isn't working. One that another connection of the computer has open is let go
   of within a few seconds, unless it is working. Activity, push history, share links, backups and session roles stay on
   the server they belong to, and Git accounts are each server's own: connect them on the new one.

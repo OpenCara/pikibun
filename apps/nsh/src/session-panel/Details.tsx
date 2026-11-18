@@ -4,6 +4,7 @@ import {
   type TokenUsage, type WorkspaceRole,
 } from "../../../../packages/shared/src/types";
 import { cacheHitRate } from "../../../../packages/shared/src/usage";
+import { parseSessionResources, resourceLines, type ResourceLine, type SessionResourcesView } from "../../../../packages/shared/src/session-resources";
 import {
   managesSession, sessionRoleAllowed, sessionRoleGrantable, sessionRoleOf, sessionRolePermissions, workspaceManagerRoles, workspaceSessionPermissions,
 } from "../../../../packages/shared/src/policy";
@@ -52,6 +53,7 @@ export function Details(props: DetailsProps) {
             <If when={props.view()?.tunnel}>{() => <TunnelSection {...props} current={current()} canStop={canWrite() && !archived()} />}</If>
             <If when={props.view()?.context}>{usage => <ContextSection usage={usage()} />}</If>
             <If when={props.view()?.usage}>{usage => <UsageSection usage={usage()} />}</If>
+            <If when={!archived()}><SessionResources sessionId={current().id} /></If>
             <HostSection {...props} current={current()} />
             <If when={props.view()?.extensions}>
               {extensions => <ExtensionsSection extensions={extensions()} host={props.hosts()?.find(item => item.id === current().connectorId)} go={props.go} />}
@@ -164,6 +166,26 @@ export function UsageSection(props: { usage: SessionUsageView }) {
         </Each>
         <If when={usage().tools}>{tools => <Row title="Tools" hint={tokensSpent(tools())} trailing={formatCost(tools().cost)} />}</If>
       </If>
+    </Section>
+  );
+}
+
+const resourceIcons: Record<ResourceLine["key"], Parameters<typeof Icon>[0]["name"]> = { cpu: "clock", memory: "database", processes: "list", gpu: "monitor", disk: "folder" };
+
+function SessionResources(props: { sessionId: string }) {
+  const listing = createResource<{ resources: unknown }>(() => `/api/sessions/${segment(props.sessionId)}/resources`, 5000);
+  return <If when={parseSessionResources(listing.data()?.resources)}>{resources => <ResourcesSection resources={resources()} />}</If>;
+}
+
+export function ResourcesSection(props: { resources: SessionResourcesView }) {
+  const how = () => (props.resources.source === "cgroup" ? "its resource groups on the host, which hold its commands and servers"
+    : props.resources.source === "processes" ? "the processes it started on the host, sampled every few seconds while they run" : "what the host could measure");
+  return (
+    <Section title="Resources" testID="panel-resources" info={`What this session uses of its host's hardware now, as its host measures ${how()}. CPU time and the memory peak count from when the session last opened on its host, and disk is its folder there, counted every few minutes. The model's own work runs at its provider and isn't counted here.`}>
+      <Each of={resourceLines(props.resources)} key={line => line.key}>
+        {line => <Row leading={icon(resourceIcons[line().key])} title={line().title} hint={line().hint} testID={`resources-${line().key}`} />}
+      </Each>
+      <Row title="Measured" hint={relativeTime(props.resources.sampledAt)} />
     </Section>
   );
 }

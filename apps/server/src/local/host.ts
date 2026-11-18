@@ -2,7 +2,7 @@ import { readFile, rename, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { savedPairing } from '../../../runner/src/connect-setup.js';
+import { savedPairing, verifySandboxIsolation } from '../../../runner/src/connect-setup.js';
 import { createConnector, type ConnectorOptions, type LocalConnector } from '../../../runner/src/connector.js';
 import { serverEnvironment } from '../config.js';
 import { createPairing } from '../connectors.js';
@@ -45,10 +45,12 @@ export function startLocalHost(server: LocalServer, stateDir: string, options: L
     const sameOwner = recorded === undefined ? server.mode === 'local' : recorded === owner.id;
     const pairing = saved === server.origin && sameOwner ? undefined : await createPairing(server.env, owner.id, hostname().slice(0, 120) || 'This computer');
     stopped.signal.throwIfAborted();
+    const sandbox = !options.capabilities && !options.unsandboxed && (await verifySandboxIsolation()).ok;
+    stopped.signal.throwIfAborted();
     connector = createConnector({
       ...options, dataDir, server: server.origin, allowInsecureLoopback: true, privateEnvironment: serverEnvironment,
       ...(pairing ? { pairing: { id: pairing.id, code: pairing.code }, replacePairing: saved !== undefined } : {}),
-      capabilities: options.capabilities ?? { platform: process.platform, sandbox: false, productionShell: false },
+      capabilities: options.capabilities ?? { platform: process.platform, sandbox, productionShell: false },
     });
     await connector.start();
     if (pairing || recorded !== owner.id) await savePairedOwner(dataDir, owner.id);

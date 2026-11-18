@@ -8,10 +8,11 @@ import { repositoryForRemote } from "./egress.js";
 const MAX_DEPTH = 3;
 const MAX_DIRECTORIES = 2000;
 export const MAX_CLONE_BRANCHES = 20;
+const MAX_CLONES = 100;
 const MAX_METADATA_BYTES = 64 * 1024;
 const SKIPPED = new Set(["node_modules", "vendor", "target", "dist", "build"]);
 
-export interface CloneBranch { directory: string; origin: string; branch: string }
+export interface CloneBranch { directory: string; origin: string; branch?: string }
 
 async function readSmall(path: string): Promise<string | undefined> {
   let handle;
@@ -73,7 +74,7 @@ export async function readCloneBranches(worktree: string): Promise<CloneBranch[]
   const found: CloneBranch[] = [];
   let visited = 0;
   const visit = async (directory: string, relative: string, depth: number): Promise<void> => {
-    if (depth > MAX_DEPTH || visited++ >= MAX_DIRECTORIES || found.length >= MAX_CLONE_BRANCHES) return;
+    if (depth > MAX_DEPTH || visited++ >= MAX_DIRECTORIES || found.length >= MAX_CLONES) return;
     let names: string[];
     try { names = (await readdir(directory)).sort(); } catch { return; }
     const metadata = relative && names.includes(".git") ? await lstat(join(directory, ".git")).catch(() => undefined) : undefined;
@@ -83,8 +84,9 @@ export async function readCloneBranches(worktree: string): Promise<CloneBranch[]
       const branch = headBranch(await readSmall(join(git, "HEAD")));
       const origin = originUrl(await readSmall(join(git, "config")) ?? "");
       const defaultBranch = headBranch(await readSmall(join(git, "refs", "remotes", "origin", "HEAD")), "refs/remotes/origin/");
-      if (branch && origin && (defaultBranch ? branch !== defaultBranch : !["main", "master"].includes(branch))) {
-        found.push({ directory: relative, origin, branch });
+      if (origin) {
+        const own = branch && (defaultBranch ? branch !== defaultBranch : !["main", "master"].includes(branch));
+        found.push({ directory: relative, origin, ...(own ? { branch } : {}) });
       }
       return;
     }
@@ -99,12 +101,20 @@ export async function readCloneBranches(worktree: string): Promise<CloneBranch[]
   return found;
 }
 
-export function reportedBranches(clones: readonly CloneBranch[], repositories: readonly EgressRepository[]): { repository: string; branch: string }[] {
-  const branches = new Map<string, { repository: string; branch: string }>();
+type ReportedBranch = { repository: string; branch: string };
+
+const byKey = (branches: Map<string, ReportedBranch>) => [...branches.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+
+export function reportedBranches(clones: readonly CloneBranch[], repositories: readonly EgressRepository[], sessionBranch?: string): ReportedBranch[] {
+  const own = new Map<string, ReportedBranch>();
+  const session = new Map<string, ReportedBranch>();
+  const pushed = sessionBranch && validPushBranch(sessionBranch) ? sessionBranch : undefined;
   for (const clone of clones) {
     const repository = repositoryForRemote(repositories, clone.origin);
     if (!repository || repository.provider !== "github" || repository.host !== "github.com") continue;
-    branches.set(`${repository.fullName}\n${clone.branch}`, { repository: repository.fullName, branch: clone.branch });
+    if (pushed) session.set(`${repository.fullName}\n${pushed}`, { repository: repository.fullName, branch: pushed });
+    if (clone.branch) own.set(`${repository.fullName}\n${clone.branch}`, { repository: repository.fullName, branch: clone.branch });
   }
-  return [...branches.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, value]) => value).slice(0, MAX_CLONE_BRANCHES);
+  const kept = new Map([...new Map([...byKey(session), ...byKey(own)])].slice(0, MAX_CLONE_BRANCHES));
+  return byKey(kept).map(([, value]) => value);
 }

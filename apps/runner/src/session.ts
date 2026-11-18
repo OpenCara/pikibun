@@ -43,6 +43,8 @@ import { HostGitShim } from "./host-git-shim.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { HelperWorkspace } from "./helper-workspace.js";
+import { SessionResources } from "./session-resources.js";
+import type { SessionResourcesView } from "../../../packages/shared/src/session-resources.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { BranchReports } from "./session/branch-reports.js";
@@ -183,6 +185,7 @@ export class RunnerSession {
   #registry?: Registry;
   readonly #inputs: MessageInputs;
   readonly #uploads: SessionUploads;
+  readonly #resources: SessionResources;
   readonly #mirrors: SessionMirrors | undefined;
   readonly #hostGit: HostGitShim | undefined;
   #mirrorsKeptAt = 0;
@@ -290,6 +293,7 @@ export class RunnerSession {
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
+    this.#resources = new SessionResources({ roots: this.sandbox.processes, directory, groups: this.sandbox.resourceGroups?.() });
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
     this.#availability = new ToolAvailability({ binding, config, sandbox: this.sandbox, onHost: this.#onHost,
       definitions: () => this.#defined.definitions, toolNames: () => this.tools.map(tool => tool.name) });
@@ -789,7 +793,7 @@ export class RunnerSession {
   private branchReports(): BranchReports | undefined {
     const send = this.config.reportBranches;
     if (!send || !this.#onHost || !this.#clone) return undefined;
-    this.#branchReports ??= new BranchReports({ sessionId: this.binding.session.id, send, closing: () => this.closing,
+    this.#branchReports ??= new BranchReports({ sessionId: this.binding.session.id, sessionBranch: sessionBranch(this.binding.session), send, closing: () => this.closing,
       repositories: async () => (await this.requestGrant()).repositories,
       clones: () => (this.sandbox as HostWorkspace).cloneBranches(async () => {}) });
     return this.#branchReports;
@@ -1372,6 +1376,10 @@ export class RunnerSession {
       commands: async () => (this.#frozen || this.#packed || this.closing ? [] : this.#commands.list()),
       usage: key => this.#usage.get(key),
     });
+  }
+
+  resources(): Promise<SessionResourcesView> {
+    return this.#resources.view();
   }
 
   private async extensionCommands(): Promise<ExtensionCommand[]> {

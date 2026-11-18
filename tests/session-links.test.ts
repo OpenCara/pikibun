@@ -468,6 +468,32 @@ test('new sessions start with the tool output their workspace sets', async t => 
   assert.equal(last.toolOutput, undefined);
 });
 
+test('resource use: whoever may read the session reads it from its host, and nothing comes from a host that predates it or an archived session', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const path = `/api/sessions/${s.session.id}/resources`;
+  const resources = { sampledAt: '2026-01-01T00:00:00.000Z', source: 'processes', processes: 2, cpuSeconds: 3.5, cpuCores: 0.5, memoryBytes: 1024, peakMemoryBytes: 2048 };
+  let answer: unknown = { resources };
+  const requests = rpcHub(f, s.connector, envelope => {
+    assert.equal(envelope.request.ticket.action, 'resources');
+    return Response.json(answer);
+  });
+  assert.deepEqual(await json(await s.owner.request('GET', path)), { resources: null });
+  assert.equal(requests.length, 0, 'a host that predates resource use is never asked');
+  f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify({ ...manifest.capabilities, sessionResources: true }), s.connector.connectorId);
+  assert.deepEqual(await json(await s.owner.request('GET', path)), { resources });
+  assert.deepEqual(await json(await s.member.request('GET', path)), { resources });
+  assert.equal(requests.at(-1)!.request.ticket.actorId, s.member.user.id, 'a reader asks as themselves');
+  assert.equal(requests.at(-1)!.request.path, `/v1/sessions/${s.session.id}/resources`);
+  await denied(await s.outsider.request('GET', path), 404, 'not_found');
+  answer = { resources: { ...resources, secret: 'x' } };
+  await denied(await s.owner.request('GET', path), 502, 'invalid_runner_response');
+  answer = { resources };
+  const asked = requests.length;
+  await json(await s.owner.request('POST', `/api/sessions/${s.session.id}/archive`));
+  assert.deepEqual(await json(await s.owner.request('GET', path)), { resources: null });
+  assert.equal(requests.length, asked, 'an archived session runs nothing to ask');
+});
+
 test('artifacts: whoever may read the session, and a share link, list and read them through its host, with secrets hidden', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}/artifacts`;
