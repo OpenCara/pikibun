@@ -18,7 +18,6 @@ const REQUEST_BYTES = 8192;
 const HEARTBEAT_MS = 5_000;
 const PROGRESS_MS = 1_000;
 const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
-/** How many git shims may run inside one another before one refuses: past it, the shims lead back to each other. */
 export const GIT_SHIM_MAX_DEPTH = 8;
 
 export const HOST_GIT_SHIM_VALUED: readonly string[] = Object.freeze(["-o", "--origin", "-b", "--branch", "-u", "--upload-pack", "--template", "-c", "--config",
@@ -51,8 +50,6 @@ export function hostGitLauncher(bin: string, node: string, program: string): str
     "  [ -n \"$dir\" ] || dir=.",
     "  [ \"$dir\" = \"$here\" ] && continue",
     "  [ \"$dir/git\" -ef \"$here/git\" ] 2>/dev/null && continue",
-    // Any other Pikibun git (another session's on the host, as when a session on the host runs Pikibun's own tests, or a sandbox's)
-    // isn't the real git: taking it, each would hand clones to the other, without end.
     "  [ -f \"$dir/../git-clone.cjs\" ] && continue",
     "  [ -f \"$dir/git-shim.cjs\" ] && continue",
     "  if [ -f \"$dir/git\" ] && [ -x \"$dir/git\" ]; then real=$dir/git; break; fi",
@@ -254,12 +251,15 @@ export function hostGitProgram(socket: string, token: string): string {
   return gitShimProgram({ socket, token });
 }
 
+const PIKIBUN_PATH_SCRIPT = /pikibun-git-[^/\\]+[/\\]path\.sh$/;
+
 export function hostGitEnvironment(bin: string, environment: Readonly<Record<string, string | undefined>>, windows = process.platform === "win32"): Record<string, string> {
   const key = Object.keys(environment).find(name => name.toUpperCase() === "PATH") ?? "PATH";
   const path = environment[key] || (windows ? "" : "/usr/bin:/bin:/usr/sbin:/sbin");
   const previous = Object.entries(environment).find(([name]) => name.toUpperCase() === "BASH_ENV")?.[1];
+  const owner = environment.PIKIBUN_BASH_ENV || (previous && !PIKIBUN_PATH_SCRIPT.test(previous) ? previous : undefined);
   return { [key]: path ? `${bin}${windows ? ";" : delimiter}${path}` : bin,
-    ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh"), ...(previous ? { PIKIBUN_BASH_ENV: previous } : {}) } : {}) };
+    ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh"), ...(owner ? { PIKIBUN_BASH_ENV: owner } : {}) } : {}) };
 }
 
 export function hostGitBashScript(bin: string): string {

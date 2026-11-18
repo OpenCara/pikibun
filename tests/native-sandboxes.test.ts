@@ -16,7 +16,7 @@ import { egressPort, HelperWorkspace, type HelperBackend, type HelperContext, ty
 import { NODE_HELPER, NODE_HELPER_KINDS } from "../apps/runner/src/node-helper.js";
 import { HELPER, type SandboxRequest } from "../apps/runner/src/sandbox.js";
 import { bashPath, sandboxNodePath } from "../apps/runner/src/platform.js";
-import { hostGitBashScript, hostGitEnvironment, HostGitShim } from "../apps/runner/src/host-git-shim.js";
+import { GIT_SHIM_MAX_DEPTH, gitShimProgram, hostGitBashScript, hostGitEnvironment, HostGitShim } from "../apps/runner/src/host-git-shim.js";
 import { realpathSync } from "node:fs";
 import { validWindowsLimits } from "../apps/runner/src/sandbox-backend.js";
 import { SeatbeltBackend, seatbeltGitShim, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
@@ -120,6 +120,63 @@ test("on Windows, the session's git is put first again once Git for Windows' bas
     { Path: "/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-1", "path.sh"), PIKIBUN_BASH_ENV: "/u/rc" });
   assert.deepEqual(hostGitEnvironment("/t/bin", { PATH: "/usr/bin" }, false), { PATH: `/t/bin${process.platform === "win32" ? ";" : ":"}/usr/bin` });
   assert.deepEqual(hostGitEnvironment("/t/bin", {}, false), { PATH: `/t/bin${process.platform === "win32" ? ";" : ":"}/usr/bin:/bin:/usr/sbin:/sbin` });
+});
+
+test("inside another session's git, the session's git keeps the owner's own BASH_ENV, never the other session's script that would run itself", () => {
+  const outer = { Path: "/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-1", "path.sh") };
+  assert.deepEqual(hostGitEnvironment("/t/pikibun-git-2/bin", outer, true),
+    { Path: "/t/pikibun-git-2/bin;/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-2", "path.sh") });
+  assert.deepEqual(hostGitEnvironment("/t/pikibun-git-2/bin", { ...outer, PIKIBUN_BASH_ENV: "/u/rc" }, true),
+    { Path: "/t/pikibun-git-2/bin;/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-2", "path.sh"), PIKIBUN_BASH_ENV: "/u/rc" });
+});
+
+test("a session's git started inside another's (a session on the host running these tests) clones with the real git, not through the other's",
+  { skip: !bashPath() || !spawnSync("git", ["--version"]).stdout }, async t => {
+    const directory = await mkdtemp(join(tmpdir(), "nested-git-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const env: Record<string, string | undefined> = { ...process.env, GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@e.test", GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@e.test" };
+    delete env.PIKIBUN_GIT_SHIM_DEPTH;
+    const work = join(directory, "work");
+    await mkdir(work);
+    for (const args of [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "initial"]]) {
+      const result = spawnSync("git", args, { cwd: work, env, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    const asked: string[] = [];
+    const outer = new HostGitShim({ mirror: async remote => { asked.push(`outer ${remote}`); return undefined; } });
+    const inner = new HostGitShim({ mirror: async remote => { asked.push(`inner ${remote}`); return undefined; } });
+    t.after(() => outer.close());
+    t.after(() => inner.close());
+    const [outerBin, innerBin] = [await outer.start(), await inner.start()];
+    const outside = { ...env, ...hostGitEnvironment(outerBin, env) };
+    const session = { ...outside, ...hostGitEnvironment(innerBin, outside), SOURCE: work, INNER: innerBin, OUTER: outerBin };
+    const adjacent = "p() { if command -v cygpath >/dev/null 2>&1; then cygpath -u \"$1\"; else printf %s \"$1\"; fi; }; "
+      + "PATH=\"$(p \"$INNER\"):$(p \"$OUTER\"):$PATH\"; export PATH; ";
+    const cloned = await new Promise<{ code: number | null; out: string }>(resolve => {
+      const child = spawn(bashPath()!, ["--noprofile", "--norc", "-c", `${adjacent}git clone -q "$SOURCE" app`], { cwd: directory, env: session });
+      let out = "";
+      child.stdout.on("data", chunk => { out += chunk; });
+      child.stderr.on("data", chunk => { out += chunk; });
+      const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
+      child.on("close", code => { clearTimeout(timer); resolve({ code, out }); });
+    });
+    assert.equal(cloned.code, 0, cloned.out);
+    assert.doesNotMatch(cloned.out, /running inside itself/);
+    assert.deepEqual(asked, [`inner ${work}`], "only the innermost git hands the clone over, once");
+    assert.equal(existsSync(join(directory, "app", ".git")), true);
+  });
+
+test("a git shim that finds itself running inside itself too many times over refuses, rather than starting another", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "git-shim-depth-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const program = join(directory, "git-clone.cjs");
+  await writeFile(program, gitShimProgram({ proxy: true }));
+  const run = (depth: number) => spawnSync(process.execPath, [program, "--version"],
+    { env: { ...process.env, PIKIBUN_HOST_GIT: "git", PIKIBUN_GIT_SHIM_DEPTH: String(depth) }, encoding: "utf8" });
+  const refused = run(GIT_SHIM_MAX_DEPTH);
+  assert.equal(refused.status, 127);
+  assert.match(refused.stderr, /pikibun: git's wrapper is running inside itself 8 times over: another git wrapper on PATH leads back to it/);
+  if (spawnSync("git", ["--version"]).stdout) assert.match(run(GIT_SHIM_MAX_DEPTH - 1).stdout, /git version/);
 });
 
 test("the script BASH_ENV names keeps naming it in nested bashes, and runs the owner's own BASH_ENV in each", { skip: !posix }, async t => {
