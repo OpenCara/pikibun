@@ -151,10 +151,10 @@ export function ScheduleForm(props: {
   const trusted = signal(false);
   const workspace = props.kind === "workspace";
   const models = () => props.models ?? [];
-  const fromSession = Boolean(existing?.originSessionId);
+  const takesOver = Boolean(existing && existing.ownerId !== props.userId);
+  const fromSession = Boolean(existing?.originSessionId) && !takesOver;
   const chosenModel = () => models().find(item => item.id === modelId());
   const levels = (): ThinkingLevel[] => modelId() ? offeredLevels(chosenModel()) : fromSession ? [...thinkingLevels] : [];
-  const takesOver = Boolean(existing && existing.ownerId !== props.userId);
   const trustNeeded = () => workspace && Boolean(chosenModel()?.foreignHost) && (!existing || takesOver || modelId() !== (existing.modelId ?? ""));
   function chooseModel(value: string) {
     modelId.set(value);
@@ -183,7 +183,8 @@ export function ScheduleForm(props: {
     <Section title={existing ? "Edit scheduled prompt" : workspace ? "New schedule" : "New scheduled prompt"} testID="schedule-form">
       <CardBody>
         <If when={takesOver}>
-          <Note testID="schedule-takeover">{`This schedule runs as ${existing?.ownerName ?? "someone else"}. Saving a change makes it yours: from then on it runs as you, with your access. Pausing or resuming it doesn't.`}</Note>
+          <Note testID="schedule-takeover">{`This schedule runs as ${existing?.ownerName ?? "someone else"}. Saving a change makes it yours: from then on it runs as you, with your access. Pausing or resuming it doesn't.${
+            workspace && existing?.originSessionId && !existing.modelId ? " It runs on the model of the session it was made from, which isn't yours: choose a model for it." : ""}`}</Note>
         </If>
         <Field label="Message" hint={workspace ? "Opens a new session, as the schedule's owner, each time it runs" : "Sent to the agent as you, as if you typed it in the chat box"}>
           <TextField testID="schedule-content" multiline value={content()} onChange={value => content.set(value)} disabled={form.busy()} autoFocus={!existing}

@@ -47,12 +47,17 @@ that may start sessions, the model, its host, the person's Git accounts.
   in the workspace's **Schedules** is chosen by a person, who chooses models for their own sessions anyway, so it
   applies to none.
 - **An owner who can no longer run it pauses it.** Each run first checks that its owner is still a member who may start
-  sessions, and not suspended. If not, nothing starts, and the schedule is paused with `owner_unavailable` rather than
-  failing on every run for ever; an owner or admin takes it over to run it again.
+  sessions, and not suspended (for a session's schedule, that they may still write to the session). If not, nothing
+  starts, and the schedule is paused with `owner_unavailable` rather than failing on every run for ever; an owner or
+  admin takes it over to run it again.
+- **Trust stays while the model and owner do.** Trust isn't stored: a schedule that keeps its model and owner keeps the
+  trust it was saved with, so changing only its reasoning level, message or timing asks for none. A new model or a new
+  owner asks again.
 
 ## Limits
 
-A session keeps at most 20 schedules, as before. A person keeps at most 50 workspace schedules in a workspace, and their
+A session keeps at most 20 schedules, as before. A person keeps at most 50 workspace schedules in a workspace, counted
+when they make one and when they take one over, and their
 schedules there keep at most 20 sessions open (`MAX_SCHEDULED_SESSIONS`). The open-sessions limit used to count one
 parent session's children; counting the owner's instead keeps it meaningful now that runs need no parent, and still
 can't be got round by making more schedules.

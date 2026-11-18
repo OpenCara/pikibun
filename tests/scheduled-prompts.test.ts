@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { MAX_SCHEDULED_SESSIONS, archiveFinishedOneShots, runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
+import { MAX_SCHEDULED_SESSIONS, MAX_SCHEDULES_PER_OWNER, archiveFinishedOneShots, runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
 import type { SessionConnections } from '../packages/shared/src/cross-session.js';
 import { CronError, nextCronTime, parseCron } from '../packages/shared/src/cron.js';
 import { sessionStatus } from '../packages/client/src/session-status.js';
@@ -820,8 +820,47 @@ test('a workspace schedule on another member\'s host needs its owner to trust th
   assert.deepEqual([models.find(model => model.id === 'shared-model')?.foreignHost, models.find(model => model.id === f.model.id)?.foreignHost], [true, undefined]);
   assert.equal((await f.owner.request('POST', path, body)).status, 201, 'the host\'s owner trusts it already');
   const { schedule } = await trusted.json() as { schedule: Schedule };
+  const levelled = await f.collaborator.request('PATCH', `${path}/${schedule.id}`, { thinkingLevel: 'high' });
+  assert.equal(levelled.status, 200, `the trust given stays while its model and owner do: ${await levelled.clone().text()}`);
   const takeover = await f.owner.request('PATCH', `${path}/${schedule.id}`, { name: 'Mine now' });
   assert.equal(takeover.status, 200, 'taken over by the host\'s owner, it needs no trust');
+
+  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('their-host', f.collaborator.user.id, 'Theirs', 'i'.repeat(43), 'd'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true,
+      approvalFree: true, chatOptions: true, plainGit: true }), JSON.stringify([{ provider: 'faux', modelId: 'faux-4', name: 'Faux 4' }]), at);
+  f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('their-host', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO connector_shares (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('their-host', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run('their-model', f.workspace.id, 'Faux 4', 'faux', 'faux-4', at, 'their-host', f.collaborator.user.id);
+  const fromSession = { cron: '0 9 * * *', content: 'Triage', runIn: 'child', modelId: 'their-model' };
+  const untrusted = await f.owner.request('POST', base, fromSession);
+  assert.deepEqual([untrusted.status, (await untrusted.json() as { code: string }).code], [403, 'connector_trust_required']);
+  const madeHere = await f.owner.request('POST', base, { ...fromSession, trustedConnectorId: 'their-host' });
+  assert.equal(madeHere.status, 201, `a session's panel gives trust as the workspace's does: ${await madeHere.clone().text()}`);
+});
+
+test('an owner keeps at most 50 workspace schedules, taking one over included; a session\'s schedule whose owner may no longer write to it pauses', async t => {
+  const f = await fixture(t);
+  const admin = await f.member('schedule-admin', 'admin');
+  const path = workspacePath(f);
+  const { schedule } = await (await f.collaborator.request('POST', path, { cron: '0 9 * * *', content: 'Triage', modelId: f.model.id })).json() as { schedule: Schedule };
+  const at = new Date().toISOString();
+  const fill = f.sqlite.prepare(`INSERT INTO schedules (id, workspace_id, owner_id, created_by, name, cron, time_zone, content, model_id, enabled, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'Filler', '0 9 * * *', 'UTC', 'Fill', ?, 0, ?, ?)`);
+  for (let index = 0; index < MAX_SCHEDULES_PER_OWNER; index++) fill.run(`filler-${index}`, f.workspace.id, admin.user.id, admin.user.id, f.model.id, at, at);
+  const full = await admin.request('PATCH', `${path}/${schedule.id}`, { content: 'Mine' });
+  assert.deepEqual([full.status, (await full.json() as { code: string }).code], [409, 'too_many_schedules']);
+  assert.equal((await admin.request('PATCH', `${path}/${schedule.id}`, { enabled: false })).status, 200, 'pausing takes nothing over, so it fits');
+
+  const own = (await (await f.owner.request('POST', base, { cron: '0 10 * * *', content: 'Check the build' })).json() as { schedule: Schedule }).schedule;
+  assert.equal((await admin.request('PATCH', `${base}/${own.id}`, { content: 'Check the docs' })).status, 200);
+  f.sqlite.prepare("UPDATE workspace_members SET role = 'viewer' WHERE workspace_id = ? AND user_id = ?").run(f.workspace.id, admin.user.id);
+  const [outcome] = await runScheduledPrompts(f.env, Date.parse(own.nextRunAt!) + 1000);
+  assert.deepEqual(outcome, { scheduleId: own.id, sessionId: 'scheduled-session', error: 'owner_unavailable' });
+  assert.equal(f.submitted.length, 0);
+  const listed = (await (await f.owner.request('GET', base)).json() as { schedules: Schedule[] }).schedules[0]!;
+  assert.deepEqual([listed.enabled, listed.nextRunAt, listed.lastError], [false, null, 'owner_unavailable']);
+  assert.equal((await f.session(f.owner)).nextScheduledAt, undefined);
 });
 
 test('the owner\'s agent lists the owner\'s workspace schedules beside the session\'s, and changes only those it may', async t => {

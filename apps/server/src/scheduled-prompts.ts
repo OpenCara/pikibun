@@ -133,7 +133,7 @@ async function choiceRefused<T>(work: () => Promise<T>): Promise<T | Refused> {
   }
 }
 
-type ChoiceContext = { workspaceId: string; ownerId: string; origin: SessionRow | null; gated: boolean; trusted?: string };
+type ChoiceContext = { workspaceId: string; ownerId: string; origin: SessionRow | null; gated: boolean; trusted?: string; trustKept?: boolean };
 
 function modelRequired(): never {
   fail(400, 'model_required', 'Choose the model each new session starts on.');
@@ -154,7 +154,7 @@ async function validModelChoice(env: Env, context: ChoiceContext, choice: ModelC
   }
   const model = await requireModel(env, choice.model_id, context.ownerId);
   if (model.workspace_id !== context.workspaceId) fail(404, 'not_found', 'Model not found.');
-  const trusted = !model.connector_id || model.connector_owner_id === context.ownerId || context.trusted === model.connector_id
+  const trusted = !model.connector_id || model.connector_owner_id === context.ownerId || context.trusted === model.connector_id || context.trustKept === true
     || (context.origin !== null && agentMayStartOn(context.origin, context.ownerId, model));
   if (!trusted) {
     fail(403, 'connector_trust_required', context.gated
@@ -246,7 +246,8 @@ async function runModel(env: Env, schedule: ScheduleRow, ownerId: string, origin
   if (chosen.modelId === undefined && chosen.thinkingLevel === undefined) return fromOrigin();
   if (origin && !(await workspaceChildSessionSettings(env.DB, schedule.workspace_id)).childModels) return fromOrigin('child_models_disabled');
   if (chosen.modelId === undefined) {
-    const levelled = await choiceRefused(() => childModel(env, origin!, ownerId, chosen, true));
+    if (!origin) return fromOrigin();
+    const levelled = await choiceRefused(() => childModel(env, origin, ownerId, chosen, true));
     if (!refused(levelled)) return { model: levelled.model, ...(levelled.thinkingLevel ? { thinkingLevel: levelled.thinkingLevel } : {}) };
     return fromOrigin(levelled.refused === 'thinking_unsupported' ? levelled.refused : 'model_unavailable');
   }
@@ -363,6 +364,12 @@ export async function runScheduledPrompts(env: Env, at = Date.now()): Promise<Sc
   return outcomes.filter((outcome): outcome is ScheduledPromptOutcome => outcome !== undefined);
 }
 
+async function ownerMayRun(env: Env, schedule: ScheduleRow): Promise<boolean> {
+  if (schedule.session_id === null) return creates(await workspaceRole(env, schedule.workspace_id, schedule.owner_id));
+  const access = await sessionAccess(env, schedule.session_id, schedule.owner_id);
+  return !!access && hasPermission(access.permissions, 'write');
+}
+
 async function runDueSchedule(env: Env, schedule: DueSchedule, at: number, timestamp: string, sent: Set<string>): Promise<ScheduledPromptOutcome | undefined> {
   const claimed = await env.DB.query(`UPDATE schedules SET next_run_at = ?, last_run_at = ?
     WHERE id = ? AND enabled = 1 AND next_run_at = ?`)
@@ -375,8 +382,8 @@ async function runDueSchedule(env: Env, schedule: DueSchedule, at: number, times
     : await env.DB.query<{ activity: string | null }>('SELECT activity FROM sessions WHERE id = ?').bind(target).first('activity');
   if (activity === 'working' || activity === 'waiting') {
     outcome = { scheduleId: schedule.id, sessionId: target, error: 'session_busy' };
-  } else if (target === null && !creates(await workspaceRole(env, schedule.workspace_id, schedule.owner_id))) {
-    outcome = { scheduleId: schedule.id, sessionId: null, error: 'owner_unavailable' };
+  } else if (!(await ownerMayRun(env, schedule))) {
+    outcome = { scheduleId: schedule.id, sessionId: target, error: 'owner_unavailable' };
     pause = true;
   } else {
     try {
@@ -398,9 +405,10 @@ async function runDueSchedule(env: Env, schedule: DueSchedule, at: number, times
 const scheduleFields = ['name', 'cron', 'timeZone', 'content', 'access', 'runIn', 'oneShot', 'modelId', 'thinkingLevel', 'enabled'] as const;
 type ScheduleInput = Partial<Record<(typeof scheduleFields)[number], unknown>>;
 
-function scheduleInput(input: Record<string, unknown>): ScheduleInput {
-  if (Object.keys(input).some(key => !(scheduleFields as readonly string[]).includes(key))) fail(400, 'invalid_input', 'Unknown schedule field.');
-  return input;
+function scheduleInput(input: Record<string, unknown>): { fields: ScheduleInput; trusted?: string } {
+  const { trustedConnectorId, ...fields } = input;
+  if (Object.keys(fields).some(key => !(scheduleFields as readonly string[]).includes(key))) fail(400, 'invalid_input', 'Unknown schedule field.');
+  return { fields, ...(trustedConnectorId === undefined ? {} : { trusted: identifier(trustedConnectorId, 'trustedConnectorId') }) };
 }
 
 const checkedLater = z.unknown().optional();
@@ -418,6 +426,14 @@ type Target = { workspaceId: string; session: SessionRow | null; origin: Session
 
 const auditOf = (schedule: Pick<ScheduleRow, 'session_id' | 'origin_session_id'>, action: 'created' | 'updated' | 'deleted') => schedule.session_id !== null
   ? { action: `session.schedule.${action}`, sessionId: schedule.session_id } : { action: `workspace.schedule.${action}`, sessionId: schedule.origin_session_id };
+
+async function requireRoomFor(env: Env, workspaceId: string, ownerId: string): Promise<void> {
+  const count = await env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM schedules WHERE workspace_id = ? AND owner_id = ? AND session_id IS NULL')
+    .bind(workspaceId, ownerId).first('n');
+  if (Number(count) >= MAX_SCHEDULES_PER_OWNER) {
+    fail(409, 'too_many_schedules', `Each person keeps at most ${MAX_SCHEDULES_PER_OWNER} schedules that start new sessions in a workspace.`);
+  }
+}
 
 function noModelForSession(): never {
   fail(400, 'invalid_input', 'A model and reasoning level choose what each run in a new session starts on: run it in a new session, or leave them out.');
@@ -449,11 +465,7 @@ async function createSchedule(env: Env, target: Target, change: ScheduleChange, 
     const count = await env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM schedules WHERE session_id = ?').bind(session.id).first('n');
     if (Number(count) >= MAX_SCHEDULES_PER_SESSION) fail(409, 'too_many_schedules', `A session keeps at most ${MAX_SCHEDULES_PER_SESSION} schedules.`);
   } else {
-    const count = await env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM schedules WHERE workspace_id = ? AND owner_id = ? AND session_id IS NULL')
-      .bind(target.workspaceId, change.actorId).first('n');
-    if (Number(count) >= MAX_SCHEDULES_PER_OWNER) {
-      fail(409, 'too_many_schedules', `Each person keeps at most ${MAX_SCHEDULES_PER_OWNER} schedules that start new sessions in a workspace.`);
-    }
+    await requireRoomFor(env, target.workspaceId, change.actorId);
   }
   const audit = auditOf(schedule, 'created');
   await env.DB.batch([
@@ -497,13 +509,15 @@ async function updateSchedule(env: Env, context: { session: SessionRow | null },
   }
   const takeover = change.actorId !== current.owner_id && Object.keys(input).some(key => key !== 'enabled');
   if (takeover) next.owner_id = change.actorId;
+  if (next.session_id === null && (takeover || current.session_id !== null)) await requireRoomFor(env, next.workspace_id, next.owner_id);
   if (next.session_id !== null) {
     if ((next.model_id !== null && input.modelId !== undefined) || (next.thinking_level !== null && input.thinkingLevel !== undefined)) noModelForSession();
     next.model_id = null;
     next.thinking_level = null;
   } else if (input.modelId !== undefined || input.thinkingLevel !== undefined || takeover || runIn !== runInOf(current)) {
     const origin = await originFor(env, next, next.owner_id);
-    await validModelChoice(env, { workspaceId: next.workspace_id, ownerId: next.owner_id, origin, gated: change.gated, trusted: change.trusted }, next);
+    await validModelChoice(env, { workspaceId: next.workspace_id, ownerId: next.owner_id, origin, gated: change.gated, trusted: change.trusted,
+      trustKept: next.model_id === current.model_id && next.owner_id === current.owner_id && current.session_id === null }, next);
   }
   if (next.access === 'read' && (next.access !== current.access || next.model_id !== current.model_id || next.session_id !== current.session_id)) {
     await requireAccessSupported(env, await scheduleHost(env, next), next.access);
@@ -717,16 +731,17 @@ export function registerScheduledPrompts(app: Hono<AppEnv>) {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
     if (row.owner_id !== c.get('auth').userId) fail(403, 'owner_required', 'Only the session owner can schedule prompts.');
     requireUnfrozen(row);
-    const input = scheduleInput(await jsonObject(c));
+    const { fields: input, trusted } = scheduleInput(await jsonObject(c));
     const target: Target = input.runIn === 'child' ? { workspaceId: row.workspace_id, session: null, origin: row } : { workspaceId: row.workspace_id, session: row, origin: null };
-    const schedule = await createSchedule(c.env, target, { actorId: c.get('auth').userId, gated: true }, input);
+    const schedule = await createSchedule(c.env, target, { actorId: c.get('auth').userId, gated: true, ...(trusted ? { trusted } : {}) }, input);
     await keepPortable(c, row);
     return c.json({ schedule: scheduleRecord(schedule) }, 201);
   });
 
   app.patch('/api/sessions/:id/schedules/:scheduleId', async c => {
     const { row, schedule } = await managedInSession(c);
-    const saved = await updateSchedule(c.env, { session: row }, { actorId: c.get('auth').userId, gated: true }, schedule, scheduleInput(await jsonObject(c)));
+    const { fields, trusted } = scheduleInput(await jsonObject(c));
+    const saved = await updateSchedule(c.env, { session: row }, { actorId: c.get('auth').userId, gated: true, ...(trusted ? { trusted } : {}) }, schedule, fields);
     await keepPortableFor(c, { session_id: row.id, origin_session_id: null });
     return c.json({ schedule: scheduleRecord(saved) });
   });
