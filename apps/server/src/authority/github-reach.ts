@@ -1,12 +1,12 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
-import type { GitHubReachSettings } from '../../../packages/shared/src/github-reach.js';
-import type { Database } from './db/types.js';
-import type { AppEnv, SessionRow } from './types.js';
-import { requireMember } from './authority/access.js';
-import { auditStatement } from './authority/audit.js';
-import { fail, identifier, now } from './http.js';
-import { body } from './schemas.js';
+import type { GitHubReachSettings } from '../../../../packages/shared/src/github-reach.js';
+import type { Database } from '../db/types.js';
+import type { AppEnv, SessionRow } from '../types.js';
+import { requireMember } from './access.js';
+import { auditStatement } from './audit.js';
+import { fail, identifier, now } from '../http.js';
+import { body } from '../schemas.js';
 
 export async function memberGitHubReach(db: Database, workspaceId: string, userId: string): Promise<GitHubReachSettings> {
   const row = await db.query<{ any_repository: number }>('SELECT any_repository FROM member_github_reach WHERE workspace_id = ? AND user_id = ?')

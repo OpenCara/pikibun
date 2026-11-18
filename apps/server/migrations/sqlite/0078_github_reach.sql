@@ -1,4 +1,4 @@
--- A member's own choice, per workspace, of which GitHub repositories their own messages may act on (apps/server/src/github-reach.ts,
+-- A member's own choice, per workspace, of which GitHub repositories their own messages may act on (apps/server/src/authority/github-reach.ts,
 -- docs/design/security-rationale.md). No row, or any_repository 0: only the workspace's repositories, as before.
 -- any_repository 1: in sessions they own, messages they send themselves may also read and write, as them, any github.com
 -- repository their GitHub sign-in reaches (github_read, github_issue, github_merge, and gh's writes on their own hosts).

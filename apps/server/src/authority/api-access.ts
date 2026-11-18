@@ -12,7 +12,7 @@ import { failureCode, githubSignInExpired } from './github-sign-in.js';
 import { rateLimitedUntil, rateLimitText } from './github-reads.js';
 import { memberToolGroup } from './tool-groups.js';
 import { forgeWriteTools } from '../../../../packages/shared/src/tool-groups.js';
-import { ownerReachesAnyGitHubRepository } from '../github-reach.js';
+import { ownerReachesAnyGitHubRepository } from './github-reach.js';
 
 export function sandboxGitHubApiMode(env: Env): 'on' | 'own-hosts' | 'off' {
   const value = env.SANDBOX_GITHUB_API?.trim().toLowerCase();

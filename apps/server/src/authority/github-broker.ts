@@ -16,7 +16,7 @@ import { requireCallbackScope } from './hosts.js';
 import { requireOperationTool, requireToolCall } from './tool-checks.js';
 import { cloneSessionRepository, githubRepositoryMetadata, recheckAccess, verifyRepository, type GitHubAccess } from './repositories.js';
 import { outsideRepositoryHint } from '../../../../packages/shared/src/github-reach.js';
-import { senderReachesAnyGitHubRepository } from '../github-reach.js';
+import { senderReachesAnyGitHubRepository } from './github-reach.js';
 import { requireBinding, requireNoRestore } from './push/broker.js';
 import { conditionalHeaders, forgetRead, githubRateLimited, rateLimitedUntil, rateLimitText, recallRead, rememberRateLimit, rememberRead } from './github-reads.js';
 import { failGitHubSignInExpired, forgetDeadGitHubToken } from './github-sign-in.js';
