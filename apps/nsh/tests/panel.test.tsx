@@ -56,6 +56,24 @@ describe("a session's panel", () => {
     expect(app.shows("text:50% of all prompts")).toBe(true);
   });
 
+  test("Details shows what the session uses of its host's CPU, memory, disk and GPU, and nothing from a host that doesn't say", async () => {
+    const MiB = 1024 * 1024;
+    const resources = { sampledAt: new Date().toISOString(), source: "cgroup", processes: 3, cpuSeconds: 125, cpuCores: 1.5, memoryBytes: 512 * MiB,
+      peakMemoryBytes: 1536 * MiB, limits: { cpuCores: 2, memoryBytes: 4096 * MiB }, diskBytes: 2560 * MiB, gpuMemoryBytes: 300 * MiB };
+    const app = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, resources }, revision: "r1" } } });
+    await app.waitFor("id:panel-resources");
+    for (const text of ["1.5 CPUs in use of 2 CPUs it may use", "2.1 min of CPU time since the session opened on its host", "512 MB memory of 4 GB it may use",
+      "At most 1.5 GB since the session opened on its host", "3 processes running", "300 MB GPU memory", "2.5 GB on disk"]) expect(app.shows(`text:${text}`)).toBe(true);
+    app.dispose();
+    const older = await openPanel();
+    await older.waitFor("id:panel-usage");
+    expect(older.shows("id:panel-resources")).toBe(false);
+    older.dispose();
+    const invalid = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, resources: { ...resources, processes: -1 } }, revision: "r1" } } });
+    await invalid.waitFor("id:panel-usage");
+    expect(invalid.shows("id:panel-resources")).toBe(false);
+  });
+
   test("Details says when no prompt tokens are reported yet", async () => {
     const none = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
     const app = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, usage: { total: none, models: [{ model: "faux/faux-1", ...none }] } }, revision: "r1" } } });

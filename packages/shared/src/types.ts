@@ -2,6 +2,7 @@ import type { GitProvider, SessionRepository } from "./repositories.js";
 import type { SessionTunnelRecord, SessionTunnelView } from "./tunnel.js";
 import type { ChatImage } from "./chat-images.js";
 import type { SessionCommand } from "./session-commands.js";
+import type { SessionResourcesView } from "./session-resources.js";
 
 export const permissions = ["read", "ask", "write", "approve", "manage"] as const;
 export type Permission = (typeof permissions)[number];
@@ -667,6 +668,7 @@ export interface SessionView {
     unavailable?: { source: string; tools: string[]; reason: string; programs?: string[] }[] };
   tunnel?: SessionTunnelView;
   sudo?: SudoPromptView;
+  resources?: SessionResourcesView;
 }
 export interface SudoPromptView {
   id: string;

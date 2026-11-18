@@ -43,6 +43,7 @@ import { HostGitShim } from "./host-git-shim.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { HelperWorkspace } from "./helper-workspace.js";
+import { SessionResources } from "./session-resources.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { BranchReports } from "./session/branch-reports.js";
@@ -183,6 +184,7 @@ export class RunnerSession {
   #registry?: Registry;
   readonly #inputs: MessageInputs;
   readonly #uploads: SessionUploads;
+  readonly #resources: SessionResources;
   readonly #mirrors: SessionMirrors | undefined;
   readonly #hostGit: HostGitShim | undefined;
   #mirrorsKeptAt = 0;
@@ -290,6 +292,7 @@ export class RunnerSession {
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
+    this.#resources = new SessionResources({ roots: this.sandbox.processes, directory, groups: this.sandbox.resourceGroups?.() });
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
     this.#availability = new ToolAvailability({ binding, config, sandbox: this.sandbox, onHost: this.#onHost,
       definitions: () => this.#defined.definitions, toolNames: () => this.tools.map(tool => tool.name) });
@@ -1370,6 +1373,7 @@ export class RunnerSession {
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
       commands: async () => (this.#frozen || this.#packed || this.closing ? [] : this.#commands.list()),
       usage: key => this.#usage.get(key),
+      resources: () => this.#resources.view(),
     });
   }
 

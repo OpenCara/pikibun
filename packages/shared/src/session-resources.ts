@@ -16,7 +16,7 @@ export interface SessionResourcesView {
 }
 
 export const resourceLimits = {
-  sampleSeconds: 5,
+  sampleSeconds: 2,
   diskSeconds: 300,
   diskEntries: 200_000,
   diskWalkSeconds: 10,

@@ -7,6 +7,7 @@ import type { HostConfig, RequiredExtension } from "../../../../packages/shared/
 import { sessionToolsOff } from "../../../../packages/shared/src/piki-extensions.js";
 import type { TunnelUnavailableReason } from "../../../../packages/shared/src/tunnel.js";
 import type { PromptTokens, RepositoryPreparationView, RunnerBinding, SessionUsageView, SessionView, SudoPromptView, TokenUsage } from "../../../../packages/shared/src/types.js";
+import type { SessionResourcesView } from "../../../../packages/shared/src/session-resources.js";
 import { sessionActivity, type ActivityEntry } from "../activity.js";
 import { compactionThreshold } from "../compaction.js";
 import { settleToolNames } from "../extensions/adapter.js";
@@ -36,6 +37,7 @@ export interface ViewSource {
   extensions(): Promise<Pick<SessionView, "extensions">>;
   commands?(): Promise<SessionView["commands"]>;
   usage?(key: string): Promise<UsageState | undefined>;
+  resources?(): Promise<SessionResourcesView | undefined>;
 }
 
 export async function sessionView(source: ViewSource): Promise<SessionView> {
@@ -83,6 +85,7 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
   const access = latestWrite && (latestWrite.options?.access === "read" ? "read" : "auto");
   const repositories = source.repositories();
   const commands = await source.commands?.().catch(() => undefined);
+  const resources = await source.resources?.().catch(() => undefined);
   const { id, displayName, gitName, gitEmail, githubLogin } = source.binding.owner;
   return { sessionId: source.binding.session.id, owner: { id, displayName, gitName, gitEmail, githubLogin }, entries,
     approvals: [],
@@ -109,6 +112,7 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
     ...await source.extensions(),
     ...(tunnel ? { tunnel } : {}),
     ...(sudo ? { sudo } : {}),
+    ...(resources ? { resources } : {}),
   };
 }
 

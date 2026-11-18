@@ -4,9 +4,10 @@ import type { HostCommandOperation } from "../../../packages/shared/src/types.js
 import { validHostOperation } from "../../../packages/shared/src/host-operations.js";
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { bashPath, hostBashArgs, killTree, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
+import type { ProcessRoots } from "./session-resources.js";
 
 export async function runHostShell(operation: HostCommandOperation, options: {
-  worktree: string; git: string; gitConfig: string; gitName: string; gitEmail: string; signal: AbortSignal;
+  worktree: string; git: string; gitConfig: string; gitName: string; gitEmail: string; signal: AbortSignal; processes?: ProcessRoots;
 }): Promise<string> {
   if (!validHostOperation(operation) || operation.kind !== "host.bash") throw new Error("Invalid host command");
   options.signal.throwIfAborted();
@@ -25,6 +26,7 @@ export async function runHostShell(operation: HostCommandOperation, options: {
         GIT_AUTHOR_EMAIL: options.gitEmail, GIT_COMMITTER_EMAIL: options.gitEmail,
       },
     });
+    const untrack = options.processes?.add(child.pid);
     const out: Buffer[] = [], err: Buffer[] = [];
     let size = 0;
     let failure: string | undefined;
@@ -51,6 +53,7 @@ export async function runHostShell(operation: HostCommandOperation, options: {
     child.stdin.on("error", () => { });
     if (failure) child.stdin.end(); else startHostBash(child, operation.command);
     child.on("close", (code, signal) => {
+      untrack?.();
       clearTimeout(timer);
       options.signal.removeEventListener("abort", abort);
       kill();
