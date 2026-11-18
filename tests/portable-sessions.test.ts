@@ -407,7 +407,8 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   assert.equal(attached.session.workspaceId, f.workspaceId);
   assert.equal(attached.session.status, 'ready');
   assert.equal(attached.schedules, 3, 'its schedules come with it');
-  const restored = (name: string) => ({ ...f.sqlite.prepare('SELECT run_in, model_id, thinking_level FROM session_schedules WHERE session_id = ? AND name = ?').get(sessionId, name) as object });
+  const restored = (name: string) => ({ ...f.sqlite.prepare(`SELECT CASE WHEN session_id IS NULL THEN 'child' ELSE 'session' END AS run_in, model_id, thinking_level FROM schedules
+    WHERE (session_id = ? OR origin_session_id = ?) AND name = ?`).get(sessionId, sessionId, name) as object });
   assert.deepEqual(restored('Triage'), { run_in: 'child', model_id: null, thinking_level: null }, 'one whose model this server lacks comes on the session\'s model');
   assert.deepEqual(restored('Here'), { run_in: 'child', model_id: 'model', thinking_level: null }, 'one whose model it has keeps it, without a level the model\'s host can\'t set');
   assert.equal(calls[0]!.action, 'attach');
@@ -450,7 +451,7 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   assert.equal(returned.session.status, 'ready');
   assert.equal(returned.session.title, 'Back again');
   assert.equal(returned.session.detached, undefined);
-  assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules WHERE session_id = ?').get(sessionId) as { n: number }).n, 3, 'schedules it kept here aren\'t doubled');
+  assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM schedules WHERE session_id = ? OR origin_session_id = ?').get(sessionId, sessionId) as { n: number }).n, 3, 'schedules it kept here aren\'t doubled');
 
   const paired = await f.pair('host-again', 'd'.repeat(43), 'e'.repeat(43), 'model-again');
   await json(await paired('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Paired again', attached: false }], {}, 'host-again')));

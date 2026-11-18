@@ -78,7 +78,8 @@ test("the agent schedules prompts from the chat for the session owner at once, n
   await session.submit(await ticket(id, "submit"), { content: "Every weekday at nine, check the build.", requestId: "create", admissionId }, "write");
   await idle(session);
   const fields = { cron: "0 9 * * 1-5", timeZone: "Europe/Berlin", content: "Check the build", runIn: "child" as const, oneShot: false };
-  assert.match(scheduleToolTarget({ action: "create", ...fields }), /each run in a new child session each child kept open/, "its record says where its runs go, and that they stay open");
+  assert.match(scheduleToolTarget({ action: "create", ...fields }), /a workspace schedule, each run in a new session under this one each child kept open/,
+    "its record says where its runs go, and that they stay open");
   assert.equal(requests.length, 1);
   assert.deepEqual({ ...requests[0], callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "create", ...fields });
   assert.match(requests[0]!.callId, /^[A-Za-z0-9_-]+$/);

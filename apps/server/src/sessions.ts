@@ -252,13 +252,13 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     await c.env.DB.query('UPDATE sessions SET portable_key = ? WHERE id = ?').bind(portableKey, row.id).run();
     row.portable_key = portableKey;
   }
-  if (link.parentSessionId) {
-    await c.env.DB.query('UPDATE sessions SET parent_session_id = ?, schedule_id = ? WHERE id = ?').bind(link.parentSessionId, link.scheduleId ?? null, row.id).run();
-    row.parent_session_id = link.parentSessionId;
+  if (link.parentSessionId || link.scheduleId) {
+    await c.env.DB.query('UPDATE sessions SET parent_session_id = ?, schedule_id = ? WHERE id = ?').bind(link.parentSessionId ?? null, link.scheduleId ?? null, row.id).run();
+    row.parent_session_id = link.parentSessionId ?? null;
     row.schedule_id = link.scheduleId ?? null;
   }
   await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}), ...(portableKey ? { portable: true } : {}),
-    ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}), ...(link.parentSessionId && link.scheduleId ? { scheduleId: link.scheduleId } : {}) }).run();
+    ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}), ...(link.scheduleId ? { scheduleId: link.scheduleId } : {}) }).run();
   try {
     const binding = await bindingForSession(c, row);
     const response = await runnerRequest(c, row, 'create', '', binding);

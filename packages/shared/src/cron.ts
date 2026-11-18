@@ -173,7 +173,7 @@ export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" |
   if (request.cron !== undefined) parts.push(`cron ${request.cron}`);
   if (request.timeZone !== undefined) parts.push(`in ${request.timeZone}`);
   if (request.access !== undefined) parts.push(`access ${request.access}`);
-  if (request.runIn !== undefined) parts.push(request.runIn === "child" ? "each run in a new child session" : "runs in this session");
+  if (request.runIn !== undefined) parts.push(request.runIn === "child" ? "a workspace schedule, each run in a new session under this one" : "runs in this session");
   if (request.oneShot !== undefined) parts.push(request.oneShot ? "each child archived once its run is done" : "each child kept open");
   if (request.modelId !== undefined) parts.push(request.modelId === null ? "on this session's model" : `model ${request.modelId}`);
   if (request.thinkingLevel !== undefined) parts.push(request.thinkingLevel === null ? "at this session's reasoning level" : `thinking ${request.thinkingLevel}`);
