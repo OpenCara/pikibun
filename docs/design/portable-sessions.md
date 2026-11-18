@@ -67,7 +67,11 @@ environments, `node_modules/.bin`), and the index lets every connection of the i
    where it runs, its model, whether it is attached to this pairing or working, and its signed mark. The server keeps
    the ones whose mark is by the delegated key (`portable_offers`) and lists those not attached here under the private
    workspace, with **Bring here** (`GET /api/portable-sessions`). The host reports titles as plain single lines, and a
-   session the server can't take is left out of the list rather than refusing the report.
+   session the server can't take is left out of the list rather than refusing the report. An archived record here is
+   offered only when the session isn't simply archived: it was moved away (`detached_at`), or the host reports it
+   attached elsewhere (it may have moved while archived, unnoticed here, as only an open session notices). A session
+   archived here and still attached here is not offered, and **Bring here** refuses it (`archived_here`): it is
+   unarchived instead, so archiving keeps it out of the lists and its packing and unarchive rules apply.
 2. **Bring here** (`POST /api/portable-sessions/:id/attach`, with the host and optionally a model of it) makes the
    session's record, private, under the same ID, and asks the host to `attach` it with the new binding.
 3. The host attaches it only for its owner, and only a session marked by its identity's current key. Under a lock in

@@ -253,7 +253,8 @@ export async function portableOffers(env: Env, userId: string): Promise<Portable
     FROM portable_offers o
     JOIN connectors c ON c.id = o.connector_id AND c.owner_id = o.user_id AND c.revoked_at IS NULL
     JOIN identity_delegations d ON d.connector_id = o.connector_id AND d.user_id = o.user_id AND d.public_key = o.public_key
-    WHERE o.user_id = ? AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = o.session_id AND s.connector_id = o.connector_id AND s.status <> 'archived')
+    WHERE o.user_id = ? AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = o.session_id AND s.connector_id = o.connector_id
+      AND (s.status <> 'archived' OR (o.attached = 1 AND s.detached_at IS NULL)))
     ORDER BY o.created_at DESC, o.session_id LIMIT 500`).bind(workspaceId ?? '', userId).all();
   return rows.map(row => ({ id: row.session_id, title: row.title, createdAt: row.created_at, connectorId: row.connector_id, hostName: row.host_name,
     hostEnvironment: Number(row.host_environment) === 1, working: Number(row.working) === 1, attachedElsewhere: Number(row.attached) !== 1,
@@ -289,6 +290,9 @@ async function attachSession(c: AppContext): Promise<Response> {
   if (model.workspace_id !== workspaceId || model.connector_id !== connectorId) fail(400, 'invalid_model', 'Choose a model of that host in your private workspace.');
   const existing = await c.env.DB.query<SessionRow>('SELECT * FROM sessions WHERE id = ?').bind(sessionId).first();
   if (existing && existing.status !== 'archived' && existing.connector_id === connectorId) fail(409, 'already_here', 'This session is attached here already.');
+  if (existing && existing.connector_id === connectorId && !existing.detached_at && Number(offer.attached) === 1) {
+    fail(409, 'archived_here', 'This session is archived here, not moved: unarchive it instead.');
+  }
   const reuse = !!existing && existing.owner_id === userId && existing.workspace_id === workspaceId && existing.connector_id === connectorId
     && existing.repository_mode === 'clone' && (existing.repositories_json ?? '[]') === '[]';
   const targetId = existing && !reuse ? id() : sessionId;
