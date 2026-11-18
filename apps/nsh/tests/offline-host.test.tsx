@@ -96,6 +96,23 @@ describe("a private session whose host is offline", () => {
     expect(app.shows("id:session-host-start")).toBe(false);
   });
 
+  test("with several of this Mac's hosts for the server, starts the one that ran the session, and otherwise opens Local hosts", async () => {
+    const hosts = (ids: string[]) => ({ "pikibun.thisComputer.hosts": JSON.stringify([
+      { id: "default", server: ORIGIN, name: "My Mac", sandbox: "none" },
+      { id: "a1b2c3d4", server: ORIGIN, name: "Sandboxed", sandbox: "seatbelt", stateDir: "~/.local/share/pikibun/hosts/a1b2c3d4", connectorIds: ids },
+    ]) });
+    const unknown = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, storage: hosts(["c5"]) });
+    await unknown.waitFor("id:session-host-connect");
+    expect(unknown.shows("text:Local hosts")).toBe(true);
+    expect(unknown.shows("id:session-host-start")).toBe(false);
+    expect(unknown.texts().some(text => text.includes("If that's one of this Mac's hosts for pikibun.test, start it under Local hosts"))).toBe(true);
+    const known = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, storage: hosts(["c1"]) });
+    await known.waitFor("id:session-host-start");
+    expect(known.shows("text:This Mac isn't hosting this session")).toBe(true);
+    await known.press("id:session-host-start");
+    await known.waitUntil(() => known.texts().some(text => text.includes("is online again. This private session continues as soon as Pikibun sees it.")));
+  });
+
   test("where this Mac is paired with another server only, sends to its settings to connect this one too", async () => {
     const app = await open("./harness/offline-host.tsx", { platform: "macos", width: 900, height: 600, host: { params: { paired: "https://other.example" } } });
     await app.waitFor("id:session-host-connect");

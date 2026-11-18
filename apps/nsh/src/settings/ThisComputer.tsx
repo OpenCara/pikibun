@@ -261,7 +261,14 @@ function AddHostSection(props: { server: string; servers: () => string[]; create
       if ((changed || !next.inspection()) && !next.inspecting()) void next.refresh();
     });
   });
-  const name = () => named() ?? defaultHostName(sandbox());
+  const suggested = () => {
+    const base = defaultHostName(sandbox());
+    const taken = new Set(hosts.list().map(host => host.name()));
+    let name = base;
+    for (let count = 2; taken.has(name); count++) name = `${base} ${count}`;
+    return name;
+  };
+  const name = () => named() ?? suggested();
   const others = () => hosts.forServer(server());
   const inspection = () => draft()?.inspection();
   const noModels = () => Boolean(inspection() && !inspection()!.models.length);
@@ -315,7 +322,7 @@ function AddHostSection(props: { server: string; servers: () => string[]; create
             </If>
           </If>
           <If when={draft() && inspection()}>
-            <Row title="Sessions run" hint={isolation(draft()!)} testID="this-computer-new-isolation" />
+            <Small testID="this-computer-new-isolation">{`Here, sessions would run: ${isolation(draft()!)}.`}</Small>
           </If>
           <If when={noModels()}>
             <Small>{`${inspection()!.modelsError ?? "Pi has no models to offer yet."} Sign Pi in to a provider ${draft()!.environment.wsl ? "in" : "on"} ${draft()!.where()} below first.`}</Small>
@@ -432,7 +439,7 @@ function HostSection(props: { host: LocalHost; createPairing: CreatePairing }) {
                 <TextField testID="this-computer-name" value={name()} onChange={value => name.set(value)} maxLength={120} onSubmit={pair} />
               </Field>
               <View style={{ flexDirection: "row" }}>
-                <Button variant="primary" testID="this-computer-pair-button" label={action.busy() ? "Pairing" : "Pair again"} busy={action.busy()}
+                <Button variant="primary" testID="this-computer-pair-button" label={action.busy() ? "Pairing" : pairingProblem() ? "Pair again" : "Pair host"} busy={action.busy()}
                   disabled={!name().trim() || Boolean(host.inspection()?.unsupported)} onPress={pair} />
               </View>
               <Feedback error={action.error()} notice={action.notice()} />

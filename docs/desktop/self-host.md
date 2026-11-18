@@ -10,7 +10,7 @@ Choose this mode when:
 ## Before you start
 
 - **Node.js 24 or newer**, from [nodejs.org](https://nodejs.org) (on a Mac, `brew install node` also works). The app runs Pikibun's server with it.
-- **Pi signed in to a model provider** on this computer, so that your sessions have models. If you don't use Pi yet, sign it in under **Settings → This Mac → Sign Pi in to a provider** once you're signed in, then stop and start your Pikibun so it offers the new models. Pi keeps the credential on this computer.
+- **Pi signed in to a model provider** on this computer, so that your sessions have models. If you don't use Pi yet, sign it in under **Settings → This Mac → Local hosts** once you're signed in (**Sign Pi in to a provider**, on a host's page, or under **Add a host** while Pi has no model), then stop and start your Pikibun so it offers the new models. Pi keeps the credential on this computer.
 
 ## A fresh install does this for you
 
@@ -42,7 +42,7 @@ There is nothing to type: each time your Pikibun starts, it makes a private sign
 
 Once you're signed in, this computer pairs itself with your Pikibun as its host. **This Mac as its host** on the Self host page turns **Online**, and the computer appears under **Settings → Hosts**. Start a session in your **Private** workspace, as in [Client](client.md#3-work-in-sessions).
 
-Your Pikibun runs its own host for this computer. **Settings → This Mac** stays the host of the servers it is paired with (your team's, say), so there's no need to pair This Mac with your Pikibun as well.
+Your Pikibun runs its own host for this computer. **Settings → This Mac → Local hosts** keeps the hosts this computer runs for other servers (your team's, say), so there's no need to add one there for your Pikibun as well.
 
 ### Repositories
 

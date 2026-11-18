@@ -56,7 +56,7 @@ export const settingsSections: readonly SettingsSection[] = [
   { id: "admin", label: "Administration", icon: "shield", scope: "server", admin: true, Component: Administration },
   { id: "desktop", label: "Local hosts", icon: "monitor", scope: "device", keywords: [computerTitle, "pair", "sandbox", "WSL"], desktop: true, Component: ThisComputer },
   { id: "self-host", label: "Self host", icon: "database", scope: "device", desktop: true, Component: SelfHost },
-  { id: "appearance", label: "Appearance", icon: "palette", scope: "device", keywords: ["theme", "dark"], Component: Appearance },
+  { id: "appearance", label: "Appearance", icon: "palette", scope: "device", Component: Appearance },
 ];
 
 export const scopes: readonly SettingsScope[] = ["server", "device"];

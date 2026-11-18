@@ -38,13 +38,15 @@ Nothing has to be reinstalled. You switch with one setting, or by signing in to 
 
 | From → to | How |
 | --- | --- |
-| Client → Host | **Settings → This Mac** (**This Computer** on Windows and Linux) → **Pair This Mac**. After that, use **Start host**. See [Host](host.md). |
-| Host → Client | **Settings → This Mac → Stop host**. The pairing is kept, so **Start host** brings it back later without a new code. |
-| Any → Self host | **Pikibun on this Mac** in the sidebar's server switch, or **Settings → Self host → Start Pikibun**, then **Sign in to it**. Signed out, the sign-in screen's **Run Pikibun on this Mac** opens the same page. See [Self host](self-host.md). |
+| Client → Host | **Settings → This Mac** (**This Computer** on Windows and Linux) **→ Local hosts → Pair host**. After that, use **Start**. See [Host](host.md). |
+| Host → Client | **Settings → This Mac → Local hosts → Stop** on each host. Its pairing is kept, so **Start** brings it back later without a new code. |
+| Any → Self host | **Pikibun on this Mac** in the sidebar's server switch, or **Settings → This Mac → Self host → Start Pikibun**, then **Sign in to it**. Signed out, the sign-in screen's **Run Pikibun on this Mac** opens the same page. See [Self host](self-host.md). |
 | Self host → Client or Host | The sidebar's server switch, or **Settings → Profile → Servers → Switch**, changes to a server you're signed in to, or **Add a server** (for example `https://pikibun.com`); see [Switching between servers](client.md#switching-between-servers). Choose **Stop** under **Settings → Self host** when you no longer need your own Pikibun. |
+
+Settings come in two sets. The server you're signed in to has its own, under its address: **Profile**, **Password**, **Notifications**, **Hosts** (every host you own on that server, wherever it runs), **Workspaces** and **Administration**. This computer has the rest, under **This Mac** (**This Computer** on Windows and Linux): **Local hosts**, **Self host** and **Appearance**. Switching servers changes only the first set.
 
 Keep in mind:
 
 - **The app is signed in to one server at a time.** Signing out of one and in to another doesn't change any server: your sessions, workspaces and hosts stay on the server they belong to.
-- **This Mac can host for several servers at once.** It keeps running for the servers it's paired with when you sign in to another one, and lists them under **Settings → This Mac → Other servers**, where you start, stop or remove each. To host for the server you're signed in to now as well, choose **Pair This Mac**: that adds a pairing and leaves the others as they are. Each server's sessions run on This Mac while its host is online, whichever server you're signed in to. A private session whose host is This Mac, opened while This Mac isn't hosting for that server, says so and offers **Start host** or **Connect This Mac**.
+- **This Mac can run several hosts at once**: for several servers, or more than one for the same server with different settings (on Windows, one in Windows' own sandbox and one in WSL2, say). **Settings → This Mac → Local hosts** lists them all, whichever server you're signed in to, where you start, stop, add or remove each. Each host keeps running when you sign in to another server, and its server's sessions run on it while it is online. A private session whose host is one of This Mac's, opened while that host isn't running, says so and offers **Start host** or **Connect This Mac**.
 - **Hosting and self hosting last while the app is open.** Quitting the app stops them. Whatever was running when you quit starts again at the next launch.

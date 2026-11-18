@@ -4,7 +4,7 @@ A host is a machine where you run the `pikibun` connector next to [Pi](https://g
 
 **Requirements:** Linux or WSL2 with Node.js 24 or newer, Pi configured with the providers and models to offer, and `bubblewrap`, Python 3, Git and `flock` (util-linux) for the sandbox. bubblewrap must be able to make user namespaces: the connector tries it before it starts, and refuses to start a sandboxed host where it can't, with the setting to change (on Ubuntu 23.10 and later, `kernel.apparmor_restrict_unprivileged_userns`; elsewhere `kernel.unprivileged_userns_clone` or `user.max_user_namespaces`, or a container that forbids them). On Windows, run the connector inside WSL2 for that sandbox. macOS and native Windows can also try their own [experimental sandboxes](#experimental-sandboxes-on-macos-and-windows), and macOS, native Windows or Linux without bubblewrap can run [without the sandbox](#running-without-the-sandbox).
 
-On a Mac, Windows or Linux desktop, the [app](apps.md)'s **This Mac** (This Computer elsewhere) lists what is missing with the command that installs it, and signs Pi in to your provider in its own window.
+On a Mac, Windows or Linux desktop, the [app](apps.md)'s **Local hosts** (under **Settings → This Mac**, This Computer elsewhere) lists what is missing with the command that installs it, and signs Pi in to your provider in its own window.
 
 ## Pairing
 
@@ -222,7 +222,7 @@ macOS and native Windows can run sessions in their own operating system's sandbo
 npx pikibun@latest connect --experimental-sandbox
 ```
 
-In the Mac app, choose **macOS sandbox** under **This Mac**, while the host is stopped.
+In the Mac app, choose **macOS sandbox** when you add a host under **Settings → This Mac → Local hosts**, or on a host's page there while it is stopped. In the Windows app, choose **Windows sandbox** when you add a host; **WSL2** there runs the host in a WSL distribution with the Linux sandbox instead, and one computer can have hosts of both kinds.
 
 - **macOS** (Seatbelt, macOS 15 or later, with the developer tools: `xcode-select --install`): every step runs under `sandbox-exec` with a profile that denies everything by default. A session sees its own files, the system's read-only runtime, the developer tools and Homebrew, and nothing of your home folder or other sessions. Its only network is its egress proxy, on a loopback port that wants the session's credentials, so tests that start a local server can't reach it, and Go and Swift programs can't verify HTTPS (they check certificates only through a macOS service that would fetch on the host's own network, outside the proxy; curl, Git, Node and Python work). macOS has no hard memory or process limits for a group of processes, so, as on a Linux host without `--resources`, commands run only in sessions of the host's owner and of members they [grant host commands](#host-admins-and-host-command-grants), for messages of theirs.
 - **Windows** (Windows 11 24H2 or later with the October 2026 update, which the connector checks by running one container, [Git for Windows](https://git-scm.com/download/win), and Microsoft's [MXC SDK](https://github.com/microsoft/mxc), which the connector tells you how to install: `npm install --prefix <state dir>\mxc @microsoft/mxc-sdk@1.0.1`): every step runs in an OS process container that may write only the session's files and reach only its egress proxy, inside a job object that limits its memory, processes and CPU (`--memory-limit`, `--process-limit`, `--cpu-limit`). Each step runs on the connector's own Node.js. Commands run in [busybox-w32](https://frippery.org/busybox/)'s shell, because Git for Windows' bash can't start in the container: save `busybox64.exe` as `%LOCALAPPDATA%\Programs\busybox\busybox.exe`, or name it in `PIKIBUN_SANDBOX_SHELL`. Pikibun refuses to run where MXC would fall back to its AppContainer modes, which change the permissions of your folders. Git LFS doesn't work here yet: Git runs LFS filters through Git for Windows' `sh`, which can't start in the container, so clones check out LFS pointer files.
@@ -292,7 +292,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 
 Everything else is the host's [configuration](#host-configuration), set in Pikibun: its command time limit, GPU, Git credentials and repository cache. `--git-credentials`, `--repo-cache` and `--repo-cache-scope` are still accepted, so existing service units keep starting, but ignored.
 
-The desktop apps' **This Mac** (This Computer elsewhere) runs the same connector; see [iPhone, iPad, Mac and Windows apps](apps.md). [`packages/cli/README.md`](../packages/cli/README.md) is the connector's own guide.
+The desktop apps' **Local hosts** (under **Settings → This Mac**, This Computer elsewhere) run the same connector, one process per host; see [iPhone, iPad, Mac and Windows apps](apps.md). [`packages/cli/README.md`](../packages/cli/README.md) is the connector's own guide.
 
 ## Logs
 

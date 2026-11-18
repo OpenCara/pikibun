@@ -6,10 +6,12 @@ native Windows without a sandbox (`--unsafe-no-sandbox`); not yet run on either 
 decision is in [Choosing](#choosing-across-windows-linux-and-macos-from-the-requirements-alone). Native Windows is refused today
 (`apps/runner/src/connect-setup.ts`), and Windows hosts run the connector inside WSL2.
 
-The app's This Computer (`pikibun host --stdio`) runs this sandbox on native Windows through the host's
-`experimentalSandbox` request, with the CLI's default limits, or unsandboxed with consent while its prerequisites are
-missing. On a Mac it offers **macOS sandbox** (Seatbelt, through the same request) or **None** (unsandboxed with
-consent, the default). The removed Electron app also offered WSL2 for each server's host.
+The app's Local hosts (`pikibun host --stdio`, one process per host) run this sandbox on native Windows through the
+host's `experimentalSandbox` request, with the CLI's default limits, or unsandboxed with consent while its prerequisites
+are missing: that is a host's **Windows sandbox**. Its **WSL2** runs the host inside a WSL distribution instead, with
+the Linux sandbox, as the removed Electron app did; one computer can have hosts of both kinds, for the same server too
+(see [Several hosts on one computer](local-hosts.md)). On a Mac it offers **macOS sandbox** (Seatbelt, through the
+same request) or **No sandbox** (unsandboxed with consent, the default).
 
 This note sets out what a native backend has to guarantee, the Windows primitives that can provide it, how three
 open-source sandboxes build on those primitives, and a recommended path. Sources read for it:
