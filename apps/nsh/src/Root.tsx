@@ -416,7 +416,7 @@ function ServerSwitch(props: { action: Action }) {
     const list = saved.some(item => item.origin === current()) ? saved : [{ origin: current(), account: "" }, ...saved];
     const mine = (origin: string) => origin === thisServerOrigin();
     const rows = list.filter(item => !mine(item.origin)).map((item): MenuAction => ({
-      label: displayOrigin(item.origin), icon: item.origin === current() ? "check" : "server", testID: `server-menu-${displayOrigin(item.origin)}`,
+      label: displayOrigin(item.origin), icon: item.origin === current() ? "check" : "cloud", testID: `server-menu-${displayOrigin(item.origin)}`,
       hint: item.origin === current() ? [item.account, "This server"].filter(Boolean).join(" · ") : item.account || undefined,
       onSelect: () => { if (item.origin !== untracked(current)) run(() => switchServer(item.origin)); },
     }));
@@ -430,7 +430,7 @@ function ServerSwitch(props: { action: Action }) {
   };
   return (
     <DropdownMenu label="Switch server" placement="top" items={items()}
-      trigger={<IconButton testID="open-servers" icon="server" label="Switch server" onPress={() => undefined} />} />
+      trigger={<IconButton testID="open-servers" icon="cloud" label="Switch server" onPress={() => undefined} />} />
   );
 }
 
