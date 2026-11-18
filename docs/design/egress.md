@@ -236,8 +236,9 @@ which pinned sessions were checked out of until phase 5. Clone sessions borrow f
     git alone hands the clone over. As a backstop, the Node program counts how deep it runs inside itself
     (`PIKIBUN_GIT_SHIM_DEPTH`, passed to the git it runs) and refuses past `GIT_SHIM_MAX_DEPTH` (8). On Windows the
     session's `BASH_ENV` is its `path.sh`, and the owner's own `BASH_ENV` goes in `PIKIBUN_BASH_ENV`: inside another
-    session's git, the owner's one is the `PIKIBUN_BASH_ENV` already set, never the other session's `path.sh`, which
-    would run itself without end.
+    session's git, the owner's one is the `PIKIBUN_BASH_ENV` already set (its name in any case, as Windows has it),
+    never a session's `path.sh`, which would run itself without end: one an earlier connector set to a `path.sh` is
+    emptied.
 - **The Windows sandbox** has no bind mounts and no Python. Its clone sessions get the same Node program, asking the
   session's proxy as the Python shim does (port and credentials from `PIKIBUN_EGRESS_STATUS`), behind a busybox `sh`
   launcher in the layout's `bin`, first on `PATH`, that runs `SANDBOX_GIT` for everything but `git clone`. Each step

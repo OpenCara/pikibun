@@ -128,6 +128,12 @@ test("inside another session's git, the session's git keeps the owner's own BASH
     { Path: "/t/pikibun-git-2/bin;/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-2", "path.sh") });
   assert.deepEqual(hostGitEnvironment("/t/pikibun-git-2/bin", { ...outer, PIKIBUN_BASH_ENV: "/u/rc" }, true),
     { Path: "/t/pikibun-git-2/bin;/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-2", "path.sh"), PIKIBUN_BASH_ENV: "/u/rc" });
+  assert.deepEqual(hostGitEnvironment("/t/pikibun-git-2/bin", { ...outer, Pikibun_Bash_Env: "/u/rc" }, true),
+    { Path: "/t/pikibun-git-2/bin;/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-2", "path.sh"), Pikibun_Bash_Env: "/u/rc" },
+    "Windows names its variables in any case");
+  assert.deepEqual(hostGitEnvironment("/t/pikibun-git-2/bin", { ...outer, PIKIBUN_BASH_ENV: join("/t/pikibun-git-0", "path.sh") }, true),
+    { Path: "/t/pikibun-git-2/bin;/t/pikibun-git-1/bin;C:\\Windows", BASH_ENV: join("/t/pikibun-git-2", "path.sh"), PIKIBUN_BASH_ENV: "" },
+    "one an earlier connector set to a session's path.sh is emptied, not kept to run itself");
 });
 
 test("a session's git started inside another's (a session on the host running these tests) clones with the real git, not through the other's",

@@ -256,10 +256,13 @@ const PIKIBUN_PATH_SCRIPT = /pikibun-git-[^/\\]+[/\\]path\.sh$/;
 export function hostGitEnvironment(bin: string, environment: Readonly<Record<string, string | undefined>>, windows = process.platform === "win32"): Record<string, string> {
   const key = Object.keys(environment).find(name => name.toUpperCase() === "PATH") ?? "PATH";
   const path = environment[key] || (windows ? "" : "/usr/bin:/bin:/usr/sbin:/sbin");
-  const previous = Object.entries(environment).find(([name]) => name.toUpperCase() === "BASH_ENV")?.[1];
-  const owner = environment.PIKIBUN_BASH_ENV || (previous && !PIKIBUN_PATH_SCRIPT.test(previous) ? previous : undefined);
+  const named = (wanted: string) => Object.entries(environment).find(([name]) => name.toUpperCase() === wanted);
+  const own = (value: string | undefined) => value && !PIKIBUN_PATH_SCRIPT.test(value) ? value : undefined;
+  const inherited = named("PIKIBUN_BASH_ENV");
+  const owner = own(inherited?.[1]) ?? own(named("BASH_ENV")?.[1]);
+  const ownerKey = inherited?.[0] ?? "PIKIBUN_BASH_ENV";
   return { [key]: path ? `${bin}${windows ? ";" : delimiter}${path}` : bin,
-    ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh"), ...(owner ? { PIKIBUN_BASH_ENV: owner } : {}) } : {}) };
+    ...(windows ? { BASH_ENV: join(dirname(bin), "path.sh"), ...(owner ? { [ownerKey]: owner } : inherited ? { [ownerKey]: "" } : {}) } : {}) };
 }
 
 export function hostGitBashScript(bin: string): string {
