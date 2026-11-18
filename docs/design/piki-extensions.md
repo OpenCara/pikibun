@@ -93,7 +93,8 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    sight (`sandboxMissingFile`), not that the command is missing; where it is under `/usr` or one of those roots,
    which the sandbox does see, it says the install looks incomplete instead. Azure CLI extensions added for the host owner live in
    their `~/.azure`, which the sandbox's own home hides, so `azure-devops` is added with `--system`, under the CLI's
-   install. Its API requests go through the proxy, which adds the session
+   install, or into the host's [shared tools folder](../hosts.md#shared-tools), which sessions read as the CLI's system extension directory
+   (`AZURE_EXTENSION_SYS_DIR`). Its API requests go through the proxy, which adds the session
    owner's access (see [credentialed APIs](egress.md#credentialed-apis-gh-without-a-token-in-the-sandbox)):
    - **Reads, always**: of api.github.com with the read-only GitHub App token for the workspace's repositories the
      session owner can read, on any host; of gitlab.com and dev.azure.com with the owner's own personal access token,

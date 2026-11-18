@@ -14,6 +14,7 @@ import type { LocalModels } from "../local-pi.js";
 import { RunnerError } from "../protocol.js";
 import type { RepositoryCache } from "../repo-cache.js";
 import type { SandboxBackendConfig } from "../sandbox-backend.js";
+import { sharedToolsPath } from "../shared-tools.js";
 import type { RunnerConfig } from "../session.js";
 import type { HostTunnels, HostTunnelSource, TunnelAccess } from "../tunnel-host.js";
 import type { ControlPlaneCalls } from "./control-plane.js";
@@ -70,6 +71,7 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
     sharedSecret: source.secret, connectorId: state.connectorId,
     allowFaux: options.allowFaux === true, allowTestShell: options.allowTestShell === true,
     resources: options.resources, unsandboxed: options.unsandboxed === true,
+    ...(options.unsandboxed ? {} : { sharedTools: sharedToolsPath(source.directory) }),
     ...(options.privateEnvironment?.length ? { privateEnvironment: options.privateEnvironment } : {}),
     pikiHostSignIn: process.env.PIKIBUN_PIKI_HOST_SIGN_IN === "1",
     ...(options.sandboxBackend && !options.unsandboxed ? { sandboxBackend: options.sandboxBackend } : {}),

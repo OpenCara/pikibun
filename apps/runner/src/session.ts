@@ -141,6 +141,7 @@ export type RunnerConfig = {
   identity?: ClientIdentity;
   portable?: { store: IdentityStore; detached?(sessionId: string): Promise<void> };
   repositoryCache?: RepositoryCache;
+  sharedTools?: string;
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;
   browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
@@ -284,6 +285,7 @@ export class RunnerSession {
         egressEnvironment: () => { const endpoint = egress.endpoint; return endpoint && egressEnvironment(branch, endpoint, workspace.layout.caBundle); },
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
         ...(this.#clone && hostGitLfs() ? { gitLfs: true } : {}),
+        ...(config.sharedTools ? { sharedTools: config.sharedTools } : {}),
       });
       this.sandbox = workspace;
     } else {
@@ -291,7 +293,8 @@ export class RunnerSession {
       this.sandbox = new Sandbox(binding, join(directory, "sandbox"), config.resources, { egressSocket: this.#egress.socketPath,
         ...(config.browser !== undefined ? { browser: config.browser } : {}),
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
-        ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
+        ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
+        ...(config.sharedTools ? { sharedTools: config.sharedTools } : {}) });
     }
     this.#resources = new SessionResources({ roots: this.sandbox.processes, directory, groups: this.sandbox.resourceGroups?.() });
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);

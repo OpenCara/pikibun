@@ -30,6 +30,7 @@ import { browserEnvironment, connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBr
 import type { SessionBrowser } from "./browser-command.js";
 import type { SandboxNodePrograms } from "./program-availability.js";
 import { ProcessRoots, type ResourceGroups } from "./session-resources.js";
+import { SANDBOX_SHARED_TOOLS, sharedToolsDirectory, sharedToolsEnvironment } from "./shared-tools.js";
 
 export { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 
@@ -63,6 +64,7 @@ export interface SandboxOptions {
   sessionBranch?: string;
   mirrors?: () => Promise<readonly MirrorMount[]>;
   gpuRoot?: string;
+  sharedTools?: string;
 }
 
 export interface MirrorMount { source: string; target: string }
@@ -347,6 +349,7 @@ export class Sandbox implements IsolatedWorkspace {
   readonly #sessionBranch: string | undefined;
   readonly #mirrors: (() => Promise<readonly MirrorMount[]>) | undefined;
   readonly #gpuRoot: string;
+  readonly #sharedTools: string | undefined;
   readonly #shim: boolean;
   readonly #nodeMount: SandboxNodeMount | undefined;
   readonly nodeBin: string | undefined;
@@ -384,6 +387,7 @@ export class Sandbox implements IsolatedWorkspace {
     this.#sessionBranch = options.sessionBranch;
     this.#mirrors = options.mirrors;
     this.#gpuRoot = options.gpuRoot ?? "/";
+    this.#sharedTools = options.sharedTools;
     this.#shim = options.egressSocket !== undefined && (options.mirrors !== undefined || hostGitLfs() !== undefined);
     const node = sandboxNodeMount(options.node === undefined ? connectorNode() : options.node ?? undefined);
     this.#nodeMount = node?.mount;
@@ -740,6 +744,7 @@ export class Sandbox implements IsolatedWorkspace {
     const limits = request.kind === "bash" ? command.limits : undefined;
     const browser = request.kind === "bash" ? sandboxBrowserMount(this.#browserSource()) : undefined;
     const service = request.kind === "bash" ? command.service : undefined;
+    const tools = request.kind === "bash" ? sharedToolsDirectory(this.#sharedTools) : undefined;
     const args = [
       "--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
       "--cap-drop", "ALL",
@@ -762,6 +767,7 @@ export class Sandbox implements IsolatedWorkspace {
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
       ...(service?.binds ?? []).flatMap(bind => ["--ro-bind-try", bind, bind]),
       ...(request.kind === "bash" ? command.binds ?? [] : []).flatMap(bind => ["--ro-bind-try", bind, bind]),
+      ...(tools ? ["--ro-bind-try", tools, SANDBOX_SHARED_TOOLS] : []),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
         ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),
       ...(gpu?.args ?? []),
@@ -770,7 +776,9 @@ export class Sandbox implements IsolatedWorkspace {
     ];
     for (const [name, value] of Object.entries(this.#environment)) args.push("--setenv", name, value);
     if (egress) for (const [name, value] of Object.entries(egressEnvironment(this.#sessionBranch))) args.push("--setenv", name, value);
-    if (egress && this.#shim) args.push("--setenv", "PATH", `${SHIM_DIRECTORY}:${this.#environment.PATH}`);
+    const path = egress && this.#shim ? `${SHIM_DIRECTORY}:${this.#environment.PATH}` : this.#environment.PATH!;
+    if (egress && this.#shim) args.push("--setenv", "PATH", path);
+    if (tools) for (const [name, value] of Object.entries(sharedToolsEnvironment(SANDBOX_SHARED_TOOLS, path, false))) args.push("--setenv", name, value);
     for (const [name, value] of Object.entries(gpu?.env ?? {})) args.push("--setenv", name, value);
     for (const [name, value] of Object.entries(browserEnvironment(browser?.executable))) args.push("--setenv", name, value);
     args.push("--", "/usr/bin/python3", "-I", "-c", HELPER);

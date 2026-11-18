@@ -183,7 +183,8 @@ export class SeatbeltBackend implements HelperBackend {
     const mirrors = (context.mirrors ?? []).filter(seatbeltMirror);
     const resolved = [...new Set(mirrors.flatMap(path => { try { return [realpathSync(path)]; } catch { return []; } }).filter(seatbeltMirror))];
     const { profile, parameters } = seatbeltProfile({
-      layout, readOnly: context.readOnly, gitWritable: context.gitWritable, toolRoots: this.#tools.roots, mirrors: resolved,
+      layout, readOnly: context.readOnly, gitWritable: context.gitWritable, mirrors: resolved,
+      toolRoots: context.sharedTools ? [...new Set([...this.#tools.roots, context.sharedTools])] : this.#tools.roots,
       ...(port !== undefined ? { egressPort: port } : {}),
     });
     void request;

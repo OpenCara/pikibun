@@ -20,6 +20,7 @@ import {
   type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
 import { sandboxCertificates } from "./trust-store.js";
+import { sharedToolsDirectory, sharedToolsEnvironment } from "./shared-tools.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
 import type { IsolatedWorkspace } from "./workspace.js";
 
@@ -42,6 +43,7 @@ export interface HelperContext {
   environment: Readonly<Record<string, string>>;
   mirrors?: readonly string[];
   gitShim?: boolean;
+  sharedTools?: string;
 }
 
 export interface HelperLaunch {
@@ -69,6 +71,7 @@ export interface HelperWorkspaceOptions {
   egressEnvironment?: () => Record<string, string> | undefined;
   gitLfs?: boolean;
   mirrors?: () => Promise<readonly MirrorMount[]>;
+  sharedTools?: string;
 }
 
 const queues = new Map<string, Promise<void>>();
@@ -377,10 +380,12 @@ export class HelperWorkspace implements IsolatedWorkspace {
     const limits = request.kind === "bash" ? context.limits : undefined;
     const deadlineMs = long ? PUSH_TIMEOUT_MS : (limits ?? commandLimits(TIMEOUT_MS / 1000)).seconds * 1000;
     const egress = context.egress ? this.#options.egressEnvironment?.() : undefined;
-    const environment = Object.freeze({ ...this.#environment, ...(egress ?? {}) });
+    const tools = request.kind === "bash" ? sharedToolsDirectory(this.#options.sharedTools) : undefined;
+    const base = { ...this.#environment, ...(egress ?? {}) };
+    const environment = Object.freeze({ ...base, ...(tools ? sharedToolsEnvironment(tools, base.PATH ?? this.#backend.path) : {}) });
     const mirrors = this.#cached && MIRROR_KINDS.has(request.kind) ? await this.#mirrors() : [];
     const launch = await this.#backend.launch(request, { ...context, egress: egress !== undefined, deadlineMs, environment,
-      ...(mirrors.length ? { mirrors } : {}), ...(this.#shim && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
+      ...(mirrors.length ? { mirrors } : {}), ...(tools ? { sharedTools: tools } : {}), ...(this.#shim && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES
       : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     return new Promise<string>((resolveResult, reject) => {
