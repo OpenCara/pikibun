@@ -212,7 +212,7 @@ export class WindowsBackend implements HelperBackend {
     };
     const readonly = [system, dirname(this.#node), this.#gitRoot, this.#bash, layout.bin, layout.ownerConfig, layout.caBundle, join(layout.worktree, ".git"),
       ...(context.gitWritable ? [] : [layout.git]), ...mirrors, ...(context.sharedTools ? [context.sharedTools] : [])];
-    const readwrite = context.readOnly ? [] : [layout.home, layout.worktree, ...(context.gitWritable ? [layout.git] : [])];
+    const readwrite = context.readOnly ? [] : [layout.home, layout.worktree, ...(context.gitWritable ? [layout.git] : []), ...(context.packageCache ? [context.packageCache] : [])];
     if (context.readOnly) readonly.push(layout.home, layout.worktree);
     const containerRequest = {
       command: `"${this.#node}" --preserve-symlinks-main --preserve-symlinks "${join(layout.bin, "helper.mjs")}"`,
