@@ -1,7 +1,8 @@
 # Design: portable sessions
 
 Status: implemented. Signing each request on the owner's devices, so that the server a session is attached to is out
-of its trust entirely, is not: see [Trust](#trust).
+of its trust entirely, is not: see [Trust](#trust). To be replaced for new private sessions by
+[private sessions on the local server](local-private-sessions.md), which removes **Bring here**.
 
 ## Why
 
