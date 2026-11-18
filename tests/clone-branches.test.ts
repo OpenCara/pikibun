@@ -54,10 +54,13 @@ test("the worktree's clones report their checked-out branches of the workspace's
   const clones = await readCloneBranches(root);
   assert.deepEqual(clones, [
     { directory: "app", origin: "https://github.com/Owner/Repo.git", branch: "fix/login" },
+    { directory: "detached", origin: "https://github.com/owner/repo" },
     { directory: "develop-default", origin: "https://github.com/owner/repo", branch: "main" },
     { directory: "elsewhere", origin: "https://gitlab.com/owner/repo.git", branch: "x" },
+    { directory: "no-remote-head", origin: "https://github.com/owner/repo" },
+    { directory: "on-main", origin: "https://github.com/owner/repo" },
     { directory: "src/tools", origin: "git@github.com:owner/tools.git", branch: "feature" },
-  ]);
+  ], "a clone on its default branch or detached has no branch of its own, but counts");
   const repositories: EgressRepository[] = [
     { bindingId: "binding-1", provider: "github", host: "github.com", fullName: "owner/repo" },
     { bindingId: "binding-2", provider: "github", host: "github.com", fullName: "owner/tools" },
@@ -69,4 +72,19 @@ test("the worktree's clones report their checked-out branches of the workspace's
     { repository: "owner/tools", branch: "feature" },
   ], "only github.com repositories of the workspace, by the workspace's name, sorted");
   assert.deepEqual(reportedBranches(clones, []), []);
+  assert.deepEqual(reportedBranches(clones, repositories, "pikibun/fix-abc"), [
+    { repository: "owner/repo", branch: "fix/login" },
+    { repository: "owner/repo", branch: "main" },
+    { repository: "owner/repo", branch: "pikibun/fix-abc" },
+    { repository: "owner/tools", branch: "feature" },
+    { repository: "owner/tools", branch: "pikibun/fix-abc" },
+  ], "the session's branch, for each workspace repository cloned");
+  assert.deepEqual(reportedBranches([{ directory: "app", origin: "https://github.com/owner/repo" }], repositories, "pikibun/fix-abc"),
+    [{ repository: "owner/repo", branch: "pikibun/fix-abc" }], "a clone on main that pushed HEAD to the session's branch");
+  assert.deepEqual(reportedBranches([{ directory: "app", origin: "https://github.com/owner/repo", branch: "pikibun/fix-abc" }], repositories, "pikibun/fix-abc"),
+    [{ repository: "owner/repo", branch: "pikibun/fix-abc" }], "once");
+  const many = Array.from({ length: 25 }, (_, index) => ({ directory: `c${index}`, origin: "https://github.com/owner/repo", branch: `b${String(index).padStart(2, "0")}` }));
+  const kept = reportedBranches(many, repositories, "pikibun/fix-abc");
+  assert.equal(kept.length, 20);
+  assert.ok(kept.some(item => item.branch === "pikibun/fix-abc"), "the session's branch is kept within the limit");
 });

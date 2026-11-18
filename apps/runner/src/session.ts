@@ -788,7 +788,7 @@ export class RunnerSession {
   private branchReports(): BranchReports | undefined {
     const send = this.config.reportBranches;
     if (!send || !this.#onHost || !this.#clone) return undefined;
-    this.#branchReports ??= new BranchReports({ sessionId: this.binding.session.id, send, closing: () => this.closing,
+    this.#branchReports ??= new BranchReports({ sessionId: this.binding.session.id, sessionBranch: sessionBranch(this.binding.session), send, closing: () => this.closing,
       repositories: async () => (await this.requestGrant()).repositories,
       clones: () => (this.sandbox as HostWorkspace).cloneBranches(async () => {}) });
     return this.#branchReports;
