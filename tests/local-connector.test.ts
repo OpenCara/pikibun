@@ -9,6 +9,7 @@ import type { TestContext } from 'node:test';
 import type { ConnectorCapabilities, ConnectorCredentials, ConnectorRpcRequest, ConnectorRpcResponse, LocalModelSummary } from '../packages/shared/src/connector.js';
 import type { AuthorizationRequest, ModelDefinition, RunnerAction, RunnerBinding, SessionView } from '../packages/shared/src/types.js';
 import type { ConnectorRuntime, ConnectorSocket, LocalConnector } from '../apps/runner/src/connector.js';
+import type { PrivateHome } from '../apps/runner/src/private-home.js';
 import type { LocalModels } from '../apps/runner/src/local-pi.js';
 import type { RunnerConfig } from '../apps/runner/src/session.js';
 import { connectorLimits } from '../packages/shared/src/connector.js';
@@ -198,7 +199,7 @@ test('connector manifests reject duplicates, excessive catalogs and implicit fau
 });
 
 test('relay accepts exactly the supported action/method/path combinations and locally signs bound tickets', async t => {
-  const bodies: Record<Exclude<RunnerAction, 'events'>, string> = {
+  const bodies: Record<Exclude<RunnerAction, 'events' | 'private'>, string> = {
     create: JSON.stringify(binding()), view: '', submit: '{}', ask: '{}',
     backup: '{}', restart: '{}', restore: JSON.stringify({ binding: binding() }), stop: '{}',
     files: JSON.stringify({ path: 'src' }), changes: '{}', revert: JSON.stringify({ entryId: '1:2' }),
@@ -224,6 +225,19 @@ test('relay accepts exactly the supported action/method/path combinations and lo
       await assert.rejects(verifyRunnerTicket(result.authorization, 'wrong-fixture-verifier', action, 'session', request.body));
     });
   }
+});
+
+test('relay accepts a private request only on its own path, for the owner, and only for a route a computer forwards', async () => {
+  const body = JSON.stringify({ method: 'GET', path: '/api/sessions/abc/view' });
+  const base = await rpc('private', body);
+  const request = { ...base, path: '/v1/private', ticket: { ...base.ticket, sessionId: 'private' } };
+  const result = await validateRelayRequest(request, credentials.connectorId, verifierSecret);
+  assert.deepEqual(await verifyRunnerTicket(result.authorization, verifierSecret, 'private', 'private', body), request.ticket);
+  await assert.rejects(validateRelayRequest({ ...request, ticket: { ...request.ticket, actorId: 'someone-else' } }, credentials.connectorId, verifierSecret), /Invalid relay ticket/);
+  await assert.rejects(validateRelayRequest({ ...request, ticket: { ...request.ticket, sessionId: 'abc' } }, credentials.connectorId, verifierSecret), /Invalid private request/);
+  await assert.rejects(validateRelayRequest({ ...request, path: '/v1/sessions/private/private' }, credentials.connectorId, verifierSecret), /not allowed/);
+  const refused = JSON.stringify({ method: 'POST', path: '/api/sessions/abc/link' });
+  await assert.rejects(validateRelayRequest({ ...request, body: refused, ticket: { ...request.ticket, bodyHash: await sha256(refused) } }, credentials.connectorId, verifierSecret), /not allowed/);
 });
 
 test('relay accepts a view request for what changed since a revision', async () => {
@@ -386,6 +400,8 @@ type FixtureOptions = {
   identityDir?: string;
   portable?: ConnectorRuntime['portable'];
   portableArchived?: ConnectorRuntime['portableArchived'];
+  privateHome?: PrivateHome;
+  privateSessions?: (body: unknown) => Response | Promise<Response>;
   identity?: (path: string, body: unknown) => Response | Promise<Response>;
   hardware?: (body: unknown) => Response | Promise<Response>;
   hardwareReport?: () => Promise<HostHardware>;
@@ -409,6 +425,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
     dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
     hardware: { report: options.hardwareReport ?? (() => Promise.resolve(fixtureHardware)) }, hardwareReportMs: 20,
+    ...(options.privateHome ? { privateHome: options.privateHome, privateReportMs: 20 } : {}),
     ...(options.version ? { version: options.version } : {}), ...(options.identityDir ? { identityDir: options.identityDir } : {}),
     ...(options.sandboxBackend ? { sandboxBackend: options.sandboxBackend } : {}),
     browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
@@ -452,6 +469,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
       if (request.url === `${origin}/api/connectors/self/extensions`) return options.extensionsSync?.(JSON.parse(call.body)) ?? Response.json({ requests: [] });
       if (request.url.startsWith(`${origin}/api/connectors/self/identity`) && options.identity) return options.identity(new URL(request.url).pathname, JSON.parse(call.body));
       if (request.url === `${origin}/api/connectors/self/hardware`) return options.hardware?.(JSON.parse(call.body)) ?? Response.json({ error: 'Not found' }, { status: 404 });
+      if (request.url === `${origin}/api/connectors/self/private-sessions`) return options.privateSessions?.(JSON.parse(call.body)) ?? Response.json({ error: 'Not found' }, { status: 404 });
       workerCalls.push(call);
       if (request.url === `${origin}/api/connectors/self/manifest`) {
         return options.manifest?.(manifests++) ?? Response.json({ ok: true });
@@ -797,6 +815,33 @@ test('a forced pairing claims the new code first, then replaces the saved token 
   await starting;
   assert.equal(claims, 2);
   assert.deepEqual(await readConnectorState(dataDir, origin), replacement);
+});
+
+test('a host with its own Pikibun says it forwards private sessions, forwards their requests to it, and reports their list when it changes', { timeout: 10000 }, async t => {
+  const forwarded: unknown[] = [];
+  const reports = mailbox<unknown>();
+  let list = [{ id: 'one', title: 'Mine' }];
+  const privateHome: PrivateHome = {
+    forward: async request => { forwarded.push(request); return { status: 202, contentType: 'application/json', data: Buffer.from('{"queued":true}').toString('base64') }; },
+    sessions: async () => list,
+    stop: async () => {},
+  };
+  const fixture = await connectorFixture(t, { privateHome, privateSessions: body => { reports.push(body); return Response.json({ ok: true }); } });
+  const socket = await startFixture(fixture);
+  const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
+  assert.equal(JSON.parse(manifest.body).capabilities.privateSessions, 1);
+  assert.deepEqual(await reports.next(), { sessions: [{ id: 'one', title: 'Mine' }] });
+  list = [{ id: 'one', title: 'Renamed' }];
+  assert.deepEqual(await reports.next(), { sessions: [{ id: 'one', title: 'Renamed' }] }, 'sent again once it changes, not every time');
+
+  const body = JSON.stringify({ method: 'POST', path: '/api/sessions/one/submit', body: '{"content":"hi"}' });
+  const base = await rpc('private', body, 'forward-1');
+  socket.receive({ ...base, path: '/v1/private', ticket: { ...base.ticket, sessionId: 'private' } });
+  const reply = JSON.parse(await socket.messages.next()) as ConnectorRpcResponse;
+  assert.equal(reply.status, 200);
+  assert.deepEqual(JSON.parse(reply.body), { status: 202, contentType: 'application/json', data: Buffer.from('{"queued":true}').toString('base64') });
+  assert.deepEqual(forwarded, [{ method: 'POST', path: '/api/sessions/one/submit', body: '{"content":"hi"}' }]);
+  assert.equal(fixture.runtimes[0]!.requests.length, 0, 'the sessions this host runs for the server never see it');
 });
 
 test('small concurrent requests fill the pending limit and complete FIFO on the same socket', { timeout: 15000 }, async t => {

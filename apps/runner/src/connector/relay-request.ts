@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ConnectorRpcRequest } from "../../../../packages/shared/src/connector.js";
 import { connectorLimits } from "../../../../packages/shared/src/connector.js";
+import { parsePrivateForwardRequest, PRIVATE_FORWARD_PATH, PRIVATE_TICKET_SESSION } from "../../../../packages/shared/src/private-sessions.js";
 import { signToken } from "../../../../packages/shared/src/crypto.js";
 import type { RunnerAction, RunnerBinding } from "../../../../packages/shared/src/types.js";
 import { assertId, verifyRunnerTicket } from "../protocol.js";
@@ -8,7 +9,7 @@ import { actorSchema, decodeJson, encoder, IDENTIFIER } from "./wire.js";
 
 export const ticketSchema = z.object({
   aud: z.literal("runner"), sessionId: z.string().regex(IDENTIFIER), actorId: actorSchema, ownerId: actorSchema,
-  action: z.enum(["create", "view", "events", "submit", "ask", "backup", "restart", "restore", "stop", "files", "changes", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image", "sudo", "attach", "portable", "artifacts", "title", "resources"]),
+  action: z.enum(["create", "view", "events", "submit", "ask", "backup", "restart", "restore", "stop", "files", "changes", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image", "sudo", "attach", "portable", "artifacts", "title", "resources", "private"]),
   policyVersion: z.number().int().positive(), iat: z.number().int(), exp: z.number().int(),
   jti: z.string().regex(IDENTIFIER), bodyHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/), connectorId: z.string().regex(IDENTIFIER),
 }).strict();
@@ -22,7 +23,12 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
   if (encoder.encode(rpc.body).length > connectorLimits.requestBytes) throw new Error("Invalid relay request");
   let action: RunnerAction;
   let sessionId: string;
-  if (rpc.path === "/v1/sessions" && rpc.method === "POST") {
+  if (rpc.path === PRIVATE_FORWARD_PATH) {
+    if (rpc.method !== "POST" || rpc.ticket.action !== "private" || rpc.ticket.sessionId !== PRIVATE_TICKET_SESSION) throw new Error("Invalid private request");
+    action = "private";
+    sessionId = PRIVATE_TICKET_SESSION;
+    if (!parsePrivateForwardRequest(decodeJson(encoder.encode(rpc.body)))) throw new Error("Private request is not allowed");
+  } else if (rpc.path === "/v1/sessions" && rpc.method === "POST") {
     action = "create";
     let binding: RunnerBinding;
     try { binding = JSON.parse(rpc.body); } catch { throw new Error("Invalid create binding"); }
@@ -50,7 +56,7 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
   const ticket = rpc.ticket;
   if (ticket.connectorId !== connectorId
     || (rpc.method === "GET" && rpc.body !== "")
-    || (["create", "restore", "restart", "fork", "pack", "unpack", "attach", "portable"].includes(action) && ticket.actorId !== ticket.ownerId)) throw new Error("Invalid relay ticket");
+    || (["create", "restore", "restart", "fork", "pack", "unpack", "attach", "portable", "private"].includes(action) && ticket.actorId !== ticket.ownerId)) throw new Error("Invalid relay ticket");
   const authorization = await signToken(ticket, verifierSecret);
   await verifyRunnerTicket(authorization, verifierSecret, action, sessionId, rpc.body);
   return { rpc, authorization };

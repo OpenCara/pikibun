@@ -7,6 +7,7 @@ import { createConnector, controlPlaneOrigin } from "./connector.js";
 import { assertConnectorPlatform, assertPrerequisites, checkPrerequisites, defaultStateDir, loadConnectorModels, savedPairing, unsandboxedWarning, verifySandboxIsolation, isolationMessage } from "./connect-setup.js";
 import { ConnectorSetupError } from "./protocol.js";
 import { identityDirectory } from "./identity.js";
+import { startPrivateHome } from "./private-home.js";
 import type { ResourceConfig } from "./resources.js";
 import { DEFAULT_WINDOWS_LIMITS, validWindowsLimits, windowsRuntimeDirectory, type SandboxBackendConfig } from "./sandbox-backend.js";
 
@@ -26,6 +27,10 @@ whether pushes in your own sessions may use this machine's Git credentials, and 
 repository cache. Changes reach running sessions within a minute; the repository cache
 changes when the connector next connects.
 
+Your private sessions live on this computer's own Pikibun, the one "pikibun serve" runs:
+when none is running, the connector starts it without a window or sign-in link, from
+~/.local/share/pikibun/server, and every server this computer is paired with shows them.
+
 Options:
   --server ORIGIN          HTTPS control-plane origin (first pairing only)
   --pairing-id ID          One-use pairing ID from Pikibun
@@ -42,7 +47,7 @@ Options:
 This machine's own setup, when the defaults don't fit:
   --state-dir PATH         Private connector state (default ~/.local/share/pikibun/connector)
   --identity-dir PATH      Your identity, shared by every connection on this computer, which
-                           keeps your private sessions portable between servers (default
+                           signs your private workspace's settings (default
                            ~/.local/share/pikibun/identity; see "pikibun identity --help")
   --pi-agent-dir PATH      Pi config/auth directory (default: Pi's own getAgentDir())
   --model PROVIDER/MODEL   Advertise this configured local model (repeatable); without it,
@@ -256,12 +261,16 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   if (pairingId && !code) throw new ConnectorSetupError("No pairing code was entered. Paste the single-use code shown in Pikibun at the hidden prompt.");
   const pairing = pairingId ? { id: pairingId, code } : undefined;
   const isolation = !unsandboxed && !sandboxBackend ? await verifySandboxIsolation() : undefined;
+  const identityDir = identityDirectory(values["identity-dir"]);
+  const hostCapabilities = { platform: process.platform, sandbox: isolation?.ok === true, productionShell: false };
+  const privateHome = startPrivateHome({ localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}), identityDir,
+    allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"], capabilities: hostCapabilities });
   const connector = createConnector({
-    dataDir, identityDir: identityDirectory(values["identity-dir"]),
+    dataDir, identityDir, ...(privateHome ? { privateHome } : {}),
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
     remoteExtensionInstalls: values["no-remote-installs"] !== true, managedExtensions: values["managed-extensions"] === true,
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
-    capabilities: { platform: process.platform, sandbox: isolation?.ok === true, productionShell: false },
+    capabilities: hostCapabilities,
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },
     onWarning: (warning, detail) => { process.stderr.write(warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : "Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.\n"); },
   });
@@ -278,6 +287,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   finally {
     process.off("SIGINT", stop); process.off("SIGTERM", stop);
     await connector.stop();
+    await privateHome?.stop();
     if (pairing) pairing.code = "";
   }
 }

@@ -149,24 +149,16 @@ export interface SessionRecord {
   pullRequest?: SessionPullRequest;
   tunnel?: SessionTunnelRecord;
   sideAsks?: SideAskSummary[];
+  forwarded?: ForwardedSession;
+}
+export interface ForwardedSession {
+  hostName: string;
+  online: boolean;
 }
 export interface SideAskSummary {
   conversationId: string;
   preview: string;
   createdAt: string;
-}
-export interface PortableSessionOffer {
-  id: string;
-  title: string;
-  createdAt: string;
-  connectorId: string;
-  hostName: string;
-  hostEnvironment: boolean;
-  working: boolean;
-  attachedElsewhere: boolean;
-  model: { provider: string; modelId: string };
-  modelId?: string;
-  existing?: boolean;
 }
 export type PullRequestState = "draft" | "open" | "failing" | "changes_requested" | "merged" | "closed";
 export interface SessionPullRequest {
@@ -233,7 +225,7 @@ export interface RunnerBinding {
   model: ModelDefinition;
 }
 export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "backup" | "restart" | "restore" | "stop" | "files" | "changes"
-  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel" | "image" | "sudo" | "attach" | "portable" | "artifacts" | "title" | "resources";
+  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel" | "image" | "sudo" | "attach" | "portable" | "artifacts" | "title" | "resources" | "private";
 
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
 

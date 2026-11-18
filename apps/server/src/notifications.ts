@@ -124,13 +124,13 @@ function background(work: Promise<unknown>): void {
 
 export interface DeliveryCount { web: number }
 
-async function notify(env: Env, items: { userId: string; notification: PikibunNotification }[], options: { wait?: boolean } = {}): Promise<DeliveryCount> {
+async function notify(env: Env, items: { userId: string; notification: PikibunNotification }[], options: { wait?: boolean; forwarded?: boolean } = {}): Promise<DeliveryCount> {
   if (!items.length) return { web: 0 };
   const cutoff = new Date(Date.now() - NOTIFICATION_FEED_RETENTION_MS).toISOString();
   await env.DB.batch(items.flatMap(({ userId, notification: n }) => [
     env.DB.query('DELETE FROM notifications WHERE user_id = ? AND created_at < ?').bind(userId, cutoff),
-    env.DB.query('INSERT INTO notifications (id, user_id, session_id, kind, title, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(n.id, userId, n.sessionId ?? null, n.kind, n.title, n.body, n.createdAt),
+    env.DB.query('INSERT INTO notifications (id, user_id, session_id, forwarded_session_id, kind, title, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(n.id, userId, options.forwarded ? null : n.sessionId ?? null, options.forwarded ? n.sessionId ?? null : null, n.kind, n.title, n.body, n.createdAt),
   ]));
   const delivery = deliver(env, items);
   if (options.wait) return delivery;
@@ -177,23 +177,23 @@ async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: Not
 }
 
 export async function notifySessionActivity(env: Env, row: Pick<SessionRow, 'id' | 'title' | 'owner_id' | 'workspace_id'>, previous: SessionActivity | null | undefined,
-  activity: SessionActivity): Promise<void> {
+  activity: SessionActivity, forwarded = false): Promise<void> {
   const kind = activityNotification(previous, activity);
   if (!kind) return;
-  const sender = await env.DB.query<{ actor_id: string }>(`SELECT actor_id FROM run_admissions WHERE session_id = ? AND mode = 'write' AND created_at > ?
+  const sender = forwarded ? null : await env.DB.query<{ actor_id: string }>(`SELECT actor_id FROM run_admissions WHERE session_id = ? AND mode = 'write' AND created_at > ?
     ORDER BY created_at DESC LIMIT 1`).bind(row.id, new Date(Date.now() - SENDER_WINDOW_MS).toISOString()).first('actor_id');
   const candidates = [...new Set([row.owner_id, ...(sender ? [sender] : [])])];
   const workspace = await env.DB.query<{ name: string }>('SELECT name FROM workspaces WHERE id = ?').bind(row.workspace_id).first('name');
   const items: { userId: string; notification: PikibunNotification }[] = [];
   const at = Date.now();
   for (const userId of candidates) {
-    if (!await sessionAccess(env, row.id, userId)) continue;
+    if (!forwarded && !await sessionAccess(env, row.id, userId)) continue;
     const preferences = await notificationPreferences(env, userId);
     if (!preferences[preferenceOf[kind]]) continue;
     const { title, body } = notificationText(kind, preferences.details, { title: row.title, workspace: workspace ?? '' });
     items.push({ userId, notification: { id: notificationId(at), kind, title, body, sessionId: row.id, createdAt: new Date(at).toISOString() } });
   }
-  await notify(env, items);
+  await notify(env, items, { forwarded });
 }
 
 function preferencesInput(input: Record<string, unknown>, current: NotificationPreferences): NotificationPreferences {
@@ -290,7 +290,7 @@ export function registerNotifications(app: Hono<AppEnv>): void {
     }
     if (!FEED_CURSOR.test(after)) fail(400, 'invalid_input', 'Invalid cursor.');
     const rows = await c.env.DB.query<{ id: string; kind: NotificationKind; title: string; body: string; session_id: string | null; created_at: string }>(
-      `SELECT id, kind, title, body, session_id, created_at FROM notifications WHERE user_id = ? AND id > ? ORDER BY id LIMIT ?`)
+      `SELECT id, kind, title, body, COALESCE(session_id, forwarded_session_id) AS session_id, created_at FROM notifications WHERE user_id = ? AND id > ? ORDER BY id LIMIT ?`)
       .bind(userId, after, FEED_LIMIT).all();
     const notifications = rows.map(row => ({ id: row.id, kind: row.kind, title: row.title, body: row.body, ...(row.session_id ? { sessionId: row.session_id } : {}),
       createdAt: row.created_at }));

@@ -11,6 +11,7 @@ npx pikibun@latest serve
 - **This computer only.** It listens on `http://127.0.0.1:7878` (`--port` changes it), so nothing else on the network reaches it.
 - **This computer is the host.** Once the owner has signed in, the computer pairs itself with the server, with no code to copy, and appears under **Settings → Hosts**. It runs sessions as `pikibun connect` would: in the bubblewrap sandbox on Linux with its prerequisites, otherwise only with `--unsafe-no-sandbox`. `--no-host` serves without it.
 - **Its data** (the SQLite database, session backups, the secrets it was set up with, and this computer's pairing) is in `~/.local/share/pikibun/server` (`--state-dir` chooses another), private to your user. It is separate from `pikibun connect`'s, so a computer connected to a team's server stays connected. One Pikibun at a time runs from it: a second `pikibun serve` on the same state says the first is running.
+- **It runs without you, too.** Your private sessions live here, whichever server you use them from, so `pikibun connect` and the desktop app's host start this Pikibun without a window or sign-in link when it isn't running ([Your private sessions on every server](backups.md#your-private-sessions-on-every-server)). `pikibun serve` takes such a one over, and it comes back once `pikibun serve` stops.
 
 To use it from the Mac, Windows or Linux app, see [Self host](desktop/self-host.md) in the desktop app user guide.
 

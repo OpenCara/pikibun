@@ -7,7 +7,8 @@ import { ConfigurationError } from '../config.js';
 import { startLocalHost, type LocalHost, type LocalHostOptions } from './host.js';
 import { githubOAuthAppInstructions, LocalServerError, startLocalServer } from './launch.js';
 import { readNewPassword } from '../password-accounts-cli.js';
-import { defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState, sharedOrigin, validGitHubApp, type GitHubOAuthApp, type SharedConfig } from './state.js';
+import { defaultLocalStateDir, LocalStateError, peekLocalState, sharedOrigin, validGitHubApp, type GitHubOAuthApp, type SharedConfig } from './state.js';
+import { openLocalStateTakingOver } from './discovery.js';
 
 const HELP = `Usage: pikibun serve [options]
 
@@ -156,7 +157,7 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
     const github = shared && values['github-client-id'] ? await githubApp(values['github-client-id'], shared.origin) : undefined;
     if (values['create-admin'] && !values['create-admin'].trim()) throw new ConnectorSetupError('--create-admin needs a username.');
     const hostSetup = values['no-host'] ? undefined : await hostOptions(values);
-    const { state, release } = await openLocalState(stateDir, {
+    const { state, release } = await openLocalStateTakingOver(stateDir, {
       ...(shared ? { shared: { ...shared, ...(github ? { github } : {}) } } : {}), ...(port ? { port } : {}),
     });
     const testSecret = values['test-mode'] ? Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url') : undefined;

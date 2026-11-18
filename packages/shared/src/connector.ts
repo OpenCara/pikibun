@@ -52,6 +52,7 @@ export interface ConnectorCapabilities {
   hostConfig?: boolean;
   compactionConfig?: boolean;
   portableSessions?: boolean;
+  privateSessions?: number;
   artifacts?: boolean;
   sessionResources?: boolean;
   gpu?: GpuKind;

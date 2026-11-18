@@ -2407,7 +2407,7 @@ test('workspace session listing stays query-bounded with sixty implicit readers 
   const before = f.queryCount();
   const { sessions } = await json<{ sessions: SessionRecord[] }>(await s.member.request('GET', '/api/sessions'));
   const queries = f.queryCount() - before;
-  assert.ok(queries > 0 && queries <= 3, `Listing sixty workspace sessions must not perform per-session authorization queries; used ${queries}`);
+  assert.ok(queries > 0 && queries <= 4, `Listing sixty workspace sessions must not perform per-session authorization queries (one more lists the private sessions computers forward); used ${queries}`);
   assert.deepEqual(sessions.map(session => session.id).sort(), [...workspaceIds, 'granted'].sort());
   for (const session of sessions) {
     assert.deepEqual(session.permissions, session.id === 'granted' ? ['read', 'ask'] : ['read']);

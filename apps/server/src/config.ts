@@ -32,7 +32,7 @@ export const stringVars = [
   'APP_ORIGIN', 'RUNNER_URL', 'RUNNER_EVENT_TRANSPORT', 'RUNNER_SHARED_SECRET', 'SESSION_SECRET', 'VAULT_KEY',
   'GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'TEST_AUTH_ENABLED', 'TEST_AUTH_SECRET', 'TEST_AUTH_EXPIRES_AT',
   'GITHUB_APP_ID', 'GITHUB_APP_SLUG', 'GITHUB_APP_PRIVATE_KEY', 'OIDC_SIGNING_KEY', 'ADMIN_USER_IDS', 'GIT_DIRECT', 'SANDBOX_GITHUB_API',
-  'LOCAL_MODE', 'LOCAL_CLAIM_SECRET', 'LOCAL_OWNER_ID', 'LOCAL_OWNER_NAME', 'PASSWORD_AUTH', 'SIGNUP',
+  'LOCAL_MODE', 'LOCAL_CLAIM_SECRET', 'LOCAL_OWNER_ID', 'LOCAL_OWNER_NAME', 'LOCAL_FORWARD_SECRET', 'PASSWORD_AUTH', 'SIGNUP',
   'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'NOTION_CLIENT_ID', 'NOTION_CLIENT_SECRET', 'DROPBOX_CLIENT_ID', 'DROPBOX_CLIENT_SECRET',
   'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'MICROSOFT_TENANT', 'TENCENT_DOCS_CLIENT_ID', 'TENCENT_DOCS_CLIENT_SECRET',
   'WEB_PUSH_CONTACT', 'PIKIBUN_VERSION',
@@ -87,6 +87,7 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
       if (!LOOPBACK.includes(listenHost)) throw new ConfigurationError('LOCAL_MODE listens on loopback only: leave HOST unset or set it to 127.0.0.1.');
       if (env.LOCAL_OWNER_ID !== undefined && !LOCAL_OWNER_ID.test(env.LOCAL_OWNER_ID)) throw new ConfigurationError('LOCAL_OWNER_ID must be a user ID such as github:12345 or password:alice.');
       if (env.LOCAL_OWNER_NAME !== undefined && !PASSWORD_USERNAME.test(env.LOCAL_OWNER_NAME)) throw new ConfigurationError('LOCAL_OWNER_NAME must be a username: 3 to 39 lowercase letters, digits, - and _.');
+      if (env.LOCAL_FORWARD_SECRET !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(env.LOCAL_FORWARD_SECRET)) throw new ConfigurationError('LOCAL_FORWARD_SECRET must be a base64url-encoded random 32-byte value.');
     }
   }
   const staticDir = clientBuildDirectory(processEnv.STATIC_DIR);

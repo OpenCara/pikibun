@@ -28,7 +28,7 @@ export function requestKey(actorId: string, mode: "write" | "ask", requestId: st
 export function permissionFor(action: RunnerAction): Permission {
   if (action === "submit" || action === "create" || action === "stop" || action === "files" || action === "changes" || action === "revert" || action === "fork" || action === "upload" || action === "tunnel" || action === "image" || action === "sudo" || action === "title") return "write";
   if (action === "ask" || action === "withdraw") return "ask";
-  if (action === "restart" || action === "backup" || action === "restore" || action === "pack" || action === "unpack" || action === "attach" || action === "portable") return "manage";
+  if (action === "restart" || action === "backup" || action === "restore" || action === "pack" || action === "unpack" || action === "attach" || action === "portable" || action === "private") return "manage";
   return "read";
 }
 export async function verifyRunnerTicket(token: string, secret: string, action: RunnerAction, sessionId: string, body: string, now = Date.now()): Promise<RunnerTicket> {

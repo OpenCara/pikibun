@@ -3,6 +3,7 @@ import { getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import { constantTimeEqual, sha256 } from '../../../../packages/shared/src/crypto.js';
 import { validateUserEnv } from '../../../../packages/shared/src/policy.js';
+import { PRIVATE_FORWARD_HEADER, privateRoute } from '../../../../packages/shared/src/private-sessions.js';
 import type { NativeSignIn, SignedInDevice } from '../../../../packages/shared/src/types.js';
 import { isInstanceAdmin } from './admin.js';
 import { auditAfterChange } from './audit.js';
@@ -52,7 +53,34 @@ export async function dbResult<T>(operation: Promise<T>): Promise<T> {
   catch { fail(503, 'auth_unavailable', 'Authentication storage is temporarily unavailable.'); }
 }
 
+function forwardSecret(c: AppContext, given: string | undefined): boolean {
+  const secret = c.env.LOCAL_FORWARD_SECRET;
+  return localMode(c.env) && !!secret && OPAQUE_TOKEN.test(secret) && typeof given === 'string' && OPAQUE_TOKEN.test(given) && constantTimeEqual(given, secret);
+}
+
+async function forwardedOwner(c: AppContext, given: string): Promise<AuthIdentity> {
+  if (!forwardSecret(c, given)) fail(401, 'unauthorized', 'Authentication is required.');
+  const url = new URL(c.req.url);
+  const route = privateRoute(c.req.method, url.pathname + url.search);
+  if (!route) fail(403, 'not_forwarded', 'Other Pikibun servers reach only the private sessions on this computer.');
+  const owner = await localOwner(c.env);
+  if (!owner) fail(409, 'local_owner_unavailable', 'The Pikibun on this computer has no owner yet.');
+  if (route.sessionId) {
+    const own = await dbResult(c.env.DB.query<{ id: string }>(`SELECT s.id FROM sessions s
+      JOIN personal_workspaces p ON p.workspace_id = s.workspace_id AND p.user_id = s.owner_id
+      WHERE s.id = ? AND s.owner_id = ?`).bind(route.sessionId, owner.id).first());
+    if (!own) fail(404, 'not_found', 'Session not found.');
+  }
+  return { userId: owner.id, tokenHash: 'forwarded', csrfToken: '', client: 'native' };
+}
+
 export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const forwarded = c.req.header(PRIVATE_FORWARD_HEADER);
+  if (forwarded !== undefined) {
+    c.set('auth', await forwardedOwner(c, forwarded));
+    await next();
+    return;
+  }
   const authorization = c.req.header('authorization');
   const bearer = authorization === undefined ? undefined : /^Bearer +(.*)$/i.exec(authorization)?.[1];
   const client = bearer === undefined ? 'browser' : 'native';
@@ -497,6 +525,18 @@ async function localOwnerAccount(env: Env): Promise<UserRow> {
   return user;
 }
 
+export async function ensureLocalOwner(env: Env): Promise<{ id: string }> {
+  return { id: (await localOwnerAccount(env)).id };
+}
+
+async function localHandover(c: AppContext) {
+  const handover = c.env.LOCAL_HANDOVER;
+  if (!handover || !forwardSecret(c, c.req.header(PRIVATE_FORWARD_HEADER))) fail(404, 'not_found', 'Not found.');
+  requireOrigin(c);
+  setTimeout(handover, 0);
+  return c.json({ handingOver: true }, 202);
+}
+
 async function localSignIn(c: AppContext) {
   const tokens = c.req.queries('token');
   requireLocalToken(c.env, tokens?.length === 1 ? tokens[0] : undefined);
@@ -650,6 +690,7 @@ export function registerAuth(app: Hono<AppEnv>): void {
   app.get(CALLBACK_PATH, privateResponse, githubCallback);
   app.get('/api/auth/local', privateResponse, localSignIn);
   app.post('/api/auth/native/local', privateResponse, nativeLocalSignIn);
+  app.post('/api/local/handover', privateResponse, localHandover);
   app.get('/api/auth/native/start', privateResponse, nativeStart);
   app.get(NATIVE_PAGE_PATH, privateResponse, nativeDone);
   app.post('/api/auth/native/token', privateResponse, nativeToken);

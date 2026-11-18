@@ -1,7 +1,9 @@
 # Design: portable sessions
 
 Status: implemented. Signing each request on the owner's devices, so that the server a session is attached to is out
-of its trust entirely, is not: see [Trust](#trust).
+of its trust entirely, is not: see [Trust](#trust). Replaced for new private sessions by
+[private sessions on the local server](local-private-sessions.md), which removed **Bring here**: what follows of moving
+sessions between servers applies to those made portable before.
 
 ## Why
 
@@ -63,44 +65,28 @@ environments, `node_modules/.bin`), and the index lets every connection of the i
 
 ## Attaching a session to another server
 
-1. The host, paired with the new server, reports the portable sessions of its identity: ID, title, when each was made,
-   where it runs, its model, whether it is attached to this pairing or working, and its signed mark. The server keeps
-   the ones whose mark is by the delegated key (`portable_offers`) and lists those not attached here under the private
-   workspace, with **Bring here** (`GET /api/portable-sessions`). The host reports titles as plain single lines, and a
-   session the server can't take is left out of the list rather than refusing the report. An archived record here is
-   offered only when the session isn't simply archived: it was moved away (`detached_at`), or the host reports it
-   attached elsewhere (it may have moved while archived, unnoticed here, as only an open session notices). A session
-   archived here and still attached here is not offered, and **Bring here** refuses it (`archived_here`): it is
-   unarchived instead, so archiving keeps it out of the lists and its packing and unarchive rules apply.
+**Bring here**, the button that did this from another server's private workspace, is gone: new private sessions live on
+the computer's own Pikibun, which every other server reaches by forwarding ([design](local-private-sessions.md)), and
+none moves. What remains serves the sessions that were made portable before, on the host and on the servers they are
+attached to:
 
-   An archived session is not offered anywhere else either. The host learns whether it is archived from the server it is
-   attached to: that server answers each report with the reported sessions attached to it that it has archived
-   (`archived`, sent only to a host whose report gives each session an `archived` field, so an older connector, which
-   reads its answer strictly, never gets it). The host keeps that in the session's folder
-   (`portable-archived.json`: the pairing that said so, and whether it is archived), and every connection reports it
-   (`archived`: `true`, `false`, or `null` once the session is attached to another pairing, or before its server has
-   said). A server doesn't offer one reported archived, nor, while the host can't say, one it has archived and not moved,
-   under whichever pairing (a host paired again with `--force` leaves its old records behind). One reported
-   open elsewhere is offered whatever this server has, as it may have moved while archived here.
-2. **Bring here** (`POST /api/portable-sessions/:id/attach`, with the host and optionally a model of it) makes the
-   session's record, private, under the same ID, and asks the host to `attach` it with the new binding.
-3. The host attaches it only for its owner, and only a session marked by its identity's current key. Under a lock in
-   the identity (one attach of a session at a time on the computer), it refuses a session that is working or packed;
-   asks the connection that has it open to let go (below); takes the session's open lease; replaces the pinned Git
-   identity (`sandbox/owner.gitconfig`, which pins the owner's name and email) and rewrites the binding kept in the
-   session's own database, as a restore does: interrupted cards stay history, used tickets and grants are dropped; and
-   only then replaces `binding.json`. Any failure before that puts the Git identity back and leaves the binding as it
-   was.
-4. The connection that had it notices: each open of a portable session checks that `binding.json` still names its own
+1. The host reports the portable sessions of its identity with each connection's identity report: ID, title, when each
+   was made, where it runs, its model, whether it is attached to this pairing or working, whether the server it is
+   attached to has archived it, and its signed mark. A server keeps no list of them any more; it uses the report to
+   follow a rotated key, and answers it with the reported sessions attached to it that it has archived (`archived`,
+   sent only to a host whose report gives each session an `archived` field, so an older connector, which reads its
+   answer strictly, never gets it). The host keeps that in the session's folder (`portable-archived.json`).
+2. The host still attaches a session (`attach`) only for its owner, and only one marked by its identity's current key.
+   Under a lock in the identity (one attach of a session at a time on the computer), it refuses a session that is
+   working or packed; asks the connection that has it open to let go (below); takes the session's open lease; replaces
+   the pinned Git identity (`sandbox/owner.gitconfig`) and rewrites the binding kept in the session's own database, as
+   a restore does; and only then replaces `binding.json`. Any failure before that puts the Git identity back and leaves
+   the binding as it was.
+3. The connection that had it notices: each open of a portable session checks that `binding.json` still names its own
    pairing and ID, and so does a sweep every second of the ones it has open, and of the ones it let go of for a
    minute after. It tells its server (`POST /api/connectors/self/portable/detached`), which archives its record as
-   **Moved to another server** (`session.detached`). Such a record can't be unarchived: it is brought back as in 2.
-
-Session IDs are UUIDs, so a session keeps its ID on every server. Bringing it back to a server that has its record
-reopens that record, when the session comes back through the same pairing. A record there under another pairing (the
-host was paired again with `--force`) can't change its host, which is immutable, so the session is attached under a
-new ID (`sourceSessionId` in the request): the host signs a mark for the new ID, forgets the old one, and the old record
-is archived as moved.
+   **Moved to another server** (`session.detached`), read-only. Such a record can't be unarchived: the session carries
+   on where it was moved.
 
 ### Open leases between connections
 
@@ -119,13 +105,6 @@ next sweep unless it is working.
   with each change), and the next server creates them again when it attaches the session and has none for it.
 - **Stays on the old server:** activity, push history, share links, backups and session roles. GitHub and other Git
   accounts are each server's own; connect them on the new one.
-
-## Converting existing sessions
-
-**Make private sessions portable** on a host's page (`POST /api/connectors/:id/portable`) converts its owner's private
-sessions on that host that qualify and are idle, fifty at a time, each batch after the last one it tried (`after`), so
-ones the host refuses don't hold up the rest: the server records the key and asks the host to `attach` each with its
-current binding, which marks and indexes it. Those the host refuses, working ones say, keep their record as it was.
 
 ## Replacing the key
 
