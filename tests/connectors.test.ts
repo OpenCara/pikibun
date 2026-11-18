@@ -1294,6 +1294,65 @@ test('github reads need the requester\'s live write admission, github_read among
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'github.read'").get()!.n, 0);
 });
 
+test('with their GitHub reach turned on, the session owner\'s own messages open issues, merge and read in any repository they can access; nobody else\'s do', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_issue', 'github_merge', 'github_read']);
+  const outside = 'https://api.github.com/repos/other/place';
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    calls.push(`${method} ${url.replace(/\?.*$/, '?…')}`);
+    assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${githubToken}`);
+    if (url === 'https://api.github.com/repos/Other/Place') return Response.json({ id: 99, full_name: 'other/place', default_branch: 'main', private: true });
+    if (url.startsWith(`${outside}/issues?`)) return Response.json([]);
+    if (url === `${outside}/issues` && method === 'POST') return Response.json({ number: 12 }, { status: 201 });
+    if (url === `${outside}/pulls/5/merge`) return Response.json({ merged: true, sha: mergedSha });
+    if (url === `${outside}/issues/7`) return Response.json({ html_url: 'https://github.com/other/place/issues/7', title: 'Upstream bug', state: 'open',
+      user: { login: 'author' }, created_at: '2026-10-01T00:00:00Z', body: 'b', labels: [] });
+    if (url.startsWith(`${outside}/issues/7/comments`)) return Response.json([]);
+    return Response.json({ message: `unexpected ${method} ${url}` }, { status: 500 });
+  });
+  const reach = `/api/workspaces/${s.team.id}/github-reach`;
+  assert.deepEqual(await json(await s.creator.request('GET', reach)), { settings: { anyRepository: false } });
+  const owner = s.session.ownerId;
+  const read = (actorId = owner) => self(f, s.connector, 'github/read', { sessionId: s.session.id, actorId, admissionId: admit(f, s.session.id, actorId),
+    callId: 'call-outside', repository: 'Other/Place', issue: 7 });
+
+  const off = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/issue', await issuePayload(f, s.session, 'Other/Place')), 403);
+  assert.equal(off.code, 'repository_not_pinned');
+  assert.match(off.error, /act on any GitHub repository they can access \(Settings → Workspaces → Your GitHub reach\), or add it to the workspace\.$/);
+  await denied(await read(), 403, 'repository_not_pinned');
+  assert.deepEqual(calls, [], 'refused before GitHub is asked anything');
+
+  assert.deepEqual(await json(await s.creator.request('PUT', reach, { anyRepository: true })), { settings: { anyRepository: true } });
+  assert.deepEqual(await json(await s.host.request('GET', reach)), { settings: { anyRepository: false } }, 'each member\'s reach is their own');
+  await denied(await s.creator.request('PUT', reach, { anyRepository: 'yes' }), 400, 'invalid_input');
+  await denied(await (await f.client('outsider')).request('PUT', reach, { anyRepository: true }), 404, 'not_found');
+
+  assert.deepEqual(await json(await self(f, s.connector, 'github/issue', await issuePayload(f, s.session, 'Other/Place'))),
+    { number: 12, url: 'https://github.com/other/place/issues/12' }, 'GitHub\'s canonical name is the one acted on');
+  assert.deepEqual(await json(await self(f, s.connector, 'github/merge', await mergePayload(f, s.session, 'Other/Place'))),
+    { sha: mergedSha, url: 'https://github.com/other/place/pull/5' });
+  assert.equal((await json<{ title: string }>(await read())).title, 'Upstream bug');
+  assert.deepEqual(calls.filter(call => !call.startsWith('GET https://api.github.com/repos/Other/Place')), [
+    `GET ${outside}/issues?…`, `POST ${outside}/issues`, `PUT ${outside}/pulls/5/merge`, `GET ${outside}/issues/7`, `GET ${outside}/issues/7/comments?…`]);
+  const details = (f.sqlite.prepare("SELECT action, detail_json FROM audit WHERE action IN ('github.issue.completed', 'github.merge.completed', 'github.read')").all() as
+    { action: string; detail_json: string }[]).map(row => [row.action, JSON.parse(row.detail_json).repository, JSON.parse(row.detail_json).outsideWorkspace]);
+  assert.deepEqual(details.sort(), [['github.issue.completed', 'other/place', true], ['github.merge.completed', 'other/place', true], ['github.read', 'other/place', true]]);
+
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
+  const before = calls.length;
+  const collaborator = await approvedOperation(f, s.session, { kind: 'github.issue', repository: 'Other/Place', title: 'From a collaborator', body: '' }, s.host.user.id, s.host.user.id);
+  await denied(await self(f, s.connector, 'github/issue', { ...collaborator, repository: 'Other/Place', title: 'From a collaborator', body: '' }), 403, 'repository_not_pinned');
+  await denied(await read(s.host.user.id), 403, 'repository_not_pinned');
+  assert.equal(calls.length, before, 'another sender\'s message never reaches beyond the workspace, whatever the owner chose');
+
+  assert.deepEqual(await json(await s.creator.request('PUT', reach, { anyRepository: false })), { settings: { anyRepository: false } });
+  await denied(await self(f, s.connector, 'github/issue', await issuePayload(f, s.session, 'Other/Place')), 403, 'repository_not_pinned');
+  assert.equal(calls.length, before);
+  assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
+});
+
 test('a github read returns the owner\'s view of a pull request with its reviews, review comments and checks, bounded and audited', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_read']);
   const api = 'https://api.github.com/repos/owner/repo';

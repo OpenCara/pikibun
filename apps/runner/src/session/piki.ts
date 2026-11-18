@@ -3,6 +3,7 @@ import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { HostConfig } from "../../../../packages/shared/src/host-config.js";
 import type { ChosenExtension } from "../../../../packages/shared/src/host-extensions.js";
+import type { ApiReach } from "../../../../packages/shared/src/network.js";
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation, type RunnerBinding } from "../../../../packages/shared/src/types.js";
 import type { ExtensionHost } from "../extensions/adapter.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "../extensions/piki/command.js";
@@ -30,7 +31,7 @@ export interface SessionPikiOptions {
   hostCommands: HostCommandPolicy;
   wholeResults: WholeResults;
   operations: Pick<SessionOperations, "run">;
-  apiLease(): { token: string; release(): void } | undefined;
+  apiLease(options?: { reach?: ApiReach }): { token: string; release(): void } | undefined;
   forgeWrites(senderId: string): Promise<boolean>;
   model(): { provider: string; modelId: string } | undefined;
   thinkingLevel(): string | undefined;
@@ -94,7 +95,8 @@ export class SessionPiki {
   async #runCommand(run: PikiSandboxRun): Promise<CliRun> {
     const call = this.#pikiCalls.get(run.callId);
     if (!call) throw new RunnerError(403, `${run.command} runs only in a call of its tool this session admitted. Nothing ran.`);
-    const lease = call.write && !run.readOnly ? this.options.apiLease() : undefined;
+    const ownerSent = call.attribution.initiatedBy === this.options.binding.owner.id;
+    const lease = call.write && !run.readOnly ? this.options.apiLease(ownerSent ? { reach: "any" } : {}) : undefined;
     try {
       const env = { ...run.env };
       if (lease) for (const name of run.tokenEnv) env[name] = lease.token;

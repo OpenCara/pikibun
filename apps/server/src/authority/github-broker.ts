@@ -14,7 +14,9 @@ import { githubRepositoryName, issueNumber, parseOperation } from './operations.
 import { decryptToken } from './vault.js';
 import { requireCallbackScope } from './hosts.js';
 import { requireOperationTool, requireToolCall } from './tool-checks.js';
-import { cloneSessionRepository, recheckAccess, verifyRepository, type GitHubAccess } from './repositories.js';
+import { cloneSessionRepository, githubRepositoryMetadata, recheckAccess, verifyRepository, type GitHubAccess } from './repositories.js';
+import { outsideRepositoryHint } from '../../../../packages/shared/src/github-reach.js';
+import { senderReachesAnyGitHubRepository } from '../github-reach.js';
 import { requireBinding, requireNoRestore } from './push/broker.js';
 import { conditionalHeaders, forgetRead, githubRateLimited, rateLimitedUntil, rateLimitText, recallRead, rememberRateLimit, rememberRead } from './github-reads.js';
 import { failGitHubSignInExpired, forgetDeadGitHubToken } from './github-sign-in.js';
@@ -53,6 +55,28 @@ export async function pinnedGitHubRepository(c: AppContext, row: SessionRow, nam
 export async function verifyPin(env: Env, github: GitHubAccess, pin: GitHubSessionRepository): Promise<void> {
   await verifyRepository({ provider: 'github', github }, { repositoryId: String(pin.repositoryId), fullName: pin.fullName });
   await recheckAccess(env, { provider: 'github', github });
+}
+
+export type GitHubTarget = { fullName: string; outside: boolean };
+
+async function githubTargetAllowed(c: AppContext, row: SessionRow, senderId: string, name: string): Promise<GitHubSessionRepository | null> {
+  const repository = row.repository_mode === 'clone'
+    ? await cloneSessionRepository(c.env, row, binding => binding.provider === 'github' && binding.full_name.toLowerCase() === name.toLowerCase()) : null;
+  if (repository && !('provider' in repository)) return repository;
+  if (!await senderReachesAnyGitHubRepository(c.env.DB, row, senderId)) fail(403, 'repository_not_pinned', outsideRepositoryHint(name));
+  return null;
+}
+
+export async function githubTarget(c: AppContext, row: SessionRow, senderId: string, name: string, github: GitHubAccess): Promise<GitHubTarget> {
+  const repository = await githubTargetAllowed(c, row, senderId, name);
+  if (repository) {
+    await requireBinding(c, row.workspace_id, repository);
+    await verifyPin(c.env, github, repository);
+    return { fullName: repository.fullName, outside: false };
+  }
+  const metadata = await githubRepositoryMetadata(github, name);
+  await recheckAccess(c.env, { provider: 'github', github });
+  return { fullName: metadata.fullName, outside: true };
 }
 
 type ApprovalInput = { sessionId: string; actorId: string; approvalId: string; admissionId: string };
@@ -186,12 +210,9 @@ export async function githubMerge(c: AppContext, connectorId: string | null): Pr
   const operation = parseOperation({ kind: 'github.merge', repository: input.repository, pull: input.pull, sha: input.sha, method: input.method });
   if (operation.kind !== 'github.merge') fail(400, 'invalid_operation', 'Only GitHub merges are supported.');
   const { sessionId, actorId, approvalId } = approval;
-  const { row, github, prepared: pin } = await approvedEffect(c, connectorId, approval, operation, 'github.merge', async (session, access) => {
-    const pinned = await pinnedGitHubRepository(c, session, operation.repository);
-    await verifyPin(c.env, access, pinned);
-    return pinned;
-  });
-  const detail = { approvalId, repository: pin.fullName, pull: operation.pull };
+  const { row, github, prepared: pin } = await approvedEffect(c, connectorId, approval, operation, 'github.merge',
+    async (session, access) => githubTarget(c, session, actorId, operation.repository, access));
+  const detail = { approvalId, repository: pin.fullName, pull: operation.pull, ...(pin.outside ? { outsideWorkspace: true } : {}) };
   const url = `https://github.com/${pin.fullName}/pull/${operation.pull}`;
   const unknown = async (): Promise<never> => {
     await auditStatement(c.env, actorId, 'github.merge.ambiguous', row.workspace_id, sessionId, detail).run();
@@ -270,8 +291,7 @@ export async function githubIssue(c: AppContext, connectorId: string | null): Pr
   if (operation.kind !== 'github.issue') fail(400, 'invalid_operation', 'Only GitHub issues are supported.');
   const { sessionId, actorId, approvalId } = approval;
   const { row, github, prepared: pin } = await approvedEffect(c, connectorId, approval, operation, 'github.issue', async (session, access) => {
-    const pinned = await pinnedGitHubRepository(c, session, operation.repository);
-    await verifyPin(c.env, access, pinned);
+    const pinned = await githubTarget(c, session, actorId, operation.repository, access);
     const recent = await ownIssues(access, pinned.fullName, operation.title, Date.now() - duplicateIssueMinutes * 60_000).catch(() => []);
     if (recent[0]) {
       const minutes = Math.max(1, Math.round((Date.now() - recent[0].createdAt) / 60_000));
@@ -280,7 +300,7 @@ export async function githubIssue(c: AppContext, connectorId: string | null): Pr
     }
     return pinned;
   });
-  const detail = { approvalId, repository: pin.fullName };
+  const detail = { approvalId, repository: pin.fullName, ...(pin.outside ? { outsideWorkspace: true } : {}) };
   const started = Date.now();
   const ambiguous = async (): Promise<Response> => {
     const found = await ownIssues(github, pin.fullName, operation.title, started - 60_000).catch(() => []);
@@ -530,12 +550,13 @@ export async function githubRead(c: AppContext, connectorId: string | null): Pro
     return access.row;
   };
   const row = await authorize();
-  const pin = await pinnedGitHubRepository(c, row, repository);
+  await githubTargetAllowed(c, row, actorId, repository);
   const github = await ownerGitHub(c.env, row.owner_id);
-  await verifyPin(c.env, github, pin);
+  const pin = await githubTarget(c, row, actorId, repository, github);
   const view = await readIssue(github, pin.fullName, number);
   await recheckAccess(c.env, { provider: 'github', github });
   await authorize();
-  await auditStatement(c.env, actorId, 'github.read', row.workspace_id, sessionId, { repository: pin.fullName, issue: number, actingAs: github.userId }).run();
+  await auditStatement(c.env, actorId, 'github.read', row.workspace_id, sessionId, { repository: pin.fullName, issue: number, actingAs: github.userId,
+    ...(pin.outside ? { outsideWorkspace: true } : {}) }).run();
   return c.json(view);
 }

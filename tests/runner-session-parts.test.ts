@@ -653,7 +653,7 @@ function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {},
     binding: { session: { id: "s1", connectorOwnerId: "github:1" }, owner: { id: "github:1" } } as unknown as RunnerBinding, config: {}, sandbox, onHost: false,
     sandboxed: true, calls, hostCommands: hostPolicy({ ownerId: "github:1" }, grants).policy, wholeResults: new WholeResults(),
     operations: { run: async (_actorId, operation) => { events.push(`run ${(operation as { tool: string }).tool}`); return { id: "tool-1", status: "executing" } as never; } },
-    apiLease: () => { events.push("lease"); return { token: "lease-token", release: () => { events.push("release"); } }; },
+    apiLease: lease => { events.push(lease?.reach === "any" ? "lease reaching any repository" : "lease"); return { token: "lease-token", release: () => { events.push("release"); } }; },
     forgeWrites: async senderId => { events.push(`forge writes ${senderId}`); return true; },
     model: () => undefined, thinkingLevel: () => undefined,
     extensionChoice: async () => ({ chosen: [{ source: "npm:ext", dev: false }], automaticTools: false }),
@@ -736,6 +736,21 @@ test("piki: a CLI runs in the sandbox only inside a call the session admitted, w
   });
   assert.ok(!limited.events.includes("lease"), "a sender or owner whose group lacks the GitHub writing tools gets no write lease");
   assert.ok(limited.events.some(event => event.startsWith("execute PATH") && !event.includes("lease-token")));
+});
+
+test("piki: a gh call in a message the session owner sent asks for a lease that may reach any repository; anyone else's keeps to the workspace's", async () => {
+  const leases = async (initiatedBy: string) => {
+    const state = toolState({ initiatedBy });
+    state.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;
+    const { host, events } = pikiFixture(state, {}, { [initiatedBy]: { hostCommands: "auto" } });
+    await host.runTool({ source: "npm:ext", tool: "gh", arguments: {}, api: toolApi(state), signal: new AbortController().signal, context: {} as never }, async () => {
+      await host.piki!.sandbox!(pikiRun("call-1"));
+      return { output: [] };
+    });
+    return events.filter(event => event.startsWith("lease"));
+  };
+  assert.deepEqual(await leases("github:1"), ["lease reaching any repository"]);
+  assert.deepEqual(await leases("github:2"), ["lease"]);
 });
 
 test("view: context usage counts the conversation's tokens against its model's window, and says where it compacts", () => {

@@ -95,8 +95,10 @@ export interface ApiCredential {
   account: string;
   authorization: string;
   repositories: string[];
+  anyRepository?: true;
   expiresAt: string;
 }
+export type ApiReach = "workspace" | "any";
 export const egressGitServices = ["info-refs", "upload-pack", "receive-refs", "receive-pack", "lfs-batch", "lfs-object"] as const;
 export type EgressGitService = (typeof egressGitServices)[number];
 export const egressReadServices: readonly EgressGitService[] = ["info-refs", "upload-pack"];

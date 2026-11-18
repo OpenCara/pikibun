@@ -88,7 +88,7 @@ import { ActivityReporter, sessionActivity } from "./activity.js";
 import type { StoredOperation } from "./operation-record.js";
 import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
-import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
+import { egressReadServices, type ApiAccessKind, type ApiReach, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import type { DocumentKind, GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
@@ -154,7 +154,7 @@ export type RunnerConfig = {
   egressGrant?: (sessionId: string) => Promise<EgressGrant>;
   gitRelay?: (sessionId: string, request: RelayRequest) => Promise<Response>;
   gitDirect?: (sessionId: string, request: Omit<GitDirectRequest, "sessionId">) => Promise<unknown>;
-  apiCredential?: (sessionId: string, host: string, access: ApiAccessKind) => Promise<unknown>;
+  apiCredential?: (sessionId: string, host: string, access: ApiAccessKind, reach?: ApiReach) => Promise<unknown>;
   hostConfig?: () => Promise<HostConfig>;
   requiredExtensions?: () => Promise<RequiredExtension[] | undefined>;
   cacheWarming?: (sessionId: string) => Promise<SessionCacheWarming>;
@@ -342,7 +342,7 @@ export class RunnerSession {
     });
     this.#piki = new SessionPiki({
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
-      wholeResults: this.#wholeResults, operations: this.#operations, apiLease: () => this.#egress?.apiLease(), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
+      wholeResults: this.#wholeResults, operations: this.#operations, apiLease: options => this.#egress?.apiLease(options), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
       mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(), extensionProcess: this.extensionProcess(),
     });
@@ -378,8 +378,9 @@ export class RunnerSession {
       ...(token ? { tcp: { token } } : {}),
       grant: () => this.requestGrant(),
       relay: request => this.relay(request),
-      apiCredential: (host, access) => this.config.apiCredential ? this.config.apiCredential(this.binding.session.id, host, access)
-        : this.controlPlane("/api/internal/api/credential", { sessionId: this.binding.session.id, host, ...(access === "write" ? { access } : {}) }),
+      apiCredential: (host, access, reach) => this.config.apiCredential
+        ? (reach === "any" ? this.config.apiCredential(this.binding.session.id, host, access, reach) : this.config.apiCredential(this.binding.session.id, host, access))
+        : this.controlPlane("/api/internal/api/credential", { sessionId: this.binding.session.id, host, ...(access === "write" ? { access } : {}), ...(reach === "any" ? { reach } : {}) }),
       ...(this.#clone && this.config.repositoryCache ? { mirror: (repository: EgressRepository, onProgress: (progress: MirrorProgress) => void) => this.mirror(repository, onProgress) } : {}),
       ...(this.#clone ? { sessionBranch: sessionBranch(this.binding.session) } : {}),
       ...(this.config.repositoryCache ? { lfsCache: this.config.repositoryCache.lfsObjects(this.binding.owner.id) } : {}),

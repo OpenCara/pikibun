@@ -1260,6 +1260,16 @@ test('the session owner\'s own credentials: writes and personal access tokens go
   assert.deepEqual(write.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization, item.repositories]),
     [['session-owner', 'Bearer owner-oauth-token', ['owner/repo']]]);
   assert.equal(own.calls.filter(call => call.url.includes('/access_tokens')).length, 0, 'no installation token for writes');
+  assert.equal((await apiCredential(own, { access: 'write', reach: 'any' })).body.credentials[0].anyRepository, undefined,
+    'a host that vouches its sender is the owner still gets the workspace\'s repositories alone until the owner turns their reach on');
+  own.sqlite.prepare('INSERT INTO member_github_reach (workspace_id, user_id, any_repository, updated_at) VALUES (?,?,?,?)')
+    .run('workspace', owner, 1, new Date().toISOString());
+  const reaching = await apiCredential(own, { access: 'write', reach: 'any' });
+  assert.deepEqual(reaching.body.credentials.map((item: Record<string, unknown>) => [item.account, item.repositories, item.anyRepository]),
+    [['session-owner', ['owner/repo'], true]]);
+  assert.equal((await apiCredential(own, { access: 'write' })).body.credentials[0].anyRepository, undefined, 'a lease for anyone else\'s message asks without reach');
+  assert.equal((await apiCredential(own, { reach: 'any' })).status, 400, 'reads never reach beyond the workspace');
+  assert.equal((await apiCredential(own, { access: 'write', reach: 'everywhere' })).status, 400);
   const gitlab = await apiCredential(own, { host: 'gitlab.com' });
   assert.deepEqual(gitlab.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization, item.repositories]),
     [['gitlab.com', 'Bearer owner-gitlab-token', []]]);

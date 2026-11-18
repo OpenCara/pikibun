@@ -11,7 +11,7 @@ import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { apiRule, apiRules, graphqlWrites, parseApiCredentialGrant, placeholderOf, restRepository, type UpstreamRequest, type UpstreamResponse } from "../apps/runner/src/api-access.js";
 import { EgressProxy, egressEnvironment, parseEgressGrant, type EgressEntry } from "../apps/runner/src/egress.js";
 import { InterceptionAuthority } from "../apps/runner/src/interception-ca.js";
-import { API_TOKEN_PLACEHOLDER, apiWriteLease, apiWriteToken, credentialedApiHosts, type ApiAccessKind, type ApiCredentialGrant, type EgressApi, type EgressGrant,
+import { API_TOKEN_PLACEHOLDER, apiWriteLease, apiWriteToken, credentialedApiHosts, type ApiAccessKind, type ApiCredentialGrant, type ApiReach, type EgressApi, type EgressGrant,
   type NetworkPolicy } from "../packages/shared/src/network.js";
 
 const authority = new InterceptionAuthority(credentialedApiHosts);
@@ -23,7 +23,7 @@ const credentials: ApiCredentialGrant = { available: true, cacheSeconds: 60, cre
 
 interface Answer { status: number; headers?: Record<string, string>; body?: string }
 async function proxy(t: TestContext, options: { policy?: Partial<NetworkPolicy>; apis?: boolean | EgressApi[];
-  credential?: (host: string, access: ApiAccessKind) => Promise<unknown>; answer?: (request: UpstreamRequest) => Answer } = {}) {
+  credential?: (host: string, access: ApiAccessKind, reach?: ApiReach) => Promise<unknown>; answer?: (request: UpstreamRequest) => Answer } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "api-"));
   const upstream: UpstreamRequest[] = [];
   const asked: string[] = [];
@@ -34,7 +34,10 @@ async function proxy(t: TestContext, options: { policy?: Partial<NetworkPolicy>;
     relay: async () => new Response("unused"),
     lookup: async () => [{ address: "93.184.216.34", family: 4 }],
     connect: () => { throw new Error("A credentialed API is never tunnelled"); },
-    apiCredential: async (host, access) => { asked.push(access === "write" ? `${host} (write)` : host); return options.credential ? options.credential(host, access) : credentials; },
+    apiCredential: async (host, access, reach) => {
+      asked.push(access === "write" ? `${host} (write${reach === "any" ? ", any" : ""})` : host);
+      return options.credential ? options.credential(host, access, reach) : credentials;
+    },
     apiAuthority: authority,
     apiUpstream: async (request): Promise<UpstreamResponse> => {
       upstream.push(request);
@@ -336,6 +339,44 @@ test("an approved call's write lease writes as the session owner, and only while
   const forged = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{}", headers: { authorization: `token ${apiWriteToken("F".repeat(43))}` } });
   assert.equal(forged.status, 403);
   assert.equal(upstream.length, 2);
+});
+
+test("a lease that reaches any repository writes and reads outside the workspace's only with a credential the Pikibun server marked so", async t => {
+  const anyRepository: ApiCredentialGrant = { available: true, cacheSeconds: 60, credentials: [{ ...owners.credentials[0]!, anyRepository: true }] };
+  assert.deepEqual(parseApiCredentialGrant(anyRepository), anyRepository);
+  for (const value of [false, "yes", 1]) {
+    assert.throws(() => parseApiCredentialGrant({ ...anyRepository, credentials: [{ ...owners.credentials[0]!, anyRepository: value }] }), /Invalid API credential/);
+  }
+  let reaches = true;
+  const { instance, socketPath, upstream, asked, log } = await proxy(t, {
+    credential: async (_host, access, reach) => access !== "write" ? credentials : reach === "any" && reaches ? anyRepository : owners });
+  const lease = instance.apiLease({ reach: "any" })!;
+  t.after(() => lease.release());
+  const issue = await call(socketPath, "/repos/someone/else/issues", { method: "POST", body: "{\"title\":\"t\"}", headers: { authorization: `token ${lease.token}` } });
+  assert.equal(issue.status, 200);
+  assert.equal(upstream[0]!.headers.authorization, "Bearer gho_owner");
+  assert.equal((await call(socketPath, "/repos/someone/else/issues/4", { headers: { authorization: `token ${lease.token}` } })).status, 200);
+  assert.equal(upstream[1]!.headers.authorization, "Bearer gho_owner", "a private repository outside the workspace is read as the owner");
+  assert.equal((await call(socketPath, "/repos/acme/app/pulls/2", { headers: { authorization: `token ${lease.token}` } })).status, 200);
+  assert.equal(upstream[2]!.headers.authorization, "Bearer ghs_acme", "the workspace's repositories still read with the App's token");
+  assert.deepEqual(asked, ["api.github.com", "api.github.com (write, any)"]);
+  assert.equal(log()[0]!.reason, "the session owner's token for session-owner (200)");
+
+  const workspaceOnly = instance.apiLease()!;
+  t.after(() => workspaceOnly.release());
+  const refused = await call(socketPath, "/repos/someone/else/issues", { method: "POST", body: "{}", headers: { authorization: `token ${workspaceOnly.token}` } });
+  assert.equal(refused.status, 403, "a lease for another sender's message keeps to the workspace's repositories");
+  assert.deepEqual(asked.slice(2), ["api.github.com (write)"]);
+
+  reaches = false;
+  const realNow = Date.now;
+  Date.now = () => realNow() + 61_000;
+  t.after(() => { Date.now = realNow; });
+  const turnedOff = instance.apiLease({ reach: "any" })!;
+  t.after(() => turnedOff.release());
+  const off = await call(socketPath, "/repos/someone/else/issues", { method: "POST", body: "{}", headers: { authorization: `token ${turnedOff.token}` } });
+  assert.equal(off.status, 403, "once the owner turned it off, the Pikibun server's credential no longer reaches other repositories");
+  assert.equal(upstream.length, 3);
 });
 
 test("under a write lease, reads of the workspace's repositories keep the App's token, so watching a run doesn't spend the owner's rate limit", async t => {

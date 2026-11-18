@@ -173,8 +173,8 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
     },
     egressGrant: async sessionId => parseEgressGrant(await calls.brokerCallback(await source.connection(), "/api/connectors/self/network", { sessionId })),
     gitDirect: async (sessionId, request) => calls.brokerCallback(await source.connection(), "/api/connectors/self/git/direct", { sessionId, ...request }),
-    apiCredential: async (sessionId, host, access) => calls.brokerCallback(await source.connection(), "/api/connectors/self/api/credential",
-      { sessionId, host, ...(access === "write" ? { access } : {}) }),
+    apiCredential: async (sessionId, host, access, reach) => calls.brokerCallback(await source.connection(), "/api/connectors/self/api/credential",
+      { sessionId, host, ...(access === "write" ? { access } : {}), ...(reach === "any" ? { reach } : {}) }),
     gitRelay: async (sessionId, request) => {
       const generation = await source.connection();
       source.requireGeneration(generation);
