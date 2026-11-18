@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { ProcessChannel, sandboxLaunch, workerCodeMounts } from "../apps/runner/src/extensions/process.js";
 import { installMount } from "../apps/runner/src/extensions/load.js";
 import { sandboxDescribe } from "../apps/runner/src/extensions/describe.js";
-import { Sandbox, serviceBindAllowed } from "../apps/runner/src/sandbox.js";
+import { commandBindAllowed, Sandbox, serviceBindAllowed } from "../apps/runner/src/sandbox.js";
 import { serviceLimits, serviceSocketDirectory } from "../apps/runner/src/session-service.js";
 import { binding, linuxSandboxMissing } from "./helpers/workspaces.js";
 
@@ -22,6 +22,13 @@ test("a service is given only paths of its own: never a system directory, the ho
     "an installed package is mounted with its project, which holds its dependencies");
   assert.equal(installMount("/work/my-extension.ts"), "/work/my-extension.ts", "a single-file extension is mounted alone, never its directory");
   assert.ok(workerCodeMounts().length > 0, "the connector's own code is found to mount");
+});
+
+test("a command is given only a program's install under /opt, never Pikibun's own or anything else of the host's", () => {
+  for (const path of ["/", "/opt", "/opt/pikibun", "/opt/pikibun/bin", "/usr", "/etc", "/home", homedir(), "opt/az", "/opt/az/../../etc", "/opt/az/", "/opt/a\nb"]) {
+    assert.equal(commandBindAllowed(path), false, path);
+  }
+  for (const path of ["/opt/az", "/opt/azure-cli"]) assert.equal(commandBindAllowed(path), true, path);
 });
 
 test("in the Linux sandbox, an installed extension sees the session's worktree and its own files, read-only, and nothing else of the host's", { skip: linuxSandboxMissing() }, async t => {

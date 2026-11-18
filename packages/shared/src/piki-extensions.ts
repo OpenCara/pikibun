@@ -46,7 +46,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     name: "azure-cli", source: "piki:azure-cli", tool: "az", title: "Azure CLI",
     description: "Runs the Azure CLI (az) in the session's sandbox, as the session owner: Azure DevOps pull requests, pipelines and work items (with the azure-devops extension).",
     install: "https://learn.microsoft.com/cli/azure/install-azure-cli", account: "their Azure DevOps access token for the organization under Git accounts",
-    signIn: "az login (and az extension add --name azure-devops)", providers: ["azure-devops"],
+    signIn: "az login (and sudo az extension add --name azure-devops --system)", providers: ["azure-devops"],
   },
   {
     name: "schedule", source: "piki:schedule", title: "Scheduled prompts", sessionTools: ["schedule"],

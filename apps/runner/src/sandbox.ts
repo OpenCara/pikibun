@@ -49,9 +49,11 @@ export interface SandboxExecutionOptions {
   limits?: CommandLimits;
   gpu?: boolean;
   signal?: AbortSignal;
+  /** Program installs under /opt the command needs, bound read-only where they exist (commandBindAllowed). */
+  binds?: readonly string[];
 }
 
-interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; service?: { socketDirectory: string; binds?: readonly string[] };
+interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; binds?: readonly string[]; service?: { socketDirectory: string; binds?: readonly string[] };
   onSpawn?: (hold: (held: boolean) => void) => void }
 
 export interface SandboxOptions {
@@ -320,6 +322,12 @@ export async function pinOwnerConfig(path: string, configText: string): Promise<
 const SERVICE_BIND_REFUSED = ["/", "/root", "/home", "/var", "/usr", "/lib", "/lib64", "/opt", "/bin", "/sbin", "/boot", "/mnt", "/media", "/snap", "/srv", "/nix"];
 const SERVICE_BIND_REFUSED_TREES = ["/etc", "/proc", "/dev", "/sys", "/run", SANDBOX_TMP, "/sessions"];
 
+/** A program's install a command may see, read-only: a directory under /opt, never Pikibun's own. */
+export function commandBindAllowed(path: string): boolean {
+  if (!isAbsolute(path) || resolve(path) !== path || /[\x00-\x1f\x7f]/.test(path)) return false;
+  return path.startsWith("/opt/") && path !== "/opt/pikibun" && !path.startsWith("/opt/pikibun/");
+}
+
 export function serviceBindAllowed(path: string, sessionRoot: string): boolean {
   if (!isAbsolute(path) || resolve(path) !== path || /[\x00-\x1f\x7f]/.test(path)) return false;
   if (SERVICE_BIND_REFUSED.includes(path) || path === homedir() || homedir().startsWith(`${path}/`)) return false;
@@ -568,8 +576,9 @@ export class Sandbox implements IsolatedWorkspace {
         if (bounded && !this.#resources) {
           throw new Error("Commands can't run here: they need explicitly provisioned cgroup and bounded filesystem resources");
         }
+        for (const bind of options.binds ?? []) if (!commandBindAllowed(bind)) throw new Error(`A command can't be given ${bind}`);
         return this.#operation({ kind: "bash", command: text(operation.command, "command", 64 * 1024, true) }, readOnly, authorize, false, bounded,
-          { limits: options.limits, gpu: options.gpu, signal: options.signal });
+          { limits: options.limits, gpu: options.gpu, signal: options.signal, ...(options.binds?.length ? { binds: options.binds } : {}) });
       }
       case "github.comment":
       case "github.merge":
@@ -741,6 +750,7 @@ export class Sandbox implements IsolatedWorkspace {
       ...(browser?.mount ? ["--ro-bind-try", browser.mount.source, browser.mount.target] : []),
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
       ...(service?.binds ?? []).flatMap(bind => ["--ro-bind-try", bind, bind]),
+      ...(request.kind === "bash" ? command.binds ?? [] : []).flatMap(bind => ["--ro-bind-try", bind, bind]),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
         ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),
       ...(gpu?.args ?? []),

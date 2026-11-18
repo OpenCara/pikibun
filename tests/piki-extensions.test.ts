@@ -8,7 +8,7 @@ import test, { type TestContext } from 'node:test';
 import { createExtensionRuntime, createEventBus } from '@earendil-works/pi-coding-agent';
 import { azureCliSpec } from '../apps/runner/src/extensions/piki/azure-cli.js';
 import { spawnSync } from 'node:child_process';
-import { apiWrites, cliEnvironment, commandWords, optionValues, sandboxDirectory, sandboxShellCommand, type CliRun, type PikiSandboxRun,
+import { apiWrites, cliEnvironment, commandWords, optionValues, sandboxDirectory, sandboxMissingFile, sandboxShellCommand, type CliRun, type PikiSandboxRun,
   type PikiSession } from '../apps/runner/src/extensions/piki/command.js';
 import { ghSpec } from '../apps/runner/src/extensions/piki/gh.js';
 import { glabSpec } from '../apps/runner/src/extensions/piki/glab.js';
@@ -321,6 +321,7 @@ test('in the sandbox: the command runs as the session owner, through the session
   const [run] = runs;
   assert.deepEqual([run!.callId, run!.command, run!.args, run!.directory, run!.readOnly, run!.timeoutSeconds], ['call', 'gh', ['pr', 'create', '--fill'], 'app', false, 300]);
   assert.deepEqual(run!.tokenEnv, ['GH_TOKEN', 'GITHUB_TOKEN'], 'the variables an approved call\'s write lease replaces');
+  assert.deepEqual(run!.binds, [], 'gh needs nothing of the host\'s beyond /usr');
   assert.equal(run!.env.GH_PROMPT_DISABLED, '1');
   assert.equal(run!.env.PIKIBUN_TEST_SECRET, undefined, 'none of the connector\'s variables');
   await assert.rejects(call({ args: ['status'], directory: '../elsewhere' }), /within the session's worktree/);
@@ -329,7 +330,18 @@ test('in the sandbox: the command runs as the session owner, through the session
   await assert.rejects(call({ args: ['pr', 'merge', '1'] }), /It exited with 1\.\nHTTP 403/);
   answer = { exitCode: 127, signal: null, output: 'bash: line 1: exec: gh: not found' };
   await assert.rejects(call({ args: ['status'] }), /gh isn't installed where the session's sandbox finds it .*https:\/\/cli\.github\.com/);
-  assert.equal(runs.length, 3, 'refusals never reach the sandbox');
+  answer = { exitCode: 127, signal: null, output: '/usr/bin/gh: line 2: /opt/gh/bin/gh-real: No such file or directory' };
+  await assert.rejects(call({ args: ['status'] }), /^Error: gh is installed, but it starts \/opt\/gh\/bin\/gh-real, which the session's sandbox doesn't see: it sees only the host's \/usr\. /);
+  assert.equal(runs.length, 4, 'refusals never reach the sandbox');
+});
+
+test('az: the sandbox also sees the CLI\'s own install under /opt, which its /usr/bin script starts, and a wrapper whose program it lacks says so', () => {
+  assert.deepEqual(azureCliSpec.sandboxRoots, ['/opt/az', '/opt/azure-cli']);
+  assert.equal(sandboxMissingFile('az', '/usr/bin/az: line 2: /opt/azure-cli/bin/python: No such file or directory'), '/opt/azure-cli/bin/python', 'bash');
+  assert.equal(sandboxMissingFile('az', 'some output\n/usr/bin/az: 3: /opt/az/bin/python3: not found\n'), '/opt/az/bin/python3', 'dash');
+  assert.equal(sandboxMissingFile('az', "env: 'az': No such file or directory"), undefined, 'az itself is missing');
+  assert.equal(sandboxMissingFile('az', 'bash: line 1: exec: az: not found'), undefined);
+  assert.equal(sandboxMissingFile('az', 'sh: 1: /usr/bin/az: not found'), undefined, 'the command, not a program it starts');
 });
 
 test('a long output: its start and end, which hold how it ended, and the whole of it saved where the session says', async t => {
