@@ -7,13 +7,15 @@ import { RepositoryCache } from "./repo-cache.js";
 const HELP = `Usage: pikibun cache <command> [options]
 
 The repository cache of a connector whose host keeps one (Settings > Hosts > the host > Configuration in Pikibun):
-one Git mirror per repository, which clone sessions borrow objects from.
+one Git mirror per repository, which clone sessions borrow objects from, and the Git LFS files sessions downloaded.
 
 Commands:
   list                    Show each cached repository, its size, and how many sessions keep objects in it
-                          (pins: sessions from before every session cloned; kept, never pruned)
+                          (pins: sessions from before every session cloned; kept, never pruned), and the Git LFS
+                          files kept
   prune                   Forget clone sessions idle for longer than --older-than, then collect what nothing reaches
-                          any more. A clone in a session idle for longer loses the objects it borrowed
+                          any more. A clone in a session idle for longer loses the objects it borrowed. Git LFS files
+                          no session downloaded for longer are deleted too
 
 Options:
   --state-dir PATH        Connector state (default ~/.local/share/pikibun/connector)
@@ -35,16 +37,24 @@ export async function cacheMain(args: string[]): Promise<void> {
   if (command === "list") {
     if (values["older-than"] !== undefined) throw new ConnectorSetupError("--older-than applies to prune only.");
     const repositories = await cache.list();
-    if (!repositories.length) { process.stdout.write(`No cached repositories in ${root}.\n`); return; }
+    const lfs = await cache.lfsUsage();
+    if (!repositories.length && !lfs.objects) { process.stdout.write(`No cached repositories in ${root}.\n`); return; }
     for (const repository of repositories) {
-      process.stdout.write(`${(repository.bytes / 1024 / 1024).toFixed(1).padStart(9)} MiB  ${String(repository.sessions).padStart(4)} sessions  `
+      process.stdout.write(`${mebibytes(repository.bytes)} MiB  ${String(repository.sessions).padStart(4)} sessions  `
         + `${String(repository.pins).padStart(4)} pins  ${relative(root, repository.directory)}\n`);
     }
+    if (lfs.objects) process.stdout.write(`${mebibytes(lfs.bytes)} MiB  ${lfs.objects} Git LFS ${lfs.objects === 1 ? "file" : "files"}\n`);
     return;
   }
   const days = Number(values["older-than"] ?? "30");
   if (!Number.isInteger(days) || days < 0 || days > 36500) throw new ConnectorSetupError("--older-than must be a whole number of days.");
   const result = await cache.prune(days * 24 * 60 * 60 * 1000);
+  const lfs = await cache.pruneLfs(days * 24 * 60 * 60 * 1000);
   process.stdout.write(`Pruned ${result.repositories} cached ${result.repositories === 1 ? "repository" : "repositories"}; `
-    + `forgot ${result.sessions} clone ${result.sessions === 1 ? "session" : "sessions"} idle for more than ${days} days.\n`);
+    + `forgot ${result.sessions} clone ${result.sessions === 1 ? "session" : "sessions"} idle for more than ${days} days; `
+    + `deleted ${lfs.objects} Git LFS ${lfs.objects === 1 ? "file" : "files"} (${mebibytes(lfs.bytes).trim()} MiB) unused for as long.\n`);
+}
+
+function mebibytes(bytes: number): string {
+  return (bytes / 1024 / 1024).toFixed(1).padStart(9);
 }

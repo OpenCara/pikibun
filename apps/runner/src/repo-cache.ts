@@ -5,6 +5,7 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { GitProvider } from "../../../packages/shared/src/repositories.js";
 import { GitRemote, GitRemoteError, ProgressLines, parseGitProgress, type GitProgressPhase } from "./git-remote.js";
+import { LfsObjectCache, type LfsCacheUsage } from "./lfs-cache.js";
 import { killTree } from "./platform.js";
 
 const windows = process.platform === "win32";
@@ -50,6 +51,7 @@ const LOCK_NAME = "pikibun.lock";
 const PIN_PREFIX = "refs/pikibun/pins/";
 const SESSION_PREFIX = "refs/pikibun/sessions/";
 const KEEP_PARENTS = 500;
+const LFS_DIRECTORY = "lfs";
 
 export function mirrorPath(repository: { provider: string; host: string; repositoryId: string }): string {
   if (!/^[a-z0-9-]{1,32}$/.test(repository.provider) || !/^[a-z0-9.-]{1,253}(?::[0-9]{1,5})?$/.test(repository.host)
@@ -86,8 +88,41 @@ export class RepositoryCache {
   }
 
   #directory(provider: string, host: string, id: string, ownerId: string): string {
-    const base = this.#scope === "owner" ? join(this.#root, "owners", digest(ownerId)) : this.#root;
-    return join(base, mirrorPath({ provider, host, repositoryId: id }));
+    return join(this.#base(ownerId), mirrorPath({ provider, host, repositoryId: id }));
+  }
+
+  #base(ownerId: string): string {
+    return this.#scope === "owner" ? join(this.#root, "owners", digest(ownerId)) : this.#root;
+  }
+
+  lfsObjects(ownerId: string): LfsObjectCache {
+    return new LfsObjectCache(join(this.#base(ownerId), LFS_DIRECTORY));
+  }
+
+  async #lfsStores(): Promise<LfsObjectCache[]> {
+    const owners = await childDirectories(join(this.#root, "owners"));
+    return [join(this.#root, LFS_DIRECTORY), ...owners.map(owner => join(owner, LFS_DIRECTORY))].map(root => new LfsObjectCache(root));
+  }
+
+  async lfsUsage(): Promise<LfsCacheUsage> {
+    const total = { objects: 0, bytes: 0 };
+    for (const store of await this.#lfsStores()) {
+      const usage = await store.usage();
+      total.objects += usage.objects;
+      total.bytes += usage.bytes;
+    }
+    return total;
+  }
+
+  async pruneLfs(age: number): Promise<LfsCacheUsage> {
+    if (!Number.isSafeInteger(age) || age < 0) throw new RepositoryCacheError("Invalid prune age");
+    const total = { objects: 0, bytes: 0 };
+    for (const store of await this.#lfsStores()) {
+      const pruned = await store.prune(age);
+      total.objects += pruned.objects;
+      total.bytes += pruned.bytes;
+    }
+    return total;
   }
 
   async prepare(repository: MirrorRepository, ownerId: string): Promise<string> {
@@ -312,13 +347,10 @@ async function keep(git: CacheGit, sessionId: string, tips: readonly string[]): 
 
 async function cacheRepositories(root: string): Promise<string[]> {
   const found: string[] = [];
-  const children = async (directory: string): Promise<string[]> => {
-    try { return (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => join(directory, entry.name)); }
-    catch (error) { if (errorCode(error) === "ENOENT") return []; throw error; }
-  };
+  const children = childDirectories;
   const visit = async (base: string) => {
     for (const provider of await children(base)) {
-      if (basename(provider) === "owners") continue;
+      if (basename(provider) === "owners" || basename(provider) === LFS_DIRECTORY) continue;
       for (const host of await children(provider)) {
         for (const repository of await children(host)) if (/^[A-Za-z0-9{}_-]{1,100}\.git$/.test(basename(repository))) found.push(repository);
       }
@@ -327,6 +359,11 @@ async function cacheRepositories(root: string): Promise<string[]> {
   await visit(root);
   for (const owner of await children(join(root, "owners"))) await visit(owner);
   return found.sort();
+}
+
+async function childDirectories(directory: string): Promise<string[]> {
+  try { return (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => join(directory, entry.name)); }
+  catch (error) { if (errorCode(error) === "ENOENT") return []; throw error; }
 }
 
 async function directorySize(directory: string): Promise<number> {

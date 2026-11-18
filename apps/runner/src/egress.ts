@@ -18,6 +18,7 @@ import { RunnerError } from "./protocol.js";
 import { CA_BUNDLE, CA_BUNDLE_VARIABLES } from "./trust-store.js";
 import { ApiAccess, type ApiUpstream } from "./api-access.js";
 import type { InterceptionAuthority } from "./interception-ca.js";
+import type { LfsObjectCache, LfsObjectWriter } from "./lfs-cache.js";
 
 export const EGRESS_PORT = 41080;
 export const EGRESS_SOCKET = "/run/pikibun/egress.sock";
@@ -31,6 +32,8 @@ const GRANT_STALE_MS = 5 * 60_000;
 const UPLOAD_REQUEST_BYTES = 64 * 1024 * 1024;
 const LFS_BATCH_BYTES = 1024 * 1024;
 const LFS_TYPE = "application/vnd.git-lfs+json";
+export const LFS_AUTHORIZATION_MS = 30 * 60_000;
+const LFS_AUTHORIZATIONS = 20_000;
 const LOG_ENTRIES = 200;
 const MIRROR_HEARTBEAT_MS = 5_000;
 const MIRROR_PROGRESS_MS = 1_000;
@@ -58,6 +61,7 @@ export interface EgressOptions {
   apiUpstream?: ApiUpstream;
   fakeIpTunnels?: () => Promise<boolean>;
   publicFetch?: typeof fetch;
+  lfsCache?: Pick<LfsObjectCache, "open" | "writer" | "discard">;
 }
 
 export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpoint, caBundle = CA_BUNDLE): Record<string, string> {
@@ -177,6 +181,18 @@ function transport(response: Response): string {
   return value && /^direct [a-z-]{1,40}$/.test(value) ? ` (${value})` : "";
 }
 
+function lfsKey(bindingId: string, object: { oid: string; size: number }): string {
+  return `${bindingId} ${object.oid} ${object.size}`;
+}
+
+function drained(response: ServerResponse): Promise<void> {
+  return new Promise<void>(resolve => {
+    const done = () => { response.off("drain", done); response.off("close", done); resolve(); };
+    response.once("drain", done);
+    response.once("close", done);
+  });
+}
+
 function relayStatus(error: unknown): number {
   return error instanceof RunnerError && error.status >= 400 && error.status < 600 ? error.status : 502;
 }
@@ -279,6 +295,7 @@ export class EgressProxy {
   #grant: { value: EgressGrant; at: number } | undefined;
   #refresh: Promise<EgressGrant> | undefined;
   readonly #api: ApiAccess | undefined;
+  readonly #lfsDownloads = new Map<string, number>();
 
   constructor(options: EgressOptions) {
     this.socketPath = options.socketPath;
@@ -681,7 +698,9 @@ export class EgressProxy {
       if (request.method !== "GET") return deny(405, "Git LFS downloads use GET");
       const size = Number(url.searchParams.get("size"));
       if (!/^\d{1,16}$/.test(url.searchParams.get("size") ?? "") || !validLfsSize(size)) return deny(400, "Invalid Git LFS object size");
-      return this.#relayLfs(response, repository, label, "lfs-object", { oid: lfs.oid!, size }, deny);
+      const object = { oid: lfs.oid!, size };
+      if (this.#lfsAuthorized(repository.bindingId, object) && await this.#cachedLfs(response, object, label)) return;
+      return this.#relayLfs(response, repository, label, "lfs-object", object, deny);
     }
     if (request.method !== "POST") return deny(405, "The Git LFS batch API uses POST");
     let input: Record<string, unknown>;
@@ -714,13 +733,16 @@ export class EgressProxy {
     let result: LfsBatchResult;
     try { result = parseLfsBatchResult(await upstream.json(), batch.objects.length); }
     catch { return deny(502, "The control plane returned an invalid Git LFS answer"); }
-    const base = `${EGRESS_GIT_BASE}${target}/info/lfs/objects/`;
+    const tcp = this.#options.tcp && this.#port !== undefined ? { port: this.#port, token: this.#options.tcp.token } : undefined;
+    const base = `${tcp ? `http://127.0.0.1:${tcp.port}/git/` : EGRESS_GIT_BASE}${target}/info/lfs/objects/`;
+    const header = tcp ? { header: { Authorization: `Basic ${Buffer.from(`${EGRESS_USER}:${tcp.token}`).toString("base64")}` } } : {};
+    this.#authorizeLfs(repository.bindingId, result.objects.filter(object => object.download));
     this.#record({ kind: "git", target: label, outcome: "allowed", reason: `lfs batch (${result.objects.length} objects)${transport(upstream)}` });
     response.writeHead(200, { "Content-Type": LFS_TYPE, "Cache-Control": "no-store" });
     response.end(`${JSON.stringify({
       transfer: "basic", hash_algo: "sha256",
       objects: result.objects.map(object => object.download
-        ? { oid: object.oid, size: object.size, authenticated: true, actions: { download: { href: `${base}${object.oid}?size=${object.size}` } } }
+        ? { oid: object.oid, size: object.size, authenticated: true, actions: { download: { href: `${base}${object.oid}?size=${object.size}`, ...header } } }
         : { oid: object.oid, size: object.size, error: object.error ?? { code: 404, message: "Object does not exist on the server" } }),
     })}\n`);
   }
@@ -731,7 +753,68 @@ export class EgressProxy {
     try { upstream = await this.#options.relay({ bindingId: repository.bindingId, service, contentType: "application/json", body: json(object) }); }
     catch (error) { return deny(relayStatus(error), error instanceof RunnerError ? error.message : "The control plane could not relay the request"); }
     this.#record({ kind: "git", target: label, outcome: "allowed", reason: `lfs object ${object.oid.slice(0, 12)}${transport(upstream)}` });
-    return this.#stream(response, upstream, "application/octet-stream");
+    const writer = this.#options.lfsCache && upstream.body ? await this.#options.lfsCache.writer(object).catch(() => undefined) : undefined;
+    return this.#stream(response, upstream, "application/octet-stream", writer);
+  }
+
+  #authorizeLfs(bindingId: string, objects: readonly { oid: string; size: number }[]): void {
+    if (!this.#options.lfsCache || !objects.length) return;
+    const now = Date.now();
+    if (this.#lfsDownloads.size + objects.length > LFS_AUTHORIZATIONS) {
+      for (const [key, until] of this.#lfsDownloads) if (until <= now) this.#lfsDownloads.delete(key);
+    }
+    for (const object of objects) {
+      const key = lfsKey(bindingId, object);
+      this.#lfsDownloads.delete(key);
+      this.#lfsDownloads.set(key, now + LFS_AUTHORIZATION_MS);
+    }
+    for (const key of this.#lfsDownloads.keys()) {
+      if (this.#lfsDownloads.size <= LFS_AUTHORIZATIONS) break;
+      this.#lfsDownloads.delete(key);
+    }
+  }
+
+  #lfsAuthorized(bindingId: string, object: { oid: string; size: number }): boolean {
+    if (!this.#options.lfsCache) return false;
+    const key = lfsKey(bindingId, object);
+    const until = this.#lfsDownloads.get(key);
+    if (until === undefined) return false;
+    if (until > Date.now()) return true;
+    this.#lfsDownloads.delete(key);
+    return false;
+  }
+
+  async #cachedLfs(response: ServerResponse, object: { oid: string; size: number }, label: string): Promise<boolean> {
+    const cache = this.#options.lfsCache!;
+    const handle = await cache.open(object).catch(() => undefined);
+    if (!handle) return false;
+    this.#record({ kind: "git", target: label, outcome: "allowed", reason: `lfs object ${object.oid.slice(0, 12)} (host cache)` });
+    const hash = createHash("sha256");
+    const stream = handle.createReadStream({ autoClose: false });
+    response.once("close", () => stream.destroy());
+    response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": String(object.size), "Cache-Control": "no-store" });
+    let held: Buffer | undefined;
+    try {
+      for await (const chunk of stream as AsyncIterable<Buffer>) {
+        hash.update(chunk);
+        if (held && !response.write(held)) await drained(response);
+        if (response.destroyed) return true;
+        held = chunk;
+      }
+      if (hash.digest("hex") !== object.oid) {
+        await cache.discard(object.oid, handle).catch(() => {});
+        this.#record({ kind: "git", target: label, outcome: "refused", reason: `lfs object ${object.oid.slice(0, 12)}: the host cache's copy was damaged and is removed` });
+        response.destroy();
+        return true;
+      }
+      response.end(held);
+    } catch {
+      response.destroy();
+    } finally {
+      stream.destroy();
+      await handle.close().catch(() => {});
+    }
+    return true;
   }
 
   async #relay(request: IncomingMessage, response: ServerResponse, repository: EgressRepository, service: EgressGitService, label: string,
@@ -755,25 +838,27 @@ export class EgressProxy {
     return this.#stream(response, upstream, upstream.headers.get("content-type") ?? "application/octet-stream");
   }
 
-  async #stream(response: ServerResponse, upstream: Response, contentType: string): Promise<void> {
+  async #stream(response: ServerResponse, upstream: Response, contentType: string, writer?: LfsObjectWriter): Promise<void> {
     response.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-store" });
-    if (!upstream.body) return void response.end();
+    if (!upstream.body) { await writer?.abort(); return void response.end(); }
     const reader = upstream.body.getReader();
     response.once("close", () => { void reader.cancel().catch(() => {}); });
     try {
       while (true) {
         const part = await reader.read();
-        if (part.done) break;
-        if (!response.write(part.value)) await new Promise<void>(resolve => {
-          const done = () => { response.off("drain", done); response.off("close", done); resolve(); };
-          response.once("drain", done);
-          response.once("close", done);
-        });
+        if (part.done) {
+          await writer?.commit().catch(() => {});
+          break;
+        }
+        await writer?.write(part.value);
+        if (!response.write(part.value)) await drained(response);
         if (response.destroyed) break;
       }
       response.end();
     } catch {
       response.destroy();
+    } finally {
+      await writer?.abort();
     }
   }
 }

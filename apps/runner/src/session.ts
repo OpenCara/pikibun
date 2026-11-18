@@ -382,6 +382,7 @@ export class RunnerSession {
         : this.controlPlane("/api/internal/api/credential", { sessionId: this.binding.session.id, host, ...(access === "write" ? { access } : {}) }),
       ...(this.#clone && this.config.repositoryCache ? { mirror: (repository: EgressRepository, onProgress: (progress: MirrorProgress) => void) => this.mirror(repository, onProgress) } : {}),
       ...(this.#clone ? { sessionBranch: sessionBranch(this.binding.session) } : {}),
+      ...(this.config.repositoryCache ? { lfsCache: this.config.repositoryCache.lfsObjects(this.binding.owner.id) } : {}),
       fakeIpTunnels: async () => (await this.hostConfig()).fakeIpTunnels,
     });
   }
