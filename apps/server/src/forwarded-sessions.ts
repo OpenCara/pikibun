@@ -16,7 +16,7 @@ const CREATE_FIELDS = ['title', 'hostEnvironment', 'generateTitle'];
 
 interface ForwardedRow {
   connector_id: string; session_id: string; user_id: string; record_json: string; activity: string | null; reported_at: string;
-  host_name: string; connection_hash: string | null;
+  host_name: string; connection_hash: string | null; workspace_id: string;
 }
 
 function plainLine(value: unknown, max: number): string | undefined {
@@ -65,16 +65,15 @@ function shown(record: SessionRecord, userId: string, workspaceId: string, conne
 }
 
 async function forwardedRows(env: Env, userId: string, sessionId?: string): Promise<ForwardedRow[]> {
-  return env.DB.query<ForwardedRow>(`SELECT f.*, c.name AS host_name, c.connection_hash FROM forwarded_sessions f
+  return env.DB.query<ForwardedRow>(`SELECT f.*, c.name AS host_name, c.connection_hash, p.workspace_id FROM forwarded_sessions f
     JOIN connectors c ON c.id = f.connector_id AND c.owner_id = f.user_id AND c.revoked_at IS NULL
+    JOIN personal_workspaces p ON p.user_id = f.user_id
     WHERE f.user_id = ? ${sessionId ? 'AND f.session_id = ?' : ''}
       AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id)
     ORDER BY f.reported_at DESC, f.connector_id`).bind(...(sessionId ? [userId, sessionId] : [userId])).all();
 }
 
 export async function forwardedRecords(env: Env, userId: string): Promise<SessionRecord[]> {
-  const workspaceId = await privateWorkspaceOf(env, userId);
-  if (!workspaceId) return [];
   const seen = new Set<string>();
   const records: SessionRecord[] = [];
   const rows = await forwardedRows(env, userId);
@@ -83,7 +82,7 @@ export async function forwardedRecords(env: Env, userId: string): Promise<Sessio
     const record = reportedRecord(JSON.parse(row.record_json));
     if (!record) continue;
     seen.add(row.session_id);
-    records.push(shown(record, userId, workspaceId, row.connector_id, row.host_name, online(row)));
+    records.push(shown(record, userId, row.workspace_id, row.connector_id, row.host_name, online(row)));
   }
   return records;
 }
@@ -92,7 +91,7 @@ async function remember(env: Env, connectorId: string, userId: string, record: S
   const json = JSON.stringify(record);
   if (json.length > RECORD_BYTES) return;
   await env.DB.query(`INSERT INTO forwarded_sessions (connector_id, session_id, user_id, record_json, activity, reported_at) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT (connector_id, session_id) DO UPDATE SET record_json = excluded.record_json, activity = excluded.activity`)
+    ON CONFLICT (connector_id, session_id) DO UPDATE SET record_json = excluded.record_json, activity = COALESCE(excluded.activity, forwarded_sessions.activity)`)
     .bind(connectorId, record.id, userId, json, record.activity ?? null, now()).run();
 }
 

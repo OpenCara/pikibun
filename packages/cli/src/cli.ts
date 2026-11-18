@@ -4,6 +4,7 @@ import { extensionsMain } from "../../../apps/runner/src/extensions-cli.js";
 import { hostMain } from "../../../apps/runner/src/host-cli.js";
 import { identityMain } from "../../../apps/runner/src/identity-cli.js";
 import { ConnectorSetupError } from "../../../apps/runner/src/protocol.js";
+import { lazyPrivateHome, providePrivateHomes } from "../../../apps/runner/src/private-home.js";
 import packageJson from "../package.json" with { type: "json" };
 
 const USAGE = `Usage: pikibun <command> [options]
@@ -27,6 +28,9 @@ Run "pikibun connect --help" or "pikibun serve --help" for their options.
 `;
 
 const [command, ...args] = process.argv.slice(2);
+providePrivateHomes(host => lazyPrivateHome(import("../../../apps/server/src/local/home.js").then(home => home.createPrivateHome(host, {
+  log: line => process.stderr.write(`${line}\n`),
+}))));
 const serveMain = async (args: string[]) => (await import("../../../apps/server/src/local/cli.js")).serveMain(args);
 const run = command === "connect" ? connectMain : command === "cache" ? cacheMain : command === "extensions" ? extensionsMain : command === "identity" ? identityMain : command === "serve" ? serveMain
   : command === "host" ? hostMain : undefined;

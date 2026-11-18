@@ -4,6 +4,7 @@ import { userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureLocalOwner, instanceAdmins, localOwner } from '../authority/index.js';
+import { ensurePersonalWorkspace } from '../catalog.js';
 import { loadConfig } from '../config.js';
 import { InstanceLockedError } from '../db/index.js';
 import { LOCAL_OWNER_ACCOUNT, PASSWORD_USERNAME } from '../http.js';
@@ -109,7 +110,7 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   const admins = [...instanceAdmins(env)];
   if (!shared) {
     try {
-      if (options.headless) await ensureLocalOwner(env);
+      if (options.headless) await ensurePersonalWorkspace(env, (await ensureLocalOwner(env)).id);
       await writeDiscovery(stateDir, { version: 1, pid: process.pid, port: state.port, origin, secret: forwardSecret, headless: options.headless === true });
     } catch (error) {
       await server.close().catch(() => {});

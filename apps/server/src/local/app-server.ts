@@ -9,7 +9,8 @@ import { ConfigurationError } from '../config.js';
 import type { ServerEvent, ServerHostState, ServerInspection, ServerRequest, ServerStartRequest, ServerStatus } from '../../../../packages/shared/src/app-server-protocol.js';
 import { startLocalHost, type LocalHost } from './host.js';
 import { LocalServerError, startLocalServer, type LocalServer } from './launch.js';
-import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState } from './state.js';
+import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, peekLocalState } from './state.js';
+import { openLocalStateTakingOver } from './discovery.js';
 
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const requestSchema: z.ZodType<ServerRequest> = z.discriminatedUnion('type', [
@@ -79,7 +80,7 @@ async function start(request: ServerStartRequest): Promise<void> {
 }
 
 async function launch(request: ServerStartRequest): Promise<void> {
-  const { state, release } = await openLocalState(stateDir);
+  const { state, release } = await openLocalStateTakingOver(stateDir);
   const host = await hostCheck().catch(async (error: unknown) => { await release(); throw error; });
   const server = await startLocalServer({ stateDir, state, release, mode: 'local', ...(staticDir ? { staticDir } : {}) });
   const current: Running = { server, hostState: 'off', stopping: false };

@@ -8,6 +8,7 @@ import { stdioTransport, type Transport } from "./app-host-transport.js";
 import { pairingCodePattern, pairingIdPattern, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "../../../packages/shared/src/app-host-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
 import { identityDirectory } from "./identity.js";
+import { startPrivateHome, type PrivateHome } from "./private-home.js";
 import { ConnectorSetupError, RunnerError } from "./protocol.js";
 import { transcriptPage } from "../../../packages/shared/src/transcript-display.js";
 import { LoginError, LoginSession, loginProviders, piLogin, runLogin } from "./pi-login.js";
@@ -57,6 +58,7 @@ let stateDir: string;
 let identityDir: string;
 let transport: Transport<HostEvent>;
 let running: { connector: LocalConnector; stopRequested: boolean } | undefined;
+let privateHome: PrivateHome | undefined;
 let signingIn: { id: number; session: LoginSession } | undefined;
 
 function emit(event: HostEvent): void { transport.send(event); }
@@ -118,10 +120,12 @@ async function start(request: StartRequest): Promise<void> {
   if (running) throw new HostFailure("already-running", "The host is already running.");
   const pairing = request.pairing && { id: request.pairing.id, code: request.pairing.code };
   const verified = !unsandboxed && !backend ? await verifySandboxIsolation() : undefined;
+  const capabilities = { platform: process.platform, sandbox: verified?.ok === true, productionShell: false };
+  privateHome ??= startPrivateHome({ localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}), identityDir, allowFaux: request.allowFaux, capabilities });
   const connector = createConnector({
     dataDir: stateDir, identityDir, server, pairing, replacePairing: replace, localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}),
-    allowInsecureLoopback: request.allowInsecureLoopback, allowFaux: request.allowFaux,
-    capabilities: { platform: process.platform, sandbox: verified?.ok === true, productionShell: false },
+    allowInsecureLoopback: request.allowInsecureLoopback, allowFaux: request.allowFaux, ...(privateHome ? { privateHome } : {}),
+    capabilities,
     onStatus: state => {
       if (running?.connector !== connector) return;
       if (state !== "stopped") {
@@ -223,6 +227,7 @@ async function shutdown(): Promise<void> {
   closing = true;
   signingIn?.session.cancel();
   await stop().catch(() => {});
+  await privateHome?.stop().catch(() => {});
   process.exit(0);
 }
 

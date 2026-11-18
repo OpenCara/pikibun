@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import { PRIVATE_REPORT_LIMIT, PRIVATE_SESSIONS_VERSION } from '../../../packages/shared/src/private-sessions.js';
 import { permissions } from '../../../packages/shared/src/types.js';
+import { ensurePersonalWorkspace } from './catalog.js';
 import { sessionRecord } from './db.js';
 import { fail, jsonObject, localMode, text } from './http.js';
 import { createSession } from './sessions.js';
@@ -10,6 +11,7 @@ const CREATE_FIELDS = ['provider', 'modelId', 'title', 'hostEnvironment', 'gener
 
 async function privateWorkspace(c: AppContext): Promise<string> {
   if (!localMode(c.env)) fail(404, 'not_found', 'API route not found.');
+  await ensurePersonalWorkspace(c.env, c.get('auth').userId);
   const workspaceId = await c.env.DB.query<{ workspace_id: string }>('SELECT workspace_id FROM personal_workspaces WHERE user_id = ?')
     .bind(c.get('auth').userId).first('workspace_id');
   if (!workspaceId) fail(409, 'no_private_workspace', 'This Pikibun has no private workspace yet: open it once.');

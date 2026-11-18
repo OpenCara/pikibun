@@ -14,5 +14,7 @@ CREATE TABLE forwarded_sessions (
   PRIMARY KEY (connector_id, session_id)
 );
 CREATE INDEX forwarded_sessions_user ON forwarded_sessions(user_id, session_id);
+-- A notification about a forwarded session names it here: it has no row in sessions for session_id to reference.
+ALTER TABLE notifications ADD COLUMN forwarded_session_id TEXT;
 -- Bring here is gone: no server offers another's portable sessions any more.
 DROP TABLE portable_offers;

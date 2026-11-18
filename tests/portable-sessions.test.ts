@@ -379,86 +379,51 @@ async function identityReport(key: Awaited<ReturnType<typeof keyPair>>, sessions
   };
 }
 
-test('a server lists the portable sessions its owner\'s host reports, brings one here, and archives it when the host takes it away', async t => {
-  const calls: { action: string; body: { binding: RunnerBinding; sourceSessionId?: string } & Record<string, unknown> }[] = [];
-  const triage = { name: 'Triage', cron: '0 4 * * *', timeZone: 'UTC', content: 'Triage the issues', access: 'auto', runIn: 'child', oneShot: true, enabled: true };
-  const kept = { title: 'From the other server', schedules: [{ name: 'Nightly', cron: '0 3 * * *', timeZone: 'UTC', content: 'Check the build', access: 'auto', runIn: 'session',
-    oneShot: true, enabled: true }, { ...triage, modelId: 'model-elsewhere', thinkingLevel: 'high' }, { ...triage, name: 'Here', modelId: 'model', thinkingLevel: 'high' }] };
+test('a server records its host\'s identity, says which reported sessions it archived, and archives one when the host takes it away', async t => {
+  const calls: { action: string; body: Record<string, unknown> }[] = [];
   const f = await server(t, (action, body) => {
     calls.push({ action, body: JSON.parse(body) });
-    return Response.json(action === 'attach' ? { session: JSON.parse(body).binding.session, kept } : { kept: true });
+    return Response.json({ kept: true });
   });
   const key = await keyPair();
-  const sessionId = randomUUID();
   const stranger = await keyPair();
-  const report = await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false }]);
+  const report = await identityReport(key, [{ id: randomUUID(), title: 'Elsewhere', attached: false }]);
   report.sessions.push({ ...report.sessions[0]!, id: randomUUID(), mark: await signStatement(stranger.privateKey, { kind: 'session', key: stranger.publicKey,
     session: 'other', issuedAt }) });
   assert.deepEqual(await json(await f.host('/api/connectors/self/identity', report)), {});
   const odd = await identityReport(key, [{ id: randomUUID(), title: 'ok', attached: false }]);
   odd.sessions[0]!.title = '\u0007';
-  const oddReport = { ...report, sessions: [...report.sessions, odd.sessions[0]!] };
-  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', oddReport)), {}, 'one session it can\'t take doesn\'t refuse the rest');
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', { ...report, sessions: [...report.sessions, odd.sessions[0]!] })), {},
+    'one session it can\'t take doesn\'t refuse the rest');
   await json(await f.host('/api/connectors/self/identity', { ...report, sessions: undefined }), 400);
   const forged = await identityReport(key, []);
   await json(await f.host('/api/connectors/self/identity', { ...forged, delegation: { ...forged.delegation, statement: { ...forged.delegation.statement, connector: 'other-host' } } }), 400);
   const elsewhere = await signStatement(key.privateKey, { kind: 'delegation', key: key.publicKey, server: 'https://another.example', connector: 'host', issuedAt });
   await json(await f.host('/api/connectors/self/identity', { ...forged, delegation: elsewhere }), 403);
+  assert.equal((f.sqlite.prepare("SELECT public_key FROM identity_delegations WHERE connector_id = 'host'").get() as { public_key: string }).public_key, key.publicKey);
+  await json(await f.alice.request('GET', '/api/portable-sessions'), 404);
 
-  const { sessions } = await json<{ sessions: { id: string; title: string; attachedElsewhere: boolean; modelId?: string; hostName: string }[] }>(
-    await f.alice.request('GET', '/api/portable-sessions'));
-  assert.deepEqual(sessions.map(item => [item.id, item.title, item.attachedElsewhere, item.modelId, item.hostName]),
-    [[sessionId, 'Elsewhere', true, 'model', 'Alice\'s Mac']], 'a mark by another key is not offered');
-  const archivedThere = await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false, archived: false },
-    { id: randomUUID(), title: 'Archived there', attached: false, archived: true }]);
-  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', archivedThere)), { archived: [] }, 'nothing is attached here to be archived');
-  assert.deepEqual((await json<{ sessions: { id: string }[] }>(await f.alice.request('GET', '/api/portable-sessions'))).sessions.map(item => item.id), [sessionId],
-    'one archived on the server it is attached to is not offered');
-  await json(await f.host('/api/connectors/self/identity', report));
-
-  const attached = await json<{ session: SessionRecord; schedules: number }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host' }), 201);
-  assert.equal(attached.session.id, sessionId);
-  assert.equal(attached.session.portable, true);
-  assert.equal(attached.session.workspaceId, f.workspaceId);
-  assert.equal(attached.session.status, 'ready');
-  assert.equal(attached.schedules, 3, 'its schedules come with it');
-  const restored = (name: string) => ({ ...f.sqlite.prepare(`SELECT CASE WHEN session_id IS NULL THEN 'child' ELSE 'session' END AS run_in, model_id, thinking_level FROM schedules
-    WHERE (session_id = ? OR origin_session_id = ?) AND name = ?`).get(sessionId, sessionId, name) as object });
-  assert.deepEqual(restored('Triage'), { run_in: 'child', model_id: null, thinking_level: null }, 'one whose model this server lacks comes on the session\'s model');
-  assert.deepEqual(restored('Here'), { run_in: 'child', model_id: 'model', thinking_level: null }, 'one whose model it has keeps it, without a level the model\'s host can\'t set');
-  assert.equal(calls[0]!.action, 'attach');
-  assert.equal(calls[0]!.body.binding.session.portable, true);
-  assert.equal(calls[0]!.body.binding.session.hostEnvironment, true);
-  assert.equal(calls[0]!.body.binding.session.connectorId, 'host');
-  assert.equal(calls[0]!.body.sourceSessionId, undefined);
-  assert.equal((f.sqlite.prepare('SELECT portable_key FROM sessions WHERE id = ?').get(sessionId) as { portable_key: string }).portable_key, key.publicKey);
-  assert.deepEqual(await json(await f.alice.request('GET', '/api/portable-sessions')), { sessions: [] }, 'attached here, it is no longer offered');
-  await json(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host' }), 409);
-
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: true }])));
+  f.sqlite.prepare("INSERT INTO agents (id, author_id, created_at) VALUES ('agent', ?, '2026-01-01')").run(f.alice.user.id);
+  f.sqlite.prepare(`INSERT INTO agent_versions (id, agent_id, author_id, workspace_id, version, name, description, instructions, tools_json, model_id, created_at)
+    VALUES ('version', 'agent', ?, ?, 1, 'Agent', '', '', '[]', 'model', '2026-01-01')`).run(f.alice.user.id, f.workspaceId);
+  const sessionId = randomUUID();
+  f.sqlite.prepare(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id,
+    connector_owner_id, repositories_json, visibility, repository_mode, host_environment, portable_key)
+    VALUES (?, ?, ?, 'version', 'Portable', 1, 'ready', '2026-01-01', 'host', ?, '[]', 'workspace', 'clone', 1, ?)`)
+    .run(sessionId, f.workspaceId, f.alice.user.id, f.alice.user.id, key.publicKey);
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Portable', attached: true, archived: null }]))),
+    { archived: [] });
   await json(await f.alice.request('POST', `/api/sessions/${sessionId}/archive`));
-  assert.deepEqual(await json(await f.alice.request('GET', '/api/portable-sessions')), { sessions: [] }, 'archived here, not moved, it is not offered');
-  const archivedHere = await json<{ code: string }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host' }), 409);
-  assert.equal(archivedHere.code, 'archived_here', 'Bring here doesn\'t unarchive it');
-  assert.equal((f.sqlite.prepare('SELECT status FROM sessions WHERE id = ?').get(sessionId) as { status: string }).status, 'archived');
-  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: true, archived: null }]))),
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Portable', attached: true, archived: null }]))),
     { archived: [sessionId] }, 'a host that keeps it is told it is archived here');
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false }])));
-  assert.deepEqual(await json(await f.alice.request('GET', '/api/portable-sessions')), { sessions: [] },
-    'archived here, it is not offered while the host can\'t say it is open elsewhere');
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false, archived: true }])));
-  assert.deepEqual(await json(await f.alice.request('GET', '/api/portable-sessions')), { sessions: [] }, 'nor once it is archived where it is attached');
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false, archived: false }])));
-  const movedWhileArchived = await json<{ sessions: { id: string; existing?: boolean }[] }>(await f.alice.request('GET', '/api/portable-sessions'));
-  assert.deepEqual(movedWhileArchived.sessions.map(item => [item.id, item.existing]), [[sessionId, true]],
-    'one the host reports open elsewhere is offered, though this server never noticed it move');
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: true }])));
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Portable', attached: true }]))), {},
+    'an older host, which reads its answer strictly, isn\'t told');
   await json(await f.alice.request('POST', `/api/sessions/${sessionId}/unarchive`));
 
   await json(await f.alice.request('PATCH', `/api/sessions/${sessionId}`, { title: 'Renamed here' }));
   const keptCall = calls.at(-1)!;
   assert.equal(keptCall.action, 'portable');
-  assert.deepEqual(keptCall.body, { title: 'Renamed here', schedules: [kept.schedules[0], triage, { ...triage, name: 'Here', modelId: 'model' }] });
+  assert.deepEqual(keptCall.body, { title: 'Renamed here', schedules: [] });
 
   await json(await f.host('/api/connectors/self/portable/detached', { sessionId }));
   const archived = f.sqlite.prepare('SELECT status, detached_at FROM sessions WHERE id = ?').get(sessionId) as { status: string; detached_at: string | null };
@@ -467,59 +432,21 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   const view = await json<{ session: SessionRecord }>(await f.alice.request('GET', `/api/sessions/${sessionId}`));
   assert.equal(view.session.detached, true);
   assert.equal((f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'session.detached' AND session_id = ?").get(sessionId) as { n: number }).n, 1);
-
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Back again', attached: false }])));
-  const returned = await json<{ session: SessionRecord }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host' }));
-  assert.equal(returned.session.status, 'ready');
-  assert.equal(returned.session.title, 'Back again');
-  assert.equal(returned.session.detached, undefined);
-  assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM schedules WHERE session_id = ? OR origin_session_id = ?').get(sessionId, sessionId) as { n: number }).n, 3, 'schedules it kept here aren\'t doubled');
-
-  const paired = await f.pair('host-again', 'd'.repeat(43), 'e'.repeat(43), 'model-again');
-  await json(await paired('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Paired again', attached: false }], {}, 'host-again')));
-  const offered = await json<{ sessions: { id: string; connectorId: string; existing?: boolean }[] }>(await f.alice.request('GET', '/api/portable-sessions'));
-  assert.deepEqual(offered.sessions.map(item => [item.id, item.connectorId, item.existing]), [[sessionId, 'host-again', true]]);
-  const moved = await json<{ session: SessionRecord }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host-again' }), 201);
-  assert.notEqual(moved.session.id, sessionId, 'a host paired again gets the session under a new ID here');
-  assert.equal(moved.session.connectorId, 'host-again');
-  assert.equal(calls.at(-1)!.body.sourceSessionId, sessionId);
-  assert.equal(calls.at(-1)!.body.binding.session.id, moved.session.id);
-  const old = f.sqlite.prepare('SELECT status, detached_at FROM sessions WHERE id = ?').get(sessionId) as { status: string; detached_at: string | null };
-  assert.equal(old.status, 'archived');
-  assert.ok(old.detached_at);
+  await json(await f.alice.request('POST', `/api/sessions/${sessionId}/unarchive`), 409);
 });
 
-test('an attach the host refuses leaves nothing behind, and only the host\'s owner brings its sessions', async t => {
-  const f = await server(t, () => Response.json({ error: 'This session is working. Stop it, or wait for it to finish, where it is attached now' }, { status: 409 }));
+test('new private sessions on the host are portable from the start, and a rotated identity moves its sessions to the new key', async t => {
+  const f = await server(t, () => Response.json({ kept: true }));
   const key = await keyPair();
-  const sessionId = randomUUID();
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Busy', attached: false }])));
-  const refused = await json<{ error: string }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host' }), 409);
-  assert.match(refused.error, /working/);
-  assert.equal(f.sqlite.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId), undefined);
-  await json(await f.alice.request('POST', `/api/portable-sessions/${randomUUID()}/attach`, { connectorId: 'host' }), 404);
-  await json(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host', modelId: 'missing' }), 404);
-  const odd = await json<{ code: string }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host', extra: true }), 400);
-  assert.equal(odd.code, 'invalid_input');
-  await json(await f.alice.request('POST', '/api/connectors/host/portable', { after: { createdAt: '2026-01-01' } }), 400);
-});
-
-test('existing private sessions on the host become portable, and new ones are portable from the start', async t => {
-  const f = await server(t, action => Response.json(action === 'attach' ? { session: {}, kept: { schedules: [] } } : { kept: true }));
-  const key = await keyPair();
+  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [])));
   f.sqlite.prepare("INSERT INTO agents (id, author_id, created_at) VALUES ('agent', ?, '2026-01-01')").run(f.alice.user.id);
   f.sqlite.prepare(`INSERT INTO agent_versions (id, agent_id, author_id, workspace_id, version, name, description, instructions, tools_json, model_id, created_at)
     VALUES ('version', 'agent', ?, ?, 1, 'Agent', '', '', '[]', 'model', '2026-01-01')`).run(f.alice.user.id, f.workspaceId);
-  const insert = f.sqlite.prepare(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id,
-    connector_owner_id, repositories_json, visibility, repository_mode, host_environment) VALUES (?, ?, ?, 'version', ?, 1, ?, '2026-01-01', 'host', ?, '[]', 'private', 'clone', 1)`);
-  insert.run('ready-one', f.workspaceId, f.alice.user.id, 'Ready', 'ready', f.alice.user.id);
-  insert.run('archived-one', f.workspaceId, f.alice.user.id, 'Archived', 'archived', f.alice.user.id);
-  await json(await f.alice.request('POST', '/api/connectors/host/portable'), 409);
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [])));
-  const result = await json<{ converted: string[]; skipped: unknown[] }>(await f.alice.request('POST', '/api/connectors/host/portable'));
-  assert.deepEqual(result, { converted: ['ready-one'], skipped: [] });
-  assert.equal((f.sqlite.prepare("SELECT portable_key FROM sessions WHERE id = 'ready-one'").get() as { portable_key: string }).portable_key, key.publicKey);
-  assert.equal((f.sqlite.prepare("SELECT portable_key FROM sessions WHERE id = 'archived-one'").get() as { portable_key: string | null }).portable_key, null);
+  f.sqlite.prepare(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id,
+    connector_owner_id, repositories_json, visibility, repository_mode, host_environment, portable_key)
+    VALUES ('ready-one', ?, ?, 'version', 'Ready', 1, 'ready', '2026-01-01', 'host', ?, '[]', 'workspace', 'clone', 1, ?)`)
+    .run(f.workspaceId, f.alice.user.id, f.alice.user.id, key.publicKey);
+  await json(await f.alice.request('POST', '/api/connectors/host/portable'), 404);
 
   const row = { workspace_id: f.workspaceId, owner_id: f.alice.user.id, connector_id: 'host', connector_owner_id: f.alice.user.id, host_environment: 1 };
   assert.equal(await portableKeyFor(f.env, row, false), key.publicKey);
@@ -540,28 +467,6 @@ test('existing private sessions on the host become portable, and new ones are po
   assert.equal(keyOf(), key.publicKey, 'nor does a chain that doesn\'t end at the key the host signs with');
   await json(await f.host('/api/connectors/self/identity', await identityReport(next, [], { rotations: [rotation, strayRotation] })));
   assert.equal(keyOf(), next.publicKey, 'a whole chain moves the sessions to the new key');
-});
-
-test('making sessions portable goes on past the ones its host refuses', async t => {
-  const f = await server(t, (action, body) => {
-    const id = (JSON.parse(body) as { binding?: RunnerBinding }).binding?.session.id ?? '';
-    if (action === 'attach' && id.startsWith('stuck-')) return Response.json({ error: 'This session has no conversation yet to attach' }, { status: 409 });
-    return Response.json(action === 'attach' ? { session: {}, kept: { schedules: [] } } : { kept: true });
-  });
-  const key = await keyPair();
-  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [])));
-  f.sqlite.prepare("INSERT INTO agents (id, author_id, created_at) VALUES ('agent', ?, '2026-01-01')").run(f.alice.user.id);
-  f.sqlite.prepare(`INSERT INTO agent_versions (id, agent_id, author_id, workspace_id, version, name, description, instructions, tools_json, model_id, created_at)
-    VALUES ('version', 'agent', ?, ?, 1, 'Agent', '', '', '[]', 'model', '2026-01-01')`).run(f.alice.user.id, f.workspaceId);
-  const insert = f.sqlite.prepare(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id,
-    connector_owner_id, repositories_json, visibility, repository_mode, host_environment) VALUES (?, ?, ?, 'version', 'Session', 1, 'ready', ?, 'host', ?, '[]', 'private', 'clone', 1)`);
-  for (let index = 0; index < 50; index++) insert.run(`stuck-${String(index).padStart(2, '0')}`, f.workspaceId, f.alice.user.id, '2026-01-01T00:00:00.000Z', f.alice.user.id);
-  insert.run('later', f.workspaceId, f.alice.user.id, '2026-02-01T00:00:00.000Z', f.alice.user.id);
-  const first = await json<{ converted: string[]; skipped: unknown[]; next?: { createdAt: string; id: string } }>(await f.alice.request('POST', '/api/connectors/host/portable', {}));
-  assert.deepEqual([first.converted, first.skipped.length], [[], 50]);
-  assert.deepEqual(first.next, { createdAt: '2026-01-01T00:00:00.000Z', id: 'stuck-49' });
-  const second = await json<{ converted: string[]; next?: unknown }>(await f.alice.request('POST', '/api/connectors/host/portable', { after: first.next }));
-  assert.deepEqual(second, { converted: ['later'], skipped: [] });
 });
 
 test('the private workspace\'s settings travel signed by the identity, and a server can\'t forge them', async t => {

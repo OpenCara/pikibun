@@ -7,6 +7,7 @@ import { createConnector, controlPlaneOrigin } from "./connector.js";
 import { assertConnectorPlatform, assertPrerequisites, checkPrerequisites, defaultStateDir, loadConnectorModels, savedPairing, unsandboxedWarning, verifySandboxIsolation, isolationMessage } from "./connect-setup.js";
 import { ConnectorSetupError } from "./protocol.js";
 import { identityDirectory } from "./identity.js";
+import { startPrivateHome } from "./private-home.js";
 import type { ResourceConfig } from "./resources.js";
 import { DEFAULT_WINDOWS_LIMITS, validWindowsLimits, windowsRuntimeDirectory, type SandboxBackendConfig } from "./sandbox-backend.js";
 
@@ -256,12 +257,16 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   if (pairingId && !code) throw new ConnectorSetupError("No pairing code was entered. Paste the single-use code shown in Pikibun at the hidden prompt.");
   const pairing = pairingId ? { id: pairingId, code } : undefined;
   const isolation = !unsandboxed && !sandboxBackend ? await verifySandboxIsolation() : undefined;
+  const identityDir = identityDirectory(values["identity-dir"]);
+  const hostCapabilities = { platform: process.platform, sandbox: isolation?.ok === true, productionShell: false };
+  const privateHome = startPrivateHome({ localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}), identityDir,
+    allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"], capabilities: hostCapabilities });
   const connector = createConnector({
-    dataDir, identityDir: identityDirectory(values["identity-dir"]),
+    dataDir, identityDir, ...(privateHome ? { privateHome } : {}),
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
     remoteExtensionInstalls: values["no-remote-installs"] !== true, managedExtensions: values["managed-extensions"] === true,
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
-    capabilities: { platform: process.platform, sandbox: isolation?.ok === true, productionShell: false },
+    capabilities: hostCapabilities,
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },
     onWarning: (warning, detail) => { process.stderr.write(warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : "Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.\n"); },
   });
@@ -278,6 +283,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   finally {
     process.off("SIGINT", stop); process.off("SIGTERM", stop);
     await connector.stop();
+    await privateHome?.stop();
     if (pairing) pairing.code = "";
   }
 }

@@ -22,3 +22,12 @@ export function providePrivateHomes(value: PrivateHomeFactory | undefined): void
 export function startPrivateHome(host: PrivateHomeHost): PrivateHome | undefined {
   return factory?.(host);
 }
+
+export function lazyPrivateHome(loading: Promise<PrivateHome>): PrivateHome {
+  void loading.catch(() => {});
+  return {
+    forward: async (request, signal) => (await loading).forward(request, signal),
+    sessions: async signal => { try { return await (await loading).sessions(signal); } catch { return null; } },
+    stop: async () => { try { await (await loading).stop(); } catch { } },
+  };
+}
