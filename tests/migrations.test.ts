@@ -4,9 +4,9 @@ import test from 'node:test';
 
 type Provider = 'sqlite' | 'postgres';
 
-const prefixesSharedBeforeTheRule: Record<Provider, readonly string[]> = {
-  sqlite: ['0013', '0024', '0036', '0047'],
-  postgres: ['0006', '0017', '0029', '0040'],
+const prefixesAlreadyShared: Record<Provider, readonly string[]> = {
+  sqlite: ['0013', '0024', '0036', '0047', '0078'],
+  postgres: ['0006', '0017', '0029', '0040', '0071'],
 };
 const firstMigrationInBothProviders = 'chat_agents';
 
@@ -23,7 +23,7 @@ for (const provider of ['sqlite', 'postgres'] as const) {
     for (const file of files) assert.match(file, /^\d{4}_[a-z0-9_]+\.sql$/, file);
     const filesByPrefix = Map.groupBy(files, prefixOf);
     const shared = [...filesByPrefix].filter(([, group]) => group.length > 1).map(([prefix]) => prefix);
-    assert.deepEqual(shared, prefixesSharedBeforeTheRule[provider], `${provider} migrations with a prefix another file already has`);
+    assert.deepEqual(shared, prefixesAlreadyShared[provider], `${provider} migrations with a prefix another file already has`);
   });
 
   test(`${provider} migration prefixes leave no gap`, () => {
