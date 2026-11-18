@@ -10,7 +10,7 @@ import {
   extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings,
   type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension,
 } from "../../../../packages/shared/src/host-extensions";
-import { AUTO_MODE_SOURCE, autoModeModels } from "../../../../packages/shared/src/auto-mode";
+import { AUTO_MODE_SOURCE, autoModeModels, autoModelsText } from "../../../../packages/shared/src/auto-mode";
 import { segment, type Workspace } from "../shared";
 import { session } from "../lib/auth";
 import { openExternal } from "../lib/links";
@@ -213,8 +213,8 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                       <If when={controlPlane()}>
                         <Small>{`${cli()?.description ?? ""} Members see Auto in the new session's host and model menus, and in a session's model menu, while it is on.`}</Small>
                         <If when={extension().source === AUTO_MODE_SOURCE}>
-                          <Small testID="auto-mode-models">{autoModeModels([extension()]).length
-                            ? `Auto chooses only among: ${autoModeModels([extension()]).join(", ")}.`
+                          <Small testID="auto-mode-models">{autoModeModels([extension()])
+                            ? `Auto chooses only among: ${autoModelsText(autoModeModels([extension()])!)}.`
                             : "Auto chooses among every model the session's host offers: set models under Edit to limit it."}</Small>
                         </If>
                       </If>

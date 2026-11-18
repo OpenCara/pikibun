@@ -33,7 +33,7 @@ import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 import { packDueAfterArchiving } from './automatic-packing.js';
 import { autoModeSettings } from './auto-mode.js';
-import { autoModelAllowed } from '../../../packages/shared/src/auto-mode.js';
+import { autoModelAllowed, autoModelsText } from '../../../packages/shared/src/auto-mode.js';
 import { keepPortable, portableKeyFor } from './portable-sessions.js';
 import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
 import { nameSessionLater } from './session-titles.js';
@@ -65,7 +65,7 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
     if (!usable.length) fail(409, 'auto_mode_unavailable', 'The session\'s host offers no model you can use.');
     const candidates = usable.filter(model => autoModelAllowed(autoSettings!.models, model));
     if (!candidates.length) {
-      fail(409, 'auto_mode_unavailable', `The session's host offers none of the models auto mode may choose in this workspace (${autoSettings!.models.join(', ')}): choose a model yourself, or ask its owners and admins to widen auto mode's models setting.`);
+      fail(409, 'auto_mode_unavailable', `The session's host offers none of the models auto mode may choose in this workspace (${autoModelsText(autoSettings!.models ?? [])}): choose a model yourself, or ask its owners and admins to widen auto mode's models setting.`);
     }
     if (capabilities.autoModel === true) options.auto = { candidates };
     else {

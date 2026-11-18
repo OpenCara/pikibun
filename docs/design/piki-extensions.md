@@ -729,10 +729,11 @@ that kind of task on, among the models that host offers. The member still choose
     hosts offer. The catalogue declares `piki:auto-mode`'s settings itself (`settings` on its entry, since no host
     reports a control-plane extension's flags), and the Extensions page edits them as it does a host-reported
     extension's. `models` is a list of patterns separated by commas (`parseAutoModels`, at most 50): a model id, a
-    provider/model, or a glob with `*` and `?`, matched without regard to case (`autoModelPatternMatches`); empty
-    allows every model. The control plane applies it where it lists the candidates (`chatOptions`), before the
+    provider/model, or a glob with `*` and `?`, matched without regard to case (`autoModelPatternMatches`); a blank
+    setting allows every model, but one whose every entry is unreadable (too long, control characters) allows none,
+    so a mistyped limit fails closed rather than lifting it. The control plane applies it where it lists the candidates (`chatOptions`), before the
     runner sees them, so the evaluator is one of them too and an older connector's rules choose among them; the old
-    `POST` filters its `usable` models the same way. With none of the host's usable models allowed, a message sent
+    `POST` filters its `usable` models the same way, and its refusal names the setting where one is set. With none of the host's usable models allowed, a message sent
     with Auto is refused with `auto_mode_unavailable`, naming the setting, rather than run on a model the workspace
     ruled out. A model picked by hand is unaffected: the setting limits Auto, not members.
 

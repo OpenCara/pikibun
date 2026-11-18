@@ -11,13 +11,14 @@ export function autoModeOn(extensions: readonly { source: string; enabled: boole
 export const AUTO_MODE_MODELS_SETTING = "models";
 export const AUTO_MODE_MODELS_LIMIT = 50;
 
-export function parseAutoModels(setting: unknown): string[] {
-  if (typeof setting !== "string") return [];
-  return [...new Set(setting.split(/[,|\n]+/).map(item => item.trim())
-    .filter(item => item && item.length <= 200 && !/[\x00-\x1f\x7f]/.test(item)))].slice(0, AUTO_MODE_MODELS_LIMIT);
+export function parseAutoModels(setting: unknown): string[] | undefined {
+  if (typeof setting !== "string") return undefined;
+  const entries = setting.split(/[,|\n]+/).map(item => item.trim()).filter(Boolean);
+  if (!entries.length) return undefined;
+  return [...new Set(entries.filter(item => item.length <= 200 && !/[\x00-\x1f\x7f]/.test(item)))].slice(0, AUTO_MODE_MODELS_LIMIT);
 }
 
-export function autoModeModels(extensions: readonly { source: string; enabled: boolean; settings?: Readonly<Record<string, unknown>> }[]): string[] {
+export function autoModeModels(extensions: readonly { source: string; enabled: boolean; settings?: Readonly<Record<string, unknown>> }[]): string[] | undefined {
   return parseAutoModels(extensions.find(item => item.source === AUTO_MODE_SOURCE)?.settings?.[AUTO_MODE_MODELS_SETTING]);
 }
 
@@ -31,8 +32,12 @@ export function autoModelPatternMatches(pattern: string, model: { provider: stri
   return pattern.includes("/") ? globMatches(pattern, `${model.provider}/${model.modelId}`) : globMatches(pattern, model.modelId);
 }
 
-export function autoModelAllowed(patterns: readonly string[], model: { provider: string; modelId: string }): boolean {
-  return !patterns.length || patterns.some(pattern => autoModelPatternMatches(pattern, model));
+export function autoModelsText(patterns: readonly string[]): string {
+  return patterns.length ? patterns.join(", ") : "none it can read";
+}
+
+export function autoModelAllowed(patterns: readonly string[] | undefined, model: { provider: string; modelId: string }): boolean {
+  return patterns === undefined || patterns.some(pattern => autoModelPatternMatches(pattern, model));
 }
 
 export const taskComplexities = ["simple", "moderate", "complex"] as const;

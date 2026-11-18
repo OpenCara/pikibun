@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
-import { AUTO_TASK_LIMIT, autoChoice, autoModeModels, autoModeOn, autoModelAllowed } from '../../../packages/shared/src/auto-mode.js';
+import { AUTO_TASK_LIMIT, autoChoice, autoModeModels, autoModeOn, autoModelAllowed, autoModelsText } from '../../../packages/shared/src/auto-mode.js';
 import type { Env, AppEnv } from './types.js';
 import { requireMember, workspaceExtensions } from './authority/index.js';
 import { usableModels } from './catalog.js';
@@ -20,7 +20,7 @@ export async function autoModeEnabled(env: Env, workspaceId: string): Promise<bo
   return autoModeOn(await workspaceExtensions(env, workspaceId));
 }
 
-export async function autoModeSettings(env: Env, workspaceId: string): Promise<{ enabled: boolean; models: string[] }> {
+export async function autoModeSettings(env: Env, workspaceId: string): Promise<{ enabled: boolean; models: string[] | undefined }> {
   const extensions = await workspaceExtensions(env, workspaceId);
   return { enabled: autoModeOn(extensions), models: autoModeModels(extensions) };
 }
@@ -57,9 +57,10 @@ export function registerAutoMode(app: Hono<AppEnv>): void {
       ...(input.model ? { model: input.model } : {}),
     });
     if (!choice) {
-      fail(409, 'auto_mode_unavailable', input.connectorId || input.model
+      const limited = settings.models ? ` Auto mode may choose only the models its models setting names here (${autoModelsText(settings.models)}).` : '';
+      fail(409, 'auto_mode_unavailable', (input.connectorId || input.model
         ? 'No online host offers what you kept: choose another host or model, or Auto for both.'
-        : 'No host shared with this workspace is online with a model you can use.');
+        : 'No host shared with this workspace is online with a model you can use.') + limited);
     }
     const model = models.find(item => item.connector_id === choice.connectorId && item.provider === choice.provider && item.model_id === choice.modelId);
     return c.json({ choice: { ...choice, ...(model ? { id: model.id } : {}) } });
