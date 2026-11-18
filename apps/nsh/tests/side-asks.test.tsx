@@ -56,6 +56,22 @@ describe("side asks in the session list", () => {
     expect(app.shows("text:Node's own test runner.")).toBe(false);
   });
 
+  test("a side ask read further up stays where it is as the session updates", async () => {
+    const long = { ...asked, entries: [...asked.entries, ...Array.from({ length: 40 }, (_, index) => ({
+      id: `5:${index + 5}`, kind: "message", role: index % 2 ? "assistant" : "user", text: `Side ask line ${index}`, actorId: "u1", conversationId: "5" }))] };
+    let reads = 0;
+    const app = await desktop({ [`GET ${ORIGIN}/api/sessions/s1/view`]: () => { reads++; return { body: { view: long, revision: "r1" } }; } });
+    await app.waitFor("id:side-ask-row-s1-5");
+    await app.press("id:side-ask-row-s1-5");
+    await app.waitFor("text:Side ask line 39");
+    await app.scroll("id:transcript", -4000);
+    await app.waitFor("id:jump-to-latest");
+    const before = reads;
+    await app.waitUntil(() => reads > before + 1, { timeout: 15_000 });
+    await app.wait(500);
+    expect(app.shows("id:jump-to-latest")).toBe(true);
+  }, 30_000);
+
   test("a side ask the host no longer has opens all of one's side asks", async () => {
     const app = await desktop({ [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [{ ...listed, sideAsks: [{ conversationId: "9", preview: "Gone", createdAt: "2026-11-06T09:30:00.000Z" }] }] } } });
     await app.waitFor("id:side-ask-row-s1-9");
