@@ -2,8 +2,9 @@
 
 Status: implemented, behind the host's **Repository cache** setting (HostConfig.repositoryCache, set by its owner in
 Pikibun; connectors 0.9.0 and older use `--repo-cache`). The cache holds one Git mirror per repository, which
-clone sessions borrow objects from. How clone sessions use it is in [egress.md](egress.md), phase 3; this document
-covers the cache itself (`apps/runner/src/repo-cache.ts`).
+clone sessions borrow objects from, and the Git LFS files sessions downloaded. How clone sessions use it is in
+[egress.md](egress.md), phase 3, and how the proxy serves LFS files from it in its Git LFS section; this document
+covers the cache itself (`apps/runner/src/repo-cache.ts`, `apps/runner/src/lfs-cache.ts`).
 
 Until phase 5 of [egress.md](egress.md), sessions pinned their repositories to commits and the cache also served those
 pins: the host fetched each pinned commit with its own Git credentials, the server re-checked the owner's access to it
@@ -19,6 +20,8 @@ repo-cache/<…>.git/refs/upstream/{heads,tags}/…              # the remote's 
 repo-cache/<…>.git/refs/pikibun/sessions/<hash of session>   # a clone session's keep ref (below)
 repo-cache/<…>.git/refs/pikibun/pins/<hash of session>       # pins of sessions from before every session cloned
 repo-cache/<provider>/<host>/<repositoryId>.git.pikibun.lock # holder's pid: one writer (fetch, gc) at a time
+repo-cache/lfs/objects/<aa>/<bb>/<oid>                       # a Git LFS file, named by its sha256 (owner scope: owners/<hash>/lfs)
+repo-cache/lfs/tmp/<oid>.<random>                            # a download being written; renamed into objects/ once verified
 ```
 
 - **Key.** A mirror is named by the provider's stable repository id (`mirrorPath`), not the repository's name, so a
@@ -88,7 +91,12 @@ network traffic goes through `GitRemote`.
   pruned, so it is safe while the connector runs.
 - **Pin refs** of sessions from before every session cloned are listed and kept, never written or pruned: a read-only
   pinned session that was checked out of the cache still borrows their objects.
-- `pikibun cache list` shows each mirror's size and how many sessions and pins keep objects in it.
+- `pikibun cache list` shows each mirror's size and how many sessions and pins keep objects in it, and the number and
+  size of the Git LFS files kept.
+- **Git LFS files** need no lock: each is written to `lfs/tmp/` and renamed into place whole, so readers see a whole
+  file or none, and two sessions downloading the same file both rename the same content. A file served counts as used
+  (its mtime is set); `pikibun cache prune` deletes those unused for longer than `--older-than`, and leftovers in
+  `lfs/tmp/` older than a day (or the cutoff, if shorter).
 
 ## Open questions
 

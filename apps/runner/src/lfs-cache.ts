@@ -37,7 +37,6 @@ export class LfsObjectCache {
       const info = await handle.stat();
       if (!info.isFile() || info.size !== object.size) {
         await handle.close();
-        if (info.isFile()) await this.remove(object.oid);
         return undefined;
       }
       const now = new Date();

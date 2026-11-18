@@ -733,14 +733,16 @@ export class EgressProxy {
     let result: LfsBatchResult;
     try { result = parseLfsBatchResult(await upstream.json(), batch.objects.length); }
     catch { return deny(502, "The control plane returned an invalid Git LFS answer"); }
-    const base = `${EGRESS_GIT_BASE}${target}/info/lfs/objects/`;
+    const tcp = this.#options.tcp && this.#port !== undefined ? { port: this.#port, token: this.#options.tcp.token } : undefined;
+    const base = `${tcp ? `http://127.0.0.1:${tcp.port}/git/` : EGRESS_GIT_BASE}${target}/info/lfs/objects/`;
+    const header = tcp ? { header: { Authorization: `Basic ${Buffer.from(`${EGRESS_USER}:${tcp.token}`).toString("base64")}` } } : {};
     this.#authorizeLfs(repository.bindingId, result.objects.filter(object => object.download));
     this.#record({ kind: "git", target: label, outcome: "allowed", reason: `lfs batch (${result.objects.length} objects)${transport(upstream)}` });
     response.writeHead(200, { "Content-Type": LFS_TYPE, "Cache-Control": "no-store" });
     response.end(`${JSON.stringify({
       transfer: "basic", hash_algo: "sha256",
       objects: result.objects.map(object => object.download
-        ? { oid: object.oid, size: object.size, authenticated: true, actions: { download: { href: `${base}${object.oid}?size=${object.size}` } } }
+        ? { oid: object.oid, size: object.size, authenticated: true, actions: { download: { href: `${base}${object.oid}?size=${object.size}`, ...header } } }
         : { oid: object.oid, size: object.size, error: object.error ?? { code: 404, message: "Object does not exist on the server" } }),
     })}\n`);
   }
@@ -791,11 +793,13 @@ export class EgressProxy {
     const stream = handle.createReadStream();
     response.once("close", () => stream.destroy());
     response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": String(object.size), "Cache-Control": "no-store" });
+    let held: Buffer | undefined;
     try {
       for await (const chunk of stream as AsyncIterable<Buffer>) {
         hash.update(chunk);
-        if (!response.write(chunk)) await drained(response);
+        if (held && !response.write(held)) await drained(response);
         if (response.destroyed) return true;
+        held = chunk;
       }
       if (hash.digest("hex") !== object.oid) {
         await cache.remove(object.oid).catch(() => {});
@@ -803,7 +807,7 @@ export class EgressProxy {
         response.destroy();
         return true;
       }
-      response.end();
+      response.end(held);
     } catch {
       response.destroy();
     } finally {
@@ -839,11 +843,13 @@ export class EgressProxy {
     if (!upstream.body) { await writer?.abort(); return void response.end(); }
     const reader = upstream.body.getReader();
     response.once("close", () => { void reader.cancel().catch(() => {}); });
-    let complete = false;
     try {
       while (true) {
         const part = await reader.read();
-        if (part.done) { complete = true; break; }
+        if (part.done) {
+          await writer?.commit().catch(() => {});
+          break;
+        }
         await writer?.write(part.value);
         if (!response.write(part.value)) await drained(response);
         if (response.destroyed) break;
@@ -852,7 +858,7 @@ export class EgressProxy {
     } catch {
       response.destroy();
     } finally {
-      if (writer) await (complete ? writer.commit() : writer.abort()).catch(() => {});
+      await writer?.abort();
     }
   }
 }

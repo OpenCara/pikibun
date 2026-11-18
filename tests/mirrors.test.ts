@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -274,13 +275,17 @@ test("pikibun cache lists and prunes a state directory's cache", async t => {
   const u = await upstream(t);
   const { cacheMain } = await import("../apps/runner/src/cache-cli.js");
   const state = join(u.directory, "state");
-  await new RepositoryCache({ root: join(state, "repo-cache") }).refresh({ repository, ownerId: "test:alice", sessionId: "listed", remote: await u.cacheRemote() });
+  const cache = new RepositoryCache({ root: join(state, "repo-cache") });
+  await cache.refresh({ repository, ownerId: "test:alice", sessionId: "listed", remote: await u.cacheRemote() });
+  const writer = await cache.lfsObjects("test:alice").writer({ oid: createHash("sha256").update("lfs").digest("hex"), size: 3 });
+  await writer.write(Buffer.from("lfs"));
+  assert.equal(await writer.commit(), true);
   const output: string[] = [];
   t.mock.method(process.stdout, "write", (chunk: string) => { output.push(chunk); return true; });
   await cacheMain(["list", "--state-dir", state]);
-  assert.match(output.join(""), /MiB +1 sessions +0 pins +github\/github\.com\/1701\.git/);
+  assert.match(output.join(""), /MiB +1 sessions +0 pins +github\/github\.com\/1701\.git\n +0\.0 MiB +1 Git LFS file\n$/);
   await cacheMain(["prune", "--older-than", "0", "--state-dir", state]);
-  assert.match(output.at(-1)!, /forgot 1 clone session idle/);
+  assert.match(output.at(-1)!, /forgot 1 clone session idle .*; deleted 1 Git LFS file \(0\.0 MiB\) unused for as long/);
   await assert.rejects(cacheMain(["prune", "--older-than", "soon", "--state-dir", state]), /whole number/);
 });
 

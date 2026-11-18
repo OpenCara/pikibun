@@ -347,7 +347,9 @@ audited as `repository.lfs.updated`; the setting is in `WorkspaceRepository.lfs`
   so it asks `http://127.0.0.1:41080/git/<host>/<path>/info/lfs/objects/batch`. For a workspace repository with LFS
   on, the proxy accepts only `download` batches of the `basic` transfer and sha256 objects, and sends each object's id
   and size to the relay as `lfs-batch`. It answers git-lfs with `authenticated: true` and download links pointing back
-  at itself (`…/info/lfs/objects/<oid>?size=<n>`), which it relays as `lfs-object`. Uploads, locks and anything else
+  at itself (`…/info/lfs/objects/<oid>?size=<n>`), which it relays as `lfs-object`. A proxy reached over TCP (the
+  macOS and Windows sandboxes) points them at its own port, with its credentials as the action's `Authorization`
+  header, since git-lfs sends a download link only the headers its action names. Uploads, locks and anything else
   under `info/lfs` are refused in git-lfs's JSON error format, so git-lfs shows the reason. Smart-HTTP paths are matched
   first, so a repository whose path contains `info/lfs` is still fetched with Git.
 - **In the control plane** (`lfs.ts`, behind the relay route; `lfs-batch` and `lfs-object` are relay services). Each
@@ -363,6 +365,29 @@ audited as `repository.lfs.updated`; the setting is in `WorkspaceRepository.lfs`
   size; git-lfs checks the content's sha256 itself.
 - **What reaches the host:** object ids, sizes, provider error messages (printable ASCII, bounded) and content. The
   provider's download URLs and the short-lived tokens in their headers never do.
+- **Shared through the host cache.** On a host that keeps a [repository cache](repository-cache.md), the proxy keeps
+  each LFS file it downloads in the cache's LFS store (`LfsObjectCache`, `repo-cache/lfs/objects/<aa>/<bb>/<oid>`, or
+  under `owners/<hash of owner>/` in the per-owner scope), and serves later downloads of it from there, in any session
+  of the host (or of the owner).
+  - **The cache decides no access.** A session's proxy serves a file from the store only for an oid and size that a
+    batch of its own, for the same repository, answered as downloadable in the last 30 minutes
+    (`LFS_AUTHORIZATION_MS`). That batch went through the relay as before, so the control plane checked the session,
+    the workspace's LFS switch and the repository's identity, and the provider confirmed with the owner's own
+    credential that the repository serves that object. Anything else (no batch, another repository's batch, an older
+    one, another size, a file the store lacks) is relayed as `lfs-object`, as without a cache. The grant is checked
+    first, as for every LFS request, so a repository whose LFS was turned off serves nothing from the store either
+    once the proxy's grant is refreshed (within a minute).
+  - **Content-addressed.** A file is the content whose sha256 is its oid, so serving it from the store gives a session
+    exactly what the provider would. A relayed download is written to `tmp/` beside the store as it streams, hashed,
+    and renamed into place only if it is exactly the pointer's size and its sha256 is the oid; a download that breaks
+    off, or a client that goes away, leaves nothing. A file served from the store is hashed again as it goes, and its
+    last bytes are held back until the hash matches: a damaged copy is deleted and the download ended, so git-lfs
+    tries again and the retry is relayed.
+  - **Sharing across repositories** is safe for the same reason: the batch proved the session may have that content.
+  - The store is written only by the runner, outside any sandbox, and never mounted into one: git-lfs takes files from an
+    alternate's `lfs/objects`, so files kept in a mirror would bypass these checks.
+  - Each file served from the store is counted as used (its mtime), and `pikibun cache prune --older-than DAYS`
+    deletes those unused for longer.
 - **A refused LFS request** doesn't unmount the session's mirror: only refused Git reads (`info-refs`, `upload-pack`)
   mean the owner lost the repository.
 - **Backups and restores.** A clone's backup stages its working tree with the LFS filters turned off, so an LFS-tracked
@@ -376,8 +401,10 @@ audited as `repository.lfs.updated`; the setting is in `WorkspaceRepository.lfs`
 
 - Uploads. Sessions run Git without hooks, so git-lfs's pre-push upload never runs, and a pushed commit that adds or
   changes LFS-tracked files would point at objects the forge doesn't have. The agent is told not to push such commits.
-- The host cache keeps Git objects only; LFS objects are downloaded through the control plane for each clone, and each
-  download costs a repository identity check with the provider (an API request).
+- Without a host repository cache, LFS objects are downloaded for each clone, and each download costs a repository
+  identity check with the provider (an API request). With one, each batch still does, but files the host has are not
+  downloaded again.
+- The LFS store has no size budget beyond pruning by age, like the mirrors.
 - Restored clones don't get the LFS filters back by themselves.
 - Like other control-plane fetches of self-hosted providers, the relay checks download hosts by name, not by the
   addresses they resolve to.
