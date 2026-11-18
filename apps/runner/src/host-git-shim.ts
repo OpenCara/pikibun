@@ -18,6 +18,8 @@ const REQUEST_BYTES = 8192;
 const HEARTBEAT_MS = 5_000;
 const PROGRESS_MS = 1_000;
 const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+/** How many git shims may run inside one another before one refuses: past it, the shims lead back to each other. */
+export const GIT_SHIM_MAX_DEPTH = 8;
 
 export const HOST_GIT_SHIM_VALUED: readonly string[] = Object.freeze(["-o", "--origin", "-b", "--branch", "-u", "--upload-pack", "--template", "-c", "--config",
   "--depth", "--shallow-since", "--shallow-exclude", "--separate-git-dir", "-j", "--jobs", "--filter", "--bundle-uri", "--server-option", "--ref-format",
@@ -49,6 +51,10 @@ export function hostGitLauncher(bin: string, node: string, program: string): str
     "  [ -n \"$dir\" ] || dir=.",
     "  [ \"$dir\" = \"$here\" ] && continue",
     "  [ \"$dir/git\" -ef \"$here/git\" ] 2>/dev/null && continue",
+    // Any other Pikibun git (another session's on the host, as when a session on the host runs Pikibun's own tests, or a sandbox's)
+    // isn't the real git: taking it, each would hand clones to the other, without end.
+    "  [ -f \"$dir/../git-clone.cjs\" ] && continue",
+    "  [ -f \"$dir/git-shim.cjs\" ] && continue",
     "  if [ -f \"$dir/git\" ] && [ -x \"$dir/git\" ]; then real=$dir/git; break; fi",
     "done",
     "set +f",
@@ -85,6 +91,12 @@ const VALUED = new Set(${JSON.stringify(HOST_GIT_SHIM_VALUED)});
 let git = process.env.PIKIBUN_HOST_GIT || process.env.SANDBOX_GIT;
 delete process.env.PIKIBUN_HOST_GIT;
 if (!git) { process.stderr.write("git: command not found\n"); process.exit(127); }
+const depth = Number.parseInt(process.env.PIKIBUN_GIT_SHIM_DEPTH || "0", 10) || 0;
+if (depth >= ${GIT_SHIM_MAX_DEPTH}) {
+  process.stderr.write("pikibun: git's wrapper is running inside itself " + depth + " times over: another git wrapper on PATH leads back to it\n");
+  process.exit(127);
+}
+process.env.PIKIBUN_GIT_SHIM_DEPTH = String(depth + 1);
 if (process.platform === "win32" && !path.extname(git) && fs.existsSync(git + ".exe")) git += ".exe";
 const started = Date.now();
 let shown;
