@@ -8,6 +8,7 @@ import { repositoryForRemote } from "./egress.js";
 const MAX_DEPTH = 3;
 const MAX_DIRECTORIES = 2000;
 export const MAX_CLONE_BRANCHES = 20;
+const MAX_CLONES = 100;
 const MAX_METADATA_BYTES = 64 * 1024;
 const SKIPPED = new Set(["node_modules", "vendor", "target", "dist", "build"]);
 
@@ -73,7 +74,7 @@ export async function readCloneBranches(worktree: string): Promise<CloneBranch[]
   const found: CloneBranch[] = [];
   let visited = 0;
   const visit = async (directory: string, relative: string, depth: number): Promise<void> => {
-    if (depth > MAX_DEPTH || visited++ >= MAX_DIRECTORIES || found.length >= MAX_CLONE_BRANCHES) return;
+    if (depth > MAX_DEPTH || visited++ >= MAX_DIRECTORIES || found.length >= MAX_CLONES) return;
     let names: string[];
     try { names = (await readdir(directory)).sort(); } catch { return; }
     const metadata = relative && names.includes(".git") ? await lstat(join(directory, ".git")).catch(() => undefined) : undefined;

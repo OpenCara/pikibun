@@ -83,6 +83,12 @@ test("the worktree's clones report their checked-out branches of the workspace's
     [{ repository: "owner/repo", branch: "pikibun/fix-abc" }], "a clone on main that pushed HEAD to the session's branch");
   assert.deepEqual(reportedBranches([{ directory: "app", origin: "https://github.com/owner/repo", branch: "pikibun/fix-abc" }], repositories, "pikibun/fix-abc"),
     [{ repository: "owner/repo", branch: "pikibun/fix-abc" }], "once");
+  const crowded = await mkdtemp(join(tmpdir(), "clone-branches-many-"));
+  t.after(() => rm(crowded, { recursive: true, force: true }));
+  for (let index = 0; index < 25; index++) await clone(crowded, `c${String(index).padStart(2, "0")}`, { url: "https://github.com/owner/other" });
+  await clone(crowded, "z", { url: "https://github.com/owner/repo" });
+  assert.deepEqual(reportedBranches(await readCloneBranches(crowded), repositories, "pikibun/fix-abc"), [{ repository: "owner/repo", branch: "pikibun/fix-abc" }],
+    "clones on their default branch don't use up the branches reported");
   const many = Array.from({ length: 25 }, (_, index) => ({ directory: `c${index}`, origin: "https://github.com/owner/repo", branch: `b${String(index).padStart(2, "0")}` }));
   const kept = reportedBranches(many, repositories, "pikibun/fix-abc");
   assert.equal(kept.length, 20);
