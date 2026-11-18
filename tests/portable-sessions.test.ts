@@ -223,6 +223,14 @@ test('a portable session made on one pairing is attached to another, and back, k
   assert.deepEqual((await f.store.entries()).map(entry => [entry.sessionId, entry.directory]), [['session-1', directory]]);
   assert.deepEqual((await f.a.portableSessions()).map(report => [report.id, report.attached, report.title]), [['session-1', true, 'Portable']]);
   assert.deepEqual(await f.b.portableSessions().then(reports => reports.map(report => report.attached)), [false]);
+  const archived = async () => [(await f.a.portableSessions())[0]!.archived, (await f.b.portableSessions())[0]!.archived];
+  assert.deepEqual(await archived(), [null, null], 'until its server says, nobody knows whether it is archived');
+  await f.b.portableArchived(['session-1']);
+  assert.deepEqual(await archived(), [null, null], 'only the server it is attached to says');
+  await f.a.portableArchived(['session-1']);
+  assert.deepEqual(await archived(), [true, true], 'every connection reports it archived where it is attached');
+  await f.a.portableArchived([]);
+  assert.deepEqual(await archived(), [false, false]);
 
   const schedule = { name: 'Nightly', cron: '0 3 * * *', timeZone: 'UTC', content: 'Check the build', access: 'auto', runIn: 'session', oneShot: true, enabled: true };
   await f.a.keep(opened, await runnerTicket(onA, 'portable'), { title: 'Renamed', schedules: [schedule] });
@@ -251,6 +259,7 @@ test('a portable session made on one pairing is attached to another, and back, k
   assert.deepEqual(f.detached.a, ['session-1'], 'once');
   assert.deepEqual((await f.a.portableSessions()).map(report => report.attached), [false]);
   assert.deepEqual((await f.b.portableSessions()).map(report => report.attached), [true]);
+  assert.deepEqual(await archived(), [null, null], 'what the server it left said no longer counts');
 
   const back = await f.a.attach({ binding: onA }, await runnerTicket(onA, 'attach'));
   assert.equal((back.session as SessionRecord).connectorId, 'connector-a');
@@ -358,7 +367,7 @@ async function server(t: TestContext, rpc: (action: string, body: string) => Res
   return { env, sqlite, alice, host, workspaceId, pair };
 }
 
-async function identityReport(key: Awaited<ReturnType<typeof keyPair>>, sessions: { id: string; title: string; attached: boolean }[], extra: Record<string, unknown> = {},
+async function identityReport(key: Awaited<ReturnType<typeof keyPair>>, sessions: { id: string; title: string; attached: boolean; archived?: boolean | null }[], extra: Record<string, unknown> = {},
   connector = 'host') {
   return {
     delegation: await signStatement(key.privateKey, { kind: 'delegation', key: key.publicKey, server: origin, connector, issuedAt }),
@@ -400,6 +409,12 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
     await f.alice.request('GET', '/api/portable-sessions'));
   assert.deepEqual(sessions.map(item => [item.id, item.title, item.attachedElsewhere, item.modelId, item.hostName]),
     [[sessionId, 'Elsewhere', true, 'model', 'Alice\'s Mac']], 'a mark by another key is not offered');
+  const archivedThere = await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false, archived: false },
+    { id: randomUUID(), title: 'Archived there', attached: false, archived: true }]);
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', archivedThere)), { archived: [] }, 'nothing is attached here to be archived');
+  assert.deepEqual((await json<{ sessions: { id: string }[] }>(await f.alice.request('GET', '/api/portable-sessions'))).sessions.map(item => item.id), [sessionId],
+    'one archived on the server it is attached to is not offered');
+  await json(await f.host('/api/connectors/self/identity', report));
 
   const attached = await json<{ session: SessionRecord; schedules: number }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host' }), 201);
   assert.equal(attached.session.id, sessionId);
@@ -426,10 +441,17 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   const archivedHere = await json<{ code: string }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host' }), 409);
   assert.equal(archivedHere.code, 'archived_here', 'Bring here doesn\'t unarchive it');
   assert.equal((f.sqlite.prepare('SELECT status FROM sessions WHERE id = ?').get(sessionId) as { status: string }).status, 'archived');
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: true, archived: null }]))),
+    { archived: [sessionId] }, 'a host that keeps it is told it is archived here');
   await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false }])));
+  assert.deepEqual(await json(await f.alice.request('GET', '/api/portable-sessions')), { sessions: [] },
+    'archived here, it is not offered while the host can\'t say it is open elsewhere');
+  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false, archived: true }])));
+  assert.deepEqual(await json(await f.alice.request('GET', '/api/portable-sessions')), { sessions: [] }, 'nor once it is archived where it is attached');
+  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false, archived: false }])));
   const movedWhileArchived = await json<{ sessions: { id: string; existing?: boolean }[] }>(await f.alice.request('GET', '/api/portable-sessions'));
   assert.deepEqual(movedWhileArchived.sessions.map(item => [item.id, item.existing]), [[sessionId, true]],
-    'one the host reports attached elsewhere is offered, though this server never noticed it move');
+    'one the host reports open elsewhere is offered, though this server never noticed it move');
   await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: true }])));
   await json(await f.alice.request('POST', `/api/sessions/${sessionId}/unarchive`));
 

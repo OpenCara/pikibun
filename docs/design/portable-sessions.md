@@ -72,6 +72,16 @@ environments, `node_modules/.bin`), and the index lets every connection of the i
    attached elsewhere (it may have moved while archived, unnoticed here, as only an open session notices). A session
    archived here and still attached here is not offered, and **Bring here** refuses it (`archived_here`): it is
    unarchived instead, so archiving keeps it out of the lists and its packing and unarchive rules apply.
+
+   An archived session is not offered anywhere else either. The host learns whether it is archived from the server it is
+   attached to: that server answers each report with the reported sessions attached to it that it has archived
+   (`archived`, sent only to a host whose report gives each session an `archived` field, so an older connector, which
+   reads its answer strictly, never gets it). The host keeps that in the session's folder
+   (`portable-archived.json`: the pairing that said so, and whether it is archived), and every connection reports it
+   (`archived`: `true`, `false`, or `null` once the session is attached to another pairing, or before its server has
+   said). A server doesn't offer one reported archived, nor, while the host can't say, one it has archived and not moved,
+   under whichever pairing (a host paired again with `--force` leaves its old records behind). One reported
+   open elsewhere is offered whatever this server has, as it may have moved while archived here.
 2. **Bring here** (`POST /api/portable-sessions/:id/attach`, with the host and optionally a model of it) makes the
    session's record, private, under the same ID, and asks the host to `attach` it with the new binding.
 3. The host attaches it only for its owner, and only a session marked by its identity's current key. Under a lock in

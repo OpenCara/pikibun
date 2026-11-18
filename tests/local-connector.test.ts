@@ -384,6 +384,7 @@ type FixtureOptions = {
   localEntries?: ConnectorRuntime['entries'];
   identityDir?: string;
   portable?: ConnectorRuntime['portable'];
+  portableArchived?: ConnectorRuntime['portableArchived'];
   identity?: (path: string, body: unknown) => Response | Promise<Response>;
   hardware?: (body: unknown) => Response | Promise<Response>;
   hardwareReport?: () => Promise<HostHardware>;
@@ -436,6 +437,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
         ...(options.localView ? { view: options.localView } : {}),
         ...(options.localEntries ? { entries: options.localEntries } : {}),
         ...(options.portable ? { portable: options.portable } : {}),
+        ...(options.portableArchived ? { portableArchived: options.portableArchived } : {}),
       };
       return Promise.resolve(runtime);
     },
@@ -1500,12 +1502,13 @@ test('a host with an identity says it keeps portable sessions, sends its delegat
   t.after(() => rm(identityDir, { recursive: true, force: true }));
   const reports = mailbox<Record<string, unknown>>();
   const signed = mailbox<Record<string, unknown>>();
+  const archived = mailbox<readonly string[]>();
   let answered = 0;
-  const fixture = await connectorFixture(t, { identityDir, portable: async () => [],
+  const fixture = await connectorFixture(t, { identityDir, portable: async () => [], portableArchived: async ids => { archived.push(ids); },
     identity: (path, body) => {
       if (path === '/api/connectors/self/identity/settings') { signed.push(body as Record<string, unknown>); return Response.json({ ok: true }); }
       reports.push(body as Record<string, unknown>);
-      return Response.json(answered++ ? {} : { sign: { version: 3, settings: { name: 'Mine', paging: true } } });
+      return Response.json(answered++ ? {} : { sign: { version: 3, settings: { name: 'Mine', paging: true } }, archived: ['session-archived'] });
     } });
   await startFixture(fixture);
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
@@ -1521,6 +1524,7 @@ test('a host with an identity says it keeps portable sessions, sends its delegat
   const settings = await verifiedSigned((await signed.next()).settings, 'settings');
   assert.equal(settings.statement.key, delegation.statement.key);
   assert.deepEqual([settings.statement.version, settings.statement.settings], [3, { name: 'Mine', paging: true }]);
+  assert.deepEqual(await archived.next(), ['session-archived'], 'the sessions its server says are archived there are kept as archived');
 });
 
 test('a connected host reports its hardware after its manifest and again later, on the connection it came with', { timeout: 10000 }, async t => {
