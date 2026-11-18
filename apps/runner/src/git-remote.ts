@@ -375,7 +375,9 @@ export class GitRemote {
       throw new GitRemoteError("Git remote does not allow fetching this commit");
     }
     const sideband = caps.has("side-band-64k");
+    const multiAck = caps.has("multi_ack_detailed") ? "multi_ack_detailed" : caps.has("multi_ack") ? "multi_ack" : undefined;
     const first = ["want", wants[0]!];
+    if (multiAck) first.push(multiAck);
     if (sideband) first.push("side-band-64k");
     if (caps.has("ofs-delta")) first.push("ofs-delta");
     if (caps.has("no-progress") && !progress) first.push("no-progress");
@@ -390,8 +392,15 @@ export class GitRemote {
     }, "application/x-git-upload-pack-result");
     const reader = bodyReader(response, this.signal);
     try {
-      const answer = text(await reader.expect());
-      if (answer !== "NAK" && !(answer?.startsWith("ACK ") && OID.test(answer.slice(4, 44)))) throw new GitRemoteError("Git remote sent a malformed fetch response");
+      for (let lines = 0; ; lines++) {
+        const answer = text(await reader.expect());
+        if (answer === "NAK") break;
+        const acknowledged = answer?.startsWith("ACK ") && OID.test(answer.slice(4, 44)) ? answer.slice(44) : undefined;
+        if (acknowledged === "") break;
+        if (!multiAck || lines > haves.length || ![" continue", " common", " ready"].includes(acknowledged ?? "")) {
+          throw new GitRemoteError("Git remote sent a malformed fetch response");
+        }
+      }
     } catch (error) {
       await reader.close();
       throw error;

@@ -252,7 +252,8 @@ export class RunnerSession {
       grant: () => this.#egress ? this.#egress.grant() : this.requestGrant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
       ...(hostPaths ? { hostPaths: true } : {}),
     }) : undefined;
-    this.#hostGit = this.#onHost && this.#mirrors ? new HostGitShim({ mirror: (remote, onProgress) => this.hostMirror(remote, onProgress) }) : undefined;
+    this.#hostGit = this.#onHost && this.#mirrors ? new HostGitShim({ mirror: (remote, onProgress) => this.hostMirror(remote, onProgress),
+      ...(config.repositoryCache ? { lfs: config.repositoryCache.lfsObjects(binding.owner.id) } : {}) }) : undefined;
     if (this.#hostSession && !binding.session.connectorOwnerId) {
       throw new RunnerError(403, "Only sessions of the host's owner, or of members they granted that, run directly on the host");
     }
