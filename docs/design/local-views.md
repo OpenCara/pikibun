@@ -5,7 +5,7 @@ Status: implemented, for the desktop apps' [host](../desktop/host.md) mode.
 ## What it does
 
 The server relays every read of a session to its host (see [How it works](../how-it-works.md)). When the desktop app
-also runs the host, as **Settings → This Mac**, that is a round trip from the app to the server and back to the same
+also runs the host, as **Settings → This Mac → Local hosts**, that is a round trip from the app to the server and back to the same
 computer, and a session running a few centimetres away can't be followed at all while the server can't be reached.
 
 So the desktop app reads a session that its own host runs **from that host first**:
@@ -33,8 +33,9 @@ the channel gives them nothing new.
 
 The app holds itself to more than that, so that it shows each signed-in account only what the server would:
 
-- It reads from the host only sessions the server said, for the account signed in, run on this computer's host
-  (`connectorId`), on the server that host is paired with (`apps/nsh/src/lib/local-sessions.ts`). It learns them from
+- It reads from the host only sessions the server said, for the account signed in, run on one of this computer's
+  hosts (`connectorId`), on the server that host is paired with, and asks that host, not another of this computer's
+  hosts for the same server ([several hosts on one computer](local-hosts.md), `apps/nsh/src/lib/local-sessions.ts`). It learns them from
   the session list and from each session's record, and forgets them when the account changes.
 - A view read from the host shows only once the server has said, in that live session, that the account may read it
   (`confirmHere` in `packages/client/src/live-session.ts`), or couldn't be reached at all to say otherwise. A session

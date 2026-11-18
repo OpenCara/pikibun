@@ -3,7 +3,7 @@ import type { ServerHostState, ServerState } from "../../../../packages/shared/s
 import { session, signInToLocalServer } from "../lib/auth";
 import { createAction } from "../lib/resource";
 import { displayOrigin } from "../lib/server";
-import { computerName, computerTitle, INSTALL_COMMAND, thisComputer } from "../lib/this-computer";
+import { computerName, computerTitle, INSTALL_COMMAND, nativeEnvironment } from "../lib/this-computer";
 import { setServerConsent, thisServer, type ThisServer } from "../lib/this-server";
 import { type Tone } from "../theme";
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, Feedback, Note, Row, Section, Small, Value } from "../ui";
@@ -40,11 +40,11 @@ export function ThisServerPanel(props: { server: ThisServer; signedInTo?: string
   return (
     <SectionPage testID="settings-self-host">
       <If when={server.problem()}>{problem => <CommandProblem kind={problem().kind} message={"message" in problem() ? (problem() as { message: string }).message : ""} server={server} />}</If>
-      <If when={thisComputer().updating()}>
+      <If when={nativeEnvironment().updating()}>
         <Section title="Pikibun's command" testID="self-host-updating">
           <CardBody>
             <Banner tone="info" title={`Updating Pikibun's command on ${computerName}`}>
-              {`Pikibun was updated, so npm is updating its pikibun command to match: this takes a minute, and Pikibun on ${computerName} starts once it is done. Its output is under ${computerTitle}'s Recent activity.`}
+              {`Pikibun was updated, so npm is updating its pikibun command to match: this takes a minute, and Pikibun on ${computerName} starts once it is done. Its output is under Local hosts' Recent activity.`}
             </Banner>
           </CardBody>
         </Section>
@@ -56,12 +56,11 @@ export function ThisServerPanel(props: { server: ThisServer; signedInTo?: string
 }
 
 function CommandProblem(props: { kind: "missing" | "outdated" | "failed"; message: string; server: ThisServer }) {
-  const host = thisComputer();
+  const host = nativeEnvironment();
   const action = createAction();
   const update = () => props.kind === "outdated";
   const install = () => void action.run(async () => {
-    const outcome = await host.install();
-    await props.server.refresh();
+    const outcome = await host.install(async () => { await props.server.refresh(); return untracked(props.server.problem); });
     if (!outcome.ok && outcome.error && !host.installError()) throw new Error(outcome.error);
   });
   const refresh = () => <Button small variant="outline" icon="refresh" label="Refresh" testID="self-host-retry" disabled={props.server.inspecting() || host.installing()} onPress={() => void props.server.refresh()} />;
@@ -83,7 +82,7 @@ function CommandProblem(props: { kind: "missing" | "outdated" | "failed"; messag
             <Button variant="primary" icon="download" testID="self-host-install" busy={host.installing()} disabled={host.installing() || props.server.inspecting()}
               label={host.installing() ? (update() ? "Updating pikibun" : "Installing pikibun") : update() ? "Update pikibun" : "Install pikibun"} onPress={install} />
           </View>
-          <If when={host.installing()}><Small>npm is installing pikibun: this takes a minute. Its output is under This Mac's Recent activity.</Small></If>
+          <If when={host.installing()}><Small>npm is installing pikibun: this takes a minute. Its output is under Local hosts' Recent activity.</Small></If>
           <Feedback error={host.installError() || action.error()} />
           <If when={host.installError()}>
             <Small>To install it in a terminal instead:</Small>

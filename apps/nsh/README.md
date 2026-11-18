@@ -182,11 +182,11 @@ session with its header menu and its panel (Details, Files, Browser, Schedules, 
 invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
 Administration). What is left out, and why:
 
-- **This Computer**: the desktop builds have it ([below](#this-computer)) for this computer as a host of the servers
-  it is paired with, and **Self host** ([below](#self-host)) runs Pikibun itself here. What the Electron app's had is left
-  out: WSL2 on Windows, sharing the Pikibun it runs with others (`pikibun serve
-  --share`, in a terminal), installing prerequisites itself, and hosting while the app is closed (its tray). In a
-  browser there are no such sections.
+- **This Computer**: the desktop builds have it ([below](#this-computer)) as **Local hosts**, this computer's hosts
+  for any server, WSL2 on Windows among them, and **Self host** ([below](#self-host)) runs Pikibun itself here. What
+  the Electron app's had is left out: sharing the Pikibun it runs with others (`pikibun serve --share`, in a terminal),
+  installing prerequisites itself, and hosting while the app is closed (its tray). In a browser there are no such
+  sections.
 - **Notifications while the app is closed**: the native apps show the account's notifications with NSH's
   `Notifications` only while they run (`src/lib/notifications.ts` asks the server's feed every 20 seconds, as a browser
   tab without Web Push does; pressing one opens its session, and one about the session in front isn't shown). Pushed
@@ -200,33 +200,53 @@ Administration). What is left out, and why:
 
 ## This Computer
 
-In the macOS, Windows and Linux builds, **Settings → This Mac** (This Computer elsewhere; `#/settings/desktop`, as the
-React web client's address for it) makes this computer one of your hosts:
+Settings come in two sets (`scope` in `src/settings/index.tsx`): the signed-in server's (Profile, Password,
+Notifications, Hosts, Workspaces, Administration) under its address, and this device's (Local hosts and Self host in
+the desktop builds, Appearance everywhere) under **This Mac**, **This Computer** or, on phones and the web, **This
+device**. See [the design](../../docs/design/local-hosts.md).
 
-- **Pair in one step** with the server signed in to: the app creates a pairing for you and hands its code straight to
-  the host, once everything else is settled (prerequisites, the unsandboxed consent), so a refusal leaves no unused code.
-- **Host for several servers at once**: pairing with another server adds a pairing rather than replacing one. The
-  first server keeps `pikibun connect`'s state directory; each one added gets its own,
-  `~/.local/share/pikibun/servers/<server>` (`serverStateDir`: the host name of an `https` server on its default port, else a
-  readable name with a short hash of the origin, so no two servers share one), with its own `pikibun host --stdio --state-dir <dir>`
-  process, pairing, sessions and resume (`ComputerHosts` in `src/lib/this-computer.ts`; the list is
-  `pikibun.thisComputer.servers` in the app's storage). **Other servers** lists the rest, with **Start host**, **Stop
-  host** and, for the ones added, **Remove**, which stops that host and forgets its pairing here; the host stays on its
-  server, offline, and its sessions' files stay in its folder. The sandbox, the models offered, Pi's sign-in and the
-  command are the computer's, shared by every server.
-- **Continue a private session from here**: a private session whose host is offline says so (`components/OfflineHost.tsx`). Where this
-  computer is paired with that server, **Start host** starts its host. Otherwise **Connect This Mac** opens this page to pair with it too.
-  The host IDs this computer has run as, per server (`pikibun.thisComputer.connectors`, `ranHere`), tell when the offline host was this computer.
-- **Read its sessions from it**: a session the server signed in to says runs on this computer's host for it opens from
+In the macOS, Windows and Linux builds, **Settings → This Mac → Local hosts** (This Computer elsewhere;
+`#/settings/desktop`, as the React web client's address for it, and `#/settings/desktop/<id>` for one host's page)
+makes this computer one or more of your hosts:
+
+- **Several hosts**, each an entry of its own (`LocalHostConfig` and `LocalHosts` in `src/lib/this-computer.ts`; the
+  list is `pikibun.thisComputer.hosts` in the app's storage): a server, a name, a sandbox, a state directory, the
+  models it offers, the host IDs it has run as and whether it was running. Several may be for one server, with
+  different sandboxes. Each runs its own `pikibun host --stdio [--state-dir <dir>]` process. The first on this computer
+  uses `pikibun connect`'s state directory, and a pairing found there that no entry has (a terminal's) becomes an
+  entry; every other host gets `~/.local/share/pikibun/hosts/<id>`. Entries are checked on load, so a state directory
+  that isn't one of those (or `servers/<server>`, what earlier versions made) never reaches a shell. What earlier
+  versions kept (`pikibun.thisComputer`, `pikibun.thisComputer.servers`) becomes the list on the first launch.
+- **Add a host** in one step, for any server the app is signed in to (its saved token makes the pairing there): the
+  app creates a pairing and hands its code straight to the host, once everything else is settled (prerequisites, the
+  unsandboxed consent), so a refusal leaves no unused code. Before pairing, the form inspects where the host would run,
+  so it shows the prerequisites, how sessions would be isolated, and Pi's sign-in where Pi has no model yet.
+- **Sandbox per host**: on macOS **No sandbox** or **macOS sandbox** (Seatbelt, experimental), changeable while the
+  host is stopped; on Windows **Windows sandbox** (its own, experimental, or none after consent) or **WSL2**, chosen
+  when the host is added; Linux uses bubblewrap where it is installed. Each start asks the CLI's own
+  `--unsafe-no-sandbox` warning in a native dialog where there is no sandbox.
+- **WSL2 on Windows**: such a host runs the command inside a WSL distribution, `wsl [--distribution NAME] --cd ~ --exec
+  bash -ilc 'PATH="$HOME/.local/share/pikibun/app-cli/node_modules/.bin:$PATH"; … exec pikibun host --stdio --state-dir …'`,
+  so its sessions run in WSL's bubblewrap sandbox with that distribution's Node.js, Pi and Git. The distributions come
+  from `wsl --list --quiet` (UTF-16, so the app drops its NULs). **Install pikibun** there installs into
+  `~/.local/share/pikibun/app-cli` in WSL, and the app keeps the version it installed per distribution
+  (`pikibun.commandUpdatedFor:wsl:<distro>`) to update it with the app, as it does its own copy.
+- **Per environment**: the command, its installs and updates, and Pi's sign-in belong to where a host runs (this
+  computer, or one WSL distribution: `LocalEnvironment`), shared by the hosts there; the models offered are each host's.
+- **Continue a private session from here**: a private session whose host is offline says so (`components/OfflineHost.tsx`). Where one of
+  this computer's hosts has run as that host ID, or it has only one for that server, **Start host** starts it. Otherwise **Connect This Mac**
+  opens Local hosts. The host IDs this computer has run as, per server (`pikibun.thisComputer.connectors`, `ranHere`), still tell when the
+  offline host was this computer after its entry was removed.
+- **Read its sessions from it**: a session the server signed in to says runs on one of this computer's hosts opens from
   that host, over the same channel (`view` and `entries`), and carries on, read-only, while the server can't be
   reached; the server still checks who may read it ([the design](../../docs/design/local-views.md),
   `src/lib/local-sessions.ts`).
-- **Start and stop** the host, with the CLI's own `--unsafe-no-sandbox` warning in a native dialog where there is no
-  sandbox; on macOS, choose **None** or **macOS sandbox** (Seatbelt, experimental). Linux uses bubblewrap where it is
-  installed; Windows its own sandbox, experimental, or none after consent.
-- **Models offered** (Pi's choice, or the ones checked), **Sign Pi in to a provider** (Pi's own `/login`, run on this
-  computer: its page opens in the browser, a device code or API key is asked here, and the credential stays in Pi's
-  configuration), **Prerequisites** with what to run for each missing one, and the host's recent activity.
+- **A host's page**: start and stop, pair again where its pairing can't be used, its sandbox, **Models offered** (Pi's
+  choice, or the ones checked), **Sign Pi in to a provider** (Pi's own `/login`, run where the host runs: its page opens
+  in the browser, a device code or API key is asked here, and the credential stays in Pi's configuration there),
+  **Prerequisites** with what to run for each missing one, its activity, and **Remove**, which stops it and forgets it
+  here (not for the one in `pikibun connect`'s state directory); the host stays on its server, offline, and its
+  sessions' files stay in its folder.
 
 The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command as `pikibun host --stdio`
 (`apps/runner/src/host-cli.ts` and `app-host.ts`), and talks to it with JSON lines
@@ -252,8 +272,8 @@ environment, and the login shell restores only what the shell profile sets. So `
 granted too, and on macOS and Linux the command first fills an unset `SSH_AUTH_SOCK` from the GUI session
 (`agentSocketImport` in `src/lib/agent-socket.ts`: `launchctl getenv`, `systemctl --user show-environment`), so the
 owner's on-host sessions reach their ssh agent (see
-[upstream workarounds](../../docs/design/upstream-workarounds.md)). The first server's host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
-one of them runs at a time. Hosting lasts while the app is open, and each server's host starts again at the next launch if it was running
+[upstream workarounds](../../docs/design/upstream-workarounds.md)). The first host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
+one of them runs at a time. Hosting lasts while the app is open, and each host starts again at the next launch if it was running
 when the app quit, with the consent given for it then (`src/lib/this-computer.ts`). A `pikibun` too old to take `--state-dir` there is offered
 as an update, as one without `host` is.
 
@@ -271,7 +291,7 @@ terminal: the server and its web app on `http://127.0.0.1:7878`, for its owner a
 that runs their sessions.
 
 - **Start and stop** it, with nothing to set up: there is no GitHub sign-in. Where this computer has no sandbox, it
-  asks the same consent as This Mac before this computer runs sessions.
+  asks the same consent as Local hosts before this computer runs sessions.
 - **Sign in to it**: the app switches its server to the running Pikibun (from Settings, after signing out of the one it
   is signed in to) and signs in as its owner with the server's sign-in token, which the command's status carries
   while it runs (`POST /api/auth/native/local`). The first sign-in makes the owner's account. Signed out of it, the
@@ -283,10 +303,10 @@ that runs their sessions.
 The app runs `pikibun serve --stdio` (`apps/server/src/local/app-server.ts`, protocol in `packages/shared/src/app-server-protocol.ts`)
 through the same login shell or `cmd` as `pikibun host --stdio` (`src/lib/pikibun-command.ts`), with JSON lines on
 its stdin and stdout, where the sign-in token travels. When the command is missing or too old for `--stdio` (or so old
-that it still asks for a GitHub OAuth app), the page offers This Mac's **Install pikibun** or **Update pikibun**. It uses `pikibun serve`'s state directory, so a
+that it still asks for a GitHub OAuth app), the page offers Local hosts' **Install pikibun** or **Update pikibun** (the same copy, `nativeEnvironment()`). It uses `pikibun serve`'s state directory, so a
 Pikibun set up in a terminal carries over, and only one of them runs at a time. Its host is the server's own (paired
-with the server's state, as `pikibun serve` pairs it), not This Mac's: This Mac stays a host of whichever server it is
-paired with.
+with the server's state, as `pikibun serve` pairs it), not one of Local hosts': those stay hosts of whichever servers
+they are paired with.
 
 The sidebar's server switch (in the apps; the web client, bound to the server that serves it, has none, and reaches Hosts under Settings)
 lists the servers the app is signed in to, **Pikibun on this Mac** in the desktop builds, which starts it where it

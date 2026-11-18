@@ -48,6 +48,36 @@ export function installCommand(os: string, shell: string | undefined, cli?: stri
   return { command: loginShell(os, shell), args: ["-ilc", line], line };
 }
 
+export const WSL = "wsl";
+export const WSL_DISTRO = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const WSL_CLI = "$HOME/.local/share/pikibun/app-cli";
+export const NVM_INSTALL = "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && . \"$HOME/.nvm/nvm.sh\" && nvm install 24";
+const DOCKER_DISTRO = /^docker-desktop(-data)?$/i;
+
+export interface CommandTarget { wsl?: { distro?: string } }
+
+export function wslCommand(distro: string | undefined, line: string): { command: string; args: string[] } {
+  if (distro !== undefined && !WSL_DISTRO.test(distro)) throw new Error("That isn't the name of a WSL distribution.");
+  return { command: WSL, args: [...(distro ? ["--distribution", distro] : []), "--cd", "~", "--exec", "bash", "-ilc", line] };
+}
+
+export function wslPikibunCommand(distro: string | undefined, args: readonly string[]): { command: string; args: string[] } {
+  return wslCommand(distro, `PATH="${WSL_CLI}/node_modules/.bin:$PATH"; export PATH; exec pikibun ${args.map(shellArg).join(" ")}`);
+}
+
+export function wslInstallCommand(distro: string | undefined, version: string = CLI_VERSION): { command: string; args: string[]; line: string } {
+  const line = `npm install --prefix "${WSL_CLI}" --no-audit --no-fund ${ownCopyPackage(version)}`;
+  return { ...wslCommand(distro, line), line };
+}
+
+export function parseWslList(output: string): string[] {
+  const names = output.replace(/\u0000/g, "").replace(/\uFEFF/g, "").split(/\r?\n/).map(line => line.trim())
+    .filter(name => WSL_DISTRO.test(name) && !DOCKER_DISTRO.test(name));
+  return [...new Set(names)];
+}
+
+export const plainOutput = (line: string) => line.replace(/\u0000/g, "").replace(/^\uFEFF/, "");
+
 export function commandDirectory(): string | undefined {
   if (nshProcess.dataDir) return undefined;
   try { return homedir(); } catch { return undefined; }
@@ -62,13 +92,14 @@ export interface CommandLink {
   kill(): void;
 }
 
-export function spawnPikibun(args: readonly string[]): CommandLink {
-  const { command, args: words } = pikibunCommand(platform.os, nshProcess.env.SHELL, appCliFolder(platform.os, nshProcess.dataDir), args);
+export function spawnPikibun(args: readonly string[], target: CommandTarget = {}): CommandLink {
+  const { command, args: words } = target.wsl ? wslPikibunCommand(target.wsl.distro, args)
+    : pikibunCommand(platform.os, nshProcess.env.SHELL, appCliFolder(platform.os, nshProcess.dataDir), args);
   const cwd = commandDirectory();
   const child = nshProcess.spawn(command, words, { stdin: "pipe", lines: true, ...(cwd ? { cwd } : {}) });
   const messages: ((value: unknown) => void)[] = [];
   const output: ((line: string) => void)[] = [];
-  const say = (line: string) => { if (line.trim()) for (const listener of output) listener(line.slice(0, 1000)); };
+  const say = (raw: string) => { const line = plainOutput(raw); if (line.trim()) for (const listener of output) listener(line.slice(0, 1000)); };
   child.on("stdout", line => {
     if (!line.startsWith(STDIO_FRAME)) { say(line); return; }
     let value: unknown;

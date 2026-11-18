@@ -25,7 +25,7 @@ import { SharedSession } from "./screens/SharedSession";
 import { SignIn } from "./screens/SignIn";
 import { UsernameSetup } from "./screens/UsernameSetup";
 import { applyStoredAppearance } from "./settings/Appearance";
-import { findSection, SectionList, visibleSections } from "./settings";
+import { findSection, scopeTitle, SectionList, visibleSections } from "./settings";
 import { canCreateSessions, type PaletteSession } from "./shared";
 import { layout, palette } from "./theme";
 import { Logo } from "./logo";
@@ -339,7 +339,8 @@ function shellCommands(options: {
     { id: "open-by-id", title: "Open a session by ID", group: "Sessions", scope: "global", icon: "hash", run: options.openById },
     { id: "settings", title: "Settings", group: "Settings", scope: "global", icon: "settings", keywords: ["preferences"], run: () => options.openSettings() },
     ...sections.map((section): AppCommand => ({
-      id: `settings-${section.id}`, title: section.label, group: "Settings", scope: "global", icon: section.icon, run: () => options.openSettings(section.id),
+      id: `settings-${section.id}`, title: section.label, group: "Settings", scope: "global", icon: section.icon, hint: scopeTitle(section.scope),
+      ...(section.keywords ? { keywords: section.keywords } : {}), run: () => options.openSettings(section.id),
     })),
     {
       id: "workspaces", title: "Workspaces…", group: "Settings", scope: "global", icon: "users", keywords: ["workspace settings", "members"],

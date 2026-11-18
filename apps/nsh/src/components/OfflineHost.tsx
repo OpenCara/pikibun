@@ -1,7 +1,7 @@
 import { signal, View } from "nsh";
 import type { ConnectorInfo } from "../shared";
 import { createAction } from "../lib/resource";
-import { computerHosts, computerName, computerTitle, hostsHere, ranHere, thisComputer } from "../lib/this-computer";
+import { computerName, computerTitle, hostsHere, localHosts, ranHere } from "../lib/this-computer";
 import { Banner, Button, Feedback } from "../ui";
 
 const hostOf = (origin: string) => { try { return new URL(origin).host; } catch { return origin; } };
@@ -14,16 +14,15 @@ export function OfflineHostBanner(props: { host: ConnectorInfo; server: string; 
       </Banner>
     );
   }
-  const hosts = computerHosts();
-  const computer = thisComputer();
+  const hosts = localHosts();
   const checked = signal(false);
-  void Promise.all([
-    hosts.load(),
-    computer.load().then(() => (!computer.inspection() && computer.state() === "stopped" ? computer.refresh(props.server) : undefined)),
-  ]).catch(() => undefined).finally(() => checked.set(true));
+  void hosts.discover(props.server).catch(() => undefined).finally(() => checked.set(true));
   const action = createAction();
-  const here = () => ranHere(props.server, props.host.id);
-  const paired = () => (checked() ? hosts.forServer(props.server) : undefined);
+  const exact = () => (checked() ? hosts.withConnector(props.server, props.host.id) : undefined);
+  const candidates = () => (checked() ? hosts.forServer(props.server) : []);
+  const here = () => Boolean(exact()) || ranHere(props.server, props.host.id);
+  const paired = () => exact() ?? (candidates().length === 1 ? candidates()[0] : undefined);
+  const several = () => !paired() && candidates().length > 1;
   const phase = () => paired()?.state() ?? "stopped";
   const connectedId = () => (phase() === "connected" ? paired()?.running()?.connectorId : undefined);
   const back = () => connectedId() === props.host.id;
@@ -31,7 +30,7 @@ export function OfflineHostBanner(props: { host: ConnectorInfo; server: string; 
     const host = paired();
     if (!host) return;
     void action.run(async () => {
-      const outcome = await host.start(props.server);
+      const outcome = await host.start();
       if (!outcome.ok) throw new Error(outcome.error ?? "The host didn't start.");
     });
   };
@@ -56,6 +55,9 @@ export function OfflineHostBanner(props: { host: ConnectorInfo; server: string; 
         ? `This private session ran on ${computerName} under an earlier pairing with ${server}, which ${computerName} no longer has. Its files stay on ${computerName}, but it can't run again here.`
         : `This private session runs on ${props.host.name}, which is offline. ${own} is online as another host, so ${props.host.name} is another computer: open Pikibun there to continue the session.`;
     }
+    if (several()) {
+      return `This private session runs on ${props.host.name}, which is offline. If that's one of ${computerName}'s hosts for ${server}, start it under Local hosts; otherwise open Pikibun on ${props.host.name}.`;
+    }
     if (here()) {
       if (paired()) return `This private session runs on ${computerName}, whose host for ${server} isn't running. Start it to continue the session.`;
       return `This private session ran on ${computerName}, which is no longer connected to ${server}. Connect ${computerTitle} to ${server} again to continue it: it keeps hosting for any other server too.`;
@@ -71,7 +73,7 @@ export function OfflineHostBanner(props: { host: ConnectorInfo; server: string; 
       actions={
         <View style={{ flexDirection: "row", gap: 8 }}>
           <If when={paired() && phase() === "stopped"}
-            else={<If when={checked() && !paired()}><Button small variant="outline" testID="session-host-connect" label={`Connect ${computerTitle}`} onPress={props.openSettings} /></If>}>
+            else={<If when={checked() && !paired()}><Button small variant="outline" testID="session-host-connect" label={several() ? "Local hosts" : `Connect ${computerTitle}`} onPress={props.openSettings} /></If>}>
             <Button small variant="outline" testID="session-host-start" label="Start host" busy={action.busy()} disabled={action.busy()} onPress={start} />
           </If>
         </View>

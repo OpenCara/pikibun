@@ -4,7 +4,7 @@ import { Application } from "nsh/desktop";
 import nshProcess from "process";
 import { APP_VERSION } from "../app-version";
 import { loginShell } from "./pikibun-command";
-import { computerHosts } from "./this-computer";
+import { localHosts } from "./this-computer";
 import { thisServer } from "./this-server";
 import {
   curlArguments, GNOME_PROXY_PROBE, gnomeProxy, PROXY_VARIABLES, SHELL_PROXY_PROBE, shellProxy, shownProxy, WINDOWS_INTERNET_SETTINGS, windowsProxy,
@@ -373,7 +373,7 @@ async function installUnix(file: string, update: AvailableUpdate): Promise<void>
 }
 
 async function restart(): Promise<void> {
-  await Promise.race([Promise.all([computerHosts().shutdown(), thisServer().shutdown()]), new Promise<void>(resolve => setTimeout(resolve, 12_000))]).catch(() => undefined);
+  await Promise.race([Promise.all([localHosts().shutdown(), thisServer().shutdown()]), new Promise<void>(resolve => setTimeout(resolve, 12_000))]).catch(() => undefined);
   try { nshProcess.exit(0); return; } catch { }
   Application.quit();
 }

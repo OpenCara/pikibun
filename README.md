@@ -26,7 +26,7 @@ And around them:
 
 Pikibun has no agent or model integrations of its own: it builds on two packages from [Pi](https://github.com/earendil-works/pi).
 
-- **Pi** (`@earendil-works/pi-coding-agent`) is what you set up on each host. Install it and sign it in to your model provider there, as you would to use Pi in a terminal (the desktop app's **This Mac** can do the sign-in for you):
+- **Pi** (`@earendil-works/pi-coding-agent`) is what you set up on each host. Install it and sign it in to your model provider there, as you would to use Pi in a terminal (the desktop app's **Local hosts**, under **Settings → This Mac**, can do the sign-in for you):
 
   ```sh
   npm install -g @earendil-works/pi-coding-agent

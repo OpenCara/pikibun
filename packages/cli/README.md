@@ -48,7 +48,7 @@ Run `npx pikibun connect --help` for all options. The connector takes only what 
 
 ### From the Pikibun app
 
-The Pikibun app for macOS, Windows and Linux hosts sessions without a terminal: **Settings → This Mac** (This Computer elsewhere) pairs this computer with the server you're signed in to in one step, starts and stops its host, and signs Pi in to a provider. It runs this package's command: where it's missing or too old, the page's **Install pikibun** button installs it from npm into the app's own folder (Node.js 24 or newer needed). Or install it once, globally, yourself; the app runs that one where it has no copy of its own:
+The Pikibun app for macOS, Windows and Linux hosts sessions without a terminal: **Settings → This Mac → Local hosts** (This Computer elsewhere) pairs this computer with a server you're signed in to in one step, as one host or several (on Windows, in its own sandbox or in WSL2), starts and stops each, and signs Pi in to a provider. It runs this package's command: where it's missing or too old, the page's **Install pikibun** button installs it from npm into the app's own folder (Node.js 24 or newer needed). Or install it once, globally, yourself; the app runs that one where it has no copy of its own:
 
 ```sh
 npm install -g pikibun@latest
