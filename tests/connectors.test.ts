@@ -2924,11 +2924,11 @@ test('messages the server writes itself name the conversation\'s current model w
   const schedule = async () => {
     const at = Date.parse('2030-01-01T00:00:00Z') + ++run * 3600_000;
     const due = new Date(at - 1000).toISOString();
-    f.sqlite.prepare(`INSERT INTO session_schedules (id, session_id, created_by, name, cron, time_zone, content, access, enabled, next_run_at, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(`schedule-${run}`, s.session.id, s.creator.user.id, 'Nightly', '0 0 * * *', 'UTC', 'Check it', 'approval', 1, due, due, due);
+    f.sqlite.prepare(`INSERT INTO schedules (id, workspace_id, session_id, owner_id, created_by, name, cron, time_zone, content, access, enabled, next_run_at, created_at, updated_at)
+      SELECT ?, workspace_id, id, owner_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions WHERE id = ?`).run(`schedule-${run}`, s.creator.user.id, 'Nightly', '0 0 * * *', 'UTC', 'Check it', 'approval', 1, due, due, due, s.session.id);
     const outcomes = await runScheduledPrompts(f.env, at);
     assert.deepEqual(outcomes.map(outcome => 'error' in outcome ? outcome.error : 'sent'), ['sent']);
-    f.sqlite.prepare('DELETE FROM session_schedules').run();
+    f.sqlite.prepare('DELETE FROM schedules').run();
     return submitted.at(-1)!.options;
   };
 
@@ -2940,9 +2940,9 @@ test('messages the server writes itself name the conversation\'s current model w
   assert.deepEqual(await schedule(), { model: first });
   agent = { ...third, thinkingLevel: 'high' };
   const before = submitted.length;
-  f.sqlite.prepare(`INSERT INTO session_schedules (id, session_id, created_by, name, cron, time_zone, content, access, enabled, next_run_at, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('schedule-disabled', s.session.id, s.creator.user.id, 'Nightly', '0 0 * * *', 'UTC', 'Check it', 'approval', 1,
-    '2031-01-01T00:00:00Z', '2031-01-01T00:00:00Z', '2031-01-01T00:00:00Z');
+  f.sqlite.prepare(`INSERT INTO schedules (id, workspace_id, session_id, owner_id, created_by, name, cron, time_zone, content, access, enabled, next_run_at, created_at, updated_at)
+    SELECT ?, workspace_id, id, owner_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions WHERE id = ?`).run('schedule-disabled', s.creator.user.id, 'Nightly', '0 0 * * *', 'UTC', 'Check it', 'approval', 1,
+    '2031-01-01T00:00:00Z', '2031-01-01T00:00:00Z', '2031-01-01T00:00:00Z', s.session.id);
   assert.deepEqual((await runScheduledPrompts(f.env, Date.parse('2031-01-01T00:00:01Z'))).map(outcome => 'error' in outcome && outcome.error), ['model_disabled']);
   assert.equal(submitted.length, before);
 });

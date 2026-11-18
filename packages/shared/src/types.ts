@@ -176,15 +176,19 @@ export interface SessionPullRequest {
 }
 export const scheduleRunIns = ["session", "child"] as const;
 export type ScheduleRunIn = (typeof scheduleRunIns)[number];
-export interface SessionSchedule {
+export interface Schedule {
   id: string;
-  sessionId: string;
+  workspaceId: string;
+  sessionId: string | null;
+  originSessionId?: string;
+  ownerId: string;
+  ownerName?: string;
   name: string;
   cron: string;
   timeZone: string;
   content: string;
   access: AccessMode;
-  runIn?: ScheduleRunIn;
+  runIn: ScheduleRunIn;
   oneShot?: boolean;
   modelId?: string;
   thinkingLevel?: ThinkingLevel;
@@ -197,6 +201,23 @@ export interface SessionSchedule {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  canManage?: boolean;
+}
+export type SessionSchedule = Schedule;
+export interface ScheduleModelChoice {
+  id: string;
+  name: string;
+  provider: string;
+  modelId: string;
+  thinkingLevels?: ThinkingLevel[];
+  host?: string;
+  foreignHost?: boolean;
+}
+export interface WorkspaceScheduleListing {
+  schedules: Schedule[];
+  canCreate: boolean;
+  admin: boolean;
+  models?: ScheduleModelChoice[];
 }
 export interface SessionGrant {
   userId: string;

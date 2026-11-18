@@ -3,11 +3,11 @@ import { randomBytes } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { MAX_SCHEDULED_CHILDREN, archiveFinishedOneShots, runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
+import { MAX_SCHEDULED_SESSIONS, archiveFinishedOneShots, runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
 import type { SessionConnections } from '../packages/shared/src/cross-session.js';
 import { CronError, nextCronTime, parseCron } from '../packages/shared/src/cron.js';
 import { sessionStatus } from '../packages/client/src/session-status.js';
-import type { SessionRecord, SessionSchedule } from '../packages/shared/src/types.js';
+import type { Schedule, SessionRecord, SessionSchedule, WorkspaceScheduleListing } from '../packages/shared/src/types.js';
 import { fakeHub, seedAgentVersion, testDatabase } from './helpers/control-plane.js';
 
 const iso = (value: number | null) => value === null ? null : new Date(value).toISOString();
@@ -104,7 +104,12 @@ async function fixture(t: TestContext) {
   };
   const session = async (client: typeof owner) =>
     (await (await client.request('GET', '/api/sessions')).json() as { sessions: SessionRecord[] }).sessions.find(item => item.id === 'scheduled-session')!;
-  return { env, sqlite, setBeforeQuery, owner, collaborator, submitted, session, workspace, model };
+  const member = async (name: string, role: string) => {
+    const joined = await client(name);
+    assert.ok((await owner.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: joined.user.id, role })).ok);
+    return joined;
+  };
+  return { env, sqlite, setBeforeQuery, owner, collaborator, submitted, session, workspace, model, member };
 }
 
 const base = '/api/sessions/scheduled-session/schedules';
@@ -218,15 +223,18 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   const created = await f.owner.request('POST', base, { cron: '0 9 * * *', timeZone: 'UTC', name: 'Triage', content: 'Triage the new issues', runIn: 'child' });
   assert.equal(created.status, 201, await created.clone().text());
   const { schedule } = await created.json() as { schedule: SessionSchedule };
-  assert.deepEqual([schedule.runIn, schedule.lastSessionId], ['child', null]);
+  assert.deepEqual([schedule.runIn, schedule.lastSessionId, schedule.sessionId, schedule.originSessionId, schedule.workspaceId, schedule.ownerId],
+    ['child', null, null, 'scheduled-session', f.workspace.id, f.owner.user.id], 'a workspace schedule, made from this session');
   const plain = (await (await f.owner.request('POST', base, { cron: '0 10 * * *', content: 'Report', enabled: false })).json() as { schedule: SessionSchedule }).schedule;
   assert.equal(plain.runIn, 'session', 'runs in the session itself by default');
+  assert.equal(plain.sessionId, 'scheduled-session');
 
   f.sqlite.prepare("UPDATE sessions SET activity = 'working' WHERE id = 'scheduled-session'").run();
   const due = Date.parse(schedule.nextRunAt!);
   const [outcome] = await runScheduledPrompts(f.env, due + 1000);
-  assert.ok(outcome && 'childSessionId' in outcome && outcome.childSessionId, JSON.stringify(outcome));
-  const childId = outcome.childSessionId!;
+  assert.ok(outcome && 'startedSessionId' in outcome && outcome.startedSessionId, JSON.stringify(outcome));
+  assert.equal(outcome.sessionId, null, 'it wakes no session');
+  const childId = outcome.startedSessionId!;
   assert.deepEqual(f.submitted.map(item => [item.path, item.body.content]), [[`/v1/sessions/${childId}/submit`, 'Triage the new issues']],
     'the message opens the new session; the session itself gets nothing');
   assert.match(String(f.submitted[0]!.body.requestId), new RegExp(`^schedule:${schedule.id}:`));
@@ -237,9 +245,9 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   const submit = f.sqlite.prepare("SELECT actor_id, session_id, detail_json FROM audit WHERE action = 'session.submit'").get()!;
   assert.deepEqual([submit.actor_id, submit.session_id], [f.owner.user.id, childId], 'sent as the owner, in the new session');
   assert.equal((JSON.parse(String(submit.detail_json)) as { scheduleId: string }).scheduleId, schedule.id);
-  const started = f.sqlite.prepare("SELECT session_id, detail_json FROM audit WHERE action = 'session.schedule.child_started'").get()!;
+  const started = f.sqlite.prepare("SELECT session_id, detail_json FROM audit WHERE action = 'workspace.schedule.session_started'").get()!;
   assert.equal(started.session_id, 'scheduled-session');
-  assert.equal((JSON.parse(String(started.detail_json)) as { childSessionId: string }).childSessionId, childId);
+  assert.equal((JSON.parse(String(started.detail_json)) as { sessionId: string }).sessionId, childId);
   const listed = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
   assert.deepEqual([listed.lastSessionId, listed.lastSubmissionId, listed.lastError], [childId, 'sub-1', null]);
   assert.equal(listed.nextRunAt, new Date(due + 86400_000).toISOString(), 'moved on to the next day');
@@ -255,10 +263,10 @@ test('a schedule that runs in a new child session starts one each run, as the ow
 
   const fill = f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,parent_session_id,schedule_id)
     SELECT ?, workspace_id, owner_id, agent_version_id, 'filler', 'ready', created_at, 'private', id, ? FROM sessions WHERE id = 'scheduled-session'`);
-  for (let index = 2; index < MAX_SCHEDULED_CHILDREN; index++) fill.run(`filler-${index}`, schedule.id);
+  for (let index = 2; index < MAX_SCHEDULED_SESSIONS; index++) fill.run(`filler-${index}`, schedule.id);
   const full = await f.owner.request('POST', `${base}/${schedule.id}/run`);
   assert.equal(full.status, 409);
-  assert.equal((await full.json() as { code: string }).code, 'too_many_children');
+  assert.equal((await full.json() as { code: string }).code, 'too_many_sessions');
   f.sqlite.prepare("UPDATE sessions SET status = 'archived', archived_status = 'ready' WHERE id = ?").run(childId);
 
   const openChildren = () => Number(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sessions WHERE schedule_id IS NOT NULL AND status <> 'archived'").get()!.n);
@@ -270,7 +278,7 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   const [failed] = await runScheduledPrompts(f.env, due + 86400_000 + 1000);
   assert.ok(failed && 'error' in failed, JSON.stringify(failed));
   assert.equal(sessionCount(), before + 1);
-  assert.equal(openChildren(), MAX_SCHEDULED_CHILDREN - 1, 'the session the failed run started is archived again');
+  assert.equal(openChildren(), MAX_SCHEDULED_SESSIONS - 1, 'the session the failed run started is archived again');
   assert.equal(f.sqlite.prepare("SELECT status FROM sessions WHERE id = 'filler-2'").get()!.status, 'error', 'and only that one');
   const afterFailure = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
   assert.deepEqual([afterFailure.lastSessionId, afterFailure.lastSubmissionId, afterFailure.lastError], [null, null, failed.error]);
@@ -283,9 +291,9 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   });
   const raced = await f.owner.request('POST', `${base}/${schedule.id}/run`);
   assert.equal(raced.status, 409, await raced.clone().text());
-  assert.equal((await raced.json() as { code: string }).code, 'too_many_children');
+  assert.equal((await raced.json() as { code: string }).code, 'too_many_sessions');
   assert.equal(sessionCount(), before + 3);
-  assert.equal(openChildren(), MAX_SCHEDULED_CHILDREN, 'a run that raced another past the limit gives way');
+  assert.equal(openChildren(), MAX_SCHEDULED_SESSIONS, 'a run that raced another past the limit gives way');
   assert.equal(f.sqlite.prepare("SELECT status FROM sessions WHERE id = 'filler-race'").get()!.status, 'ready');
 });
 
@@ -395,17 +403,17 @@ test('a schedule that runs in a new session starts it on a model and reasoning l
     assert.equal(response.status, status, JSON.stringify(bad));
     assert.equal((await response.json() as { code: string }).code, code, JSON.stringify(bad));
   }
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules').get()!.n, 0, 'nothing refused was kept');
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM schedules').get()!.n, 0, 'nothing refused was kept');
 
   const plain = (await (await f.owner.request('POST', base, { ...fields, runIn: 'child', enabled: false })).json() as { schedule: SessionSchedule }).schedule;
   assert.deepEqual([plain.modelId, plain.thinkingLevel, 'modelId' in plain], [undefined, undefined, false], 'left out, its runs start on the session\'s model');
-  assert.deepEqual({ ...f.sqlite.prepare('SELECT model_id, thinking_level FROM session_schedules WHERE id = ?').get(plain.id)! }, { model_id: null, thinking_level: null });
+  assert.deepEqual({ ...f.sqlite.prepare('SELECT model_id, thinking_level FROM schedules WHERE id = ?').get(plain.id)! }, { model_id: null, thinking_level: null });
   const created = await f.owner.request('POST', base, { ...fields, runIn: 'child', modelId: 'hosted-model', thinkingLevel: 'high' });
   assert.equal(created.status, 201, await created.clone().text());
   const { schedule } = await created.json() as { schedule: SessionSchedule };
   assert.deepEqual([schedule.modelId, schedule.thinkingLevel], ['hosted-model', 'high']);
-  assert.deepEqual({ ...f.sqlite.prepare('SELECT model_id, thinking_level FROM session_schedules WHERE id = ?').get(schedule.id)! }, { model_id: 'hosted-model', thinking_level: 'high' });
-  const createdAudit = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.schedule.created' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
+  assert.deepEqual({ ...f.sqlite.prepare('SELECT model_id, thinking_level FROM schedules WHERE id = ?').get(schedule.id)! }, { model_id: 'hosted-model', thinking_level: 'high' });
+  const createdAudit = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.schedule.created' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
   assert.deepEqual([createdAudit.modelId, createdAudit.thinkingLevel], ['hosted-model', 'high']);
 
   const listing = await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[]; childModels: boolean; models: { id: string; thinkingLevels?: string[] }[] };
@@ -423,11 +431,11 @@ test('a schedule that runs in a new session starts it on a model and reasoning l
   assert.deepEqual([hosted.at(-1)!.sessionId, hosted.at(-1)!.body.content, (hosted.at(-1)!.body.options as Record<string, unknown>).thinkingLevel],
     [result.sessionId, 'Review the architecture', 'high'], 'its opening message runs at the schedule\'s reasoning level');
   assert.equal(result.schedule.lastError, null);
-  const started = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.schedule.child_started' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
+  const started = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.schedule.session_started' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
   assert.deepEqual([started.modelId, started.thinkingLevel, started.fallback], ['hosted-model', 'high', undefined]);
   const [swept] = await runScheduledPrompts(f.env, Date.parse(schedule.nextRunAt!) + 1000);
-  assert.ok(swept && 'childSessionId' in swept && !swept.fallback, JSON.stringify(swept));
-  assert.equal(childModel(swept.childSessionId!), 'hosted-model', 'and so does each run the sweep starts');
+  assert.ok(swept && 'startedSessionId' in swept && !swept.fallback, JSON.stringify(swept));
+  assert.equal(childModel(swept.startedSessionId!), 'hosted-model', 'and so does each run the sweep starts');
 
   const unchosen = await (await f.owner.request('PATCH', `${base}/${schedule.id}`, { thinkingLevel: null })).json() as { schedule: SessionSchedule };
   assert.deepEqual([unchosen.schedule.modelId, unchosen.schedule.thinkingLevel], ['hosted-model', undefined], 'null clears a choice');
@@ -458,12 +466,12 @@ test('a schedule that runs in a new session starts it on a model and reasoning l
   const due = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
   assert.equal(due.lastError, 'model_unavailable');
   const [fallback] = await runScheduledPrompts(f.env, Date.parse(due.nextRunAt!) + 1000);
-  assert.ok(fallback && 'childSessionId' in fallback, JSON.stringify(fallback));
+  assert.ok(fallback && 'startedSessionId' in fallback, JSON.stringify(fallback));
   assert.equal(fallback.fallback, 'model_unavailable');
-  assert.equal(childModel(fallback.childSessionId!), f.model.id);
+  assert.equal(childModel(fallback.startedSessionId!), f.model.id);
   const afterSweep = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
-  assert.deepEqual([afterSweep.lastSessionId, afterSweep.lastError, afterSweep.modelId], [fallback.childSessionId, 'model_unavailable', 'hosted-model'], 'the choice stays, for when it is back');
-  const fellBack = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.schedule.child_started' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
+  assert.deepEqual([afterSweep.lastSessionId, afterSweep.lastError, afterSweep.modelId], [fallback.startedSessionId, 'model_unavailable', 'hosted-model'], 'the choice stays, for when it is back');
+  const fellBack = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.schedule.session_started' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
   assert.deepEqual([fellBack.modelId, fellBack.fallback], [f.model.id, 'model_unavailable']);
   f.sqlite.prepare("UPDATE models SET available = 1 WHERE id = 'hosted-model'").run();
 
@@ -529,7 +537,7 @@ test('a run the database fails is recorded as failed, and its host is free for t
   const due = Date.parse(schedule.nextRunAt!);
   let failed = false;
   f.setBeforeQuery(sql => {
-    if (!failed && sql.startsWith('UPDATE session_schedules SET last_submission_id')) { failed = true; throw new Error('database unavailable'); }
+    if (!failed && sql.startsWith('UPDATE schedules SET last_submission_id')) { failed = true; throw new Error('database unavailable'); }
   });
   const [outcome] = await runScheduledPrompts(f.env, due + 1000);
   f.setBeforeQuery(undefined);
@@ -580,22 +588,22 @@ test('an edit never brings back a run a sweep claimed while it was being saved',
   const { schedule } = await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Report' })).json() as { schedule: SessionSchedule };
   const claimed = new Date(Date.parse(schedule.nextRunAt!) + 86400_000).toISOString();
   const claim = (sql: string) => {
-    if (!sql.startsWith('UPDATE session_schedules SET name')) return;
+    if (!sql.startsWith('UPDATE schedules SET name')) return;
     f.setBeforeQuery(undefined);
-    f.sqlite.prepare('UPDATE session_schedules SET next_run_at = ? WHERE id = ?').run(claimed, schedule.id);
+    f.sqlite.prepare('UPDATE schedules SET next_run_at = ? WHERE id = ?').run(claimed, schedule.id);
   };
   f.setBeforeQuery(claim);
   const renamed = await f.owner.request('PATCH', `${base}/${schedule.id}`, { name: 'Daily report', content: 'Report, briefly' });
   assert.equal(renamed.status, 200, await renamed.clone().text());
   assert.equal((await renamed.json() as { schedule: SessionSchedule }).schedule.nextRunAt, claimed, 'a rename leaves the next run alone');
-  assert.equal(f.sqlite.prepare('SELECT next_run_at FROM session_schedules WHERE id = ?').get(schedule.id)!.next_run_at, claimed);
+  assert.equal(f.sqlite.prepare('SELECT next_run_at FROM schedules WHERE id = ?').get(schedule.id)!.next_run_at, claimed);
 
-  f.setBeforeQuery(sql => { if (sql.startsWith('UPDATE session_schedules SET name')) { f.setBeforeQuery(undefined);
-    f.sqlite.prepare('UPDATE session_schedules SET next_run_at = ? WHERE id = ?').run(new Date(Date.parse(claimed) + 86400_000).toISOString(), schedule.id); } });
+  f.setBeforeQuery(sql => { if (sql.startsWith('UPDATE schedules SET name')) { f.setBeforeQuery(undefined);
+    f.sqlite.prepare('UPDATE schedules SET next_run_at = ? WHERE id = ?').run(new Date(Date.parse(claimed) + 86400_000).toISOString(), schedule.id); } });
   const moved = await f.owner.request('PATCH', `${base}/${schedule.id}`, { cron: '0 10 * * *' });
   assert.equal(moved.status, 409);
   assert.equal((await moved.json() as { code: string }).code, 'schedule_changed');
-  assert.equal(f.sqlite.prepare('SELECT cron FROM session_schedules WHERE id = ?').get(schedule.id)!.cron, '0 9 * * *', 'nothing changed');
+  assert.equal(f.sqlite.prepare('SELECT cron FROM schedules WHERE id = ?').get(schedule.id)!.cron, '0 9 * * *', 'nothing changed');
   assert.equal((await f.owner.request('PATCH', `${base}/${schedule.id}`, { cron: '0 10 * * *' })).status, 200, 'read again, it saves');
 });
 
@@ -634,7 +642,7 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
     [{ ...create, modelId: f.model.id }, 'invalid_input'], [{ ...create, runIn: 'session', thinkingLevel: 'low' }, 'invalid_input']] as const) {
     await refused(tool(write, bad), 400, code);
   }
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules').get()!.n, 0);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM schedules').get()!.n, 0);
 
   const created = await tool(write, create);
   assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -663,11 +671,155 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
 
   const deleted = await tool(write, { action: 'delete', scheduleId: schedule.id });
   assert.deepEqual([deleted.status, deleted.body], [200, { deleted: schedule.id }]);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules').get()!.n, 0);
-  const audits = f.sqlite.prepare("SELECT action, actor_id, detail_json FROM audit WHERE action LIKE 'session.schedule.%' ORDER BY rowid").all();
-  assert.deepEqual(audits.map(row => row.action), ['session.schedule.created', 'session.schedule.updated', 'session.schedule.updated', 'session.schedule.deleted']);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM schedules').get()!.n, 0);
+  const audits = f.sqlite.prepare("SELECT action, actor_id, session_id, detail_json FROM audit WHERE action LIKE '%.schedule.%' ORDER BY rowid").all();
+  assert.deepEqual(audits.map(row => [row.action, row.session_id]), [['session.schedule.created', 'scheduled-session'], ['workspace.schedule.updated', 'scheduled-session'],
+    ['workspace.schedule.updated', 'scheduled-session'], ['workspace.schedule.deleted', 'scheduled-session']], 'run in a new session, it is the workspace\'s, made from this session');
   for (const row of audits) {
     assert.equal(row.actor_id, ownerId);
     assert.deepEqual((({ agent, callId }) => ({ agent, callId }))(JSON.parse(String(row.detail_json)) as { agent: boolean; callId: string }), { agent: true, callId: 'call-1' });
   }
+});
+
+const workspacePath = (f: { workspace: { id: string } }) => `/api/workspaces/${f.workspace.id}/schedules`;
+type Client = { request(method: string, path: string, body?: unknown): Promise<Response> };
+const workspaceListing = async (client: Client, path: string) => await (await client.request('GET', path)).json() as WorkspaceScheduleListing;
+
+test('a workspace schedule belongs to the workspace: members who start sessions make them on a model of their choice, and each run starts a new session as its owner', async t => {
+  const f = await fixture(t);
+  const path = workspacePath(f);
+  const viewer = await f.member('schedule-viewer', 'viewer');
+  const body = { cron: '0 9 * * *', timeZone: 'UTC', name: 'Triage', content: 'Triage the new issues', modelId: f.model.id };
+  for (const [bad, status, code] of [[{ ...body, modelId: undefined }, 400, 'model_required'], [{ ...body, runIn: 'session' }, 400, 'invalid_input'],
+    [{ ...body, modelId: 'missing-model' }, 404, 'not_found'], [{ ...body, trustedConnectorId: 'not a host' }, 400, 'invalid_input'],
+    [{ ...body, access: 'read' }, 400, 'options_unsupported']] as const) {
+    const response = await f.owner.request('POST', path, bad);
+    assert.equal(response.status, status, JSON.stringify(bad));
+    assert.equal((await response.json() as { code: string }).code, code, JSON.stringify(bad));
+  }
+  const refused = await viewer.request('POST', path, body);
+  assert.deepEqual([refused.status, (await refused.json() as { code: string }).code], [403, 'viewer_role']);
+  const created = await f.collaborator.request('POST', path, body);
+  assert.equal(created.status, 201, await created.clone().text());
+  const { schedule } = await created.json() as { schedule: Schedule };
+  assert.deepEqual([schedule.runIn, schedule.sessionId, schedule.originSessionId, schedule.ownerId, schedule.workspaceId, schedule.modelId],
+    ['child', null, undefined, f.collaborator.user.id, f.workspace.id, f.model.id]);
+  const own = (await (await f.owner.request('POST', path, { ...body, name: 'Report', enabled: false })).json() as { schedule: Schedule }).schedule;
+
+  const seen = await workspaceListing(viewer, path);
+  assert.deepEqual([seen.canCreate, seen.admin, seen.models, seen.schedules.map(item => [item.name, item.canManage, item.ownerName])],
+    [false, false, undefined, [['Triage', false, 'schedule-collaborator'], ['Report', false, 'schedule-owner']]], 'every member sees them');
+  const mine = await workspaceListing(f.collaborator, path);
+  assert.deepEqual([mine.canCreate, mine.admin, mine.schedules.map(item => item.canManage)], [true, false, [true, false]], 'a member manages their own');
+  assert.ok(mine.models?.some(model => model.id === f.model.id), 'and is offered the models they may start sessions on');
+  const managed = await workspaceListing(f.owner, path);
+  assert.deepEqual([managed.admin, managed.schedules.map(item => item.canManage)], [true, [true, true]], 'the workspace\'s owner manages them all');
+  assert.deepEqual((await (await f.owner.request('GET', base)).json() as { schedules: Schedule[] }).schedules, [], 'no session lists it');
+  assert.equal((await f.session(f.owner)).nextScheduledAt, undefined, 'nor shows as scheduled');
+
+  const [outcome] = await runScheduledPrompts(f.env, Date.parse(schedule.nextRunAt!) + 1000);
+  assert.ok(outcome && 'startedSessionId' in outcome && outcome.startedSessionId, JSON.stringify(outcome));
+  assert.equal(outcome.sessionId, null);
+  const started = f.sqlite.prepare('SELECT * FROM sessions WHERE id = ?').get(outcome.startedSessionId!)!;
+  assert.deepEqual([started.parent_session_id, started.schedule_id, started.owner_id, started.workspace_id], [null, schedule.id, f.collaborator.user.id, f.workspace.id]);
+  assert.deepEqual(f.submitted.map(item => [item.path, item.body.content]), [[`/v1/sessions/${outcome.startedSessionId}/submit`, 'Triage the new issues']]);
+  const audit = f.sqlite.prepare("SELECT actor_id, workspace_id, session_id FROM audit WHERE action = 'workspace.schedule.session_started'").get()!;
+  assert.deepEqual({ ...audit }, { actor_id: f.collaborator.user.id, workspace_id: f.workspace.id, session_id: null });
+  const after = (await workspaceListing(f.collaborator, path)).schedules.find(item => item.id === schedule.id)!;
+  assert.deepEqual([after.lastSessionId, after.lastError], [outcome.startedSessionId, null]);
+
+  const ran = await f.owner.request('POST', `${path}/${own.id}/run`);
+  assert.equal(ran.status, 202, await ran.clone().text());
+  assert.equal(f.sqlite.prepare('SELECT owner_id FROM sessions WHERE id = ?').get((await ran.json() as { sessionId: string }).sessionId)!.owner_id, f.owner.user.id);
+  assert.equal((await viewer.request('POST', `${path}/${schedule.id}/run`)).status, 403);
+  assert.equal((await f.collaborator.request('DELETE', `${path}/${own.id}`)).status, 403);
+  assert.equal((await f.collaborator.request('DELETE', `${path}/${schedule.id}`)).status, 204);
+  const actions = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.schedule.%' ORDER BY rowid").all().map(row => row.action);
+  assert.deepEqual(actions, ['workspace.schedule.created', 'workspace.schedule.created', 'workspace.schedule.session_started', 'workspace.schedule.session_started',
+    'workspace.schedule.deleted']);
+});
+
+test('a workspace owner or admin edits any schedule, and an edit takes it over: its runs act as them from then on, while pausing takes nothing over', async t => {
+  const f = await fixture(t);
+  const admin = await f.member('schedule-admin', 'admin');
+  const path = workspacePath(f);
+  const { schedule } = await (await f.collaborator.request('POST', path, { cron: '0 9 * * *', content: 'Triage', modelId: f.model.id })).json() as { schedule: Schedule };
+  const paused = await admin.request('PATCH', `${path}/${schedule.id}`, { enabled: false });
+  assert.equal(paused.status, 200, await paused.clone().text());
+  assert.equal((await paused.json() as { schedule: Schedule }).schedule.ownerId, f.collaborator.user.id, 'pausing takes nothing over');
+  const edited = await admin.request('PATCH', `${path}/${schedule.id}`, { enabled: true, content: 'Triage, briefly' });
+  assert.equal(edited.status, 200, await edited.clone().text());
+  const taken = (await edited.json() as { schedule: Schedule }).schedule;
+  assert.deepEqual([taken.ownerId, taken.content, taken.createdBy], [admin.user.id, 'Triage, briefly', f.collaborator.user.id]);
+  const audit = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.schedule.updated' ORDER BY rowid DESC").get()!.detail_json)) as Record<string, unknown>;
+  assert.equal(audit.takenOverFrom, f.collaborator.user.id);
+  assert.equal((await f.collaborator.request('PATCH', `${path}/${schedule.id}`, { enabled: false })).status, 403, 'no longer theirs');
+  const [outcome] = await runScheduledPrompts(f.env, Date.parse(taken.nextRunAt!) + 1000);
+  assert.ok(outcome && 'startedSessionId' in outcome, JSON.stringify(outcome));
+  assert.equal(f.sqlite.prepare('SELECT owner_id FROM sessions WHERE id = ?').get(outcome.startedSessionId!)!.owner_id, admin.user.id, 'it runs as whoever took it over');
+
+  const own = (await (await f.owner.request('POST', base, { cron: '0 10 * * *', content: 'Check the build' })).json() as { schedule: Schedule }).schedule;
+  const listed = await (await admin.request('GET', base)).json() as { schedules: Schedule[]; canManage: boolean; canCreate: boolean };
+  assert.deepEqual([listed.canManage, listed.canCreate, listed.schedules.map(item => item.canManage)], [true, false, [true]],
+    'an admin changes another\'s session\'s schedules, but makes none there');
+  assert.equal((await admin.request('POST', base, { cron: '0 10 * * *', content: 'Mine' })).status, 403);
+  const changed = await admin.request('PATCH', `${base}/${own.id}`, { content: 'Check the build, and the docs' });
+  assert.equal(changed.status, 200, await changed.clone().text());
+  assert.equal((await changed.json() as { schedule: Schedule }).schedule.ownerId, admin.user.id);
+  await runScheduledPrompts(f.env, Date.parse(own.nextRunAt!) + 1000);
+  const submit = f.sqlite.prepare("SELECT actor_id FROM audit WHERE action = 'session.submit' AND session_id = 'scheduled-session'").get()!;
+  assert.equal(submit.actor_id, admin.user.id, 'the session\'s prompt is sent as the admin who changed it');
+  const back = await f.owner.request('PATCH', `${base}/${own.id}`, { name: 'Build' });
+  assert.equal((await back.json() as { schedule: Schedule }).schedule.ownerId, f.owner.user.id, 'the session owner takes it back by changing it');
+});
+
+test('a workspace schedule whose owner may no longer start sessions pauses, and says why', async t => {
+  const f = await fixture(t);
+  const path = workspacePath(f);
+  const { schedule } = await (await f.collaborator.request('POST', path, { cron: '0 9 * * *', content: 'Triage', modelId: f.model.id })).json() as { schedule: Schedule };
+  f.sqlite.prepare("UPDATE workspace_members SET role = 'viewer' WHERE workspace_id = ? AND user_id = ?").run(f.workspace.id, f.collaborator.user.id);
+  const [outcome] = await runScheduledPrompts(f.env, Date.parse(schedule.nextRunAt!) + 1000);
+  assert.deepEqual(outcome, { scheduleId: schedule.id, sessionId: null, error: 'owner_unavailable' });
+  assert.equal(f.submitted.length, 0);
+  const listed = (await workspaceListing(f.owner, path)).schedules[0]!;
+  assert.deepEqual([listed.enabled, listed.nextRunAt, listed.lastError], [false, null, 'owner_unavailable']);
+  const resumed = await f.owner.request('PATCH', `${path}/${schedule.id}`, { enabled: true, content: 'Triage, as the workspace owner' });
+  assert.equal(resumed.status, 200, await resumed.clone().text());
+  assert.equal((await resumed.json() as { schedule: Schedule }).schedule.ownerId, f.owner.user.id, 'an admin takes it over to run it again');
+});
+
+test('a schedule made from a session is the workspace\'s: it shows there, and runs on once that session is archived', async t => {
+  const f = await fixture(t);
+  const { schedule } = await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Triage', runIn: 'child' })).json() as { schedule: Schedule };
+  const listing = await workspaceListing(f.owner, workspacePath(f));
+  assert.deepEqual(listing.schedules.map(item => [item.id, item.originSessionId]), [[schedule.id, 'scheduled-session']]);
+  f.sqlite.prepare("UPDATE sessions SET status = 'archived', archived_status = 'ready' WHERE id = 'scheduled-session'").run();
+  const [outcome] = await runScheduledPrompts(f.env, Date.parse(schedule.nextRunAt!) + 1000);
+  assert.ok(outcome && 'startedSessionId' in outcome, JSON.stringify(outcome));
+  assert.equal(f.sqlite.prepare('SELECT parent_session_id FROM sessions WHERE id = ?').get(outcome.startedSessionId!)!.parent_session_id, 'scheduled-session',
+    'its runs still start under the session it was made from');
+});
+
+test('a workspace schedule on another member\'s host needs its owner to trust that host, as starting a session there does', async t => {
+  const f = await fixture(t);
+  const at = new Date().toISOString();
+  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('shared-host', f.owner.user.id, 'Shared', 'h'.repeat(43), 'c'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, approvalFree: true,
+      chatOptions: true, plainGit: true }), JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3' }]), at);
+  f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('shared-host', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO connector_shares (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('shared-host', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run('shared-model', f.workspace.id, 'Faux 3', 'faux', 'faux-3', at, 'shared-host', f.owner.user.id);
+  const path = workspacePath(f);
+  const body = { cron: '0 9 * * *', content: 'Triage', modelId: 'shared-model' };
+  const refused = await f.collaborator.request('POST', path, body);
+  assert.deepEqual([refused.status, (await refused.json() as { code: string }).code], [403, 'connector_trust_required']);
+  const trusted = await f.collaborator.request('POST', path, { ...body, trustedConnectorId: 'shared-host' });
+  assert.equal(trusted.status, 201, await trusted.clone().text());
+  const models = (await workspaceListing(f.collaborator, path)).models ?? [];
+  assert.deepEqual([models.find(model => model.id === 'shared-model')?.foreignHost, models.find(model => model.id === f.model.id)?.foreignHost], [true, undefined]);
+  assert.equal((await f.owner.request('POST', path, body)).status, 201, 'the host\'s owner trusts it already');
+  const { schedule } = await trusted.json() as { schedule: Schedule };
+  const takeover = await f.owner.request('PATCH', `${path}/${schedule.id}`, { name: 'Mine now' });
+  assert.equal(takeover.status, 200, 'taken over by the host\'s owner, it needs no trust');
 });
