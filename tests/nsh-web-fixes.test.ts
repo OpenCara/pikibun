@@ -41,6 +41,10 @@ test("a page the strict script policy would stop fails the build", async t => {
   assert.throws(() => checkStrictPage(`${page("nsh.89070fe10a.js")}<script>const fetches = new Map();</script>`), /inline script/);
   assert.throws(() => checkStrictPage(`${page("nsh.89070fe10a.js")}<script type="module">import "./x.js";</script>`), /inline script/);
   assert.throws(() => checkStrictPage("<script src=\"nsh-start.40ff64d01a.js\"></script>"), /no #nsh-app/);
+  for (const look of [' data-src="x.js"', ' data-type="application/json"']) {
+    assert.throws(() => checkStrictPage(`${page("nsh.89070fe10a.js")}<script${look}>alert(1)</script>`), /inline script/, `${look} is no src or type`);
+  }
+  assert.throws(() => checkStrictPage(page("nsh.89070fe10a.js").replace('id="nsh-app"', 'data-id="nsh-app"')), /no #nsh-app/);
   const root = await site(t);
   await writeFile(join(root, "index.html"), page("nsh.89070fe10a.js", false));
   assert.throws(() => fixWebSite(root), /aren't linked/);

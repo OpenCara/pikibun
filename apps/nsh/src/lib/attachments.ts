@@ -189,7 +189,9 @@ export function createAttachments(options: { imagesUnavailable: Accessor<string 
         const maxBytes = untracked(options.fileOptions!).maxBytes;
         const picked = await Picker.pickFiles({ multiple: true, limit: fileUploadLimits.count + chatImageLimits.count, maxSize: maxBytes });
         const found = picked.flatMap(({ file }) => (!file ? [] : [file.type ? file : new File([file], file.name, { type: typeOfName(file.name) })]));
-        attachFound(found, maxBytes, true, found.length < picked.length ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.` : "");
+        const unread = picked.filter(item => !item.file);
+        attachFound(found, maxBytes, true, unread.some(item => item.status === "tooLarge") ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.`
+          : unread.length ? `Couldn't read ${unread.map(item => item.name).join(", ")}.` : "");
         return;
       }
       const room = chatImageLimits.count - untracked(images).length;

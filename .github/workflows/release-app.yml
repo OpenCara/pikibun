@@ -583,19 +583,28 @@ jobs:
       # uses no encryption but the system's (HTTPS), which is exempt. Without it every build waits in App Store Connect
       # as Missing Compliance, and TestFlight's testers get none until someone answers by hand (0.10.1 to 0.15.0 waited
       # so). Read from the package as it is uploaded, never changed: a change would break its signature.
+      # A signed package is checked in the .ipa the upload sends, which it must have; an unsigned one has only the .app.
       - name: The SDK and Info.plist App Store Connect requires
+        env:
+          SIGNED: ${{ steps.signing.outputs.configured }}
         run: |
-          app=$(find "$RUNNER_TEMP/app" -maxdepth 1 -name '*.app' | head -n1)
-          if [ -z "$app" ]; then
-            ipa=$(find "$RUNNER_TEMP/app" -maxdepth 2 -name '*.ipa' | head -n1)
-            [ -n "$ipa" ] || { echo "::error::nsh package wrote neither an .app nor an .ipa."; exit 1; }
+          ipa=$(find "$RUNNER_TEMP/app" -maxdepth 2 -name '*.ipa' | head -n1)
+          if [ "$SIGNED" = true ] && [ -z "$ipa" ]; then
+            echo "::error::nsh package wrote no .ipa to upload."
+            exit 1
+          fi
+          if [ -n "$ipa" ]; then
             rm -rf "$RUNNER_TEMP/ipa-check" && mkdir -p "$RUNNER_TEMP/ipa-check"
             ditto -x -k "$ipa" "$RUNNER_TEMP/ipa-check"
             app=$(find "$RUNNER_TEMP/ipa-check/Payload" -maxdepth 1 -name '*.app' | head -n1)
+          else
+            app=$(find "$RUNNER_TEMP/app" -maxdepth 1 -name '*.app' | head -n1)
           fi
+          [ -n "$app" ] || { echo "::error::nsh package wrote no app to check."; exit 1; }
           plist="$app/Info.plist"
           executable="$app/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")"
           sdk=$(xcrun vtool -show-build "$executable" | awk '$1 == "sdk" {print $2; exit}')
+          [[ "$sdk" =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo "::error::Couldn't read the iOS SDK the app's runner ($executable) was built with."; exit 1; }
           echo "The app's runner is built with the iOS $sdk SDK."
           if [ "${sdk%%.*}" -lt 26 ]; then
             echo "::error::The app's runner was built with the iOS $sdk SDK; App Store Connect needs iOS 26 or later."

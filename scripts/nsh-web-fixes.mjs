@@ -29,10 +29,10 @@ function removeWithCompressed(file) {
 
 export function checkStrictPage(html) {
   for (const [, attributes, body] of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
-    if (/\bsrc\s*=/i.test(attributes) || /\btype\s*=\s*["']?application\/json\b/i.test(attributes)) continue;
+    if (/(^|\s)src\s*=/i.test(attributes) || /(^|\s)type\s*=\s*["']?application\/json\b/i.test(attributes)) continue;
     throw new Error(`nsh-web-fixes: the page has an inline script, which its Content-Security-Policy refuses: <script${attributes}>${body.slice(0, 80)}`);
   }
-  const app = /<script\b[^>]*\bid="nsh-app"[^>]*>([\s\S]*?)<\/script>/i.exec(html);
+  const app = /<script\b[^>]*\sid="nsh-app"[^>]*>([\s\S]*?)<\/script>/i.exec(html);
   if (!app) throw new Error("nsh-web-fixes: the page has no #nsh-app to start");
   if (JSON.parse(app[1]).linked !== true) {
     throw new Error("nsh-web-fixes: the app's modules aren't linked to their files, so the runtime would add an import map and blob: modules, which the page's Content-Security-Policy refuses: import Native Shell's modules by name (import { x } from \"nsh\"), not whole");
