@@ -319,7 +319,7 @@ describe("settings", () => {
     const app = await openSettings("workspaces");
     await app.waitFor("id:workspace-w1");
     await app.press("id:workspace-w1");
-    for (const part of ["workspace-sources", "workspace-connections", "workspace-push-access", "workspace-network", "workspace-extensions", "workspace-cache-warming", "workspace-database", "workspace-members", "workspace-invite"]) {
+    for (const part of ["workspace-sources", "workspace-connections", "workspace-schedules", "workspace-push-access", "workspace-network", "workspace-extensions", "workspace-cache-warming", "workspace-database", "workspace-members", "workspace-invite"]) {
       await app.waitFor(`id:${part}`);
     }
     await app.waitFor("text:OpenCara/pikibun");
@@ -425,6 +425,53 @@ describe("settings", () => {
     await app.press("id:new-workspace-create");
     await app.waitFor("text:What should we work on?");
     expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces`)).toEqual({ name: "Difference Engine" });
+  });
+
+  test("Workspace schedules start a new session each run, on a model chosen for them, trusting another member's host only when told to", async () => {
+    const models = [{ id: "m1", name: "Claude Sonnet", provider: "anthropic", modelId: "claude-sonnet", host: "c1" },
+      { id: "m2", name: "Claude Opus", provider: "anthropic", modelId: "claude-opus", thinkingLevels: ["off", "low", "high"], host: "c2", foreignHost: true }];
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/schedules`]: { body: { schedules: [], canCreate: true, admin: false, models } },
+      [`POST ${ORIGIN}/api/workspaces/w1/schedules`]: { status: 201, body: { schedule: { id: "sc1" } } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:workspace-schedules");
+    await app.waitFor("text:No schedules");
+    await app.press("id:workspace-schedule-new");
+    await app.type("id:schedule-content", "Triage the new issues");
+    await app.press("id:schedule-model");
+    await app.press("text:Claude Opus");
+    await app.waitFor("id:schedule-trust");
+    await app.press("id:schedule-thinking");
+    await app.press("text:High");
+    await app.press("id:schedule-trust");
+    await app.press("id:schedule-save");
+    await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/schedules`)));
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/schedules`)).toMatchObject({ content: "Triage the new issues", modelId: "m2", thinkingLevel: "high",
+      trustedConnectorId: "c2", oneShot: true, access: "auto" });
+  });
+
+  test("Workspace schedules show whom each runs as, and tell an admin that changing someone else's makes it theirs", async () => {
+    const schedule = { id: "sc2", workspaceId: "w1", sessionId: null, ownerId: "u2", ownerName: "Grace Hopper", name: "Nightly", cron: "0 3 * * *", timeZone: "UTC",
+      content: "Run the nightly checks", access: "auto", runIn: "child", oneShot: true, modelId: "m1", enabled: true, nextRunAt: "2099-01-01T03:00:00.000Z",
+      lastRunAt: null, lastSubmissionId: null, lastSessionId: null, lastError: null, createdBy: "u2", createdAt: "2026-11-01T00:00:00.000Z",
+      updatedAt: "2026-11-01T00:00:00.000Z", canManage: true };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/schedules`]: { body: { schedules: [schedule], canCreate: true, admin: true,
+        models: [{ id: "m1", name: "Claude Sonnet", provider: "anthropic", modelId: "claude-sonnet", host: "c1" }] } },
+      [`PATCH ${ORIGIN}/api/workspaces/w1/schedules/sc2`]: { body: { schedule: { ...schedule, ownerId: "u1" } } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:schedule-sc2");
+    expect(app.texts().join(" ")).toContain("runs as Grace Hopper");
+    await app.press("text:Pause");
+    await app.waitUntil(() => Boolean(bodyOf(app, "PATCH", `${ORIGIN}/api/workspaces/w1/schedules/sc2`)));
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/workspaces/w1/schedules/sc2`)).toEqual({ enabled: false });
+    await app.press("text:Edit");
+    await app.waitFor("id:schedule-takeover");
+    expect(app.texts().join(" ")).toContain("This schedule runs as Grace Hopper. Saving a change makes it yours");
   });
 });
 

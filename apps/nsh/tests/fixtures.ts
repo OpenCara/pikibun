@@ -107,6 +107,7 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/sessions/s1/audit`]: { body: { events: [{ id: "a1", actorId: "u1", action: "session.create", detail: { title: "Fix the flaky login test" }, createdAt: "2026-11-06T09:00:00.000Z" }] } },
     [`GET ${ORIGIN}/api/sessions/s1/schedules`]: { body: { schedules: [], canManage: true } },
     [`POST ${ORIGIN}/api/sessions/s1/schedules`]: { status: 201, body: { schedule: { id: "sc1" } } },
+    [`GET ${ORIGIN}/api/workspaces/w1/schedules`]: { body: { schedules: [], canCreate: true, admin: true, models: [{ id: "m1", name: "Claude Sonnet", provider: "anthropic", modelId: "claude-sonnet", host: "c1" }] } },
     [`GET ${ORIGIN}/api/sessions/s1/connections`]: { body: { parent: null, children: [], messages: [] } },
     [`GET ${ORIGIN}/api/sessions/s1/grants`]: { body: { grants: [{ userId: "u1", permissions: ["read", "ask", "write", "approve", "manage"] }] } },
     [`GET ${ORIGIN}/api/sessions/s1/link`]: { body: { link: null } },

@@ -26,6 +26,7 @@ import { Card, gitAccountLabel, GroupTitle } from "./accounts";
 import { SectionPage, type SectionProps } from "./parts";
 import { WorkspaceDatabaseSection } from "./workspace-database";
 import { WorkspaceExtensions } from "./workspace-extensions";
+import { WorkspaceSchedules } from "./workspace-schedules";
 import { ToolGroups } from "./workspace-tool-groups";
 import { AttachmentSettings, CacheWarmingSettings, ChildSessionSettings, NetworkAccess, PackingSettings, TranscriptSettings } from "./workspace-options";
 import {
@@ -106,6 +107,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
         changed={sourcesChanged} go={props.go} />
       <WorkspaceConnections workspaceId={workspace().id} admin={admin()} connections={connections.data()?.connections ?? null}
         loading={connections.loading()} error={connections.error()} refresh={connections.refresh} changed={sourcesChanged} />
+      <WorkspaceSchedules workspace={workspace()} go={props.go} />
       <PushAccess workspace={workspace()} admin={admin()} />
       <NetworkAccess workspace={workspace()} admin={admin()} />
       <WorkspaceExtensions workspace={workspace()} />
