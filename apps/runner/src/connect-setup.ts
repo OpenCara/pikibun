@@ -1,8 +1,8 @@
-import { access, constants } from "node:fs/promises";
-import { homedir, release, userInfo } from "node:os";
+import { access, constants, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir, release, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { execFile, spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { readConnectorState } from "./connector.js";
 import { createFauxLocalModels, loadLocalPiModels, readPiSettings, type LocalModels } from "./local-pi.js";
 import type { Prerequisite, PrerequisiteFix } from "../../../packages/shared/src/app-host-protocol.js";
@@ -114,6 +114,106 @@ export function bubblewrapPrerequisite(probe: BubblewrapProbe = hostProbe): Prer
     ? { text: "This bubblewrap is too old for the sandbox: install bubblewrap 0.8 or newer." }
     : bubblewrapFix(probe.sysctl);
   return { name: `bubblewrap can make the sandbox (it can't here: ${said})`, ok: false, fix };
+}
+
+export const ISOLATION_NAMESPACES = ["user", "mnt", "pid", "net", "ipc", "uts"] as const;
+
+export const ISOLATION_CANARY = "PIKIBUN_ISOLATION_CANARY";
+
+export const ISOLATION_CHECK = `import os, sys
+sentinel, home, host = sys.argv[1], sys.argv[2], sys.argv[3:]
+failed = []
+for entry in host:
+    name, link = entry.split('=', 1)
+    try:
+        if os.readlink('/proc/self/ns/' + name) == link:
+            failed.append('it shares the host ' + name + ' namespace')
+    except OSError:
+        failed.append('its ' + name + ' namespace cannot be read')
+try:
+    with open('/proc/net/dev') as devices:
+        interfaces = [line.split(':', 1)[0].strip() for line in devices.read().splitlines()[2:] if ':' in line]
+    if [name for name in interfaces if name != 'lo']:
+        failed.append('it has network interfaces besides loopback')
+except OSError:
+    failed.append('its network interfaces cannot be read')
+try:
+    with open('/proc/self/status') as status:
+        effective = [line.split()[1] for line in status if line.startswith('CapEff:')]
+    if not effective or int(effective[0], 16) != 0:
+        failed.append('it keeps capabilities')
+except (OSError, ValueError):
+    failed.append('its capabilities cannot be read')
+if os.path.lexists(sentinel):
+    failed.append('it sees the host temporary files')
+if home not in ('', '/') and not home.startswith('/usr') and os.path.lexists(home):
+    failed.append('it sees the host home directory')
+try:
+    with open('/.pikibun-isolation-check', 'w'):
+        pass
+    failed.append('its root is writable')
+except OSError:
+    pass
+if hasattr(os, 'unshare') and hasattr(os, 'CLONE_NEWUSER'):
+    try:
+        os.unshare(os.CLONE_NEWUSER)
+        failed.append('it can make user namespaces')
+    except OSError:
+        pass
+if '${ISOLATION_CANARY}' in os.environ:
+    failed.append('it inherits the host environment')
+print('; '.join(failed) if failed else 'ok')
+sys.exit(1 if failed else 0)
+`;
+
+export const ISOLATION_ARGS = ["--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
+  "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib", "--ro-bind-try", "/lib64", "/lib64", "--symlink", "usr/bin", "/bin",
+  "--proc", "/proc", "--dev", "/dev", "--remount-ro", "/proc", "--remount-ro", "/dev", "--remount-ro", "/", "--chdir", "/", "--clearenv",
+  "--", "/usr/bin/python3", "-I", "-c", ISOLATION_CHECK] as const;
+
+export interface IsolationRun {
+  (args: readonly string[], env: Record<string, string>): Promise<{ status: number | null; stdout: string; stderr: string; error?: Error }>;
+}
+
+export interface IsolationResult { ok: boolean; detail: string }
+
+const runBubblewrap: IsolationRun = (args, env) => new Promise(resolveRun => {
+  execFile("/usr/bin/bwrap", args, { encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024, env }, (error, stdout, stderr) => {
+    const status = error ? (typeof error.code === "number" ? error.code : null) : 0;
+    resolveRun({ status, stdout: stdout ?? "", stderr: stderr ?? "", ...(error && status === null ? { error } : {}) });
+  });
+});
+
+const hostNamespace = (name: string): string | undefined => { try { return readlinkSync(`/proc/self/ns/${name}`); } catch { return undefined; } };
+
+export async function verifySandboxIsolation(options: { run?: IsolationRun; platform?: NodeJS.Platform; namespace?: (name: string) => string | undefined } = {}): Promise<IsolationResult> {
+  if ((options.platform ?? process.platform) !== "linux") return { ok: false, detail: "only the Linux sandbox (bubblewrap) is checked" };
+  const namespaces = ISOLATION_NAMESPACES.map(name => [name, (options.namespace ?? hostNamespace)(name)] as const);
+  const unreadable = namespaces.filter(([, link]) => !link).map(([name]) => name);
+  if (unreadable.length) return { ok: false, detail: `this machine's ${unreadable.join(", ")} namespace${unreadable.length > 1 ? "s" : ""} could not be read` };
+  let directory: string | undefined;
+  try {
+    directory = await mkdtemp(join(tmpdir(), "pikibun-isolation-"));
+    const sentinel = join(directory, "sentinel");
+    await writeFile(sentinel, "", { mode: 0o600 });
+    const result = await (options.run ?? runBubblewrap)([...ISOLATION_ARGS, sentinel, homedir(), ...namespaces.map(([name, link]) => `${name}=${link}`)],
+      { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", [ISOLATION_CANARY]: "1" });
+    const said = (result.stdout.trim() || result.error?.message || result.stderr).replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 300);
+    if (result.status === 0 && said === "ok") return { ok: true, detail: "ok" };
+    return { ok: false, detail: said || (result.status === null ? "it didn't finish" : `it exited with ${result.status}`) };
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message.slice(0, 300) : "the check could not run" };
+  } finally {
+    if (directory) await rm(directory, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+export function isolationMessage(isolation: IsolationResult | undefined): string {
+  const limits = "without provisioned, verified limits, commands run only where they may run without them.";
+  if (!isolation) return `Sandbox capability is verified per session; ${limits}`;
+  return isolation.ok
+    ? `Sandbox verified: a test step ran isolated from this machine's files, network, processes and environment. Each session is still checked as it starts; ${limits}`
+    : `Sandbox not verified (${isolation.detail}): Pikibun shows this host as "Sandbox unverified". Each session is still checked as it starts; ${limits}`;
 }
 
 export function npmPrerequisite(platform: NodeJS.Platform = process.platform, path = process.env.PATH ?? ""): Prerequisite {
