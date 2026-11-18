@@ -417,11 +417,13 @@ test('a schedule that runs in a new session starts it on a model and reasoning l
   assert.deepEqual([createdAudit.modelId, createdAudit.thinkingLevel], ['hosted-model', 'high']);
 
   const listing = await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[]; childModels: boolean; models: { id: string; thinkingLevels?: string[] }[] };
-  assert.deepEqual(listing.schedules.map(item => [item.modelId, item.thinkingLevel]), [[undefined, undefined], ['hosted-model', 'high']]);
+  const choiceOf = (schedules: SessionSchedule[], id: string) => (({ modelId, thinkingLevel }) => [modelId, thinkingLevel])(schedules.find(item => item.id === id)!);
+  assert.deepEqual([choiceOf(listing.schedules, plain.id), choiceOf(listing.schedules, schedule.id)], [[undefined, undefined], ['hosted-model', 'high']]);
   assert.equal(listing.childModels, true);
   assert.deepEqual(listing.models.find(model => model.id === 'hosted-model')?.thinkingLevels, ['off', 'low', 'high'], 'the owner is offered the models to choose from');
   const seen = await (await f.collaborator.request('GET', base)).json() as Record<string, unknown> & { schedules: SessionSchedule[] };
-  assert.deepEqual([seen.models, seen.childModels, seen.schedules[1]!.modelId], [undefined, undefined, 'hosted-model'], 'others see the choice, not the owner\'s models');
+  assert.deepEqual([seen.models, seen.childModels, seen.schedules.find(item => item.id === schedule.id)!.modelId], [undefined, undefined, 'hosted-model'],
+    'others see the choice, not the owner\'s models');
 
   const ran = await f.owner.request('POST', `${base}/${schedule.id}/run`);
   assert.equal(ran.status, 202, await ran.clone().text());
@@ -706,11 +708,12 @@ test('a workspace schedule belongs to the workspace: members who start sessions 
     ['child', null, undefined, f.collaborator.user.id, f.workspace.id, f.model.id]);
   const own = (await (await f.owner.request('POST', path, { ...body, name: 'Report', enabled: false })).json() as { schedule: Schedule }).schedule;
 
+  const byName = (listing: WorkspaceScheduleListing) => [...listing.schedules].sort((a, b) => a.name.localeCompare(b.name));
   const seen = await workspaceListing(viewer, path);
-  assert.deepEqual([seen.canCreate, seen.admin, seen.models, seen.schedules.map(item => [item.name, item.canManage, item.ownerName])],
-    [false, false, undefined, [['Triage', false, 'schedule-collaborator'], ['Report', false, 'schedule-owner']]], 'every member sees them');
+  assert.deepEqual([seen.canCreate, seen.admin, seen.models, byName(seen).map(item => [item.name, item.canManage, item.ownerName])],
+    [false, false, undefined, [['Report', false, 'schedule-owner'], ['Triage', false, 'schedule-collaborator']]], 'every member sees them');
   const mine = await workspaceListing(f.collaborator, path);
-  assert.deepEqual([mine.canCreate, mine.admin, mine.schedules.map(item => item.canManage)], [true, false, [true, false]], 'a member manages their own');
+  assert.deepEqual([mine.canCreate, mine.admin, byName(mine).map(item => item.canManage)], [true, false, [false, true]], 'a member manages their own');
   assert.ok(mine.models?.some(model => model.id === f.model.id), 'and is offered the models they may start sessions on');
   const managed = await workspaceListing(f.owner, path);
   assert.deepEqual([managed.admin, managed.schedules.map(item => item.canManage)], [true, [true, true]], 'the workspace\'s owner manages them all');
