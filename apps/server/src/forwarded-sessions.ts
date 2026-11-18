@@ -23,6 +23,12 @@ interface ForwardedRow {
   host_name: string; connection_hash: string | null; workspace_id: string;
 }
 
+function shownTitle(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const title = value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200).trim();
+  return title || undefined;
+}
+
 function plainLine(value: unknown, max: number): string | undefined {
   return typeof value === 'string' && value.trim() && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : undefined;
 }
@@ -36,7 +42,7 @@ export function reportedRecord(value: unknown): SessionRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
   const id = typeof input.id === 'string' && IDENT.test(input.id) ? input.id : undefined;
-  const title = plainLine(input.title, 200);
+  const title = shownTitle(input.title);
   const agentVersionId = plainLine(input.agentVersionId, 128);
   const createdAt = typeof input.createdAt === 'string' && !Number.isNaN(Date.parse(input.createdAt)) ? input.createdAt : undefined;
   if (!id || !title || !agentVersionId || !createdAt || typeof input.status !== 'string' || !STATUSES.includes(input.status)
@@ -168,14 +174,18 @@ async function relay(c: AppContext, row: Pick<ForwardedRow, 'connector_id' | 'ho
     const extra = value as Record<string, unknown>;
     return { ...shown(record, userId, workspaceId, row.connector_id, row.host_name, true),
       ...(typeof extra.cloneUnavailable === 'string' ? { cloneUnavailable: extra.cloneUnavailable } : {}),
-      ...(typeof extra.viewable === 'boolean' ? { viewable: extra.viewable } : {}) };
+      ...(typeof extra.viewable === 'boolean' ? { viewable: extra.viewable } : {}),
+      ...(extra.hostUnsandboxed === true ? { hostUnsandboxed: true } : {}) };
   };
   if (body.session) body.session = await map(body.session);
   return { answer, json: body };
 }
 
+const NO_BODY = [101, 204, 205, 304];
+
 function respond(c: AppContext, result: { answer: PrivateForwardResponse; json?: unknown }): Response {
   const status = result.answer.status as 200;
+  if (NO_BODY.includes(status)) return new Response(null, { status, headers: { 'Cache-Control': 'private, no-store' } });
   if (result.json !== undefined) return c.json(result.json as Record<string, unknown>, status);
   return new Response(Buffer.from(result.answer.data, 'base64'), { status,
     headers: { 'Content-Type': result.answer.contentType, 'Cache-Control': 'private, no-store, no-transform', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' } });

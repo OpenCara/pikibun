@@ -104,7 +104,8 @@ test('another server lists the private sessions a computer reports, forwards the
     if (request.path.split('?')[0]!.endsWith('/events')) return forwardAnswer(200, 'event: view\ndata: {}\n\n', 'text/event-stream');
     if (request.path.endsWith('/submit')) return forwardAnswer(202, { queued: true });
     if (request.path.endsWith('/stop')) return forwardAnswer(409, { error: 'Nothing to stop.', code: 'not_working' });
-    return forwardAnswer(200, { session: record(request.path.split('/')[3]!, { title: 'Renamed there' }) });
+    if (request.method === 'DELETE') return Response.json({ status: 204, contentType: 'application/octet-stream', data: '' } satisfies PrivateForwardResponse);
+    return forwardAnswer(200, { session: { ...record(request.path.split('/')[3]!, { title: 'Renamed\tthere' }), hostUnsandboxed: true } });
   });
   const sessionId = randomUUID();
   await json(await f.older('/api/connectors/self/private-sessions', { sessions: [record(sessionId)] }), 409);
@@ -124,7 +125,11 @@ test('another server lists the private sessions a computer reports, forwards the
   assert.equal((await json<{ code: string }>(await f.alice.request('POST', `/api/sessions/${sessionId}/stop`, {}), 409)).code, 'not_working', 'the computer\'s answer comes back as it is');
   const renamed = await json<{ session: SessionRecord }>(await f.alice.request('PATCH', `/api/sessions/${sessionId}`, { title: 'Renamed there' }));
   assert.equal(renamed.session.workspaceId, f.workspaceId, 'records it answers with are shown as this server\'s');
-  assert.equal(renamed.session.title, 'Renamed there');
+  assert.equal(renamed.session.title, 'Renamed there', 'a title is shown on one plain line, not dropped');
+  assert.equal(renamed.session.hostUnsandboxed, true, 'the computer\'s warning that its commands run unsandboxed comes along');
+  const removed = await f.alice.request('DELETE', `/api/sessions/${sessionId}/schedules/nightly`);
+  assert.equal(removed.status, 204, 'an answer without a body comes back as one');
+  assert.equal(await removed.text(), '');
   const count = forwarded.length;
   assert.equal((await json<{ code: string }>(await f.alice.request('PUT', `/api/sessions/${sessionId}/link`, {}), 409)).code, 'private_session_here');
   assert.equal(forwarded.length, count, 'a route a computer doesn\'t forward never reaches it');
