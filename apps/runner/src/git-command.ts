@@ -2,7 +2,7 @@ import { programArguments, programLimits, programShellCommand, workDirectory } f
 
 export const gitSubcommands = Object.freeze([
   "add", "am", "apply", "blame", "branch", "checkout", "cherry-pick", "clean", "clone", "commit", "describe", "diff", "fetch",
-  "format-patch", "grep", "init", "log", "ls-files", "ls-remote", "ls-tree", "merge", "merge-base", "mv", "notes", "pull", "push",
+  "format-patch", "grep", "init", "lfs", "log", "ls-files", "ls-remote", "ls-tree", "merge", "merge-base", "mv", "notes", "pull", "push",
   "range-diff", "rebase", "reflog", "remote", "reset", "restore", "revert", "rev-list", "rev-parse", "rm", "shortlog", "show",
   "show-ref", "stash", "status", "switch", "tag", "worktree",
 ] as const);
@@ -19,6 +19,7 @@ const refused: Partial<Record<GitSubcommand, { long: readonly string[]; short?: 
   push: { long: ["--receive-pack", "--exec"] },
   rebase: { long: ["--exec"], short: "x", valued: "sXxC" },
   grep: { long: ["--open-files-in-pager"], short: "O", valued: "eABCfmO" },
+  lfs: { long: ["--program"] },
 };
 
 export interface GitRequest {
