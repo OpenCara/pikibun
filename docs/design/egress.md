@@ -227,6 +227,18 @@ which pinned sessions were checked out of until phase 5. Clone sessions borrow f
   the cache's read-only rule doesn't hold for it; it holds nothing the connector's user can't reach anyway. On Windows
   the launcher runs in Git for Windows' bash: the socket is a named pipe, and the launcher turns the real git's MSYS
   path into a Windows one (`cygpath -w`) for the Node program.
+  - **Inside another session's git.** A session on the host can start another (running Pikibun's own tests, or a
+    connector), so `PATH` may hold several Pikibun gits. The "next `git` on `PATH`" skips them all, not only its own:
+    a directory whose parent holds `git-clone.cjs` (another `HostGitShim`) or which holds `git-shim.cjs` (the Windows
+    sandbox's). Skipping only its own, each took the other for the real git and handed it the clone, which handed it
+    back: one `git clone` started Node programs without end, each waiting on the next, until the host (a WSL host,
+    whose sessions then couldn't start their extension processes within 60 seconds) ran out of memory. The innermost
+    git alone hands the clone over. As a backstop, the Node program counts how deep it runs inside itself
+    (`PIKIBUN_GIT_SHIM_DEPTH`, passed to the git it runs) and refuses past `GIT_SHIM_MAX_DEPTH` (8). On Windows the
+    session's `BASH_ENV` is its `path.sh`, and the owner's own `BASH_ENV` goes in `PIKIBUN_BASH_ENV`: inside another
+    session's git, the owner's one is the `PIKIBUN_BASH_ENV` already set (its name in any case, as Windows has it),
+    never a session's `path.sh`, which would run itself without end: one an earlier connector set to a `path.sh` is
+    emptied.
 - **The Windows sandbox** has no bind mounts and no Python. Its clone sessions get the same Node program, asking the
   session's proxy as the Python shim does (port and credentials from `PIKIBUN_EGRESS_STATUS`), behind a busybox `sh`
   launcher in the layout's `bin`, first on `PATH`, that runs `SANDBOX_GIT` for everything but `git clone`. Each step
