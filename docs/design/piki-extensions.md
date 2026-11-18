@@ -84,7 +84,16 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    older connector leaves out the API hosts it doesn't know.
 8. **In the sandbox, as the session owner.** A session with a sandbox and an egress proxy runs the command there, as
    one sandbox operation (`SessionPiki`'s sandbox command in `apps/runner/src/session/piki.ts`, through `bash` with every word quoted): it sees the host's
-   `/usr`, so the host's owner installs the command there. Its API requests go through the proxy, which adds the session
+   `/usr`, so the host's owner installs the command there. A command whose `/usr/bin` entry is a script starting a
+   program outside `/usr` names that install in its spec (`sandboxRoots`): `az` from Microsoft's .deb starts
+   `/opt/az/bin/python3`, and Arch's `/opt/azure-cli/bin/python`, so without them every `az` call ended with exit 127
+   and was reported as `az` missing. The Linux sandbox binds those directories read-only for that command's runs only,
+   where they exist (`--ro-bind-try`), and takes nothing but a directory under `/opt` other than `/opt/pikibun`
+   (`commandBindAllowed`). An exit 127 naming a program the script starts says that program is out of the sandbox's
+   sight (`sandboxMissingFile`), not that the command is missing; where it is under `/usr` or one of those roots,
+   which the sandbox does see, it says the install looks incomplete instead. Azure CLI extensions added for the host owner live in
+   their `~/.azure`, which the sandbox's own home hides, so `azure-devops` is added with `--system`, under the CLI's
+   install. Its API requests go through the proxy, which adds the session
    owner's access (see [credentialed APIs](egress.md#credentialed-apis-gh-without-a-token-in-the-sandbox)):
    - **Reads, always**: of api.github.com with the read-only GitHub App token for the workspace's repositories the
      session owner can read, on any host; of gitlab.com and dev.azure.com with the owner's own personal access token,

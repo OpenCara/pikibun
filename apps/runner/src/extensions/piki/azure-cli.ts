@@ -56,6 +56,7 @@ export const azureCliSpec: CliSpec = {
   ].join(" "),
   passEnv: name => name.startsWith("AZURE_") || name === "AZDEVOPS_EXT_PAT",
   tokenEnv: ["AZURE_DEVOPS_EXT_PAT"],
+  sandboxRoots: ["/opt/az", "/opt/azure-cli"],
   setEnv: { AZURE_CORE_NO_COLOR: "true", AZURE_CORE_ONLY_SHOW_ERRORS: "true", AZURE_CORE_DISABLE_PROGRESS_BAR: "true", AZURE_CORE_SURVEY_MESSAGE: "false",
     PYTHONIOENCODING: "utf-8" },
   refused(original) {
