@@ -407,6 +407,19 @@ describe("settings", () => {
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`)).toMatchObject({ source: "piki:auto-mode", settings: { models: "anthropic/claude-sonnet-*" } });
   });
 
+  test("Extensions shows a models setting with nothing readable in it as allowing no model, as Auto treats it", async () => {
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [],
+        extensions: [{ source: "piki:auto-mode", enabled: true, tools: "automatic", settings: { models: "x".repeat(201) } }] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("text:Auto mode · piki:auto-mode");
+    await app.press("text:Auto mode · piki:auto-mode");
+    await app.waitFor("id:auto-mode-models");
+    expect(app.texts().join(" ")).toContain("Auto chooses only among: none it can read.");
+  });
+
   test("Extensions warns that Sub-agents does nothing while Other sessions is off, and adds it from there", async () => {
     const app = await openSettings("workspaces", {
       [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [], extensions: [
