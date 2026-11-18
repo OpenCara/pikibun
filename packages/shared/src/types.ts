@@ -181,6 +181,7 @@ export interface Schedule {
   workspaceId: string;
   sessionId: string | null;
   originSessionId?: string;
+  originOwnerId?: string;
   ownerId: string;
   ownerName?: string;
   name: string;

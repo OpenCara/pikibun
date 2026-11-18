@@ -227,20 +227,13 @@ describe("a session's panel", () => {
     expect(app.texts().join(" ")).toContain("the schedule's model is no longer available");
     expect(app.texts().join(" ")).toContain("No scheduled prompts");
 
-    await app.press("text:Edit");
-    await app.waitFor("id:schedule-model");
-    await app.press("id:schedule-thinking");
-    await app.press("text:Low");
-    await app.press("id:schedule-save");
+    await app.press("text:Pause");
     await app.waitUntil(() => Boolean(bodyOf(app, "PATCH", `${ORIGIN}/api/sessions/s1/schedules/sc1`)));
-    const edited = bodyOf(app, "PATCH", `${ORIGIN}/api/sessions/s1/schedules/sc1`);
-    expect(edited.thinkingLevel).toBe("low");
-    expect(Object.keys(edited)).not.toContain("modelId");
-    expect(Object.keys(edited)).not.toContain("runIn");
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/sessions/s1/schedules/sc1`)).toEqual({ enabled: false });
 
-    await app.waitFor("id:schedules-workspace");
-    await app.press("id:schedules-workspace");
+    await app.press("text:Edit");
     await app.waitFor("id:workspace-schedules");
+    expect(app.shows("id:schedule-form")).toBe(false);
   });
 
   test("Schedules offers no choice of where a run goes: a new session each run is the workspace's", async () => {

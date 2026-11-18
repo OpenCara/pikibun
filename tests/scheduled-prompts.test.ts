@@ -792,7 +792,7 @@ test('a schedule made from a session is the workspace\'s: it shows there, and ru
   const f = await fixture(t);
   const { schedule } = await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Triage', runIn: 'child' })).json() as { schedule: Schedule };
   const listing = await workspaceListing(f.owner, workspacePath(f));
-  assert.deepEqual(listing.schedules.map(item => [item.id, item.originSessionId]), [[schedule.id, 'scheduled-session']]);
+  assert.deepEqual(listing.schedules.map(item => [item.id, item.originSessionId, item.originOwnerId]), [[schedule.id, 'scheduled-session', f.owner.user.id]]);
   f.sqlite.prepare("UPDATE sessions SET status = 'archived', archived_status = 'ready' WHERE id = 'scheduled-session'").run();
   const [outcome] = await runScheduledPrompts(f.env, Date.parse(schedule.nextRunAt!) + 1000);
   assert.ok(outcome && 'startedSessionId' in outcome, JSON.stringify(outcome));

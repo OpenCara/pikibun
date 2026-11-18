@@ -37,7 +37,7 @@ interface ScheduleRow {
   enabled: number; next_run_at: string | null; last_run_at: string | null; last_submission_id: string | null; last_session_id: string | null; last_error: string | null;
   created_at: string; updated_at: string;
 }
-type ListedRow = ScheduleRow & { owner_name?: string | null };
+type ListedRow = ScheduleRow & { owner_name?: string | null; origin_owner_id?: string | null };
 
 const runInOf = (row: Pick<ScheduleRow, 'session_id'>): ScheduleRunIn => row.session_id === null ? 'child' : 'session';
 const normal = <T extends ScheduleRow>(row: T): T => ({ ...row, session_id: row.session_id ?? null, origin_session_id: row.origin_session_id ?? null,
@@ -45,6 +45,7 @@ const normal = <T extends ScheduleRow>(row: T): T => ({ ...row, session_id: row.
 
 export function scheduleRecord(row: ListedRow, canManage?: boolean): Schedule {
   return { id: row.id, workspaceId: row.workspace_id, sessionId: row.session_id ?? null, ...(row.origin_session_id ? { originSessionId: row.origin_session_id } : {}),
+    ...(row.origin_session_id && row.origin_owner_id ? { originOwnerId: row.origin_owner_id } : {}),
     ownerId: row.owner_id, ...(row.owner_name ? { ownerName: row.owner_name } : {}), name: row.name, cron: row.cron, timeZone: row.time_zone, content: row.content,
     access: row.access, runIn: runInOf(row), oneShot: Number(row.one_shot ?? 1) === 1,
     ...(row.model_id ? { modelId: row.model_id } : {}), ...(row.thinking_level ? { thinkingLevel: row.thinking_level } : {}),
@@ -53,7 +54,8 @@ export function scheduleRecord(row: ListedRow, canManage?: boolean): Schedule {
     createdAt: row.created_at, updatedAt: row.updated_at, ...(canManage === undefined ? {} : { canManage }) };
 }
 
-const listedSQL = 'SELECT p.*, u.display_name AS owner_name FROM schedules p LEFT JOIN users u ON u.id = p.owner_id';
+const listedSQL = `SELECT p.*, u.display_name AS owner_name, o.owner_id AS origin_owner_id FROM schedules p
+  LEFT JOIN users u ON u.id = p.owner_id LEFT JOIN sessions o ON o.id = p.origin_session_id`;
 
 async function listed(env: Env, where: string, values: SqlValue[]): Promise<ListedRow[]> {
   return (await env.DB.query<ListedRow>(`${listedSQL} WHERE ${where} ORDER BY p.created_at, p.id`).bind(...values).all()).map(normal);

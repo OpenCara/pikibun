@@ -37,7 +37,6 @@ const errorLabels: Record<string, string> = {
   session_busy: "Skipped: the agent was busy",
   too_many_sessions: "Skipped: too many of the sessions its owner's schedules started are still open. Archive some",
   too_many_children: "Skipped: too many of the sessions its schedules started are still open. Archive some",
-  owner_unavailable: "Paused: its owner may no longer start sessions in this workspace. An owner or admin can take it over",
   connector_offline: "The host was offline",
   connector_unavailable: "The host was unavailable",
   connector_relay_error: "The host didn't answer",
@@ -49,6 +48,10 @@ const errorLabels: Record<string, string> = {
 
 function errorText(schedule: Schedule): string {
   const error = schedule.lastError!;
+  if (error === "owner_unavailable") {
+    return schedule.runIn === "child" ? "Paused: its owner may no longer start sessions in this workspace. An owner or admin can take it over"
+      : "Paused: its owner may no longer write to this session. The session owner, or a workspace owner or admin, can take it over";
+  }
   if (error === "model_unavailable") {
     return schedule.lastSessionId ? "Started a new session on the model of the session it was made from: the schedule's model is no longer available"
       : "Nothing ran: the schedule's model is no longer available. Choose another";
@@ -152,7 +155,8 @@ export function ScheduleForm(props: {
   const workspace = props.kind === "workspace";
   const models = () => props.models ?? [];
   const takesOver = Boolean(existing && existing.ownerId !== props.userId);
-  const fromSession = Boolean(existing?.originSessionId) && !takesOver;
+  const fromSession = Boolean(existing?.originSessionId) && existing?.originOwnerId === (takesOver ? props.userId : existing?.ownerId);
+  const losesSessionModel = workspace && Boolean(existing?.originSessionId && !existing.modelId) && !fromSession;
   const chosenModel = () => models().find(item => item.id === modelId());
   const levels = (): ThinkingLevel[] => modelId() ? offeredLevels(chosenModel()) : fromSession ? [...thinkingLevels] : [];
   const trustNeeded = () => workspace && Boolean(chosenModel()?.foreignHost) && (!existing || takesOver || modelId() !== (existing.modelId ?? ""));
@@ -184,7 +188,7 @@ export function ScheduleForm(props: {
       <CardBody>
         <If when={takesOver}>
           <Note testID="schedule-takeover">{`This schedule runs as ${existing?.ownerName ?? "someone else"}. Saving a change makes it yours: from then on it runs as you, with your access. Pausing or resuming it doesn't.${
-            workspace && existing?.originSessionId && !existing.modelId ? " It runs on the model of the session it was made from, which isn't yours: choose a model for it." : ""}`}</Note>
+            losesSessionModel ? " It runs on the model of the session it was made from, which isn't yours: choose a model for it." : ""}`}</Note>
         </If>
         <Field label="Message" hint={workspace ? "Opens a new session, as the schedule's owner, each time it runs" : "Sent to the agent as you, as if you typed it in the chat box"}>
           <TextField testID="schedule-content" multiline value={content()} onChange={value => content.set(value)} disabled={form.busy()} autoFocus={!existing}

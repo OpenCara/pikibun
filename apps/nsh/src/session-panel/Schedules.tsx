@@ -57,14 +57,14 @@ export function Schedules(props: PanelTabProps) {
   };
   const card = (schedule: () => Schedule) => (
     <ScheduleCard schedule={schedule()} models={listing.data()?.models} manage={manages(schedule())} busy={action.busy()} showOwner={schedule().ownerId !== props.session()?.ownerId}
-      onToggle={() => toggle(schedule())} onRunNow={() => runNow(schedule())} onEdit={() => editing.set(schedule())} onDelete={() => void remove(schedule())}
+      onToggle={() => toggle(schedule())} onRunNow={() => runNow(schedule())} onDelete={() => void remove(schedule())}
+      onEdit={() => { if (schedule().runIn === "child") workspaceSchedules(); else editing.set(schedule()); }}
       onOpenSession={sessionId => props.go({ name: "session", sessionId })} />
   );
   return (
     <TabPage testID="panel-schedules">
       <If when={!editing()}
-        else={<ScheduleForm kind={editing() !== "new" && (editing() as Schedule).runIn === "child" ? "workspace" : "session"} models={listing.data()?.models}
-          schedule={editing() === "new" ? null : editing() as Schedule} userId={session().user.id}
+        else={<ScheduleForm kind="session" schedule={editing() === "new" ? null : editing() as Schedule} userId={session().user.id}
           canSave={editing() === "new" ? canCreate() : manages(editing() as Schedule)} save={save}
           onDone={saved => { editing.set(null); if (saved) after(); }} />}>
         <Section bare title={`Scheduled prompts${wakes().length ? ` ${wakes().length}` : ""}`} info={<View style={{ gap: 8 }}>
@@ -89,6 +89,7 @@ export function Schedules(props: PanelTabProps) {
         <If when={madeHere().length}>
           <Section bare title={`Made here, run in new sessions ${madeHere().length}`} testID="schedules-made-here" info={<View style={{ gap: 8 }}>
             <Note>These schedules were made in this session, and belong to the workspace: each run starts a new session under this one, and they keep running once this session is archived.</Note>
+            <Note>Edit them in the workspace's Schedules, where you choose their model.</Note>
           </View>} action={<Button small variant="outline" icon="chevron-right" label="Workspace schedules" testID="schedules-workspace" onPress={workspaceSchedules} />}>
             <View style={{ gap: 12 }}>
               <Each of={madeHere()} key={schedule => schedule.id}>{card}</Each>

@@ -472,6 +472,35 @@ describe("settings", () => {
     await app.press("text:Edit");
     await app.waitFor("id:schedule-takeover");
     expect(app.texts().join(" ")).toContain("This schedule runs as Grace Hopper. Saving a change makes it yours");
+    expect(app.texts().join(" ")).not.toContain("choose a model for it");
+  });
+
+  test("a workspace schedule made from a session keeps that session's model while the session's owner runs it, and asks for one of anyone else", async () => {
+    const base = { workspaceId: "w1", sessionId: null, originSessionId: "s9", cron: "0 3 * * *", timeZone: "UTC", content: "Triage", access: "auto", runIn: "child",
+      oneShot: true, enabled: true, nextRunAt: null, lastRunAt: null, lastSubmissionId: null, lastSessionId: null, lastError: null, createdAt: "2026-11-01T00:00:00.000Z",
+      updatedAt: "2026-11-01T00:00:00.000Z", canManage: true };
+    const mine = { ...base, id: "sc3", name: "Mine", ownerId: "u1", originOwnerId: "u1", createdBy: "u1" };
+    const theirs = { ...base, id: "sc4", name: "Theirs", ownerId: "u2", ownerName: "Grace Hopper", originOwnerId: "u2", createdBy: "u2" };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/schedules`]: { body: { schedules: [mine, theirs], canCreate: true, admin: true,
+        models: [{ id: "m1", name: "Claude Sonnet", provider: "anthropic", modelId: "claude-sonnet", host: "c1" }] } },
+      [`PATCH ${ORIGIN}/api/workspaces/w1/schedules/sc3`]: { body: { schedule: mine } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:schedule-sc3");
+    expect(app.texts().join(" ")).toContain("on its session's model");
+    await app.press("text:Edit >> nth=0");
+    await app.waitFor("id:schedule-form");
+    expect(app.texts().join(" ")).toContain("Its session's model");
+    await app.press("id:schedule-save");
+    await app.waitUntil(() => Boolean(bodyOf(app, "PATCH", `${ORIGIN}/api/workspaces/w1/schedules/sc3`)));
+    expect(Object.keys(bodyOf(app, "PATCH", `${ORIGIN}/api/workspaces/w1/schedules/sc3`))).not.toContain("modelId");
+    await app.waitFor("id:schedule-sc4");
+    await app.press("text:Edit >> nth=1");
+    await app.waitFor("id:schedule-takeover");
+    expect(app.texts().join(" ")).toContain("which isn't yours: choose a model for it");
+    expect(app.texts().join(" ")).not.toContain("Its session's model");
   });
 });
 
