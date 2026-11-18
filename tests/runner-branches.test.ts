@@ -66,7 +66,7 @@ test("a clone session on the host reports its clones' branches of the workspace'
     assert.equal(reports.length, count, `reports so far: ${JSON.stringify(reports)}`);
   };
   await reported(1);
-  assert.deepEqual(reports[0], [id, []]);
+  assert.deepEqual(reports[0], [id, []], "no clones, so not even the session's branch");
   assert.equal(grants, 2, "the grant that failed at open was asked for again");
 
   const git = join((session.sandbox as HostWorkspace).worktree, "alpha", ".git");
@@ -77,7 +77,7 @@ test("a clone session on the host reports its clones' branches of the workspace'
   await session.submit(await ticket(id, "submit"), { content: "Fix the parser and open a pull request.", requestId: "first" }, "write");
   await idle(session);
   await reported(2);
-  assert.deepEqual(reports[1], [id, [{ repository: "acme/alpha", branch: "fix-parser" }]]);
+  assert.deepEqual(reports[1], [id, [{ repository: "acme/alpha", branch: "fix-parser" }, { repository: "acme/alpha", branch: `pikibun/${id}` }]]);
 
   await session.submit(await ticket(id, "submit"), { content: "Anything else?", requestId: "second" }, "write");
   await idle(session);
