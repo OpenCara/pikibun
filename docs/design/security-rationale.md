@@ -159,7 +159,7 @@ connector fetched since, at the version Pikibun's control plane pins. What bound
   `--no-remote-installs` refuses it as it refuses every install asked for in Pikibun. A connector run from source never
   uses pins.
 - **Versions only go up.** A host runs the newest of the pinned package, the newest managed version it has run before
-  and its bundled copy (whose version is the committed one, which the extension release must publish), and installs a
+  and its bundled copy (whose version is the extension's latest release tag at the connector release's commit), and installs a
   pin only when it would run. So neither a mistaken pin nor a compromised control plane takes a host back to an older
   version, with whatever that version got wrong.
 - **A failed pin runs nothing.** A package that fails a check is deleted; the host runs what it ran before, so a

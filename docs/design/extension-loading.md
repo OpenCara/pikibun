@@ -94,7 +94,8 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
 7. **The newest version a host can vouch for runs.** For each `piki:` source the connector has up to three candidates:
    - the pinned package, once it has passed decision 6;
    - the newest managed version this host has loaded before, while it is still installed;
-   - its bundled copy, whose version is the one committed in `extensions/<name>/package.json`.
+   - its bundled copy, whose version is its latest `ext-<name>-v` tag at the connector release's commit (the one
+     committed in `extensions/<name>/package.json` where it has none, and in a connector run from source).
 
    It runs the candidate with the highest version, compared as semantic versions, and nothing where it has none.
    That is the whole rule: no candidate is passed over for any other reason, neither the bundled copy because a pin
@@ -126,9 +127,10 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
    with `--no-remote-installs`; and one started without `--managed-extensions`. The last two are the host owner's own
    way back to the bundled copies.
 
-   For the comparison to mean anything, the committed version in `extensions/<name>/package.json` has to be the
-   published one: the extension release refuses a tag that differs from it (today it sets the tag's version, and the
-   committed one need not match).
+   For the comparison to mean anything, a bundled copy's version has to be a published one: an extension's tag sets
+   its version, as the connector's does, and the connector release stamps each bundled copy with the extension's latest
+   tag at its commit (`scripts/set-release-version.mjs`). A bundled copy with changes since that tag still reports the
+   tag, so a pin of that version replaces it with the published one, never with an older one.
 
    Some sources run only from their bundled copy, whatever is pinned: a list in the connector, which holds
    `piki:prompt-audit` until phase 4 (it needs the host's model keys, which the extension process of phase 2 won't
@@ -227,7 +229,7 @@ extension process doesn't have. Until then it runs from its bundled copy, in the
 | The pin's type, the list, its parser, the scope | `packages/shared/src/managed-extensions.ts` (new) |
 | `managed` in the sync answer | `packages/shared/src/host-extensions.ts` (`ExtensionsSyncAnswer`, `parseExtensionsSyncAnswer`); `apps/server/src/extensions.ts` |
 | Installing, checking the lock file, marking a version loaded, pruning | `apps/runner/src/extensions/store.ts` |
-| The committed version is the published one | `.github/workflows/release-extensions.yml`, `scripts/set-release-version.mjs` |
+| A bundled copy's version is its latest published one | `.github/workflows/release.yml`, `.github/workflows/release-extensions.yml`, `scripts/set-release-version.mjs`, `scripts/release-versions.mjs` |
 | Choosing among the pinned package, the newest loaded version and the bundled copy for each `piki:` source | `apps/runner/src/extensions/load.ts` (`loadInstalled`), `host.ts` (`HostExtensions`). `refreshIfChanged` tells store sources from bundled ones by `factories`; a managed source has files, so it needs a mark of its own |
 | Passing the pins on | `apps/runner/src/connector.ts` (`syncExtensions`) |
 | The option, and the list | `apps/runner/src/connect-cli.ts`, `extensions-cli.ts` |
@@ -250,7 +252,7 @@ Where the code (#310) settles what the text above leaves open, or differs from i
 - **A version run before that no longer loads** is deleted like a failed pin, and the next newest one it ran is the
   candidate. Its files are on the host already, so a failure to load them isn't the kind that passes.
 - **A damaged index** (`managed.json` that doesn't parse) stops pruning and installs rather than count as empty: nothing
-  is deleted or replaced, the host runs its bundled copies, and the log says why. A bundled copy whose committed version
+  is deleted or replaced, the host runs its bundled copies, and the log says why. A bundled copy whose version
   doesn't parse counts as no candidate, and is logged.
 - **Which pins count.** Besides the bundled-only list, the connector ignores a pin for a `piki:` source whose own copy
   isn't a hook package, or which the catalogue it was built with names as a command, session-tool or control-plane

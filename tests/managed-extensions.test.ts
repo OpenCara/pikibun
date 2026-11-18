@@ -111,7 +111,7 @@ test("the pins Pikibun's release holds: none yet, each checked field by field, a
   assert.equal(compareVersions("1.0.0+build.1", "1.0.0"), 0);
 });
 
-test("a bundled copy's version is the one committed in its package, which the extension release publishes", async () => {
+test("a bundled copy's version is its package's: as committed from source, its latest release tag in a connector release", async () => {
   for (const extension of connectorPikiExtensions.filter(item => item.version !== undefined)) {
     const manifest = JSON.parse(await readFile(join(import.meta.dirname, "..", "extensions", extension.info.name, "package.json"), "utf8"));
     assert.equal(extension.version, manifest.version, extension.info.source);
