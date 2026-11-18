@@ -38,7 +38,7 @@ const convertBody = fields({ after: fields({ createdAt: textField('after.created
 interface DelegationRow { connector_id: string; user_id: string; public_key: string }
 interface OfferRow {
   connector_id: string; session_id: string; user_id: string; public_key: string; title: string; created_at: string; host_environment: number;
-  provider: string; model_id: string; attached: number; working: number; reported_at: string;
+  provider: string; model_id: string; attached: number; working: number; archived: number | null; reported_at: string;
 }
 interface SettingsRow {
   user_id: string; public_key: string | null; version: number; statement_json: string | null; signature: string | null;
@@ -125,9 +125,13 @@ async function storeSettings(env: Env, userId: string, signed: Signed<StatementO
 }
 
 type ReportedSession = {
-  id: string; title: string; createdAt: string; attached: boolean; hostEnvironment: boolean; working: boolean;
+  id: string; title: string; createdAt: string; attached: boolean; hostEnvironment: boolean; working: boolean; archived: boolean | null;
   model: { provider: string; modelId: string }; mark: Signed<StatementOf<'session'>>;
 };
+
+function reportsArchived(value: unknown): boolean {
+  return Array.isArray(value) && value.some(item => !!item && typeof item === 'object' && 'archived' in item);
+}
 
 async function reportedSessions(value: unknown, key: string): Promise<ReportedSession[]> {
   if (!Array.isArray(value) || value.length > MAX_REPORTED) fail(400, 'invalid_report', 'Invalid portable session report.');
@@ -141,14 +145,15 @@ async function reportedSessions(value: unknown, key: string): Promise<ReportedSe
     const modelId = plainText(model?.modelId, 200);
     if (!input || typeof input !== 'object' || typeof input.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(input.id) || !title
       || typeof input.createdAt !== 'string' || Number.isNaN(Date.parse(input.createdAt)) || typeof input.attached !== 'boolean'
-      || typeof input.hostEnvironment !== 'boolean' || typeof input.working !== 'boolean' || !provider || !modelId || seen.has(input.id)) continue;
+      || typeof input.hostEnvironment !== 'boolean' || typeof input.working !== 'boolean' || !provider || !modelId || seen.has(input.id)
+      || (input.archived !== undefined && input.archived !== null && typeof input.archived !== 'boolean')) continue;
     let mark: Signed<StatementOf<'session'>>;
     try { mark = await verifiedSigned(input.mark, 'session'); }
     catch { continue; }
     if (mark.statement.session !== input.id || mark.statement.key !== key) continue;
     seen.add(input.id);
     reported.push({ id: input.id, title, createdAt: input.createdAt, attached: input.attached, hostEnvironment: input.hostEnvironment, working: input.working,
-      model: { provider, modelId }, mark });
+      archived: typeof input.archived === 'boolean' ? input.archived : null, model: { provider, modelId }, mark });
   }
   return reported;
 }
@@ -189,9 +194,10 @@ async function identityReport(c: AppContext): Promise<Response> {
   for (const session of sessions) {
     statements.push(
       c.env.DB.query<never>(`INSERT INTO portable_offers (connector_id, session_id, user_id, public_key, title, created_at, host_environment, provider, model_id,
-        attached, working, reported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        attached, working, archived, reported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(connector.id, session.id, connector.owner_id, key, session.title, session.createdAt, session.hostEnvironment ? 1 : 0,
-          session.model.provider, session.model.modelId, session.attached ? 1 : 0, session.working ? 1 : 0, timestamp),
+          session.model.provider, session.model.modelId, session.attached ? 1 : 0, session.working ? 1 : 0,
+          session.archived === null ? null : session.archived ? 1 : 0, timestamp),
       c.env.DB.query<never>('UPDATE sessions SET portable_key = ? WHERE id = ? AND owner_id = ? AND connector_id = ? AND portable_key IS NOT NULL')
         .bind(key, session.id, connector.owner_id, connector.id),
     );
@@ -202,11 +208,19 @@ async function identityReport(c: AppContext): Promise<Response> {
     try { settings = await verifiedSigned(input.settings, 'settings'); } catch { settings = undefined; }
     if (settings && settings.statement.key === key) await storeSettings(c.env, connector.owner_id, settings, true);
   }
+  const archived = reportsArchived(input.sessions) ? await archivedHere(c.env, connector.id, connector.owner_id, sessions) : undefined;
   const pending = await c.env.DB.query<SettingsRow>('SELECT * FROM portable_settings WHERE user_id = ?').bind(connector.owner_id).first();
-  if (pending?.pending_version && pending.pending_json && Number(pending.pending_version) > Number(pending.version)) {
-    return c.json({ sign: { version: Number(pending.pending_version), settings: JSON.parse(pending.pending_json) } });
-  }
-  return c.json({});
+  const sign = pending?.pending_version && pending.pending_json && Number(pending.pending_version) > Number(pending.version)
+    ? { version: Number(pending.pending_version), settings: JSON.parse(pending.pending_json) } : undefined;
+  return c.json({ ...(sign ? { sign } : {}), ...(archived ? { archived } : {}) });
+}
+
+async function archivedHere(env: Env, connectorId: string, userId: string, sessions: ReportedSession[]): Promise<string[]> {
+  const attached = new Set(sessions.filter(session => session.attached).map(session => session.id));
+  if (!attached.size) return [];
+  const rows = await env.DB.query<{ id: string }>(`SELECT id FROM sessions WHERE connector_id = ? AND owner_id = ? AND portable_key IS NOT NULL
+    AND status = 'archived' AND detached_at IS NULL`).bind(connectorId, userId).all();
+  return rows.map(row => row.id).filter(sessionId => attached.has(sessionId)).sort();
 }
 
 async function signedSettings(c: AppContext): Promise<Response> {
@@ -253,8 +267,10 @@ export async function portableOffers(env: Env, userId: string): Promise<Portable
     FROM portable_offers o
     JOIN connectors c ON c.id = o.connector_id AND c.owner_id = o.user_id AND c.revoked_at IS NULL
     JOIN identity_delegations d ON d.connector_id = o.connector_id AND d.user_id = o.user_id AND d.public_key = o.public_key
-    WHERE o.user_id = ? AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = o.session_id AND s.connector_id = o.connector_id
+    WHERE o.user_id = ? AND COALESCE(o.archived, 0) = 0 AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = o.session_id AND s.connector_id = o.connector_id
       AND (s.status <> 'archived' OR (o.attached = 1 AND s.detached_at IS NULL)))
+      AND NOT (o.archived IS NULL AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = o.session_id AND s.owner_id = o.user_id
+        AND s.status = 'archived' AND s.detached_at IS NULL))
     ORDER BY o.created_at DESC, o.session_id LIMIT 500`).bind(workspaceId ?? '', userId).all();
   return rows.map(row => ({ id: row.session_id, title: row.title, createdAt: row.created_at, connectorId: row.connector_id, hostName: row.host_name,
     hostEnvironment: Number(row.host_environment) === 1, working: Number(row.working) === 1, attachedElsewhere: Number(row.attached) !== 1,
@@ -345,7 +361,7 @@ async function attachSession(c: AppContext): Promise<Response> {
         .bind(now(), sessionId, userId),
       c.env.DB.query<never>('DELETE FROM portable_offers WHERE session_id = ? AND user_id = ?').bind(sessionId, userId),
     ] : [
-      c.env.DB.query<never>('UPDATE portable_offers SET attached = CASE WHEN connector_id = ? THEN 1 ELSE 0 END WHERE session_id = ? AND user_id = ?').bind(connectorId, sessionId, userId),
+      c.env.DB.query<never>('UPDATE portable_offers SET attached = CASE WHEN connector_id = ? THEN 1 ELSE 0 END, archived = 0 WHERE session_id = ? AND user_id = ?').bind(connectorId, sessionId, userId),
     ]),
     auditStatement(c.env, userId, 'session.attached', workspaceId, targetId, { connectorId, ...(reuse ? { returned: true } : {}),
       ...(targetId !== sessionId ? { hostSessionId: sessionId } : {}) }),

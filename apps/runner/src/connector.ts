@@ -175,6 +175,7 @@ export interface ConnectorRuntime {
   view?(sessionId: string, options: { since?: string; brief?: boolean }): Promise<LocalView>;
   entries?(sessionId: string, options: { conversation: string; before: string; limit: number; brief?: boolean }): Promise<LocalPage | null>;
   portable?(): Promise<PortableReport[]>;
+  portableArchived?(archived: readonly string[]): Promise<void>;
 }
 
 export class LocalViewUnavailable extends Error {
@@ -489,10 +490,12 @@ export class LocalConnector {
     const delegation = await identity.delegation(new URL(state.controlPlaneUrl).origin, state.connectorId);
     const key = await identity.key();
     const sessions = (await runtime.portable()).slice(0, IDENTITY_REPORT_LIMIT);
-    const answer = z.object({ sign: z.object({ version: z.number().int().positive(), settings: z.unknown() }).strict().optional() }).strict()
+    const answer = z.object({ sign: z.object({ version: z.number().int().positive(), settings: z.unknown() }).strict().optional(),
+      archived: z.array(z.string().max(128)).max(IDENTITY_REPORT_LIMIT).optional() }).strict()
       .parse(await this.calls.callback(generation, "/api/connectors/self/identity", {
         delegation, rotations: key.rotations, settings: await identity.settings() ?? null, sessions,
       }, IDENTITY_ANSWER_LIMIT) ?? {});
+    if (answer.archived) await runtime.portableArchived?.(answer.archived).catch(() => {});
     if (answer.sign) {
       const settings = await identity.signSettings(answer.sign.version, parseSettings(answer.sign.settings));
       await this.calls.callback(generation, "/api/connectors/self/identity/settings", { settings });
@@ -639,6 +642,7 @@ async function defaultRuntime(config: RunnerConfig): Promise<ConnectorRuntime> {
     view: (sessionId, options) => service.localView(sessionId, options),
     entries: (sessionId, options) => service.localEntries(sessionId, options),
     portable: () => service.portableSessions(),
+    portableArchived: archived => service.portableArchived(archived),
   };
 }
 
