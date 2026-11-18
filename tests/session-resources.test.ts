@@ -8,8 +8,8 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
-import { RunnerService } from '../apps/runner/src/server.js';
-import { sha256 } from '../packages/shared/src/crypto.js';
+import { createRunnerApp, RunnerService } from '../apps/runner/src/server.js';
+import { sha256, signToken } from '../packages/shared/src/crypto.js';
 import { toolNames, type AuthorizationRequest, type RunnerAction, type RunnerBinding, type RunnerTicket } from '../packages/shared/src/types.js';
 import { cpuTime, parseSessionResources, resourceBytes, resourceLines, type SessionResourcesView } from '../packages/shared/src/session-resources.js';
 import {
@@ -18,6 +18,7 @@ import {
 } from '../apps/runner/src/session-resources.js';
 
 const MiB = 1024 * 1024;
+const SECRET = 'runner-resources-secret-not-a-production-secret';
 
 async function temporary(t: test.TestContext, prefix: string): Promise<string> {
   const directory = await mkdtemp(join(await realpath(tmpdir()), prefix));
@@ -226,7 +227,7 @@ test('a session on the host shows the CPU and memory of the command it runs, and
   const models = createModels();
   models.setProvider(faux.provider);
   const service = new RunnerService({
-    dataDir: directory, sharedSecret: 'runner-resources-secret-not-a-production-secret', controlPlaneUrl: 'http://127.0.0.1:8787', allowFaux: true, unsandboxed: true,
+    dataDir: directory, sharedSecret: SECRET, controlPlaneUrl: 'http://127.0.0.1:8787', allowFaux: true, unsandboxed: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
   });
@@ -234,18 +235,25 @@ test('a session on the host shows the CPU and memory of the command it runs, and
   t.after(() => service.close());
   const id = 'resources-session';
   const session = await service.provision(binding(id), await ticket(id, 'create'));
-  assert.equal((await session.view()).resources?.processes, 0);
+  const before = await session.resources();
+  assert.equal(before.processes, 0);
+  assert.equal((await session.view() as unknown as Record<string, unknown>).resources, undefined, 'the view stays as it was: resource use is asked for on its own');
   await session.submit(await ticket(id, 'submit'), { content: 'Work.', requestId: 'first', admissionId: await sha256('resources first') }, 'write');
   let running: SessionResourcesView | undefined;
   for (let attempt = 0; attempt < 200 && !running; attempt++) {
-    const resources = (await session.view()).resources;
+    const resources = await session.resources();
     if (resources && resources.processes > 0 && resources.memoryBytes! > 0) running = resources;
     else await delay(50);
   }
   assert.ok(running, 'the running command shows');
   assert.equal(running.source, 'processes');
   for (let count = 0; count < 1000 && (await session.view()).busy; count++) await delay(20);
-  const after = (await session.view()).resources!;
+  const app = createRunnerApp(service);
+  const response = await app.request(`/v1/sessions/${id}/resources`, { method: 'POST', body: '{}',
+    headers: { authorization: `Bearer ${await signToken({ ...await ticket(id, 'resources'), bodyHash: await sha256('{}') }, SECRET)}` } });
+  assert.equal(response.status, 200);
+  const after = (await response.json() as { resources: SessionResourcesView }).resources;
+  assert.deepEqual(parseSessionResources(after), after);
   assert.equal(after.processes, 0);
   assert.ok(after.cpuSeconds! >= 1, `${after.cpuSeconds} s of CPU time`);
   assert.ok(after.peakMemoryBytes! > 10 * MiB, `${after.peakMemoryBytes} bytes at most`);

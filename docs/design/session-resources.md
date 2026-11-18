@@ -1,10 +1,22 @@
 # Session resources
 
 Each session's **Details** tab shows what the session uses of its host's hardware: CPU, memory, processes, GPU memory
-and disk. The host measures it, since nothing else can, and sends it with the session's view (`SessionView.resources`,
-`SessionResourcesView` in `packages/shared/src/session-resources.ts`); the client words it (`resourceLines`). The
-Pikibun server passes it through as it passes the rest of the view, so this needs no schema change, no callback and no
-new server: a session on an older connector simply has no `resources`, and the section isn't shown.
+and disk. The host measures it, since nothing else can (`SessionResourcesView` in
+`packages/shared/src/session-resources.ts`), and the client words it (`resourceLines`).
+
+## Transport
+
+The client asks `GET /api/sessions/:id/resources` every 5 seconds while the tab is open. The Pikibun server checks that
+the asker may read the session and passes the request to its host as the runner action `resources` (permission
+`read`, like `artifacts`: allowed on a frozen session, during a move, and in a packed one), and checks the answer's
+shape strictly (`parseSessionResources`) before returning it. It answers `{ resources: null }` without asking the host
+for an archived or packed session, which runs nothing, and for a host whose connector doesn't advertise
+`sessionResources`, so an older connector is never sent an action it would refuse; the client then shows no section.
+
+It is not part of the session's view. The view is compared between polls and sent as patches: a value that changes
+every few seconds while commands run would make a new revision each time, and an idle session's view must stay the
+same from one read to the next (several runner tests rely on that). Asked on its own, it costs nothing unless someone
+has the tab open. It needs no schema change: nothing is stored.
 
 ## What is measured
 
@@ -50,18 +62,19 @@ macOS's `ps` has no children time, so there a short-lived process counts only fo
 ## When it samples
 
 Sampling costs a read of every process's `stat` file, so it runs only while the session has processes: every 2 seconds
-from the first root on, while any is left (`ProcessRoots.onChange`), on an unreferenced timer. A view asked for more
-than 2 seconds after the last sample, or after a process started or ended, samples again first; otherwise it gets the
-last sample, so frequent view polls see a stable value and send no patch for it. The CPU rate is taken over at least a
-second. What a root process used after its last sample is the part that can be lost, so the interval bounds it. Disk is walked at most every 5 minutes, in the background, and
-only once someone looks at the session: one directory handle at a time, `lstat` without following links, stopping at
+from the first root on, while any is left (`ProcessRoots.onChange`), on an unreferenced timer. A request more than 2
+seconds after the last sample, or after a process started or ended, samples again first; otherwise it gets the last
+sample. The CPU rate is taken over at least a second. What a root process used after its last sample is the part that
+can be lost, so the interval bounds it.
+
+Disk is walked at most every 5 minutes, in the background, and only once someone asks: one directory handle at a time, `lstat` without following links, stopping at
 200,000 entries or 10 seconds and saying so (`diskPartial`). GPU memory reads `nvidia-smi` at most every 10 seconds,
 only while the session has processes, and never again on a host where it failed.
 
 ## Who sees it
 
-Everyone who can read the session's view, as for its token usage and context: the workspace's members and the session's
-grantees. A share link's view (`sharedView`) keeps entries only, so link readers don't see it, as they don't see the
+Everyone who may read the session, as for its token usage and context: the workspace's members and the session's
+grantees, each asking as themselves. There is no share-link route, so link readers don't see it, as they don't see the
 host. It says nothing of other sessions on the host.
 
 ## Not done

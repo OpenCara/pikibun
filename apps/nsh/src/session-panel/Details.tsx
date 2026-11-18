@@ -53,7 +53,7 @@ export function Details(props: DetailsProps) {
             <If when={props.view()?.tunnel}>{() => <TunnelSection {...props} current={current()} canStop={canWrite() && !archived()} />}</If>
             <If when={props.view()?.context}>{usage => <ContextSection usage={usage()} />}</If>
             <If when={props.view()?.usage}>{usage => <UsageSection usage={usage()} />}</If>
-            <If when={parseSessionResources(props.view()?.resources)}>{resources => <ResourcesSection resources={resources()} />}</If>
+            <If when={!archived()}><SessionResources sessionId={current().id} /></If>
             <HostSection {...props} current={current()} />
             <If when={props.view()?.extensions}>
               {extensions => <ExtensionsSection extensions={extensions()} host={props.hosts()?.find(item => item.id === current().connectorId)} go={props.go} />}
@@ -171,6 +171,11 @@ export function UsageSection(props: { usage: SessionUsageView }) {
 }
 
 const resourceIcons: Record<ResourceLine["key"], Parameters<typeof Icon>[0]["name"]> = { cpu: "clock", memory: "database", processes: "list", gpu: "monitor", disk: "folder" };
+
+function SessionResources(props: { sessionId: string }) {
+  const listing = createResource<{ resources: unknown }>(() => `/api/sessions/${segment(props.sessionId)}/resources`, 5000);
+  return <If when={parseSessionResources(listing.data()?.resources)}>{resources => <ResourcesSection resources={resources()} />}</If>;
+}
 
 export function ResourcesSection(props: { resources: SessionResourcesView }) {
   const how = () => (props.resources.source === "cgroup" ? "its resource groups on the host, which hold its commands and servers"

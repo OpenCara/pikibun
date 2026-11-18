@@ -44,6 +44,7 @@ import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { HelperWorkspace } from "./helper-workspace.js";
 import { SessionResources } from "./session-resources.js";
+import type { SessionResourcesView } from "../../../packages/shared/src/session-resources.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { BranchReports } from "./session/branch-reports.js";
@@ -1373,8 +1374,11 @@ export class RunnerSession {
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),
       commands: async () => (this.#frozen || this.#packed || this.closing ? [] : this.#commands.list()),
       usage: key => this.#usage.get(key),
-      resources: () => this.#resources.view(),
     });
+  }
+
+  resources(): Promise<SessionResourcesView> {
+    return this.#resources.view();
   }
 
   private async extensionCommands(): Promise<ExtensionCommand[]> {
