@@ -21,7 +21,7 @@ The prerequisites check runs only for a server release, not on pull requests: a 
 is merged before the connector it names is released, and that order is right.
 
 Already enforced before this note, so their lessons only point at the check: migrations for both providers
-(`tests/migrations.test.ts`), an extension tag repeating its committed version (`scripts/set-release-version.mjs`), the
+(`tests/migrations.test.ts`), a bundled extension's version from its latest release tag (`scripts/set-release-version.mjs`), the
 upstream workarounds list (`tests/upstream-workarounds.test.ts`), the Native Shell pin (`tests/nsh-download.test.ts`) and
 the old file tool names (`tests/pi-tool-names.test.ts`).
 

@@ -2,7 +2,9 @@ name: Release pikibun (npm)
 # Pushing a cli-v1.2.3 tag (cli-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then publishes the
 # `pikibun` connector from packages/cli to npm, a prerelease to the `next` dist-tag. The tag decides the version:
 # scripts/set-release-version.mjs sets it in package.json and npm-shrinkwrap.json before building, so no version bump
-# needs committing first. The other release lines are in release-check.yml.
+# needs committing first. It stamps each extension the connector bundles with that extension's latest ext-<name>-v tag
+# at the release commit (its committed version if it has none), which connectors compare with the version Pikibun pins
+# (managed packages, docs/design/extension-loading.md). The other release lines are in release-check.yml.
 # npm auth: a trusted publisher on npmjs.com for this workflow file (release.yml, keep its name) and environment
 # `release`, or an NPM_TOKEN secret.
 on:
@@ -32,6 +34,9 @@ jobs:
       id-token: write # npm trusted publishing and provenance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The whole history with its tags: the bundled extensions' versions are their latest ext-<name>-v tags.
+          fetch-depth: 0
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
@@ -44,8 +49,9 @@ jobs:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
       - run: pnpm install --frozen-lockfile
-      # The tag's version, in the manifest and the shrinkwrap alike (prepublishOnly checks they agree); the build bundles it.
-      - name: Set the connector version from the tag
+      # The tag's version, in the manifest and the shrinkwrap alike (prepublishOnly checks they agree), and each bundled
+      # extension's latest release; the build bundles them.
+      - name: Set the connector's and its bundled extensions' versions from the tags
         env:
           VERSION: ${{ needs.check.outputs.version }}
         run: node scripts/set-release-version.mjs "$VERSION" cli
