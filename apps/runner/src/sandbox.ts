@@ -49,7 +49,6 @@ export interface SandboxExecutionOptions {
   limits?: CommandLimits;
   gpu?: boolean;
   signal?: AbortSignal;
-  /** Program installs under /opt the command needs, bound read-only where they exist (commandBindAllowed). */
   binds?: readonly string[];
 }
 
@@ -322,7 +321,6 @@ export async function pinOwnerConfig(path: string, configText: string): Promise<
 const SERVICE_BIND_REFUSED = ["/", "/root", "/home", "/var", "/usr", "/lib", "/lib64", "/opt", "/bin", "/sbin", "/boot", "/mnt", "/media", "/snap", "/srv", "/nix"];
 const SERVICE_BIND_REFUSED_TREES = ["/etc", "/proc", "/dev", "/sys", "/run", SANDBOX_TMP, "/sessions"];
 
-/** A program's install a command may see, read-only: a directory under /opt, never Pikibun's own. */
 export function commandBindAllowed(path: string): boolean {
   if (!isAbsolute(path) || resolve(path) !== path || /[\x00-\x1f\x7f]/.test(path)) return false;
   return path.startsWith("/opt/") && path !== "/opt/pikibun" && !path.startsWith("/opt/pikibun/");

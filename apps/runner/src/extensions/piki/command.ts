@@ -17,8 +17,6 @@ export interface CliSpec {
   passEnv: (name: string) => boolean;
   tokenEnv: readonly string[];
   setEnv: Record<string, string>;
-  /** Where the command's install lives outside /usr, for a /usr/bin wrapper that starts a program there (az's /opt/az, /opt/azure-cli):
-   *  the session's sandbox, which sees only the host's /usr, binds these read-only where they exist. */
   sandboxRoots?: readonly string[];
   refused(args: readonly string[]): string | undefined;
   writes(args: readonly string[]): string | undefined;
@@ -176,7 +174,6 @@ export function runCli(spec: Pick<CliSpec, "command" | "windowsCommand" | "passE
   });
 }
 
-/** The program a wrapper script starts that the sandbox lacks, as bash or sh reports it ("/usr/bin/az: line 2: /opt/az/bin/python3: No such file or directory"). */
 export function sandboxMissingFile(command: string, output: string): string | undefined {
   const match = /^[^\n:]*: (?:line )?\d+: (?:exec: )?(\/[^\n:]+): (?:No such file or directory|not found)$/m.exec(output);
   return match && match[1] !== command && !match[1]!.endsWith(`/${command}`) ? match[1] : undefined;

@@ -56,7 +56,6 @@ export const azureCliSpec: CliSpec = {
   ].join(" "),
   passEnv: name => name.startsWith("AZURE_") || name === "AZDEVOPS_EXT_PAT",
   tokenEnv: ["AZURE_DEVOPS_EXT_PAT"],
-  // /usr/bin/az is a script that starts the CLI's own Python: /opt/az/bin/python3 from Microsoft's .deb, /opt/azure-cli/bin/python from Arch's package.
   sandboxRoots: ["/opt/az", "/opt/azure-cli"],
   setEnv: { AZURE_CORE_NO_COLOR: "true", AZURE_CORE_ONLY_SHOW_ERRORS: "true", AZURE_CORE_DISABLE_PROGRESS_BAR: "true", AZURE_CORE_SURVEY_MESSAGE: "false",
     PYTHONIOENCODING: "utf-8" },
