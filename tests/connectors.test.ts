@@ -1322,7 +1322,7 @@ test('with their GitHub reach turned on, the session owner\'s own messages open 
   assert.equal(off.code, 'repository_not_pinned');
   assert.match(off.error, /act on any GitHub repository they can access \(Settings → Workspaces → Your GitHub reach\), or add it to the workspace\.$/);
   await denied(await read(), 403, 'repository_not_pinned');
-  assert.deepEqual(calls, [], 'refused before GitHub is asked anything');
+  assert.equal(calls.length, 0, 'refused before GitHub is asked anything');
 
   assert.deepEqual(await json(await s.creator.request('PUT', reach, { anyRepository: true })), { settings: { anyRepository: true } });
   assert.deepEqual(await json(await s.host.request('GET', reach)), { settings: { anyRepository: false } }, 'each member\'s reach is their own');

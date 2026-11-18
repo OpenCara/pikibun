@@ -532,7 +532,11 @@ could use it. Instead the proxy adds the credential, the way the Git relay does,
   instead of the plain placeholder (`apiWriteToken`). The proxy knows a lease only until the call ends; its requests
   then go with the session's **write** credential where the control plane gives one, and a write without a lease, or
   with one it doesn't know, is refused. Sandbox operations run one at a time per session, so no other command of the
-  session runs while a lease holds. GitHub REST reads of a repository the read credential covers keep that credential
+  session runs while a lease holds. A lease of a call whose message the session owner sent asks for its write credential
+  with `reach: "any"` (`SessionPiki#runCommand`); the Pikibun server marks the owner's credential `anyRepository` only
+  where they turned their [GitHub reach](../github.md#repositories-outside-the-workspace) on, and the proxy then uses it
+  for a repository no credential names (`credentialFor`). Grants are cached per access and reach, so another sender's
+  lease never gets the wider credential. Why: [security rationale](security-rationale.md#github-repositories-outside-the-workspace). GitHub REST reads of a repository the read credential covers keep that credential
   under a lease: the owner's sign-in has one hourly quota for all of their sessions and Pikibun's own reads, and a
   lease's call is usually one that mostly reads (`gh run watch` polls; `gh pr create` reads before it writes), so those
   reads go on the App's quota instead. GraphQL, which may ask about the owner (`viewer`), and reads outside the
@@ -554,7 +558,7 @@ could use it. Instead the proxy adds the credential, the way the Git relay does,
     (`actions`, `checks`, `contents`, `deployments`, `discussions`, `issues`, `metadata`, `pages`, `pull_requests`,
     `statuses`), shared while it has 20 minutes left. Any host running the session gets these.
   - **The session owner's own credentials**: for api.github.com's writes, their GitHub sign-in token, covering the
-    same verified repositories; for gitlab.com, their personal access token for it; for dev.azure.com, theirs for each
+    same verified repositories, and any repository where the request asks `reach: "any"` and the owner's reach is on; for gitlab.com, their personal access token for it; for dev.azure.com, theirs for each
     organization of the workspace's repositories, as Basic credentials. These reach everything the owner can (a
     personal access token can't be limited to a repository), so they go **only to the session owner's own hosts** (and
     the server's own runner), never to a host someone else owns, whose owner could take them from its connector; there

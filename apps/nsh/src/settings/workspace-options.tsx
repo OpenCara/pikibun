@@ -4,6 +4,7 @@ import { segment } from "../shared";
 import { transcriptPage, type ToolOutput } from "../../../../packages/shared/src/transcript-display";
 import type { ChildSessionSettings as ChildSettings } from "../../../../packages/shared/src/cross-session";
 import { cacheWarmingModes, type CacheWarmingMode, type CacheWarmingSettings as CacheWarming } from "../../../../packages/shared/src/cache-warming";
+import type { GitHubReachSettings as GitHubReach } from "../../../../packages/shared/src/github-reach";
 import { automaticPackingDays, type PackingSettings as Packing } from "../../../../packages/shared/src/packing";
 import { fileUploadLimits, formatBytes } from "../../../../packages/shared/src/file-uploads";
 import { networkLimits, type NetworkMode, type NetworkPolicy } from "../../../../packages/shared/src/network";
@@ -118,6 +119,33 @@ export function CacheWarmingSettings(props: { workspace: Workspace; admin: boole
                   options={cacheWarmingModes.map(value => ({ value, label: warmingLabel[value] }))}
                   onChange={next => { if (next !== current()) put(path(), action, resource.refresh, { mode: next }, warmingNotice[next]); }} />
                 : <Badge tone={current() === "off" ? "neutral" : "success"}>{warmingLabel[current()]}</Badge>} />
+          )}
+        </If>
+      </ResourceState>
+      <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+    </Section>
+  );
+}
+
+export function GitHubReachSettings(props: { workspace: Workspace }) {
+  const path = () => `/api/workspaces/${segment(props.workspace.id)}/github-reach`;
+  const resource = createResource<{ settings: GitHubReach }>(path);
+  const action = createAction();
+  return (
+    <Section title="Your GitHub reach" testID="workspace-github-reach" info={<View style={{ gap: 8 }}>
+      <Note>Your own choice, in this workspace; each member makes theirs. Sessions act on GitHub as their owner, and by default only on this workspace's repositories.</Note>
+      <Note>With this on, messages you send yourself, in sessions you own, may also read, open issues in, merge in and, with gh on your own hosts, write to any GitHub repository your account can access, as you. Messages anyone else sends in your sessions still reach only this workspace's repositories.</Note>
+      <Note>An agent follows what it reads, such as issues and web pages, so text written to mislead it could have it act as you anywhere your account reaches. Turn this on only where you watch what your sessions do. Pushes still go only to this workspace's repositories.</Note>
+    </View>}>
+      <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>
+        <If when={resource.data()}>
+          {data => (
+            <Toggle title="Any repository I can access" testID="github-reach-any" label="Let my own messages act on any GitHub repository I can access" admin busy={action.busy()}
+              value={data().settings.anyRepository}
+              hint={data().settings.anyRepository ? "Your own messages in your sessions reach every repository your GitHub account can" : "Your sessions act only on this workspace's repositories"}
+              onChange={next => put(path(), action, resource.refresh, { anyRepository: next }, next
+                ? "Your own messages in your sessions here may now act on any GitHub repository you can access."
+                : "Your sessions here now act only on this workspace's repositories.")} />
           )}
         </If>
       </ResourceState>

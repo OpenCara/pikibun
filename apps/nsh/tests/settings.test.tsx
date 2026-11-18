@@ -319,7 +319,7 @@ describe("settings", () => {
     const app = await openSettings("workspaces");
     await app.waitFor("id:workspace-w1");
     await app.press("id:workspace-w1");
-    for (const part of ["workspace-sources", "workspace-connections", "workspace-schedules", "workspace-push-access", "workspace-network", "workspace-extensions", "workspace-cache-warming", "workspace-database", "workspace-members", "workspace-invite"]) {
+    for (const part of ["workspace-sources", "workspace-connections", "workspace-schedules", "workspace-push-access", "workspace-network", "workspace-extensions", "workspace-github-reach", "workspace-cache-warming", "workspace-database", "workspace-members", "workspace-invite"]) {
       await app.waitFor(`id:${part}`);
     }
     await app.waitFor("text:OpenCara/pikibun");
@@ -339,6 +339,19 @@ describe("settings", () => {
     await app.press("text:While working");
     await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/cache-warming`) !== undefined);
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/cache-warming`)).toEqual({ mode: "streaming" });
+  });
+
+  test("Workspaces lets each member turn on their own GitHub reach beyond the workspace's repositories", async () => {
+    const app = await openSettings("workspaces", {
+      [`PUT ${ORIGIN}/api/workspaces/w1/github-reach`]: { body: { settings: { anyRepository: true } } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:github-reach-any");
+    expect(app.texts().join(" ")).toContain("Your sessions act only on this workspace's repositories");
+    await app.press("id:github-reach-any");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`)).toEqual({ anyRepository: true });
   });
 
   test("Workspaces shows each role's tools and creates a tool group with the tools an admin picks", async () => {
