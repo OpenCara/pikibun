@@ -29,6 +29,7 @@ import { checkedFileOperation, type FileOperationRequest, type FileOperationResu
 import { browserEnvironment, connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBrowserMount, type BrowserToolchain } from "./browser-toolchain.js";
 import type { SessionBrowser } from "./browser-command.js";
 import type { SandboxNodePrograms } from "./program-availability.js";
+import { ProcessRoots, type ResourceGroups } from "./session-resources.js";
 
 export { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 
@@ -357,6 +358,7 @@ export class Sandbox implements IsolatedWorkspace {
   #closed = false;
   #cancelActive: (() => void) | undefined;
   readonly #services = new Set<() => void>();
+  readonly processes = new ProcessRoots();
 
   constructor(binding: RunnerBinding, root: string, resources?: ResourceConfig, options: SandboxOptions = {}) {
     if (process.platform !== "linux" || !isAbsolute(root) || resolve(root) === sep) {
@@ -553,6 +555,17 @@ export class Sandbox implements IsolatedWorkspace {
     return checkedBrowse(JSON.parse(await this.#operation({ kind: "browse", path: text(path, "path", 1024) }, true, authorize)));
   }
 
+  resourceGroups(): ResourceGroups | undefined {
+    const resources = this.#resources;
+    if (!resources) return undefined;
+    return { directories: [this.#sessionKey, this.#serviceDomain()].map(domain => join(resources.cgroupRoot, `session-${domain}`)),
+      limits: { cpuCores: resources.cpuQuotaMicros / resources.cpuPeriodMicros, memoryBytes: resources.memoryMaxBytes } };
+  }
+
+  #serviceDomain(): string {
+    return createHash("sha256").update(`${this.#sessionKey}\0service`).digest("hex");
+  }
+
   async search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult> {
     return checkedSearch(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, true, authorize)));
   }
@@ -654,7 +667,7 @@ export class Sandbox implements IsolatedWorkspace {
       try {
         return await runHostShell(operation, {
           worktree: this.hostWorktree, git: resolve(this.#root, "git"), gitConfig: resolve(this.#root, "owner.gitconfig"),
-          gitName: this.#identity.gitName, gitEmail: this.#identity.gitEmail,
+          gitName: this.#identity.gitName, gitEmail: this.#identity.gitEmail, processes: this.processes,
           signal: AbortSignal.any([signal, controller.signal]),
         });
       } finally { if (this.#cancelActive === cancel) this.#cancelActive = undefined; }
@@ -764,7 +777,7 @@ export class Sandbox implements IsolatedWorkspace {
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     const deadline = ["clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"].includes(request.kind)
       ? PUSH_TIMEOUT_MS : (limits ?? commandLimits(TIMEOUT_MS / 1000)).seconds * 1000;
-    const domain = service ? createHash("sha256").update(`${this.#sessionKey}\0service`).digest("hex") : this.#sessionKey;
+    const domain = service ? this.#serviceDomain() : this.#sessionKey;
     const launch = requireResources
       ? resourceLaunch(this.#resources!, domain, args, deadline / 1000)
       : { command: "/bin/sh", args: [...EXPENDABLE, "/usr/bin/bwrap", ...args] };
@@ -777,6 +790,7 @@ export class Sandbox implements IsolatedWorkspace {
           ? ["pipe", "pipe", "pipe", mounts.home.fd, mounts.worktree.fd, mounts.git.fd, mounts.config.fd, "pipe", mounts.root.fd]
           : ["pipe", "pipe", "pipe", mounts.home.fd, mounts.worktree.fd, mounts.git.fd, mounts.config.fd],
       });
+      const untrack = this.processes.add(child.pid);
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let bytes = 0;
@@ -840,6 +854,7 @@ export class Sandbox implements IsolatedWorkspace {
         }
       });
       child.once("close", (code, signal) => {
+        untrack();
         clearTimeout(timer);
         command.signal?.removeEventListener("abort", stop);
         if (this.#cancelActive === cancel) this.#cancelActive = undefined;

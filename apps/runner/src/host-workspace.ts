@@ -1,5 +1,6 @@
 import { CONNECTOR_ENVIRONMENT } from "./connector-environment.js";
 import { runHostShell } from "./host-shell.js";
+import { ProcessRoots } from "./session-resources.js";
 import type { HostCommandOperation } from "../../../packages/shared/src/types.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -75,6 +76,7 @@ export function ownerHostEnvironment(identity: Readonly<SandboxIdentity>, base: 
 
 export class HostWorkspace implements SessionWorkspace {
   readonly isolated = false;
+  readonly processes = new ProcessRoots();
   readonly #root: string;
   readonly #identity: Readonly<SandboxIdentity>;
   readonly #environment: Readonly<Record<string, string>>;
@@ -343,7 +345,7 @@ export class HostWorkspace implements SessionWorkspace {
       try {
         return await runHostShell(operation, {
           worktree: this.worktree, git: join(this.worktree, ".git"), gitConfig: join(this.#root, "owner.gitconfig"),
-          gitName: this.#identity.gitName, gitEmail: this.#identity.gitEmail,
+          gitName: this.#identity.gitName, gitEmail: this.#identity.gitEmail, processes: this.processes,
           signal: AbortSignal.any([signal, controller.signal]),
         });
       } finally { if (this.#cancelActive === cancel) this.#cancelActive = undefined; }
@@ -467,6 +469,7 @@ export class HostWorkspace implements SessionWorkspace {
     const started = Date.now();
     const sudo = options.isolated ? undefined : this.#sudo;
     const tracked = sudo?.track?.();
+    const untrack = this.processes.add(child.pid);
     if (options.hostCommand !== undefined) this.#activeCommand = options.hostCommand;
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -503,9 +506,11 @@ export class HostWorkspace implements SessionWorkspace {
       if (options.hostCommand !== undefined && this.#activeCommand === options.hostCommand) this.#activeCommand = undefined;
       options.signal?.removeEventListener("abort", stop);
       tracked?.end();
+      untrack();
       reject(new SandboxProcessError(`Cannot start ${command}: ${errorCode(error) ?? "launch failed"}`, null, null, "", ""));
     });
     child.once("close", (code, signal) => {
+      untrack();
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", stop);
       if (this.#cancelActive === cancel) this.#cancelActive = undefined;
