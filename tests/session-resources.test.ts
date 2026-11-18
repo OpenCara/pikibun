@@ -13,7 +13,7 @@ import { sha256, signToken } from '../packages/shared/src/crypto.js';
 import { toolNames, type AuthorizationRequest, type RunnerAction, type RunnerBinding, type RunnerTicket } from '../packages/shared/src/types.js';
 import { cpuTime, parseSessionResources, resourceBytes, resourceLines, type SessionResourcesView } from '../packages/shared/src/session-resources.js';
 import {
-  cpuCredit, descendants, diskUsage, parseNvidiaApps, parseProcStat, parsePs, procTableReader, ProcessRoots, readCgroups, SessionResources,
+  cpuCredit, descendants, diskUsage, nvidiaReader, parseNvidiaApps, parseProcStat, parsePs, procTableReader, ProcessRoots, readCgroups, SessionResources,
   type ProcessInfo, type ProcessTable,
 } from '../apps/runner/src/session-resources.js';
 
@@ -45,8 +45,10 @@ test('a /proc stat line gives its parent, CPU time and resident memory, whatever
 });
 
 test('ps output gives every process with its CPU time in any of the forms ps prints', () => {
-  const parsed = parsePs(' 1 0 1024 1-02:03:04.50\n 20 1 2048 03:04.25\n 21 20 10 0:00.10\nbad line\n');
+  const parsed = parsePs(' 1 0 1024 1-02:03:04.50 Tue Nov 18 09:00:00 2026\n 20 1 2048 03:04.25 Tue Nov 18 13:00:01 2026\n 21 20 10 0:00.10 Tue Nov 18 13:00:02 2026\nbad line\n');
   assert.deepEqual([...parsed.keys()], [1, 20, 21]);
+  assert.equal(parsed.get(20)!.start, 'Tue Nov 18 13:00:01 2026', 'a reused pid is told apart by when its process started');
+  assert.equal(parsed.get(20)!.childSeconds, undefined, 'ps gives no time of reaped children');
   assert.equal(parsed.get(1)!.cpuSeconds, 86400 + 2 * 3600 + 3 * 60 + 4.5);
   assert.equal(parsed.get(20)!.cpuSeconds, 184.25);
   assert.equal(parsed.get(20)!.rssBytes, 2048 * 1024);
@@ -68,6 +70,28 @@ test('CPU time counts each process once, whether it is still running or a proces
   assert.equal(state.credit, 4, 'a child that started and ended between samples still counts, through its parent');
   state = cpuCredit(state.seen, []);
   assert.equal(state.credit, 0, 'a process gone with no parent of the session left is never subtracted');
+  const bare = (pid: number, ppid: number, cpuSeconds: number): ProcessInfo => ({ pid, ppid, start: `s${pid}`, cpuSeconds, rssBytes: 0 });
+  let mac = cpuCredit(new Map(), [bare(10, 1, 1), bare(11, 10, 2)]);
+  assert.equal(mac.credit, 3);
+  mac = cpuCredit(mac.seen, [bare(10, 1, 4)]);
+  assert.equal(mac.credit, 3, 'without children time, a child its parent reaped keeps what it was seen using, and the parent its own');
+});
+
+test('GPU memory stops being asked only of a host without nvidia-smi, and is asked again after a passing failure', async () => {
+  const failing = (code: string) => async () => { throw Object.assign(new Error(code), { code }); };
+  let calls = 0;
+  const missing = nvidiaReader(async () => { calls++; return failing('ENOENT')(); }, -1, 'linux');
+  assert.equal(await missing(), undefined);
+  const after = calls;
+  assert.equal(await missing(), undefined);
+  assert.equal(calls, after, 'nvidia-smi is not there: never asked again');
+  let broken = true;
+  calls = 0;
+  const flaky = nvidiaReader(async () => { calls++; if (broken) throw Object.assign(new Error('driver'), { code: 9 }); return '7, 64\n'; }, -1, 'linux');
+  assert.equal(await flaky(), undefined);
+  broken = false;
+  assert.deepEqual([...(await flaky())!], [[7, 64 * MiB]]);
+  assert.equal(await nvidiaReader(async () => '7, 64\n', -1, 'darwin')(), undefined);
 });
 
 test('nvidia-smi compute apps give GPU memory by process', () => {

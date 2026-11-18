@@ -53,7 +53,7 @@ export interface ProcessInfo {
   ppid: number;
   start: string;
   cpuSeconds: number;
-  childSeconds: number;
+  childSeconds?: number;
   rssBytes: number;
 }
 
@@ -93,9 +93,9 @@ function psTime(value: string): number | undefined {
 export function parsePs(output: string): Map<number, ProcessInfo> {
   const table = new Map<number, ProcessInfo>();
   for (const line of output.split(/\r?\n/)) {
-    const [pid, ppid, rss, time] = line.trim().split(/\s+/);
+    const [pid, ppid, rss, time, ...started] = line.trim().split(/\s+/);
     const cpuSeconds = time === undefined ? undefined : psTime(time);
-    const info = { pid: Number(pid), ppid: Number(ppid), start: "", cpuSeconds: cpuSeconds ?? NaN, childSeconds: 0, rssBytes: Number(rss) * 1024 };
+    const info = { pid: Number(pid), ppid: Number(ppid), start: started.join(" "), cpuSeconds: cpuSeconds ?? NaN, rssBytes: Number(rss) * 1024 };
     if (!Number.isSafeInteger(info.pid) || info.pid <= 0 || !Number.isSafeInteger(info.ppid) || !Number.isFinite(info.cpuSeconds) || !Number.isFinite(info.rssBytes)) continue;
     table.set(info.pid, info);
   }
@@ -128,7 +128,7 @@ export function procTableReader(root = "/proc", run: Run = runProgram): ProcessT
 
 export function psTableReader(run: Run = runProgram): ProcessTableReader {
   return async () => {
-    try { return parsePs(await run("/bin/ps", ["-A", "-o", "pid=,ppid=,rss=,time="])); } catch { return undefined; }
+    try { return parsePs(await run("/bin/ps", ["-A", "-o", "pid=,ppid=,rss=,time=,lstart="])); } catch { return undefined; }
   };
 }
 
@@ -179,15 +179,17 @@ export function parseNvidiaApps(output: string): Map<number, number> {
 
 export type GpuReader = () => Promise<ReadonlyMap<number, number> | undefined>;
 
-export function nvidiaReader(run: Run = runProgram, ms = GPU_MS): GpuReader {
-  let disabled = process.platform !== "linux";
+export function nvidiaReader(run: Run = runProgram, ms = GPU_MS, platform: NodeJS.Platform = process.platform): GpuReader {
+  let disabled = platform !== "linux";
   let last: { at: number; used: Promise<ReadonlyMap<number, number> | undefined> } | undefined;
-  const programs = process.platform === "linux" && existsSync(WSL_NVIDIA_SMI) ? [WSL_NVIDIA_SMI, "nvidia-smi"] : ["nvidia-smi"];
+  const programs = platform === "linux" && existsSync(WSL_NVIDIA_SMI) ? [WSL_NVIDIA_SMI, "nvidia-smi"] : ["nvidia-smi"];
   const query = async () => {
+    let missing = 0;
     for (const program of programs) {
-      try { return parseNvidiaApps(await run(program, ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"])); } catch { }
+      try { return parseNvidiaApps(await run(program, ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"])); }
+      catch (error) { if ((error as NodeJS.ErrnoException)?.code === "ENOENT") missing++; }
     }
-    disabled = true;
+    if (missing === programs.length) disabled = true;
     return undefined;
   };
   return () => {
@@ -426,15 +428,15 @@ export class SessionResources {
   }
 }
 
-export interface Seen { pid: number; ppid: number; total: number }
+export interface Seen { pid: number; ppid: number; total: number; childTime: boolean }
 
 export function cpuCredit(previous: ReadonlyMap<string, Seen>, list: readonly ProcessInfo[]): { seen: Map<string, Seen>; credit: number } {
   const seen = new Map<string, Seen>();
   let credit = 0;
   for (const info of list) {
     const key = `${info.pid}:${info.start}`;
-    const total = info.cpuSeconds + info.childSeconds;
-    seen.set(key, { pid: info.pid, ppid: info.ppid, total });
+    const total = info.cpuSeconds + (info.childSeconds ?? 0);
+    seen.set(key, { pid: info.pid, ppid: info.ppid, total, childTime: info.childSeconds !== undefined });
     credit += total - (previous.get(key)?.total ?? 0);
   }
   const live = new Set(list.map(info => info.pid));
@@ -448,7 +450,7 @@ export function cpuCredit(previous: ReadonlyMap<string, Seen>, list: readonly Pr
     }
     return false;
   };
-  for (const [key, item] of previous) if (!seen.has(key) && reapedInside(item.ppid)) credit -= item.total;
+  for (const [key, item] of previous) if (item.childTime && !seen.has(key) && reapedInside(item.ppid)) credit -= item.total;
   return { seen, credit: Math.max(0, credit) };
 }
 

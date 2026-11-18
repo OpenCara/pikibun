@@ -57,7 +57,9 @@ last-seen total of each process that has gone, where a process of the session ab
 it. What a process used between its last sample and its end is lost only when nothing of the session reaped it (the
 root process itself, reaped by the connector): at most one interval of that process. With cgroups, CPU time is exact.
 
-macOS's `ps` has no children time, so there a short-lived process counts only for the samples that saw it.
+macOS's `ps` has no children time, so there a short-lived process counts only for the samples that saw it, and nothing
+is taken off when one goes (each sample's entry says whether its table had children time). A process is known by its
+PID and start time (`/proc` start ticks, `ps`'s `lstart`), so a reused PID is a new process.
 
 ## When it samples
 
@@ -69,7 +71,8 @@ can be lost, so the interval bounds it.
 
 Disk is walked at most every 5 minutes, in the background, and only once someone asks: one directory handle at a time, `lstat` without following links, stopping at
 200,000 entries or 10 seconds and saying so (`diskPartial`). GPU memory reads `nvidia-smi` at most every 10 seconds,
-only while the session has processes, and never again on a host where it failed.
+only while the session has processes, and never again on a host that has no `nvidia-smi` (`ENOENT`); any other
+failure is tried again in the next window.
 
 ## Who sees it
 
