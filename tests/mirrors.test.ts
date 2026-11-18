@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { EgressProxy, endpointUrl, relayFetch, type RelayRequest } from "../apps/runner/src/egress.js";
 import { GIT_SHIM } from "../apps/runner/src/sandbox-python.generated.js";
 import { GitRemote } from "../apps/runner/src/git-remote.js";
-import { gitShimProgram, HostGitShim, sandboxGitLauncher } from "../apps/runner/src/host-git-shim.js";
+import { gitShimProgram, hostGitLauncher, HostGitShim, sandboxGitLauncher } from "../apps/runner/src/host-git-shim.js";
 import { RepositoryCache } from "../apps/runner/src/repo-cache.js";
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
@@ -485,9 +485,10 @@ test("a session on the host clones a workspace repository with its own git, borr
 
     assert.doesNotMatch(await shell("git clone -q https://github.com/acme/app.git app"), /pikibun:/);
     assert.equal(await session.sandbox.readFile("app/README.md", allow), "from upstream\n");
-    const borrowed = join(realpathSync(mirror), "objects");
-    assert.equal((await session.sandbox.readFile("app/.git/objects/info/alternates", allow)).trim(), borrowed);
+    const borrowed = `${join(realpathSync(mirror), "objects")}\n${realpathSync(cache.lfsObjects("test:alice").root)}`;
+    assert.equal((await session.sandbox.readFile("app/.git/objects/info/alternates", allow)).trim(), borrowed, "the mirror's objects, then the host's Git LFS store");
     assert.equal((await shell("cd app && git count-objects -v | grep '^count\\|^in-pack'")).trim(), "count: 0\nin-pack: 0");
+    assert.equal((await shell("cd app && git fsck --connectivity-only >/dev/null 2>&1; echo $?")).trim(), "0", "the LFS store is an alternate Git can read");
     assert.equal(await cache.filled(repository, "test:alice"), true);
     assert.ok(u.fetched.some(path => path.endsWith("/git-upload-pack")), "the host filled its mirror with its own credential");
     assert.equal(u.relayedPack(), false, "no pack went through the relay");
@@ -581,6 +582,130 @@ test("the host's git hands only clones to the runner, borrows the mirror it answ
     assert.equal(spawnSync("test", ["-e", join(work, "seven")]).status, 1, "nothing was cloned");
     await shim.close();
     assert.equal(spawnSync("test", ["-e", bin]).status, 1, "closing removes the session's git");
+  });
+
+test("a mirror the host can't read says when the host's Git gave it no credential without asking, rather than that the credential it has can't read it", async () => {
+  const { cacheFailure } = await import("../apps/runner/src/session/mirrors.js");
+  const { HostCredentialError } = await import("../apps/runner/src/git-credentials.js");
+  const { GitRemoteError } = await import("../apps/runner/src/git-remote.js");
+  const azure = { ...repository, provider: "azure-devops", host: "dev.azure.com", fullName: "acme/App/app" } as const;
+  const refused = new GitRemoteError("Git remote returned HTTP 401", 401);
+  const unasked = cacheFailure(refused, azure, new HostCredentialError("No Git credentials for dev.azure.com are set up on this host"));
+  assert.equal(unasked.status, 502);
+  assert.match(unasked.message, /^This host's Git gave no credentials for dev\.azure\.com without asking, and acme\/App\/app can't be read without one; its owner can set one up, or sign in again/);
+  assert.match(unasked.message, /^[\x20-\x7e]{1,300}$/, "short and printable, so the clone shows it");
+  assert.match(cacheFailure(refused, azure).message, /^This host's Git credentials can't read acme\/App\/app;/);
+  assert.equal(cacheFailure(new GitRemoteError("Git remote returned HTTP 503", 503), azure, new HostCredentialError("none")).status, 503);
+});
+
+const gitLfs = spawnSync("git", ["lfs", "version"], { encoding: "utf8" }).status === 0;
+
+test("a clone on the host takes Git LFS files from the host's store, which then keeps the ones the clone downloaded; neither keeps a second copy",
+  { skip: !gitLfs || process.platform === "win32" }, async t => {
+    const directory = realpathSync(await mkdtemp(join(tmpdir(), "mirrors-lfs-")));
+    await chmod(directory, 0o700);
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const lfsEnvironment = { ...environment, GIT_CONFIG_NOSYSTEM: "1", HOME: directory, GIT_CONFIG_COUNT: "4",
+      GIT_CONFIG_KEY_0: "filter.lfs.process", GIT_CONFIG_VALUE_0: "git-lfs filter-process", GIT_CONFIG_KEY_1: "filter.lfs.smudge", GIT_CONFIG_VALUE_1: "git-lfs smudge -- %f",
+      GIT_CONFIG_KEY_2: "filter.lfs.clean", GIT_CONFIG_VALUE_2: "git-lfs clean -- %f", GIT_CONFIG_KEY_3: "filter.lfs.required", GIT_CONFIG_VALUE_3: "true" };
+    const plain = (args: string[], cwd: string) => {
+      const result = spawnSync("git", args, { cwd, encoding: "utf8", env: lfsEnvironment });
+      assert.equal(result.status, 0, result.stderr);
+    };
+    const work = join(directory, "work"), remote = join(directory, "remote.git");
+    plain(["init", "-q", "-b", "main", work], directory);
+    plain(["lfs", "track", "*.bin"], work);
+    const kept = Buffer.from("kept by the host ".repeat(4096)), fresh = Buffer.from("downloaded once ".repeat(4096));
+    await writeFile(join(work, "kept.bin"), kept);
+    await writeFile(join(work, "fresh.bin"), fresh);
+    plain(["add", "."], work);
+    plain(["commit", "-q", "-m", "lfs"], work);
+    plain(["clone", "-q", "--bare", work, remote], directory);
+    plain(["lfs", "push", "--all", `file://${remote}`], work);
+    const oid = (content: Buffer) => createHash("sha256").update(content).digest("hex");
+    const remoteObject = (content: Buffer) => join(remote, "lfs", "objects", oid(content).slice(0, 2), oid(content).slice(2, 4), oid(content));
+    const cloneObject = (clone: string, content: Buffer) => join(directory, "clones", clone, ".git", "lfs", "objects", oid(content).slice(0, 2), oid(content).slice(2, 4), oid(content));
+
+    const { LfsObjectCache } = await import("../apps/runner/src/lfs-cache.js");
+    const store = new LfsObjectCache(join(directory, "cache", "lfs"));
+    await mkdir(join(directory, "cache"), { mode: 0o700 });
+    const writer = await store.writer({ oid: oid(kept), size: kept.length });
+    await writer.write(kept);
+    assert.equal(await writer.commit(), true);
+    await rm(remoteObject(kept));
+
+    const shim = new HostGitShim({ mirror: async () => remote, lfs: store });
+    t.after(() => shim.close());
+    const bin = await shim.start();
+    const clones = join(directory, "clones");
+    await mkdir(clones);
+    const clone = (...args: string[]) => run("git", ["clone", "-q", ...args], { cwd: clones, env: { ...lfsEnvironment, PATH: `${bin}:${process.env.PATH}` } });
+    const { statSync, readFileSync } = await import("node:fs");
+    const same = (one: string, other: string) => statSync(one).ino === statSync(other).ino;
+
+    const first = await clone(`file://${remote}`);
+    assert.equal(first.code, 0, first.stderr);
+    assert.deepEqual(readFileSync(join(clones, "remote", "kept.bin")), kept, "only the store had it");
+    assert.deepEqual(readFileSync(join(clones, "remote", "fresh.bin")), fresh);
+    assert.ok(same(cloneObject("remote", kept), store.path(oid(kept))), "git-lfs linked the store's file instead of copying it");
+    assert.equal(readFileSync(join(clones, "remote", ".git", "objects", "info", "alternates"), "utf8").split("\n")[1], realpathSync(store.root));
+    await shim.shared();
+    assert.ok(same(cloneObject("remote", fresh), store.path(oid(fresh))), "the store kept the file the clone downloaded, as the same file");
+
+    await rm(remoteObject(fresh));
+    const second = await clone(`file://${remote}`, "second");
+    assert.equal(second.code, 0, second.stderr);
+    assert.deepEqual(readFileSync(join(clones, "second", "fresh.bin")), fresh, "the remote has neither file now");
+    assert.ok(same(cloneObject("second", fresh), store.path(oid(fresh))));
+
+    const elsewhere = join(directory, "elsewhere");
+    await mkdir(join(elsewhere, "lfs", "objects", "ab", "cd"), { recursive: true });
+    const copied = join(elsewhere, "lfs", "objects", oid(kept).slice(0, 2), oid(kept).slice(2, 4), oid(kept));
+    await mkdir(join(copied, ".."), { recursive: true });
+    await writeFile(copied, kept);
+    const forged = join(elsewhere, "lfs", "objects", "ab", "cd", "abcd" + "0".repeat(60));
+    await writeFile(forged, "not what its name says");
+    assert.deepEqual(await store.share(elsewhere), { added: 0, linked: 1, kept: 0, skipped: 1 });
+    assert.ok(same(copied, store.path(oid(kept))), "a clone's own copy of a file the store has becomes the store's");
+    await assert.rejects(stat(store.path("abcd" + "0".repeat(60))), "a file whose content isn't its name stays out of the store");
+    assert.deepEqual(await store.share(elsewhere), { added: 0, linked: 0, kept: 1, skipped: 1 });
+
+    const own = join(elsewhere, "lfs", "objects", oid(fresh).slice(0, 2), oid(fresh).slice(2, 4), oid(fresh));
+    await mkdir(join(own, ".."), { recursive: true });
+    await writeFile(own, fresh);
+    const damaged = join(directory, "damaged");
+    await writeFile(damaged, Buffer.alloc(fresh.length, 0x21));
+    const { rename } = await import("node:fs/promises");
+    await rename(damaged, store.path(oid(fresh)));
+    assert.deepEqual(await store.share(elsewhere), { added: 0, linked: 0, kept: 1, skipped: 2 });
+    assert.deepEqual(readFileSync(own), fresh, "a damaged file in the store never replaces a clone's good copy");
+
+    const bare = await clone("--bare", `file://${remote}`);
+    assert.equal(bare.code, 0, bare.stderr);
+    assert.equal(readFileSync(join(clones, "remote.git", "objects", "info", "alternates"), "utf8").split("\n")[1], realpathSync(store.root),
+      "a bare clone is found where Git puts it, NAME.git");
+    assert.equal(await new LfsObjectCache(join(directory, "cache", "elsewhere")).reference(), undefined,
+      "git-lfs looks in ALTERNATE/../lfs/objects, so only a store named lfs can be an alternate");
+  });
+
+test("the host's git clones without the cache when the Node.js it was written with is gone, and finds another on PATH first",
+  { skip: process.platform === "win32" }, async t => {
+    const directory = realpathSync(await mkdtemp(join(tmpdir(), "mirrors-node-")));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const bin = join(directory, "bin"), only = join(directory, "only-git");
+    await mkdir(bin);
+    await mkdir(only);
+    const program = join(bin, "..", "clone-program", "clone.cjs");
+    await mkdir(dirname(program));
+    await writeFile(program, "process.stdout.write('the clone program ran\\n');");
+    await writeFile(join(bin, "git"), hostGitLauncher(bin, join(directory, "gone", "node"), program), { mode: 0o700 });
+    const { symlink } = await import("node:fs/promises");
+    await symlink(spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim(), join(only, "git"));
+    const withNode = await run("/bin/sh", ["-c", "git clone"], { cwd: directory, env: { ...environment, PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin` } });
+    assert.equal(withNode.stdout, "the clone program ran\n");
+    const withoutNode = await run("/bin/sh", ["-c", "git clone"], { cwd: directory, env: { ...environment, PATH: `${bin}:${only}` } });
+    assert.match(withoutNode.stderr, /pikibun: Node\.js, which borrows the host repository cache, is not on this host any more; cloning without the cache/);
+    assert.match(withoutNode.stderr, /usage: git clone/, "git itself ran the clone");
   });
 
 const python = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();

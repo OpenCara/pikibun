@@ -2,12 +2,14 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import type { MirrorProgress } from "./egress.js";
+import type { LfsObjectCache } from "./lfs-cache.js";
 import { RunnerError } from "./protocol.js";
 
 export interface HostGitShimOptions {
   mirror(remote: string, onProgress: (progress: MirrorProgress) => void): Promise<string | undefined>;
+  lfs?: Pick<LfsObjectCache, "reference" | "share">;
   node?: string;
   heartbeatMs?: number;
 }
@@ -58,7 +60,9 @@ export function hostGitLauncher(bin: string, node: string, program: string): str
     "IFS=$saved",
     "if [ -z \"$real\" ]; then echo 'git: command not found' >&2; exit 127; fi",
     "if command -v cygpath >/dev/null 2>&1; then real=$(cygpath -w \"$real\"); fi",
-    ...CLONE_ONLY(`PIKIBUN_HOST_GIT=$real; export PIKIBUN_HOST_GIT; exec ${quote(node)} ${quote(program)} "$@"`),
+    ...CLONE_ONLY(`node=${quote(node)}; [ -x "$node" ] || node=$(command -v node 2>/dev/null) || node=; `
+      + `if [ -n "$node" ]; then PIKIBUN_HOST_GIT=$real; export PIKIBUN_HOST_GIT; exec "$node" ${quote(program)} "$@"; fi; `
+      + `echo 'pikibun: Node.js, which borrows the host repository cache, is not on this host any more; cloning without the cache' >&2; exec "$real" "$@"`),
     "exec \"$real\" \"$@\"",
     "",
   ].join("\n");
@@ -124,7 +128,7 @@ function answerOf(line, url, state) {
   let answer;
   try { answer = JSON.parse(line); } catch { return undefined; }
   if (!answer || typeof answer !== "object") return undefined;
-  if (typeof answer.path === "string" && answer.path) return { kind: "path", path: answer.path };
+  if (typeof answer.path === "string" && answer.path) return { kind: "path", path: answer.path, lfs: typeof answer.lfs === "string" && answer.lfs ? answer.lfs : undefined };
   if (answer.none === true) return { kind: "none" };
   if ("error" in answer) return { kind: "error", reason: String(answer.error).slice(0, 300), retry: answer.retry === true, moved: state.moved };
   state.moved = true;
@@ -184,7 +188,7 @@ async function mirror(url) {
     const answer = await ask(url);
     if (answer.kind === "path") {
       if (shown !== undefined) note("the repository cache is ready; cloning from it");
-      return answer.path;
+      return answer;
     }
     if (answer.kind === "none") return undefined;
     let reason = "it did not answer", transient = false;
@@ -206,8 +210,58 @@ function readable(found) {
   try { fs.readdirSync(path.join(found, "objects")); return true; } catch { return false; }
 }
 
+function humanish(url) {
+  let end = url.replace(/[\\/\s]+$/, "");
+  if (end.endsWith("/.git")) end = end.slice(0, -5).replace(/[\\/\s]+$/, "");
+  const start = Math.max(end.lastIndexOf("/"), end.lastIndexOf(":"), end.lastIndexOf("\\")) + 1;
+  return end.slice(start).replace(/\.(git|bundle)$/, "");
+}
+
+function cloneDirectory(args, index) {
+  let base = process.cwd();
+  for (let position = 0; position < index; position++) {
+    if (args[position] === "-C") base = path.resolve(base, args[++position] || ".");
+    else if (args[position] === "-c") position++;
+  }
+  const rest = args.slice(index + 1), positionals = [];
+  for (let position = 0; position < rest.length; position++) {
+    const argument = rest[position];
+    if (argument === "--") { positionals.push(...rest.slice(position + 1)); break; }
+    if (argument.startsWith("-")) { if (VALUED.has(argument)) position++; continue; }
+    positionals.push(argument);
+  }
+  const bare = rest.slice(0, rest.includes("--") ? rest.indexOf("--") : rest.length).some(argument => argument === "--bare" || argument === "--mirror");
+  const directory = positionals[1] || (positionals[0] && humanish(positionals[0]) + (bare ? ".git" : ""));
+  return directory ? path.resolve(base, directory) : undefined;
+}
+
+function shareClone(gitDirectory) {
+  return new Promise(resolve => {
+    const stream = require("node:net").connect(TRANSPORT.socket);
+    const done = () => { stream.destroy(); resolve(); };
+    stream.setTimeout(10000, done);
+    stream.on("connect", () => stream.write(JSON.stringify({ token: TRANSPORT.token, share: gitDirectory }) + "\n"));
+    stream.on("data", done);
+    stream.on("error", done);
+    stream.on("close", done);
+  });
+}
+
+async function borrowLfs(directory, store) {
+  if (!directory) return;
+  const found = require("node:child_process").spawnSync(git, ["-C", directory, "rev-parse", "--absolute-git-dir"], { encoding: "utf8", windowsHide: true });
+  const gitDirectory = found.status === 0 ? found.stdout.trim() : "";
+  if (!gitDirectory) return;
+  const file = path.join(gitDirectory, "objects", "info", "alternates");
+  let text;
+  try { text = fs.readFileSync(file, "utf8"); } catch { return; }
+  if (!text.split(/\r?\n/).includes(store)) fs.appendFileSync(file, (text && !text.endsWith("\n") ? "\n" : "") + store + "\n");
+  await shareClone(gitDirectory);
+}
+
 async function main() {
   let args = process.argv.slice(2);
+  let lfs, target;
   let index = 0;
   while (index < args.length && args[index].startsWith("-")) index += args[index] === "-C" || args[index] === "-c" ? 2 : 1;
   if (args[index] === "clone") {
@@ -224,7 +278,15 @@ async function main() {
     const extra = [];
     if (url && !borrowing) {
       const found = await mirror(url);
-      if (found && readable(found)) extra.push("--reference-if-able", found);
+      if (found && readable(found.path)) {
+        extra.push("--reference-if-able", found.path);
+        if (TRANSPORT.socket && found.lfs && fs.existsSync(path.join(found.lfs, "objects"))) {
+          lfs = fs.realpathSync(found.lfs);
+          target = cloneDirectory(args, index);
+          const alternates = process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+          process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES = alternates ? alternates + path.delimiter + lfs : lfs;
+        }
+      }
       else if (found && TRANSPORT.socket) note("the host's repository cache of " + url + " has no objects to borrow; cloning without it");
       else if (found) {
         note("the repository cache of " + url + " is ready, but this command started before it could see it; run the clone again");
@@ -239,7 +301,9 @@ async function main() {
   child.on("error", () => { process.stderr.write("git: could not be started\n"); process.exit(127); });
   child.on("exit", (code, signal) => {
     if (signal) { process.removeAllListeners(signal); try { process.kill(process.pid, signal); } catch {} }
-    process.exit(code === null ? 128 + (constants.signals[signal] || 0) : code);
+    const finish = () => process.exit(code === null ? 128 + (constants.signals[signal] || 0) : code);
+    if (code === 0 && lfs) borrowLfs(target, lfs).then(finish, finish);
+    else finish();
   });
 }
 
@@ -278,9 +342,14 @@ export class HostGitShim {
   #starting: Promise<string> | undefined;
   #closing: Promise<void> | undefined;
   readonly #connections = new Set<Socket>();
+  #sharing: Promise<void> = Promise.resolve();
 
   constructor(options: HostGitShimOptions) {
     this.#options = options;
+  }
+
+  shared(): Promise<void> {
+    return this.#sharing;
   }
 
   start(): Promise<string> {
@@ -353,8 +422,12 @@ export class HostGitShim {
       const end = received.indexOf("\n");
       if (end < 0) return;
       asked = true;
-      let request: { token?: unknown; remote?: unknown };
+      let request: { token?: unknown; remote?: unknown; share?: unknown };
       try { request = JSON.parse(received.slice(0, end)) as typeof request; } catch { connection.destroy(); return; }
+      if (this.#authentic(request.token) && typeof request.share === "string") {
+        this.#share(connection, request.share);
+        return;
+      }
       if (!this.#authentic(request.token) || typeof request.remote !== "string" || !request.remote || request.remote.length > 2048) {
         connection.destroy();
         return;
@@ -375,7 +448,8 @@ export class HostGitShim {
     const heartbeat = setInterval(() => { sent = Date.now(); send({ progress: last }); }, this.#options.heartbeatMs ?? HEARTBEAT_MS);
     try {
       const path = await this.#options.mirror(remote, progress);
-      send(path ? { path } : { none: true });
+      const lfs = path ? await this.#options.lfs?.reference().catch(() => undefined) : undefined;
+      send(path ? { path, ...(lfs ? { lfs } : {}) } : { none: true });
     } catch (error) {
       const reason = error instanceof Error && /^[\x20-\x7e]{1,300}$/.test(error.message) ? error.message : "The repository could not be cached";
       send({ error: reason, ...(error instanceof RunnerError && error.status === 503 ? { retry: true } : {}) });
@@ -383,6 +457,14 @@ export class HostGitShim {
       clearInterval(heartbeat);
       if (!connection.destroyed) connection.end();
     }
+  }
+
+  #share(connection: Socket, gitDirectory: string): void {
+    const lfs = this.#options.lfs;
+    const accepted = lfs !== undefined && gitDirectory.length <= 4096 && isAbsolute(gitDirectory) && !gitDirectory.includes("\0");
+    if (!connection.destroyed && connection.writable) connection.end(`${JSON.stringify({ accepted })}\n`);
+    if (!accepted) return;
+    this.#sharing = this.#sharing.then(() => lfs.share(gitDirectory)).then(() => undefined, () => undefined);
   }
 
   #authentic(token: unknown): boolean {

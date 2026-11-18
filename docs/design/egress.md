@@ -397,7 +397,9 @@ audited as `repository.lfs.updated`; the setting is in `WorkspaceRepository.lfs`
     it meanwhile) and the download ended, so git-lfs tries again and the retry is relayed.
   - **Sharing across repositories** is safe for the same reason: the batch proved the session may have that content.
   - The store is written only by the runner, outside any sandbox, and never mounted into one: git-lfs takes files from an
-    alternate's `lfs/objects`, so files kept in a mirror would bypass these checks.
+    alternate's `lfs/objects`, so files kept in a mirror would bypass these checks. Sessions on the host, which have
+    no proxy and run as the runner's user, are the exception: their clones list the store as an alternate, and the
+    runner takes in what they downloaded ([repository-cache.md](repository-cache.md), Lifetime).
   - Each file served from the store is counted as used (its mtime), and `pikibun cache prune --older-than DAYS`
     deletes those unused for longer.
 - **A refused LFS request** doesn't unmount the session's mirror: only refused Git reads (`info-refs`, `upload-pack`)

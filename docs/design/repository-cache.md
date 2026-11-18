@@ -53,6 +53,14 @@ The fill comes after it, so a session can't have the host download a repository 
 that listing (`MirrorTarget.refs`): the host's credential only downloads the history of the tips the owner's listing
 named, so a mirror never holds what that listing didn't reach, even if the repository's name changed hands in between.
 
+- **Protocol v0.** A remote that answers only v0 (Azure DevOps) gets the wants, the haves and `done` in one request, as
+  Git's own stateless fetch sends them, asking for `multi_ack_detailed` (or `multi_ack`) where it is advertised: Azure
+  DevOps refuses a fetch without it (`TF401041: Clients must support multi-ack`). In that mode the answer starts with
+  an `ACK <oid> common|continue|ready` per have it knows, then the final `ACK <oid>` or `NAK`, then the pack; at most
+  one line per have is read before the final one.
+- **Host credentials.** Where the host's credential helpers give nothing without asking (Git Credential Manager whose
+  sign-in has run out, say), the mirror is read anonymously; if the remote then refuses it, the error says the host's
+  Git gave no credential without asking, rather than that the credential it has can't read the repository.
 - **Retries.** A ref listing or fetch that fails in a way another attempt may get past (the connection failed or broke
   off, the remote answered 5xx, 408 or 429; `GitRemoteError.retryable`) is tried twice more, after 2 and 10 seconds;
   anything else, an unforeseen error included, is final. A fetch starts again from what the mirror had: a pack that
@@ -98,6 +106,22 @@ network traffic goes through `GitRemote`.
   (its mtime is set); `pikibun cache prune` deletes those unused for longer than `--older-than`, and leftovers in
   `lfs/tmp/` older than a day (or the cutoff, if shorter, but never one written to in the last hour: a download
   under way keeps its file's mtime current). Reads check the store's root is private, as writes do.
+- **Clones on the host** (sessions that run on the host, with `HostGitShim`) share the store without the proxy. git-lfs
+  takes a file from `<alternate>/../lfs/objects` when one of a clone's alternates (its `objects/info/alternates`, or
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES`) has it, by hard link where it can, before it downloads one. So the runner answers
+  the shim's mirror request with the store's root (`LfsObjectCache.reference`, which creates `lfs/objects`); the shim
+  clones with that root in `GIT_ALTERNATE_OBJECT_DIRECTORIES`, so the checkout links what the store has, and then
+  appends the root to the clone's alternates, so later pulls and checkouts do too (a `--bare` or `--mirror` clone is
+  found at `NAME.git`, where Git puts it). Git sees the root as an object directory with no loose objects and no
+  packs. git-lfs looks in `<root>/../lfs/objects`, which is the store only because its root is named `lfs`, so
+  `reference` offers no root of another name. The shim then hands the clone's Git directory to the runner, which
+  `share`s it in the background, one clone at a time: a file the store has as another file replaces the clone's copy
+  with a link to the store's, once the store's sha256 is checked (a damaged store file never replaces a good copy); a file it lacks is linked into `lfs/tmp/`, its sha256 checked, and renamed into place (or
+  copied through the writer where a link isn't possible); a file that is already the store's only has its mtime set,
+  so pruning counts it as used. A file whose content isn't its name is left out. Files are never rewritten in place,
+  so a clone and the store sharing one is safe; pruning either only drops a link. The store isn't exposed to
+  sandboxed sessions any more than before: sessions on the host run as the runner's user and could read it anyway.
+  Files a clone downloads after its clone (a pull, another branch) aren't handed to the store.
 
 ## Open questions
 
