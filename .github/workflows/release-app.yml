@@ -568,18 +568,6 @@ jobs:
           printf '%s' "$IOS_PROVISIONING_PROFILE" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
       - name: Xcode
         run: xcodebuild -version
-      - name: The prebuilt iPhone runner's SDK
-        run: |
-          # The `ios` component, pinned and checked by scripts/nsh.mjs.
-          node scripts/nsh.mjs --component ios
-          version=$(node --input-type=module -e 'import { NSH_VERSION } from "./scripts/nsh.mjs"; console.log(NSH_VERSION)')
-          runner=".cache/nsh/$version/nsh/runtime/ios/iphoneos/nsh-ios-app"
-          sdk=$(xcrun vtool -show-build "$runner" | awk '$1 == "sdk" {print $2; exit}')
-          echo "NSH $version's iPhone runner is built with the iOS $sdk SDK."
-          if [ "${sdk%%.*}" -lt 26 ]; then
-            echo "::error::NSH $version's iPhone runner was built with the iOS $sdk SDK; App Store Connect needs iOS 26 or later."
-            exit 1
-          fi
       - name: Stamp the version into the app
         run: node scripts/app-version.mjs "$VERSION"
       - name: Package
@@ -595,7 +583,7 @@ jobs:
       # uses no encryption but the system's (HTTPS), which is exempt. Without it every build waits in App Store Connect
       # as Missing Compliance, and TestFlight's testers get none until someone answers by hand (0.10.1 to 0.15.0 waited
       # so). Read from the package as it is uploaded, never changed: a change would break its signature.
-      - name: Info.plist as App Store Connect requires
+      - name: The SDK and Info.plist App Store Connect requires
         run: |
           app=$(find "$RUNNER_TEMP/app" -maxdepth 1 -name '*.app' | head -n1)
           if [ -z "$app" ]; then
@@ -606,6 +594,13 @@ jobs:
             app=$(find "$RUNNER_TEMP/ipa-check/Payload" -maxdepth 1 -name '*.app' | head -n1)
           fi
           plist="$app/Info.plist"
+          executable="$app/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")"
+          sdk=$(xcrun vtool -show-build "$executable" | awk '$1 == "sdk" {print $2; exit}')
+          echo "The app's runner is built with the iOS $sdk SDK."
+          if [ "${sdk%%.*}" -lt 26 ]; then
+            echo "::error::The app's runner was built with the iOS $sdk SDK; App Store Connect needs iOS 26 or later."
+            exit 1
+          fi
           plutil -lint "$plist"
           plutil -p "$plist" | grep -E 'DT|BuildMachine|UIRequired|arm64|ITSAppUsesNonExemptEncryption' || true
           missing=()
