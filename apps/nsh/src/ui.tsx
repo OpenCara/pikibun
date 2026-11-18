@@ -493,7 +493,16 @@ export function RowMenu(props: {
     if (props.open) heldMenu = held;
     else release();
   });
-  return <>{props.children}{menu(<View style={{ height: 0 }} />)}</>;
+  return (
+    <>
+      {props.children}
+      <Menu testID={props.testID} trigger={<View style={{ height: 0 }} />} offset={2} open={Boolean(props.open) && props.items().some(item => item !== "separator")}
+        onOpenChange={change => props.onOpenChange?.(change.open)}
+        backdropStyle={{ backgroundColor: palette().backdrop }} popupStyle={menuPopupStyle()}>
+        <MenuActions items={props.items()} />
+      </Menu>
+    </>
+  );
 }
 
 export interface SwipeAction {

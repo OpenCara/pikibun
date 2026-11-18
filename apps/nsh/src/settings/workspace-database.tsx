@@ -146,9 +146,9 @@ function ImportSheet(props: { path: string; database: WorkspaceDatabase; close: 
     void action.run(async () => {
       const [picked] = pageAvailable()
         ? await pickFilesInPage({ accept: "application/json,.json", maxBytes: maxUploadBytes })
-        : await Promise.all((await Picker.pickFiles({ filters: [{ name: "JSON dump", extensions: ["json"] }] })).map(async ({ file: chosen }) => ({
-          name: chosen.name, type: chosen.type, size: chosen.size,
-          ...(chosen.size <= maxUploadBytes ? { data: encodeBase64(new Uint8Array(await chosen.arrayBuffer())) } : {}),
+        : await Promise.all((await Picker.pickFiles({ filters: [{ name: "JSON dump", extensions: ["json"] }], maxSize: maxUploadBytes })).map(async ({ file: chosen, name, type, size }) => ({
+          name, type, size,
+          ...(chosen && size <= maxUploadBytes ? { data: encodeBase64(new Uint8Array(await chosen.arrayBuffer())) } : {}),
         })));
       if (!picked) return;
       imported.set(null);

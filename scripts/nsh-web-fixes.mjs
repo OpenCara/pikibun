@@ -3,8 +3,8 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync 
 import path from "node:path";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 
-export const MEASURE_TEXT = "measure_text:(e,t,n,r)=>(++this.measureUses>=5e3&&(this.measureUses=0,this.measure=R()),this.measure.font=this.str(e,t),this.measure.measureText(this.str(n,r)).width)";
-export const PATCHED_MEASURE_TEXT = "measure_text:(e,t,n,r)=>(++this.measureUses>=5e3&&(this.measureUses=0,this.measure=R()),__pikibunTextWidth(this.measure,this.str(e,t),this.str(n,r)))";
+export const MEASURE_TEXT = "measure_text:(e,t,n,r)=>(++this.measureUses>=5e3&&(this.measureUses=0,this.measure=q()),this.measure.font=this.str(e,t),this.measure.measureText(this.str(n,r)).width)";
+export const PATCHED_MEASURE_TEXT = "measure_text:(e,t,n,r)=>(++this.measureUses>=5e3&&(this.measureUses=0,this.measure=q()),__pikibunTextWidth(this.measure,this.str(e,t),this.str(n,r)))";
 
 export const DRAWN_WIDTH = String.raw`const __pikibunInDom=new Map,__pikibunSample="The quick brown fox jumps over the lazy dog, 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ";let __pikibunSpan=null;typeof document<"u"&&document.fonts?.addEventListener?.("loadingdone",()=>__pikibunInDom.clear());function __pikibunDomWidth(f,s){if(typeof document>"u"||!document.body)return null;if(!__pikibunSpan?.isConnected){let b=document.createElement("div");b.setAttribute("aria-hidden","true");b.style.cssText="position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none;contain:strict";__pikibunSpan=document.createElement("span");__pikibunSpan.style.cssText="position:absolute;left:0;top:0;white-space:pre;letter-spacing:normal;word-spacing:normal;text-transform:none;font-kerning:auto;font-feature-settings:normal";b.append(__pikibunSpan);document.body.append(b)}__pikibunSpan.style.font=f;__pikibunSpan.textContent=s;return __pikibunSpan.getBoundingClientRect().width}function __pikibunTextWidth(c,f,s){c.font=f;let d=__pikibunInDom.get(f);if(d===void 0){let w=__pikibunDomWidth(f,__pikibunSample);if(w==null)return c.measureText(s).width;let m=c.measureText(__pikibunSample).width;d=Math.abs(w-m)>Math.max(.5,m*.002);__pikibunInDom.set(f,d)}return d&&__pikibunDomWidth(f,s)||c.measureText(s).width}`;
 
@@ -27,7 +27,20 @@ function removeWithCompressed(file) {
   for (const name of [file, `${file}.br`, `${file}.gz`]) rmSync(name, { force: true });
 }
 
+export function checkStrictPage(html) {
+  for (const [, attributes, body] of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    if (/\bsrc\s*=/i.test(attributes) || /\btype\s*=\s*["']?application\/json\b/i.test(attributes)) continue;
+    throw new Error(`nsh-web-fixes: the page has an inline script, which its Content-Security-Policy refuses: <script${attributes}>${body.slice(0, 80)}`);
+  }
+  const app = /<script\b[^>]*\bid="nsh-app"[^>]*>([\s\S]*?)<\/script>/i.exec(html);
+  if (!app) throw new Error("nsh-web-fixes: the page has no #nsh-app to start");
+  if (JSON.parse(app[1]).linked !== true) {
+    throw new Error("nsh-web-fixes: the app's modules aren't linked to their files, so the runtime would add an import map and blob: modules, which the page's Content-Security-Policy refuses: import Native Shell's modules by name (import { x } from \"nsh\"), not whole");
+  }
+}
+
 export function fixWebSite(site) {
+  checkStrictPage(readFileSync(path.join(site, "index.html"), "utf8"));
   const entries = readdirSync(site);
   const loader = only(entries, /^nsh\.[0-9a-f]{10}\.js$/, "nsh.<hash>.js");
   const loaderSource = readFileSync(path.join(site, loader), "utf8");

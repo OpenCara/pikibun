@@ -22,7 +22,7 @@ const directive = (policy: string, name: string) => policy.split("; ").find(item
 
 test("the page's policy lets Native Shell's web runtime start, and no more", () => {
   const policy = pageContentSecurityPolicy();
-  assert.equal(directive(policy, "script-src"), "script-src 'self' blob: 'unsafe-inline' 'wasm-unsafe-eval'");
+  assert.equal(directive(policy, "script-src"), "script-src 'self' 'wasm-unsafe-eval'", "the site's own files and WebAssembly: no inline scripts, no blob: modules");
   assert.doesNotMatch(policy, /'unsafe-eval'|'sha256-|'nonce-|\*/, "no eval, no hashes or nonces, no wildcard");
   assert.equal(directive(policy, "connect-src"), "connect-src 'self' blob: data:", "requests go to this server only");
   for (const kept of ["object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'", "form-action 'self'", "default-src 'self'"]) {

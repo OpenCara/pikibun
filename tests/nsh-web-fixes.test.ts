@@ -4,9 +4,13 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DRAWN_WIDTH, MEASURE_TEXT, PATCHED_MEASURE_TEXT, fixWebSite } from "../scripts/nsh-web-fixes.mjs";
+import { DRAWN_WIDTH, MEASURE_TEXT, PATCHED_MEASURE_TEXT, checkStrictPage, fixWebSite } from "../scripts/nsh-web-fixes.mjs";
 
 const LOADER = `import(\`./browser.991ab24c49/runtime.js\`);const imports={nsh:{${MEASURE_TEXT},measure_numeric_text:()=>0}};`;
+const page = (loader: string, linked = true) => `<link rel="modulepreload" href="./${loader}">\n`
+  + `<script type="application/json" id="nsh-fetch">["app.0123456789.js"]</script>\n<script src="nsh-prefetch.4e97bd2e90.js"></script>\n`
+  + `<script type="application/json" id="nsh-app">{"code":"app.0123456789.js","runtime":"./${loader}","linked":${linked}}</script>\n`
+  + `<script type="module" src="nsh-start.40ff64d01a.js"></script>`;
 
 async function site(t: test.TestContext, loader = LOADER) {
   const root = await mkdtemp(join(tmpdir(), "nsh-site-"));
@@ -15,7 +19,7 @@ async function site(t: test.TestContext, loader = LOADER) {
   await writeFile(join(root, "browser.991ab24c49", "runtime.js"), "runtime");
   await writeFile(join(root, "nsh.89070fe10a.js"), loader);
   await writeFile(join(root, "nsh.89070fe10a.js.br"), "stale");
-  await writeFile(join(root, "index.html"), `<script type="module">import { createPlayer } from "./nsh.89070fe10a.js";</script>`);
+  await writeFile(join(root, "index.html"), page("nsh.89070fe10a.js"));
   return root;
 }
 
@@ -26,9 +30,20 @@ test("text is measured as the page draws it, in a renamed loader", async t => {
   assert.ok(!names.includes("nsh.89070fe10a.js") && !names.includes("nsh.89070fe10a.js.br"));
   assert.match(loader, /^nsh\.[0-9a-f]{10}\.js$/);
   assert.ok(existsSync(join(root, `${loader}.br`)) && existsSync(join(root, `${loader}.gz`)));
-  assert.equal(await readFile(join(root, "index.html"), "utf8"), `<script type="module">import { createPlayer } from "./${loader}";</script>`);
+  assert.equal(await readFile(join(root, "index.html"), "utf8"), page(loader));
   assert.equal(await readFile(join(root, loader), "utf8"), `${DRAWN_WIDTH}\n${LOADER.replace(MEASURE_TEXT, PATCHED_MEASURE_TEXT)}`);
   assert.equal(await readFile(join(root, "browser.991ab24c49", "runtime.js"), "utf8"), "runtime", "the runtime is left as it is");
+});
+
+test("a page the strict script policy would stop fails the build", async t => {
+  assert.doesNotThrow(() => checkStrictPage(page("nsh.89070fe10a.js")));
+  assert.throws(() => checkStrictPage(page("nsh.89070fe10a.js", false)), /aren't linked to their files/, "an import map and blob: modules");
+  assert.throws(() => checkStrictPage(`${page("nsh.89070fe10a.js")}<script>const fetches = new Map();</script>`), /inline script/);
+  assert.throws(() => checkStrictPage(`${page("nsh.89070fe10a.js")}<script type="module">import "./x.js";</script>`), /inline script/);
+  assert.throws(() => checkStrictPage("<script src=\"nsh-start.40ff64d01a.js\"></script>"), /no #nsh-app/);
+  const root = await site(t);
+  await writeFile(join(root, "index.html"), page("nsh.89070fe10a.js", false));
+  assert.throws(() => fixWebSite(root), /aren't linked/);
 });
 
 test("a loader without the measure_text it patches fails the build", async t => {

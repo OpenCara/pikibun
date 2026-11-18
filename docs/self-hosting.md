@@ -59,8 +59,8 @@ Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load
 ## The web client
 
 Servers serve the Native Shell client (`apps/nsh`, built by `pnpm build` into `dist/client`), the only web client the
-Docker image and `pikibun serve` ship. The page gets the policy NSH's web runtime needs (`'wasm-unsafe-eval'`, inline
-and `blob:` scripts).
+Docker image and `pikibun serve` ship. The page gets the policy NSH's web runtime needs: scripts from the server's
+own files and `'wasm-unsafe-eval'`, with no inline or `blob:` scripts.
 
 > **Upgrading from a server that served the React client:** the React web client is removed. Both clients use the same
 > API, so switching moves, copies or restores no accounts, hosts or sessions. Drop `STATIC_DIR=dist/web` and

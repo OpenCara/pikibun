@@ -3,6 +3,7 @@
   "id": "com.pikibun.app",
   "version": "0.1.0",
   "build": 1,
+  "nsh": ">=0.6.0",
   "icon": "icon.png",
   "schemes": ["pikibun"],
   "capabilities": {
@@ -13,6 +14,8 @@
     "openUrl": true,
     "statusBar": true,
     "notifications": true,
+    "application": true,
+    "homeDir": true,
     "fs": { "read": ["${homeDir}", "${dataDir}/updates", "${dataDir}/cli"], "write": ["${dataDir}/updates"] },
     "process": {
       "execute": ["zsh", "bash", "sh", "cmd", "schtasks"],
@@ -27,5 +30,6 @@
     },
     "host": ["page.*"]
   },
-  "web": { "host": "./web/host.js" }
+  "web": { "host": "./web/host.js" },
+  "ios": { "infoPlist": { "ITSAppUsesNonExemptEncryption": false } }
 }

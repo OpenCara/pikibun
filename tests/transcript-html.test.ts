@@ -39,7 +39,7 @@ test('nothing the client ships writes text into the page as HTML or runs it as c
     const text = readFileSync(file, 'utf8');
     for (const [pattern, name] of sinks) if (pattern.test(text)) found.push(`${relative(root, file)}: ${name}`);
   }
-  assert.deepEqual(found, [], 'transcript text, tool output and Markdown reach the page only as text: the page\'s policy allows inline scripts (see docs/design/security-rationale.md)');
+  assert.deepEqual(found, [], 'transcript text, tool output and Markdown reach the page only as text, whatever the page\'s policy allows (see docs/design/security-rationale.md)');
 });
 
 test('the code the build adds to Native Shell\'s web runtime writes only text and attributes into the page', () => {
