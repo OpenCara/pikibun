@@ -423,10 +423,13 @@ function Conversation(props: {
     loadingOlder.set(true);
     void Promise.all(olderConversations().map(conversation => props.live.loadOlder(conversation.id))).finally(() => loadingOlder.set(false));
   }
+  let scrolledFor: { list: ListRef; thread: string } | undefined;
   effect(() => {
-    actualMode();
-    conversationId();
-    list()?.scrollToEnd({ animated: false });
+    const ref = list();
+    const thread = `${actualMode()}:${conversationId()}`;
+    if (!ref || (scrolledFor?.list === ref && scrolledFor.thread === thread)) return;
+    scrolledFor = { list: ref, thread };
+    ref.scrollToEnd({ animated: false });
   });
 
   async function submit() {

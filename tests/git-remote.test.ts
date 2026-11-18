@@ -63,6 +63,33 @@ test("push surfaces a server-side rejection as ng with reason", gitAvailable, as
   assert.equal(git(upstream, ["rev-parse", "refs/heads/main"]), commits[2]);
 });
 
+test("a v0 fetch asks for multi-ack, as Azure DevOps requires, and reads the acknowledgements before the pack", gitAvailable, async (t) => {
+  const { root, commits, server } = await fixture(t, { protocolV2: false });
+  const asked: string[] = [];
+  const azure: typeof fetch = async (input, init) => {
+    if (init?.method === "POST") {
+      const body = Buffer.from(await new Response(init.body as ReadableStream<Uint8Array>).arrayBuffer());
+      const first = body.subarray(4, Math.max(4, parseInt(body.subarray(0, 4).toString(), 16))).toString();
+      asked.push(first);
+      if (!/ multi_ack(?:_detailed)?(?: |$)/.test(first)) {
+        return new Response("TF401041: The Git protocol sent is not as expected (Clients must support multi-ack.).", { status: 400, headers: { "Content-Type": "text/plain" } });
+      }
+      return fetch(input, { ...init, body } as RequestInit);
+    }
+    return fetch(input, init);
+  };
+  const remote = new GitRemote({ url: server.url("upstream.git"), authorization: AUTH, fetch: azure });
+  const pack = await remote.fetchHistory({ wants: [commits[2]!], haves: [commits[0]!, "f".repeat(40)] });
+  const parts: Uint8Array[] = [];
+  for await (const chunk of pack) parts.push(chunk);
+  assert.match(asked[0] ?? "", /^want [0-9a-f]{40} multi_ack_detailed side-band-64k ofs-delta /);
+  const file = join(root, "fetched.pack");
+  await writeFile(file, Buffer.concat(parts));
+  git(root, ["index-pack", file]);
+  assert.match(git(root, ["verify-pack", "-v", file]), new RegExp(`^${commits[2]} commit`, "m"));
+  assert.doesNotMatch(git(root, ["verify-pack", "-v", file]), new RegExp(`^${commits[0]} commit`, "m"), "the commit both sides have isn't sent again");
+});
+
 test("wrong Authorization is rejected with GitRemoteError 401", gitAvailable, async (t) => {
   const { server } = await fixture(t);
   const remote = new GitRemote({ url: server.url("upstream.git"), authorization: "Basic d3Jvbmc=" });
