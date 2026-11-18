@@ -6,7 +6,7 @@ import { app } from '../apps/server/src/index.js';
 import { connectorWorkspaceExtensions } from '../apps/server/src/extensions.js';
 import type { Env } from '../apps/server/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
-import { assessTask, autoChoice, autoModeOn, autoThinkingLevel, modelTier, rankModels } from '../packages/shared/src/auto-mode.js';
+import { assessTask, autoChoice, autoModeModels, autoModeOn, autoModelAllowed, autoModelPatternMatches, autoThinkingLevel, modelTier, parseAutoModels, rankModels } from '../packages/shared/src/auto-mode.js';
 import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, LocalModelSummary } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { isControlPlaneExtension, pikiControlPlaneExtensions, pikiExtension, pikiExtensionOn } from '../packages/shared/src/piki-extensions.js';
@@ -81,6 +81,28 @@ test('auto chooses an online host it may use, preferring the user\'s own, the id
   assert.equal(autoChoice({ ...base, task: complexTask, hosts: [own, shared], connectorId: 'c2' })?.connectorId, 'c2', 'a host the user kept');
   assert.equal(autoChoice({ ...base, task: complexTask, hosts: [own], model: { provider: 'anthropic', modelId: 'claude-sonnet-4-5' } })?.modelId, 'claude-sonnet-4-5', 'a model the user kept');
   assert.equal(autoChoice({ ...base, task: complexTask, hosts: [own], usable: (_, model) => model !== opus })?.modelId, 'claude-sonnet-4-5', 'only models the user may use');
+});
+
+test('auto mode\'s models setting names the only models Auto may choose: ids, provider/model or globs', () => {
+  assert.deepEqual(parseAutoModels(' anthropic/*, claude-haiku-4-5 |gpt-5\n\nanthropic/* '), ['anthropic/*', 'claude-haiku-4-5', 'gpt-5']);
+  assert.equal(parseAutoModels(undefined), undefined);
+  assert.equal(parseAutoModels(true), undefined);
+  assert.equal(parseAutoModels(' , \n'), undefined, 'a blank setting limits nothing');
+  assert.deepEqual(parseAutoModels(`${'x'.repeat(201)}, a\tb`), [], 'a setting with nothing readable in it allows no model, rather than every one');
+  assert.equal(autoModelAllowed([], haiku), false);
+  assert.deepEqual(autoModeModels([{ source: 'piki:auto-mode', enabled: true, settings: { models: 'anthropic/claude-sonnet-*' } }]), ['anthropic/claude-sonnet-*']);
+  assert.equal(autoModeModels([{ source: 'piki:pr-flow', enabled: true, settings: { models: 'x' } }]), undefined);
+  assert.equal(autoModelPatternMatches('claude-sonnet-4-5', sonnet), true);
+  assert.equal(autoModelPatternMatches('anthropic/claude-sonnet-4-5', sonnet), true);
+  assert.equal(autoModelPatternMatches('Anthropic/*', sonnet), true);
+  assert.equal(autoModelPatternMatches('*sonnet*', sonnet), true);
+  assert.equal(autoModelPatternMatches('openai/*', sonnet), false);
+  assert.equal(autoModelPatternMatches('claude-sonnet', sonnet), false, 'a name is matched whole');
+  assert.equal(autoModelPatternMatches('claude.sonnet-4-5', sonnet), false, 'a dot is a dot');
+  assert.equal(autoModelAllowed(undefined, opus), true, 'no setting allows every model');
+  assert.deepEqual([haiku, sonnet, opus].filter(model => autoModelAllowed(['claude-haiku-*', '*/claude-sonnet-4-5'], model)), [haiku, sonnet]);
+  const info = pikiExtension('piki:auto-mode')!;
+  assert.deepEqual(info.settings?.map(setting => [setting.name, setting.type]), [['models', 'string']]);
 });
 
 test('piki:auto-mode is Pikibun\'s, off until a workspace turns it on, and never reaches hosts', () => {
@@ -168,6 +190,13 @@ test('a workspace with auto mode on answers with a host and model for the task; 
   assert.equal((await json<{ code: string }>(await bob.request('POST', path, { task: complexTask, connectorId: 'elsewhere' }), 409)).code, 'auto_mode_unavailable');
   assert.equal((await json<{ code: string }>(await bob.request('POST', path, { task: 1 }), 400)).code, 'invalid_input');
   assert.equal((await json<{ code: string }>(await bob.request('POST', path, { task: '', extra: true }), 400)).code, 'invalid_input');
+
+  await json(await alice.request('PUT', `/api/workspaces/${workspace.id}/extensions`, { source: 'piki:auto-mode', settings: { models: 'claude-sonnet-*, anthropic/claude-haiku-4-5' } }));
+  assert.equal((await json<Answer>(await bob.request('POST', path, { task: complexTask }))).choice.modelId, 'claude-sonnet-4-5', 'Opus is not among the models setting');
+  assert.equal((await json<Answer>(await bob.request('POST', path, { task: simpleTask }))).choice.modelId, 'claude-haiku-4-5');
+  const refused = await json<{ code: string; error: string }>(await bob.request('POST', path, { task: complexTask, model: { provider: 'anthropic', modelId: 'claude-opus-4-1' } }), 409);
+  assert.equal(refused.code, 'auto_mode_unavailable');
+  assert.match(refused.error, /models setting names here \(claude-sonnet-\*, anthropic\/claude-haiku-4-5\)/);
 
   await json(await alice.request('PUT', `/api/workspaces/${workspace.id}/extensions`, { source: 'piki:auto-mode', enabled: false }));
   assert.deepEqual(await json(await bob.request('GET', path)), { enabled: false });
