@@ -49,6 +49,7 @@ test("the git tool refuses options that run a program, or take settings or hooks
     ["grep", "--open-files-in-pager=vi", "foo"],
     ["lfs", "merge-driver", "--program", "touch x"],
     ["lfs", "merge-driver", "--program=touch x"],
+    ["lfs", "merge-driver", "--prog", "touch x"],
   ];
   for (const args of refused) assert.throws(() => gitRequest({ args }), /runs a program/, args.join(" "));
   const allowed: string[][] = [
