@@ -8,6 +8,33 @@ export function autoModeOn(extensions: readonly { source: string; enabled: boole
   return extensions.some(item => item.source === AUTO_MODE_SOURCE && item.enabled);
 }
 
+export const AUTO_MODE_MODELS_SETTING = "models";
+export const AUTO_MODE_MODELS_LIMIT = 50;
+
+export function parseAutoModels(setting: unknown): string[] {
+  if (typeof setting !== "string") return [];
+  return [...new Set(setting.split(/[,|\n]+/).map(item => item.trim())
+    .filter(item => item && item.length <= 200 && !/[\x00-\x1f\x7f]/.test(item)))].slice(0, AUTO_MODE_MODELS_LIMIT);
+}
+
+export function autoModeModels(extensions: readonly { source: string; enabled: boolean; settings?: Readonly<Record<string, unknown>> }[]): string[] {
+  return parseAutoModels(extensions.find(item => item.source === AUTO_MODE_SOURCE)?.settings?.[AUTO_MODE_MODELS_SETTING]);
+}
+
+function globMatches(pattern: string, value: string): boolean {
+  if (!/[*?]/.test(pattern)) return pattern.toLowerCase() === value.toLowerCase();
+  const expression = pattern.split("").map(char => char === "*" ? ".*" : char === "?" ? "." : char.replace(/[\\^$.|+()[\]{}]/g, "\\$&")).join("");
+  return new RegExp(`^${expression}$`, "i").test(value);
+}
+
+export function autoModelPatternMatches(pattern: string, model: { provider: string; modelId: string }): boolean {
+  return pattern.includes("/") ? globMatches(pattern, `${model.provider}/${model.modelId}`) : globMatches(pattern, model.modelId);
+}
+
+export function autoModelAllowed(patterns: readonly string[], model: { provider: string; modelId: string }): boolean {
+  return !patterns.length || patterns.some(pattern => autoModelPatternMatches(pattern, model));
+}
+
 export const taskComplexities = ["simple", "moderate", "complex"] as const;
 export type TaskComplexity = (typeof taskComplexities)[number];
 
