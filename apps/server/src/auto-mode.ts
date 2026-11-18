@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
-import { AUTO_TASK_LIMIT, autoChoice, autoModeOn } from '../../../packages/shared/src/auto-mode.js';
+import { AUTO_TASK_LIMIT, autoChoice, autoModeModels, autoModeOn, autoModelAllowed, autoModelsText } from '../../../packages/shared/src/auto-mode.js';
 import type { Env, AppEnv } from './types.js';
 import { requireMember, workspaceExtensions } from './authority/index.js';
 import { usableModels } from './catalog.js';
@@ -18,6 +18,11 @@ const choiceRequest = z.strictObject({
 
 export async function autoModeEnabled(env: Env, workspaceId: string): Promise<boolean> {
   return autoModeOn(await workspaceExtensions(env, workspaceId));
+}
+
+export async function autoModeSettings(env: Env, workspaceId: string): Promise<{ enabled: boolean; models: string[] | undefined }> {
+  const extensions = await workspaceExtensions(env, workspaceId);
+  return { enabled: autoModeOn(extensions), models: autoModeModels(extensions) };
 }
 
 async function workingSessions(env: Env, connectorIds: readonly string[]): Promise<Record<string, number>> {
@@ -40,20 +45,22 @@ export function registerAutoMode(app: Hono<AppEnv>): void {
     const userId = c.get('auth').userId;
     await requireMember(c.env, workspaceId, userId);
     const input = await body(c, choiceRequest, { maxBytes: AUTO_TASK_LIMIT * 4 + 4096 });
-    if (!await autoModeEnabled(c.env, workspaceId)) fail(409, 'auto_mode_off', 'Auto mode is off in this workspace: its owners and admins add it under Extensions.');
+    const settings = await autoModeSettings(c.env, workspaceId);
+    if (!settings.enabled) fail(409, 'auto_mode_off', 'Auto mode is off in this workspace: its owners and admins add it under Extensions.');
     const [hosts, models] = await Promise.all([workspaceConnectorInfos(c.env, workspaceId, userId), usableModels(c.env, workspaceId, userId)]);
     const offered = new Set(models.flatMap(model => model.connector_id ? [JSON.stringify([model.connector_id, model.provider, model.model_id])] : []));
     const working = await workingSessions(c.env, hosts.filter(host => host.online).map(host => host.id));
     const choice = autoChoice({
       task: input.task, userId, workspaceId, hosts, working,
-      usable: (host, model) => offered.has(JSON.stringify([host.id, model.provider, model.modelId])),
+      usable: (host, model) => offered.has(JSON.stringify([host.id, model.provider, model.modelId])) && autoModelAllowed(settings.models, model),
       ...(input.connectorId ? { connectorId: input.connectorId } : {}),
       ...(input.model ? { model: input.model } : {}),
     });
     if (!choice) {
-      fail(409, 'auto_mode_unavailable', input.connectorId || input.model
+      const limited = settings.models ? ` Auto mode may choose only the models its models setting names here (${autoModelsText(settings.models)}).` : '';
+      fail(409, 'auto_mode_unavailable', (input.connectorId || input.model
         ? 'No online host offers what you kept: choose another host or model, or Auto for both.'
-        : 'No host shared with this workspace is online with a model you can use.');
+        : 'No host shared with this workspace is online with a model you can use.') + limited);
     }
     const model = models.find(item => item.connector_id === choice.connectorId && item.provider === choice.provider && item.model_id === choice.modelId);
     return c.json({ choice: { ...choice, ...(model ? { id: model.id } : {}) } });

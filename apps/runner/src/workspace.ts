@@ -6,6 +6,7 @@ import type { CloneBackup, SandboxAuthorize, SandboxExecutionOptions, SandboxIde
 import type { FindRequest, FindResult, SearchRequest, SearchResult } from "./search.js";
 import type { FileOperationRequest, FileOperationResult } from "./file-operations.js";
 import type { SessionBrowser } from "./browser-command.js";
+import type { ProcessRoots, ResourceGroups } from "./session-resources.js";
 
 export interface SessionWorkspace {
   readonly isolated: boolean;
@@ -14,6 +15,8 @@ export interface SessionWorkspace {
   readonly hostWorktree: string;
   readonly nodeBin?: string | undefined;
   readonly browser?: SessionBrowser | undefined;
+  readonly processes?: ProcessRoots;
+  resourceGroups?(): ResourceGroups | undefined;
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>>;
   initialize(): Promise<void>;
   readFile(path: string, authorize: SandboxAuthorize): Promise<string>;

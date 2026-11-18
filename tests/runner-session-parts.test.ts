@@ -641,9 +641,9 @@ test("defined tools: a refresh adds what Pikibun defines now as one more extensi
 
 function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {}, grants: Record<string, Partial<AuthorizationResult>> = { "github:2": { hostCommands: "auto" } }) {
   const events: string[] = [];
-  const sandbox = { hostWorktree: "/worktree", execute: async (operation: { command: string }, readOnly: boolean, authorize: () => Promise<void>) => {
+  const sandbox = { hostWorktree: "/worktree", execute: async (operation: { command: string }, readOnly: boolean, authorize: () => Promise<void>, options?: { binds?: readonly string[] }) => {
     await authorize();
-    events.push(`execute ${readOnly ? "read-only " : ""}${operation.command}`);
+    events.push(`execute ${readOnly ? "read-only " : ""}${options?.binds ? `binds ${options.binds.join(",")} ` : ""}${operation.command}`);
     return "done";
   }, writeFile: async (path: string) => { events.push(`write ${path}`); }, listFiles: async () => [] } as unknown as SessionWorkspace;
   const authorize = async (actorId: string, permission: string) => { events.push(`authorize ${actorId} ${permission}`); };
@@ -663,8 +663,8 @@ function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {},
   return { piki, host: piki.host(), events };
 }
 
-const pikiRun = (callId: string, readOnly = false): PikiSandboxRun => ({ callId, command: "gh", args: ["pr", "view"], env: {}, tokenEnv: ["GH_TOKEN"], readOnly,
-  signal: new AbortController().signal, timeoutSeconds: 30 });
+const pikiRun = (callId: string, readOnly = false, binds: readonly string[] = []): PikiSandboxRun => ({ callId, command: "gh", args: ["pr", "view"], env: {}, tokenEnv: ["GH_TOKEN"],
+  binds, readOnly, signal: new AbortController().signal, timeoutSeconds: 30 });
 
 test("piki: an extension's tool runs for a message that may act, while its extension applies, for someone with host commands, and its record says how it ended", async () => {
   const state = toolState();
@@ -712,14 +712,14 @@ test("piki: a CLI runs in the sandbox only inside a call the session admitted, w
   events.length = 0;
   await host.runTool({ source: "npm:ext", tool: "gh", arguments: {}, api: toolApi(state), signal: new AbortController().signal, context: {} as never }, async () => {
     const written = await piki.sandbox!(pikiRun("call-1"));
-    const read = await piki.sandbox!(pikiRun("call-1", true));
+    const read = await piki.sandbox!(pikiRun("call-1", true, ["/opt/az", "/opt/azure-cli"]));
     assert.deepEqual([written.output, read.output], ["done", "done"]);
     assert.match(await piki.saveOutput!("call-1", "gh", "long"), /gh/);
     return { output: [] };
   });
   assert.deepEqual(events.slice(4), ["lease", "authorize github:2 write",
     `execute PATH="$PATH:/usr/local/bin" && export PATH && exec env 'GH_TOKEN=lease-token' 'gh' 'pr' 'view' </dev/null 2>&1`, "release",
-    "authorize github:2 write", `execute read-only PATH="$PATH:/usr/local/bin" && export PATH && exec env 'gh' 'pr' 'view' </dev/null 2>&1`,
+    "authorize github:2 write", `execute read-only binds /opt/az,/opt/azure-cli PATH="$PATH:/usr/local/bin" && export PATH && exec env 'gh' 'pr' 'view' </dev/null 2>&1`,
     "write tool-output/gh-call-1-d39038e4.txt"], "a read-only command gets no lease");
   const onHost = pikiFixture(state, { onHost: true }).host.piki!;
   assert.equal(onHost.sandbox, undefined);

@@ -23,7 +23,7 @@ export function ExtensionSettingsFields(props: {
             <If when={flag().type !== "boolean"}
               else={<Checkbox label="On" disabled={props.busy} checked={(props.settings[flag().name] ?? flag().default) === true}
                 onChange={checked => props.onChange({ ...props.settings, [flag().name]: checked })} />}>
-              <TextField value={text(flag().name)} onChange={value => setText(flag().name, value)} disabled={props.busy} maxLength={SETTING_TEXT} monospace
+              <TextField testID={`extension-setting-${flag().name}`} value={text(flag().name)} onChange={value => setText(flag().name, value)} disabled={props.busy} maxLength={SETTING_TEXT} monospace
                 multiline={props.multiline?.includes(flag().name)} placeholder={typeof flag().default === "string" ? flag().default as string : ""} />
             </If>
           </Field>

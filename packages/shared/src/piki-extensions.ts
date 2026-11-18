@@ -21,6 +21,14 @@ export interface PikiExtensionInfo {
   workflow?: boolean;
   controlPlane?: boolean;
   needs?: readonly `piki:${string}`[];
+  settings?: readonly PikiExtensionSetting[];
+}
+
+export interface PikiExtensionSetting {
+  name: string;
+  type: "boolean" | "string";
+  description?: string;
+  default?: boolean | string;
 }
 
 function documentSourceExtension(name: string, kind: DocumentKind, title: string): PikiExtensionInfo {
@@ -46,7 +54,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     name: "azure-cli", source: "piki:azure-cli", tool: "az", title: "Azure CLI",
     description: "Runs the Azure CLI (az) in the session's sandbox, as the session owner: Azure DevOps pull requests, pipelines and work items (with the azure-devops extension).",
     install: "https://learn.microsoft.com/cli/azure/install-azure-cli", account: "their Azure DevOps access token for the organization under Git accounts",
-    signIn: "az login (and az extension add --name azure-devops)", providers: ["azure-devops"],
+    signIn: "az login (and sudo az extension add --name azure-devops --system)", providers: ["azure-devops"],
   },
   {
     name: "schedule", source: "piki:schedule", title: "Scheduled prompts", sessionTools: ["schedule"],
@@ -167,8 +175,12 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "auto-mode", source: "piki:auto-mode", title: "Auto mode", controlPlane: true, optIn: true,
-    description: "Adds Auto to the host and model dropdowns: Pikibun picks the session's host, model and reasoning level for the task, from how complex it looks (simple ones get a light model, complex ones a frontier model with more reasoning) and the hosts' details (online, shared here, yours, sandboxed, with a GPU where the task needs one, how busy). Pikibun runs it itself: hosts install nothing. Without it, the dropdowns have no Auto.",
+    description: "Adds Auto to the host and model dropdowns: Pikibun picks the session's host, model and reasoning level for the task, from how complex it looks (simple ones get a light model, complex ones a frontier model with more reasoning) and the hosts' details (online, shared here, yours, sandboxed, with a GPU where the task needs one, how busy). Its models setting limits which models Auto may choose. Pikibun runs it itself: hosts install nothing. Without it, the dropdowns have no Auto.",
     providers: [],
+    settings: [{
+      name: "models", type: "string", default: "",
+      description: "The only models Auto may choose, and judge messages with, separated by commas: model ids (claude-sonnet-4-5), provider/model (anthropic/claude-sonnet-4-5), or globs such as anthropic/* or *sonnet*. Empty lets Auto choose any model the session's host offers",
+    }],
   },
 ] as const satisfies readonly PikiExtensionInfo[]);
 

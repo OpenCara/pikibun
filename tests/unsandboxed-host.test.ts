@@ -207,8 +207,8 @@ test("a host clone session reads the branches its clones have checked out, as Gi
   const run = (command: string) => workspace.execute({ kind: "bash", command }, false, authorize);
   await run(`git init -q -b main '${upstream}' && git -C '${upstream}' commit -q --allow-empty -m initial`);
   await run(`git clone -q '${upstream}' app && git clone -q '${upstream}' other && git -C app switch -q -c fix/parser`);
-  assert.deepEqual(await workspace.cloneBranches(authorize), [{ directory: "app", origin: upstream, branch: "fix/parser" }],
-    "a clone on its origin's default branch has no pull request of its own");
+  assert.deepEqual(await workspace.cloneBranches(authorize), [{ directory: "app", origin: upstream, branch: "fix/parser" }, { directory: "other", origin: upstream }],
+    "a clone on its origin's default branch has no branch of its own");
 });
 
 async function stillBeating(file: string): Promise<boolean> {

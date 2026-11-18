@@ -18,6 +18,7 @@ import { registerSessionLinks, registerSharedSessions } from './session-links.js
 import { registerBackups } from './backups.js';
 import { registerSessionFiles } from './session-files.js';
 import { registerSessionArtifacts } from './session-artifacts.js';
+import { registerSessionResources } from './session-resources.js';
 import { registerSessionTunnels } from './session-tunnels.js';
 import { registerSessionSudo } from './session-sudo.js';
 import { registerFileUploads } from './file-uploads.js';
@@ -109,6 +110,7 @@ registerSessionLinks(app);
 registerBackups(app);
 registerSessionFiles(app);
 registerSessionArtifacts(app);
+registerSessionResources(app);
 registerSessionTunnels(app);
 registerSessionSudo(app);
 registerFileUploads(app);

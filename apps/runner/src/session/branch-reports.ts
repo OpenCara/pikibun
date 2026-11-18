@@ -4,6 +4,7 @@ import { reportedBranches, type CloneBranch } from "../clone-branches.js";
 
 export interface BranchReportsOptions {
   sessionId: string;
+  sessionBranch?: string;
   send: (sessionId: string, branches: SessionBranch[]) => Promise<void>;
   repositories: () => Promise<EgressRepository[]>;
   clones: () => Promise<CloneBranch[]>;
@@ -32,7 +33,7 @@ export class BranchReports {
           this.#wanted = false;
           if (!this.#repositories.length) this.#repositories = await this.options.repositories();
           if (!this.#repositories.length) break;
-          const branches = reportedBranches(await this.options.clones(), this.#repositories);
+          const branches = reportedBranches(await this.options.clones(), this.#repositories, this.options.sessionBranch);
           const json = JSON.stringify(branches);
           if (json === this.#sent) continue;
           await this.options.send(this.options.sessionId, branches);

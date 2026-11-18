@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProcessChannel, sandboxLaunch, workerCodeMounts } from "../apps/runner/src/extensions/process.js";
 import { installMount } from "../apps/runner/src/extensions/load.js";
 import { sandboxDescribe } from "../apps/runner/src/extensions/describe.js";
-import { Sandbox, serviceBindAllowed } from "../apps/runner/src/sandbox.js";
+import { commandBindAllowed, Sandbox, serviceBindAllowed } from "../apps/runner/src/sandbox.js";
 import { serviceLimits, serviceSocketDirectory } from "../apps/runner/src/session-service.js";
 import { binding, linuxSandboxMissing } from "./helpers/workspaces.js";
 
@@ -22,6 +23,32 @@ test("a service is given only paths of its own: never a system directory, the ho
     "an installed package is mounted with its project, which holds its dependencies");
   assert.equal(installMount("/work/my-extension.ts"), "/work/my-extension.ts", "a single-file extension is mounted alone, never its directory");
   assert.ok(workerCodeMounts().length > 0, "the connector's own code is found to mount");
+});
+
+test("a command is given only a program's install under /opt, never Pikibun's own or anything else of the host's", () => {
+  for (const path of ["/", "/opt", "/opt/pikibun", "/opt/pikibun/bin", "/usr", "/etc", "/home", homedir(), "opt/az", "/opt/az/../../etc", "/opt/az/", "/opt/a\nb"]) {
+    assert.equal(commandBindAllowed(path), false, path);
+  }
+  for (const path of ["/opt/az", "/opt/azure-cli"]) assert.equal(commandBindAllowed(path), true, path);
+});
+
+test("in the Linux sandbox, a command sees the /opt installs it was given, read-only, where they exist, and is refused any other path", { skip: linuxSandboxMissing() }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-command-binds-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const faux = binding("command-binds");
+  const sandbox = new Sandbox({ ...faux, model: { ...faux.model, provider: "faux" } }, join(root, "session"), undefined, {});
+  t.after(() => sandbox.close());
+  await sandbox.initialize();
+  const present = ["/opt/az", "/opt/azure-cli"].find(path => existsSync(path));
+  const absent = "/opt/pikibun-test-absent-install";
+  const shell = (command: string, binds: string[]) => sandbox.execute({ kind: "bash", command }, false, async () => {}, { allowTestShell: true, binds });
+  assert.equal((await shell(`test -e ${absent} || echo absent`, [absent])).trim(), "absent", "a missing install is left out, and the command still runs");
+  if (present) {
+    assert.deepEqual((await shell(`test -d ${present} && echo seen; touch ${present}/written 2>/dev/null || echo read-only`, [present])).trim().split("\n"), ["seen", "read-only"]);
+    assert.equal((await shell(`test -e ${present} || echo hidden`, [])).trim(), "hidden", "only for a command given it");
+  } else t.diagnostic("no Azure CLI install under /opt here: only the absent case is checked");
+  await assert.rejects(shell("true", ["/etc"]), /A command can't be given \/etc/);
+  await assert.rejects(shell("true", ["/opt/pikibun"]), /A command can't be given \/opt\/pikibun/);
 });
 
 test("in the Linux sandbox, an installed extension sees the session's worktree and its own files, read-only, and nothing else of the host's", { skip: linuxSandboxMissing() }, async t => {

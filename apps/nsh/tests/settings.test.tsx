@@ -369,7 +369,7 @@ describe("settings", () => {
     await app.press("text:Add extension");
     await app.waitFor("text:Pikibun features");
     await app.press("text:Auto mode");
-    await app.waitUntil(() => app.texts().some(item => item.startsWith("Adds Auto to the host and model dropdowns") && item.endsWith("It has no settings.")));
+    await app.waitUntil(() => app.texts().some(item => item.startsWith("Adds Auto to the host and model dropdowns") && item.endsWith("Set its settings with Edit once added.")));
     await app.press("text:Save");
     await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`) !== undefined);
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`)).toMatchObject({ source: "piki:auto-mode", enabled: true });
@@ -385,6 +385,39 @@ describe("settings", () => {
     await app.waitFor("text:Auto mode · piki:auto-mode");
     expect(app.texts().join(" ")).toContain("Runs in Pikibun itself: hosts install nothing");
     expect(app.texts().join(" ")).not.toContain("0 of 1 host");
+  });
+
+  test("Extensions limits the models auto mode may choose with its models setting", async () => {
+    const autoMode = { source: "piki:auto-mode", enabled: true, tools: "automatic", settings: {} };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, extensions: [autoMode], hosts: [] } },
+      [`PUT ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [{ ...autoMode, settings: { models: "anthropic/claude-sonnet-*" } }] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("text:Auto mode · piki:auto-mode");
+    await app.press("text:Auto mode · piki:auto-mode");
+    await app.waitFor("id:auto-mode-models");
+    expect(app.texts().join(" ")).toContain("Auto chooses among every model the session's host offers");
+    await app.press("text:Edit");
+    await app.waitFor("id:extension-setting-models");
+    await app.type("id:extension-setting-models", "anthropic/claude-sonnet-*");
+    await app.press("text:Save");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`)).toMatchObject({ source: "piki:auto-mode", settings: { models: "anthropic/claude-sonnet-*" } });
+  });
+
+  test("Extensions shows a models setting with nothing readable in it as allowing no model, as Auto treats it", async () => {
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [],
+        extensions: [{ source: "piki:auto-mode", enabled: true, tools: "automatic", settings: { models: "x".repeat(201) } }] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("text:Auto mode · piki:auto-mode");
+    await app.press("text:Auto mode · piki:auto-mode");
+    await app.waitFor("id:auto-mode-models");
+    expect(app.texts().join(" ")).toContain("Auto chooses only among: none it can read.");
   });
 
   test("Extensions warns that Sub-agents does nothing while Other sessions is off, and adds it from there", async () => {
@@ -466,12 +499,14 @@ describe("settings", () => {
     await app.press("id:workspace-w1");
     await app.waitFor("id:schedule-sc2");
     expect(app.texts().join(" ")).toContain("runs as Grace Hopper");
+    expect(app.texts().join(" ")).not.toContain("Run the nightly checks");
     await app.press("text:Pause");
     await app.waitUntil(() => Boolean(bodyOf(app, "PATCH", `${ORIGIN}/api/workspaces/w1/schedules/sc2`)));
     expect(bodyOf(app, "PATCH", `${ORIGIN}/api/workspaces/w1/schedules/sc2`)).toEqual({ enabled: false });
     await app.press("text:Edit");
     await app.waitFor("id:schedule-takeover");
     expect(app.texts().join(" ")).toContain("This schedule runs as Grace Hopper. Saving a change makes it yours");
+    expect(app.value("id:schedule-content")).toBe("Run the nightly checks");
     expect(app.texts().join(" ")).not.toContain("choose a model for it");
   });
 

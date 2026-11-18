@@ -84,7 +84,16 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    older connector leaves out the API hosts it doesn't know.
 8. **In the sandbox, as the session owner.** A session with a sandbox and an egress proxy runs the command there, as
    one sandbox operation (`SessionPiki`'s sandbox command in `apps/runner/src/session/piki.ts`, through `bash` with every word quoted): it sees the host's
-   `/usr`, so the host's owner installs the command there. Its API requests go through the proxy, which adds the session
+   `/usr`, so the host's owner installs the command there. A command whose `/usr/bin` entry is a script starting a
+   program outside `/usr` names that install in its spec (`sandboxRoots`): `az` from Microsoft's .deb starts
+   `/opt/az/bin/python3`, and Arch's `/opt/azure-cli/bin/python`, so without them every `az` call ended with exit 127
+   and was reported as `az` missing. The Linux sandbox binds those directories read-only for that command's runs only,
+   where they exist (`--ro-bind-try`), and takes nothing but a directory under `/opt` other than `/opt/pikibun`
+   (`commandBindAllowed`). An exit 127 naming a program the script starts says that program is out of the sandbox's
+   sight (`sandboxMissingFile`), not that the command is missing; where it is under `/usr` or one of those roots,
+   which the sandbox does see, it says the install looks incomplete instead. Azure CLI extensions added for the host owner live in
+   their `~/.azure`, which the sandbox's own home hides, so `azure-devops` is added with `--system`, under the CLI's
+   install. Its API requests go through the proxy, which adds the session
    owner's access (see [credentialed APIs](egress.md#credentialed-apis-gh-without-a-token-in-the-sandbox)):
    - **Reads, always**: of api.github.com with the read-only GitHub App token for the workspace's repositories the
      session owner can read, on any host; of gitlab.com and dev.azure.com with the owner's own personal access token,
@@ -671,7 +680,7 @@ that kind of task on, among the models that host offers. The member still choose
     message's options, not a Pi extension a host loads. It is off until added, and a workspace that removes or turns it
     off has no Auto: `GET /api/workspaces/:id/auto-mode` answers `{ enabled }`, which the client reads before offering
     it, and a message sent with Auto is refused with `auto_mode_off`. It isn't among the default extensions, so no
-    migration adds it; the add sheet offers it under **Pikibun features**, and it has no settings.
+    migration adds it; the add sheet offers it under **Pikibun features**; its one setting is `models` (note 47).
 42. **The host is the member's; only the model is Auto.** The host menu has no Auto: choosing where work runs is
     choosing whom to trust with the task and the code, and that stays the member's, as does a shared host's trust.
     Auto in the model menu leaves the model and the reasoning to the evaluation for each message; the access stays the
@@ -725,6 +734,17 @@ that kind of task on, among the models that host offers. The member still choose
     keeping the conversation's model (from the session's view) for a follow-up there too.
     `POST /api/workspaces/:id/auto-mode` stays for clients from before this, answering with the old rules' host and
     model (`autoChoice`); new clients no longer call it.
+47. **The models setting: the only models Auto may choose.** A workspace may not want Auto spending on every model its
+    hosts offer. The catalogue declares `piki:auto-mode`'s settings itself (`settings` on its entry, since no host
+    reports a control-plane extension's flags), and the Extensions page edits them as it does a host-reported
+    extension's. `models` is a list of patterns separated by commas (`parseAutoModels`, at most 50): a model id, a
+    provider/model, or a glob with `*` and `?`, matched without regard to case (`autoModelPatternMatches`); a blank
+    setting allows every model, but one whose every entry is unreadable (too long, control characters) allows none,
+    so a mistyped limit fails closed rather than lifting it. The control plane applies it where it lists the candidates (`chatOptions`), before the
+    runner sees them, so the evaluator is one of them too and an older connector's rules choose among them; the old
+    `POST` filters its `usable` models the same way, and its refusal names the setting where one is set. With none of the host's usable models allowed, a message sent
+    with Auto is refused with `auto_mode_unavailable`, naming the setting, rather than run on a model the workspace
+    ruled out. A model picked by hand is unaffected: the setting limits Auto, not members.
 
 ## Where things are
 

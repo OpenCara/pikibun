@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { createConnector, controlPlaneOrigin } from "./connector.js";
-import { assertConnectorPlatform, assertPrerequisites, checkPrerequisites, defaultStateDir, loadConnectorModels, savedPairing, unsandboxedWarning } from "./connect-setup.js";
+import { assertConnectorPlatform, assertPrerequisites, checkPrerequisites, defaultStateDir, loadConnectorModels, savedPairing, unsandboxedWarning, verifySandboxIsolation, isolationMessage } from "./connect-setup.js";
 import { ConnectorSetupError } from "./protocol.js";
 import { identityDirectory } from "./identity.js";
 import type { ResourceConfig } from "./resources.js";
@@ -255,19 +255,20 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const code = pairingId ? await promptPairingCode() : "";
   if (pairingId && !code) throw new ConnectorSetupError("No pairing code was entered. Paste the single-use code shown in Pikibun at the hidden prompt.");
   const pairing = pairingId ? { id: pairingId, code } : undefined;
+  const isolation = !unsandboxed && !sandboxBackend ? await verifySandboxIsolation() : undefined;
   const connector = createConnector({
     dataDir, identityDir: identityDirectory(values["identity-dir"]),
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
     remoteExtensionInstalls: values["no-remote-installs"] !== true, managedExtensions: values["managed-extensions"] === true,
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
-    capabilities: { platform: process.platform, sandbox: false, productionShell: false },
+    capabilities: { platform: process.platform, sandbox: isolation?.ok === true, productionShell: false },
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },
     onWarning: (warning, detail) => { process.stderr.write(warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : "Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.\n"); },
   });
   process.stderr.write(unsandboxed
     ? "Running unsandboxed: commands execute directly on this machine.\n"
     : sandboxBackend ? `Experimental ${sandboxBackend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.\n`
-    : "Sandbox capability is verified per session; without provisioned, verified limits, commands run only where they may run without them.\n");
+    : `${isolationMessage(isolation)}\n`);
   process.stderr.write("Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings > Hosts > this host.\n");
   const stopped = Promise.withResolvers<void>();
   const stop = () => { void connector.stop().then(() => stopped.resolve(), () => stopped.reject(new Error("Connector shutdown failed"))); };
