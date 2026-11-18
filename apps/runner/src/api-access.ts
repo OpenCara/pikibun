@@ -6,7 +6,7 @@ import { isIP, type LookupFunction } from "node:net";
 import { Readable, type Duplex } from "node:stream";
 import { TLSSocket } from "node:tls";
 import { API_CREDENTIAL_CACHE_SECONDS, API_TOKEN_PLACEHOLDER, apiWriteLease, apiWriteToken, hostAllowed, type ApiAccessKind, type ApiCredential,
-  type ApiCredentialGrant, type CredentialedApiProvider, type EgressGrant } from "../../../packages/shared/src/network.js";
+  type ApiCredentialGrant, type ApiReach, type CredentialedApiProvider, type EgressGrant } from "../../../packages/shared/src/network.js";
 import { forgeWriteTools } from "../../../packages/shared/src/tool-groups.js";
 import { fakeIpAddress, publicAddress } from "./egress.js";
 import { interceptionAuthority, type InterceptionAuthority } from "./interception-ca.js";
@@ -29,7 +29,7 @@ export interface UpstreamResponse { status: number; headers: IncomingHttpHeaders
 export type ApiUpstream = (request: UpstreamRequest) => Promise<UpstreamResponse>;
 
 export interface ApiAccessOptions {
-  credential: (host: string, access: ApiAccessKind) => Promise<unknown>;
+  credential: (host: string, access: ApiAccessKind, reach?: ApiReach) => Promise<unknown>;
   grant: () => Promise<EgressGrant>;
   record: (entry: ApiEntry) => void;
   authority?: InterceptionAuthority;
@@ -86,8 +86,10 @@ export function parseApiCredentialGrant(value: unknown): ApiCredentialGrant {
       || typeof credential.authorization !== "string" || !/^[\x21-\x7e][\x20-\x7e]{0,16383}$/.test(credential.authorization)
       || !Array.isArray(credential.repositories) || credential.repositories.length > 100
       || credential.repositories.some(name => typeof name !== "string" || !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(name))
+      || (credential.anyRepository !== undefined && credential.anyRepository !== true)
       || typeof credential.expiresAt !== "string" || !Number.isFinite(Date.parse(credential.expiresAt))) throw invalid();
-    return { account: credential.account, authorization: credential.authorization, repositories: [...credential.repositories as string[]], expiresAt: credential.expiresAt };
+    return { account: credential.account, authorization: credential.authorization, repositories: [...credential.repositories as string[]],
+      ...(credential.anyRepository === true ? { anyRepository: true as const } : {}), expiresAt: credential.expiresAt };
   });
   return { available: true, credentials, cacheSeconds: cacheSeconds as number };
 }
@@ -175,7 +177,8 @@ export const publicUpstream: ApiUpstream = async ({ url, method, headers, body, 
 export function credentialFor(credentials: ApiCredential[], scope: { repository?: string; account?: string }, owner?: string): ApiCredential | undefined {
   if (scope.repository) {
     const name = scope.repository.toLowerCase();
-    return credentials.find(credential => credential.repositories.some(item => item.toLowerCase() === name));
+    return credentials.find(credential => credential.repositories.some(item => item.toLowerCase() === name))
+      ?? credentials.find(credential => credential.anyRepository === true);
   }
   if (scope.account !== undefined) {
     const account = scope.account.toLowerCase();
@@ -193,7 +196,7 @@ export class ApiAccess {
   readonly #hosts = new WeakMap<object, string>();
   readonly #credentials = new Map<string, { grant: ApiCredentialGrant; until: number }>();
   readonly #pending = new Map<string, Promise<ApiCredentialGrant>>();
-  readonly #leases = new Set<string>();
+  readonly #leases = new Map<string, { reach: ApiReach }>();
 
   constructor(options: ApiAccessOptions) {
     this.#options = options;
@@ -205,9 +208,9 @@ export class ApiAccess {
 
   handles(host: string): boolean { return this.#authority.hosts.includes(host) && apiRules[host] !== undefined; }
 
-  lease(): { token: string; release(): void } {
+  lease(options: { reach?: ApiReach } = {}): { token: string; release(): void } {
     const lease = randomBytes(32).toString("base64url");
-    this.#leases.add(lease);
+    this.#leases.set(lease, { reach: options.reach ?? "workspace" });
     return { token: apiWriteToken(lease), release: () => { this.#leases.delete(lease); } };
   }
 
@@ -220,16 +223,21 @@ export class ApiAccess {
     this.#server.emit("connection", socket);
   }
 
-  async #credential(host: string, access: ApiAccessKind): Promise<ApiCredentialGrant> {
-    const key = `${access} ${host}`;
+  async #credential(host: string, access: ApiAccessKind, reach: ApiReach = "workspace"): Promise<ApiCredentialGrant> {
+    const key = `${access} ${reach} ${host}`;
     const cached = this.#credentials.get(key);
     if (cached && cached.until > Date.now()) return cached.grant;
     let pending = this.#pending.get(key);
     if (!pending) {
       pending = (async () => {
         let grant: ApiCredentialGrant;
-        try { grant = parseApiCredentialGrant(await this.#options.credential(host, access)); }
+        try { grant = parseApiCredentialGrant(await (reach === "any" ? this.#options.credential(host, access, reach) : this.#options.credential(host, access))); }
         catch (error) {
+          if (reach === "any" && error instanceof RunnerError && error.status === 400) {
+            const workspace = await this.#credential(host, access);
+            this.#credentials.set(key, { grant: workspace, until: Date.now() + (workspace.available ? API_CREDENTIAL_CACHE_SECONDS * 1000 : UNAVAILABLE_CACHE_MS) });
+            return workspace;
+          }
           const reason = error instanceof RunnerError && /^[\x20-\x7e]{1,300}$/.test(error.message) ? error.message : "Pikibun gave no credential for this API";
           const unavailable: ApiCredentialGrant = { available: false, reason, cacheSeconds: 0 };
           this.#credentials.set(key, { grant: unavailable, until: Date.now() + UNAVAILABLE_CACHE_MS });
@@ -263,7 +271,9 @@ export class ApiAccess {
     if (named !== host) return refuse(421, `This connection is for ${host}, not ${named.slice(0, 253) || "no host"}`);
     if (!path.startsWith("/") || path.length > PATH_LENGTH) return refuse(400, "Invalid API request path");
     const carried = placeholderOf(request.headers);
-    const leased = carried.lease !== undefined && this.#leases.has(carried.lease);
+    const lease = carried.lease !== undefined ? this.#leases.get(carried.lease) : undefined;
+    const leased = lease !== undefined;
+    const reach: ApiReach = lease?.reach === "any" && rules.provider === "github" ? "any" : "workspace";
     const isApi = rules.api(pathname) && (!rules.placeholderOnly || carried.placeholder);
     const rule = isApi ? apiRule(rules, method, pathname) : "read";
     if (isApi && rule === "write" && !leased) return refuse(403, unleasedWrite(rules, `${method} ${pathname.slice(0, 200)}`));
@@ -320,12 +330,12 @@ export class ApiAccess {
         && credentialFor(available.credentials, scope) !== undefined;
       if (leased && named && appRead) {
         ownerInstead = async () => {
-          const write = await this.#credential(host, "write");
+          const write = await this.#credential(host, "write", reach);
           return write.available ? credentialFor(write.credentials, scope) : undefined;
         };
       }
       if (leased && named && !appRead) {
-        const write = await this.#credential(host, "write");
+        const write = await this.#credential(host, "write", reach);
         if (write.available) { available = write; access = "write"; }
         else if (rule === "write" || mutates) {
           return refuse(403, `${write.reason}; ${method} ${pathname.slice(0, 200)} didn't reach ${rules.name}`);

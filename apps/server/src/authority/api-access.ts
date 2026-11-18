@@ -12,6 +12,7 @@ import { failureCode, githubSignInExpired } from './github-sign-in.js';
 import { rateLimitedUntil, rateLimitText } from './github-reads.js';
 import { memberToolGroup } from './tool-groups.js';
 import { forgeWriteTools } from '../../../../packages/shared/src/tool-groups.js';
+import { ownerReachesAnyGitHubRepository } from './github-reach.js';
 
 export function sandboxGitHubApiMode(env: Env): 'on' | 'own-hosts' | 'off' {
   const value = env.SANDBOX_GITHUB_API?.trim().toLowerCase();
@@ -37,10 +38,12 @@ const signInExpired = 'GitHub no longer accepts Pikibun\'s sign-in for the sessi
 
 export async function apiCredential(c: AppContext, connector: ConnectorRow | null): Promise<Response> {
   const input = await jsonObject(c, 4096);
-  if (Object.keys(input).some(key => key !== 'sessionId' && key !== 'host' && key !== 'access')) fail(400, 'invalid_api_request', 'Only the session, host and access are accepted.');
+  if (Object.keys(input).some(key => key !== 'sessionId' && key !== 'host' && key !== 'access' && key !== 'reach')) fail(400, 'invalid_api_request', 'Only the session, host, access and reach are accepted.');
   const sessionId = identifier(input.sessionId, 'sessionId');
   if (typeof input.host !== 'string' || !credentialedApiHosts.includes(input.host)) fail(400, 'invalid_api_request', 'Not a credentialed API host.');
   if (input.access !== undefined && input.access !== 'read' && input.access !== 'write') fail(400, 'invalid_api_request', 'Access is read or write.');
+  if (input.reach !== undefined && input.reach !== 'workspace' && input.reach !== 'any') fail(400, 'invalid_api_request', 'Reach is workspace or any.');
+  if (input.reach === 'any' && input.access !== 'write') fail(400, 'invalid_api_request', 'Only a write credential reaches any repository.');
   const host = input.host;
   const access: ApiAccessKind = input.access === 'write' ? 'write' : 'read';
   const provider = credentialedApiProviders[host]!;
@@ -131,7 +134,9 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
   await authorize();
   if (access === 'write') {
     if (owner.provider !== 'github') return unavailable('The session owner has no GitHub connection');
-    return answer([{ account: 'session-owner', authorization: `Bearer ${owner.github.token}`, repositories: readable.map(item => item.fullName), expiresAt: expiresAt() }]);
+    const anyRepository = input.reach === 'any' && await ownerReachesAnyGitHubRepository(c.env.DB, original);
+    return answer([{ account: 'session-owner', authorization: `Bearer ${owner.github.token}`, repositories: readable.map(item => item.fullName),
+      ...(anyRepository ? { anyRepository: true as const } : {}), expiresAt: expiresAt() }]);
   }
   let minted: Awaited<ReturnType<typeof mintGitHubApiReadTokens>>;
   try { minted = await mintGitHubApiReadTokens(c.env, { workspaceId: original.workspace_id, repositories: readable }); }

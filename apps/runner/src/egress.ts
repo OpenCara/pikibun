@@ -9,7 +9,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Readable, type Duplex } from "node:stream";
 import { bindingRemote, gitProviders, validGitHost, validRepositoryId, validRepositoryName, type GitProvider } from "../../../packages/shared/src/repositories.js";
 import { documentItemTypes, documentKind, sourceLimits, type DocumentItemType, type GrantSource } from "../../../packages/shared/src/sources.js";
-import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, credentialedApiProviders, type ApiAccessKind, type CredentialedApiProvider, egressPushService, hostAllowed, hostNamed, lfsLimits, parseLfsBatchRequest, parseNetworkPolicy, validLfsOid, validLfsSize,
+import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, credentialedApiProviders, type ApiAccessKind, type ApiReach, type CredentialedApiProvider, egressPushService, hostAllowed, hostNamed, lfsLimits, parseLfsBatchRequest, parseNetworkPolicy, validLfsOid, validLfsSize,
   type EgressApi, type EgressGitService, type EgressGrant, type EgressRepository, type LfsBatchResult, type NetworkPolicy } from "../../../packages/shared/src/network.js";
 import { boundedStream, drainStream, PUSH_REQUEST_BYTES, pushRejection, PushRequestError, readPushCommands, sessionBranchRefusal, type PushCommand } from "../../../packages/shared/src/git-push.js";
 import { NON_PUBLIC_IPV4, NON_PUBLIC_IPV6 } from "../../../packages/shared/src/non-public-addresses.js";
@@ -56,7 +56,7 @@ export interface EgressOptions {
   connect?: (port: number, address: string) => Duplex;
   mirror?: (repository: EgressRepository, onProgress: (progress: MirrorProgress) => void) => Promise<string>;
   sessionBranch?: string;
-  apiCredential?: (host: string, access: ApiAccessKind) => Promise<unknown>;
+  apiCredential?: (host: string, access: ApiAccessKind, reach?: ApiReach) => Promise<unknown>;
   apiAuthority?: InterceptionAuthority;
   apiUpstream?: ApiUpstream;
   fakeIpTunnels?: () => Promise<boolean>;
@@ -309,7 +309,7 @@ export class EgressProxy {
     });
   }
 
-  apiLease(): { token: string; release(): void } | undefined { return this.#api?.lease(); }
+  apiLease(options: { reach?: ApiReach } = {}): { token: string; release(): void } | undefined { return this.#api?.lease(options); }
 
   #credentialedApi(grant: EgressGrant, host: string): EgressApi | undefined {
     if (!this.#api?.handles(host)) return undefined;

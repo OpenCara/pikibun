@@ -40,6 +40,7 @@ export { registerGitAccounts } from './git/accounts.js';
 export { registerWorkspaceConnections } from './workspace-connections.js';
 export { egressGrant, gitDirect, gitRelay, registerNetworkPolicies, workspaceNetworkPolicy } from './network.js';
 export { apiCredential } from './api-access.js';
+export { registerGitHubReach } from './github-reach.js';
 export { pushComplete, pushCredential, settlePushCredentials } from './push/broker.js';
 export { publicIdentity, registerPushIdentities } from './push/identities.js';
 export { registerOidc } from './push/oidc.js';

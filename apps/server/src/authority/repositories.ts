@@ -211,6 +211,9 @@ export async function githubRepositoryIdentity(env: Env, userId: string, fullNam
   await recheckGitHubAccess(env, access);
   return metadata.id;
 }
+export async function githubRepositoryMetadata(access: GitHubAccess, fullName: string): Promise<ProviderRepository> {
+  return githubRepository(await githubJSON(access, `/repos/${repositoryName('github', fullName)}`));
+}
 export async function verifyRepository(access: RepositoryAccess, expected: ExpectedRepository): Promise<ProviderRepository> {
   const name = repositoryName(access.provider, expected.fullName);
   const metadata = access.provider === 'github'

@@ -92,7 +92,7 @@ test("only the authority writes the audit log", () => {
 
 const authorityTables = [
   "app_sign_in_codes", "auth_sessions", "automatic_github_effects", "connector_admins", "connector_host_grants", "connector_shares", "document_sources", "git_credentials",
-  "github_tokens", "native_auth_codes", "oauth_states", "password_credentials", "push_credentials", "push_identities", "push_oauth_states",
+  "github_tokens", "member_github_reach", "native_auth_codes", "oauth_states", "password_credentials", "push_credentials", "push_identities", "push_oauth_states",
   "repository_lfs_settings", "repository_push_policies", "run_admissions", "session_grants", "session_tool_grants", "source_accounts", "source_oauth_states",
   "source_read_settings", "users", "workspace_connections", "workspace_extensions", "workspace_members", "workspace_network_policies",
   "workspace_member_tool_groups", "workspace_repositories", "workspace_sources", "workspace_tool_groups",
