@@ -413,8 +413,9 @@ audited as `repository.lfs.updated`; the setting is in `WorkspaceRepository.lfs`
 
 - **New sessions** are all clone sessions (`repository_mode = 'clone'`), and pin nothing. The host must advertise
   `plainGit`; a connector from before can't start one (`connector_update_required`). Every connector of this version
-  advertises `plainGit` (and, unless unsandboxed, `cloneBackups`) whatever its `sandbox` claim says: real connectors
-  advertise `sandbox: false` because isolation is verified per session, and their sessions always run in the sandbox.
+  advertises `plainGit` (and, unless unsandboxed, `cloneBackups`) whatever its `sandbox` claim says: a connector advertises
+  `sandbox: true` only where its isolation self-test passed when it started (`verifySandboxIsolation`), isolation is still
+  verified per session, and sessions of a sandboxed host always run in the sandbox either way.
 - **Unsandboxed hosts** advertise `plainGit` too. Their clone sessions have no proxy: the agent clones, commits and pushes
   with the host's own Git, network and credentials, each command with the owner's approval as before. Their Git config
   gets a credential helper that asks the host user's own helpers with their real HOME (`hostCredentialConfig`), which
