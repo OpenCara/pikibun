@@ -154,7 +154,7 @@ so until a third tool needs the same rule they stay hand-written, in one file ea
   before the subcommand (`-C`, `-c`, `--git-dir`, `--exec-path`). An allow-list of first words is not a rule a
   definition can state.
 - **`git` matches options as Git reads them.** The options that name a program or load settings (`--upload-pack`,
-  `--exec`, `--template`, `--config`) are refused in every spelling Git takes: any unambiguous abbreviation of the
+  `--exec`, `--template`, `--config`, `lfs merge-driver --program`) are refused in every spelling Git takes: any unambiguous abbreviation of the
   long form (`--upload-p`, `--e`), and the short form inside a cluster of short options, up to the first letter that
   takes a value (`-ix`, but not the `x` of `-bx`). The grammar compares whole words.
 - **`python` follows modules and package specs.** `python3 -m twine upload` runs a module as a program, under any of

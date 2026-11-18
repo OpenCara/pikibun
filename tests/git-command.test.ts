@@ -47,6 +47,8 @@ test("the git tool refuses options that run a program, or take settings or hooks
     ["rebase", "-ix", "touch x", "main"],
     ["grep", "-O", "foo"],
     ["grep", "--open-files-in-pager=vi", "foo"],
+    ["lfs", "merge-driver", "--program", "touch x"],
+    ["lfs", "merge-driver", "--program=touch x"],
   ];
   for (const args of refused) assert.throws(() => gitRequest({ args }), /runs a program/, args.join(" "));
   const allowed: string[][] = [
@@ -66,6 +68,11 @@ test("the git tool refuses options that run a program, or take settings or hooks
     ["grep", "-e", "-O", "foo"],
     ["log", "--", "--exec"],
     ["push", "origin", "HEAD:pikibun/session"],
+    ["lfs", "pull"],
+    ["lfs", "fetch", "--all", "origin"],
+    ["lfs", "track", "*.psd"],
+    ["lfs", "ls-files"],
+    ["lfs", "install", "--local"],
   ];
   for (const args of allowed) assert.doesNotThrow(() => gitRequest({ args }), args.join(" "));
 });
