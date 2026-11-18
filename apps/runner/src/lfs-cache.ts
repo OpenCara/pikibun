@@ -1,7 +1,7 @@
 import { createHash, randomBytes, type Hash } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, readdir, rename, rm, utimes, type FileHandle } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 const windows = process.platform === "win32";
 const OID = /^[0-9a-f]{64}$/;
@@ -68,6 +68,7 @@ export class LfsObjectCache {
   }
 
   async reference(): Promise<string | undefined> {
+    if (basename(this.root) !== "lfs") return undefined;
     try {
       await this.#prepare();
       await mkdir(join(this.root, "objects"), { recursive: true, mode: 0o700 });
@@ -95,6 +96,7 @@ export class LfsObjectCache {
             result.kept++;
             continue;
           }
+          if (!await matches(target, { oid, size: info.size })) { result.skipped++; continue; }
           const swap = join(dirname(source), `.${oid}.pikibun-${randomBytes(8).toString("hex")}`);
           await link(target, swap);
           try { await rename(swap, source); }

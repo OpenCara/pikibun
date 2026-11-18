@@ -230,7 +230,8 @@ function cloneDirectory(args, index) {
     if (argument.startsWith("-")) { if (VALUED.has(argument)) position++; continue; }
     positionals.push(argument);
   }
-  const directory = positionals[1] || (positionals[0] && humanish(positionals[0]));
+  const bare = rest.slice(0, rest.includes("--") ? rest.indexOf("--") : rest.length).some(argument => argument === "--bare" || argument === "--mirror");
+  const directory = positionals[1] || (positionals[0] && humanish(positionals[0]) + (bare ? ".git" : ""));
   return directory ? path.resolve(base, directory) : undefined;
 }
 

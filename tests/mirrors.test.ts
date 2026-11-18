@@ -669,6 +669,23 @@ test("a clone on the host takes Git LFS files from the host's store, which then 
     assert.ok(same(copied, store.path(oid(kept))), "a clone's own copy of a file the store has becomes the store's");
     await assert.rejects(stat(store.path("abcd" + "0".repeat(60))), "a file whose content isn't its name stays out of the store");
     assert.deepEqual(await store.share(elsewhere), { added: 0, linked: 0, kept: 1, skipped: 1 });
+
+    const own = join(elsewhere, "lfs", "objects", oid(fresh).slice(0, 2), oid(fresh).slice(2, 4), oid(fresh));
+    await mkdir(join(own, ".."), { recursive: true });
+    await writeFile(own, fresh);
+    const damaged = join(directory, "damaged");
+    await writeFile(damaged, Buffer.alloc(fresh.length, 0x21));
+    const { rename } = await import("node:fs/promises");
+    await rename(damaged, store.path(oid(fresh)));
+    assert.deepEqual(await store.share(elsewhere), { added: 0, linked: 0, kept: 1, skipped: 2 });
+    assert.deepEqual(readFileSync(own), fresh, "a damaged file in the store never replaces a clone's good copy");
+
+    const bare = await clone("--bare", `file://${remote}`);
+    assert.equal(bare.code, 0, bare.stderr);
+    assert.equal(readFileSync(join(clones, "remote.git", "objects", "info", "alternates"), "utf8").split("\n")[1], realpathSync(store.root),
+      "a bare clone is found where Git puts it, NAME.git");
+    assert.equal(await new LfsObjectCache(join(directory, "cache", "elsewhere")).reference(), undefined,
+      "git-lfs looks in ALTERNATE/../lfs/objects, so only a store named lfs can be an alternate");
   });
 
 test("the host's git clones without the cache when the Node.js it was written with is gone, and finds another on PATH first",

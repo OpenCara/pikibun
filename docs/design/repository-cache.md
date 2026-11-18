@@ -111,10 +111,12 @@ network traffic goes through `GitRemote`.
   `GIT_ALTERNATE_OBJECT_DIRECTORIES`) has it, by hard link where it can, before it downloads one. So the runner answers
   the shim's mirror request with the store's root (`LfsObjectCache.reference`, which creates `lfs/objects`); the shim
   clones with that root in `GIT_ALTERNATE_OBJECT_DIRECTORIES`, so the checkout links what the store has, and then
-  appends the root to the clone's alternates, so later pulls and checkouts do too. Git sees the root as an object
-  directory with no loose objects and no packs. The shim then hands the clone's Git directory to the runner, which
+  appends the root to the clone's alternates, so later pulls and checkouts do too (a `--bare` or `--mirror` clone is
+  found at `NAME.git`, where Git puts it). Git sees the root as an object directory with no loose objects and no
+  packs. git-lfs looks in `<root>/../lfs/objects`, which is the store only because its root is named `lfs`, so
+  `reference` offers no root of another name. The shim then hands the clone's Git directory to the runner, which
   `share`s it in the background, one clone at a time: a file the store has as another file replaces the clone's copy
-  with a link to the store's; a file it lacks is linked into `lfs/tmp/`, its sha256 checked, and renamed into place (or
+  with a link to the store's, once the store's sha256 is checked (a damaged store file never replaces a good copy); a file it lacks is linked into `lfs/tmp/`, its sha256 checked, and renamed into place (or
   copied through the writer where a link isn't possible); a file that is already the store's only has its mtime set,
   so pruning counts it as used. A file whose content isn't its name is left out. Files are never rewritten in place,
   so a clone and the store sharing one is safe; pruning either only drops a link. The store isn't exposed to
