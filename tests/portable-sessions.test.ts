@@ -425,6 +425,11 @@ test('a server lists the portable sessions its owner\'s host reports, brings one
   const archivedHere = await json<{ code: string }>(await f.alice.request('POST', `/api/portable-sessions/${sessionId}/attach`, { connectorId: 'host' }), 409);
   assert.equal(archivedHere.code, 'archived_here', 'Bring here doesn\'t unarchive it');
   assert.equal((f.sqlite.prepare('SELECT status FROM sessions WHERE id = ?').get(sessionId) as { status: string }).status, 'archived');
+  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: false }])));
+  const movedWhileArchived = await json<{ sessions: { id: string; existing?: boolean }[] }>(await f.alice.request('GET', '/api/portable-sessions'));
+  assert.deepEqual(movedWhileArchived.sessions.map(item => [item.id, item.existing]), [[sessionId, true]],
+    'one the host reports attached elsewhere is offered, though this server never noticed it move');
+  await json(await f.host('/api/connectors/self/identity', await identityReport(key, [{ id: sessionId, title: 'Elsewhere', attached: true }])));
   await json(await f.alice.request('POST', `/api/sessions/${sessionId}/unarchive`));
 
   await json(await f.alice.request('PATCH', `/api/sessions/${sessionId}`, { title: 'Renamed here' }));
