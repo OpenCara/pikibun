@@ -33,7 +33,7 @@ npx pikibun@latest connect --server https://pikibun.com --pairing-id PAIRING_ID 
 
 The saved token is replaced only once the new code is accepted. The old host stays in **Settings → Hosts**, offline, until you revoke it there; its sessions are not moved to the new host, apart from your portable private sessions.
 
-Sessions in your private workspace are portable: they belong to your identity, a key every connection of yours on this machine shares (`~/.local/share/pikibun/identity`, `--identity-dir`), not to a server. Paired with another server, the machine offers them there under your private workspace, with **Bring here**; see [Moving a session to another server](https://github.com/OpenCara/pikibun/blob/main/docs/backups.md#moving-a-session-to-another-server). Manage the identity with `pikibun identity`:
+Sessions in your private workspace live on this machine's own Pikibun, which `pikibun connect` starts without a window when `pikibun serve` isn't running, so every server the machine is paired with shows the same ones; see [Your private sessions on every server](https://github.com/OpenCara/pikibun/blob/main/docs/backups.md#your-private-sessions-on-every-server). Your identity, a key every connection of yours on this machine shares (`~/.local/share/pikibun/identity`, `--identity-dir`), signs your private workspace's settings. Manage it with `pikibun identity`:
 
 ```sh
 npx pikibun@latest identity show                      # its public key and the portable sessions here

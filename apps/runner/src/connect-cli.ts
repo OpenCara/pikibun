@@ -27,6 +27,10 @@ whether pushes in your own sessions may use this machine's Git credentials, and 
 repository cache. Changes reach running sessions within a minute; the repository cache
 changes when the connector next connects.
 
+Your private sessions live on this computer's own Pikibun, the one "pikibun serve" runs:
+when none is running, the connector starts it without a window or sign-in link, from
+~/.local/share/pikibun/server, and every server this computer is paired with shows them.
+
 Options:
   --server ORIGIN          HTTPS control-plane origin (first pairing only)
   --pairing-id ID          One-use pairing ID from Pikibun
@@ -43,7 +47,7 @@ Options:
 This machine's own setup, when the defaults don't fit:
   --state-dir PATH         Private connector state (default ~/.local/share/pikibun/connector)
   --identity-dir PATH      Your identity, shared by every connection on this computer, which
-                           keeps your private sessions portable between servers (default
+                           signs your private workspace's settings (default
                            ~/.local/share/pikibun/identity; see "pikibun identity --help")
   --pi-agent-dir PATH      Pi config/auth directory (default: Pi's own getAgentDir())
   --model PROVIDER/MODEL   Advertise this configured local model (repeatable); without it,

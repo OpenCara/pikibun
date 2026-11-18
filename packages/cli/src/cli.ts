@@ -15,8 +15,8 @@ Commands:
               or shared with others (--share)
   cache       List or prune this host's repository cache
   extensions  Add, list or remove this host's extensions
-  identity    Your identity on this computer, which keeps your private sessions
-              portable between servers: show, export, import, rotate or reset it
+  identity    Your identity on this computer, which signs your private
+              workspace's settings: show, export, import, rotate or reset it
   host        This computer's host for the Pikibun app, which runs it itself
               (host --stdio)
 

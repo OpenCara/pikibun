@@ -4,7 +4,9 @@ import { PRIVATE_REPORT_LIMIT, PRIVATE_SESSIONS_VERSION, privateRoute, type Priv
 import { permissions, sessionActivities, type SessionActivity, type SessionRecord } from '../../../packages/shared/src/types.js';
 import { authenticateConnector } from './authority/index.js';
 import { privateConnectorRequest } from './connector-transport.js';
-import { fail, jsonObject, now } from './http.js';
+import { z } from 'zod';
+import { fail, now } from './http.js';
+import { body as requestBody, fields } from './schemas.js';
 import { notifySessionActivity } from './notifications.js';
 import type { AppContext, AppEnv, Env } from './types.js';
 
@@ -13,6 +15,8 @@ const STATUSES = ['provisioning', 'ready', 'error', 'archived'];
 const ONLINE_WITHIN_MS = 3 * 60_000;
 const RECORD_BYTES = 16 * 1024;
 const CREATE_FIELDS = ['title', 'hostEnvironment', 'generateTitle'];
+const reportBody = fields({ sessions: z.array(z.unknown(), { error: 'Invalid private session report.' }).max(PRIVATE_REPORT_LIMIT, 'Invalid private session report.') },
+  'Invalid private session report.', { required: ['sessions'], code: 'invalid_report' });
 
 interface ForwardedRow {
   connector_id: string; session_id: string; user_id: string; record_json: string; activity: string | null; reported_at: string;
@@ -100,10 +104,7 @@ async function report(c: AppContext): Promise<Response> {
   if ((parseCapabilities(connector.capabilities_json).privateSessions ?? 0) < PRIVATE_SESSIONS_VERSION) {
     fail(409, 'private_sessions_unsupported', 'This host doesn\'t say it forwards private sessions.');
   }
-  const input = await jsonObject(c, 4 * 1024 * 1024);
-  if (Object.keys(input).some(key => key !== 'sessions') || !Array.isArray(input.sessions) || input.sessions.length > PRIVATE_REPORT_LIMIT) {
-    fail(400, 'invalid_report', 'Invalid private session report.');
-  }
+  const input = await requestBody(c, reportBody, { maxBytes: 4 * 1024 * 1024 });
   const records = new Map<string, SessionRecord>();
   for (const value of input.sessions) {
     const record = reportedRecord(value);

@@ -281,6 +281,16 @@ A private session can be attached to whichever server its owner's identity is pa
 - **Settings can't be forged.** A server applies the private workspace's settings only signed by the identity, at a newer version than it applied.
 - **Not covered:** the server a session is attached to signs its users in, so it can still act as their account there.
 
+## Private sessions forwarded to their computer
+
+New private sessions live on their computer's own Pikibun, and other servers forward requests to it ([design](local-private-sessions.md)). What keeps that safe:
+
+- **Only the owner's own connection carries them.** A forwarded request rides the relay as a `private` ticket, which the authority allows only for the connector's owner, on a connector that says it forwards, from its current connection (`authorizePrivateTicket`); the connector refuses any other actor.
+- **A named list, checked twice.** Only the routes `privateRoute` lists, with a plain query, are forwarded: the connector checks the request, and the computer's Pikibun checks it again. Share links, session roles, backups, moves and every account or workspace route are refused before they reach the computer.
+- **The computer's Pikibun takes it only with its secret.** The secret is made at each start and written only to `local.json` in its `0700` state directory (`0600`), so only its OS user reads it, as with the identity key. With it, a request acts as the local server's owner, and only on a session of its private workspace (`forwardedOwner`).
+- **The other server holds no credential of the session's**, nor any of its conversation: only the records it lists, checked field by field. Revoking the computer there ends its access.
+- **Not covered:** the other server signs its users in, so while the computer is connected to it, it can act as the owner on these sessions, as any server can for sessions attached to it.
+
 ## Single instance
 
 The server holds a database lock while it runs ([One server per database](../self-hosting.md#one-server-per-database)): live state (connected hosts, requests in flight, live updates, the password hashing queue) is in memory, and a second server would split it. On Postgres the lock lives on a connection of its own, which the server keeps watching (`apps/server/src/db/instance-lock.ts`): if that connection drops it takes the lock again, and if another server got it first, or the database stays unreachable for a minute, it stops rather than run beside it.
