@@ -6,8 +6,8 @@ only one the Docker image and `pikibun serve` ship. It replaced the React web cl
 are removed, on the same backend, `@pikibun/client` and `packages/shared`. See [the web client](../../docs/self-hosting.md#the-web-client).
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
-(longbridge/nsh#1061), a system sign-in session (longbridge/nsh#1065, not planned: native sign-in goes through the
-system browser and comes back as a `pikibun://` link instead), and bundling the `pikibun` connector inside the app (the
+(longbridge/nsh#1061), a system sign-in session (0.6 added `open_auth_session` for Rust apps only, not to TSX: native
+sign-in goes through the system browser and comes back as a `pikibun://` link instead), and bundling the `pikibun` connector inside the app (the
 desktop builds run the installed command instead: see [This Computer](#this-computer)).
 
 ## Run it
@@ -319,19 +319,16 @@ isn't running and signs in to it, and **Add a server**.
 
 Each workaround below is on the [list of upstream workarounds](../../docs/design/upstream-workarounds.md), with what tracks it upstream and when to remove it.
 
-- **App Store builds**: NSH's prebuilt iPhone runner (0.4's, and 0.5's `ios` component) was linked with the iOS 18.5
-  SDK, which App Store Connect no longer takes, and `nsh package` writes none of the build keys it requires in Info.plist (`DT*`, `arm64` in
-  `UIRequiredDeviceCapabilities`). `release-app.yml` builds the runner from NSH's source with its own Xcode
-  (`NSH_RUNTIME`), adds the keys and signs the app again; drop both once an NSH release does them.
-- **The web runtime**: its loader inserts an import map and `blob:` modules no hash can allow, so the page's policy
-  allows inline scripts (`apps/server/src/static.ts`).
-- **Text widths on the web**: NSH (0.4 and 0.5) lays text out with widths the browser's canvas measures and draws it as page
+- **Text widths on the web**: NSH (0.4 to 0.6) lays text out with widths the browser's canvas measures and draws it as page
   text, so where a browser's canvas measures a font otherwise (another face for the system font, a minimum font size,
   text-only zoom) each run overlaps the next: inline code over the words before it. `scripts/nsh-web-fixes.mjs` patches
   the built runtime to measure such a font as the page draws it; drop the patch once NSH measures so itself.
 - **Secure storage**: native sign-ins are kept in NSH's `Storage`, a plain file in the app's data, not the Keychain or
   Keystore ([nsh#1061](https://github.com/longbridge/nsh/issues/1061)).
-- **Types**: NSH (0.4 and 0.5) declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared
+- **A session's menu on phones**: rows that slide open their menu from their own long press, so the app opens it; NSH
+  0.6's `ContextMenu` opened by the app moves the focus to its first item, and until the focus lands a tap on any item
+  chooses the first. `RowMenu` opens those menus as a `Menu` instead (`src/ui.tsx`).
+- **Types**: NSH (0.4 to 0.6) declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared
   code names.
 - **Tests**: screenshots need `--target`. Since NSH 0.5 an app imports only files inside its directory, the nearest one
   up with an `nsh.json`: the harnesses in `tests/harness` build with the app's, but the attach test's, which writes

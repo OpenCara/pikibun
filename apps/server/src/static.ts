@@ -41,7 +41,7 @@ export function webBuild(root: string): 'nsh' | 'other' | 'none' {
 export function pageContentSecurityPolicy(): string {
   return [
     "default-src 'self'",
-    "script-src 'self' blob: 'unsafe-inline' 'wasm-unsafe-eval'",
+    "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://avatars.githubusercontent.com",
     "font-src 'self' data:",
