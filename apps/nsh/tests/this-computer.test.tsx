@@ -531,6 +531,26 @@ describe("Local hosts", () => {
     expect(app.texts()).toContain("install error: ");
   });
 
+  test("never replaces the command while a host that runs it is running", async () => {
+    const { app, sent } = await openPanel();
+    await app.waitFor("id:this-computer-pair-button");
+    app.onDialog(() => "Run unsandboxed");
+    await app.press("id:this-computer-pair-button");
+    await app.waitFor("id:local-host-stop-default");
+    await app.press("id:fake-old-command");
+    await app.press("id:this-computer-add");
+    await app.waitFor("id:this-computer-install-button");
+    await app.waitFor("id:this-computer-install-hosts-running");
+    let refused = "";
+    try { await app.press("id:this-computer-install-button"); } catch (error) { refused = String(error); }
+    expect(refused.includes("is disabled")).toBe(true);
+    expect(sent()).not.toContain("install");
+    await app.press("id:local-host-stop-default");
+    await app.waitUntil(() => !app.shows("id:this-computer-install-hosts-running"));
+    await app.press("id:this-computer-install-button");
+    await app.waitUntil(() => sent().includes("install"));
+  });
+
   test("a global install (with no app folder) the login shell can't find afterwards says to put npm's folder on PATH", async () => {
     const { app, showsText } = await openPanel({ command: "missing", npm: "elsewhere" });
     await app.waitFor("id:this-computer-install-button");
@@ -696,6 +716,18 @@ describe("Local hosts on Windows", () => {
     await app.waitUntil(() => showsText("WSL isn't set up on this computer, or has no distribution yet."));
     await app.waitUntil(() => showsText("WSL isn't set up on this computer. In PowerShell, run wsl --install"));
     expect(app.shows("id:this-computer-install-button")).toBe(false);
+  });
+
+  test("lists WSL's distributions again once it is set up, without a restart", async () => {
+    const { app } = await openPanel({ distros: null }, {}, "windows");
+    await app.waitFor("id:this-computer-sandbox-choice");
+    await app.press("text:WSL2");
+    await app.waitFor("id:this-computer-distros-refresh");
+    await app.press("id:fake-wsl-installed");
+    await app.press("id:this-computer-distros-refresh");
+    await app.waitUntil(() => !app.shows("id:this-computer-distros-refresh"));
+    await app.press("id:this-computer-distro");
+    await app.waitFor("text:Ubuntu-24.04");
   });
 });
 

@@ -53,7 +53,10 @@ Now each host is an entry of its own (`LocalHostConfig` in `apps/nsh/src/lib/thi
 A host's process runs in an **environment**: this computer itself, or one WSL distribution. The environment, not the
 host, owns what is installed and signed in there: Pikibun's command (installed and updated with the app), Pi's
 configuration and its provider sign-in. So **Sign Pi in to a provider** on a WSL host's page signs in Pi inside WSL,
-and every host of that distribution sees it; the models each host offers stay its own.
+and every host of that distribution sees it; the models each host offers stay its own. **Install pikibun** is refused
+while any host of the environment runs, since they all run the copy it replaces (on Windows, files in use are locked).
+The list of WSL distributions is read once and again on **Refresh**, so a distribution set up meanwhile appears without
+a restart.
 
 - **One state directory per host.** At most one host per environment uses the command line's own state directory,
   so a computer paired from a terminal (`pikibun connect`) carries over: the page inspects that directory, and a

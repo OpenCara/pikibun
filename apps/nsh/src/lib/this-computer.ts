@@ -128,6 +128,11 @@ export function wslDistributions(): string[] | null | undefined {
   return wslDistros();
 }
 
+export function relistWsl(): void {
+  listingWsl = undefined;
+  wslDistros.set(undefined);
+}
+
 export const COMMAND_UPDATED_KEY = "pikibun.commandUpdatedFor";
 
 export function ownCopyManifest(os: string, cli: string): string {
@@ -220,6 +225,7 @@ export class LocalEnvironment {
   constructor(readonly target: HostTarget) {}
 
   get key(): string { return environmentKey(this.target); }
+  hostsRunning(): boolean { return localHosts().all().some(host => host.environment === this && host.state() !== "stopped"); }
   get wsl(): boolean { return Boolean(this.target.wsl); }
   where(): string { return this.target.wsl ? wslName(this.target.wsl.distro) : computerName; }
   title(): string { return this.target.wsl ? wslName(this.target.wsl.distro) : computerTitle; }
@@ -302,6 +308,7 @@ export class LocalEnvironment {
 
   async install(check: () => Promise<LaunchProblem | null | undefined>): Promise<Outcome> {
     if (untracked(this.installing)) return { ok: false, error: "pikibun is already being installed." };
+    if (untracked(() => this.hostsRunning())) return { ok: false, error: `Stop the hosts that run in ${this.where()} first: they run the command this replaces.` };
     this.installError.set("");
     const { where, lines, result } = await this.runInstall();
     const failure = result.code !== 0 ? installFailure(lines, result, this.target) : undefined;
@@ -623,7 +630,7 @@ export class LocalHost {
 
   async setSandbox(choice: LocalSandbox): Promise<Outcome> {
     const config = untracked(this.config);
-    if (!sandboxChoices().includes(choice)) return { ok: false, error: `${computerTitle} has no ${sandboxNames[choice]}.` };
+    if (!sandboxChoices().includes(choice)) return { ok: false, error: `That sandbox isn't offered on ${computerName}.` };
     if (choice === config.sandbox) return { ok: true };
     if (environmentKey(targetOf({ sandbox: choice })) !== this.environment.key) return { ok: false, error: `A host runs in ${this.where()} for good: add another host to run sessions in ${sandboxNames[choice]}.` };
     if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first: its sandbox changes from its next start." };

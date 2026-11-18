@@ -25,7 +25,8 @@ if (typeof params.appVersion === "string") {
     return ownCopy;
   } });
 }
-setWslLister(async () => (params.distros === null ? null : Array.isArray(params.distros) ? params.distros as string[] : ["Ubuntu"]));
+let distros: string[] | null = params.distros === null ? null : Array.isArray(params.distros) ? params.distros as string[] : ["Ubuntu"];
+setWslLister(async () => distros);
 const sent = signal<string[]>([]);
 const DEFAULT_DIR = "/Users/ada/.local/share/pikibun/connector";
 const pairings = new Map<string, string>();
@@ -161,6 +162,8 @@ mount(() => (
       return { id: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", code: "Z3AQnmLC6x9-xm2HZqXObhdMmKQhqLOKk3ST1ZuBYIw" };
     }} />
     <Button testID="fake-terminal-install" label="Install in a terminal" onPress={() => { command = "ok"; }} />
+    <Button testID="fake-old-command" label="Make the command old" onPress={() => { command = "outdated"; }} />
+    <Button testID="fake-wsl-installed" label="Set up WSL" onPress={() => { distros = ["Ubuntu-24.04"]; }} />
     <Text>{`install error: ${nativeEnvironment().installError()}`}</Text>
     <Text>{`this computer's hosts: ${thisComputerHostIds(SERVER).join(",") || "none"}`}</Text>
     <Text>{`hosts: ${localHosts().all().map(item => `${item.pairedWith() ?? "unpaired"}=${item.state()}`).join(" ")}`}</Text>

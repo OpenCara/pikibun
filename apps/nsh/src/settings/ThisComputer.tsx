@@ -9,7 +9,7 @@ import { createAction } from "../lib/resource";
 import { displayOrigin } from "../lib/server";
 import {
   computerName, computerTitle, defaultHostName, INSTALL_COMMAND, localHosts, nativeEnvironment, NVM_INSTALL, originOf, sandboxChoices, sandboxNames, setUnsandboxedConsent,
-  wslDistributions, wslName, type LaunchProblem, type LocalEnvironment, type LocalHost, type LocalSandbox, type LogLine,
+  relistWsl, wslDistributions, wslName, type LaunchProblem, type LocalEnvironment, type LocalHost, type LocalSandbox, type LogLine,
 } from "../lib/this-computer";
 import { Checkbox, Field, Select, TextField } from "../form";
 import { Icon } from "../icons";
@@ -129,7 +129,10 @@ function CommandSection(props: { environment: LocalEnvironment; refresh: () => P
   const action = createAction();
   const install = () => {
     if (env.installing()) return;
-    void action.run(async () => { await env.install(props.refresh); });
+    void action.run(async () => {
+      const outcome = await env.install(props.refresh);
+      if (!outcome.ok && outcome.error && !env.installError()) throw new Error(outcome.error);
+    });
   };
   const place = () => `${env.wsl ? "in" : "on"} ${env.where()}`;
   const node = () => (env.wsl ? `Node.js 24 or newer there (for example with nvm: ${NVM_INSTALL})` : `Node.js 24 or newer (nodejs.org${computerTitle === "This Mac" ? ", or brew install node" : ""})`);
@@ -153,10 +156,12 @@ function CommandSection(props: { environment: LocalEnvironment; refresh: () => P
               </If>
               <If when={problem().kind !== "failed"}>
                 <View style={{ flexDirection: "row" }}>
-                  <Button variant="primary" icon="download" testID="this-computer-install-button" busy={env.installing()} disabled={env.installing() || props.busy}
+                  <Button variant="primary" icon="download" testID="this-computer-install-button" busy={env.installing()} disabled={env.installing() || props.busy || env.hostsRunning()}
                     label={env.installing() ? (update() ? "Updating pikibun" : "Installing pikibun") : update() ? "Update pikibun" : "Install pikibun"} onPress={install} />
                 </View>
                 <If when={env.installing()}><Small>npm is installing pikibun: this takes a minute. Its output is under Recent activity below.</Small></If>
+                <If when={!env.installing() && env.hostsRunning()}><Small testID="this-computer-install-hosts-running">{`Stop the hosts that run ${place()} first: they run the command this replaces.`}</Small></If>
+                <Feedback error={action.error()} />
                 <If when={env.installError()}>
                   <Feedback error={env.installError()} />
                   <Small>{env.wsl ? `To install it in a WSL terminal instead:` : "To install it in a terminal instead:"}</Small>
@@ -317,8 +322,11 @@ function AddHostSection(props: { server: string; servers: () => string[]; create
                 options={[{ value: "", label: "WSL's default" }, ...(distros() ?? []).map(name => ({ value: name, label: name }))]} onChange={value => distro.set(value)} />
             </Field>
             <If when={distros() === null}>
-              <Small>WSL isn't set up on this computer, or has no distribution yet. In PowerShell, run wsl --install, restart if Windows asks, and open Ubuntu once to create your Linux user.</Small>
+              <Small>WSL isn't set up on this computer, or has no distribution yet. In PowerShell, run wsl --install, restart if Windows asks, and open Ubuntu once to create your Linux user; then choose Refresh.</Small>
               <CopyField value="wsl --install" label="Copy command" />
+              <View style={{ flexDirection: "row" }}>
+                <Button small variant="outline" icon="refresh" label="Refresh" testID="this-computer-distros-refresh" onPress={() => { relistWsl(); const host = untracked(draft); if (host) void host.refresh(); }} />
+              </View>
             </If>
           </If>
           <If when={draft() && inspection()}>
@@ -338,7 +346,7 @@ function AddHostSection(props: { server: string; servers: () => string[]; create
         {host => (
           <>
             <If when={host().environment.wsl}>
-              <CommandSection environment={host().environment} busy={host().inspecting()} refresh={async () => { await host().refresh(); return untracked(() => host().problem()); }} />
+              <CommandSection environment={host().environment} busy={host().inspecting()} refresh={async () => { relistWsl(); await host().refresh(); return untracked(() => host().problem()); }} />
               <UpdatingSection environment={host().environment} />
             </If>
             <If when={noModels()}><SignInSection host={host()} /></If>
