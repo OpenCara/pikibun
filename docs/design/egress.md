@@ -549,7 +549,8 @@ could use it. Instead the proxy adds the credential, the way the Git relay does,
   with `reach: "any"` (`SessionPiki#runCommand`); the Pikibun server marks the owner's credential `anyRepository` only
   where they turned their [GitHub reach](../github.md#repositories-outside-the-workspace) on, and the proxy then uses it
   for a repository no credential names (`credentialFor`). Grants are cached per access and reach, so another sender's
-  lease never gets the wider credential. Why: [security rationale](security-rationale.md#github-repositories-outside-the-workspace). GitHub REST reads of a repository the read credential covers keep that credential
+  lease never gets the wider credential. A Pikibun server older than reach refuses the field (`400`); the proxy then
+  asks again without it and keeps the workspace's credential for that reach, so a new connector's writes still work there. Why: [security rationale](security-rationale.md#github-repositories-outside-the-workspace). GitHub REST reads of a repository the read credential covers keep that credential
   under a lease: the owner's sign-in has one hourly quota for all of their sessions and Pikibun's own reads, and a
   lease's call is usually one that mostly reads (`gh run watch` polls; `gh pr create` reads before it writes), so those
   reads go on the App's quota instead. GraphQL, which may ask about the owner (`viewer`), and reads outside the

@@ -11,6 +11,7 @@ import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { apiRule, apiRules, graphqlWrites, parseApiCredentialGrant, placeholderOf, restRepository, type UpstreamRequest, type UpstreamResponse } from "../apps/runner/src/api-access.js";
 import { EgressProxy, egressEnvironment, parseEgressGrant, type EgressEntry } from "../apps/runner/src/egress.js";
 import { InterceptionAuthority } from "../apps/runner/src/interception-ca.js";
+import { RunnerError } from "../apps/runner/src/protocol.js";
 import { API_TOKEN_PLACEHOLDER, apiWriteLease, apiWriteToken, credentialedApiHosts, type ApiAccessKind, type ApiCredentialGrant, type ApiReach, type EgressApi, type EgressGrant,
   type NetworkPolicy } from "../packages/shared/src/network.js";
 
@@ -377,6 +378,22 @@ test("a lease that reaches any repository writes and reads outside the workspace
   const off = await call(socketPath, "/repos/someone/else/issues", { method: "POST", body: "{}", headers: { authorization: `token ${turnedOff.token}` } });
   assert.equal(off.status, 403, "once the owner turned it off, the Pikibun server's credential no longer reaches other repositories");
   assert.equal(upstream.length, 3);
+});
+
+test("an owner's lease on a Pikibun server older than reach falls back to the workspace's repositories, rather than losing its writes", async t => {
+  const { instance, socketPath, upstream, asked } = await proxy(t, { credential: async (_host, access, reach) => {
+    if (reach !== undefined) throw new RunnerError(400, "Only the session, host and access are accepted.");
+    return access === "write" ? owners : credentials;
+  } });
+  const lease = instance.apiLease({ reach: "any" })!;
+  t.after(() => lease.release());
+  const comment = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{}", headers: { authorization: `token ${lease.token}` } });
+  assert.equal(comment.status, 200, "a write to the workspace's repository still goes as the owner");
+  assert.equal(upstream[0]!.headers.authorization, "Bearer gho_owner");
+  const elsewhere = await call(socketPath, "/repos/someone/else/issues", { method: "POST", body: "{}", headers: { authorization: `token ${lease.token}` } });
+  assert.equal(elsewhere.status, 403);
+  assert.equal((await call(socketPath, "/repos/acme/app/issues/2/comments", { method: "POST", body: "{}", headers: { authorization: `token ${lease.token}` } })).status, 200);
+  assert.deepEqual(asked, ["api.github.com", "api.github.com (write, any)", "api.github.com (write)"], "the refusal is remembered: the server is asked once each way");
 });
 
 test("under a write lease, reads of the workspace's repositories keep the App's token, so watching a run doesn't spend the owner's rate limit", async t => {

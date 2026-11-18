@@ -233,6 +233,11 @@ export class ApiAccess {
         let grant: ApiCredentialGrant;
         try { grant = parseApiCredentialGrant(await (reach === "any" ? this.#options.credential(host, access, reach) : this.#options.credential(host, access))); }
         catch (error) {
+          if (reach === "any" && error instanceof RunnerError && error.status === 400) {
+            const workspace = await this.#credential(host, access);
+            this.#credentials.set(key, { grant: workspace, until: Date.now() + (workspace.available ? API_CREDENTIAL_CACHE_SECONDS * 1000 : UNAVAILABLE_CACHE_MS) });
+            return workspace;
+          }
           const reason = error instanceof RunnerError && /^[\x20-\x7e]{1,300}$/.test(error.message) ? error.message : "Pikibun gave no credential for this API";
           const unavailable: ApiCredentialGrant = { available: false, reason, cacheSeconds: 0 };
           this.#credentials.set(key, { grant: unavailable, until: Date.now() + UNAVAILABLE_CACHE_MS });

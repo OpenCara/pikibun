@@ -67,8 +67,9 @@ async function githubTargetAllowed(c: AppContext, row: SessionRow, senderId: str
   return null;
 }
 
-export async function githubTarget(c: AppContext, row: SessionRow, senderId: string, name: string, github: GitHubAccess): Promise<GitHubTarget> {
-  const repository = await githubTargetAllowed(c, row, senderId, name);
+export async function githubTarget(c: AppContext, row: SessionRow, senderId: string, name: string, github: GitHubAccess,
+  allowed?: GitHubSessionRepository | null): Promise<GitHubTarget> {
+  const repository = allowed !== undefined ? allowed : await githubTargetAllowed(c, row, senderId, name);
   if (repository) {
     await requireBinding(c, row.workspace_id, repository);
     await verifyPin(c.env, github, repository);
@@ -550,9 +551,9 @@ export async function githubRead(c: AppContext, connectorId: string | null): Pro
     return access.row;
   };
   const row = await authorize();
-  await githubTargetAllowed(c, row, actorId, repository);
+  const allowed = await githubTargetAllowed(c, row, actorId, repository);
   const github = await ownerGitHub(c.env, row.owner_id);
-  const pin = await githubTarget(c, row, actorId, repository, github);
+  const pin = await githubTarget(c, row, actorId, repository, github, allowed);
   const view = await readIssue(github, pin.fullName, number);
   await recheckAccess(c.env, { provider: 'github', github });
   await authorize();
