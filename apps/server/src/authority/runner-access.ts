@@ -1,3 +1,5 @@
+import { parseCapabilities } from '../../../../packages/shared/src/connector.js';
+import { PRIVATE_SESSIONS_VERSION, PRIVATE_TICKET_SESSION } from '../../../../packages/shared/src/private-sessions.js';
 import type { Permission, RunnerAction, RunnerTicket } from '../../../../packages/shared/src/types.js';
 import { requireNoMigration, requireUnfrozen } from '../db.js';
 import { fail } from '../http.js';
@@ -10,16 +12,16 @@ const actionPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write', changes: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write', sudo: 'write',
-  attach: 'manage', portable: 'manage', artifacts: 'read', title: 'write', resources: 'read',
+  attach: 'manage', portable: 'manage', artifacts: 'read', title: 'write', resources: 'read', private: 'manage',
 };
 
 export const connectorPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write', changes: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write', sudo: 'write',
-  attach: 'manage', portable: 'manage', artifacts: 'read', title: 'write', resources: 'read',
+  attach: 'manage', portable: 'manage', artifacts: 'read', title: 'write', resources: 'read', private: 'manage',
 };
-export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack', 'sudo', 'attach', 'portable'];
+export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack', 'sudo', 'attach', 'portable', 'private'];
 
 export function requireArchivedAction(row: SessionRow, action: RunnerAction): void {
   if (action === 'view' || action === 'events' || action === 'artifacts') return;
@@ -46,7 +48,21 @@ export async function requireRunnerAccess(c: AppContext, actorId: string, row: S
   return access.row;
 }
 
-export async function authorizeConnectorTicket(env: Env, ticket: RunnerTicket, connectionHash?: string): Promise<SessionRow> {
+export async function authorizePrivateTicket(env: Env, ticket: RunnerTicket, connectionHash?: string): Promise<void> {
+  if (ticket.action !== 'private' || ticket.sessionId !== PRIVATE_TICKET_SESSION || ticket.actorId !== ticket.ownerId || ticket.policyVersion !== 1 || !ticket.connectorId) {
+    fail(403, 'invalid_ticket', 'Invalid connector ticket.');
+  }
+  const host = await env.DB.query<{ capabilities_json: string | null; connection_hash: string | null }>(`SELECT c.capabilities_json, c.connection_hash
+    FROM connectors c JOIN users u ON u.id = c.owner_id WHERE c.id = ? AND c.owner_id = ? AND c.revoked_at IS NULL AND u.suspended_at IS NULL`)
+    .bind(ticket.connectorId, ticket.ownerId).first();
+  if (!host || (parseCapabilities(host.capabilities_json).privateSessions ?? 0) < PRIVATE_SESSIONS_VERSION
+    || (connectionHash !== undefined && host.connection_hash !== connectionHash)) {
+    fail(403, 'permission_revoked', 'This computer no longer forwards its private sessions here.');
+  }
+}
+
+export async function authorizeConnectorTicket(env: Env, ticket: RunnerTicket, connectionHash?: string): Promise<SessionRow | null> {
+  if (ticket.action === 'private') { await authorizePrivateTicket(env, ticket, connectionHash); return null; }
   const permission = connectorPermissions[ticket.action];
   if (!permission || !Object.hasOwn(connectorPermissions, ticket.action) || !ticket.connectorId) fail(403, 'invalid_ticket', 'Invalid connector ticket.');
   const access = await sessionAccess(env, ticket.sessionId, ticket.actorId);

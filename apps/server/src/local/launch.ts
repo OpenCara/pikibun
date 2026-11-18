@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { instanceAdmins, localOwner } from '../authority/index.js';
+import { ensureLocalOwner, instanceAdmins, localOwner } from '../authority/index.js';
 import { loadConfig } from '../config.js';
 import { InstanceLockedError } from '../db/index.js';
 import { LOCAL_OWNER_ACCOUNT, PASSWORD_USERNAME } from '../http.js';
@@ -11,6 +11,7 @@ import { passwordCommandOutcome, PasswordCommandError } from '../password-accoun
 import { startServer } from '../serve.js';
 import { webBuild } from '../static.js';
 import type { Env } from '../types.js';
+import { removeDiscovery, writeDiscovery } from './discovery.js';
 import { recordLocalOwnership, type LocalState } from './state.js';
 
 export const LOCAL_ORIGIN_HOST = '127.0.0.1';
@@ -34,6 +35,8 @@ export interface LocalServerOptions {
   extraEnv?: Record<string, string>;
   release?: () => Promise<void>;
   mode?: LocalServerMode;
+  headless?: boolean;
+  onHandover?: () => void;
 }
 
 export type LocalServerMode = 'local' | 'shared';
@@ -60,37 +63,40 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   let { state } = options;
   const stateDir = resolve(options.stateDir);
   const staticDir = options.staticDir ?? defaultStaticDir();
-  if (!staticDir) throw new LocalServerError('The Pikibun web app is missing from this installation. Reinstall it, or run `pnpm build` in a source checkout.');
+  if (!staticDir && !options.headless) throw new LocalServerError('The Pikibun web app is missing from this installation. Reinstall it, or run `pnpm build` in a source checkout.');
   const backups = join(stateDir, 'backups');
   await mkdir(backups, { recursive: true, mode: 0o700 });
   const mode = options.mode ?? 'local';
   const shared = mode === 'shared' ? state.shared : undefined;
   if (mode === 'shared' && !shared) throw new LocalServerError('Set up sharing first: its public HTTPS address, sign-in and administrators.');
+  if (mode === 'shared' && options.headless) throw new LocalServerError('A shared Pikibun runs from `pikibun serve --share`, not headless.');
   const listenHost = shared?.listen === 'all' ? '0.0.0.0' : LOCAL_ORIGIN_HOST;
   const origin = shared ? shared.origin : `http://${LOCAL_ORIGIN_HOST}:${state.port}`;
   const common: Record<string, string> = {
     APP_ORIGIN: origin, HOST: listenHost, PORT: String(state.port),
-    DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STORAGE_URL: pathToFileURL(backups).href, STATIC_DIR: staticDir,
+    DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STORAGE_URL: pathToFileURL(backups).href, ...(staticDir ? { STATIC_DIR: staticDir } : {}),
     SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey,
   };
   if (shared && !state.sharedOnce) {
-    const first = await withData(state, stateDir, staticDir, firstAccount);
+    const first = await withData(state, stateDir, staticDir!, firstAccount);
     state = await recordLocalOwnership(stateDir, state, { ...(first && !state.owner ? { owner: first } : {}), sharedOnce: true });
   }
   const owner = shared ? undefined : await pinnedOwner(state, stateDir, staticDir);
   const ownerName = shared ? undefined : localUsername();
   const signInToken = randomBytes(32).toString('base64url');
+  const forwardSecret = randomBytes(32).toString('base64url');
   const settings: Record<string, string> = shared ? {
     ...common, TRUST_PROXY: String(shared.trustProxy), LOCAL_MODE: 'false', SIGNUP: shared.signup, PASSWORD_AUTH: String(shared.passwordAuth),
     ADMIN_USER_IDS: shared.admins.join(','),
     ...(shared.github ? { GITHUB_CLIENT_ID: shared.github.clientId, GITHUB_CLIENT_SECRET: shared.github.clientSecret } : {}),
     ...options.extraEnv,
   } : {
-    ...common, TRUST_PROXY: 'false', LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: signInToken, ...(owner ? { LOCAL_OWNER_ID: owner } : {}),
+    ...common, TRUST_PROXY: 'false', LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: signInToken, LOCAL_FORWARD_SECRET: forwardSecret, ...(owner ? { LOCAL_OWNER_ID: owner } : {}),
     ...(ownerName ? { LOCAL_OWNER_NAME: ownerName } : {}),
     ...options.extraEnv,
   };
   const config = await loadConfig(settings);
+  if (options.onHandover && !shared) config.env.LOCAL_HANDOVER = options.onHandover;
   let server;
   try { server = await startServer(config); }
   catch (error) {
@@ -101,6 +107,15 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   }
   const { env } = config;
   const admins = [...instanceAdmins(env)];
+  if (!shared) {
+    try {
+      if (options.headless) await ensureLocalOwner(env);
+      await writeDiscovery(stateDir, { version: 1, pid: process.pid, port: state.port, origin, secret: forwardSecret, headless: options.headless === true });
+    } catch (error) {
+      await server.close().catch(() => {});
+      throw error;
+    }
+  }
   return {
     mode, origin, env, address: `http://${listenHost}:${state.port}`,
     async owner() {
@@ -128,7 +143,10 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
       }
     },
     async close() {
-      try { await server.close(); } finally { await options.release?.(); }
+      try {
+        if (!shared) await removeDiscovery(stateDir, forwardSecret);
+        await server.close();
+      } finally { await options.release?.(); }
     },
   };
 }
@@ -146,7 +164,7 @@ async function firstAccount(env: Env): Promise<string | undefined> {
   return (await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE ${LOCAL_OWNER_ACCOUNT} ORDER BY created_at, id LIMIT 1`).first())?.id;
 }
 
-async function pinnedOwner(state: LocalState, stateDir: string, staticDir: string): Promise<string | undefined> {
+async function pinnedOwner(state: LocalState, stateDir: string, staticDir: string | undefined): Promise<string | undefined> {
   if (state.owner) return state.owner;
   if (!state.shared && !state.sharedOnce) return undefined;
   const admins = state.shared?.admins ?? [];
@@ -161,9 +179,9 @@ async function pinnedOwner(state: LocalState, stateDir: string, staticDir: strin
   return owner;
 }
 
-async function withData<T>(state: LocalState, stateDir: string, staticDir: string, read: (env: Env) => Promise<T>): Promise<T> {
+async function withData<T>(state: LocalState, stateDir: string, staticDir: string | undefined, read: (env: Env) => Promise<T>): Promise<T> {
   const config = await loadConfig({ APP_ORIGIN: `http://${LOCAL_ORIGIN_HOST}:${state.port}`, SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey,
-    DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STATIC_DIR: staticDir });
+    DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, ...(staticDir ? { STATIC_DIR: staticDir } : {}) });
   try {
     await config.env.DB.migrate();
     return await read(config.env);

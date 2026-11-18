@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ConnectorCredentials, ConnectorRpcRequest, ConnectorRpcResponse } from "../../../../packages/shared/src/connector.js";
 import { connectorLimits, connectorRequestTimeoutMs } from "../../../../packages/shared/src/connector.js";
+import { parsePrivateForwardRequest, type PrivateForwardRequest, type PrivateForwardResponse } from "../../../../packages/shared/src/private-sessions.js";
 import type { Generation } from "./generation.js";
 import { requestSchema, validateRelayRequest } from "./relay-request.js";
 import { boundedBody } from "./wire.js";
@@ -21,6 +22,7 @@ export interface RelayFramesOptions {
   state(): ConnectorCredentials | undefined;
   restarting(): boolean;
   runtime(): RelayRuntime | undefined;
+  privateForward?(request: PrivateForwardRequest, signal: AbortSignal): Promise<PrivateForwardResponse>;
   disconnect(generation: Generation, reason: string): void;
   requireGeneration(generation: Generation): void;
   log?: LogLine;
@@ -127,6 +129,7 @@ export class RelayFrames {
   async #reply(generation: Generation, rpc: ConnectorRpcRequest, authorization: string): Promise<Frame> {
     const frame = (payload: string) => ({ payload, payloadSize: Buffer.byteLength(payload, "utf8") });
     const failed = (status: number, error: string) => this.#errorFrame(rpc, status, error);
+    if (rpc.ticket.action === "private") return this.#forward(generation, rpc);
     const runtime = this.options.runtime();
     if (!runtime) return failed(503, "The host's runner is restarting; try again.");
     let result: ConnectorRpcResponse;
@@ -152,5 +155,25 @@ export class RelayFrames {
     const reply = frame(JSON.stringify(result));
     if (reply.payloadSize > connectorLimits.frameBytes) return failed(502, "The host's reply is too large to relay.");
     return reply;
+  }
+
+  async #forward(generation: Generation, rpc: ConnectorRpcRequest): Promise<Frame> {
+    const forward = this.options.privateForward;
+    let request: PrivateForwardRequest | null = null;
+    try { request = parsePrivateForwardRequest(JSON.parse(rpc.body)); } catch { request = null; }
+    if (!request) return this.#errorFrame(rpc, 400, "That request isn't one a computer forwards for its private sessions.");
+    if (!forward) return this.#errorFrame(rpc, 503, "This computer doesn't run the Pikibun that holds its private sessions.");
+    let answer: PrivateForwardResponse;
+    try { answer = await forward(request, generation.abort.signal); }
+    catch (error) {
+      this.options.requireGeneration(generation);
+      this.#failures.report(`Private request ${request.method} ${request.path.split("?")[0]} failed`, error);
+      return this.#errorFrame(rpc, 503, "The Pikibun on this computer, which holds its private sessions, isn't answering yet. Try again shortly.");
+    }
+    this.options.requireGeneration(generation);
+    const payload = JSON.stringify({ type: "response", id: rpc.id, status: 200, body: JSON.stringify(answer) } satisfies ConnectorRpcResponse);
+    const size = Buffer.byteLength(payload, "utf8");
+    if (size > connectorLimits.frameBytes || answer.data.length > connectorLimits.responseBytes) return this.#errorFrame(rpc, 502, "The reply is too large to relay.");
+    return { payload, payloadSize: size };
   }
 }

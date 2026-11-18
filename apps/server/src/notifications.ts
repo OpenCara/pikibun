@@ -177,17 +177,17 @@ async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: Not
 }
 
 export async function notifySessionActivity(env: Env, row: Pick<SessionRow, 'id' | 'title' | 'owner_id' | 'workspace_id'>, previous: SessionActivity | null | undefined,
-  activity: SessionActivity): Promise<void> {
+  activity: SessionActivity, forwarded = false): Promise<void> {
   const kind = activityNotification(previous, activity);
   if (!kind) return;
-  const sender = await env.DB.query<{ actor_id: string }>(`SELECT actor_id FROM run_admissions WHERE session_id = ? AND mode = 'write' AND created_at > ?
+  const sender = forwarded ? null : await env.DB.query<{ actor_id: string }>(`SELECT actor_id FROM run_admissions WHERE session_id = ? AND mode = 'write' AND created_at > ?
     ORDER BY created_at DESC LIMIT 1`).bind(row.id, new Date(Date.now() - SENDER_WINDOW_MS).toISOString()).first('actor_id');
   const candidates = [...new Set([row.owner_id, ...(sender ? [sender] : [])])];
   const workspace = await env.DB.query<{ name: string }>('SELECT name FROM workspaces WHERE id = ?').bind(row.workspace_id).first('name');
   const items: { userId: string; notification: PikibunNotification }[] = [];
   const at = Date.now();
   for (const userId of candidates) {
-    if (!await sessionAccess(env, row.id, userId)) continue;
+    if (!forwarded && !await sessionAccess(env, row.id, userId)) continue;
     const preferences = await notificationPreferences(env, userId);
     if (!preferences[preferenceOf[kind]]) continue;
     const { title, body } = notificationText(kind, preferences.details, { title: row.title, workspace: workspace ?? '' });

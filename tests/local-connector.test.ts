@@ -198,7 +198,7 @@ test('connector manifests reject duplicates, excessive catalogs and implicit fau
 });
 
 test('relay accepts exactly the supported action/method/path combinations and locally signs bound tickets', async t => {
-  const bodies: Record<Exclude<RunnerAction, 'events'>, string> = {
+  const bodies: Record<Exclude<RunnerAction, 'events' | 'private'>, string> = {
     create: JSON.stringify(binding()), view: '', submit: '{}', ask: '{}',
     backup: '{}', restart: '{}', restore: JSON.stringify({ binding: binding() }), stop: '{}',
     files: JSON.stringify({ path: 'src' }), changes: '{}', revert: JSON.stringify({ entryId: '1:2' }),
@@ -224,6 +224,19 @@ test('relay accepts exactly the supported action/method/path combinations and lo
       await assert.rejects(verifyRunnerTicket(result.authorization, 'wrong-fixture-verifier', action, 'session', request.body));
     });
   }
+});
+
+test('relay accepts a private request only on its own path, for the owner, and only for a route a computer forwards', async () => {
+  const body = JSON.stringify({ method: 'GET', path: '/api/sessions/abc/view' });
+  const base = await rpc('private', body);
+  const request = { ...base, path: '/v1/private', ticket: { ...base.ticket, sessionId: 'private' } };
+  const result = await validateRelayRequest(request, credentials.connectorId, verifierSecret);
+  assert.deepEqual(await verifyRunnerTicket(result.authorization, verifierSecret, 'private', 'private', body), request.ticket);
+  await assert.rejects(validateRelayRequest({ ...request, ticket: { ...request.ticket, actorId: 'someone-else' } }, credentials.connectorId, verifierSecret), /Invalid relay ticket/);
+  await assert.rejects(validateRelayRequest({ ...request, ticket: { ...request.ticket, sessionId: 'abc' } }, credentials.connectorId, verifierSecret), /Invalid private request/);
+  await assert.rejects(validateRelayRequest({ ...request, path: '/v1/sessions/private/private' }, credentials.connectorId, verifierSecret), /not allowed/);
+  const refused = JSON.stringify({ method: 'POST', path: '/api/sessions/abc/link' });
+  await assert.rejects(validateRelayRequest({ ...request, body: refused, ticket: { ...request.ticket, bodyHash: await sha256(refused) } }, credentials.connectorId, verifierSecret), /not allowed/);
 });
 
 test('relay accepts a view request for what changed since a revision', async () => {

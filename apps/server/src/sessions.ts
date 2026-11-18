@@ -35,6 +35,7 @@ import { packDueAfterArchiving } from './automatic-packing.js';
 import { autoModeSettings } from './auto-mode.js';
 import { autoModelAllowed, autoModelsText } from '../../../packages/shared/src/auto-mode.js';
 import { keepPortable, portableKeyFor } from './portable-sessions.js';
+import { createForwardedSession, forwardedRecords } from './forwarded-sessions.js';
 import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
 import { nameSessionLater } from './session-titles.js';
 
@@ -458,11 +459,14 @@ export function registerSessions(app: Hono<AppEnv>): void {
       const sideAsks = asked.get(item.row.id);
       return sideAsks ? { ...record, sideAsks } : record;
     });
-    return c.json({ sessions });
+    return c.json({ sessions: [...sessions, ...await forwardedRecords(c.env, actorId)] });
   });
 
   app.post('/api/sessions', async c => {
-    const { row, notice } = await createSession(c, await jsonObject(c));
+    const input = await jsonObject(c);
+    const forwarded = await createForwardedSession(c, input);
+    if (forwarded) return forwarded;
+    const { row, notice } = await createSession(c, input);
     return c.json({ session: { ...sessionRecord(row, [...permissions]), ...(notice ? { cloneUnavailable: notice } : {}) } }, 201);
   });
 

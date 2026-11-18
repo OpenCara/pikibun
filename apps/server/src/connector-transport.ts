@@ -1,5 +1,6 @@
 import { HTTPException } from 'hono/http-exception';
 import { connectorLimits, type ConnectorRpcRequest } from '../../../packages/shared/src/connector.js';
+import { parsePrivateForwardResponse, PRIVATE_FORWARD_PATH, PRIVATE_TICKET_SESSION, type PrivateForwardRequest, type PrivateForwardResponse } from '../../../packages/shared/src/private-sessions.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { isRevision } from '../../../packages/shared/src/view-patch.js';
 import type { RunnerAction, RunnerTicket } from '../../../packages/shared/src/types.js';
@@ -27,6 +28,9 @@ export function connectorPath(action: RunnerAction, sessionId: string, suffix = 
   const base = `/v1/sessions/${sessionId}`;
   switch (action) {
     case 'create': return '/v1/sessions';
+    case 'private':
+      if (sessionId !== PRIVATE_TICKET_SESSION) fail(400, 'invalid_session', 'Invalid session identifier.');
+      return PRIVATE_FORWARD_PATH;
     case 'view':
       if (!suffix) return `${base}/view`;
       if (!isRevision(suffix)) fail(400, 'invalid_revision', 'Invalid view revision.');
@@ -128,6 +132,34 @@ export async function connectorRequest(c: AppContext, row: SessionRow, action: R
     await response.body?.cancel();
     throw error;
   }
+}
+
+export async function privateConnectorRequest(c: AppContext, connectorId: string, request: PrivateForwardRequest): Promise<PrivateForwardResponse> {
+  if (!c.env.CONNECTOR_HUB) fail(503, 'connector_unavailable', 'The connector transport is unavailable.');
+  const actorId = c.get('auth').userId;
+  const serialized = JSON.stringify(request);
+  if (connectorUtf8Bytes(serialized) > connectorLimits.requestBytes) fail(413, 'body_too_large', 'The request is too large to forward.');
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const ticket: RunnerTicket = { aud: 'runner', sessionId: PRIVATE_TICKET_SESSION, actorId, ownerId: actorId, connectorId, action: 'private', policyVersion: 1,
+    iat: issuedAt, exp: issuedAt + 60, jti: id(), bodyHash: await sha256(serialized) };
+  await authorizeConnectorTicket(c.env, ticket);
+  const connection = await currentConnector(c.env, connectorId);
+  if (!connection.connection_hash) fail(503, 'computer_offline', 'Your computer is offline: start it, or open Pikibun on it, to reach its sessions.');
+  const envelope: ConnectorRelayEnvelope = { connectorId, credentialHash: connection.credential_hash, connectionHash: connection.connection_hash,
+    request: { type: 'request', id: ticket.jti, method: 'POST', path: PRIVATE_FORWARD_PATH, body: serialized, ticket } };
+  await validateConnectorRpc(envelope);
+  let response: Response;
+  try { response = await c.env.CONNECTOR_HUB.rpc(connectorId, envelope); }
+  catch { fail(503, 'computer_offline', 'Your computer didn\'t answer. It may be asleep or offline; an accepted message may still run there.'); }
+  if (!response.ok) {
+    const reason = await runnerReason(response);
+    await response.body?.cancel().catch(() => {});
+    fail(runnerFailureStatus(response.status), 'private_forward_failed', reason || 'Your computer could not complete the request. Try again shortly.');
+  }
+  let answer: PrivateForwardResponse | null = null;
+  try { answer = parsePrivateForwardResponse(JSON.parse(await response.text())); } catch { answer = null; }
+  if (!answer) fail(502, 'invalid_runner_response', 'Your computer returned an invalid response.');
+  return answer;
 }
 
 export function runnerFailureStatus(status: number): 400 | 403 | 404 | 409 | 410 | 413 | 422 | 429 | 500 | 503 | 504 {

@@ -39,6 +39,8 @@ import { buildVersion } from "../../../packages/shared/src/version.js";
 import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
 import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
 import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
+import { PRIVATE_REPORT_LIMIT, PRIVATE_SESSIONS_VERSION } from "../../../packages/shared/src/private-sessions.js";
+import type { PrivateHome } from "./private-home.js";
 
 const STATE_FILE = "connector.json";
 const EXTENSION_SYNC_MS = 30_000;
@@ -47,6 +49,7 @@ const RECONNECT_WAIT = 15_000;
 const IDENTITY_SYNC_MS = 60_000;
 const IDENTITY_REPORT_LIMIT = 500;
 const IDENTITY_ANSWER_LIMIT = 64 * 1024;
+const PRIVATE_REPORT_MS = 5_000;
 const credentialsSchema = z.object({
   connectorId: z.string().regex(IDENTIFIER), token: z.string().regex(TOKEN), controlPlaneUrl: z.string(),
 }).strict();
@@ -211,6 +214,8 @@ export interface ConnectorOptions {
   extensions?: HostExtensions;
   remoteExtensionInstalls?: boolean;
   managedExtensions?: boolean;
+  privateHome?: PrivateHome;
+  privateReportMs?: number;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
   onWarning?: (warning: "resources-unavailable" | "identity-unavailable", detail?: string) => void;
 }
@@ -250,7 +255,9 @@ export class LocalConnector {
     this.ready = this.readiness.promise;
     this.calls = new ControlPlaneCalls({ credentials: () => this.state!, settings: options, lifetime: this.lifetime.signal,
       requireGeneration: generation => this.requireGeneration(generation), connection: () => this.connection() });
+    const home = options.privateHome;
     this.frames = new RelayFrames({ secret: this.secret, state: () => this.state, restarting: () => this.restarting, runtime: () => this.runtime?.value,
+      ...(home ? { privateForward: (request, signal) => home.forward(request, AbortSignal.any([signal, this.lifetime.signal])) } : {}),
       disconnect: (generation, reason) => this.disconnect(generation, reason),
       requireGeneration: generation => this.requireGeneration(generation) });
     const gpu = options.unsandboxed ? undefined : options.gpu === undefined ? detectGpu() : options.gpu;
@@ -409,7 +416,8 @@ export class LocalConnector {
       const runtime = await this.ensureRuntime(generation, answered || !this.runtime ? configured.repositoryCache : this.runtime.repositoryCache);
       this.requireGeneration(generation);
       const advertised = { ...capabilities(this.options.capabilities, { unsandboxed: this.options.unsandboxed, repositoryCache: runtime.repositoryCache !== "off", gpu: this.gpu }),
-        ...(this.identity && runtime.value.portable ? { portableSessions: true } : {}) };
+        ...(this.identity && runtime.value.portable ? { portableSessions: true } : {}),
+        ...(this.options.privateHome ? { privateSessions: PRIVATE_SESSIONS_VERSION } : {}) };
       await this.calls.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
         capabilities: withHostToolCapabilities(advertised) });
       this.requireGeneration(generation);
@@ -417,6 +425,7 @@ export class LocalConnector {
       void this.syncExtensions(generation);
       void this.syncIdentity(generation);
       void this.syncHardware(generation);
+      void this.syncPrivateSessions(generation);
       this.options.onStatus?.("connected");
       this.readiness.resolve();
       if (!runtime.resumed) {
@@ -513,6 +522,28 @@ export class LocalConnector {
         if (error instanceof CallbackRefused && error.status < 500 && error.status !== 408 && error.status !== 429) return;
       }
       await delay(this.options.hardwareReportMs ?? hardwareLimits.reportSeconds * 1000, undefined, { signal }).catch(() => {});
+    }
+  }
+
+  private async syncPrivateSessions(generation: Generation): Promise<void> {
+    const home = this.options.privateHome;
+    if (!home) return;
+    const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
+    let last = "";
+    let sent = 0;
+    while (!signal.aborted) {
+      try {
+        const sessions = await home.sessions(signal);
+        const report = sessions ? JSON.stringify(sessions.slice(0, PRIVATE_REPORT_LIMIT)) : "";
+        if (sessions && (report !== last || Date.now() - sent > 60_000)) {
+          await this.calls.callback(generation, "/api/connectors/self/private-sessions", { sessions: JSON.parse(report) as unknown[] });
+          last = report;
+          sent = Date.now();
+        }
+      } catch (error) {
+        if (error instanceof CallbackRefused && error.status < 500 && error.status !== 408 && error.status !== 429) return;
+      }
+      await delay(this.options.privateReportMs ?? PRIVATE_REPORT_MS, undefined, { signal }).catch(() => {});
     }
   }
 

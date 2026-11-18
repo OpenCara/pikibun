@@ -13,6 +13,7 @@ const CLIENT_ID = /^[A-Za-z0-9._-]{1,100}$/;
 const CLIENT_SECRET = /^[A-Za-z0-9._-]{1,200}$/;
 
 export class LocalStateError extends Error {}
+export class LocalStateBusyError extends LocalStateError {}
 
 export interface GitHubOAuthApp { clientId: string; clientSecret: string }
 
@@ -141,7 +142,7 @@ async function writeState(directory: string, state: LocalState): Promise<void> {
 async function lease(directory: string): Promise<() => Promise<void>> {
   try { return await acquireRunnerLease(directory, () => {}); }
   catch (error) {
-    if (error instanceof RunnerLeaseBusyError) throw new LocalStateError('Pikibun is already running with this state directory, for example `pikibun serve` in a terminal or the Pikibun app. Stop it there first.');
+    if (error instanceof RunnerLeaseBusyError) throw new LocalStateBusyError('Pikibun is already running with this state directory, for example `pikibun serve` in a terminal or the Pikibun app. Stop it there first.');
     throw new LocalStateError('The local server state could not be locked: this needs flock (Linux, util-linux) or lockf (macOS).');
   }
 }
