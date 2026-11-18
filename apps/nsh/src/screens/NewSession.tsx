@@ -16,7 +16,7 @@ import { createDraft, forgetSentDraft, newSessionDraftId, saveDraft } from "../l
 import { randomId } from "../lib/format";
 import type { PageRoute } from "../lib/page";
 import { createAction, createResource } from "../lib/resource";
-import { thisComputerHostId } from "../lib/this-computer";
+import { thisComputerHostIds } from "../lib/this-computer";
 import { OwnJoinRequests } from "../settings/join-requests";
 import { control, palette, radius, text } from "../theme";
 import { Logo } from "../logo";
@@ -103,7 +103,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     return (connectors() ?? []).filter(host => offering.has(host.id) && !host.revokedAt)
       .sort((a, b) => Number(b.ownerId === user.id) - Number(a.ownerId === user.id));
   });
-  const thisComputerHost = () => { const id = personal() ? thisComputerHostId() : undefined; return id ? hosts().find(item => item.id === id && item.online) : undefined; };
+  const thisComputerHost = () => { const ids = personal() ? thisComputerHostIds() : []; return ids.length ? hosts().find(item => ids.includes(item.id) && item.online) : undefined; };
   const manualHost = () => hosts().find(item => item.id === choice()) ?? thisComputerHost() ?? hosts().find(item => item.id === data.lastChat()?.connectorId)
     ?? hosts().find(item => item.online) ?? hosts()[0];
   const autoMode = createAutoMode(() => props.workspace.id);

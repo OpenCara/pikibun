@@ -2,21 +2,26 @@ import { untracked } from "nsh";
 import type { LocalSessions, SessionRecord } from "../shared";
 import { auth } from "./auth";
 import { onClearDrafts } from "./drafts";
-import { computerHosts, hostsHere, type ThisComputerHost } from "./this-computer";
+import { hostsHere, localHosts, type LocalHost } from "./this-computer";
 
 const records = new Map<string, SessionRecord>();
 const RECORDS = 500;
 onClearDrafts(() => records.clear());
 
-function servingHere(): { host: ThisComputerHost; connectorId: string } | undefined {
+function signedInOrigin(): string | undefined {
   if (!hostsHere) return undefined;
   const signedIn = untracked(auth);
-  if (signedIn.status !== "signedIn" || !signedIn.origin) return undefined;
-  return computerHosts().serving(signedIn.origin);
+  return signedIn.status === "signedIn" && signedIn.origin ? signedIn.origin : undefined;
 }
 
-function hostHere(): string | undefined {
-  return servingHere()?.connectorId;
+function runsHere(connectorId: string | undefined): boolean {
+  const origin = signedInOrigin();
+  return Boolean(origin && connectorId && untracked(() => localHosts().servingIds(origin)).includes(connectorId));
+}
+
+function servingHost(connectorId: string | undefined): LocalHost | undefined {
+  const origin = signedInOrigin();
+  return origin && connectorId ? localHosts().serving(origin, connectorId)?.host : undefined;
 }
 
 function remember(session: SessionRecord): void {
@@ -30,8 +35,7 @@ function remember(session: SessionRecord): void {
 
 export const localSessions: LocalSessions | undefined = hostsHere ? {
   runs(session) {
-    const host = hostHere();
-    if (!host || session.connectorId !== host || session.viewable === false) {
+    if (!runsHere(session.connectorId) || session.viewable === false) {
       records.delete(session.id);
       return false;
     }
@@ -40,17 +44,16 @@ export const localSessions: LocalSessions | undefined = hostsHere ? {
   },
   ran(sessionId) {
     const session = records.get(sessionId);
-    const host = hostHere();
-    return session && host && session.connectorId === host ? session : undefined;
+    return session && runsHere(session.connectorId) ? session : undefined;
   },
-  view: async (sessionId, options) => (await servingHere()?.host.readView(sessionId, options)) ?? null,
-  entries: async (sessionId, options) => (await servingHere()?.host.readEntries(sessionId, options)) ?? null,
+  view: async (sessionId, options) => (await servingHost(records.get(sessionId)?.connectorId)?.readView(sessionId, options)) ?? null,
+  entries: async (sessionId, options) => (await servingHost(records.get(sessionId)?.connectorId)?.readEntries(sessionId, options)) ?? null,
 } : undefined;
 
 export function rememberLocalSessions(sessions: readonly SessionRecord[]): void {
   if (!localSessions) return;
-  for (const host of computerHosts().all()) host.running();
+  const origin = signedInOrigin();
   auth();
-  if (!hostHere()) return;
+  if (!origin || !localHosts().servingIds(origin).length) return;
   for (const session of sessions) localSessions.runs(session);
 }

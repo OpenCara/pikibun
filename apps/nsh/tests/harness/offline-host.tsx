@@ -1,6 +1,6 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import { OfflineHostBanner } from "../../src/components/OfflineHost";
-import { computerHosts, setHostLauncher, setUnsandboxedConsent } from "../../src/lib/this-computer";
+import { localHosts, setHostLauncher, setUnsandboxedConsent } from "../../src/lib/this-computer";
 import type { ConnectorInfo } from "../../src/shared";
 
 const params = (embedder.params ?? {}) as { paired?: unknown; state?: unknown; inspectMs?: unknown; connectorId?: unknown };
@@ -43,7 +43,7 @@ const offline: ConnectorInfo = { id: "c1", ownerId: "u1", ownerName: "ada", name
 mount(() => (
   <View style={{ flex: 1 }}>
     <OfflineHostBanner host={offline} server={SERVER} openSettings={() => settings.update(count => count + 1)} />
-    <Text>{`hosts: ${computerHosts().all().map(item => `${item.pairedWith() ?? "unpaired"}=${item.state()}`).join(" ")}`}</Text>
+    <Text>{`hosts: ${localHosts().all().map(item => `${item.pairedWith() ?? "unpaired"}=${item.state()}`).join(" ")}`}</Text>
     <Text>{`settings opened: ${settings()}`}</Text>
     <Text>{`sent: ${sent().join(",")}`}</Text>
   </View>

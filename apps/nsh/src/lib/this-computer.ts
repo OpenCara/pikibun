@@ -6,13 +6,14 @@ import type {
   HostEvent, HostInspection, HostRequest, HostState, LocalPage, LocalView, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
 } from "../../../../packages/shared/src/app-host-protocol";
 import {
-  appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, pikibunCommand, spawnPikibun, type CommandLink, type LaunchProblem, type LogLine,
+  appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, NVM_INSTALL, parseWslList, pikibunCommand, plainOutput, spawnPikibun, WSL, WSL_DISTRO,
+  wslInstallCommand, type CommandLink, type CommandTarget, type LaunchProblem, type LogLine,
 } from "./pikibun-command";
 import { auth } from "./auth";
 import { isVersion } from "./version";
 import { lastLines } from "./windows-cmd";
 
-export { appCliFolder, INSTALL_COMMAND, installCommand } from "./pikibun-command";
+export { appCliFolder, INSTALL_COMMAND, installCommand, NVM_INSTALL, parseWslList, wslInstallCommand, wslPikibunCommand } from "./pikibun-command";
 export type { LaunchProblem, LogLine } from "./pikibun-command";
 
 export const hostsHere = platform.os === "macos" || platform.os === "windows" || platform.os === "linux";
@@ -21,9 +22,11 @@ export const computerName = platform.os === "macos" ? "this Mac" : "this compute
 
 const HOST_ARGS = ["host", "--stdio"];
 const INSTALL_TIMEOUT_MS = 5 * 60_000;
+const LIST_TIMEOUT_MS = 20_000;
 const LOG_LIMIT = 200;
 const NOTICES = 20;
 const LOCAL_READ_MS = 5_000;
+const CONNECTORS_KEPT = 20;
 
 export function hostCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[] } {
   return pikibunCommand(os, shell, cli, HOST_ARGS);
@@ -34,6 +37,8 @@ export function hostArgs(stateDir?: string): string[] {
 }
 
 const PLAIN_HOST = /^[a-z0-9][a-z0-9.-]{0,99}$/;
+const HOST_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const CONNECTOR_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 function shortHash(text: string): string {
   let hash = 0x811c9dc5;
@@ -51,38 +56,77 @@ export function serverStateDir(server: string): string {
   return `~/.local/share/pikibun/servers/${name}-${shortHash(url?.origin ?? server)}`;
 }
 
-export type HostLink = CommandLink;
-export type HostLauncher = (args: string[]) => HostLink;
+export const hostStateDir = (id: string) => `~/.local/share/pikibun/hosts/${id}`;
 
-export const spawnHost: HostLauncher = args => spawnPikibun(args);
+export type LocalSandbox = "none" | "seatbelt" | "windows" | "wsl" | "bubblewrap";
+
+export function sandboxChoices(os: string = platform.os): LocalSandbox[] {
+  return os === "macos" ? ["none", "seatbelt"] : os === "windows" ? ["windows", "wsl"] : ["bubblewrap"];
+}
+
+export const sandboxNames: Record<LocalSandbox, string> = {
+  none: "No sandbox", seatbelt: "macOS sandbox", windows: "Windows sandbox", wsl: "WSL2", bubblewrap: "bubblewrap",
+};
+
+export type HostTarget = CommandTarget;
+
+export function targetOf(config: { sandbox: LocalSandbox; distro?: string }): HostTarget {
+  return config.sandbox === "wsl" ? { wsl: config.distro ? { distro: config.distro } : {} } : {};
+}
+
+export const environmentKey = (target: HostTarget) => (target.wsl ? `wsl:${target.wsl.distro ?? ""}` : "native");
+
+export type HostLink = CommandLink;
+export type HostLauncher = (args: string[], target: HostTarget) => HostLink;
+
+export const spawnHost: HostLauncher = (args, target) => spawnPikibun(args, target);
 
 let launcher: HostLauncher = spawnHost;
 export function setHostLauncher(next: HostLauncher): void { launcher = next; }
 
 export interface InstallRun {
   line: string;
-  where: "app" | "global";
+  where: "app" | "global" | "wsl";
   onOutput(listener: (line: string) => void): void;
   onExit(listener: (result: { code?: number | null; error?: string | null }) => void): void;
 }
 
-export type Installer = () => InstallRun;
+export type Installer = (target: HostTarget) => InstallRun;
 
-export const spawnInstall: Installer = () => {
-  const cli = appCliFolder(platform.os, nshProcess.dataDir);
-  const { command, args, line } = installCommand(platform.os, nshProcess.env.SHELL, cli);
+export const spawnInstall: Installer = target => {
+  const cli = target.wsl ? null : appCliFolder(platform.os, nshProcess.dataDir);
+  const { command, args, line } = target.wsl ? wslInstallCommand(target.wsl.distro) : installCommand(platform.os, nshProcess.env.SHELL, cli);
   const cwd = commandDirectory();
   const child = nshProcess.spawn(command, args, { lines: true, timeoutMs: INSTALL_TIMEOUT_MS, ...(cwd ? { cwd } : {}) });
   return {
     line,
-    where: cli ? "app" : "global",
-    onOutput: listener => { child.on("stdout", listener); child.on("stderr", listener); },
+    where: target.wsl ? "wsl" : cli ? "app" : "global",
+    onOutput: listener => { const say = (text: string) => listener(plainOutput(text)); child.on("stdout", say); child.on("stderr", say); },
     onExit: listener => { child.on("exit", result => listener(result)); },
   };
 };
 
 let installer: Installer = spawnInstall;
 export function setInstaller(next: Installer): void { installer = next; }
+
+export type WslLister = () => Promise<string[] | null>;
+
+export const listWsl: WslLister = async () => {
+  try {
+    const output = await nshProcess.run(WSL, ["--list", "--quiet"], { timeoutMs: LIST_TIMEOUT_MS });
+    return output.code === 0 ? parseWslList(output.stdout) : null;
+  } catch { return null; }
+};
+
+let wslLister: WslLister = listWsl;
+export function setWslLister(next: WslLister): void { wslLister = next; }
+
+const wslDistros = signal<string[] | null | undefined>(undefined);
+let listingWsl: Promise<void> | undefined;
+export function wslDistributions(): string[] | null | undefined {
+  if (platform.os === "windows") listingWsl ??= wslLister().catch(() => null).then(list => wslDistros.set(list));
+  return wslDistros();
+}
 
 export const COMMAND_UPDATED_KEY = "pikibun.commandUpdatedFor";
 
@@ -115,36 +159,188 @@ export function setCommandUpdate(next: CommandUpdate): void { commandUpdate = ne
 
 type InstallResult = { code?: number | null; error?: string | null };
 
-export function installFailure(lines: readonly string[], result: InstallResult): string {
+export const wslName = (distro?: string) => (distro ? `WSL (${distro})` : "WSL");
+
+export function wslProblem(text: string, distro?: string): string | undefined {
+  if (/no installed distributions|has not been enabled|is not installed|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED|0x8007019e/i.test(text)) {
+    return "WSL isn't set up on this computer. In PowerShell, run wsl --install, restart if Windows asks, and open Ubuntu once to create your Linux user; then choose Refresh.";
+  }
+  if (/no distribution with the supplied name|WSL_E_DISTRO_NOT_FOUND/i.test(text)) return `WSL has no distribution named ${distro ?? "that"} any more. Add a host for another one.`;
+  return undefined;
+}
+
+export function installFailure(lines: readonly string[], result: InstallResult, target: HostTarget = {}): string {
   const text = lines.join("\n");
+  if (target.wsl) {
+    const wsl = wslProblem(text, target.wsl.distro);
+    if (wsl) return wsl;
+    if (result.code === 127 || /npm: (command )?not found/i.test(text)) {
+      return `npm isn't installed in ${wslName(target.wsl.distro)}. Install Node.js 24 or newer there, for example with nvm (${NVM_INSTALL}), then choose Install again.`;
+    }
+  }
   const node = `Node.js 24 or newer (from nodejs.org${platform.os === "macos" ? ", or brew install node" : ""})`;
-  if (result.code === 127 || result.code === 9009 || /npm: (command )?not found|not found: npm|'npm' is not recognized/i.test(text)) {
+  if (!target.wsl && (result.code === 127 || result.code === 9009 || /npm: (command )?not found|not found: npm|'npm' is not recognized/i.test(text))) {
     return `npm isn't installed on ${computerName}. Install ${node}, then choose Install again.`;
   }
   if (/\bEACCES\b|\bEPERM\b|permission denied/i.test(text)) {
     const chown = /sudo chown -R [^\s"]+ "[^"\n]+"/.exec(text)?.[0];
-    if (chown) return `npm's cache on ${computerName} has files it can't write, left by an earlier sudo npm. Fix them in a terminal with ${chown}, then choose Install again.`;
-    return `npm couldn't write a folder it needs on ${computerName}: permission denied. Run the command below in a terminal${platform.os === "windows" ? " as administrator" : " with sudo in front"}, then choose Refresh.`;
+    const where = target.wsl ? wslName(target.wsl.distro) : computerName;
+    if (chown) return `npm's cache in ${where} has files it can't write, left by an earlier sudo npm. Fix them in a terminal with ${chown}, then choose Install again.`;
+    return `npm couldn't write a folder it needs in ${where}: permission denied. Run the command below in a terminal${platform.os === "windows" && !target.wsl ? " as administrator" : " with sudo in front"}, then choose Refresh.`;
   }
   if (result.error) return `The install didn't finish: ${result.error}`;
   const last = lastLines(lines);
   return last ? `npm couldn't install pikibun: ${last}` : `npm couldn't install pikibun (exit code ${result.code ?? "unknown"}).`;
 }
 
-export function updateFailure(lines: readonly string[], result: InstallResult): string {
+export function updateFailure(lines: readonly string[], result: InstallResult, who: string = computerTitle): string {
   const last = lastLines(lines);
   const why = result.error || last || `exit code ${result.code ?? "unknown"}`;
-  return `npm couldn't update Pikibun's command (${why}). ${computerTitle} keeps the one it has, and Pikibun tries again the next time it opens.`;
+  return `npm couldn't update Pikibun's command (${why}). ${who} keeps the one it has, and Pikibun tries again the next time it opens.`;
 }
 
-export function launchProblem(lines: readonly string[], code: number | null | undefined): LaunchProblem {
+export function launchProblem(lines: readonly string[], code: number | null | undefined, target: HostTarget = {}): LaunchProblem {
+  if (target.wsl) {
+    const wsl = wslProblem(lines.join("\n"), target.wsl.distro);
+    if (wsl) return { kind: "failed", message: wsl };
+  }
   return commandProblem(lines, code, /Unknown command: host|Unknown option\. Run "pikibun host --help"/, "The host");
 }
 
+export interface Outcome { ok: boolean; error?: string }
+
+export class LocalEnvironment {
+  readonly installing = signal(false);
+  readonly updating = signal(false);
+  readonly installError = signal("");
+  readonly problem = signal<LaunchProblem | null>(null);
+  readonly logs = signal<LogLine[]>([]);
+  private updated?: Promise<void>;
+
+  constructor(readonly target: HostTarget) {}
+
+  get key(): string { return environmentKey(this.target); }
+  get wsl(): boolean { return Boolean(this.target.wsl); }
+  where(): string { return this.target.wsl ? wslName(this.target.wsl.distro) : computerName; }
+  title(): string { return this.target.wsl ? wslName(this.target.wsl.distro) : computerTitle; }
+  private updatedKey(): string { return this.wsl ? `${COMMAND_UPDATED_KEY}:${this.key}` : COMMAND_UPDATED_KEY; }
+
+  log(level: LogLine["level"], message: string): void {
+    this.logs.update(lines => [...lines, { time: Date.now(), level, message }].slice(-LOG_LIMIT));
+  }
+
+  private async runInstall(): Promise<{ where: InstallRun["where"]; lines: string[]; result: InstallResult }> {
+    this.installing.set(true);
+    const lines: string[] = [];
+    let where = "global" as InstallRun["where"];
+    try {
+      const result = await new Promise<InstallResult>(resolve => {
+        let run: InstallRun;
+        try { run = installer(this.target); }
+        catch (error) { resolve({ code: null, error: error instanceof Error ? error.message : String(error) }); return; }
+        where = run.where;
+        this.log("info", `Running ${run.line}${this.wsl ? ` in ${this.where()}` : ""}.`);
+        run.onOutput(line => {
+          if (!line.trim()) return;
+          lines.push(line);
+          if (lines.length > 40) lines.shift();
+          this.log("info", line.slice(0, 1000));
+        });
+        run.onExit(resolve);
+      });
+      return { where, lines, result };
+    } finally {
+      this.installing.set(false);
+    }
+  }
+
+  commandUpdated(): Promise<void> {
+    this.updated ??= (this.wsl ? this.updateWslCommand() : this.updateOwnCommand()).catch(() => undefined);
+    return this.updated;
+  }
+
+  private async updateOwnCommand(): Promise<void> {
+    const { appVersion, ownCopy } = commandUpdate;
+    if (!hostsHere || !isVersion(appVersion)) return;
+    if (await Storage.getItem(COMMAND_UPDATED_KEY).catch(() => null) === appVersion) return;
+    let had: string | null;
+    try { had = await ownCopy(); }
+    catch (error) {
+      this.log("warning", `Pikibun couldn't look for its own pikibun command (${error instanceof Error ? error.message : String(error)}), so it wasn't updated with the app. Pikibun tries again the next time it opens.`);
+      return;
+    }
+    if (had === null || untracked(this.installing)) return;
+    this.updating.set(true);
+    try {
+      this.log("info", `Pikibun is now ${appVersion}: updating its own pikibun command${had ? ` (${had})` : ""} from npm.`);
+      const { lines, result } = await this.runInstall();
+      if (result.code !== 0) { this.log("warning", updateFailure(lines, result)); return; }
+      const has = await ownCopy().catch(() => null);
+      this.log("info", has && has === had ? `pikibun ${has} is the one this version of Pikibun installs already.` : `npm updated pikibun${has ? ` to ${has}` : ""} in Pikibun's own folder.`);
+      await Storage.setItem(COMMAND_UPDATED_KEY, appVersion).catch(() => undefined);
+    } finally {
+      this.updating.set(false);
+    }
+  }
+
+  private async updateWslCommand(): Promise<void> {
+    const { appVersion } = commandUpdate;
+    if (!hostsHere || !isVersion(appVersion)) return;
+    const had = await Storage.getItem(this.updatedKey()).catch(() => null);
+    if (!had || had === appVersion || untracked(this.installing)) return;
+    this.updating.set(true);
+    try {
+      this.log("info", `Pikibun is now ${appVersion}: updating its pikibun command in ${this.where()} from npm.`);
+      const { lines, result } = await this.runInstall();
+      if (result.code !== 0) { this.log("warning", updateFailure(lines, result, this.title())); return; }
+      this.log("info", `npm updated pikibun in ${this.where()}.`);
+      await Storage.setItem(this.updatedKey(), appVersion).catch(() => undefined);
+    } finally {
+      this.updating.set(false);
+    }
+  }
+
+  async install(check: () => Promise<LaunchProblem | null | undefined>): Promise<Outcome> {
+    if (untracked(this.installing)) return { ok: false, error: "pikibun is already being installed." };
+    this.installError.set("");
+    const { where, lines, result } = await this.runInstall();
+    const failure = result.code !== 0 ? installFailure(lines, result, this.target) : undefined;
+    if (failure) {
+      this.installError.set(failure);
+      this.log("error", failure);
+      return { ok: false, error: failure };
+    }
+    this.log("info", where === "app" ? "npm installed pikibun in Pikibun's own folder." : where === "wsl" ? `npm installed pikibun in ${this.where()}.` : "npm installed pikibun.");
+    if (where !== "global" && isVersion(commandUpdate.appVersion)) await Storage.setItem(this.updatedKey(), commandUpdate.appVersion).catch(() => undefined);
+    if ((await check())?.kind === "missing") {
+      const message = where === "app"
+        ? `npm installed pikibun, but ${computerName} still can't start it. Install it in a terminal with the command below, then choose Refresh.`
+        : where === "wsl"
+          ? `npm installed pikibun in ${this.where()}, but its login shell still can't start it. Install it there in a terminal with npm install -g pikibun@latest, then choose Refresh.`
+          : `npm installed pikibun, but ${computerName}'s ${platform.os === "windows" ? "PATH" : "login shell"} doesn't find it. Add npm's global folder (npm prefix -g${platform.os === "windows" ? "" : ", then its bin"}) to your PATH, then choose Refresh.`;
+      this.installError.set(message);
+      return { ok: false, error: message };
+    }
+    return { ok: true };
+  }
+}
+
+const environments = new Map<string, LocalEnvironment>();
+
+export function localEnvironment(target: HostTarget = {}): LocalEnvironment {
+  const key = environmentKey(target);
+  let environment = environments.get(key);
+  if (!environment) {
+    environment = new LocalEnvironment(target.wsl ? { wsl: target.wsl.distro ? { distro: target.wsl.distro } : {} } : {});
+    environments.set(key, environment);
+  }
+  return environment;
+}
+
+export const nativeEnvironment = () => localEnvironment({});
+
 type HostResult = Extract<HostEvent, { type: "result" }>;
 const hostEventTypes: ReadonlySet<string> = new Set(["ready", "result", "status", "log", "failed", "login"]);
-
-export type MacSandbox = "none" | "seatbelt";
 
 export interface SignInView {
   provider: string;
@@ -157,18 +353,25 @@ export interface SignInView {
 }
 
 export interface ModelChoice { provider: string; modelId: string }
-interface Saved {
-  sandbox?: MacSandbox;
+
+export interface LocalHostConfig {
+  id: string;
+  server: string;
+  name: string;
+  sandbox: LocalSandbox;
+  distro?: string;
+  stateDir?: string;
   models?: ModelChoice[];
-  resume?: { server: string; unsandboxedConsent: boolean };
+  connectorIds?: string[];
+  resume?: { unsandboxedConsent: boolean };
 }
 
-const SAVED_KEY = "pikibun.thisComputer";
-const SERVERS_KEY = "pikibun.thisComputer.servers";
+const HOSTS_KEY = "pikibun.thisComputer.hosts";
+const LEGACY_KEY = "pikibun.thisComputer";
+const LEGACY_SERVERS_KEY = "pikibun.thisComputer.servers";
 const CONNECTORS_KEY = "pikibun.thisComputer.connectors";
-const CONNECTORS_KEPT = 20;
 
-const originOf = (value: string) => { try { return new URL(value).origin; } catch { return value; } };
+export const originOf = (value: string) => { try { return new URL(value).origin; } catch { return value; } };
 
 const seenConnectors = signal<Record<string, string[]> | null>(null);
 let seenLoading: Promise<Record<string, string[]>> | undefined;
@@ -208,13 +411,6 @@ export function ranHere(server: string, connectorId: string): boolean {
   return seen[originOf(server)]?.includes(connectorId) ?? false;
 }
 
-export interface Outcome { ok: boolean; error?: string }
-
-export interface HostOptions {
-  stateDir?: string;
-  computer?: ThisComputerHost;
-}
-
 const isLoopbackHttp = (origin: string) => {
   try {
     const url = new URL(origin);
@@ -223,85 +419,88 @@ const isLoopbackHttp = (origin: string) => {
 };
 const isHttps = (url: string) => { try { return new URL(url).protocol === "https:"; } catch { return false; } };
 
-export class ThisComputerHost {
+let consent: (warning: string, server: string, missing: string[], host: string) => Promise<boolean> = async () => false;
+export function setUnsandboxedConsent(next: typeof consent): void { consent = next; }
+
+interface HostOwner {
+  changed(host: LocalHost): void;
+  inspected(host: LocalHost): void;
+}
+
+export type ThisComputerHost = LocalHost;
+
+export class LocalHost {
+  readonly config: Signal<LocalHostConfig>;
+  readonly environment: LocalEnvironment;
   readonly state = signal<HostState>("stopped");
   readonly running = signal<{ server: string; unsandboxed: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string } | null>(null);
   readonly inspection = signal<HostInspection | null>(null);
   readonly inspecting = signal(false);
-  readonly problem = signal<LaunchProblem | null>(null);
-  readonly installing = signal(false);
-  readonly updating = signal(false);
-  readonly installError = signal("");
   readonly error = signal("");
   readonly logs = signal<LogLine[]>([]);
   readonly providers = signal<LoginProvider[] | null>(null);
   readonly providersError = signal("");
   readonly signIn = signal<(SignInView & { login?: number }) | null>(null);
-  readonly sandbox: Signal<MacSandbox>;
-  readonly models: Signal<ModelChoice[] | null>;
-  readonly stateDir?: string;
-  private readonly computer?: ThisComputerHost;
-  private readonly savedKey: string;
-  private resume: Saved["resume"];
-  private loaded?: Promise<void>;
-  private server?: string;
   private inspectError = false;
-  private updated?: Promise<void>;
-  private readonly channel = new CommandChannel<HostEvent, HostRequest>({
-    launch: () => launcher(hostArgs(this.stateDir)), before: () => this.commandUpdated(), eventTypes: hostEventTypes, problem: launchProblem, subject: "The host",
-    failure: (id, message, notReady) => ({ type: "result", id, ok: false, error: { code: notReady ? "unsupported" : "failed", message } }),
-    onEvent: event => this.handleEvent(event),
-    onOutput: line => this.log("info", line),
-    onExit: (code, expected) => this.handleExit(code, expected),
-  });
+  private readonly channel: CommandChannel<HostEvent, HostRequest>;
 
-  constructor(private readonly confirmUnsandboxed: (warning: string, server: string, missing: string[]) => Promise<boolean>, options: HostOptions = {}) {
-    this.stateDir = options.stateDir;
-    this.computer = options.computer;
-    this.sandbox = options.computer?.sandbox ?? signal<MacSandbox>("none");
-    this.models = options.computer?.models ?? signal<ModelChoice[] | null>(null);
-    this.savedKey = options.stateDir ? `${SAVED_KEY}:${options.stateDir}` : SAVED_KEY;
+  constructor(config: LocalHostConfig, private readonly owner?: HostOwner) {
+    this.config = signal(config);
+    this.environment = localEnvironment(targetOf(config));
+    const target = targetOf(config);
+    this.channel = new CommandChannel<HostEvent, HostRequest>({
+      launch: () => launcher(hostArgs(untracked(this.config).stateDir), target), before: () => this.environment.commandUpdated(), eventTypes: hostEventTypes,
+      problem: (lines, code) => launchProblem(lines, code, target), subject: "The host",
+      failure: (id, message, notReady) => ({ type: "result", id, ok: false, error: { code: notReady ? "unsupported" : "failed", message } }),
+      onEvent: event => this.handleEvent(event),
+      onOutput: line => this.log("info", line),
+      onExit: (code, expected) => this.handleExit(code, expected),
+    });
   }
 
-  load(): Promise<void> {
-    this.loaded ??= Promise.all([this.computer?.load(), Storage.getItem(this.savedKey)]).then(([, raw]) => {
-      if (!raw) return;
-      const saved = JSON.parse(raw) as Saved;
-      if (this.computer) {
-        if (saved.resume && typeof saved.resume.server === "string") this.resume = { server: saved.resume.server, unsandboxedConsent: saved.resume.unsandboxedConsent === true };
-        return;
-      }
-      if (saved.sandbox === "seatbelt") this.sandbox.set("seatbelt");
-      const models = Array.isArray(saved.models) ? saved.models.filter(model => typeof model?.provider === "string" && typeof model?.modelId === "string") : [];
-      if (models.length) this.models.set(models);
-      if (saved.resume && typeof saved.resume.server === "string") this.resume = { server: saved.resume.server, unsandboxedConsent: saved.resume.unsandboxedConsent === true };
-    }).catch(() => undefined);
-    return this.loaded;
+  get id(): string { return untracked(this.config).id; }
+  get stateDir(): string | undefined { return untracked(this.config).stateDir; }
+  server(): string { return this.config().server; }
+  name(): string { return this.config().name; }
+  sandbox(): LocalSandbox { return this.config().sandbox; }
+  models(): ModelChoice[] | null { return this.config().models ?? null; }
+  problem(): LaunchProblem | null { return this.environment.problem(); }
+  where(): string { return this.environment.where(); }
+
+  isolationName(): string {
+    const config = this.config();
+    return config.sandbox === "wsl" ? wslName(config.distro) : sandboxNames[config.sandbox];
   }
 
-  private save(): void {
-    const own = !this.computer;
-    const saved: Saved = { ...(own && untracked(this.sandbox) === "seatbelt" ? { sandbox: "seatbelt" as const } : {}), ...(own && untracked(this.models)?.length ? { models: untracked(this.models)! } : {}),
-      ...(this.resume ? { resume: this.resume } : {}) };
-    Storage.setItem(this.savedKey, JSON.stringify(saved)).catch(() => undefined);
+  change(update: Partial<LocalHostConfig>, persist = true): void {
+    this.config.update(config => {
+      const next: LocalHostConfig = { ...config, ...update };
+      for (const key of Object.keys(next) as (keyof LocalHostConfig)[]) if (next[key] === undefined) delete next[key];
+      return next;
+    });
+    if (persist) this.owner?.changed(this);
   }
 
   pairedWith(): string | undefined {
     return this.running()?.server ?? this.inspection()?.pairedServer;
   }
 
-  forget(): Promise<void> {
-    this.resume = undefined;
-    return Storage.removeItem(this.savedKey).catch(() => undefined);
+  paired(): boolean {
+    const paired = this.pairedWith();
+    return Boolean(paired && this.server() && originOf(paired) === originOf(this.server()));
   }
 
-  private setResume(resume: Saved["resume"]): void {
-    this.resume = resume;
-    this.save();
+  private setResume(resume: LocalHostConfig["resume"]): void {
+    this.change({ resume });
   }
 
   log(level: LogLine["level"], message: string): void {
     this.logs.update(lines => [...lines, { time: Date.now(), level, message }].slice(-LOG_LIMIT));
+  }
+
+  private noteId(connectorId: string): void {
+    const ids = untracked(this.config).connectorIds ?? [];
+    if (!ids.includes(connectorId)) this.change({ connectorIds: [...ids, connectorId].slice(-CONNECTORS_KEPT) });
   }
 
   private handleEvent(event: Exclude<HostEvent, HostResult | { type: "ready" }>): void {
@@ -314,18 +513,17 @@ export class ThisComputerHost {
     else if (event.server !== undefined) {
       const before = untracked(this.running);
       const connectorId = event.connectorId ?? (before?.server === event.server ? before.connectorId : undefined);
-      if (event.connectorId) noteConnector(event.server, event.connectorId);
+      if (event.connectorId) { noteConnector(event.server, event.connectorId); this.noteId(event.connectorId); }
       this.running.set({ server: event.server, unsandboxed: event.unsandboxed === true,
         ...(event.sandbox === "bubblewrap" || event.sandbox === "seatbelt" || event.sandbox === "windows" ? { sandbox: event.sandbox } : {}),
         ...(connectorId ? { connectorId } : {}) });
     }
-    if (event.server !== undefined) this.server = event.server;
     if (event.state === "connected") this.error.set("");
-    if (event.state === "connected" && previous !== "connected") void this.refresh(event.server);
+    if (event.state === "connected" && previous !== "connected") void this.refresh();
   }
 
   private fail(message: string): void {
-    if (this.resume) this.setResume(undefined);
+    if (untracked(this.config).resume) this.setResume(undefined);
     this.inspectError = false;
     this.error.set(message);
     this.log("error", message);
@@ -339,21 +537,22 @@ export class ThisComputerHost {
   }
 
   private isolation(): { experimentalSandbox?: true } {
-    return platform.os === "windows" || (platform.os === "macos" && untracked(this.sandbox) === "seatbelt") ? { experimentalSandbox: true } : {};
+    const sandbox = untracked(this.config).sandbox;
+    return sandbox === "seatbelt" || sandbox === "windows" ? { experimentalSandbox: true } : {};
   }
 
   async refresh(server?: string): Promise<HostInspection | undefined> {
-    if (server) this.server = server;
-    const origin = server ?? this.server;
+    const origin = untracked(this.config).server || server;
     this.inspecting.set(true);
     try {
       const result = await this.channel.request({ type: "inspect", ...this.isolation(), ...(origin && isLoopbackHttp(origin) ? { allowInsecureLoopback: true } : {}) });
       const problem = this.channel.launchFailure;
-      this.problem.set(!result.ok && problem ? problem : null);
-      if (untracked(this.problem)?.kind !== "missing" && untracked(this.problem)?.kind !== "outdated") this.installError.set("");
+      this.environment.problem.set(!result.ok && problem ? problem : null);
+      if (untracked(this.environment.problem)?.kind !== "missing" && untracked(this.environment.problem)?.kind !== "outdated") this.environment.installError.set("");
       if (result.ok && result.inspection) {
         this.inspection.set(result.inspection);
         if (this.inspectError) { this.inspectError = false; this.error.set(""); }
+        this.owner?.inspected(this);
       } else if (!result.ok && !problem) { this.inspectError = true; this.error.set(result.error.message); }
       if (result.ok && untracked(this.providers) === null && untracked(this.signIn)?.state !== "running") void this.loadProviders();
       return result.ok ? result.inspection : undefined;
@@ -362,30 +561,34 @@ export class ThisComputerHost {
     }
   }
 
-  async start(server: string, pairing?: { create: () => Promise<{ id: string; code: string }>; replace: boolean }, resume?: { unsandboxedConsent: boolean }): Promise<Outcome> {
+  async start(options: { pairing?: { create: () => Promise<{ id: string; code: string }>; replace: boolean }; resume?: { unsandboxedConsent: boolean } } = {}): Promise<Outcome> {
+    const { pairing, resume } = options;
+    const server = untracked(this.config).server;
+    if (!server) return this.refuse("Choose the server this host is for first.");
     if (untracked(this.state) !== "stopped") return { ok: false, error: "The host is already running." };
     this.inspectError = false;
-    const inspection = await this.refresh(server);
-    if (!inspection) return this.refuse(untracked(this.problem) ? "" : untracked(this.error) || `${computerTitle} could not be inspected.`);
+    const inspection = await this.refresh();
+    if (!inspection) return this.refuse(untracked(this.environment.problem) ? "" : untracked(this.error) || `${this.environment.title()} could not be inspected.`);
     const offered = this.offeredModels(inspection);
+    const pairedHere = inspection.pairedServer !== undefined && originOf(inspection.pairedServer) === originOf(server);
     const failure = inspection.unsupported ?? inspection.prerequisitesError
-      ?? (!pairing && inspection.pairedServer !== server ? `${computerTitle} is not paired with ${server} yet.` : undefined)
-      ?? (!inspection.models.length ? `${inspection.modelsError ?? "Pi has no models to offer on this computer."} Sign Pi in to a provider below first.`
+      ?? (!pairing && !pairedHere ? `This host is not paired with ${server} yet.` : undefined)
+      ?? (!inspection.models.length ? `${inspection.modelsError ?? `Pi has no models to offer in ${this.where()}.`} Sign Pi in to a provider below first.`
         : !offered.length ? "None of the models chosen to offer is configured in Pi any more. Check some under Models offered, or let Pi choose." : undefined);
     if (failure) return this.refuse(failure);
     let unsandboxedConsent = false;
     if (inspection.mode === "unsandboxed") {
       const missing = inspection.sandboxPrerequisites?.filter(item => !item.ok).map(item => item.name) ?? [];
-      unsandboxedConsent = resume ? resume.unsandboxedConsent : await this.confirmUnsandboxed(inspection.unsandboxedWarning ?? "", server, missing);
-      if (!unsandboxedConsent) return this.refuse(resume ? `Hosting was not resumed: ${computerName} now runs agent work unsandboxed, which needs your consent. Start the host to review it.` : "Unsandboxed mode was not confirmed; nothing was started.");
+      unsandboxedConsent = resume ? resume.unsandboxedConsent : await consent(inspection.unsandboxedWarning ?? "", server, missing, untracked(this.config).name);
+      if (!unsandboxedConsent) return this.refuse(resume ? `Hosting was not resumed: ${this.where()} now runs agent work unsandboxed, which needs your consent. Start the host to review it.` : "Unsandboxed mode was not confirmed; nothing was started.");
     }
-    const models = untracked(this.models);
+    const models = untracked(this.config).models;
     this.error.set("");
     let made: { id: string; code: string } | undefined;
     if (pairing) {
       try { made = await pairing.create(); }
       catch (error) { return this.refuse(error instanceof Error ? error.message : String(error)); }
-      this.log("info", pairing.replace ? `Replacing ${computerName}'s pairing with one for ${server}.` : `Pairing ${computerName} with ${server}.`);
+      this.log("info", pairing.replace ? `Replacing this host's pairing with one for ${server}.` : `Pairing ${untracked(this.config).name} with ${server}.`);
     }
     const result = await this.channel.request({
       type: "start", server,
@@ -395,86 +598,7 @@ export class ThisComputerHost {
       ...this.isolation(), ...(isLoopbackHttp(server) ? { allowInsecureLoopback: true } : {}),
     });
     if (!result.ok) return this.refuse(result.error.message);
-    this.setResume({ server, unsandboxedConsent });
-    return { ok: true };
-  }
-
-  private async runInstall(): Promise<{ where: InstallRun["where"]; lines: string[]; result: InstallResult }> {
-    this.installing.set(true);
-    const lines: string[] = [];
-    let where = "global" as InstallRun["where"];
-    try {
-      const result = await new Promise<InstallResult>(resolve => {
-        let run: InstallRun;
-        try { run = installer(); }
-        catch (error) { resolve({ code: null, error: error instanceof Error ? error.message : String(error) }); return; }
-        where = run.where;
-        this.log("info", `Running ${run.line}.`);
-        run.onOutput(line => {
-          if (!line.trim()) return;
-          lines.push(line);
-          if (lines.length > 40) lines.shift();
-          this.log("info", line.slice(0, 1000));
-        });
-        run.onExit(resolve);
-      });
-      return { where, lines, result };
-    } finally {
-      this.installing.set(false);
-    }
-  }
-
-  commandUpdated(): Promise<void> {
-    if (this.computer) return this.computer.commandUpdated();
-    this.updated ??= this.updateOwnCommand().catch(() => undefined);
-    return this.updated;
-  }
-
-  private async updateOwnCommand(): Promise<void> {
-    const { appVersion, ownCopy } = commandUpdate;
-    if (!hostsHere || !isVersion(appVersion)) return;
-    if (await Storage.getItem(COMMAND_UPDATED_KEY).catch(() => null) === appVersion) return;
-    let had: string | null;
-    try { had = await ownCopy(); }
-    catch (error) {
-      this.log("warning", `Pikibun couldn't look for its own pikibun command (${error instanceof Error ? error.message : String(error)}), so it wasn't updated with the app. Pikibun tries again the next time it opens.`);
-      return;
-    }
-    if (had === null || untracked(this.installing)) return;
-    this.updating.set(true);
-    try {
-      this.log("info", `Pikibun is now ${appVersion}: updating its own pikibun command${had ? ` (${had})` : ""} from npm.`);
-      const { lines, result } = await this.runInstall();
-      if (result.code !== 0) { this.log("warning", updateFailure(lines, result)); return; }
-      const has = await ownCopy().catch(() => null);
-      this.log("info", has && has === had ? `pikibun ${has} is the one this version of Pikibun installs already.` : `npm updated pikibun${has ? ` to ${has}` : ""} in Pikibun's own folder.`);
-      await Storage.setItem(COMMAND_UPDATED_KEY, appVersion).catch(() => undefined);
-    } finally {
-      this.updating.set(false);
-    }
-  }
-
-  async install(server?: string): Promise<Outcome> {
-    if (untracked(this.installing)) return { ok: false, error: "pikibun is already being installed." };
-    if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first." };
-    this.installError.set("");
-    const { where, lines, result } = await this.runInstall();
-    const failure = result.code !== 0 ? installFailure(lines, result) : undefined;
-    if (failure) {
-      this.installError.set(failure);
-      this.log("error", failure);
-      return { ok: false, error: failure };
-    }
-    this.log("info", where === "app" ? "npm installed pikibun in Pikibun's own folder." : "npm installed pikibun.");
-    if (where === "app" && isVersion(commandUpdate.appVersion)) await Storage.setItem(COMMAND_UPDATED_KEY, commandUpdate.appVersion).catch(() => undefined);
-    await this.refresh(server);
-    if (untracked(this.problem)?.kind === "missing") {
-      const message = where === "app"
-        ? `npm installed pikibun, but ${computerName} still can't start it. Install it in a terminal with the command below, then choose Refresh.`
-        : `npm installed pikibun, but ${computerName}'s ${platform.os === "windows" ? "PATH" : "login shell"} doesn't find it. Add npm's global folder (npm prefix -g${platform.os === "windows" ? "" : ", then its bin"}) to your PATH, then choose Refresh.`;
-      this.installError.set(message);
-      return { ok: false, error: message };
-    }
+    this.setResume({ unsandboxedConsent });
     return { ok: true };
   }
 
@@ -484,33 +608,27 @@ export class ThisComputerHost {
   }
 
   async stop(): Promise<Outcome> {
-    this.setResume(undefined);
+    if (untracked(this.config).resume) this.setResume(undefined);
     if (!this.channel.running || untracked(this.state) === "stopped") return { ok: true };
     const result = await this.channel.request({ type: "stop" });
     return result.ok ? { ok: true } : this.refuse(result.error.message);
   }
 
   async resumeHosting(): Promise<void> {
-    await this.load();
-    const resume = this.resume;
-    if (!resume) return;
-    const outcome = await this.start(resume.server, undefined, resume);
-    if (!outcome.ok) this.setResume(undefined);
+    const resume = untracked(this.config).resume;
+    if (!resume || !untracked(this.config).server) return;
+    const outcome = await this.start({ resume });
+    if (!outcome.ok && untracked(this.config).resume) this.setResume(undefined);
   }
 
-  async setSandbox(choice: MacSandbox): Promise<Outcome> {
-    if (platform.os !== "macos") return { ok: false, error: "Only macOS offers a choice of sandbox here." };
-    if (computerHosts().all().some(host => untracked(host.state) !== "stopped")) return { ok: false, error: `Stop ${computerName}'s hosts first: their sandbox changes from their next start.` };
+  async setSandbox(choice: LocalSandbox): Promise<Outcome> {
+    const config = untracked(this.config);
+    if (!sandboxChoices().includes(choice)) return { ok: false, error: `${computerTitle} has no ${sandboxNames[choice]}.` };
+    if (choice === config.sandbox) return { ok: true };
+    if (environmentKey(targetOf({ sandbox: choice })) !== this.environment.key) return { ok: false, error: `A host runs in ${this.where()} for good: add another host to run sessions in ${sandboxNames[choice]}.` };
+    if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first: its sandbox changes from its next start." };
     if (untracked(this.signIn)?.state === "running") return { ok: false, error: "Finish or cancel the sign-in first." };
-    if (choice === untracked(this.sandbox)) return { ok: true };
-    this.sandbox.set(choice);
-    for (const host of computerHosts().all()) {
-      if (host === this) continue;
-      void host.forget();
-      host.inspection.set(null);
-    }
-    this.resume = undefined;
-    this.save();
+    this.change({ sandbox: choice, resume: undefined });
     this.inspection.set(null);
     this.error.set("");
     this.log("info", choice === "seatbelt" ? "Sessions run in macOS's own sandbox (experimental) from the host's next start, or without one, after your consent, while it isn't ready."
@@ -521,14 +639,13 @@ export class ThisComputerHost {
 
   setModels(models: ModelChoice[] | null): Outcome {
     if (models && !models.length) return { ok: false, error: "Check at least one model, or let Pi choose." };
-    this.models.set(models);
-    this.save();
+    this.change({ models: models ?? undefined });
     if (untracked(this.state) !== "stopped") this.log("info", "The model choice applies from the host's next start.");
     return { ok: true };
   }
 
   private offeredModels(inspection: HostInspection): ModelChoice[] {
-    const chosen = untracked(this.models);
+    const chosen = untracked(this.config).models;
     const available = inspection.models.map(model => ({ provider: model.provider, modelId: model.modelId }));
     return chosen ? chosen.filter(model => available.some(entry => entry.provider === model.provider && entry.modelId === model.modelId)) : available;
   }
@@ -555,7 +672,7 @@ export class ThisComputerHost {
     this.current = undefined;
     update();
     if (!result.ok) return { ok: false, error: result.error.message };
-    this.log("info", `Pi is signed in to ${name} on ${computerName}.${untracked(this.state) === "stopped" ? "" : " Its models are offered from the host's next start."}`);
+    this.log("info", `Pi is signed in to ${name} in ${this.where()}.${untracked(this.state) === "stopped" ? "" : " Its models are offered from the host's next start."}`);
     await Promise.all([this.loadProviders(), this.refresh()]);
     return { ok: true };
   }
@@ -623,138 +740,249 @@ export class ThisComputerHost {
   shutdown(): Promise<void> { return this.channel.shutdown(); }
 }
 
-let shared: ThisComputerHost | undefined;
-let consent: (warning: string, server: string, missing: string[]) => Promise<boolean> = async () => false;
-const ask = (warning: string, server: string, missing: string[]) => consent(warning, server, missing);
+const validModels = (value: unknown): ModelChoice[] | undefined => {
+  const models = Array.isArray(value)
+    ? value.filter(model => typeof model?.provider === "string" && typeof model?.modelId === "string").map(model => ({ provider: model.provider as string, modelId: model.modelId as string }))
+    : [];
+  return models.length ? models : undefined;
+};
 
-export function setUnsandboxedConsent(next: typeof consent): void { consent = next; }
+const validOrigin = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : undefined;
+  } catch { return undefined; }
+};
 
-export function thisComputer(): ThisComputerHost {
-  shared ??= new ThisComputerHost(ask);
-  return shared;
+export const defaultHostName = (sandbox?: LocalSandbox) => `${platform.os === "macos" ? "My Mac" : "My computer"}${sandbox === "wsl" ? " (WSL)" : ""}`;
+
+export function validHostConfigs(value: unknown, os: string = platform.os): LocalHostConfig[] {
+  if (!Array.isArray(value)) return [];
+  const choices = sandboxChoices(os);
+  const ids = new Set<string>();
+  const folders = new Set<string>();
+  const configs: LocalHostConfig[] = [];
+  for (const item of value as Record<string, unknown>[]) {
+    if (!item || typeof item !== "object") continue;
+    const id = typeof item.id === "string" && HOST_ID.test(item.id) ? item.id : undefined;
+    const server = validOrigin(item.server);
+    if (!id || !server || ids.has(id)) continue;
+    const sandbox = choices.includes(item.sandbox as LocalSandbox) ? item.sandbox as LocalSandbox : choices[0]!;
+    if (item.distro !== undefined && (sandbox !== "wsl" || typeof item.distro !== "string" || !WSL_DISTRO.test(item.distro))) continue;
+    const distro = item.distro as string | undefined;
+    const stateDir = item.stateDir;
+    if (stateDir !== undefined && stateDir !== hostStateDir(id) && stateDir !== serverStateDir(server)) continue;
+    const folder = `${environmentKey(targetOf({ sandbox, ...(distro ? { distro } : {}) }))}|${(stateDir as string | undefined) ?? ""}`;
+    if (folders.has(folder)) continue;
+    ids.add(id);
+    folders.add(folder);
+    const name = typeof item.name === "string" && item.name.trim() ? item.name.trim().slice(0, 120) : computerTitle;
+    const models = validModels(item.models);
+    const connectorIds = Array.isArray(item.connectorIds) ? item.connectorIds.filter((entry): entry is string => typeof entry === "string" && CONNECTOR_ID.test(entry)).slice(-CONNECTORS_KEPT) : [];
+    const resume = item.resume && typeof item.resume === "object" ? { unsandboxedConsent: (item.resume as { unsandboxedConsent?: unknown }).unsandboxedConsent === true } : undefined;
+    configs.push({
+      id, server, name, sandbox, ...(distro ? { distro } : {}), ...(stateDir !== undefined ? { stateDir: stateDir as string } : {}),
+      ...(models ? { models } : {}), ...(connectorIds.length ? { connectorIds } : {}), ...(resume ? { resume } : {}),
+    });
+  }
+  return configs;
 }
 
-interface SavedServer { server: string; stateDir: string }
+interface Legacy { sandbox?: unknown; models?: unknown; resume?: { server?: unknown; unsandboxedConsent?: unknown } }
 
-export class ComputerHosts {
-  readonly added = signal<{ server: string; host: ThisComputerHost }[]>([]);
-  private readonly candidates = new Map<string, ThisComputerHost>();
+const parse = (raw: string | null): unknown => { try { return raw ? JSON.parse(raw) as unknown : undefined; } catch { return undefined; } };
+
+const newHostId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 8).toLowerCase();
+
+export class LocalHosts implements HostOwner {
+  readonly list = signal<LocalHost[]>([]);
+  private readonly probeHost = signal<LocalHost | undefined>(undefined);
+  private readonly drafts = new Map<string, LocalHost>();
   private loaded?: Promise<void>;
-
-  constructor(readonly computer: ThisComputerHost) {}
+  private discovering?: Promise<void>;
 
   load(): Promise<void> {
-    this.loaded ??= Promise.all([this.computer.load(), Storage.getItem(SERVERS_KEY).catch(() => null)]).then(([, raw]) => {
-      let saved: SavedServer[] = [];
-      try { saved = raw ? (JSON.parse(raw) as SavedServer[]).filter(item => typeof item?.server === "string" && typeof item?.stateDir === "string" && item.stateDir === serverStateDir(item.server)) : []; } catch { saved = []; }
-      const known = untracked(this.added);
-      const loaded = saved.filter(item => !known.some(entry => entry.server === item.server))
-        .map(item => ({ server: item.server, host: this.candidates.get(item.server) ?? new ThisComputerHost(ask, { stateDir: item.stateDir, computer: this.computer }) }));
-      if (loaded.length) this.added.set([...known, ...loaded]);
+    this.loaded ??= this.read().then(({ configs, legacy }) => {
+      const known = new Set(untracked(this.list).map(host => host.id));
+      const hosts = configs.filter(config => !known.has(config.id)).map(config => new LocalHost(config, this));
+      this.list.update(list => [...list, ...hosts]);
+      if (!configs.some(config => config.sandbox !== "wsl" && config.stateDir === undefined)) {
+        const sandbox = sandboxChoices().includes(legacy.sandbox as LocalSandbox) ? legacy.sandbox as LocalSandbox : sandboxChoices()[0]!;
+        const models = validModels(legacy.models);
+        this.probeHost.set(new LocalHost({ id: "default", server: "", name: defaultHostName(), sandbox, ...(models ? { models } : {}) }, this));
+      }
     });
     return this.loaded;
   }
 
-  all(): ThisComputerHost[] {
-    const added = this.added().map(entry => entry.host);
-    const starting = [...this.candidates.values()].filter(host => !added.includes(host) && host.state() !== "stopped");
-    return [this.computer, ...added, ...starting];
+  private async read(): Promise<{ configs: LocalHostConfig[]; legacy: Legacy }> {
+    const [raw, legacyRaw] = await Promise.all([Storage.getItem(HOSTS_KEY).catch(() => null), Storage.getItem(LEGACY_KEY).catch(() => null)]);
+    const legacy = (parse(legacyRaw) ?? {}) as Legacy;
+    if (raw !== null) return { configs: validHostConfigs(parse(raw)), legacy };
+    const configs = await this.migrate(legacy);
+    await this.write(configs);
+    return { configs, legacy };
   }
 
-  others(server: string): { server: string; host: ThisComputerHost; added: boolean }[] {
-    const own = this.computer.pairedWith();
-    return [
-      ...(own && originOf(own) !== originOf(server) ? [{ server: own, host: this.computer, added: false }] : []),
-      ...this.added().filter(entry => originOf(entry.server) !== originOf(server)).map(entry => ({ ...entry, added: true })),
-    ];
-  }
-
-  forServer(server: string): ThisComputerHost | undefined {
-    const origin = originOf(server);
-    const own = this.computer.pairedWith();
-    if (own && originOf(own) === origin) return this.computer;
-    return this.added().find(entry => originOf(entry.server) === origin)?.host;
-  }
-
-  slotFor(server: string): ThisComputerHost {
-    const found = this.forServer(server);
-    if (found) return found;
-    const inspection = this.computer.inspection();
-    const free = this.computer.state() === "stopped" && (!inspection || (!inspection.pairedServer && !inspection.pairingError));
-    if (free) return this.computer;
-    const origin = originOf(server);
-    let candidate = this.candidates.get(origin);
-    if (!candidate) {
-      candidate = new ThisComputerHost(ask, { stateDir: serverStateDir(origin), computer: this.computer });
-      this.candidates.set(origin, candidate);
+  private async migrate(legacy: Legacy): Promise<LocalHostConfig[]> {
+    const [serversRaw, seen] = await Promise.all([Storage.getItem(LEGACY_SERVERS_KEY).catch(() => null), loadSeen()]);
+    const sandbox = sandboxChoices().includes(legacy.sandbox as LocalSandbox) ? legacy.sandbox as LocalSandbox : sandboxChoices()[0]!;
+    const models = validModels(legacy.models);
+    const shared = { name: computerTitle, sandbox, ...(models ? { models } : {}) };
+    const ids = (origin: string) => (seen[origin]?.length ? { connectorIds: seen[origin]!.slice(-CONNECTORS_KEPT) } : {});
+    const configs: unknown[] = [];
+    const resumed = validOrigin(legacy.resume?.server);
+    if (resumed) configs.push({ id: "default", server: resumed, ...shared, ...ids(resumed), resume: { unsandboxedConsent: legacy.resume?.unsandboxedConsent === true } });
+    const servers = parse(serversRaw);
+    for (const item of Array.isArray(servers) ? servers as { server?: unknown; stateDir?: unknown }[] : []) {
+      const server = validOrigin(item?.server);
+      if (!server || item.stateDir !== serverStateDir(server)) continue;
+      const saved = parse(await Storage.getItem(`${LEGACY_KEY}:${item.stateDir}`).catch(() => null)) as Legacy | undefined;
+      const resume = saved?.resume && typeof saved.resume === "object" ? { resume: { unsandboxedConsent: saved.resume.unsandboxedConsent === true } } : {};
+      configs.push({ id: shortHash(server), server, ...shared, stateDir: item.stateDir, ...ids(server), ...resume });
     }
-    return candidate;
+    return validHostConfigs(configs);
   }
 
-  async remember(server: string, host: ThisComputerHost): Promise<void> {
-    if (host === this.computer || !host.stateDir) return;
+  private write(configs: LocalHostConfig[]): Promise<void> {
+    return Storage.setItem(HOSTS_KEY, JSON.stringify(configs)).catch(() => undefined);
+  }
+
+  private persist(): Promise<void> {
+    return this.write(untracked(this.list).map(host => untracked(host.config)));
+  }
+
+  changed(host: LocalHost): void {
+    if (untracked(this.list).includes(host)) void this.persist();
+  }
+
+  inspected(host: LocalHost): void {
+    const paired = untracked(host.inspection)?.pairedServer;
+    if (host !== untracked(this.probeHost) || !paired || untracked(host.state) !== "stopped" || untracked(host.config).server) return;
+    const server = validOrigin(paired);
+    if (!server) return;
+    host.change({ server, name: computerTitle }, false);
+    void this.add(host);
+  }
+
+  discover(server?: string): Promise<void> {
+    this.discovering ??= this.load().then(async () => {
+      const probe = untracked(this.probeHost) ?? untracked(this.list).find(host => !host.stateDir && host.environment.key === "native");
+      if (probe && !untracked(probe.inspection)) await probe.refresh(server);
+    }).finally(() => { this.discovering = undefined; });
+    return this.discovering;
+  }
+
+  probe(): LocalHost | undefined { return this.probeHost(); }
+
+  all(): LocalHost[] {
+    const listed = this.list();
+    const probe = this.probeHost();
+    const extra = [...(probe ? [probe] : []), ...this.drafts.values()].filter(host => !listed.includes(host) && host.state() !== "stopped");
+    return [...listed, ...new Set(extra)];
+  }
+
+  byId(id: string): LocalHost | undefined {
+    return this.list().find(host => host.id === id);
+  }
+
+  forServer(server: string): LocalHost[] {
     const origin = originOf(server);
-    if (!untracked(this.added).some(entry => entry.host === host)) this.added.update(list => [...list.filter(entry => originOf(entry.server) !== origin), { server: origin, host }]);
-    if (this.candidates.get(origin) === host) this.candidates.delete(origin);
+    return this.list().filter(host => originOf(host.server()) === origin);
+  }
+
+  withConnector(server: string, connectorId: string): LocalHost | undefined {
+    return this.forServer(server).find(host => host.running()?.connectorId === connectorId || (host.config().connectorIds ?? []).includes(connectorId));
+  }
+
+  draft(sandbox: LocalSandbox, distro?: string): LocalHost {
+    const target = targetOf({ sandbox, ...(distro ? { distro } : {}) });
+    const key = environmentKey(target);
+    const probe = this.probeHost();
+    if (key === "native" && probe && !this.list().includes(probe)) {
+      const inspection = probe.inspection();
+      if (probe.state() !== "stopped" || !inspection || (!inspection.pairedServer && !inspection.pairingError)) return probe;
+    }
+    let draft = this.drafts.get(key);
+    if (!draft) {
+      const id = newHostId();
+      draft = new LocalHost({ id, server: "", name: defaultHostName(sandbox), sandbox, ...(distro ? { distro } : {}), stateDir: hostStateDir(id) }, this);
+      this.drafts.set(key, draft);
+    }
+    return draft;
+  }
+
+  async add(host: LocalHost): Promise<void> {
+    await this.load();
+    if (untracked(this.list).includes(host)) return;
+    if (untracked(this.probeHost) === host) this.probeHost.set(undefined);
+    for (const [key, draft] of this.drafts) if (draft === host) this.drafts.delete(key);
+    this.list.update(list => [...list, host]);
     await this.persist();
   }
 
-  async remove(server: string): Promise<Outcome> {
-    const origin = originOf(server);
-    const entry = untracked(this.added).find(item => originOf(item.server) === origin);
-    if (!entry) return { ok: false, error: `${computerTitle} has no pairing of its own for ${server} to remove.` };
-    const stopped = await entry.host.stop();
+  async remove(id: string): Promise<Outcome> {
+    const host = untracked(this.list).find(item => item.id === id);
+    if (!host) return { ok: false, error: `${computerTitle} has no such host.` };
+    if (!host.stateDir) return { ok: false, error: "This host is the command line's (pikibun connect's) pairing: stop it here, or remove it from its Pikibun server's Settings › Hosts." };
+    const stopped = await host.stop();
     if (!stopped.ok) return stopped;
-    await entry.host.forget();
-    this.added.update(list => list.filter(item => item !== entry));
-    this.candidates.delete(origin);
+    this.list.update(list => list.filter(item => item !== host));
     await this.persist();
-    void entry.host.shutdown();
+    void host.shutdown();
     return { ok: true };
   }
 
-  serving(server: string): { host: ThisComputerHost; connectorId: string } | undefined {
+  serving(server: string, connectorId?: string): { host: LocalHost; connectorId: string } | undefined {
     const origin = originOf(server);
     for (const host of this.all()) {
       const serving = host.serving();
-      if (serving && originOf(serving.server) === origin) return { host, connectorId: serving.connectorId };
+      if (serving && originOf(serving.server) === origin && (connectorId === undefined || serving.connectorId === connectorId)) return { host, connectorId: serving.connectorId };
     }
     return undefined;
   }
 
+  servingIds(server: string): string[] {
+    const origin = originOf(server);
+    const ids: string[] = [];
+    for (const host of this.all()) {
+      host.running();
+      host.state();
+      const serving = host.serving();
+      if (serving && originOf(serving.server) === origin) ids.push(serving.connectorId);
+    }
+    return ids;
+  }
+
   async resumeHosting(): Promise<void> {
     await this.load();
-    await Promise.all(this.all().map(host => host.resumeHosting()));
+    await Promise.all(untracked(this.list).map(host => host.resumeHosting()));
   }
 
   shutdown(): Promise<unknown> {
-    return Promise.all([...new Set([...untracked(() => this.all()), ...this.candidates.values()])].map(host => host.shutdown()));
-  }
-
-  private persist(): Promise<void> {
-    const saved: SavedServer[] = untracked(this.added).map(entry => ({ server: entry.server, stateDir: entry.host.stateDir! }));
-    return Storage.setItem(SERVERS_KEY, JSON.stringify(saved)).catch(() => undefined);
+    const probe = untracked(this.probeHost);
+    return Promise.all([...new Set([...untracked(this.list), ...(probe ? [probe] : []), ...this.drafts.values()])].map(host => host.shutdown()));
   }
 }
 
-let hosts: ComputerHosts | undefined;
+let hosts: LocalHosts | undefined;
 
-export function computerHosts(): ComputerHosts {
-  hosts ??= new ComputerHosts(thisComputer());
+export function localHosts(): LocalHosts {
+  hosts ??= new LocalHosts();
   return hosts;
 }
 
-export function thisComputerHostId(server?: string): string | undefined {
-  if (!hostsHere) return undefined;
+export function thisComputerHostIds(server?: string): string[] {
+  if (!hostsHere) return [];
   const signedIn = server === undefined ? auth() : undefined;
   const origin = server ?? (signedIn?.status === "signedIn" ? signedIn.origin : undefined);
-  if (!origin) return undefined;
-  for (const host of computerHosts().all()) host.running();
-  return computerHosts().serving(origin)?.connectorId;
+  if (!origin) return [];
+  return localHosts().servingIds(origin);
 }
 
 export function resumeThisComputer(): void {
   if (!hostsHere) return;
-  void thisComputer().commandUpdated();
-  void computerHosts().resumeHosting();
+  void nativeEnvironment().commandUpdated();
+  void localHosts().resumeHosting();
 }
