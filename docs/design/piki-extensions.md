@@ -671,7 +671,7 @@ that kind of task on, among the models that host offers. The member still choose
     message's options, not a Pi extension a host loads. It is off until added, and a workspace that removes or turns it
     off has no Auto: `GET /api/workspaces/:id/auto-mode` answers `{ enabled }`, which the client reads before offering
     it, and a message sent with Auto is refused with `auto_mode_off`. It isn't among the default extensions, so no
-    migration adds it; the add sheet offers it under **Pikibun features**, and it has no settings.
+    migration adds it; the add sheet offers it under **Pikibun features**; its one setting is `models` (note 47).
 42. **The host is the member's; only the model is Auto.** The host menu has no Auto: choosing where work runs is
     choosing whom to trust with the task and the code, and that stays the member's, as does a shared host's trust.
     Auto in the model menu leaves the model and the reasoning to the evaluation for each message; the access stays the
@@ -725,6 +725,16 @@ that kind of task on, among the models that host offers. The member still choose
     keeping the conversation's model (from the session's view) for a follow-up there too.
     `POST /api/workspaces/:id/auto-mode` stays for clients from before this, answering with the old rules' host and
     model (`autoChoice`); new clients no longer call it.
+47. **The models setting: the only models Auto may choose.** A workspace may not want Auto spending on every model its
+    hosts offer. The catalogue declares `piki:auto-mode`'s settings itself (`settings` on its entry, since no host
+    reports a control-plane extension's flags), and the Extensions page edits them as it does a host-reported
+    extension's. `models` is a list of patterns separated by commas (`parseAutoModels`, at most 50): a model id, a
+    provider/model, or a glob with `*` and `?`, matched without regard to case (`autoModelPatternMatches`); empty
+    allows every model. The control plane applies it where it lists the candidates (`chatOptions`), before the
+    runner sees them, so the evaluator is one of them too and an older connector's rules choose among them; the old
+    `POST` filters its `usable` models the same way. With none of the host's usable models allowed, a message sent
+    with Auto is refused with `auto_mode_unavailable`, naming the setting, rather than run on a model the workspace
+    ruled out. A model picked by hand is unaffected: the setting limits Auto, not members.
 
 ## Where things are
 

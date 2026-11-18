@@ -10,6 +10,7 @@ import {
   extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings,
   type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension,
 } from "../../../../packages/shared/src/host-extensions";
+import { AUTO_MODE_SOURCE, autoModeModels } from "../../../../packages/shared/src/auto-mode";
 import { segment, type Workspace } from "../shared";
 import { session } from "../lib/auth";
 import { openExternal } from "../lib/links";
@@ -28,6 +29,8 @@ interface ExtensionsResponse { extensions: WorkspaceExtension[]; hosts: Extensio
 
 
 function flagsOf(source: string, hosts: readonly ExtensionHost[]): ExtensionFlag[] | undefined {
+  const known = pikiExtension(source);
+  if (known?.controlPlane) return [...known.settings ?? []];
   for (const host of hosts) {
     const installed = host.report?.installed.find(item => item.source === source);
     if (installed) return installed.modules.flatMap(module => module.flags);
@@ -209,6 +212,11 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                       </If>
                       <If when={controlPlane()}>
                         <Small>{`${cli()?.description ?? ""} Members see Auto in the new session's host and model menus, and in a session's model menu, while it is on.`}</Small>
+                        <If when={extension().source === AUTO_MODE_SOURCE}>
+                          <Small testID="auto-mode-models">{autoModeModels([extension()]).length
+                            ? `Auto chooses only among: ${autoModeModels([extension()]).join(", ")}.`
+                            : "Auto chooses among every model the session's host offers: set models under Edit to limit it."}</Small>
+                        </If>
                       </If>
                       <Each of={controlPlane() ? [] : current().hosts} key={host => host.id}>
                         {host => {
@@ -359,7 +367,7 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
         : "npm:<package>@<exact version>, git:<https URL>@<full commit>, or piki:<name>. A Pi extension package, pinned"}>
         <TextField monospace value={source()} onChange={value => source.set(value)} disabled={props.busy || editingCli} maxLength={512} placeholder="npm:cc-safety-net@2.7.2" autoFocus={!existing} />
       </Field>
-      <If when={cli()?.controlPlane}><Note>{`${cli()!.description} It has no settings.`}</Note></If>
+      <If when={cli()?.controlPlane}><Note>{`${cli()!.description}${cli()!.settings?.length ? existing ? "" : " Set its settings with Edit once added." : " It has no settings."}`}</Note></If>
       <If when={cli()?.controlPlane ? undefined : offer()} else={<If when={normalized() && !cli()?.controlPlane}><Note>What it is and its tools show here once a host that has it installed at this version reports them.</Note></If>}>
         {current => (
           <View style={{ gap: 8 }}>
@@ -374,7 +382,7 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
       <If when={!existing && !replacing() && normalized() ? missingNeeds(normalized()!, props.taken) : []}>
         {needed => <If when={needed().length}><Note>{`It works through ${needed().map(item => `${item.title} (${item.source})`).join(" and ")}, off here: adding it adds ${needed().length === 1 ? "that" : "those"} too, unless this workspace turned ${needed().length === 1 ? "it" : "them"} off itself. Its row then says so, with a button that turns ${needed().length === 1 ? "it" : "them"} on.`}</Note></If>}
       </If>
-      <If when={existing && !cli()?.controlPlane}>
+      <If when={existing && (!cli()?.controlPlane || cli()!.settings?.length)}>
         <If when={props.flags !== undefined} else={<Note>Its settings show here once a host that has it installed reports them.</Note>}>
           <If when={props.flags?.length || extra().length} else={<Note>This extension has no settings.</Note>}>
             <ExtensionSettingsFields flags={props.flags ?? []} settings={settings()} onChange={value => settings.set(value)} busy={props.busy} />
