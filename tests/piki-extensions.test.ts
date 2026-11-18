@@ -331,8 +331,11 @@ test('in the sandbox: the command runs as the session owner, through the session
   answer = { exitCode: 127, signal: null, output: 'bash: line 1: exec: gh: not found' };
   await assert.rejects(call({ args: ['status'] }), /gh isn't installed where the session's sandbox finds it .*https:\/\/cli\.github\.com/);
   answer = { exitCode: 127, signal: null, output: '/usr/bin/gh: line 2: /opt/gh/bin/gh-real: No such file or directory' };
-  await assert.rejects(call({ args: ['status'] }), /^Error: gh is installed, but it starts \/opt\/gh\/bin\/gh-real, which the session's sandbox doesn't see: it sees only the host's \/usr\. /);
-  assert.equal(runs.length, 4, 'refusals never reach the sandbox');
+  await assert.rejects(call({ args: ['status'] }), /^Error: gh is installed, but it starts \/opt\/gh\/bin\/gh-real, which isn't in the session's sandbox: it sees the host's \/usr\. /);
+  answer = { exitCode: 127, signal: null, output: '/usr/bin/gh: line 2: /usr/lib/gh/gh-real: No such file or directory' };
+  await assert.rejects(call({ args: ['status'] }), /^Error: gh is installed, but \/usr\/lib\/gh\/gh-real, which it starts, is missing: its install looks incomplete\. /,
+    'a program the sandbox does see is missing on the host too');
+  assert.equal(runs.length, 5, 'refusals never reach the sandbox');
 });
 
 test('az: the sandbox also sees the CLI\'s own install under /opt, which its /usr/bin script starts, and a wrapper whose program it lacks says so', () => {

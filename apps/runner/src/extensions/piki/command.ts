@@ -290,8 +290,11 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
           if (run.exitCode === 127) {
             const missing = sandboxMissingFile(spec.command, run.output);
             if (missing) {
-              throw new Error(`${spec.command} is installed, but it starts ${missing}, which the session's sandbox doesn't see: it sees only the host's /usr`
-                + `${spec.sandboxRoots?.length ? ` and ${spec.sandboxRoots.join(", ")}` : ""}. The host's owner installs ${spec.command} where the sandbox sees it (${spec.info.install}).`);
+              const seen = ["/usr", ...spec.sandboxRoots ?? []].some(root => missing.startsWith(`${root}/`));
+              throw new Error(seen
+                ? `${spec.command} is installed, but ${missing}, which it starts, is missing: its install looks incomplete. The host's owner installs it again (${spec.info.install}).`
+                : `${spec.command} is installed, but it starts ${missing}, which isn't in the session's sandbox: it sees the host's /usr`
+                  + `${spec.sandboxRoots?.length ? ` (and, in the Linux sandbox, ${spec.sandboxRoots.join(", ")})` : ""}. The host's owner installs ${spec.command} where the sandbox sees it (${spec.info.install}).`);
             }
             if (new RegExp(`${spec.command}: (?:command )?not found|No such file`).test(run.output)) {
               throw new Error(`${spec.command} isn't installed where the session's sandbox finds it (the host's /usr/bin or /usr/local/bin). The host's owner installs it (${spec.info.install}).`);

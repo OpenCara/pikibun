@@ -90,7 +90,8 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    and was reported as `az` missing. The Linux sandbox binds those directories read-only for that command's runs only,
    where they exist (`--ro-bind-try`), and takes nothing but a directory under `/opt` other than `/opt/pikibun`
    (`commandBindAllowed`). An exit 127 naming a program the script starts says that program is out of the sandbox's
-   sight (`sandboxMissingFile`), not that the command is missing. Azure CLI extensions added for the host owner live in
+   sight (`sandboxMissingFile`), not that the command is missing; where it is under `/usr` or one of those roots,
+   which the sandbox does see, it says the install looks incomplete instead. Azure CLI extensions added for the host owner live in
    their `~/.azure`, which the sandbox's own home hides, so `azure-devops` is added with `--system`, under the CLI's
    install. Its API requests go through the proxy, which adds the session
    owner's access (see [credentialed APIs](egress.md#credentialed-apis-gh-without-a-token-in-the-sandbox)):
