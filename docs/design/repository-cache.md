@@ -96,7 +96,8 @@ network traffic goes through `GitRemote`.
 - **Git LFS files** need no lock: each is written to `lfs/tmp/` and renamed into place whole, so readers see a whole
   file or none, and two sessions downloading the same file both rename the same content. A file served counts as used
   (its mtime is set); `pikibun cache prune` deletes those unused for longer than `--older-than`, and leftovers in
-  `lfs/tmp/` older than a day (or the cutoff, if shorter).
+  `lfs/tmp/` older than a day (or the cutoff, if shorter, but never one written to in the last hour: a download
+  under way keeps its file's mtime current). Reads check the store's root is private, as writes do.
 
 ## Open questions
 

@@ -61,7 +61,7 @@ export interface EgressOptions {
   apiUpstream?: ApiUpstream;
   fakeIpTunnels?: () => Promise<boolean>;
   publicFetch?: typeof fetch;
-  lfsCache?: Pick<LfsObjectCache, "open" | "writer" | "remove">;
+  lfsCache?: Pick<LfsObjectCache, "open" | "writer" | "discard">;
 }
 
 export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpoint, caBundle = CA_BUNDLE): Record<string, string> {
@@ -790,7 +790,7 @@ export class EgressProxy {
     if (!handle) return false;
     this.#record({ kind: "git", target: label, outcome: "allowed", reason: `lfs object ${object.oid.slice(0, 12)} (host cache)` });
     const hash = createHash("sha256");
-    const stream = handle.createReadStream();
+    const stream = handle.createReadStream({ autoClose: false });
     response.once("close", () => stream.destroy());
     response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": String(object.size), "Cache-Control": "no-store" });
     let held: Buffer | undefined;
@@ -802,7 +802,7 @@ export class EgressProxy {
         held = chunk;
       }
       if (hash.digest("hex") !== object.oid) {
-        await cache.remove(object.oid).catch(() => {});
+        await cache.discard(object.oid, handle).catch(() => {});
         this.#record({ kind: "git", target: label, outcome: "refused", reason: `lfs object ${object.oid.slice(0, 12)}: the host cache's copy was damaged and is removed` });
         response.destroy();
         return true;

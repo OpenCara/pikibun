@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 const windows = process.platform === "win32";
 const OID = /^[0-9a-f]{64}$/;
 const TEMPORARY_AGE_MS = 24 * 60 * 60 * 1000;
+const TEMPORARY_IDLE_MS = 60 * 60 * 1000;
 const READ_FLAGS = constants.O_RDONLY | (windows ? 0 : constants.O_NOFOLLOW);
 
 export class LfsCacheError extends Error {
@@ -30,6 +31,7 @@ export class LfsObjectCache {
 
   async open(object: LfsObject): Promise<FileHandle | undefined> {
     const path = this.path(object.oid);
+    if (!await this.#private()) return undefined;
     let handle: FileHandle;
     try { handle = await open(path, READ_FLAGS); }
     catch { return undefined; }
@@ -48,8 +50,10 @@ export class LfsObjectCache {
     }
   }
 
-  async remove(oid: string): Promise<void> {
-    await rm(this.path(oid), { force: true });
+  async discard(oid: string, handle: FileHandle): Promise<void> {
+    const path = this.path(oid);
+    const [opened, current] = await Promise.all([handle.stat(), lstat(path)]);
+    if (opened.ino === current.ino && opened.dev === current.dev) await rm(path, { force: true });
   }
 
   async writer(object: LfsObject): Promise<LfsObjectWriter> {
@@ -85,16 +89,22 @@ export class LfsObjectCache {
     }
     for (const name of await names(join(this.root, "tmp"))) {
       const path = join(this.root, "tmp", name);
-      try { if (now - (await lstat(path)).mtimeMs >= Math.min(age, TEMPORARY_AGE_MS)) await rm(path, { force: true }); } catch { }
+      try { if (now - (await lstat(path)).mtimeMs >= Math.max(Math.min(age, TEMPORARY_AGE_MS), TEMPORARY_IDLE_MS)) await rm(path, { force: true }); } catch { }
     }
     return { objects, bytes };
   }
 
   async #prepare(): Promise<void> {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    const info = await lstat(this.root);
-    if (!info.isDirectory() || (!windows && (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0))) {
-      throw new LfsCacheError("Git LFS cache root must be a private directory owned by the runner user");
+    if (!await this.#private()) throw new LfsCacheError("Git LFS cache root must be a private directory owned by the runner user");
+  }
+
+  async #private(): Promise<boolean> {
+    try {
+      const info = await lstat(this.root);
+      return info.isDirectory() && (windows || (info.uid === process.getuid?.() && (info.mode & 0o077) === 0));
+    } catch {
+      return false;
     }
   }
 

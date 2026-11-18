@@ -381,8 +381,8 @@ audited as `repository.lfs.updated`; the setting is in `WorkspaceRepository.lfs`
     exactly what the provider would. A relayed download is written to `tmp/` beside the store as it streams, hashed,
     and renamed into place only if it is exactly the pointer's size and its sha256 is the oid; a download that breaks
     off, or a client that goes away, leaves nothing. A file served from the store is hashed again as it goes, and its
-    last bytes are held back until the hash matches: a damaged copy is deleted and the download ended, so git-lfs
-    tries again and the retry is relayed.
+    last bytes are held back until the hash matches: a damaged copy is deleted (unless another download replaced
+    it meanwhile) and the download ended, so git-lfs tries again and the retry is relayed.
   - **Sharing across repositories** is safe for the same reason: the batch proved the session may have that content.
   - The store is written only by the runner, outside any sandbox, and never mounted into one: git-lfs takes files from an
     alternate's `lfs/objects`, so files kept in a mirror would bypass these checks.

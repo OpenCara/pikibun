@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -306,6 +306,34 @@ test("the host's Git LFS store follows the cache's scope, keeps only verified fi
   assert.deepEqual(await shared.lfsUsage(), { objects: 1, bytes: 5 });
   assert.deepEqual(await shared.pruneLfs(0), { objects: 1, bytes: 5 });
   await assert.rejects(shared.pruneLfs(-1), /Invalid prune age/);
+
+  const writing = await store.writer({ oid: contentOid, size: 3 });
+  await writing.write(Buffer.from("b"));
+  const [partial] = await readdir(join(store.root, "tmp"));
+  await shared.pruneLfs(0);
+  assert.deepEqual(await readdir(join(store.root, "tmp")), [partial], "a download under way survives a prune");
+  const idle = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  await utimes(join(store.root, "tmp", partial!), idle, idle);
+  await shared.pruneLfs(0);
+  assert.deepEqual(await readdir(join(store.root, "tmp")), [], "one idle for over an hour doesn't");
+  await writing.abort();
+
+  assert.equal(await put(store, content), true);
+  const stale = (await store.open({ oid: contentOid, size: 3 }))!;
+  assert.equal(await put(store, content), true, "another session's download replaces the file");
+  await store.discard(contentOid, stale);
+  await stale.close();
+  assert.equal(await readFile(store.path(contentOid), "utf8"), content, "discarding the copy one read leaves a newer one alone");
+  const current = (await store.open({ oid: contentOid, size: 3 }))!;
+  await store.discard(contentOid, current);
+  await current.close();
+  await assert.rejects(stat(store.path(contentOid)), { code: "ENOENT" });
+
+  assert.equal(await put(store, content), true);
+  await chmod(store.root, 0o755);
+  assert.equal(await store.open({ oid: contentOid, size: 3 }), undefined, "a store others can open serves nothing");
+  await assert.rejects(store.writer({ oid: contentOid, size: 3 }), /private directory/);
+  await chmod(store.root, 0o700);
 });
 
 test("over TCP, git-lfs is sent back to the session's own port, with its credentials", async t => {
