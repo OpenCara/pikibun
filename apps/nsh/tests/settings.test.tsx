@@ -499,12 +499,14 @@ describe("settings", () => {
     await app.press("id:workspace-w1");
     await app.waitFor("id:schedule-sc2");
     expect(app.texts().join(" ")).toContain("runs as Grace Hopper");
+    expect(app.texts().join(" ")).not.toContain("Run the nightly checks");
     await app.press("text:Pause");
     await app.waitUntil(() => Boolean(bodyOf(app, "PATCH", `${ORIGIN}/api/workspaces/w1/schedules/sc2`)));
     expect(bodyOf(app, "PATCH", `${ORIGIN}/api/workspaces/w1/schedules/sc2`)).toEqual({ enabled: false });
     await app.press("text:Edit");
     await app.waitFor("id:schedule-takeover");
     expect(app.texts().join(" ")).toContain("This schedule runs as Grace Hopper. Saving a change makes it yours");
+    expect(app.value("id:schedule-content")).toBe("Run the nightly checks");
     expect(app.texts().join(" ")).not.toContain("choose a model for it");
   });
 
