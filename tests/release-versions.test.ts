@@ -72,3 +72,10 @@ test("an extension release takes its version from its tag, whatever is committed
   assert.throws(() => r.release("0.4.0", "extension:missing"), /No Pi extension missing/);
   assert.throws(() => r.release("latest", "extension:pr-flow"), /usage/);
 });
+
+test("one target a run: a connector's stamping can't undo the version an extension's release just set", async t => {
+  const r = await repository(t);
+  assert.throws(() => r.release("0.4.0", "extension:pr-flow", "cli"), /Name one target/);
+  assert.equal(await r.version("extensions", "pr-flow", "package.json"), "0.1.0");
+  assert.equal(await r.version("packages", "cli", "package.json"), "0.9.0");
+});

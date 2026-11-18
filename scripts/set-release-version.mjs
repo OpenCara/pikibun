@@ -5,11 +5,12 @@ import { fileURLToPath } from "node:url";
 import { latestExtensionRelease, RELEASE_VERSION } from "./release-versions.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const [version, ...targets] = process.argv.slice(2);
+const [version, target, ...more] = process.argv.slice(2);
 if (!version || !RELEASE_VERSION.test(version)) {
-  throw new Error("usage: set-release-version.mjs <version such as 1.2.3 or 1.2.3-beta.1> <cli | extension:NAME>...");
+  throw new Error("usage: set-release-version.mjs <version such as 1.2.3 or 1.2.3-beta.1> <cli | extension:NAME>");
 }
-if (targets.length === 0) throw new Error("Name the target: cli, or extension:NAME for extensions/NAME.");
+if (!target) throw new Error("Name the target: cli, or extension:NAME for extensions/NAME.");
+if (more.length > 0) throw new Error("Name one target: each release line sets its own version, and the connector's stamps the extensions it bundles.");
 
 function setManifestVersion(path, to) {
   const manifest = readFileSync(path, "utf8").replace(/^(  "version": )"[^"]*"/m, (_, key) => key + JSON.stringify(to));
@@ -39,24 +40,22 @@ function stampBundledExtensions() {
   }
 }
 
-for (const target of targets) {
-  if (target === "cli") {
-    const cli = join(root, "packages", "cli");
-    setManifestVersion(join(cli, "package.json"), version);
-    const shrinkwrapPath = join(cli, "npm-shrinkwrap.json");
-    const shrinkwrap = JSON.parse(readFileSync(shrinkwrapPath, "utf8"));
-    shrinkwrap.version = version;
-    shrinkwrap.packages[""].version = version;
-    writeFileSync(shrinkwrapPath, JSON.stringify(shrinkwrap, null, 2) + "\n");
-    console.log(`pikibun@${version}`);
-    stampBundledExtensions();
-  } else if (target.startsWith("extension:")) {
-    const name = target.slice("extension:".length);
-    const path = join(root, "extensions", name, "package.json");
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || !existsSync(path)) throw new Error(`No Pi extension ${name} in extensions/.`);
-    setManifestVersion(path, version);
-    console.log(`${JSON.parse(readFileSync(path, "utf8")).name}@${version}`);
-  } else {
-    throw new Error(`Unknown target ${target}: use cli or extension:NAME.`);
-  }
+if (target === "cli") {
+  const cli = join(root, "packages", "cli");
+  setManifestVersion(join(cli, "package.json"), version);
+  const shrinkwrapPath = join(cli, "npm-shrinkwrap.json");
+  const shrinkwrap = JSON.parse(readFileSync(shrinkwrapPath, "utf8"));
+  shrinkwrap.version = version;
+  shrinkwrap.packages[""].version = version;
+  writeFileSync(shrinkwrapPath, JSON.stringify(shrinkwrap, null, 2) + "\n");
+  console.log(`pikibun@${version}`);
+  stampBundledExtensions();
+} else if (target.startsWith("extension:")) {
+  const name = target.slice("extension:".length);
+  const path = join(root, "extensions", name, "package.json");
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || !existsSync(path)) throw new Error(`No Pi extension ${name} in extensions/.`);
+  setManifestVersion(path, version);
+  console.log(`${JSON.parse(readFileSync(path, "utf8")).name}@${version}`);
+} else {
+  throw new Error(`Unknown target ${target}: use cli or extension:NAME.`);
 }
