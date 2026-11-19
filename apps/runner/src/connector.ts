@@ -311,8 +311,9 @@ export class LocalConnector {
     this.hostExtensions = this.options.extensions
       ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), {
         remoteInstalls: this.options.remoteExtensionInstalls !== false,
-        managed: this.options.managedExtensions === true,
-        autoCache: this.options.autoCacheExtensions === true,
+        managed: this.options.managedExtensions ?? (linuxSandboxed || seatbeltSandboxed),
+        autoCache: this.options.autoCacheExtensions ?? (linuxSandboxed || seatbeltSandboxed),
+        autoCacheRefused: this.options.autoCacheExtensions === false,
         connectorVersion,
         ...(linuxSandboxed
           ? {
@@ -480,6 +481,7 @@ export class LocalConnector {
     let results: ExtensionRequestResult[] = [];
     let refusedStatus: string | undefined;
     let pikiExtensions = true;
+    let reportAutoCache = false;
     const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
     while (!signal.aborted) {
       try {
@@ -492,7 +494,8 @@ export class LocalConnector {
         const statusKey = browser || tunnel ? JSON.stringify({ browser, tunnel }) : undefined;
         let withStatus = statusKey !== undefined && statusKey !== refusedStatus;
         const report = () => {
-          const base = pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions();
+          const listed = pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions();
+          const base = reportAutoCache ? { ...listed, autoCache: extensions.autoCacheDefault } : listed;
           return withStatus ? { ...base, ...(browser ? { browser } : {}), ...(tunnel ? { tunnel } : {}) } : base;
         };
         const sync = async () => parseExtensionsSyncAnswer(await this.calls.callback(generation, "/api/connectors/self/extensions", { report: report(), results }));
@@ -508,12 +511,14 @@ export class LocalConnector {
           }
         }
         results = [];
+        const learned = answer.reportAutoCache === true && !reportAutoCache;
+        if (learned) reportAutoCache = true;
         const changed = await extensions.applyManaged(answer.managed).catch(() => false);
         if (answer.requests.length) {
           results = await extensions.apply(answer.requests);
           continue;
         }
-        if (changed) continue;
+        if (changed || learned) continue;
       } catch { }
       await delay(EXTENSION_SYNC_MS, undefined, { signal }).catch(() => {});
     }

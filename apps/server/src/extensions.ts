@@ -9,7 +9,7 @@ import { extensionAvailability, extensionLimits, extensionPackageKey, inReposito
 import type { Env, AppEnv } from './types.js';
 import {
   addNeededExtensions, auditStatement, authenticateConnector, connectorExtensionSettings, isPersonalWorkspace, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
-  saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensionLock, workspaceExtensions,
+  saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensionLock, workspaceExtensions, type AutoCacheChoice,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
 import { resolveNpmExtensionPackage, saveRegistryExtensionMetadata, workspaceRegistryMetadata } from './npm-registry.js';
@@ -45,8 +45,8 @@ export function knowsGitSubdirectories(row: { capabilities_json?: string | null 
   try { return parseCapabilities(row.capabilities_json ?? '{}').gitSubdirectories === true; } catch { return false; }
 }
 
-export function hostSupportsAutoCache(row: { capabilities_json?: string | null }, report: HostExtensionsReport | undefined, autoCache: boolean): boolean {
-  if (!autoCache || !report?.remoteInstalls) return false;
+export function hostSupportsAutoCache(row: { capabilities_json?: string | null }, report: HostExtensionsReport | undefined, choice: AutoCacheChoice): boolean {
+  if (choice === 'off' || !report?.remoteInstalls || (choice === 'host' && report.autoCache !== true)) return false;
   try {
     const caps = parseCapabilities(row.capabilities_json ?? '{}');
     return caps.sandbox === true && (caps.platform === 'linux' || caps.platform === 'darwin');
@@ -112,7 +112,7 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     const pending = await c.env.DB.query<ExtensionRequest>(`SELECT id, action, source FROM connector_extension_requests
       WHERE connector_id = ? AND status = 'pending' AND (? = 1 OR source NOT LIKE 'git:%#%') ORDER BY requested_at, id LIMIT ?`)
       .bind(row.id, knowsGitSubdirectories(row) ? 1 : 0, MAX_PENDING).all();
-    return c.json({ requests: pending.map(item => ({ id: item.id, action: item.action, source: item.source })), managed: managedExtensions });
+    return c.json({ requests: pending.map(item => ({ id: item.id, action: item.action, source: item.source })), managed: managedExtensions, reportAutoCache: true });
   });
 
   app.post('/api/connectors/self/extensions/workspace', async c => {
@@ -138,7 +138,7 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     return c.json({
       extensions: shown,
       automaticTools: settings.automaticTools,
-      ...(options.extensionLocks && settings.autoCache ? { autoCache: true } : {}),
+      ...(options.extensionLocks && settings.autoCache !== 'host' ? { autoCache: settings.autoCache === 'on' } : {}),
       ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
       ...(ownerPrivate ? { ownerPrivate: true } : {}),
     });
@@ -255,7 +255,9 @@ export function registerExtensions(app: Hono<AppEnv>): void {
       role: row.role,
       ...(reported ? { report: shownReport(reported.report, row.role === 'owner'), reportedAt: reported.reportedAt } : {}),
       automaticTools: settings.automaticTools,
-      ...(settings.autoCache ? { autoCache: true } : {}),
+      autoCache,
+      autoCacheChoice: settings.autoCache,
+      ...(reported?.report.autoCache !== undefined ? { hostAutoCache: reported.report.autoCache } : {}),
       requests: requests.map(item => ({ id: item.id, action: item.action, source: item.source, status: item.status, ...(item.error ? { error: item.error } : {}),
         requestedAt: item.requested_at, ...(item.finished_at ? { finishedAt: item.finished_at } : {}) })),
       workspaces: await Promise.all(workspaces.map(async workspace => {
@@ -309,18 +311,19 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     const keys = Object.keys(input);
     if (!keys.length || keys.some(key => key !== 'automaticTools' && key !== 'autoCache')
       || ('automaticTools' in input && typeof input.automaticTools !== 'boolean')
-      || ('autoCache' in input && typeof input.autoCache !== 'boolean')) {
-      fail(400, 'invalid_input', 'Set automaticTools or autoCache to true or false.');
+      || ('autoCache' in input && typeof input.autoCache !== 'boolean' && input.autoCache !== null)) {
+      fail(400, 'invalid_input', 'Set automaticTools to true or false, or autoCache to true, false or null (the host\'s own default).');
     }
     const current = await connectorExtensionSettings(c.env, row.id);
     const automaticTools = typeof input.automaticTools === 'boolean' ? input.automaticTools : current.automaticTools;
-    const autoCache = typeof input.autoCache === 'boolean' ? input.autoCache : current.autoCache;
+    const choice: AutoCacheChoice = 'autoCache' in input ? (input.autoCache === true ? 'on' : input.autoCache === false ? 'off' : 'host') : current.autoCache;
+    const autoCache = choice === 'host' ? null : choice === 'on';
     const at = now();
     await c.env.DB.batch([
-      c.env.DB.query(`INSERT INTO connector_extension_settings (connector_id, automatic_tools, auto_cache, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)
+      c.env.DB.query(`INSERT INTO connector_extension_settings (connector_id, automatic_tools, auto_cache, auto_cache_off, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT (connector_id) DO UPDATE SET automatic_tools = excluded.automatic_tools, auto_cache = excluded.auto_cache,
-          updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
-        .bind(row.id, automaticTools ? 1 : 0, autoCache ? 1 : 0, row.owner_id, at),
+          auto_cache_off = excluded.auto_cache_off, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+        .bind(row.id, automaticTools ? 1 : 0, choice === 'on' ? 1 : 0, choice === 'off' ? 1 : 0, row.owner_id, at),
       ...('automaticTools' in input
         ? [auditStatement(c.env, row.owner_id, 'connector.extension.automatic_tools', null, null, { connectorId: row.id, automaticTools })]
         : []),
@@ -328,7 +331,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
         ? [auditStatement(c.env, row.owner_id, 'connector.extension.auto_cache', null, null, { connectorId: row.id, autoCache })]
         : []),
     ]);
-    return c.json({ automaticTools, ...(autoCache || 'autoCache' in input ? { autoCache } : {}) });
+    return c.json({ automaticTools, ...(autoCache !== null || 'autoCache' in input ? { autoCache } : {}) });
   });
 }
 

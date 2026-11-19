@@ -22,6 +22,7 @@ export interface HostExtensionsOptions {
   pikiExtensions?: readonly PikiExtension[];
   managed?: boolean;
   autoCache?: boolean;
+  autoCacheRefused?: boolean;
   cache?: ExtensionCache;
   connectorVersion?: string;
   log?: (line: string) => void;
@@ -225,8 +226,13 @@ export class HostExtensions {
 
   lastKnown(workspaceId: string): WorkspaceExtensionsAnswer | undefined { return this.#lastKnown.get(workspaceId); }
 
+  get autoCacheDefault(): boolean {
+    return this.options.remoteInstalls && this.options.autoCache === true && this.options.autoCacheRefused !== true && this.options.cache?.sandboxed === true;
+  }
+
   canAutoCache(answerAutoCache?: boolean): boolean {
-    return this.options.remoteInstalls && (this.options.autoCache === true || answerAutoCache === true) && this.options.cache?.sandboxed === true;
+    return this.options.remoteInstalls && this.options.autoCacheRefused !== true && this.options.cache?.sandboxed === true
+      && (answerAutoCache ?? this.options.autoCache === true);
   }
 
   private knownCacheKeys(extra: readonly WorkspaceExtension[] = []): Set<string> {
