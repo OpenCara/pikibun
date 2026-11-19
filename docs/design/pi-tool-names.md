@@ -95,7 +95,11 @@ would then run on data it misreads, which is worse than not running.
 5. **What stays Pikibun's under Pi's names.** None of this is part of what a handler reads, and the conformance suite
    lists each as an exception:
 
-   - **Paths.** They are worktree paths, confined by the sandbox. An absolute path or `~` is refused, where Pi takes it.
+   - **Paths.** They are worktree paths, confined by the sandbox. An absolute path or `~` is refused, where Pi takes it, and the
+     refusal says so before the path reaches the workspace. One exception: in a session on its host, `read` takes an absolute or
+     `~` path for a message that may run host commands, and reads it as those commands would (`HostWorkspace.readHostContent`).
+     That reaches nothing the sender's `python` or `node` couldn't, and nobody else's message, a Read-only one or the Files tab
+     gets it.
    - **`grep`'s engine.** It is Pikibun's search (`apps/runner/src/search.ts`), the same on every backend. Its regular
      expressions are Python's and JavaScript's, not ripgrep's. It doesn't read `.gitignore`: it skips `.git`, and
      `node_modules` unless `all`. It skips links, binary files and files over 1 MB. `context` over 5 and `limit` over 500

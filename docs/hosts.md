@@ -136,6 +136,7 @@ Such a session runs like one on an [unsandboxed host](#running-without-the-sandb
 - Turning **Sessions on the host** off stops the next command of every such session of a member (within half a minute) before it runs; nothing else of theirs changes, and the owner's own carry on. So does a member's grant ending or no longer including sessions on the host, for their sessions.
 - Pushes with the [host's Git credentials](pushes.md#push-access) stay the owner's alone; a member's clones still use Git on the host, with whatever credential helpers it has set up.
 - Everyone who can see the session is warned that it runs without a sandbox (**Runs on the host**).
+- **`read` takes host paths.** The file tools still take worktree paths, but `read` also takes an absolute or `~` path (`~` is the `HOME` the session's commands get) and reads that file of the host, as a command would. It does so only where the session's commands may run: in a message of the host's owner or of a member they granted host commands, never in a **Read only** message or a side question. Everyone else gets the worktree alone, and so does the session panel's **Files** tab. The other file tools (`ls`, `grep`, `find`, `write`, `edit`, …) stay in the worktree; reach other host files with a command tool. A path a file tool refuses says why, and on the host, what reaches it instead.
 - **sudo asks you.** In your own such sessions in your [private workspace](workspaces.md#your-private-workspace), on Linux and macOS, the agent runs commands as root with `sudo -A`. sudo then asks for your password in Pikibun, in a box of its own above the chat box, showing the command it is for. The session is **Needs you** meanwhile, and you get a notification. Type it and **Send to sudo**, or **Decline**. It goes to that one sudo and nowhere else: not into the chat, the transcript or the agent's context, and nothing keeps it. Each use asks again, as far as sudo's own caching allows. A prompt left five minutes is declined, and the wait doesn't count against the command's time limit. Elsewhere you can only decline, and others only see that sudo waits. See [the design](design/sudo-prompts.md) for what this does and doesn't protect.
 
 ## The sandbox
@@ -240,7 +241,7 @@ npx pikibun@latest connect --unsafe-no-sandbox
 The connector prints the risks and asks you to type `unsandboxed` before it starts:
 
 - Commands and commits run directly as your user, as soon as the agent calls them, with access to your files, credentials (`~/.ssh`, cloud and Git configuration, Pi's auth) and network, and no CPU, memory or disk limits.
-- File tools are confined to each session's folder by path checks only.
+- File tools are confined to each session's folder by path checks only, except `read`, which takes an absolute or `~` path to a file of yours in a message that may run commands (see [Sessions on the host](#sessions-on-the-host)).
 - Commands use this machine's network directly: the workspace's [network access](#network-access) doesn't apply.
 - Only your own sessions, and those of members you grant host commands, run commands on it; everyone else's are refused.
 

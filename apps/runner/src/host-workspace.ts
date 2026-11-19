@@ -4,7 +4,7 @@ import { ProcessRoots } from "./session-resources.js";
 import type { HostCommandOperation } from "../../../packages/shared/src/types.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { BigIntStats, Stats } from "node:fs";
+import { constants, type BigIntStats, type Stats } from "node:fs";
 import { lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -26,6 +26,7 @@ import { ATTACHMENT_CANDIDATES, attachmentCandidate } from "../../../packages/sh
 const MAX_ENTRIES = 10_000;
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
 const FILE_FLAGS = OPEN_FILE;
+const HOST_FILE_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
 const DIRECTORY_FLAGS = OPEN_DIRECTORY;
 const queues = new Map<string, Promise<void>>();
 
@@ -176,6 +177,24 @@ export class HostWorkspace implements SessionWorkspace {
       if (data.length > MAX_FILE_BYTES) throw hostError("file exceeds size limit");
       return { text: new TextDecoder("utf-8", { ignoreBOM: true }).decode(data) };
     });
+  }
+
+  async readHostContent(path: string, authorize: SandboxAuthorize): Promise<FileContent> {
+    const value = text(path, "path", 1024);
+    if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
+    if (/[\x00-\x1f\x7f]/.test(value)) throw new Error(`${JSON.stringify(value)} is not a file path`);
+    const target = value === "~" || /^~[\\/]/.test(value) ? join(this.#reported.home, value.slice(2)) : value;
+    if (!isAbsolute(target)) throw new Error(`${value} is not an absolute path on this host: start it with / or ~${windows ? ", or a drive" : ""}`);
+    await this.initialize();
+    if (this.#closed) throw new Error("Sandbox is closed");
+    await authorize();
+    let data: Buffer;
+    try { data = await readHostFile(target, MAX_IMAGE_BYTES); }
+    catch (error) { throw new Error(`${value}: ${describe(error)}`); }
+    const mimeType = imageType(data);
+    if (mimeType) return { image: data, mimeType };
+    if (data.length > MAX_FILE_BYTES) throw new Error(`${value}: file exceeds size limit`);
+    return { text: new TextDecoder("utf-8", { ignoreBOM: true }).decode(data) };
   }
 
   async writeFile(path: string, content: string, authorize: SandboxAuthorize): Promise<void> {
@@ -613,6 +632,28 @@ async function readAt(parent: string, name: string, limit: number): Promise<{ da
       throw hostError("file changed while being read; retry the operation");
     }
     return { data: Buffer.concat(chunks), mode: Number(before.mode) & 0o777 };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readHostFile(path: string, limit: number): Promise<Buffer> {
+  const handle = await open(path, HOST_FILE_FLAGS);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error(info.isDirectory() ? "is a directory: list it with a command tool" : "not a regular file");
+    if (info.size > limit) throw new Error("file exceeds size limit");
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for (;;) {
+      const chunk = Buffer.alloc(Math.min(65536, limit + 1 - size));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (!bytesRead) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      size += bytesRead;
+      if (size > limit) throw new Error("file exceeds size limit");
+    }
+    return Buffer.concat(chunks);
   } finally {
     await handle.close();
   }

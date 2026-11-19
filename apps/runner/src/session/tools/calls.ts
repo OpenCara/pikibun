@@ -105,7 +105,7 @@ export class ToolCalls {
     return { limits: callLimits(commandLimits(config.commandTimeoutSeconds), timeoutSeconds), gpu: config.gpu };
   }
 
-  async check(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean } = {}): Promise<{ unbounded: boolean }> {
+  async check(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean; host?: boolean } = {}): Promise<{ unbounded: boolean }> {
     const state = await this.options.metadata();
     const actor = state.toolActors[String(api.taskId)];
     const run = actor && state.runs[actor.runKey];
@@ -114,6 +114,10 @@ export class ToolCalls {
     if (run.mode === "write") await this.options.requireSenderTool(tool, run.initiatedBy);
     if (effect.write && run.options?.access === "read") {
       throw new RunnerError(403, `${tool} changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.`);
+    }
+    if (effect.host && (run.mode !== "write" || run.options?.access === "read")) {
+      throw new RunnerError(403, `${tool} of a file outside the worktree runs like a host command, which a Read-only message or side question doesn't run: `
+        + "ask in a message that may act, or read it from the worktree. Nothing was read.");
     }
     return { unbounded: effect.shell === true && !this.options.hostCommands.shellAllowed() };
   }

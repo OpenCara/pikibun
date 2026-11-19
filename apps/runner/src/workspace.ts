@@ -21,6 +21,7 @@ export interface SessionWorkspace {
   initialize(): Promise<void>;
   readFile(path: string, authorize: SandboxAuthorize): Promise<string>;
   readContent(path: string, authorize: SandboxAuthorize): Promise<FileContent>;
+  readHostContent?(path: string, authorize: SandboxAuthorize): Promise<FileContent>;
   writeFile(path: string, content: string, authorize: SandboxAuthorize): Promise<void>;
   importFile(directory: string, name: string, data: Buffer, authorize: SandboxAuthorize): Promise<string>;
   listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]>;

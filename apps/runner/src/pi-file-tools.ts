@@ -30,8 +30,12 @@ export const prepareEditArguments = (args: unknown): unknown => createEditToolDe
 
 export class PathRefusal extends Error {}
 
-export function worktreePath(path: string): string {
-  if (path === "~" || path.startsWith("~/") || path.startsWith("~\\")) throw new PathRefusal(`${path} is not a worktree path: paths start at the worktree's top, and ~ is not a home directory here`);
+export function outsideWorktree(path: string): boolean {
+  return path === "~" || /^~[\\/]/.test(path) || /^[\\/]/.test(path) || (process.platform === "win32" ? /^[A-Za-z]:/ : /^[A-Za-z]:([\\/]|$)/).test(path);
+}
+
+export function worktreePath(path: string, hint = ""): string {
+  if (outsideWorktree(path)) throw new PathRefusal(`${path} is not a worktree path: file tools take a path from the worktree's top, without a leading / or ~ or a drive${hint}`);
   return path;
 }
 
