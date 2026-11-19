@@ -4,14 +4,15 @@ import { bundledToolDefinitions as toolDefinitions } from '../../../packages/sha
 import { managedExtensions } from '../../../packages/shared/src/managed-extensions.js';
 import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import { extensionAvailability, extensionLimits, extensionPackageKey, inRepositoryDirectory, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
-  parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
+  parseWorkspaceExtension, withoutExtensionLocks, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, AppEnv } from './types.js';
 import {
-  addNeededExtensions, auditStatement, authenticateConnector, automaticTools, isPersonalWorkspace, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
-  saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
+  addNeededExtensions, auditStatement, authenticateConnector, connectorExtensionSettings, isPersonalWorkspace, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
+  saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensionLock, workspaceExtensions,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
+import { resolveNpmExtensionPackage, saveRegistryExtensionMetadata, workspaceRegistryMetadata } from './npm-registry.js';
 
 const RECENT_REQUESTS = 20;
 const MAX_PENDING = 20;
@@ -24,8 +25,11 @@ async function hostReport(env: Env, connectorId: string): Promise<{ report: Host
   catch { return null; }
 }
 
-function availability(extensions: readonly WorkspaceExtension[], installed: readonly InstalledExtension[]): Record<string, ExtensionAvailability> {
-  return Object.fromEntries(extensions.map(extension => [extension.source, extensionAvailability(extension.source, installed)]));
+function availability(extensions: readonly WorkspaceExtension[], installed: readonly InstalledExtension[], autoCache = false): Record<string, ExtensionAvailability> {
+  return Object.fromEntries(extensions.map(extension => [
+    extension.source,
+    extensionAvailability(extension.source, installed, { ...(extension.integrity ? { integrity: extension.integrity } : {}), autoCache }),
+  ]));
 }
 
 function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExtensionsReport {
@@ -41,14 +45,30 @@ export function knowsGitSubdirectories(row: { capabilities_json?: string | null 
   try { return parseCapabilities(row.capabilities_json ?? '{}').gitSubdirectories === true; } catch { return false; }
 }
 
+export function hostSupportsAutoCache(row: { capabilities_json?: string | null }, report: HostExtensionsReport | undefined, autoCache: boolean): boolean {
+  if (!autoCache || !report?.remoteInstalls) return false;
+  try {
+    const caps = parseCapabilities(row.capabilities_json ?? '{}');
+    return caps.sandbox === true && (caps.platform === 'linux' || caps.platform === 'darwin');
+  } catch { return false; }
+}
+
+export interface ConnectorWorkspaceExtensionsOptions {
+  toolDefinitions?: boolean;
+  sessionToolSwitches?: boolean;
+  extensionLocks?: boolean;
+}
+
 export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined,
-  options: { toolDefinitions?: boolean } = {}): WorkspaceExtension[] {
+  options: ConnectorWorkspaceExtensionsOptions = {}): WorkspaceExtension[] {
   const has = new Set((installed ?? []).map(item => item.source));
-  const knowsPiki = [...has].some(isPikiExtensionSource);
+  const switchesAll = options.sessionToolSwitches === true;
+  const knowsPiki = switchesAll || [...has].some(isPikiExtensionSource);
   if (options.toolDefinitions && knowsPiki) for (const definition of toolDefinitions) for (const extension of definition.extensions) has.add(extension);
   const shown = extensions.filter(item => !isPikiExtensionSource(item.source)
-    || (knowsPiki && !isControlPlaneExtension(item.source) && (!sessionToolSources.includes(item.source) || has.has(item.source))));
-  return knowsPiki ? withReplacedSwitches(shown, extensions, has) : shown;
+    || (knowsPiki && !isControlPlaneExtension(item.source) && (!sessionToolSources.includes(item.source) || switchesAll || has.has(item.source))));
+  const replaced = knowsPiki && !switchesAll ? withReplacedSwitches(shown, extensions, has) : shown;
+  return options.extensionLocks ? replaced : withoutExtensionLocks(replaced);
 }
 
 function withReplacedSwitches(shown: readonly WorkspaceExtension[], extensions: readonly WorkspaceExtension[], has: ReadonlySet<string>): WorkspaceExtension[] {
@@ -99,19 +119,29 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     const row = await authenticateConnector(c);
     const input = await jsonObject(c, 4096);
     const workspaceId = identifier(input.workspaceId, 'workspaceId');
-    const options = { toolDefinitions: input.toolDefinitions === true };
+    const options: ConnectorWorkspaceExtensionsOptions = {
+      toolDefinitions: input.toolDefinitions === true,
+      sessionToolSwitches: input.sessionToolSwitches === true,
+      extensionLocks: input.extensionLocks === true,
+    };
     const connected = await c.env.DB.query<{ connector_id: string }>(`SELECT cw.connector_id FROM connector_workspaces cw
       JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = ?
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
     if (!connected) fail(404, 'not_found', 'Workspace not found.');
     const known = knowsGitSubdirectories(row);
     const extensions = (await workspaceExtensions(c.env, workspaceId)).filter(item => known || !inRepositoryDirectory(item.source));
-    const shown = extensions.some(item => isPikiExtensionSource(item.source))
-      ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed, options) : extensions;
+    const needReport = !options.sessionToolSwitches && extensions.some(item => isPikiExtensionSource(item.source));
+    const shown = connectorWorkspaceExtensions(extensions, needReport ? (await hostReport(c.env, row.id))?.report.installed : undefined, options);
+    const settings = await connectorExtensionSettings(c.env, row.id);
     const toolGroups = await memberToolGroups(c.env, workspaceId);
     const ownerPrivate = await isPersonalWorkspace(c.env, workspaceId, row.owner_id);
-    return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id), ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
-      ...(ownerPrivate ? { ownerPrivate: true } : {}) });
+    return c.json({
+      extensions: shown,
+      automaticTools: settings.automaticTools,
+      ...(options.extensionLocks && settings.autoCache ? { autoCache: true } : {}),
+      ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
+      ...(ownerPrivate ? { ownerPrivate: true } : {}),
+    });
   });
 }
 
@@ -122,20 +152,29 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     const userId = c.get('auth').userId;
     const member = await requireMember(c.env, workspaceId, userId);
     const extensions = await workspaceExtensions(c.env, workspaceId);
-    const rows = await c.env.DB.query<{ id: string; name: string; owner_id: string; owner_name: string }>(`SELECT c.id, c.name, c.owner_id, u.display_name AS owner_name
+    const rows = await c.env.DB.query<{ id: string; name: string; owner_id: string; owner_name: string; capabilities_json: string }>(`SELECT c.id, c.name, c.owner_id, u.display_name AS owner_name, c.capabilities_json
       FROM connectors c JOIN connector_workspaces cw ON cw.connector_id = c.id AND cw.workspace_id = ?
       JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = c.owner_id
       JOIN users u ON u.id = c.owner_id
       WHERE c.revoked_at IS NULL AND c.removed_at IS NULL AND (c.owner_id = ? OR EXISTS (SELECT 1 FROM connector_shares sh
         WHERE sh.connector_id = c.id AND sh.workspace_id = cw.workspace_id))
       ORDER BY c.created_at DESC LIMIT 30`).bind(workspaceId, userId).all();
-    const hosts = await Promise.all(rows.map(async host => {
-      const reported = await hostReport(c.env, host.id);
-      return { id: host.id, name: host.name, ownerId: host.owner_id, ownerName: host.owner_name,
-        ...(reported ? { report: shownReport(reported.report, host.owner_id === userId), reportedAt: reported.reportedAt,
-          availability: availability(extensions, reported.report.installed) } : {}) };
-    }));
-    return c.json({ extensions, hosts, admin: member.role === 'owner' || member.role === 'admin' });
+    const [hosts, registryMetadata] = await Promise.all([
+      Promise.all(rows.map(async host => {
+        const [reported, settings] = await Promise.all([hostReport(c.env, host.id), connectorExtensionSettings(c.env, host.id)]);
+        const autoCache = hostSupportsAutoCache(host, reported?.report, settings.autoCache);
+        return { id: host.id, name: host.name, ownerId: host.owner_id, ownerName: host.owner_name,
+          ...(reported ? { report: shownReport(reported.report, host.owner_id === userId), reportedAt: reported.reportedAt,
+            availability: availability(extensions, reported.report.installed, autoCache) } : {}) };
+      })),
+      workspaceRegistryMetadata(c.env, extensions),
+    ]);
+    return c.json({
+      extensions,
+      hosts,
+      admin: member.role === 'owner' || member.role === 'admin',
+      ...(Object.keys(registryMetadata).length ? { registryMetadata } : {}),
+    });
   });
 
   app.put('/api/workspaces/:id/extensions', async c => {
@@ -149,14 +188,34 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     const sessionTool = sessionToolSources.includes(key);
     if (sessionTool) extension = { ...extension, tools: 'automatic', settings: {} };
     if (coreSources.includes(key) && !extension.enabled) fail(400, 'invalid_extension', `${key} offers the tools every session needs; it can't be turned off.`);
+    const at = now();
+    if (extension.source.startsWith('npm:')) {
+      const existing = await workspaceExtensionLock(c.env, workspaceId, key);
+      if (existing?.source === extension.source && existing.integrity) {
+        if (extension.integrity !== undefined && extension.integrity !== existing.integrity) {
+          fail(409, 'integrity_mismatch', `${extension.source} is already locked to a different integrity digest in this workspace.`);
+        }
+        extension = { ...extension, integrity: existing.integrity };
+      } else {
+        const resolved = await resolveNpmExtensionPackage(c.env, extension.source);
+        if (resolved) {
+          if (extension.integrity !== undefined && extension.integrity !== resolved.integrity) {
+            fail(409, 'integrity_mismatch', `The integrity digest does not match ${extension.source} on registry.npmjs.org.`);
+          }
+          extension = { ...extension, integrity: resolved.integrity };
+          await saveRegistryExtensionMetadata(c.env, extension.source, resolved.integrity, resolved.metadata, at);
+        }
+      }
+    }
     const first = !sessionTool && !(await workspaceExtensions(c.env, workspaceId)).some(item => extensionPackageKey(item.source) === key);
-    const saved = await saveWorkspaceExtensionStatement(c.env.DB, { workspaceId, extension, actor, at: now() }).first();
+    const saved = await saveWorkspaceExtensionStatement(c.env.DB, { workspaceId, extension, actor, at }).first();
     if (!saved) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
       fail(409, 'extension_limit', `A workspace uses at most ${extensionLimits.workspace} extensions.`);
     }
     await auditStatement(c.env, actor, 'workspace.extension.updated', workspaceId, null,
-      { source: extension.source, enabled: extension.enabled, tools: extension.tools, settings: Object.keys(extension.settings) }).run();
+      { source: extension.source, enabled: extension.enabled, tools: extension.tools, settings: Object.keys(extension.settings),
+        ...(extension.integrity ? { integrity: extension.integrity } : {}) }).run();
     const added = first && extension.enabled ? await addNeededExtensions(c.env, workspaceId, key, actor) : [];
     return c.json({ extensions: await workspaceExtensions(c.env, workspaceId), ...(added.length ? { added } : {}) });
   });
@@ -187,18 +246,23 @@ export function registerExtensions(app: Hono<AppEnv>): void {
       JOIN workspace_members owner ON owner.workspace_id = w.id AND owner.user_id = ?
       JOIN workspace_members viewer ON viewer.workspace_id = w.id AND viewer.user_id = ?
       WHERE cw.connector_id = ? ORDER BY w.name LIMIT 50`).bind(row.owner_id, userId, row.id).all();
-    const installed = reported?.report.installed ?? [];
+    const [installed, settings] = [reported?.report.installed ?? [], await connectorExtensionSettings(c.env, row.id)];
+    const autoCache = hostSupportsAutoCache(row, reported?.report, settings.autoCache);
     return c.json({
       role: row.role,
       ...(reported ? { report: shownReport(reported.report, row.role === 'owner'), reportedAt: reported.reportedAt } : {}),
-      automaticTools: await automaticTools(c.env, row.id),
+      automaticTools: settings.automaticTools,
+      ...(settings.autoCache ? { autoCache: true } : {}),
       requests: requests.map(item => ({ id: item.id, action: item.action, source: item.source, status: item.status, ...(item.error ? { error: item.error } : {}),
         requestedAt: item.requested_at, ...(item.finished_at ? { finishedAt: item.finished_at } : {}) })),
       workspaces: await Promise.all(workspaces.map(async workspace => {
         const extensions = (await workspaceExtensions(c.env, workspace.id))
           .filter(item => item.enabled && !sessionToolSources.includes(item.source) && !isControlPlaneExtension(item.source));
         return { id: workspace.id, name: workspace.name, shared: Number(workspace.shared) === 1,
-          extensions: extensions.map(item => ({ source: item.source, availability: extensionAvailability(item.source, installed) })) };
+          extensions: extensions.map(item => ({
+            source: item.source,
+            availability: extensionAvailability(item.source, installed, { ...(item.integrity ? { integrity: item.integrity } : {}), autoCache }),
+          })) };
       })),
     });
   });
@@ -239,14 +303,29 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     if (row.role !== 'owner') fail(403, 'host_owner_required', 'Only the host\'s owner decides whether extension tools run on it for every session.');
     if (row.revoked_at) fail(409, 'connector_revoked', 'Connector is revoked.');
     const input = await jsonObject(c, 1024);
-    if (Object.keys(input).join() !== 'automaticTools' || typeof input.automaticTools !== 'boolean') fail(400, 'invalid_input', 'Set automaticTools to true or false.');
+    const keys = Object.keys(input);
+    if (!keys.length || keys.some(key => key !== 'automaticTools' && key !== 'autoCache')
+      || ('automaticTools' in input && typeof input.automaticTools !== 'boolean')
+      || ('autoCache' in input && typeof input.autoCache !== 'boolean')) {
+      fail(400, 'invalid_input', 'Set automaticTools or autoCache to true or false.');
+    }
+    const current = await connectorExtensionSettings(c.env, row.id);
+    const automaticTools = typeof input.automaticTools === 'boolean' ? input.automaticTools : current.automaticTools;
+    const autoCache = typeof input.autoCache === 'boolean' ? input.autoCache : current.autoCache;
+    const at = now();
     await c.env.DB.batch([
-      c.env.DB.query(`INSERT INTO connector_extension_settings (connector_id, automatic_tools, updated_by, updated_at) VALUES (?, ?, ?, ?)
-        ON CONFLICT (connector_id) DO UPDATE SET automatic_tools = excluded.automatic_tools, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
-        .bind(row.id, input.automaticTools ? 1 : 0, row.owner_id, now()),
-      auditStatement(c.env, row.owner_id, 'connector.extension.automatic_tools', null, null, { connectorId: row.id, automaticTools: input.automaticTools }),
+      c.env.DB.query(`INSERT INTO connector_extension_settings (connector_id, automatic_tools, auto_cache, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (connector_id) DO UPDATE SET automatic_tools = excluded.automatic_tools, auto_cache = excluded.auto_cache,
+          updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+        .bind(row.id, automaticTools ? 1 : 0, autoCache ? 1 : 0, row.owner_id, at),
+      ...('automaticTools' in input
+        ? [auditStatement(c.env, row.owner_id, 'connector.extension.automatic_tools', null, null, { connectorId: row.id, automaticTools })]
+        : []),
+      ...('autoCache' in input
+        ? [auditStatement(c.env, row.owner_id, 'connector.extension.auto_cache', null, null, { connectorId: row.id, autoCache })]
+        : []),
     ]);
-    return c.json({ automaticTools: input.automaticTools });
+    return c.json({ automaticTools, ...(autoCache || 'autoCache' in input ? { autoCache } : {}) });
   });
 }
 

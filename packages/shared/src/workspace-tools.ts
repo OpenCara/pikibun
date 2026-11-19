@@ -1,5 +1,5 @@
 import { builtinExtensions } from "./host-config.js";
-import { parseExtensionSourceSpec, type ExtensionToolMode, type InstalledExtension, type WorkspaceExtension } from "./host-extensions.js";
+import { parseExtensionSourceSpec, type ExtensionToolMode, type InstalledExtension, type RegistryExtensionMetadata, type WorkspaceExtension } from "./host-extensions.js";
 import { pikiExtension, pikiExtensionOn, pikiSessionToolExtensions, sessionToolsOff } from "./piki-extensions.js";
 import { canonicalToolName } from "./types.js";
 
@@ -125,6 +125,13 @@ export function workspaceTools(extensions: readonly WorkspaceExtension[], instal
     }
   }
   return { tools: [...tools, ...offered], off, shadowed, unreported };
+}
+
+export function extensionDescription(source: string, installed: readonly InstalledExtension[],
+  registryMetadata?: Readonly<Record<string, RegistryExtensionMetadata>>): string | undefined {
+  const offer = extensionOffer(source, installed);
+  if (offer?.description) return offer.description;
+  return registryMetadata?.[source]?.description;
 }
 
 export function extensionLabel(source: string): string {

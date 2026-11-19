@@ -54,8 +54,11 @@ export interface RunnerConfigSource {
 function runnerExtensions(source: RunnerConfigSource, extensions: HostExtensions): NonNullable<RunnerConfig["extensions"]> {
   return {
     installed: () => extensions.loaded,
+    ensureCached: (items, autoCache, signal) => extensions.ensureCached(items, autoCache, signal),
+    peekCached: (items, autoCache) => extensions.peekCached(items, autoCache),
     workspace: workspaceId => extensions.workspace(workspaceId, async () =>
-      source.calls.callback(await source.connection(), "/api/connectors/self/extensions/workspace", { workspaceId, toolDefinitions: true }, WORKSPACE_EXTENSIONS_LIMIT)),
+      source.calls.callback(await source.connection(), "/api/connectors/self/extensions/workspace",
+        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true }, WORKSPACE_EXTENSIONS_LIMIT)),
     lastKnown: workspaceId => extensions.lastKnown(workspaceId),
     ...(source.options.localModels.modelRegistry ? { modelRegistry: source.options.localModels.modelRegistry } : {}),
   };

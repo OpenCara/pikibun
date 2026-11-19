@@ -1,7 +1,8 @@
 # Decoupling extensions from connectors (#438)
 
-Status: design note. Each phase below is one pull request, and phase 2 stops for the owner's go-ahead before changing a
-default for every sandboxed host.
+Status: phase 1 is built; phases 2 to 4 are a plan. Each phase below is one pull request, and phase 2 stops for the
+owner's go-ahead before changing a default for every sandboxed host. See [Phase 1 as built](#phase-1-as-built) where the
+code settles details of the text below.
 
 ## Why
 
@@ -225,7 +226,7 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
 
 | Phase | What lands | Default changed? |
 |---|---|---|
-| 1 | `sessionToolSwitches: true` on `/api/connectors/self/extensions/workspace` (lifting the 31/32 `connectorPikiExtensions` ceiling for new switches and fixing pre-report switch races); `sub-agents` enabled in `managedSource`; machine-wide `ExtensionCache`; `workspace_extensions.integrity` and `extension_descriptions` migrations; Plane 2 sandboxed auto-provisioning behind `--auto-cache-extensions` / `HostConfig.autoCacheExtensions` (off by default) | No |
+| 1 | `sessionToolSwitches: true` on `/api/connectors/self/extensions/workspace` (lifting the 31/32 `connectorPikiExtensions` ceiling for new switches and fixing pre-report switch races); `sub-agents` enabled in `managedSource`; machine-wide `ExtensionCache`; `workspace_extensions.integrity` and `extension_descriptions` migrations; Plane 2 sandboxed auto-provisioning behind `--auto-cache-extensions` / `connector_extension_settings.auto_cache` (off by default) | No |
 | 2 | *(After owner go-ahead)* Turn on `autoCacheExtensions` and `managedExtensions` by default on sandboxed Linux and macOS hosts where `remoteInstalls` is true; update workspace/host availability UI to show auto-cached readiness | **Yes** — stops for decision first |
 | 3 | `BrokeredToolDefinition` `inputSchema` (bounded JSON Schema) and `readOnlySafe`; Plane 1 Workspace Remote MCP servers on the Pikibun server with vault credentials | No |
 | 4 | Policy-gated `complete` RPC on `ExtensionChannel` so `piki:prompt-audit` (and opted-in `requiredExtensions`) run in `ProcessChannel` without host keys; credentialed CLI rules on `ProgramToolDefinition` (`gh`, `glab`, `az`) | No |
@@ -239,3 +240,18 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
 - **Host pools and remote sandboxes (#181):** Plane 1 tools and Plane 2 auto-cached extensions give every sandboxed
   member of a host pool the exact same workspace tools and hooks without pool operators manually syncing installs across
   machines.
+
+## Phase 1 as built
+
+- **The host owner's switch lives in `connector_extension_settings.auto_cache`** (`PATCH /api/connectors/:id/extensions`
+  with `{ autoCache: boolean }`, audited as `connector.extension.auto_cache`, and carried to connectors sending
+  `extensionLocks: true` as `WorkspaceExtensionsAnswer.autoCache`) alongside `pikibun connect --auto-cache-extensions`,
+  rather than on `HostConfig`, which older connectors parse with a fixed set of keys.
+- **Plane 3 isolation on the same machine:** `ExtensionCache` (`apps/runner/src/extensions/cache.ts`) stays separate from
+  `ExtensionStore` (`sources.json`), and `RunnerSession` consults `ensureCached` / `peekCached` only when the session's
+  own extension channel runs inside the OS sandbox (`sandboxedExtensionChannel()`), so an on-host session on the same
+  computer never loads a package that only a sandboxed session auto-cached.
+- **Describing fails closed:** the `ExtensionCache` describer passes `refusingDescribe` as the fallback to
+  `sandboxDescribe` and `helperDescribe`, so a cache path the sandbox refuses to mount fails rather than falling back to
+  an unsandboxed `processDescribe`.
+

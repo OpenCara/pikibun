@@ -1,7 +1,8 @@
-import { extensionLimits, isPikiExtensionSource, parseExtensionSourceSpec, parseWorkspaceExtensionsAnswer, type ExtensionRequest, type ExtensionRequestResult,
-  type HostExtensionsReport, type WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
+import { extensionLimits, isExtensionIntegrity, isPikiExtensionSource, parseExtensionSourceSpec, parseWorkspaceExtensionsAnswer, type ExtensionRequest, type ExtensionRequestResult,
+  type HostExtensionsReport, type WorkspaceExtension, type WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
 import { compareVersions, connectorRelease, connectorRunsPin, inManagedScope, isVersion, MANAGED_EXTENSION_SCOPE, managedPinKey,
   type ManagedExtensionPin } from "../../../../packages/shared/src/managed-extensions.js";
+import { extensionCacheKey, type ExtensionCache } from "./cache.js";
 import { connectorPikiExtensions, managedSource, type PikiExtension } from "./piki/index.js";
 import type { Describe } from "./describe.js";
 import { loadInstalled, loadManaged, type LoadedSource, type LoadOptions } from "./load.js";
@@ -20,6 +21,8 @@ export interface HostExtensionsOptions {
   now?: () => number;
   pikiExtensions?: readonly PikiExtension[];
   managed?: boolean;
+  autoCache?: boolean;
+  cache?: ExtensionCache;
   connectorVersion?: string;
   log?: (line: string) => void;
   describe?: Describe;
@@ -30,9 +33,12 @@ export class HostExtensions {
   #workspaces = new Map<string, { value: WorkspaceExtensionsAnswer; at: number; refresh?: Promise<WorkspaceExtensionsAnswer> }>();
   #lastKnown = new Map<string, WorkspaceExtensionsAnswer>();
   #managed: LoadedSource[] = [];
+  #cached = new Map<string, LoadedSource>();
+  #cacheFailed = new Map<string, { at: number; reason: string }>();
   #failed = new Map<string, { at: number; reason: string }>();
   #logged = new Set<string>();
   #pruned = false;
+  #cachePruned = false;
   #chosen = false;
 
   constructor(readonly store: ExtensionStore, readonly options: HostExtensionsOptions) {}
@@ -218,6 +224,69 @@ export class HostExtensions {
   }
 
   lastKnown(workspaceId: string): WorkspaceExtensionsAnswer | undefined { return this.#lastKnown.get(workspaceId); }
+
+  canAutoCache(answerAutoCache?: boolean): boolean {
+    return this.options.remoteInstalls && (this.options.autoCache === true || answerAutoCache === true) && this.options.cache?.sandboxed === true;
+  }
+
+  private knownCacheKeys(extra: readonly WorkspaceExtension[] = []): Set<string> {
+    const keys = new Set<string>();
+    const all = [...extra, ...[...this.#lastKnown.values()].flatMap(item => item.extensions)];
+    for (const item of all) {
+      if (item.enabled && item.source.startsWith("npm:") && isExtensionIntegrity(item.integrity)) {
+        keys.add(extensionCacheKey(item.source, item.integrity));
+      }
+    }
+    return keys;
+  }
+
+  async peekCached(extensions: readonly WorkspaceExtension[], answerAutoCache?: boolean): Promise<LoadedSource[]> {
+    if (!this.canAutoCache(answerAutoCache)) return [];
+    const cache = this.options.cache!;
+    const found: LoadedSource[] = [];
+    for (const item of extensions) {
+      if (!item.enabled || !item.source.startsWith("npm:") || !isExtensionIntegrity(item.integrity)) continue;
+      if (this.#loaded.some(loaded => !loaded.summary.dev && loaded.summary.source === item.source && !loaded.summary.error)) continue;
+      const key = extensionCacheKey(item.source, item.integrity);
+      const existing = this.#cached.get(key) ?? await cache.getIfCached(item.source, item.integrity);
+      if (existing) {
+        this.#cached.set(key, existing);
+        found.push(existing);
+      }
+    }
+    return found;
+  }
+
+  async ensureCached(extensions: readonly WorkspaceExtension[], answerAutoCache?: boolean, signal?: AbortSignal): Promise<LoadedSource[]> {
+    if (!this.canAutoCache(answerAutoCache)) return [];
+    const cache = this.options.cache!;
+    const now = this.options.now ?? Date.now;
+    if (!this.#cachePruned) {
+      this.#cachePruned = true;
+      await cache.prune(this.knownCacheKeys(extensions)).catch(error => { this.log(`cached extensions couldn't be pruned: ${message(error)}`); });
+    }
+    const ensured: LoadedSource[] = [];
+    for (const item of extensions) {
+      if (!item.enabled || !item.source.startsWith("npm:") || !isExtensionIntegrity(item.integrity)) continue;
+      if (this.#loaded.some(loaded => !loaded.summary.dev && loaded.summary.source === item.source && !loaded.summary.error)) continue;
+      const key = extensionCacheKey(item.source, item.integrity);
+      const current = this.#cached.get(key);
+      if (current) { ensured.push(current); continue; }
+      const failed = this.#cacheFailed.get(key);
+      if (failed && now() - failed.at < MANAGED_RETRY_MS) continue;
+      try {
+        const loaded = await cache.ensure(item.source, item.integrity, signal);
+        this.#cacheFailed.delete(key);
+        this.#cached.set(key, loaded);
+        ensured.push(loaded);
+      } catch (error) {
+        const reason = message(error);
+        this.#cacheFailed.set(key, { at: now(), reason });
+        this.log(`${item.source}: auto-cache isn't used, until tried again in ${MANAGED_RETRY_MS / 60_000} minutes: ${reason}`);
+      }
+    }
+    return ensured;
+  }
 
   private log(line: string): void {
     if (this.#logged.has(line)) return;

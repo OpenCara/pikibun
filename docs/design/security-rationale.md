@@ -182,6 +182,44 @@ What it doesn't protect against: outside a sandboxed session on Linux or macOS, 
 host's user, outside the sandbox ([extension isolation](extension-isolation.md)), and a version reaches every host that
 opted in within a sync. That is why it stays opt-in until extensions run in the sandbox on every platform.
 
+## Sandboxed auto-cached workspace extensions
+
+`apps/runner/src/extensions/cache.ts` (`ExtensionCache`, `sandboxExtensionInstaller`, `helperExtensionInstaller`,
+`verifyCachedNpmTree`), `host.ts` (`ensureCached`, `peekCached`), `apps/server/src/npm-registry.ts`; the plan is
+[Decoupling extensions from connectors](extension-planes.md) (#438). On a Linux or macOS sandboxed host whose owner opts
+in (`pikibun connect --auto-cache-extensions` or `PATCH /api/connectors/:id/extensions` with `{ autoCache: true }`), a
+sandboxed session fetches and caches an enabled `npm:<package>@<version>` workspace extension on demand without a
+per-connector install request. What bounds that:
+
+- **Two parties lock the package.** When a workspace adds an `npm:` extension, the Pikibun server fetches its manifest
+  from `https://registry.npmjs.org` (`redirect: "error"`, bounded size and time) and locks `dist.integrity` (`sha512-...`)
+  on `workspace_extensions.integrity`; once set for `(workspace_id, source)`, SQL keeps that digest until `source`
+  changes, and a conflicting digest is refused (`409 integrity_mismatch`).
+- **Registry metadata isn't taken from hosts.** Shared rows in `extension_descriptions` hold only `{ name, version, description }`
+  fetched and verified against `dist.integrity` by the Pikibun server itself from `https://registry.npmjs.org`; dynamic
+  `modules` summaries reported by connectors stay scoped to each workspace's own shared hosts (`connector_extensions`).
+- **Provisioning runs inside an OS sandbox behind a `registry.npmjs.org`-only proxy.** `npm install` runs in a dedicated
+  `Sandbox` (Linux) or `SeatbeltBackend` (macOS) with its own empty home, `npm_config_userconfig=/dev/null`,
+  `npm_config_globalconfig=/dev/null` (and their uppercase counterparts), `npm_config_allow_git=none`, `--ignore-scripts`
+  and `--registry=https://registry.npmjs.org`, behind a local `EgressProxy` whose fixed allowlist admits HTTPS `CONNECT`
+  to `registry.npmjs.org` alone (`packageRegistries: false`, checked against `non-public-addresses.ts`). So neither
+  `~/.npmrc` nor `$PREFIX/etc/npmrc` sends a host token, and a direct tarball URL, Git URL or redirect to another host
+  or private IP is refused before connecting.
+- **Tree and lockfile checks, and a sandbox-only describer.** Before staging renames into the 32-hex cache entry,
+  `verifyCachedNpmTree` checks that every entry in `package-lock.json` resolved from `https://registry.npmjs.org/`, that
+  the root package's version and `integrity` match the workspace's lock, and that the tree holds no hard links, special
+  files or symbolic links escaping it. Describing passes `refusingDescribe` as the fallback so it never runs outside the
+  sandbox.
+- **Plane 3 sessions never read `ExtensionCache`.** `RunnerSession` consults `ExtensionCache` only when the session's own
+  extension process runs inside the sandbox (`sandboxedExtensionChannel()`), and `--no-remote-installs` refuses
+  auto-caching altogether. Unsandboxed hosts, Windows hosts and on-host sessions run only what the host's owner
+  installed in `ExtensionStore`.
+
+What it doesn't protect against: a third-party `npm:` extension's transitive npm dependencies, if specified as version
+ranges, resolve from `registry.npmjs.org` when the cache entry is populated and run inside the session's sandboxed
+`ProcessChannel` (`MODEL_CALLS_REFUSED`, behind the workspace's egress proxy), with the same confinement as `pnpm
+install` inside the session's worktree.
+
 ## Installed extensions and the host's models
 
 `apps/runner/src/extensions/worker.ts` (`describedRegistry`, `modelDescription`), `adapter.ts` (`SessionExtensions.channel`);
