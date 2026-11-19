@@ -9,7 +9,7 @@ import { extensionAvailability, extensionLimits, extensionPackageKey, inReposito
 import type { Env, AppEnv } from './types.js';
 import {
   addNeededExtensions, auditStatement, authenticateConnector, connectorExtensionSettings, isPersonalWorkspace, managedConnector, memberToolGroups, removeWorkspaceExtensionStatement, requireMember,
-  saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensionLock, workspaceExtensions, type AutoCacheChoice,
+  saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensionLock, workspaceExtensions, workspaceRemoteTools, type AutoCacheChoice,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
 import { resolveNpmExtensionPackage, saveRegistryExtensionMetadata, workspaceRegistryMetadata } from './npm-registry.js';
@@ -124,6 +124,7 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
       sessionToolSwitches: input.sessionToolSwitches === true,
       extensionLocks: input.extensionLocks === true,
     };
+    const remoteTools = input.remoteTools === true;
     const connected = await c.env.DB.query<{ connector_id: string }>(`SELECT cw.connector_id FROM connector_workspaces cw
       JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = ?
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
@@ -141,6 +142,7 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
       ...(options.extensionLocks && settings.autoCache !== 'host' ? { autoCache: settings.autoCache === 'on' } : {}),
       ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
       ...(ownerPrivate ? { ownerPrivate: true } : {}),
+      ...(remoteTools ? { remoteTools: await workspaceRemoteTools(c.env, workspaceId) } : {}),
     });
   });
 }

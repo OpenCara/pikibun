@@ -3,6 +3,7 @@ import { z } from "zod";
 import { cacheWarmingModes } from "../../../../packages/shared/src/cache-warming.js";
 import type { ConnectorCredentials } from "../../../../packages/shared/src/connector.js";
 import type { SessionsToolResult } from "../../../../packages/shared/src/cross-session.js";
+import { remoteMcpLimits } from "../../../../packages/shared/src/remote-mcp.js";
 import type { GitHubEffectAuthority, GitHubIssueView, ScheduleToolResult } from "../../../../packages/shared/src/types.js";
 import type { HostBrowserSource } from "../browser-host.js";
 import { parseEgressGrant, relayGitRequest, relayPath } from "../egress.js";
@@ -58,7 +59,7 @@ function runnerExtensions(source: RunnerConfigSource, extensions: HostExtensions
     peekCached: (items, autoCache) => extensions.peekCached(items, autoCache),
     workspace: workspaceId => extensions.workspace(workspaceId, async () =>
       source.calls.callback(await source.connection(), "/api/connectors/self/extensions/workspace",
-        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true }, WORKSPACE_EXTENSIONS_LIMIT)),
+        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true }, WORKSPACE_EXTENSIONS_LIMIT)),
     lastKnown: workspaceId => extensions.lastKnown(workspaceId),
     ...(source.options.localModels.modelRegistry ? { modelRegistry: source.options.localModels.modelRegistry } : {}),
   };
@@ -107,7 +108,8 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
     toolDefinitions: async () => calls.toolDefinitions(),
     brokered: async (route, request) => {
       if (!BROKERED_ROUTE.test(route)) throw new RunnerError(400, "Invalid brokered tool route");
-      return z.looseObject({}).parse(await calls.brokerCallback(await source.connection(), `/api/connectors/self/${route}`, request, BROKERED_LIMIT));
+      const timeout = route.startsWith("mcp/") ? (remoteMcpLimits.callSeconds + 30) * 1000 : undefined;
+      return z.looseObject({}).parse(await calls.brokerCallback(await source.connection(), `/api/connectors/self/${route}`, request, BROKERED_LIMIT, timeout));
     },
     githubMerge: async request => {
       const payload = {

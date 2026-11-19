@@ -5,7 +5,7 @@ import {
   apiCredential, auditStatement, authenticateConnector, authorizeSession, connectorAdmins, connectorHostGrants, type ConnectorRow, egressGrant,
   gitDirect, githubComment, githubIssue, githubMerge, githubRead, gitRelay, legacyRepositoryFixture, managedConnector, pushComplete,
   pushCredential, requireCallbackScope, requireConfiguredWorkspace, requireConnectorTLS, requireManagedWorkspace, requireMember,
-  removedHostStatements, requireSharedWorkspace, shareHostStatements, sourceRead, unshareHostStatements, viewerHostAuthority,
+  removedHostStatements, remoteMcpCall, requireSharedWorkspace, shareHostStatements, sourceRead, unshareHostStatements, viewerHostAuthority,
 } from './authority/index.js';
 import { withHostToolCapabilities } from './host-capabilities.js';
 import type { Hono } from 'hono';
@@ -329,6 +329,7 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/self/github/merge', async c => githubMerge(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/issue', async c => githubIssue(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sources/read', async c => sourceRead(c, (await authenticateConnector(c)).id));
+  app.post('/api/connectors/self/mcp/:prefix/:key', async c => remoteMcpCall(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/tools', async c => {
     await authenticateConnector(c);
     return c.json({ tools: toolDefinitions });

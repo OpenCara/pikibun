@@ -4,6 +4,7 @@ import type { SessionsToolRequest, SessionsToolResult } from "../../../../../pac
 import type { HostConfig } from "../../../../../packages/shared/src/host-config.js";
 import type { EgressGrant } from "../../../../../packages/shared/src/network.js";
 import type { HostTunnelStatus, TunnelUnavailableReason } from "../../../../../packages/shared/src/tunnel.js";
+import type { BrokeredToolDefinition } from "../../../../../packages/shared/src/tool-definitions.js";
 import type { GitHubIssueView, GitHubReadRequest, RunnerBinding, ScheduleToolRequest, ScheduleToolResult } from "../../../../../packages/shared/src/types.js";
 import type { StoredOperation } from "../../operation-record.js";
 import type { SessionWorkspace } from "../../workspace.js";
@@ -33,6 +34,7 @@ export interface ToolContext {
   wholeResults: WholeResults;
   operations: Pick<SessionOperations, "run" | "internalGitHub" | "internalBroker">;
   requireSessionTool(tool: string): Promise<void>;
+  remoteDefinition(name: string): Promise<BrokeredToolDefinition | undefined>;
   requireSenderTool(tool: string, senderId: string): Promise<void>;
   metadata(): Promise<Metadata>;
   mutate(change: (state: Metadata) => void): Promise<void>;

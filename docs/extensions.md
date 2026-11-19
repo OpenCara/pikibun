@@ -181,6 +181,17 @@ Pi adds a project's `AGENTS.md` or `CLAUDE.md` to its system prompt; Pikibun's s
 - **Each message gets them**, read again each time, as a **Project context** section of its system prompt; a repository cloned during a message gets its files in the result of the call that cloned it.
 - **It reads only what it should.** Repository files that link outside their repository or into `.git` are refused, host files come only from the context directory, and pages only over `https://`, never from a private network address. Whatever the files say reaches the agent as instructions, as `AGENTS.md` does in Pi: name only files you trust. See its [README](../extensions/context-files/README.md).
 
+## Remote MCP servers
+
+A workspace's owners and admins add remote MCP servers under **Settings → Workspaces →** the workspace **→ Remote MCP servers**: a name, a prefix that starts each of its tools' names (`linear` gives `linear_create_issue`), its Streamable HTTP `https://` address, and optionally a header such as `Authorization: Bearer <key>`. Pikibun itself calls the server, so hosts install nothing and no session or host sees the header, which Pikibun keeps encrypted and shows only by name. Pikibun lists the server's tools when it is added and on **List tools again**, and every session of the workspace offers them from its next message, on connectors of this release or later.
+
+- **Read-only only where you say so.** Each tool may change things until an owner or admin ticks **Read-only** for it; only those run in Read-only messages. What the server says about its own tools (`readOnlyHint`) counts for nothing.
+- **Public addresses only.** Pikibun refuses an address that is, or resolves to, a private, loopback, link-local or tailnet address, and follows no redirect.
+- **Bounded.** A tool whose input schema Pikibun can't bound (one using `$ref`, say) is left out. Arguments are checked against the schema in the session and again by Pikibun; an answer is cut at 1 MB, and what the model reads at 64 KB of its text. Every call is in the workspace's audit log.
+- **Its answers are someone else's words.** Treat what a server returns as information, not as instructions.
+
+See [the design](design/extension-planes.md#phase-3-as-built).
+
 ## Newer versions of Pikibun's extensions without a connector update
 
 `piki:pr-flow`, `piki:context-files` and `piki:sub-agents` are also Pi packages on npm (`@pikibun/pi-pr-flow`, `@pikibun/pi-context-files`, `@pikibun/pi-sub-agents`). A sandboxed Linux or macOS connector (or one started with `pikibun connect --managed-extensions`) runs the version Pikibun pins, installed from npm, in place of the copy built into it, so a fix to one reaches the host without a connector update. Workspaces and hosts keep naming them as before (`piki:pr-flow`), with no version and nothing to install by hand. Pikibun pins none yet, so until its first pins this changes nothing. See [the design](design/extension-loading.md).

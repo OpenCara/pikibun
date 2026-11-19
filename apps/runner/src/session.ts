@@ -313,13 +313,14 @@ export class RunnerSession {
     this.#toolContext = {
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, calls: this.#calls, hostCommands: this.hostCommands, wholeResults: this.#wholeResults, operations: this.#operations,
       requireSessionTool: tool => this.#availability.requireSessionTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId),
+      remoteDefinition: name => this.#defined.current(name),
       metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
       programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
       tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
     };
     this.#defined = new SessionDefinitions({
-      sessionId: binding.session.id, windows: process.platform === "win32" && this.sandbox.isolated, config,
+      sessionId: binding.session.id, workspaceId: binding.session.workspaceId, windows: process.platform === "win32" && this.sandbox.isolated, config,
       tool: definition => definedTool(this.#toolContext, definition), registry: () => this.#registry, toolNames: () => this.tools.map(tool => tool.name),
       added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); },
     });
@@ -1443,7 +1444,7 @@ export class RunnerSession {
     return extensionView({
       binding: this.binding, config: this.config.extensions, sandboxed: this.sandboxedExtensionChannel(), builtins: () => this.#builtins, hostConfig: () => this.hostConfig(),
       requiredExtensions: () => this.requiredExtensions(), toolNames: () => this.tools.map(tool => tool.name),
-      definedToolsOff: (off, extensions) => this.#availability.definedToolsOff(off, extensions), browserUnavailable: () => this.#availability.browserUnavailable(),
+      definedToolsOff: (off, extensions, remoteTools) => this.#availability.definedToolsOff(off, extensions, remoteTools), browserUnavailable: () => this.#availability.browserUnavailable(),
       tunnelUnavailable: () => this.#availability.tunnelUnavailable(), missingPrograms: off => this.#availability.missingPrograms(off),
     });
   }
