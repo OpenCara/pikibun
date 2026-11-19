@@ -204,6 +204,9 @@ export function registerExtensions(app: Hono<AppEnv>): void {
           }
           extension = { ...extension, integrity: resolved.integrity };
           await saveRegistryExtensionMetadata(c.env, extension.source, resolved.integrity, resolved.metadata, at);
+        } else {
+          const { integrity: _unverified, ...rest } = extension;
+          extension = rest;
         }
       }
     }

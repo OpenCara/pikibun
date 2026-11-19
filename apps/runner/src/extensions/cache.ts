@@ -92,7 +92,7 @@ export function installShellCommand(nodeBin: string, subdir: string, spec: strin
     + `npm install --save-exact --no-audit --no-fund --legacy-peer-deps --ignore-scripts --registry=https://registry.npmjs.org ${quote(spec)} </dev/null 2>&1`;
 }
 
-async function copySafeTree(fromRoot: string, toRoot: string): Promise<void> {
+export async function copySafeTree(fromRoot: string, toRoot: string): Promise<void> {
   const sourceBase = await realpath(fromRoot);
   await mkdir(toRoot, { recursive: true, mode: 0o700 });
   const pending: { from: string; to: string }[] = [{ from: sourceBase, to: toRoot }];
@@ -396,20 +396,19 @@ export class ExtensionCache {
     const key = extensionCacheKey(source, integrity);
     const packagesDir = await this.packagesDir();
     const projectDir = join(packagesDir, key);
-    const hit = await this.loadExisting(projectDir, source, spec.package, spec.version, integrity).catch(async () => {
-      await rm(projectDir, { recursive: true, force: true }).catch(() => {});
-      return undefined;
-    });
+    const hit = await this.loadExisting(projectDir, source, spec.package, spec.version, integrity).catch(() => undefined);
     if (hit) return hit;
     return this.withKeyLock(packagesDir, key, signal, async () => {
-      const raced = await this.loadExisting(projectDir, source, spec.package, spec.version, integrity).catch(() => undefined);
+      const raced = await this.loadExisting(projectDir, source, spec.package, spec.version, integrity).catch(async () => {
+        await rm(projectDir, { recursive: true, force: true }).catch(() => {});
+        return undefined;
+      });
       if (raced) return raced;
       if (!this.options.install) throw new ExtensionSourceError("No sandboxed extension installer is configured on this host");
       const stageDir = join(packagesDir, `${key}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`);
       await rm(stageDir, { recursive: true, force: true }).catch(() => {});
       try {
         await mkdir(stageDir, { recursive: true, mode: 0o700 });
-        await writeFile(join(stageDir, "package.json"), `${JSON.stringify({ name: "pikibun-cached-extension", private: true, dependencies: {} }, null, 2)}\n`, { mode: 0o600 });
         await this.options.install({ package: spec.package, version: spec.version, stageDir, ...(signal ? { signal } : {}) });
         await verifyCachedNpmTree(stageDir, spec.package, spec.version, integrity);
         const stagedRoot = join(stageDir, "node_modules", ...spec.package.split("/"));

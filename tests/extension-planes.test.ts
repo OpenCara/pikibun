@@ -10,7 +10,7 @@ import { connectorWorkspaceExtensions } from "../apps/server/src/extensions.js";
 import type { Env } from "../apps/server/src/types.js";
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import {
-  CACHE_LOCK_STALE_MS, CACHE_MAX_AGE_MS, CACHE_PACKAGES_LIMIT, defaultExtensionCacheDir, ExtensionCache, extensionCacheKey, installShellCommand,
+  CACHE_LOCK_STALE_MS, CACHE_MAX_AGE_MS, CACHE_PACKAGES_LIMIT, copySafeTree, defaultExtensionCacheDir, ExtensionCache, extensionCacheKey, installShellCommand,
   refusingDescribe, registryOnlyProxy,
 } from "../apps/runner/src/extensions/cache.js";
 import { egressSocketPath } from "../apps/runner/src/egress.js";
@@ -260,6 +260,25 @@ test("workspace npm extensions lock registry integrity, populate server-verified
   })));
   assert.equal(lockAnswer.autoCache, true);
 
+  const offlinePut = await json<{ extensions: WorkspaceExtension[] }>(await alice.request("PUT", `/api/workspaces/${wsA.id}/extensions`, {
+    source: "npm:@acme/offline-pkg@0.1.0",
+    enabled: true,
+    integrity: digest("unverified-client-digest"),
+  }));
+  assert.equal(offlinePut.extensions.find(item => item.source === "npm:@acme/offline-pkg@0.1.0")?.integrity, undefined);
+  const offlineRealDigest = digest("@acme/offline-pkg@0.1.0");
+  registry["https://registry.npmjs.org/@acme/offline-pkg/0.1.0"] = {
+    name: "@acme/offline-pkg",
+    version: "0.1.0",
+    description: "Resolved once registry recovered.",
+    integrity: offlineRealDigest,
+  };
+  const recoveredPut = await json<{ extensions: WorkspaceExtension[] }>(await alice.request("PUT", `/api/workspaces/${wsA.id}/extensions`, {
+    source: "npm:@acme/offline-pkg@0.1.0",
+    enabled: true,
+  }));
+  assert.equal(recoveredPut.extensions.find(item => item.source === "npm:@acme/offline-pkg@0.1.0")?.integrity, offlineRealDigest);
+
   const upgraded = await json<{ extensions: WorkspaceExtension[] }>(await alice.request("PUT", `/api/workspaces/${wsA.id}/extensions`, {
     source: "npm:@acme/pi-helper@1.1.0",
     enabled: true,
@@ -276,23 +295,26 @@ interface FakePackageSpec {
   link?: boolean;
   noLock?: boolean;
   extraResolved?: string;
-  escapeSymlink?: boolean;
+  escapeSymlink?: string;
   hardLink?: boolean;
   moduleCode?: string;
 }
 
 async function writeFakeNpmInstall(stageDir: string, pkg: string, requestedVersion: string, spec: FakePackageSpec = {}): Promise<void> {
-  const version = spec.version ?? requestedVersion;
-  const pkgDir = join(stageDir, "node_modules", ...pkg.split("/"));
-  await mkdir(pkgDir, { recursive: true });
-  await writeFile(join(pkgDir, "package.json"), JSON.stringify({
-    name: pkg,
-    version,
-    description: `${pkg} cached description`,
-    type: "module",
-    pi: { extensions: ["./index.js"] },
-  }));
-  await writeFile(join(pkgDir, "index.js"), spec.moduleCode ?? `import { Type } from "typebox";
+  const workDir = await mkdtemp(join(tmpdir(), "pikibun-fake-work-"));
+  try {
+    await writeFile(join(workDir, "package.json"), `${JSON.stringify({ name: "pikibun-cached-extension", private: true, dependencies: {} }, null, 2)}\n`, { mode: 0o600 });
+    const version = spec.version ?? requestedVersion;
+    const pkgDir = join(workDir, "node_modules", ...pkg.split("/"));
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(join(pkgDir, "package.json"), JSON.stringify({
+      name: pkg,
+      version,
+      description: `${pkg} cached description`,
+      type: "module",
+      pi: { extensions: ["./index.js"] },
+    }));
+    await writeFile(join(pkgDir, "index.js"), spec.moduleCode ?? `import { Type } from "typebox";
 export default function (pi) {
   pi.on("input", async event => event.text === "block-me" ? { action: "handled" } : { action: "continue" });
   pi.on("before_agent_start", async event => ({ systemPrompt: event.systemPrompt + "\\n\\ncached ${pkg}@${version}" }));
@@ -304,38 +326,43 @@ export default function (pi) {
     async execute(_id, params) { return { content: [{ type: "text", text: "echo:" + params.word }] }; },
   });
 }`);
-  const manifest = JSON.parse(await readFile(join(stageDir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
-  manifest.dependencies[pkg] = version;
-  await writeFile(join(stageDir, "package.json"), JSON.stringify(manifest));
-  if (spec.escapeSymlink) await symlink("/etc/passwd", join(pkgDir, "escape.txt"));
-  if (spec.hardLink) {
-    const outside = join(stageDir, "..", "..", `outside-${randomBytes(4).toString("hex")}.txt`);
-    await writeFile(outside, "secret");
-    await link(outside, join(pkgDir, "hardlinked.txt"));
+    const manifest = JSON.parse(await readFile(join(workDir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+    manifest.dependencies[pkg] = version;
+    await writeFile(join(workDir, "package.json"), JSON.stringify(manifest));
+    if (spec.escapeSymlink) await symlink(spec.escapeSymlink, join(pkgDir, "escape.txt"));
+    if (spec.hardLink) {
+      const outside = join(stageDir, "..", "..", `outside-${randomBytes(4).toString("hex")}.txt`);
+      await writeFile(outside, "secret");
+      await link(outside, join(pkgDir, "hardlinked.txt"));
+    }
+    if (!spec.noLock) {
+      const packages: Record<string, unknown> = {
+        "": { dependencies: { [pkg]: version } },
+        [`node_modules/${pkg}`]: {
+          version,
+          resolved: spec.resolved ?? `https://registry.npmjs.org/${pkg}/-/pkg-${version}.tgz`,
+          integrity: spec.integrity ?? digest(`${pkg}@${version}`),
+          ...(spec.link ? { link: true } : {}),
+        },
+      };
+      if (spec.extraResolved) {
+        packages["node_modules/helper-dep"] = {
+          version: "1.0.0",
+          resolved: spec.extraResolved,
+          integrity: digest("helper-dep@1.0.0"),
+        };
+      }
+      await writeFile(join(workDir, "package-lock.json"), JSON.stringify({
+        name: "pikibun-cached-extension",
+        lockfileVersion: 3,
+        requires: true,
+        packages,
+      }));
+    }
+    await copySafeTree(workDir, stageDir);
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
-  if (spec.noLock) return;
-  const packages: Record<string, unknown> = {
-    "": { dependencies: { [pkg]: version } },
-    [`node_modules/${pkg}`]: {
-      version,
-      resolved: spec.resolved ?? `https://registry.npmjs.org/${pkg}/-/pkg-${version}.tgz`,
-      integrity: spec.integrity ?? digest(`${pkg}@${version}`),
-      ...(spec.link ? { link: true } : {}),
-    },
-  };
-  if (spec.extraResolved) {
-    packages["node_modules/helper-dep"] = {
-      version: "1.0.0",
-      resolved: spec.extraResolved,
-      integrity: digest("helper-dep@1.0.0"),
-    };
-  }
-  await writeFile(join(stageDir, "package-lock.json"), JSON.stringify({
-    name: "pikibun-cached-extension",
-    lockfileVersion: 3,
-    requires: true,
-    packages,
-  }));
 }
 
 test("ExtensionCache shares 32-hex installs across connectors, coalesces concurrent installs, recovers stale locks, and prunes by age and count", async t => {
@@ -383,6 +410,19 @@ test("ExtensionCache shares 32-hex installs across connectors, coalesces concurr
   const staleIntegrity = digest("@acme/stale-lock@1.0.0");
   const staleKey = extensionCacheKey(staleSource, staleIntegrity);
   const packagesDir = join(cacheDir, "packages");
+  const entryKey = extensionCacheKey(source, integrity);
+  await writeFile(join(packagesDir, `${entryKey}.lock`), `999999 active-token ${now}\n`);
+  const transientFailCache = new ExtensionCache(cacheDir, {
+    sandboxed: true,
+    connectorVersion: "0.35.0",
+    now: () => now,
+    describe: async () => { throw new Error("transient describe failure"); },
+  });
+  await assert.rejects(transientFailCache.ensure(source, integrity, AbortSignal.timeout(80)));
+  await rm(join(packagesDir, `${entryKey}.lock`), { force: true });
+  assert.equal((await makeCache().ensure(source, integrity)).root, first.root);
+  assert.equal(installCount, 1);
+
   await writeFile(join(packagesDir, `${staleKey}.lock`), `999999 stale-token ${now - CACHE_LOCK_STALE_MS - 1000}\n`);
   const recovered = await cache1.ensure(staleSource, staleIntegrity);
   assert.equal(recovered.summary.source, staleSource);
@@ -417,7 +457,8 @@ test("ExtensionCache refuses tampered digests, non-registry tarball URLs, links,
     { label: "no lockfile", spec: { noLock: true }, match: /no package-lock\.json/ },
     { label: "private tarball URL", spec: { extraResolved: "http://127.0.0.1:8080/evil.tgz" }, match: /outside https:\/\/registry\.npmjs\.org\// },
     { label: "link in lockfile", spec: { link: true }, match: /holds a link/ },
-    { label: "escaping symlink", spec: { escapeSymlink: true }, match: /symbolic link escaping/ },
+    { label: "absolute symlink", spec: { escapeSymlink: "/etc/passwd" }, match: /absolute symbolic link/ },
+    { label: "relative escaping symlink", spec: { escapeSymlink: "../../../../../etc/passwd" }, match: /symbolic link escaping/ },
     { label: "hard link", spec: { hardLink: true }, match: /hard-linked file/ },
     { label: "broken module", spec: { moduleCode: "throw new Error('boom at import');" }, match: /didn't load/ },
   ];

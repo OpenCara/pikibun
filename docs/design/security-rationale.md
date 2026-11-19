@@ -193,8 +193,9 @@ per-connector install request. What bounds that:
 
 - **Two parties lock the package.** When a workspace adds an `npm:` extension, the Pikibun server fetches its manifest
   from `https://registry.npmjs.org` (`redirect: "error"`, bounded size and time) and locks `dist.integrity` (`sha512-...`)
-  on `workspace_extensions.integrity`; once set for `(workspace_id, source)`, SQL keeps that digest until `source`
-  changes, and a conflicting digest is refused (`409 integrity_mismatch`).
+  on `workspace_extensions.integrity` (dropping any unverified client-supplied digest when the registry can't be
+  reached); once set for `(workspace_id, source)`, SQL keeps that digest until `source` changes, and a conflicting
+  digest is refused (`409 integrity_mismatch`).
 - **Registry metadata isn't taken from hosts.** Shared rows in `extension_descriptions` hold only `{ name, version, description }`
   fetched and verified against `dist.integrity` by the Pikibun server itself from `https://registry.npmjs.org`; dynamic
   `modules` summaries reported by connectors stay scoped to each workspace's own shared hosts (`connector_extensions`).

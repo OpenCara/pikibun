@@ -84,12 +84,12 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
    - Workspace extensions lock an immutable digest (`integrity`) for `npm:` packages (`workspace_extensions.integrity`,
      nullable `TEXT`; migrations for SQLite and Postgres).
    - For `npm:<package>@<version>`, `PUT /api/workspaces/:id/extensions` resolves the version's `dist.integrity`
-     (`sha512-...`, matching `INTEGRITY` in `packages/shared/src/managed-extensions.ts`) from
-     `https://registry.npmjs.org` (or accepts a caller-supplied `sha512-...` that matches the registry when reachable)
-     and stores it. If the Pikibun server cannot reach the registry when the row is saved, `integrity` starts `NULL` (so
-     airgapped self-hosted setups still save the extension for manually installed Plane 3 hosts) and is locked on the
-     first verified install report or refresh; once set for `(workspace_id, source)`, `integrity` never changes without
-     changing `source`.
+     (`sha512-...`, matching `EXTENSION_INTEGRITY` in `packages/shared/src/host-extensions.ts`) from
+     `https://registry.npmjs.org` (checking any caller-supplied `sha512-...` against it) and stores it. If the Pikibun
+     server cannot reach the registry when the row is saved, any unverified caller-supplied digest is dropped so
+     `integrity` starts `NULL` (airgapped self-hosted setups still save the extension for manually installed Plane 3
+     hosts, and a later save once the registry is reachable locks the verified digest); once set for
+     `(workspace_id, source)`, `integrity` never changes without changing `source`.
    - `git:<url>@<commit>[#<directory>]` sources stay Plane 3 (installed explicitly by the host's owner in
      `ExtensionStore`): an arbitrary `https://` Git URL could otherwise reach a shared host's private network or
      tailnet when fetched outside a session's proxy.
