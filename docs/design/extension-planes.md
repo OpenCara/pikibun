@@ -254,7 +254,9 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   sandbox (Linux with bubblewrap, macOS with Seatbelt) turns `autoCache` and `managed` on unless started with
   `--no-auto-cache-extensions` / `--no-managed-extensions` (`--auto-cache-extensions` / `--managed-extensions` still turn
   them on, and are the only way on hosts without the sandbox, where auto-caching still never runs). Local `--no-...`
-  wins over Pikibun's setting, since it is the host owner's machine.
+  wins over Pikibun's setting, since it is the host owner's machine: the connector reports it as
+  `HostExtensionsReport.autoCacheRefused`, and the Pikibun server then never reports `"auto-cache"` for that host, even
+  with the setting on, so its extensions stay installable there.
 - **The Pikibun server's setting has three states**: `connector_extension_settings.auto_cache = 1` (on),
   `auto_cache_off = 1` (off), neither (follow the host's default). `PATCH /api/connectors/:id/extensions` takes
   `{ autoCache: true | false | null }`; `WorkspaceExtensionsAnswer.autoCache` carries `true` or `false` to connectors

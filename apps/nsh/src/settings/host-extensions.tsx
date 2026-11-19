@@ -29,6 +29,7 @@ interface HostExtensionsResponse {
   autoCache?: boolean;
   autoCacheChoice?: "on" | "off" | "host";
   hostAutoCache?: boolean;
+  hostAutoCacheRefused?: boolean;
   requests: HostRequest[];
   workspaces: { id: string; name: string; shared: boolean; extensions: { source: string; availability: ExtensionAvailability }[] }[];
 }
@@ -222,6 +223,7 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
     const sandboxed = props.connector.capabilities.sandbox === true && (props.connector.capabilities.platform === "linux" || props.connector.capabilities.platform === "darwin");
     if (!sandboxed) return "Only Linux and macOS hosts whose sessions run in the sandbox fetch extensions themselves; this one needs them installed";
     if (report() && !report()!.remoteInstalls) return "Its connector runs with --no-remote-installs, so it fetches nothing itself";
+    if (data()?.hostAutoCacheRefused) return "Its connector runs with --no-auto-cache-extensions, which wins over the setting here: it fetches nothing itself, so install what its workspaces use";
     return "Workspaces' npm: extensions are fetched from npm on first use, checked against the digest Pikibun locked when they were added, and run only in each session's sandbox";
   };
   const builtin = () => config()?.builtinExtensions ?? [];

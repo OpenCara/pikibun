@@ -495,7 +495,8 @@ export class LocalConnector {
         let withStatus = statusKey !== undefined && statusKey !== refusedStatus;
         const report = () => {
           const listed = pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions();
-          const base = reportAutoCache ? { ...listed, autoCache: extensions.autoCacheDefault } : listed;
+          const base = reportAutoCache
+            ? { ...listed, autoCache: extensions.autoCacheDefault, ...(extensions.autoCacheRefused ? { autoCacheRefused: true as const } : {}) } : listed;
           return withStatus ? { ...base, ...(browser ? { browser } : {}), ...(tunnel ? { tunnel } : {}) } : base;
         };
         const sync = async () => parseExtensionsSyncAnswer(await this.calls.callback(generation, "/api/connectors/self/extensions", { report: report(), results }));

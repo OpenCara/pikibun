@@ -46,7 +46,7 @@ export function knowsGitSubdirectories(row: { capabilities_json?: string | null 
 }
 
 export function hostSupportsAutoCache(row: { capabilities_json?: string | null }, report: HostExtensionsReport | undefined, choice: AutoCacheChoice): boolean {
-  if (choice === 'off' || !report?.remoteInstalls || (choice === 'host' && report.autoCache !== true)) return false;
+  if (choice === 'off' || !report?.remoteInstalls || report.autoCacheRefused === true || (choice === 'host' && report.autoCache !== true)) return false;
   try {
     const caps = parseCapabilities(row.capabilities_json ?? '{}');
     return caps.sandbox === true && (caps.platform === 'linux' || caps.platform === 'darwin');
@@ -258,6 +258,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
       autoCache,
       autoCacheChoice: settings.autoCache,
       ...(reported?.report.autoCache !== undefined ? { hostAutoCache: reported.report.autoCache } : {}),
+      ...(reported?.report.autoCacheRefused ? { hostAutoCacheRefused: true } : {}),
       requests: requests.map(item => ({ id: item.id, action: item.action, source: item.source, status: item.status, ...(item.error ? { error: item.error } : {}),
         requestedAt: item.requested_at, ...(item.finished_at ? { finishedAt: item.finished_at } : {}) })),
       workspaces: await Promise.all(workspaces.map(async workspace => {

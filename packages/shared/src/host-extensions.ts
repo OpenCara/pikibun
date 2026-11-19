@@ -124,6 +124,7 @@ export interface HostExtensionsReport {
   browser?: HostBrowserStatus;
   tunnel?: HostTunnelStatus;
   autoCache?: boolean;
+  autoCacheRefused?: true;
 }
 
 export type ExtensionSettings = Record<string, boolean | string>;
@@ -279,14 +280,17 @@ function parseInstalled(value: unknown): InstalledExtension {
 
 export function parseHostExtensionsReport(value: unknown): HostExtensionsReport {
   if (!isPlainObject(value)) throw new Error("Invalid extensions report");
-  only(value, ["installed", "remoteInstalls", "browser", "tunnel", "autoCache"], "extensions report");
-  if (value.autoCache !== undefined && typeof value.autoCache !== "boolean") throw new Error("Invalid extensions report");
+  only(value, ["installed", "remoteInstalls", "browser", "tunnel", "autoCache", "autoCacheRefused"], "extensions report");
+  if ((value.autoCache !== undefined && typeof value.autoCache !== "boolean") || (value.autoCacheRefused !== undefined && value.autoCacheRefused !== true)) {
+    throw new Error("Invalid extensions report");
+  }
   if (typeof value.remoteInstalls !== "boolean" || !Array.isArray(value.installed) || value.installed.length > extensionLimits.installed + extensionLimits.connector) throw new Error("Invalid extensions report");
   const installed = value.installed.map(parseInstalled);
   if (new Set(installed.map(item => item.source)).size !== installed.length) throw new Error("An extension is reported twice");
   return { installed, remoteInstalls: value.remoteInstalls, ...(value.browser !== undefined ? { browser: parseHostBrowserStatus(value.browser) } : {}),
     ...(value.tunnel !== undefined ? { tunnel: parseHostTunnelStatus(value.tunnel) } : {}),
-    ...(typeof value.autoCache === "boolean" ? { autoCache: value.autoCache } : {}) };
+    ...(typeof value.autoCache === "boolean" ? { autoCache: value.autoCache } : {}),
+    ...(value.autoCacheRefused === true ? { autoCacheRefused: true as const } : {}) };
 }
 
 export type ExtensionAvailability = { status: "installed" } | { status: "auto-cache" } | { status: "other-version"; installed: string } | { status: "missing" };

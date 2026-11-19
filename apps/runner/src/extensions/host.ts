@@ -226,6 +226,10 @@ export class HostExtensions {
 
   lastKnown(workspaceId: string): WorkspaceExtensionsAnswer | undefined { return this.#lastKnown.get(workspaceId); }
 
+  get autoCacheRefused(): boolean {
+    return this.options.autoCacheRefused === true;
+  }
+
   get autoCacheDefault(): boolean {
     return this.options.remoteInstalls && this.options.autoCache === true && this.options.autoCacheRefused !== true && this.options.cache?.sandboxed === true;
   }
