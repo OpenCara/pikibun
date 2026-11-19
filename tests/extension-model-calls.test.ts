@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ProcessChannel, type LaunchHandlers, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
-import { completeLimits, completeRequestOf, completeWith, modelCallSources } from "../apps/runner/src/extensions/complete.js";
+import { completeAnswerOf, completeLimits, completeRequestOf, completeWith, modelCallSources } from "../apps/runner/src/extensions/complete.js";
 import { bundledOnlySources, managedSource } from "../apps/runner/src/extensions/piki/index.js";
 import type { CompleteAnswer, CompleteRequest } from "../apps/runner/src/extensions/protocol.js";
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
@@ -127,6 +127,11 @@ test("a model call is bounded: its shape is checked, its tokens and time are cap
   assert.equal(completeRequestOf({ source: "x", messages: Array.from({ length: 33 }, () => ({ role: "user", content: [] })) }), undefined);
   assert.equal(completeRequestOf({ source: "x", model: { provider: "", id: "m" }, messages: [{ role: "user", content: [] }] }), undefined);
   assert.equal(completeRequestOf({ source: "x", messages: [{ role: "user", content: [{ type: "image", data: "x", mimeType: "text/html" }] }] }), undefined);
+  const big = { type: "image", data: "a".repeat(8 * 1024 * 1024), mimeType: "image/png" };
+  assert.equal(completeRequestOf({ source: "x", messages: [{ role: "user", content: [big, big, big] }] }), undefined, "the request as a whole is bounded");
+  assert.deepEqual(completeAnswerOf({ content: [{ type: "text", text: "ok" }, { type: "thinking", thinking: "x" }], stopReason: "stop" }),
+    { content: [{ type: "text", text: "ok" }], stopReason: "stop" });
+  assert.equal(completeAnswerOf({ content: "ok" }), undefined);
   assert.deepEqual(completeRequestOf({ source: "x", maxTokens: 99_999, messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] }),
     { source: "x", maxTokens: 99_999, messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] });
 

@@ -3,6 +3,7 @@ import { createServer, Socket } from "node:net";
 import { ExtensionWorker } from "./worker.js";
 import type { CompleteAnswer, CompleteRequest, ExtensionMethod } from "./protocol.js";
 import { lineReader } from "./lines.js";
+import { completeAnswerOf } from "./complete.js";
 
 type Incoming = { id: number; method: ExtensionMethod; params: Record<string, unknown> } | { cancel: number }
   | { answered: number; value?: CompleteAnswer; error?: string };
@@ -91,8 +92,9 @@ serve(message => {
     const waiting = asked.get(message.answered);
     asked.delete(message.answered);
     if (!waiting) return;
-    if (message.error !== undefined || !message.value) waiting.reject(new Error(message.error ?? "The model call gave no answer"));
-    else waiting.resolve(message.value);
+    const answer = message.error === undefined ? completeAnswerOf(message.value) : undefined;
+    if (!answer) waiting.reject(new Error(typeof message.error === "string" ? message.error.slice(0, 2000) : "The model call gave no answer"));
+    else waiting.resolve(answer);
     return;
   }
   if ("cancel" in message) {

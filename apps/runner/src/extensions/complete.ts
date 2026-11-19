@@ -2,7 +2,8 @@ import type { Api, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { CompleteAnswer, CompleteRequest } from "./protocol.js";
 
-export const completeLimits = Object.freeze({ timeoutMs: 60_000, maxTokens: 4096, messages: 32, parts: 32, text: 256 * 1024, systemPrompt: 64 * 1024, answerText: 256 * 1024 });
+export const completeLimits = Object.freeze({ timeoutMs: 60_000, maxTokens: 4096, messages: 32, parts: 32, text: 256 * 1024, systemPrompt: 64 * 1024, answerText: 256 * 1024,
+  requestBytes: 20 * 1024 * 1024 });
 
 export const modelCallSources: ReadonlySet<string> = new Set(["piki:prompt-audit"]);
 
@@ -20,14 +21,20 @@ export function completeRequestOf(value: unknown): CompleteRequest | undefined {
     model = { provider: value.model.provider, id: value.model.id };
   }
   const messages: CompleteRequest["messages"] = [];
+  let size = typeof value.systemPrompt === "string" ? value.systemPrompt.length : 0;
   for (const message of value.messages) {
     if (!isObject(message) || message.role !== "user" || !Array.isArray(message.content) || message.content.length > completeLimits.parts) return undefined;
     const content: CompleteRequest["messages"][number]["content"] = [];
     for (const part of message.content) {
-      if (isObject(part) && part.type === "text" && typeof part.text === "string" && part.text.length <= completeLimits.text) content.push({ type: "text", text: part.text });
-      else if (isObject(part) && part.type === "image" && typeof part.data === "string" && part.data.length <= 16 * 1024 * 1024
-        && typeof part.mimeType === "string" && /^image\/[a-z0-9.+-]{1,64}$/.test(part.mimeType)) content.push({ type: "image", data: part.data, mimeType: part.mimeType });
-      else return undefined;
+      if (isObject(part) && part.type === "text" && typeof part.text === "string" && part.text.length <= completeLimits.text) {
+        content.push({ type: "text", text: part.text });
+        size += part.text.length;
+      } else if (isObject(part) && part.type === "image" && typeof part.data === "string" && part.data.length <= 16 * 1024 * 1024
+        && typeof part.mimeType === "string" && /^image\/[a-z0-9.+-]{1,64}$/.test(part.mimeType)) {
+        content.push({ type: "image", data: part.data, mimeType: part.mimeType });
+        size += part.data.length;
+      } else return undefined;
+      if (size > completeLimits.requestBytes) return undefined;
     }
     messages.push({ role: "user", content, ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp) ? { timestamp: message.timestamp } : {}) });
   }
