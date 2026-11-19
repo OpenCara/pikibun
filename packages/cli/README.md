@@ -88,7 +88,7 @@ npx pikibun@latest connect --unsafe-no-sandbox
 This needs only Git on your `PATH` (on macOS: `xcode-select --install` or `brew install git`). The connector prints the risks and asks you to type `unsandboxed` before starting:
 
 - Commands (`git`, `node`, `python`, ...) run directly as your user, as soon as the agent calls them, with access to your files, credentials (`~/.ssh`, cloud and Git config, Pi's auth) and network, and no CPU, memory or disk limits.
-- File tools are confined to each session folder by path checks only.
+- File tools are confined to each session folder by path checks only, except `read`, which takes a host path in a message that may run commands.
 - Only your own sessions, and those of members you grant host commands, run commands on it; everyone else's are refused.
 
 Nobody approves commands one by one: they run at once for you and the members you grant host commands. Pikibun labels the host **Unsandboxed** to everyone who can see it.

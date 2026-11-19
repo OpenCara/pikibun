@@ -41,7 +41,6 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       await hostCommands.require(attribution.initiatedBy, what);
       await calls.recheck(attribution);
     };
-    await recheck();
     return { attribution, file: await sandbox.readHostContent!(path, recheck) };
   };
   return [

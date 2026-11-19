@@ -14,6 +14,7 @@ import { defaultHostConfig } from "../packages/shared/src/host-config.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 import { EDIT_ROOT, editTarget, findText, grepText, lsText, prepareEditArguments, readText, runPiEdit } from "../apps/runner/src/pi-file-tools.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
+import { HOST_COMMANDS_RULE } from "../apps/runner/src/session/host-commands.js";
 import { wholeForScripts } from "../apps/runner/src/script-output.js";
 import { ToolCalls } from "../apps/runner/src/session/tools/calls.js";
 import type { ToolContext } from "../apps/runner/src/session/tools/context.js";
@@ -49,10 +50,10 @@ function api(metadata: Metadata, script = false): ToolExecutionApi {
     } } as unknown as ToolExecutionApi;
 }
 
-function pikibunTools(sandbox: SessionWorkspace, metadata = state()): (name: string) => ToolRegistration {
+function pikibunTools(sandbox: SessionWorkspace, metadata = state(), host?: Pick<ToolContext, "hostCommands">): (name: string) => ToolRegistration {
   const calls = new ToolCalls({ ownerId: "github:1", sandbox, hostCommands: {} as never, authorize: async () => {}, metadata: async () => structuredClone(metadata),
     hostConfig: async () => defaultHostConfig, requireOwnerTool: async () => {}, requireSenderTool: async () => {} });
-  const context = { sandbox, calls, onHost: false, hostConfig: async () => defaultHostConfig } as unknown as ToolContext;
+  const context = { sandbox, calls, onHost: !!host, ...host, hostConfig: async () => defaultHostConfig } as unknown as ToolContext;
   const registered = fileTools(context).map(wholeForScripts);
   return name => registered.find(tool => tool.name === name)!;
 }
@@ -305,6 +306,65 @@ test("edit stays off the host: Pi's own edit runs over the worktree, and no path
     assert.deepEqual(written, ["b\n"]);
   }
   assert.ok(!existsSync(EDIT_ROOT), "and nothing made the made-up directory");
+});
+
+test("a path outside the worktree is refused with why, on every backend, before it reaches the workspace", async () => {
+  const touched: string[] = [];
+  const sandbox = new Proxy({ isolated: true }, { get: (target, name) => name in target ? target[name as keyof typeof target]
+    : async () => { touched.push(String(name)); return { text: "x" }; } }) as unknown as SessionWorkspace;
+  const metadata = state();
+  const tool = pikibunTools(sandbox, metadata);
+  for (const path of ["/etc/hostname", "~/.bashrc", "~", "C:\\x", "\\\\server\\x"]) {
+    for (const [name, args] of [["read", { path }], ["ls", { path }], ["write", { path, content: "x" }], ["grep", { pattern: "x", path }], ["find", { pattern: "*", path }]] as const) {
+      await assert.rejects(tool(name).execute(args as never, api(metadata), {} as never),
+        (error: unknown) => error instanceof RunnerError && error.status === 400 && /is not a worktree path/.test(error.message)
+          && /Every file tool sees only the session's worktree/.test(error.message) && !/sandbox: /.test(error.message), `${name} ${path}`);
+    }
+  }
+  assert.deepEqual(touched, []);
+});
+
+test("in a session on the host, read takes a host path only in a message that may run host commands; the other file tools stay in the worktree", async t => {
+  const kind = workspaceKinds.find(item => item.name.startsWith("the unsandboxed host"))!;
+  if (kind.missing) return t.skip(kind.missing);
+  const { workspace, worktree } = await kind.open(t);
+  const outside = await mkdtemp(join(tmpdir(), "host-read-"));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writeFile(join(outside, "settings.json"), "{\"theme\":\"dark\"}\n");
+  await writeFile(join(workspace.home, "note.txt"), "from home\n");
+  await writeFile(join(worktree, "inside.txt"), "inside\n");
+  let allowed = true;
+  const asked: string[] = [];
+  const hostCommands = {
+    requireHostEnvironment: async () => {},
+    require: async (actorId: string, what: string) => { asked.push(actorId); if (!allowed) throw new RunnerError(403, `${what} ${HOST_COMMANDS_RULE}`); },
+  } as unknown as ToolContext["hostCommands"];
+  const run = async (name: string, args: Record<string, unknown>, change: (metadata: Metadata) => void = () => {}) => {
+    const metadata = state();
+    change(metadata);
+    const result = await pikibunTools(workspace, metadata, { hostCommands })(name).execute(args as never, api(metadata), {} as never);
+    return (result.output ?? []).flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
+  };
+  assert.match(pikibunTools(workspace, state(), { hostCommands })("read").description ?? "", /an absolute or ~ path, a file on this host/);
+  assert.equal(await run("read", { path: join(outside, "settings.json") }), "{\"theme\":\"dark\"}\n");
+  assert.equal(await run("read", { path: "~/note.txt" }), "from home\n", "~ is the HOME the session's commands get");
+  assert.equal(await run("read", { path: "inside.txt" }), "inside\n", "a worktree path reads as before");
+  assert.deepEqual(asked, ["github:2", "github:2"], "the host-command gate is asked for each host read, for who sent the message");
+  await assert.rejects(run("read", { path: outside }), /is a directory/);
+  await assert.rejects(run("read", { path: join(outside, "missing") }), /no such file or directory/);
+  for (const [name, args] of [["ls", { path: outside }], ["write", { path: join(outside, "x"), content: "x" }], ["grep", { pattern: "x", path: outside }]] as const) {
+    await assert.rejects(run(name, args), (error: unknown) => error instanceof RunnerError && error.status === 400
+      && /is not a worktree path/.test(error.message) && /command tool such as python or node/.test(error.message), name);
+  }
+  await assert.rejects(run("read", { path: join(outside, "settings.json") }, metadata => { metadata.runs.r1!.options = { access: "read" } as never; }),
+    (error: unknown) => error instanceof RunnerError && error.status === 403 && /Read-only message/.test(error.message), "a Read-only message reads no host file");
+  await assert.rejects(run("read", { path: join(outside, "settings.json") }, metadata => { metadata.runs.r1!.mode = "ask"; }),
+    (error: unknown) => error instanceof RunnerError && error.status === 403, "nor does a side question");
+  allowed = false;
+  await assert.rejects(run("read", { path: join(outside, "settings.json") }),
+    (error: unknown) => error instanceof RunnerError && error.status === 403 && /Reading a file outside the worktree runs on the host's own machine/.test(error.message),
+    "a sender without host commands reads no host file");
+  assert.equal(await run("read", { path: "inside.txt" }), "inside\n", "but still reads the worktree");
 });
 
 test("edit through the tool: a refused path reaches neither the sandbox nor Pi, and the call's own arguments are repaired as Pi repairs them", async () => {

@@ -294,7 +294,8 @@ Agent work for sessions on this host runs directly as "${userInfo().username}" o
     calls them: nobody approves them one by one. They can read and change anything you can,
     including ~/.ssh, cloud and Git credentials and Pi's auth.
   - Commands have unrestricted network access and no CPU, memory or disk limits.
-  - File tools are confined to each session folder by path checks only, not isolation.
+  - File tools are confined to each session folder by path checks only, not isolation;
+    read also takes a host path in a message that may run commands.
   - Prompts and repository content can try to trick the agent.
   - Only you, and members you grant host commands, run commands here; everyone else's
     sessions on this host are refused them.
