@@ -123,6 +123,8 @@ export interface HostExtensionsReport {
   remoteInstalls: boolean;
   browser?: HostBrowserStatus;
   tunnel?: HostTunnelStatus;
+  autoCache?: boolean;
+  autoCacheRefused?: true;
 }
 
 export type ExtensionSettings = Record<string, boolean | string>;
@@ -278,12 +280,17 @@ function parseInstalled(value: unknown): InstalledExtension {
 
 export function parseHostExtensionsReport(value: unknown): HostExtensionsReport {
   if (!isPlainObject(value)) throw new Error("Invalid extensions report");
-  only(value, ["installed", "remoteInstalls", "browser", "tunnel"], "extensions report");
+  only(value, ["installed", "remoteInstalls", "browser", "tunnel", "autoCache", "autoCacheRefused"], "extensions report");
+  if ((value.autoCache !== undefined && typeof value.autoCache !== "boolean") || (value.autoCacheRefused !== undefined && value.autoCacheRefused !== true)) {
+    throw new Error("Invalid extensions report");
+  }
   if (typeof value.remoteInstalls !== "boolean" || !Array.isArray(value.installed) || value.installed.length > extensionLimits.installed + extensionLimits.connector) throw new Error("Invalid extensions report");
   const installed = value.installed.map(parseInstalled);
   if (new Set(installed.map(item => item.source)).size !== installed.length) throw new Error("An extension is reported twice");
   return { installed, remoteInstalls: value.remoteInstalls, ...(value.browser !== undefined ? { browser: parseHostBrowserStatus(value.browser) } : {}),
-    ...(value.tunnel !== undefined ? { tunnel: parseHostTunnelStatus(value.tunnel) } : {}) };
+    ...(value.tunnel !== undefined ? { tunnel: parseHostTunnelStatus(value.tunnel) } : {}),
+    ...(typeof value.autoCache === "boolean" ? { autoCache: value.autoCache } : {}),
+    ...(value.autoCacheRefused === true ? { autoCacheRefused: true as const } : {}) };
 }
 
 export type ExtensionAvailability = { status: "installed" } | { status: "auto-cache" } | { status: "other-version"; installed: string } | { status: "missing" };
@@ -344,12 +351,13 @@ export interface ExtensionsSync {
 export interface ExtensionsSyncAnswer {
   requests: ExtensionRequest[];
   managed?: ManagedExtensionPin[];
+  reportAutoCache?: true;
 }
 
 export interface WorkspaceExtensionsAnswer {
   extensions: WorkspaceExtension[];
   automaticTools: boolean;
-  autoCache?: true;
+  autoCache?: boolean;
   toolGroups?: Record<string, MemberToolGroup>;
   ownerPrivate?: true;
 }
@@ -362,7 +370,8 @@ export function parseExtensionsSyncAnswer(value: unknown): ExtensionsSyncAnswer 
     if (!isPlainObject(item) || Object.keys(item).sort().join() !== "action,id,source" || typeof item.id !== "string" || !REQUEST_ID.test(item.id)
       || (item.action !== "install" && item.action !== "remove") || typeof item.source !== "string") throw new Error("Invalid extension request");
     return { id: item.id, action: item.action, source: normalizeExtensionSource(item.source) };
-  }), ...(value.managed !== undefined ? { managed: parseManagedExtensions(value.managed) } : {}) };
+  }), ...(value.managed !== undefined ? { managed: parseManagedExtensions(value.managed) } : {}),
+    ...(value.reportAutoCache === true ? { reportAutoCache: true as const } : {}) };
 }
 
 export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensionsAnswer {
@@ -370,7 +379,7 @@ export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensi
   if (value.autoCache !== undefined && typeof value.autoCache !== "boolean") throw new Error("Invalid workspace extensions");
   const toolGroups = parseMemberToolGroups(value.toolGroups);
   return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools,
-    ...(value.autoCache === true ? { autoCache: true as const } : {}), ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
+    ...(typeof value.autoCache === "boolean" ? { autoCache: value.autoCache } : {}), ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
     ...(value.ownerPrivate === true ? { ownerPrivate: true as const } : {}) };
 }
 

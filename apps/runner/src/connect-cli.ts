@@ -60,13 +60,15 @@ This machine's own setup, when the defaults don't fit:
   --cpu-limit PERCENT      Windows sandbox: share of this machine's CPU per step (50)
   --no-remote-installs     Refuse extension installs and removals asked for in Pikibun;
                            install them here with "pikibun extensions" instead
-  --managed-extensions     Run Pikibun's own extensions (piki:pr-flow, ...) at the version
-                           Pikibun pins, installed from npm, in place of the copies built
-                           into this connector, which stay the fallback. Not with
-                           --no-remote-installs
-  --auto-cache-extensions  On Linux and macOS sandboxed hosts, fetch and verify locked npm:
-                           workspace extensions on demand into a shared cache, running them
-                           only inside each session's sandbox. Not with --no-remote-installs
+  --no-managed-extensions  Run Pikibun's own extensions (piki:pr-flow, ...) only from the
+                           copies built into this connector. By default sandboxed hosts run
+                           the version Pikibun pins, installed from npm, with the built-in
+                           copies as the fallback (--managed-extensions turns that on elsewhere)
+  --no-auto-cache-extensions
+                           Don't fetch locked npm: workspace extensions on demand. By default
+                           Linux and macOS sandboxed hosts fetch and verify them into a shared
+                           cache and run them only inside each session's sandbox; the host's
+                           owner can also turn this off in Pikibun. Both need remote installs
 
 Development:
   --allow-insecure-loopback  Permit HTTP/WS only on localhost/127.0.0.1/[::1]
@@ -210,11 +212,14 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     "state-dir": { type: "string" }, "identity-dir": { type: "string" }, "pi-agent-dir": { type: "string" }, model: { type: "string", multiple: true },
     resources: { type: "string" }, "allow-insecure-loopback": { type: "boolean" },
     "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" }, "no-remote-installs": { type: "boolean" },
-    "managed-extensions": { type: "boolean" }, "auto-cache-extensions": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
+    "managed-extensions": { type: "boolean" }, "auto-cache-extensions": { type: "boolean" },
+    "no-managed-extensions": { type: "boolean" }, "no-auto-cache-extensions": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
     "experimental-sandbox": { type: "boolean" }, "memory-limit": { type: "string" }, "process-limit": { type: "string" }, "cpu-limit": { type: "string" },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
   process.stderr.write(movedOptionsNotice(MOVED_OPTIONS.filter(name => values[name] !== undefined)));
+  if (values["managed-extensions"] && values["no-managed-extensions"]) throw new ConnectorSetupError("Choose one of --managed-extensions and --no-managed-extensions.");
+  if (values["auto-cache-extensions"] && values["no-auto-cache-extensions"]) throw new ConnectorSetupError("Choose one of --auto-cache-extensions and --no-auto-cache-extensions.");
   if (values["managed-extensions"] && values["no-remote-installs"]) process.stderr.write("--managed-extensions is ignored with --no-remote-installs: Pikibun's own extensions run from the copies built into this connector.\n");
   if (values["auto-cache-extensions"] && values["no-remote-installs"]) process.stderr.write("--auto-cache-extensions is ignored with --no-remote-installs: install extensions on this host with pikibun extensions.\n");
   const unsandboxed = values["unsafe-no-sandbox"] === true;
@@ -272,8 +277,9 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const connector = createConnector({
     dataDir, identityDir, ...(privateHome ? { privateHome } : {}),
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
-    remoteExtensionInstalls: values["no-remote-installs"] !== true, managedExtensions: values["managed-extensions"] === true,
-    autoCacheExtensions: values["auto-cache-extensions"] === true,
+    remoteExtensionInstalls: values["no-remote-installs"] !== true,
+    ...(values["managed-extensions"] || values["no-managed-extensions"] ? { managedExtensions: values["managed-extensions"] === true } : {}),
+    ...(values["auto-cache-extensions"] || values["no-auto-cache-extensions"] ? { autoCacheExtensions: values["auto-cache-extensions"] === true } : {}),
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
     capabilities: hostCapabilities,
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },

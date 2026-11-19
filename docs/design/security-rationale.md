@@ -168,8 +168,9 @@ connector fetched since, at the version Pikibun's control plane pins. What bound
   (`managedSource`: `pr-flow`, `context-files`) or names one it doesn't know. The extensions that run a forge's
   command with the host's sign-in, switch the session's own tools, or call a model with the host's keys (the prompt
   audit) are connector code, and a pin for one is ignored.
-- **The host's owner decides.** It is off unless the connector starts with `--managed-extensions`, and
-  `--no-remote-installs` refuses it as it refuses every install asked for in Pikibun. A connector run from source never
+- **The host's owner decides.** It is on by default only where installed extensions run in the session's sandbox
+  (Linux, and macOS with Seatbelt; #438 phase 2), off elsewhere unless the connector starts with `--managed-extensions`,
+  off with `--no-managed-extensions`, and `--no-remote-installs` refuses it as it refuses every install asked for in Pikibun. A connector run from source never
   uses pins.
 - **Versions only go up.** A host runs the newest of the pinned package, the newest managed version it has run before
   and its bundled copy (whose version is the extension's latest release tag at the connector release's commit), and installs a
@@ -180,15 +181,15 @@ connector fetched since, at the version Pikibun's control plane pins. What bound
 
 What it doesn't protect against: outside a sandboxed session on Linux or macOS, a managed package runs in a process of its own but as the
 host's user, outside the sandbox ([extension isolation](extension-isolation.md)), and a version reaches every host that
-opted in within a sync. That is why it stays opt-in until extensions run in the sandbox on every platform.
+opted in within a sync. That is why it stays opt-in on hosts without the sandbox until extensions run in it on every platform.
 
 ## Sandboxed auto-cached workspace extensions
 
 `apps/runner/src/extensions/cache.ts` (`ExtensionCache`, `sandboxExtensionInstaller`, `helperExtensionInstaller`,
 `verifyCachedNpmTree`), `host.ts` (`ensureCached`, `peekCached`), `apps/server/src/npm-registry.ts`; the plan is
-[Decoupling extensions from connectors](extension-planes.md) (#438). On a Linux or macOS sandboxed host whose owner opts
-in (`pikibun connect --auto-cache-extensions` or `PATCH /api/connectors/:id/extensions` with `{ autoCache: true }`), a
-sandboxed session fetches and caches an enabled `npm:<package>@<version>` workspace extension on demand without a
+[Decoupling extensions from connectors](extension-planes.md) (#438). On a Linux or macOS sandboxed host (by default since
+phase 2; its owner turns it off with `pikibun connect --no-auto-cache-extensions`, which wins, or `PATCH
+/api/connectors/:id/extensions` with `{ autoCache: false }`), a sandboxed session fetches and caches an enabled `npm:<package>@<version>` workspace extension on demand without a
 per-connector install request. What bounds that:
 
 - **Two parties lock the package.** When a workspace adds an `npm:` extension, the Pikibun server fetches its manifest

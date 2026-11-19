@@ -27,11 +27,14 @@ export async function workspaceExtensionLock(env: Env, workspaceId: string, pack
     .bind(workspaceId, packageKey).first();
 }
 
-export async function connectorExtensionSettings(env: Env, connectorId: string): Promise<{ automaticTools: boolean; autoCache: boolean }> {
-  const row = await env.DB.query<{ automatic_tools: number | string; auto_cache: number | string }>(
-    'SELECT automatic_tools, auto_cache FROM connector_extension_settings WHERE connector_id = ?')
+export type AutoCacheChoice = 'on' | 'off' | 'host';
+
+export async function connectorExtensionSettings(env: Env, connectorId: string): Promise<{ automaticTools: boolean; autoCache: AutoCacheChoice }> {
+  const row = await env.DB.query<{ automatic_tools: number | string; auto_cache: number | string; auto_cache_off: number | string }>(
+    'SELECT automatic_tools, auto_cache, auto_cache_off FROM connector_extension_settings WHERE connector_id = ?')
     .bind(connectorId).first();
-  return { automaticTools: Number(row?.automatic_tools) === 1, autoCache: Number(row?.auto_cache) === 1 };
+  const autoCache: AutoCacheChoice = Number(row?.auto_cache_off) === 1 ? 'off' : Number(row?.auto_cache) === 1 ? 'on' : 'host';
+  return { automaticTools: Number(row?.automatic_tools) === 1, autoCache };
 }
 
 export async function automaticTools(env: Env, connectorId: string): Promise<boolean> {

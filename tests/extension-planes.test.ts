@@ -240,6 +240,48 @@ test("workspace npm extensions lock registry integrity, populate server-verified
   );
   assert.equal(wsAAfterPoison.registryMetadata?.["npm:@acme/pi-helper@1.0.0"]?.description, "Verified registry description.");
 
+  const syncAnswer = await json<{ reportAutoCache?: boolean }>(await linuxHost.self("extensions", { report: { remoteInstalls: true, installed: [], autoCache: true }, results: [] }));
+  assert.equal(syncAnswer.reportAutoCache, true);
+  await json(await winHost.self("extensions", { report: { remoteInstalls: true, installed: [], autoCache: true }, results: [] }));
+  const hostDefault = await json<{ hosts: { id: string; availability?: Record<string, ExtensionAvailability> }[] }>(
+    await alice.request("GET", `/api/workspaces/${wsA.id}/extensions`),
+  );
+  assert.deepEqual(hostDefault.hosts.find(item => item.id === linuxHost.connectorId)?.availability?.["npm:@acme/pi-helper@1.0.0"], { status: "auto-cache" });
+  assert.deepEqual(hostDefault.hosts.find(item => item.id === winHost.connectorId)?.availability?.["npm:@acme/pi-helper@1.0.0"], { status: "missing" });
+  const hostPage = await json<{ autoCache: boolean; autoCacheChoice: string; hostAutoCache?: boolean }>(await alice.request("GET", `/api/connectors/${linuxHost.connectorId}/extensions`));
+  assert.deepEqual([hostPage.autoCache, hostPage.autoCacheChoice, hostPage.hostAutoCache], [true, "host", true]);
+
+  assert.deepEqual(await json(await alice.request("PATCH", `/api/connectors/${linuxHost.connectorId}/extensions`, { autoCache: false })),
+    { automaticTools: false, autoCache: false });
+  const offAnswer = parseWorkspaceExtensionsAnswer(await json(await linuxHost.self("extensions/workspace", {
+    workspaceId: wsA.id, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true,
+  })));
+  assert.equal(offAnswer.autoCache, false);
+  const hostOff = await json<{ hosts: { id: string; availability?: Record<string, ExtensionAvailability> }[] }>(
+    await alice.request("GET", `/api/workspaces/${wsA.id}/extensions`),
+  );
+  assert.deepEqual(hostOff.hosts.find(item => item.id === linuxHost.connectorId)?.availability?.["npm:@acme/pi-helper@1.0.0"], { status: "missing" });
+  assert.deepEqual(await json(await alice.request("PATCH", `/api/connectors/${linuxHost.connectorId}/extensions`, { autoCache: null })),
+    { automaticTools: false, autoCache: null });
+  const backToHost = parseWorkspaceExtensionsAnswer(await json(await linuxHost.self("extensions/workspace", {
+    workspaceId: wsA.id, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true,
+  })));
+  assert.equal(backToHost.autoCache, undefined);
+
+  await json(await alice.request("PATCH", `/api/connectors/${linuxHost.connectorId}/extensions`, { autoCache: true }));
+  await json(await linuxHost.self("extensions", { report: { remoteInstalls: true, installed: [], autoCache: false, autoCacheRefused: true }, results: [] }));
+  const refusing = await json<{ hosts: { id: string; availability?: Record<string, ExtensionAvailability> }[] }>(
+    await alice.request("GET", `/api/workspaces/${wsA.id}/extensions`),
+  );
+  assert.deepEqual(refusing.hosts.find(item => item.id === linuxHost.connectorId)?.availability?.["npm:@acme/pi-helper@1.0.0"], { status: "missing" },
+    "--no-auto-cache-extensions wins over the setting, so the extension stays installable");
+  const refusingPage = await json<{ autoCache: boolean; hostAutoCacheRefused?: boolean; workspaces: { extensions: { source: string; availability: ExtensionAvailability }[] }[] }>(
+    await alice.request("GET", `/api/connectors/${linuxHost.connectorId}/extensions`));
+  assert.equal(refusingPage.autoCache, false);
+  assert.equal(refusingPage.hostAutoCacheRefused, true);
+  assert.deepEqual(refusingPage.workspaces.flatMap(item => item.extensions).find(item => item.source === "npm:@acme/pi-helper@1.0.0")?.availability, { status: "missing" });
+  await json(await alice.request("PATCH", `/api/connectors/${linuxHost.connectorId}/extensions`, { autoCache: null }));
+
   await json(await linuxHost.self("extensions", { report: { remoteInstalls: true, installed: [] }, results: [] }));
   await json(await winHost.self("extensions", { report: { remoteInstalls: true, installed: [] }, results: [] }));
   assert.deepEqual(await json(await alice.request("PATCH", `/api/connectors/${linuxHost.connectorId}/extensions`, { autoCache: true })),
@@ -510,6 +552,14 @@ test("Plane 2 vs Plane 3: auto-cached extensions run in sandboxed sessions, resp
   const lockedList: WorkspaceExtension[] = parseWorkspaceExtensions([{ source: pkgSource, enabled: true, integrity: pkgIntegrity }]);
   assert.deepEqual(await noRemoteHost.ensureCached(lockedList, true), []);
   assert.equal(installs, 0);
+
+  const defaultOnHost = new HostExtensions(store, { remoteInstalls: true, autoCache: true, cache, now: () => now, log: () => {} });
+  assert.equal(defaultOnHost.autoCacheDefault, true);
+  assert.deepEqual([defaultOnHost.canAutoCache(), defaultOnHost.canAutoCache(true), defaultOnHost.canAutoCache(false)], [true, true, false]);
+  const refusedHost = new HostExtensions(store, { remoteInstalls: true, autoCache: false, autoCacheRefused: true, cache, now: () => now, log: () => {} });
+  assert.equal(refusedHost.autoCacheDefault, false);
+  assert.equal(refusedHost.autoCacheRefused, true);
+  assert.deepEqual([refusedHost.canAutoCache(), refusedHost.canAutoCache(true)], [false, false], "--no-auto-cache-extensions wins over Pikibun's setting");
 
   const defaultOffHost = new HostExtensions(store, { remoteInstalls: true, cache, now: () => now, log: () => {} });
   await defaultOffHost.load();

@@ -1,8 +1,8 @@
 # Decoupling extensions from connectors (#438)
 
-Status: phase 1 is built; phases 2 to 4 are a plan. Each phase below is one pull request, and phase 2 stops for the
-owner's go-ahead before changing a default for every sandboxed host. See [Phase 1 as built](#phase-1-as-built) where the
-code settles details of the text below.
+Status: phases 1 and 2 are built (phase 2 with the owner's go-ahead); phases 3 and 4 are a plan. Each phase below is one
+pull request. See [Phase 1 as built](#phase-1-as-built) and [Phase 2 as built](#phase-2-as-built) where the code settles
+details of the text below.
 
 ## Why
 
@@ -124,8 +124,8 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
    - Auto-provisioning of a workspace's `npm:` extension runs **only** when all five hold:
      1. `source` is `npm:<package>@<version>` with a `sha512-...` `integrity` lock;
      2. `remoteInstalls` is true (not `pikibun connect --no-remote-installs`);
-     3. the host's `autoCacheExtensions` option is enabled (opt-in in phase 1 via `--auto-cache-extensions` and
-        `HostConfig.autoCacheExtensions`; on by default for sandboxed hosts in phase 2 after owner go-ahead);
+     3. auto-caching is on for the host: on by default for sandboxed hosts since phase 2, unless its connector runs with
+        `--no-auto-cache-extensions` or its owner turned it off in Pikibun ([Phase 2 as built](#phase-2-as-built));
      4. the connector has an OS sandbox for describing and installing (`Sandbox` on Linux, `HelperWorkspace` over
         `SeatbeltBackend` on macOS);
      5. the session itself opens extensions on a sandboxed channel (`channel.sandboxed === true`, so never on an
@@ -227,7 +227,7 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
 | Phase | What lands | Default changed? |
 |---|---|---|
 | 1 | `sessionToolSwitches: true` on `/api/connectors/self/extensions/workspace` (lifting the 31/32 `connectorPikiExtensions` ceiling for new switches and fixing pre-report switch races); `sub-agents` enabled in `managedSource`; machine-wide `ExtensionCache`; `workspace_extensions.integrity` and `extension_descriptions` migrations; Plane 2 sandboxed auto-provisioning behind `--auto-cache-extensions` / `connector_extension_settings.auto_cache` (off by default) | No |
-| 2 | *(After owner go-ahead)* Turn on `autoCacheExtensions` and `managedExtensions` by default on sandboxed Linux and macOS hosts where `remoteInstalls` is true; update workspace/host availability UI to show auto-cached readiness | **Yes** — stops for decision first |
+| 2 | *(Owner go-ahead given)* Turn on `autoCacheExtensions` and `managedExtensions` by default on sandboxed Linux and macOS hosts where `remoteInstalls` is true; update workspace/host availability UI to show auto-cached readiness | **Yes** — stops for decision first |
 | 3 | `BrokeredToolDefinition` `inputSchema` (bounded JSON Schema) and `readOnlySafe`; Plane 1 Workspace Remote MCP servers on the Pikibun server with vault credentials | No |
 | 4 | Policy-gated `complete` RPC on `ExtensionChannel` so `piki:prompt-audit` (and opted-in `requiredExtensions`) run in `ProcessChannel` without host keys; credentialed CLI rules on `ProgramToolDefinition` (`gh`, `glab`, `az`) | No |
 
@@ -247,6 +247,29 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   with `{ autoCache: boolean }`, audited as `connector.extension.auto_cache`, and carried to connectors sending
   `extensionLocks: true` as `WorkspaceExtensionsAnswer.autoCache`) alongside `pikibun connect --auto-cache-extensions`,
   rather than on `HostConfig`, which older connectors parse with a fixed set of keys.
+
+## Phase 2 as built
+
+- **The default is the connector's, the override the owner's.** A connector whose sessions open extensions in the
+  sandbox (Linux with bubblewrap, macOS with Seatbelt) turns `autoCache` and `managed` on unless started with
+  `--no-auto-cache-extensions` / `--no-managed-extensions` (`--auto-cache-extensions` / `--managed-extensions` still turn
+  them on, and are the only way on hosts without the sandbox, where auto-caching still never runs). Local `--no-...`
+  wins over Pikibun's setting, since it is the host owner's machine: the connector reports it as
+  `HostExtensionsReport.autoCacheRefused`, and the Pikibun server then never reports `"auto-cache"` for that host, even
+  with the setting on, so its extensions stay installable there.
+- **The Pikibun server's setting has three states**: `connector_extension_settings.auto_cache = 1` (on),
+  `auto_cache_off = 1` (off), neither (follow the host's default). `PATCH /api/connectors/:id/extensions` takes
+  `{ autoCache: true | false | null }`; `WorkspaceExtensionsAnswer.autoCache` carries `true` or `false` to connectors
+  sending `extensionLocks: true` and is left out for the host's default. Phase 1 connectors read only `true`, so an
+  explicit off leaves them at their own default, which was off.
+- **The host reports its default** as `HostExtensionsReport.autoCache`, only once the Pikibun server's sync answer says
+  `reportAutoCache: true`, because older Pikibun servers refuse a report with a key they don't know. Availability is
+  `"auto-cache"` where the setting is on, or follows the host and the host reports `autoCache: true`, and the host is
+  sandboxed Linux or macOS with remote installs.
+- **UI**: the workspace page shows **Fetched on first use** for such hosts, offers no **Install** there, and falls back
+  to the Pikibun server's verified `registryMetadata` description before any host reports the extension; the host page
+  has **Fetch workspace extensions in the sandbox** (host default, on, off) and lists the workspace extensions it will
+  fetch instead of as missing.
 - **Plane 3 isolation on the same machine:** `ExtensionCache` (`apps/runner/src/extensions/cache.ts`) stays separate from
   `ExtensionStore` (`sources.json`), and `RunnerSession` consults `ensureCached` / `peekCached` only when the session's
   own extension channel runs inside the OS sandbox (`sandboxedExtensionChannel()`), so an on-host session on the same

@@ -28,7 +28,7 @@ export { audienceSharing, registerAudienceSharing, requireOperationTool, require
 export { admissionExpired, issueRunAdmission } from './run-admissions.js';
 export {
   addNeededExtensions, automaticTools, connectorExtensionSettings, defaultWorkspaceExtensionStatements, removeWorkspaceExtensionStatement, saveWorkspaceExtensionStatement,
-  sessionToolSources, workspaceExtensionLock, workspaceExtensions,
+  sessionToolSources, workspaceExtensionLock, workspaceExtensions, type AutoCacheChoice,
 } from './extension-policy.js';
 export { createToolGroup, deleteToolGroup, memberToolGroup, memberToolGroups, requireSessionTool, setMemberToolGroup, updateToolGroup } from './tool-groups.js';
 

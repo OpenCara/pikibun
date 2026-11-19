@@ -4,11 +4,11 @@ import {
   type PikiExtensionInfo,
 } from "../../../../packages/shared/src/piki-extensions";
 import {
-  descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, workspaceTools, type ExtensionOffer, type ShadowKind, type WorkspaceTool, type WorkspaceTools,
+  descriptionSummary, extensionDescription, extensionLabel, extensionOffer, PIKIBUN, workspaceTools, type ExtensionOffer, type ShadowKind, type WorkspaceTool, type WorkspaceTools,
 } from "../../../../packages/shared/src/workspace-tools";
 import {
   extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings,
-  type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension,
+  type HostExtensionsReport, type InstalledExtension, type RegistryExtensionMetadata, type WorkspaceExtension,
 } from "../../../../packages/shared/src/host-extensions";
 import { AUTO_MODE_SOURCE, autoModeModels, autoModelsText } from "../../../../packages/shared/src/auto-mode";
 import { segment, type Workspace } from "../shared";
@@ -25,7 +25,7 @@ interface ExtensionHost {
   id: string; name: string; ownerId: string; ownerName: string;
   report?: HostExtensionsReport; reportedAt?: string; availability?: Record<string, ExtensionAvailability>;
 }
-interface ExtensionsResponse { extensions: WorkspaceExtension[]; hosts: ExtensionHost[]; admin: boolean }
+interface ExtensionsResponse { extensions: WorkspaceExtension[]; hosts: ExtensionHost[]; admin: boolean; registryMetadata?: Record<string, RegistryExtensionMetadata> }
 
 
 function flagsOf(source: string, hosts: readonly ExtensionHost[]): ExtensionFlag[] | undefined {
@@ -44,6 +44,7 @@ function AvailabilityBadge(props: { availability?: ExtensionAvailability; source
     <If when={props.availability} else={<Badge>Not reported</Badge>}>
       {availability => availability().status === "installed" ? <Badge tone="success">{isPikiExtensionSource(props.source) ? "Available" : "Installed"}</Badge>
         : isPikiExtensionSource(props.source) ? <Badge tone="warning">Update its connector</Badge>
+        : availability().status === "auto-cache" ? <Badge tone="success">Fetched on first use</Badge>
         : availability().status === "other-version" ? <Badge tone="warning">{`${(availability() as { installed: string }).installed.slice((availability() as { installed: string }).installed.lastIndexOf("@") + 1)} installed`}</Badge>
         : <Badge>Missing</Badge>}
     </If>
@@ -100,12 +101,14 @@ function ToolsOverview(props: { usable: WorkspaceTools }) {
   );
 }
 
-function extensionHint(offer: ExtensionOffer | undefined, shadowed?: ReadonlyMap<string, string>, limit = 300, note?: string, extra?: string): string {
+function extensionHint(offer: ExtensionOffer | undefined, shadowed?: ReadonlyMap<string, string>, limit = 300, note?: string, extra?: string, registered?: string): string {
   const parts: string[] = [];
   if (offer?.description) parts.push(`${descriptionSummary(offer.description, limit)}${note ? ` ${note}` : ""}`);
   if (offer) {
     const names = offer.tools.map(tool => (shadowed?.has(tool.name) ? `${tool.name} (left out)` : tool.name));
     parts.push(names.length ? `${names.length === 1 ? "Tool" : "Tools"}: ${names.join(", ")}` : "No tools: prompt text or hooks only");
+  } else if (registered) {
+    parts.push(`${descriptionSummary(registered, limit)}`, "Its tools show here once a host that runs it reports them.");
   } else parts.push("What it is and its tools show here once a host that has it installed reports them.");
   if (extra) parts.push(extra);
   return parts.join("\n");
@@ -161,7 +164,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
   };
   return (
     <Section title="Extensions" testID="workspace-extensions" info={<View style={{ gap: 8 }}>
-      <Note>Pi extensions add tools, prompt text and hooks to this workspace's sessions. A session runs those enabled here that its host has installed at the same version: its host's owner installs them there, from the host's page or with pikibun extensions.</Note>
+      <Note>Pi extensions add tools, prompt text and hooks to this workspace's sessions. A session runs those enabled here that its host has installed at the same version: its host's owner installs them there, from the host's page or with pikibun extensions. Sandboxed Linux and macOS hosts fetch npm: extensions themselves on first use, checked against the digest Pikibun locked from npm when the extension was added, and run them only in the session's sandbox.</Note>
       <Note>Tools sessions can use lists every tool they get: Pikibun's own, which the session-tool extensions below add, the built-in code mode, and those of the extensions enabled here, as hosts that have them report them.</Note>
       <Note>Pikibun's own extensions are added as the workspace needs them: Git, GitHub and the forge's command-line tool with its first repository there, a document source's reader with its first source of that kind. Add the others (Node.js, Python, the browser, scheduled prompts, ...) with Add extension.</Note>
       <Note>Installed extensions run in the session's sandbox on Linux hosts, and on macOS hosts with the sandbox, within the network access above, and their tools run for anyone who may send the session messages. Elsewhere, and for Pikibun's own, they run on the host, as its owner's OS user, outside the sandbox: their tool calls run like host commands, for the host's owner and members granted host commands, and for everyone else only where the host's owner lets every session run them.</Note>
@@ -191,13 +194,15 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                   const controlPlane = () => cli()?.controlPlane === true;
                   const offer = () => extensionOffer(extension().source, installed());
                   const hostsWithIt = () => current().hosts.filter(host => host.availability?.[extension().source]?.status === "installed").length;
+                  const hostsFetching = () => current().hosts.filter(host => host.availability?.[extension().source]?.status === "auto-cache").length;
+                  const registered = () => (offer() ? undefined : extensionDescription(extension().source, installed(), current().registryMetadata));
                   const missing = () => (extension().enabled ? missingNeeds(extension().source, current().extensions) : []);
                   const needsNote = () => missing().length ? `Does nothing without ${missing().map(item => item.title).join(" and ")}, which ${missing().length === 1 ? "is" : "are"} off here` : undefined;
                   return (
                     <CollapsibleRow leading={<Icon name={controlPlane() ? "sparkles" : "tool"} size={16} color={palette().muted} />} title={cli() ? `${cli()!.title} · ${extension().source}` : extension().source}
                       hint={controlPlane() ? `${descriptionSummary(cli()!.description, 300)}\nRuns in Pikibun itself: hosts install nothing`
                         : extensionHint(offer(), extension().enabled ? shadowedOf(extension().source) : undefined, 300, undefined,
-                        [`${cli() ? "On" : "Installed on"} ${hostsWithIt()} of ${current().hosts.length} ${current().hosts.length === 1 ? "host" : "hosts"}`, needsNote()].filter(Boolean).join("\n"))}
+                        [`${cli() ? "On" : "Installed on"} ${hostsWithIt()} of ${current().hosts.length} ${current().hosts.length === 1 ? "host" : "hosts"}${hostsFetching() ? `; ${hostsFetching()} more fetch it in their sandbox on first use` : ""}`, needsNote()].filter(Boolean).join("\n"), registered())}
                       trailing={<Badge tone={extension().enabled ? "success" : "neutral"}>{extension().enabled ? "On" : "Off"}</Badge>}>
                       <Each of={missing()} key={item => item.source}>
                         {needed => (
@@ -221,7 +226,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                       <Each of={controlPlane() ? [] : current().hosts} key={host => host.id}>
                         {host => {
                           const availability = () => host().availability?.[extension().source];
-                          const installable = () => !cli() && host().ownerId === user.id && host().report?.remoteInstalls === true && availability() && availability()!.status !== "installed";
+                          const installable = () => !cli() && host().ownerId === user.id && host().report?.remoteInstalls === true && availability() && availability()!.status !== "installed" && availability()!.status !== "auto-cache";
                           return (
                             <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
                               <Icon name="server" size={16} color={palette().muted} />

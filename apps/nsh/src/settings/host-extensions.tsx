@@ -26,6 +26,10 @@ interface HostExtensionsResponse {
   role: "owner" | "admin";
   report?: HostExtensionsReport; reportedAt?: string;
   automaticTools: boolean;
+  autoCache?: boolean;
+  autoCacheChoice?: "on" | "off" | "host";
+  hostAutoCache?: boolean;
+  hostAutoCacheRefused?: boolean;
   requests: HostRequest[];
   workspaces: { id: string; name: string; shared: boolean; extensions: { source: string; availability: ExtensionAvailability }[] }[];
 }
@@ -206,6 +210,22 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
       resource.refresh();
     }, automaticTools ? "Every session on this host may now run its workspace's extension tools." : "Extension tools on this host run only for you and members you granted host commands again.");
   }
+  function setAutoCache(choice: "on" | "off" | "host") {
+    if (action.busy() || revoked() || choice === (data()?.autoCacheChoice ?? "host")) return;
+    void action.run(async () => {
+      await session().api(path(), { method: "PATCH", body: { autoCache: choice === "host" ? null : choice === "on" } });
+      resource.refresh();
+    }, choice === "off" ? "Sessions on this host no longer fetch npm: extensions themselves: install them here instead."
+      : choice === "on" ? "Sandboxed sessions on this host fetch and verify locked npm: extensions on first use."
+      : "This host follows its connector's default again.");
+  }
+  const autoCacheHint = () => {
+    const sandboxed = props.connector.capabilities.sandbox === true && (props.connector.capabilities.platform === "linux" || props.connector.capabilities.platform === "darwin");
+    if (!sandboxed) return "Only Linux and macOS hosts whose sessions run in the sandbox fetch extensions themselves; this one needs them installed";
+    if (report() && !report()!.remoteInstalls) return "Its connector runs with --no-remote-installs, so it fetches nothing itself";
+    if (data()?.hostAutoCacheRefused) return "Its connector runs with --no-auto-cache-extensions, which wins over the setting here: it fetches nothing itself, so install what its workspaces use";
+    return "Workspaces' npm: extensions are fetched from npm on first use, checked against the digest Pikibun locked when they were added, and run only in each session's sandbox";
+  };
   const builtin = () => config()?.builtinExtensions ?? [];
   function setBuiltin(name: BuiltinExtensionName, on: boolean) {
     const next = builtinExtensions.map(item => item.name).filter(item => (item === name ? on : builtin().includes(item)));
@@ -237,7 +257,8 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
   const isRequired = (source: string) => required().some(item => item.source === source);
   const installedSources = () => new Set(report()?.installed.map(item => item.source) ?? []);
   const unavailable = () => (report() ? missingRequiredExtensions(required(), report()!.installed).flatMap(source => required().filter(item => item.source === source)) : []);
-  const missing = () => (data()?.workspaces ?? []).flatMap(workspace => workspace.extensions.filter(item => item.availability.status !== "installed").map(item => ({ workspace, ...item })));
+  const missing = () => (data()?.workspaces ?? []).flatMap(workspace => workspace.extensions.filter(item => item.availability.status !== "installed" && item.availability.status !== "auto-cache").map(item => ({ workspace, ...item })));
+  const fetched = () => (data()?.workspaces ?? []).flatMap(workspace => workspace.extensions.filter(item => item.availability.status === "auto-cache").map(item => ({ workspace, ...item })));
   const waiting = (source: string) => pending().some(item => item.source === source);
   const revoked = () => Boolean(props.connector.revokedAt);
   return (
@@ -339,7 +360,20 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
                 : <Badge>Missing</Badge>} />
           )}
         </Each>
+        <Each of={fetched()} key={item => `${item.workspace.id} ${item.source}`}>
+          {item => (
+            <Row leading={<Icon name="tool" size={16} color={palette().muted} />} title={item().source}
+              hint={`${item().workspace.name} uses it: sessions here fetch it in their sandbox on first use, checked against the digest Pikibun locked`}
+              trailing={<Badge tone="success">Fetched on first use</Badge>} />
+          )}
+        </Each>
         <If when={data()}>
+          <If when={owner()} else={<Row title="Fetch workspace extensions in the sandbox" hint={autoCacheHint()} trailing={<Badge tone={data()?.autoCache ? "success" : "neutral"}>{data()?.autoCache ? "On" : "Off"}</Badge>} />}>
+            <Row title="Fetch workspace extensions in the sandbox" hint={`${autoCacheHint()}${data()?.hostAutoCache !== undefined ? `. Its connector's default: ${data()!.hostAutoCache ? "on" : "off"}` : ""}`}
+              trailing={<Segmented small testID="host-auto-cache" value={data()?.autoCacheChoice ?? "host"}
+                options={[{ value: "host", label: "Host default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]}
+                onChange={value => setAutoCache(value as "on" | "off" | "host")} />} />
+          </If>
           <If when={owner()} else={<Row title="Extension tools for every session" trailing={<Badge tone={data()?.automaticTools ? "warning" : "neutral"}>{data()?.automaticTools ? "Allowed" : "Off"}</Badge>} />}>
             <Row title="Let every session run extension tools" hint="For extensions that run on this machine, outside the sandbox. Off: only your sessions, and those of members you granted host commands, run their tools; everyone else's are refused"
               trailing={<CheckControl label="Let every session run extension tools" checked={Boolean(data()?.automaticTools)} disabled={action.busy()} onChange={setAutomatic} />} />
