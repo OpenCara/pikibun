@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import { compile } from '@earendil-works/pi-schema';
+import { z } from 'zod';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import {
   remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl, validRemoteMcpPrefix,
@@ -7,7 +8,8 @@ import {
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
 import type { AppContext, AppEnv, Env, SessionRow } from '../../types.js';
-import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../../http.js';
+import { fail, id, identifier, now, text, userIdentifier } from '../../http.js';
+import { body, fields } from '../../schemas.js';
 import { requireMember, sessionAccess, workspaceAdminSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
 import { requireCallbackScope } from '../hosts.js';
@@ -30,6 +32,13 @@ function transport(env: Env): RemoteMcpTransport {
   if (env.TEST_AUTH_ENABLED === 'true') return refusingTransport;
   return productionTransport ??= publicHttpsTransport();
 }
+
+const callBody = fields({ sessionId: z.unknown(), actorId: z.unknown(), admissionId: z.unknown(), callId: z.unknown(), arguments: z.unknown() },
+  'Unexpected remote MCP call field.');
+const addBody = fields({ name: z.unknown(), prefix: z.unknown(), url: z.unknown(), headers: z.unknown(), readOnlyTools: z.unknown() },
+  'Only name, prefix, url, headers and readOnlyTools are accepted.', { code: 'invalid_mcp_server' });
+const changeBody = fields({ name: z.unknown(), url: z.unknown(), headers: z.unknown(), readOnlyTools: z.unknown(), enabled: z.unknown(), refresh: z.unknown() },
+  'Change name, url, headers, readOnlyTools or enabled, or set refresh to true.', { code: 'invalid_mcp_server', some: true });
 
 const secretContext = (serverId: string) => `remote-mcp:${serverId}`;
 const parsedList = (json: string): string[] => { try { const value = JSON.parse(json); return Array.isArray(value) ? value.filter(item => typeof item === 'string') : []; } catch { return []; } };
@@ -99,10 +108,7 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
   const prefix = c.req.param('prefix');
   const key = c.req.param('key');
   if (!validRemoteMcpPrefix(prefix) || !key || !/^[0-9a-f]{16}$/.test(key)) fail(404, 'not_found', 'No such remote MCP tool.');
-  const input = await jsonObject(c, 256 * 1024);
-  if (Object.keys(input).some(name => !['sessionId', 'actorId', 'admissionId', 'callId', 'arguments'].includes(name))) {
-    fail(400, 'invalid_input', 'Unexpected remote MCP call field.');
-  }
+  const input = await body(c, callBody, { maxBytes: 256 * 1024 });
   const sessionId = identifier(input.sessionId, 'sessionId');
   const actorId = userIdentifier(input.actorId, 'actorId');
   const admissionId = text(input.admissionId, 'admissionId', 128);
@@ -164,10 +170,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
   app.post('/api/workspaces/:id/mcp-servers', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const input = await jsonObject(c, 64 * 1024);
-    if (Object.keys(input).some(name => !['name', 'prefix', 'url', 'headers', 'readOnlyTools'].includes(name))) {
-      fail(400, 'invalid_mcp_server', 'Only name, prefix, url, headers and readOnlyTools are accepted.');
-    }
+    const input = await body(c, addBody, { maxBytes: 64 * 1024 });
     const name = nameOf(input.name);
     if (!validRemoteMcpPrefix(input.prefix)) fail(400, 'invalid_mcp_server', 'prefix must be a lowercase letter then up to 15 lowercase letters or digits: it starts each of its tools\' names.');
     const prefix = input.prefix as string;
@@ -201,11 +204,8 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     const serverId = identifier(c.req.param('serverId'), 'serverId');
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const input = await jsonObject(c, 64 * 1024);
-    const keys = Object.keys(input);
-    if (!keys.length || keys.some(name => !['name', 'url', 'headers', 'readOnlyTools', 'enabled', 'refresh'].includes(name))) {
-      fail(400, 'invalid_mcp_server', 'Change name, url, headers, readOnlyTools or enabled, or set refresh to true.');
-    }
+    const input = await body(c, changeBody, { maxBytes: 64 * 1024 });
+    const keys = Object.keys(input).filter(name => input[name as keyof typeof input] !== undefined);
     if (input.enabled !== undefined && typeof input.enabled !== 'boolean') fail(400, 'invalid_mcp_server', 'enabled must be true or false.');
     if (input.refresh !== undefined && input.refresh !== true) fail(400, 'invalid_mcp_server', 'refresh must be true.');
     const row = await serverRow(c.env, workspaceId, serverId);
