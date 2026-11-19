@@ -308,6 +308,24 @@ test('faux is explicit fixture-only opt-in and never an unsupported-provider fal
   }
 });
 
+test('models Pi saved from catalog refreshes are offered, offline, like the built-in ones', async t => {
+  const agentDir = await mkdtemp(join(tmpdir(), 'local-pi-store-fixture-'));
+  t.after(() => rm(agentDir, { recursive: true, force: true }));
+  const network = t.mock.method(globalThis, 'fetch', async () => {
+    throw new Error('Restoring saved catalogs must not perform network requests');
+  });
+  const builtin = (await ModelRuntime.create({ modelsPath: join(agentDir, 'models.json'), refreshOnCreate: false, allowModelNetwork: false }))
+    .getModels().find(model => model.provider === 'openrouter');
+  assert.ok(builtin);
+  const stored = { ...builtin, id: 'fixture/stored-only-model', name: 'Fixture: stored only' };
+  await writeFile(join(agentDir, 'models-store.json'), JSON.stringify({ openrouter: { models: [stored], checkedAt: Date.now() } }));
+  await writeFile(join(agentDir, 'auth.json'), JSON.stringify({ openrouter: { type: 'api_key', key: 'synthetic-fixture-key' } }), { mode: 0o600 });
+
+  const local = await loadLocalPiModels({ agentDir, enabledModels: ['openrouter/fixture/stored-only-model'] });
+  assert.deepEqual((await local.manifest()).map(model => `${model.provider}/${model.modelId}`), ['openrouter/fixture/stored-only-model']);
+  assert.equal(network.mock.callCount(), 0);
+});
+
 test('pinned ModelRuntime discovers selected configured models without catalog network refresh', async t => {
   const agentDir = await mkdtemp(join(tmpdir(), 'local-pi-config-fixture-'));
   t.after(() => rm(agentDir, { recursive: true, force: true }));

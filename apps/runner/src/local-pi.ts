@@ -126,20 +126,34 @@ export async function readPiSettings(agentDir?: string, env: NodeJS.ProcessEnv =
   return settings;
 }
 
+export async function createPiRuntime(config: Parameters<NonNullable<LocalPiOptions["runtimeFactory"]>>[0]): Promise<LocalPiRuntime> {
+  const runtime = await ModelRuntime.create(config);
+  try { await runtime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(15_000) }); }
+  catch (error) { console.warn(`Pi's saved model catalogs could not be restored: ${error instanceof Error ? error.message : String(error)}`); }
+  return runtime;
+}
+
 export async function loadLocalPiModels(options: LocalPiOptions = {}): Promise<LocalModels> {
-  const runtimeFactory: NonNullable<LocalPiOptions["runtimeFactory"]> = options.runtimeFactory ?? (config => ModelRuntime.create(config));
+  const runtimeFactory: NonNullable<LocalPiOptions["runtimeFactory"]> = options.runtimeFactory ?? createPiRuntime;
   const agentDir = options.agentDir === undefined ? undefined : resolve(options.agentDir);
   const runtime = await runtimeFactory({
     ...(agentDir === undefined ? {} : { authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json") }),
     refreshOnCreate: false,
     allowModelNetwork: false,
   });
+  const warned = new Set<string>();
   const selected = options.models && new Set(options.models.map(model => JSON.stringify([model.provider, model.modelId])));
   const selectedProviders = options.models && [...new Set(options.models.map(model => model.provider))];
   const manifest = async (): Promise<LocalModelSummary[]> => {
     const signal = AbortSignal.timeout(15_000);
     const enabled = !selected && options.enabledModels?.length ? [...options.enabledModels] : undefined;
-    const scoped = !selectedProviders && enabled ? (await resolveModelScopeWithDiagnostics(enabled, runtime as never, { signal })).scopedModels : undefined;
+    const resolution = !selectedProviders && enabled ? await resolveModelScopeWithDiagnostics(enabled, runtime as never, { signal }) : undefined;
+    for (const diagnostic of resolution?.diagnostics ?? []) {
+      if (warned.has(diagnostic.message)) continue;
+      warned.add(diagnostic.message);
+      console.warn(`Pi settings.json enabledModels: ${diagnostic.message}`);
+    }
+    const scoped = resolution?.scopedModels;
     const available = selectedProviders
       ? (await Promise.all(selectedProviders.map(provider => runtime.getAvailable(provider, { signal })))).flat()
       : scoped ? scoped.map(item => item.model)
