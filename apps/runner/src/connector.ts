@@ -31,6 +31,7 @@ import { HardwareProbe } from "./hardware.js";
 import { hardwareLimits, type HostHardware } from "../../../packages/shared/src/hardware.js";
 import type { RunnerConfig } from "./session.js";
 import { HostExtensions } from "./extensions/host.js";
+import { defaultExtensionCacheDir, ExtensionCache, helperExtensionInstaller, refusingDescribe, sandboxExtensionInstaller } from "./extensions/cache.js";
 import { helperDescribe, sandboxDescribe } from "./extensions/describe.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { ExtensionStore } from "./extensions/store.js";
@@ -214,6 +215,7 @@ export interface ConnectorOptions {
   extensions?: HostExtensions;
   remoteExtensionInstalls?: boolean;
   managedExtensions?: boolean;
+  autoCacheExtensions?: boolean;
   privateHome?: PrivateHome;
   privateReportMs?: number;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
@@ -303,13 +305,39 @@ export class LocalConnector {
     const tunnel = this.tunnel;
     this.tunnels = new HostTunnels({ cloudflared: () => tunnel.current(), directory: join(this.directory, "tunnels"),
       log: line => { if (/\b(ERR|WRN)\b/.test(line)) process.stderr.write(`cloudflared: ${line.slice(0, 1000)}\n`); } });
+    const connectorVersion = this.options.version ?? buildVersion;
+    const linuxSandboxed = process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend && !this.options.runtimeFactory;
+    const seatbeltSandboxed = process.platform === "darwin" && !this.options.unsandboxed && this.options.sandboxBackend?.kind === "seatbelt" && !this.options.runtimeFactory;
     this.hostExtensions = this.options.extensions
-      ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false,
-        managed: this.options.managedExtensions === true, connectorVersion: this.options.version ?? buildVersion,
-        ...(process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend && !this.options.runtimeFactory
-          ? { describe: sandboxDescribe(this.directory) }
-          : process.platform === "darwin" && !this.options.unsandboxed && this.options.sandboxBackend?.kind === "seatbelt" && !this.options.runtimeFactory
-            ? { describe: helperDescribe(this.directory, () => new SeatbeltBackend()) } : {}) });
+      ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), {
+        remoteInstalls: this.options.remoteExtensionInstalls !== false,
+        managed: this.options.managedExtensions === true,
+        autoCache: this.options.autoCacheExtensions === true,
+        connectorVersion,
+        ...(linuxSandboxed
+          ? {
+            describe: sandboxDescribe(this.directory),
+            cache: new ExtensionCache(defaultExtensionCacheDir(this.directory), {
+              fallbackDirectory: join(this.directory, "extensions", "cache"),
+              sandboxed: true,
+              install: sandboxExtensionInstaller(this.directory),
+              describe: sandboxDescribe(this.directory, refusingDescribe),
+              connectorVersion,
+            }),
+          }
+          : seatbeltSandboxed
+            ? {
+              describe: helperDescribe(this.directory, () => new SeatbeltBackend()),
+              cache: new ExtensionCache(defaultExtensionCacheDir(this.directory), {
+                fallbackDirectory: join(this.directory, "extensions", "cache"),
+                sandboxed: true,
+                install: helperExtensionInstaller(this.directory, () => new SeatbeltBackend()),
+                describe: helperDescribe(this.directory, () => new SeatbeltBackend(), refusingDescribe),
+                connectorVersion,
+              }),
+            }
+            : {}),
+      });
     await this.hostExtensions.load();
     this.releaseLease = await (this.options.acquireLease ?? acquireRunnerLease)(this.directory, () => {
       this.lifetime.abort();

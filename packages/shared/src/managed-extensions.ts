@@ -1,4 +1,4 @@
-import { EXACT_VERSION, PACKAGE_NAME, PIKI_NAME } from "./host-extensions.js";
+import { EXACT_VERSION, isExtensionIntegrity, PACKAGE_NAME, PIKI_NAME } from "./host-extensions.js";
 import { connectorTooOld } from "./version.js";
 
 export interface ManagedExtensionPin {
@@ -15,7 +15,6 @@ export const MANAGED_EXTENSIONS_LIMIT = 32;
 
 export const managedExtensions: readonly ManagedExtensionPin[] = Object.freeze([]);
 
-const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
 const RELEASE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const KEYS = ["integrity", "minimumConnector", "package", "source", "version"].join();
 
@@ -27,7 +26,7 @@ export function parseManagedExtensionPin(value: unknown): ManagedExtensionPin | 
   if (typeof source !== "string" || !source.startsWith("piki:") || !PIKI_NAME.test(source.slice(5))) return undefined;
   if (typeof name !== "string" || name.length > 214 || !PACKAGE_NAME.test(name)) return undefined;
   if (typeof version !== "string" || version.length > 64 || !EXACT_VERSION.test(version)) return undefined;
-  if (typeof integrity !== "string" || !INTEGRITY.test(integrity)) return undefined;
+  if (!isExtensionIntegrity(integrity)) return undefined;
   if (typeof minimumConnector !== "string" || minimumConnector.length > 64 || !RELEASE.test(minimumConnector)) return undefined;
   return { source, package: name, version, integrity, minimumConnector };
 }

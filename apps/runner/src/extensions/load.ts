@@ -161,7 +161,7 @@ export interface LoadOptions { describe?: Describe; version?: string }
 
 export const DESCRIPTION_FILE = "pikibun-description.json";
 
-async function describedModules(options: LoadOptions, install: string | undefined, root: string, files: string[], mount: string | undefined): Promise<ExtensionModuleSummary[]> {
+export async function describedModules(options: LoadOptions, install: string | undefined, root: string, files: string[], mount: string | undefined): Promise<ExtensionModuleSummary[]> {
   const listed = files.map(file => relative(root, file));
   const kept = install !== undefined && connectorRelease(options.version) ? join(install, DESCRIPTION_FILE) : undefined;
   const checked = (value: unknown) => parseExtensionModules(value).map(module => ({ ...module, tools: module.tools.filter(tool => !pikibunOwn(tool.name)) }));

@@ -16,6 +16,11 @@ export const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.
 export const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 export const PIKI_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+export const EXTENSION_INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
+
+export function isExtensionIntegrity(value: unknown): value is string {
+  return typeof value === "string" && EXTENSION_INTEGRITY.test(value);
+}
 
 export class ExtensionSourceError extends Error {}
 
@@ -127,6 +132,17 @@ export interface WorkspaceExtension {
   enabled: boolean;
   tools: ExtensionToolMode;
   settings: ExtensionSettings;
+  integrity?: string;
+}
+
+export interface RegistryExtensionMetadata {
+  name: string;
+  version: string;
+  description?: string;
+}
+
+export function withoutExtensionLocks(extensions: readonly WorkspaceExtension[]): WorkspaceExtension[] {
+  return extensions.map(({ integrity: _integrity, ...rest }) => rest);
 }
 
 export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([
@@ -179,14 +195,28 @@ export function parseExtensionSettings(value: unknown): ExtensionSettings {
 
 export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
   if (!isPlainObject(value)) throw new Error("Invalid extension");
-  only(value, ["source", "enabled", "tools", "settings"], "extension");
+  only(value, ["source", "enabled", "tools", "settings", "integrity"], "extension");
   if (typeof value.source !== "string") throw new Error("Invalid extension source");
   const source = normalizeExtensionSource(value.source);
   const enabled = value.enabled ?? true;
   const tools = value.tools ?? "automatic";
   if (typeof enabled !== "boolean") throw new Error("Invalid extension setting");
   if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("Invalid extension tools mode");
-  return { source, enabled, tools: "automatic", settings: parseExtensionSettings(value.settings ?? {}) };
+  if (value.integrity !== undefined && (!source.startsWith("npm:") || !isExtensionIntegrity(value.integrity))) {
+    throw new Error("An extension's integrity is a sha512-... digest of an npm package");
+  }
+  return { source, enabled, tools: "automatic", settings: parseExtensionSettings(value.settings ?? {}),
+    ...(value.integrity !== undefined ? { integrity: value.integrity } : {}) };
+}
+
+export function parseRegistryExtensionMetadata(value: unknown): RegistryExtensionMetadata {
+  if (!isPlainObject(value)) throw new Error("Invalid registry metadata");
+  only(value, ["name", "version", "description"], "registry metadata");
+  if (!text(value.name, 214) || !PACKAGE_NAME.test(value.name) || !text(value.version, 64) || !EXACT_VERSION.test(value.version)) {
+    throw new Error("Invalid registry metadata");
+  }
+  if (value.description !== undefined && !text(value.description, extensionLimits.text)) throw new Error("Invalid registry metadata");
+  return { name: value.name, version: value.version, ...(value.description !== undefined ? { description: value.description } : {}) };
 }
 
 export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {
@@ -256,10 +286,12 @@ export function parseHostExtensionsReport(value: unknown): HostExtensionsReport 
     ...(value.tunnel !== undefined ? { tunnel: parseHostTunnelStatus(value.tunnel) } : {}) };
 }
 
-export type ExtensionAvailability = { status: "installed" } | { status: "other-version"; installed: string } | { status: "missing" };
+export type ExtensionAvailability = { status: "installed" } | { status: "auto-cache" } | { status: "other-version"; installed: string } | { status: "missing" };
 
-export function extensionAvailability(source: string, installed: readonly InstalledExtension[]): ExtensionAvailability {
+export function extensionAvailability(source: string, installed: readonly InstalledExtension[],
+  options?: { integrity?: string; autoCache?: boolean }): ExtensionAvailability {
   if (installed.some(item => !item.dev && item.source === source)) return { status: "installed" };
+  if (options?.autoCache && source.startsWith("npm:") && isExtensionIntegrity(options.integrity)) return { status: "auto-cache" };
   const key = extensionPackageKey(source);
   const other = installed.find(item => !item.dev && extensionPackageKey(item.source) === key);
   return other ? { status: "other-version", installed: other.source } : { status: "missing" };
@@ -317,6 +349,7 @@ export interface ExtensionsSyncAnswer {
 export interface WorkspaceExtensionsAnswer {
   extensions: WorkspaceExtension[];
   automaticTools: boolean;
+  autoCache?: true;
   toolGroups?: Record<string, MemberToolGroup>;
   ownerPrivate?: true;
 }
@@ -334,8 +367,10 @@ export function parseExtensionsSyncAnswer(value: unknown): ExtensionsSyncAnswer 
 
 export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensionsAnswer {
   if (!isPlainObject(value) || typeof value.automaticTools !== "boolean") throw new Error("Invalid workspace extensions");
+  if (value.autoCache !== undefined && typeof value.autoCache !== "boolean") throw new Error("Invalid workspace extensions");
   const toolGroups = parseMemberToolGroups(value.toolGroups);
-  return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools, ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
+  return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools,
+    ...(value.autoCache === true ? { autoCache: true as const } : {}), ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
     ...(value.ownerPrivate === true ? { ownerPrivate: true as const } : {}) };
 }
 

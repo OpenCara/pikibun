@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Message, Models } from "@earendil-works/pi-ai";
 import type { CompactionSettings, Conversation, EntryRecord, Harness, UsageState } from "@earendil-works/pi-durable";
 import type { BrowserUnavailableReason } from "../../../../packages/shared/src/browser.js";
-import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
+import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type WorkspaceExtension, type WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
 import type { HostConfig, RequiredExtension } from "../../../../packages/shared/src/host-config.js";
 import { sessionToolsOff } from "../../../../packages/shared/src/piki-extensions.js";
 import type { TunnelUnavailableReason } from "../../../../packages/shared/src/tunnel.js";
@@ -187,7 +187,12 @@ export class SessionUsage {
 
 export interface ExtensionViewSource {
   binding: RunnerBinding;
-  config: { workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>; installed(): readonly LoadedSource[] } | undefined;
+  config: {
+    workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>;
+    installed(): readonly LoadedSource[];
+    peekCached?(extensions: readonly WorkspaceExtension[], autoCache?: boolean): Promise<LoadedSource[]>;
+  } | undefined;
+  sandboxed?: boolean;
   builtins(): SessionBuiltins | undefined;
   hostConfig(): Promise<HostConfig>;
   requiredExtensions(): Promise<RequiredExtension[] | undefined>;
@@ -207,10 +212,14 @@ export async function extensionView(source: ExtensionViewSource): Promise<Pick<S
   }
   try {
     const answer = await config.workspace(binding.session.workspaceId);
-    const installed = config.installed().map(item => item.summary);
+    const storeInstalled = config.installed().map(item => item.summary);
+    const cached = source.sandboxed && config.peekCached
+      ? (await config.peekCached(answer.extensions, answer.autoCache).catch(() => [])).map(item => item.summary)
+      : [];
+    const installed = [...storeInstalled, ...cached.filter(item => !storeInstalled.some(other => other.source === item.source))];
     const required = await source.requiredExtensions() ?? [];
     const chosen = sessionExtensions(answer.extensions, installed, { ownerId: binding.owner.id, connectorOwnerId: binding.session.connectorOwnerId }, required);
-    const missingRequired = missingRequiredExtensions(required, installed);
+    const missingRequired = missingRequiredExtensions(required, storeInstalled);
     const settled = settleToolNames(chosen.map(item => ({ source: item.source,
       tools: installed.find(candidate => candidate.source === item.source)?.modules.flatMap(module => module.tools.map(tool => tool.name)) ?? [] })),
       source.toolNames());

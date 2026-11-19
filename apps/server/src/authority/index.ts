@@ -27,7 +27,8 @@ export { parseOperation } from './operations.js';
 export { audienceSharing, registerAudienceSharing, requireOperationTool, requireToolCall, sessionsNeedGranted, setAudienceSharing } from './tool-checks.js';
 export { admissionExpired, issueRunAdmission } from './run-admissions.js';
 export {
-  addNeededExtensions, automaticTools, defaultWorkspaceExtensionStatements, removeWorkspaceExtensionStatement, saveWorkspaceExtensionStatement, sessionToolSources, workspaceExtensions,
+  addNeededExtensions, automaticTools, connectorExtensionSettings, defaultWorkspaceExtensionStatements, removeWorkspaceExtensionStatement, saveWorkspaceExtensionStatement,
+  sessionToolSources, workspaceExtensionLock, workspaceExtensions,
 } from './extension-policy.js';
 export { createToolGroup, deleteToolGroup, memberToolGroup, memberToolGroups, requireSessionTool, setMemberToolGroup, updateToolGroup } from './tool-groups.js';
 

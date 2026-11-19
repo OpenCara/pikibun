@@ -13,7 +13,7 @@ import type { SessionsToolRequest, SessionsToolResult } from "../../../packages/
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
-import { missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
+import { missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
 import { SessionBuiltins } from "./extensions/builtin.js";
@@ -162,6 +162,8 @@ export type RunnerConfig = {
   cacheWarming?: (sessionId: string) => Promise<SessionCacheWarming>;
   extensions?: {
     installed(): readonly LoadedSource[];
+    ensureCached?(extensions: readonly WorkspaceExtension[], autoCache?: boolean, signal?: AbortSignal): Promise<LoadedSource[]>;
+    peekCached?(extensions: readonly WorkspaceExtension[], autoCache?: boolean): Promise<LoadedSource[]>;
     workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>;
     lastKnown?(workspaceId: string): WorkspaceExtensionsAnswer | undefined;
     modelRegistry?: ModelRegistry;
@@ -203,6 +205,7 @@ export class RunnerSession {
   readonly #queue: RunQueue;
   readonly #commands: SessionCommands;
   readonly #commandSources = new Set<string>();
+  readonly #cachedSources = new Map<string, LoadedSource>();
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   #compaction: () => CompactionSettings | undefined = () => undefined;
@@ -901,15 +904,30 @@ export class RunnerSession {
       : undefined;
   }
 
-  private async extensionChoice(): Promise<{ chosen: ChosenExtension[]; automaticTools: boolean; missingRequired: string[]; unknownRequired: boolean }> {
+  private sandboxedExtensionChannel(): boolean {
+    if (this.#onHost) return false;
+    const sandbox = this.sandbox;
+    if (sandbox instanceof HelperWorkspace && sandbox.runsProcesses) return !!sandbox.nodeBin;
+    if (sandbox instanceof Sandbox) return !!sandbox.nodeBin;
+    return false;
+  }
+
+  private async extensionChoice(): Promise<{ chosen: ChosenExtension[]; loaded: LoadedSource[]; automaticTools: boolean; missingRequired: string[]; unknownRequired: boolean }> {
     const config = this.config.extensions;
-    if (!config) return { chosen: [], automaticTools: false, missingRequired: [], unknownRequired: false };
-    const answer = await config.workspace(this.binding.session.workspaceId).catch(() => ({ extensions: [], automaticTools: false }));
+    if (!config) return { chosen: [], loaded: [], automaticTools: false, missingRequired: [], unknownRequired: false };
+    const answer = await config.workspace(this.binding.session.workspaceId).catch((): WorkspaceExtensionsAnswer => ({ extensions: [], automaticTools: false }));
     const known = await this.requiredExtensions();
     const required = known ?? [];
-    const installed = config.installed().map(item => item.summary);
+    const base = config.installed();
+    const cached = this.sandboxedExtensionChannel() && config.ensureCached
+      ? await config.ensureCached(answer.extensions, answer.autoCache).catch(() => [])
+      : [];
+    for (const item of cached) this.#cachedSources.set(item.summary.source, item);
+    const loaded = [...base, ...cached.filter(item => !base.some(other => other.summary.source === item.summary.source))];
+    const installed = loaded.map(item => item.summary);
+    const storeSummaries = base.map(item => item.summary);
     return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
-      automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
+      loaded, automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, storeSummaries), unknownRequired: !known };
   }
 
   private extensionProcess(): ExtensionHost["extensionProcess"] {
@@ -1082,9 +1100,8 @@ export class RunnerSession {
     if (!this.#hostExtensions || !config) return { screen: false };
     const refusal = await this.requiredRefusal(false);
     if (refusal) throw new RunnerError(422, refusal);
-    const { chosen } = await this.extensionChoice();
-    const installed = config.installed();
-    return { screen: chosen.some(item => installed.some(candidate => candidate.summary.source === item.source && candidate.summary.modules.some(module => module.events.includes("input")))) };
+    const { chosen, loaded } = await this.extensionChoice();
+    return { screen: chosen.some(item => loaded.some(candidate => candidate.summary.source === item.source && candidate.summary.modules.some(module => module.events.includes("input")))) };
   }
 
   private openExtensions(sources: readonly string[]): Promise<void> {
@@ -1092,7 +1109,14 @@ export class RunnerSession {
     const config = this.config.extensions;
     if (!host || !config) return Promise.resolve();
     const installed = config.installed();
-    const open = this.#opening.then(() => host.ensure(sources.flatMap(source => installed.filter(candidate => candidate.summary.source === source))));
+    const sandboxed = this.sandboxedExtensionChannel();
+    const resolveSource = (source: string): LoadedSource[] => {
+      const fromStore = installed.filter(candidate => candidate.summary.source === source);
+      if (fromStore.length) return fromStore;
+      const fromCache = sandboxed ? this.#cachedSources.get(source) : undefined;
+      return fromCache ? [fromCache] : [];
+    };
+    const open = this.#opening.then(() => host.ensure(sources.flatMap(resolveSource)));
     this.#opening = open.catch(() => {});
     return open;
   }
@@ -1417,7 +1441,7 @@ export class RunnerSession {
 
   private extensionView(): Promise<Pick<SessionView, "extensions">> {
     return extensionView({
-      binding: this.binding, config: this.config.extensions, builtins: () => this.#builtins, hostConfig: () => this.hostConfig(),
+      binding: this.binding, config: this.config.extensions, sandboxed: this.sandboxedExtensionChannel(), builtins: () => this.#builtins, hostConfig: () => this.hostConfig(),
       requiredExtensions: () => this.requiredExtensions(), toolNames: () => this.tools.map(tool => tool.name),
       definedToolsOff: (off, extensions) => this.#availability.definedToolsOff(off, extensions), browserUnavailable: () => this.#availability.browserUnavailable(),
       tunnelUnavailable: () => this.#availability.tunnelUnavailable(), missingPrograms: off => this.#availability.missingPrograms(off),

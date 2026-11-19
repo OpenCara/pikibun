@@ -11,6 +11,7 @@ export interface Env {
   CONNECTOR_HUB?: ConnectorHub;
   BUCKET?: ObjectStorage;
   WORKSPACE_DATABASES?: WorkspaceDatabaseProvider;
+  NPM_REGISTRY_FETCH?: typeof fetch;
   LOG?: (line: string) => void;
   APP_ORIGIN: string;
   PIKIBUN_VERSION?: string;
