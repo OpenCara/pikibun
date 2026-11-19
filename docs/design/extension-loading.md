@@ -1,6 +1,7 @@
 # Loading Pikibun's extensions without a connector release
 
-Status: phase 1 is built (#310), with no pins yet; the rest is a plan. The phases at the end say what lands in which
+Status: phase 1 is built (#310), with no pins yet; the rest is a plan, extended to workspace extensions, shared caching
+and remote planes in [extension-planes.md](extension-planes.md) (#438). The phases at the end say what lands in which
 order, and [Phase 1 as built](#phase-1-as-built) where the code differs from this text.
 
 ## Why
