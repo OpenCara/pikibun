@@ -8,14 +8,25 @@ export class RemoteMcpError extends Error {}
 
 interface JsonRpcAnswer { id?: unknown; result?: unknown; error?: { code?: unknown; message?: unknown } }
 
+export function eventStreamMessages(body: string): unknown[] {
+  const messages: unknown[] = [];
+  for (const event of body.split(/\r?\n\r?\n/)) {
+    const data = event.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n');
+    if (!data) continue;
+    try { messages.push(JSON.parse(data)); } catch { }
+  }
+  return messages;
+}
+
+export function answersId(message: unknown, id: number): boolean {
+  const items = Array.isArray(message) ? message : [message];
+  return items.some(item => !!item && typeof item === 'object' && (item as JsonRpcAnswer).id === id && ('result' in item || 'error' in item));
+}
+
 function answerFrom(body: string, contentType: string, id: number): JsonRpcAnswer {
   const candidates: unknown[] = [];
   if (contentType.includes('text/event-stream')) {
-    for (const event of body.split(/\r?\n\r?\n/)) {
-      const data = event.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n');
-      if (!data) continue;
-      try { candidates.push(JSON.parse(data)); } catch { }
-    }
+    candidates.push(...eventStreamMessages(body));
   } else {
     try { candidates.push(JSON.parse(body)); } catch { throw new RemoteMcpError('The server answered with something other than JSON'); }
   }
@@ -31,9 +42,11 @@ export class RemoteMcpSession {
   #initialized = false;
 
   constructor(private readonly transport: RemoteMcpTransport, private readonly url: string, private readonly headers: Readonly<Record<string, string>>,
-    private readonly timeoutMs: number) {}
+    private readonly deadline: number) {}
 
   private async post(payload: Record<string, unknown>, expectAnswer: boolean): Promise<JsonRpcAnswer | undefined> {
+    const timeoutMs = this.deadline - Date.now();
+    if (timeoutMs <= 0) throw new RemoteMcpError('It took longer than Pikibun waits for a remote MCP server');
     const response = await this.transport({
       url: this.url,
       headers: {
@@ -41,8 +54,9 @@ export class RemoteMcpSession {
         ...(this.#initialized ? { 'MCP-Protocol-Version': PROTOCOL_VERSION } : {}), ...(this.#sessionId ? { 'Mcp-Session-Id': this.#sessionId } : {}),
       },
       body: JSON.stringify({ jsonrpc: '2.0', ...payload }),
-      timeoutMs: this.timeoutMs,
+      timeoutMs,
       maxBytes: remoteMcpLimits.responseBytes,
+      ...(expectAnswer ? { expectId: payload.id as number } : {}),
     });
     const session = response.headers['mcp-session-id'];
     if (session && /^[\x21-\x7e]{1,256}$/.test(session)) this.#sessionId = session;
@@ -72,7 +86,7 @@ export class RemoteMcpSession {
 }
 
 export async function discoverRemoteMcpTools(transport: RemoteMcpTransport, url: string, headers: Readonly<Record<string, string>>): Promise<RemoteMcpTool[]> {
-  const session = new RemoteMcpSession(transport, url, headers, remoteMcpLimits.discoverSeconds * 1000);
+  const session = new RemoteMcpSession(transport, url, headers, Date.now() + remoteMcpLimits.discoverSeconds * 1000);
   const listed: unknown[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -108,6 +122,6 @@ function shown(result: unknown): RemoteMcpCallResult {
 
 export async function callRemoteMcpTool(transport: RemoteMcpTransport, url: string, headers: Readonly<Record<string, string>>, name: string,
   args: Record<string, unknown>): Promise<RemoteMcpCallResult> {
-  const session = new RemoteMcpSession(transport, url, headers, remoteMcpLimits.callSeconds * 1000);
+  const session = new RemoteMcpSession(transport, url, headers, Date.now() + remoteMcpLimits.callSeconds * 1000);
   return shown(await session.call('tools/call', { name, arguments: args }));
 }

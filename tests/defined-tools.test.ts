@@ -191,6 +191,10 @@ test("a session offers its workspace's remote tools, checks their arguments agai
     fauxAssistantMessage([fauxToolCall("tracker_search", { labels: ["bug"] })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("tracker_search", { query: "bug" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Done."),
+    fauxAssistantMessage([fauxToolCall("tracker_search", { query: "again" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Refused."),
+    fauxAssistantMessage([fauxToolCall("tracker_search", { query: "gone" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Gone."),
   ] as never);
   const models = createModels();
   models.setProvider(faux.provider);
@@ -198,11 +202,12 @@ test("a session offers its workspace's remote tools, checks their arguments agai
     parameters: {}, target: [], route: "mcp/tracker/0123456789abcdef", write: false,
     inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } };
   const calls: { route: string; request: Record<string, unknown> }[] = [];
+  let remoteTools: BrokeredToolDefinition[] = [tracker];
   const service = new RunnerService({
     dataDir: directory, sharedSecret: "runner-remote-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false, remoteTools: [tracker] }) },
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false, remoteTools }) },
     toolDefinitions: async () => bundledToolDefinitions,
     brokered: async (route, request) => { calls.push({ route, request }); return { result: "3 issues" }; },
   });
@@ -217,6 +222,18 @@ test("a session offers its workspace's remote tools, checks their arguments agai
   assert.equal(calls.length, 1, "the call without its required query never left the session");
   assert.equal(calls[0]!.route, "mcp/tracker/0123456789abcdef");
   assert.deepEqual({ ...calls[0]!.request, callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId: await sha256("remote first"), callId: undefined, arguments: { query: "bug" } });
+
+  remoteTools = [{ ...tracker, write: true }];
+  await session.submit(await ticket(id, "submit"), { content: "Again, read-only.", requestId: "second", admissionId: await sha256("remote second"), options: { access: "read" } }, "write");
+  await idle(session);
+  assert.equal(calls.length, 1, "a tool its workspace no longer marks read-only doesn't run in a Read-only message of a session that opened before");
+  assert.match((await session.view()).entries.map(entry => entry.text).join("\n"), /tracker_search changes things, which a Read-only message doesn't do/);
+
+  remoteTools = [];
+  await session.submit(await ticket(id, "submit"), { content: "Once more.", requestId: "third", admissionId: await sha256("remote third") }, "write");
+  await idle(session);
+  assert.equal(calls.length, 1, "a removed tool isn't called");
+  assert.match((await session.view()).entries.map(entry => entry.text).join("\n"), /Tool tracker_search is not available|no longer offered/);
 });
 
 function binding(id: string): RunnerBinding {

@@ -3,6 +3,7 @@ import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { NON_PUBLIC_IPV4, NON_PUBLIC_IPV6 } from '../../../../../packages/shared/src/non-public-addresses.js';
 import type { RemoteMcpHttpRequest, RemoteMcpHttpResponse, RemoteMcpTransport } from '../../../../../packages/shared/src/remote-mcp.js';
+import { answersId, eventStreamMessages } from './client.js';
 
 const nonPublicIpv4 = new BlockList();
 for (const [network, prefix] of NON_PUBLIC_IPV4) nonPublicIpv4.addSubnet(network, prefix, 'ipv4');
@@ -51,23 +52,33 @@ export function publicHttpsTransport(resolve?: AddressLookup): RemoteMcpTranspor
     }, response => {
       const chunks: Buffer[] = [];
       let total = 0;
+      let finished = false;
+      const headers: Record<string, string> = {};
+      for (const [name, value] of Object.entries(response.headers)) if (typeof value === 'string') headers[name.toLowerCase()] = value;
+      const streaming = request.expectId !== undefined && (headers['content-type'] ?? '').includes('text/event-stream');
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        done({ status: response.statusCode ?? 0, headers, body: Buffer.concat(chunks).toString('utf8') });
+      };
       response.on('data', (chunk: Buffer) => {
+        if (finished) return;
         total += chunk.byteLength;
         if (total > request.maxBytes) {
           call.destroy(new RemoteMcpRefused(`The answer was larger than ${request.maxBytes} bytes`));
           return;
         }
         chunks.push(chunk);
+        if (streaming && eventStreamMessages(Buffer.concat(chunks).toString('utf8')).some(message => answersId(message, request.expectId!))) {
+          finish();
+          call.destroy();
+        }
       });
-      response.on('end', () => {
-        const headers: Record<string, string> = {};
-        for (const [name, value] of Object.entries(response.headers)) if (typeof value === 'string') headers[name.toLowerCase()] = value;
-        done({ status: response.statusCode ?? 0, headers, body: Buffer.concat(chunks).toString('utf8') });
-      });
-      response.on('error', reject);
+      response.on('end', finish);
+      response.on('error', error => { if (!finished) reject(error); });
     });
     const timer = setTimeout(() => call.destroy(new RemoteMcpRefused(`No answer within ${Math.round(request.timeoutMs / 1000)} seconds`)), request.timeoutMs);
-    call.on('error', reject);
+    call.on('error', error => reject(error));
     call.on('close', () => clearTimeout(timer));
     call.end(body);
   });

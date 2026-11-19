@@ -27,6 +27,7 @@ import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import type { RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
 import { publicLookup } from '../apps/server/src/authority/remote-mcp/transport.js';
+import { answersId, eventStreamMessages, RemoteMcpSession } from '../apps/server/src/authority/remote-mcp/client.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'connectors-test-secret-not-for-deployment';
@@ -3898,9 +3899,24 @@ test('workspace remote MCP servers: admins register them with vault-held headers
   assert.deepEqual(parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true }))).remoteTools, []);
   const { server: wrong } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { enabled: true, headers: { Authorization: 'Bearer wrong' } }));
   assert.match(wrong.error ?? '', /refused the credentials/);
-  assert.deepEqual(wrong.tools, []);
+  assert.deepEqual(wrong.tools.map(tool => tool.name), ['search_issues', 'create-issue'], 'a failed listing keeps the tools it had');
   await json(await s.admin.request('DELETE', path + '/' + server.id));
   assert.deepEqual((await json<{ servers: unknown[] }>(await s.creator.request('GET', path))).servers, []);
+});
+
+test('a remote MCP call has one deadline for all its requests, and an event stream answers as soon as its response arrives', async () => {
+  let posts = 0;
+  const slow = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
+    posts++;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const body = JSON.parse(request.body) as { id?: number };
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result: {} }) };
+  };
+  await assert.rejects(new RemoteMcpSession(slow, 'https://mcp.example.com/mcp', {}, Date.now() + 45).call('tools/list', {}), /took longer than Pikibun waits/);
+  assert.equal(posts, 2, 'initialize spent the deadline; tools/list was never sent');
+  const stream = 'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress"}\n\nevent: message\ndata: {"jsonrpc":"2.0","id":3,"result":{"content":[]}}\n\n';
+  assert.ok(eventStreamMessages(stream).some(message => answersId(message, 3)));
+  assert.ok(!eventStreamMessages(stream.slice(0, stream.lastIndexOf('{"jsonrpc"') + 20)).some(message => answersId(message, 3)), 'half an event answers nothing');
 });
 
 test('the remote MCP transport reaches only public addresses, checked as it connects', async () => {

@@ -67,9 +67,9 @@ export class ControlPlaneCalls {
     return bytes.length ? decodeJson(bytes, response) : undefined;
   }
 
-  async brokerCallback(generation: Generation, path: string, body: unknown, limit = CALLBACK_LIMIT): Promise<unknown> {
+  async brokerCallback(generation: Generation, path: string, body: unknown, limit = CALLBACK_LIMIT, timeoutMs = RPC_TIMEOUT): Promise<unknown> {
     this.options.requireGeneration(generation);
-    const signal = AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(RPC_TIMEOUT)]);
+    const signal = AbortSignal.any([generation.abort.signal, this.options.lifetime, AbortSignal.timeout(timeoutMs)]);
     const response = await this.#post(generation, path, body, signal);
     const bytes = await boundedBody(response, limit, signal);
     this.options.requireGeneration(generation);

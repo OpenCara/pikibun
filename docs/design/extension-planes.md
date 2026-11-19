@@ -309,4 +309,12 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
 - **Untrusted `readOnlyHint`**: every tool is `write: true` unless its name is in the registration's `readOnlyTools`;
   a write tool is refused for a Read-only message's admission (`run_admissions.access = 'read'`), and every call is
   audited as `workspace.mcp.called` with the server, tool and whether it may write.
+- **Open sessions follow the current registration.** A session reads its workspace's `remoteTools` at each call
+  (`SessionDefinitions.current`): a tool removed or turned off is off for the session (`definedToolsOff`), and a call uses
+  the current `write` flag, schema and route; only the tool's description and schema shown to the model stay as they were
+  until the session next opens.
+- **Deadlines**: a call has one deadline (60 s) for its `initialize`, `notifications/initialized` and `tools/call` together;
+  the connector waits 30 s longer than that for `mcp/` routes, so it never reports a call as failed that the Pikibun server
+  still completes. An event-stream answer is taken as soon as the response with the request's id arrives, without
+  waiting for the server to close the stream. A failed re-listing keeps the tools last listed and shows the error.
 

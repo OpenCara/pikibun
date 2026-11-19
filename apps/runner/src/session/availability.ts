@@ -84,10 +84,11 @@ export class ToolAvailability {
     return !!this.options.config.tunnels && this.tunnelUnavailable() === undefined;
   }
 
-  definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0]): Set<string> {
+  definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0], remoteTools?: readonly ToolDefinition[]): Set<string> {
     for (const definition of this.options.definitions()) {
       off.delete(definition.name);
       if (!definition.extensions.some(extension => extensionSwitchOn(extension, extensions))) off.add(definition.name);
+      if (definition.kind === "brokered" && definition.inputSchema && !remoteTools?.some(item => item.name === definition.name)) off.add(definition.name);
     }
     return off;
   }
@@ -98,7 +99,7 @@ export class ToolAvailability {
     const workspaceId = binding.session.workspaceId;
     const answer = config ? await config.workspace(workspaceId).catch(() => undefined) : undefined;
     const extensions = answer?.extensions ?? [];
-    const off = this.definedToolsOff(sessionToolsOff(extensions), extensions);
+    const off = this.definedToolsOff(sessionToolsOff(extensions), extensions, answer?.remoteTools ?? []);
     for (const tool of (await this.memberToolGroup(binding.owner.id))?.off ?? []) off.add(tool);
     if (senderId !== undefined && senderId !== binding.owner.id) {
       for (const tool of (await this.memberToolGroup(senderId))?.off ?? []) off.add(tool);

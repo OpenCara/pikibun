@@ -6,6 +6,7 @@ import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type
 import type { HostConfig, RequiredExtension } from "../../../../packages/shared/src/host-config.js";
 import { sessionToolsOff } from "../../../../packages/shared/src/piki-extensions.js";
 import type { TunnelUnavailableReason } from "../../../../packages/shared/src/tunnel.js";
+import type { ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
 import type { PromptTokens, RepositoryPreparationView, RunnerBinding, SessionUsageView, SessionView, SudoPromptView, TokenUsage } from "../../../../packages/shared/src/types.js";
 import { sessionActivity, type ActivityEntry } from "../activity.js";
 import { compactionThreshold } from "../compaction.js";
@@ -197,7 +198,7 @@ export interface ExtensionViewSource {
   hostConfig(): Promise<HostConfig>;
   requiredExtensions(): Promise<RequiredExtension[] | undefined>;
   toolNames(): string[];
-  definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0]): Set<string>;
+  definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0], remoteTools?: readonly ToolDefinition[]): Set<string>;
   browserUnavailable(): BrowserUnavailableReason | undefined;
   tunnelUnavailable(): TunnelUnavailableReason | undefined;
   missingPrograms(off: ReadonlySet<string>): { tool: string; source: string; programs: string[] }[];
@@ -228,7 +229,7 @@ export async function extensionView(source: ExtensionViewSource): Promise<Pick<S
     const missing = answer.extensions.filter(item => item.enabled && !requiredPackages.has(extensionPackageKey(item.source))
       && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
     const builtin = source.builtins()?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
-    const off = source.definedToolsOff(sessionToolsOff(answer.extensions), answer.extensions);
+    const off = source.definedToolsOff(sessionToolsOff(answer.extensions), answer.extensions, answer.remoteTools ?? []);
     const browserReason = off.has("browser") ? undefined : source.browserUnavailable();
     const tunnelReason = off.has("tunnel") ? undefined : source.tunnelUnavailable();
     const unavailable = [...(browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : []),

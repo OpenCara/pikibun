@@ -8,7 +8,7 @@ export const remoteMcpLimits = Object.freeze({
   discoverSeconds: 15, callSeconds: 60, responseBytes: 1024 * 1024, resultCharacters: 64 * 1024,
 });
 
-export interface RemoteMcpHttpRequest { url: string; headers: Record<string, string>; body: string; timeoutMs: number; maxBytes: number }
+export interface RemoteMcpHttpRequest { url: string; headers: Record<string, string>; body: string; timeoutMs: number; maxBytes: number; expectId?: number }
 export interface RemoteMcpHttpResponse { status: number; headers: Record<string, string>; body: string }
 export type RemoteMcpTransport = (request: RemoteMcpHttpRequest) => Promise<RemoteMcpHttpResponse>;
 

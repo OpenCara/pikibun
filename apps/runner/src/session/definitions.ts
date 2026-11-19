@@ -1,5 +1,5 @@
 import { defineExtension, type Extension, type Registry, type ToolRegistration } from "@earendil-works/pi-durable";
-import { bundledToolDefinitions, type ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
+import { bundledToolDefinitions, type BrokeredToolDefinition, type ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
 import type { WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
 import { rememberToolDefinitions } from "../defined-tools.js";
 import { wholeForScripts } from "../script-output.js";
@@ -45,6 +45,11 @@ export class SessionDefinitions {
     return [...(fetched ?? bundledToolDefinitions), ...remote];
   }
 
+  async current(name: string): Promise<BrokeredToolDefinition | undefined> {
+    const found = (await this.remote()).find(item => item.name === name);
+    return found?.kind === "brokered" && found.inputSchema ? found : undefined;
+  }
+
   private async remote(): Promise<readonly ToolDefinition[]> {
     const { workspaceId, config } = this.options;
     if (!workspaceId || !config.extensions) return [];
@@ -73,7 +78,8 @@ export class SessionDefinitions {
     const fetched = await this.fetch();
     for (const definition of fetched) {
       const had = this.#definitions.find(item => item.name === definition.name);
-      if (had && JSON.stringify(had) !== JSON.stringify(definition)) this.#note(definition.name, "changed; the session uses it as it was until it next opens");
+      const remote = definition.kind === "brokered" && !!definition.inputSchema;
+      if (had && !remote && JSON.stringify(had) !== JSON.stringify(definition)) this.#note(definition.name, "changed; the session uses it as it was until it next opens");
       else if (!had && extensionTools.includes(definition.name)) this.#note(definition.name, "is offered by one of the workspace's extensions, which keeps it");
     }
     const added = this.usable(fetched, [...this.options.toolNames(), ...extensionTools]);

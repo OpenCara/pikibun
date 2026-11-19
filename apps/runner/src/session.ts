@@ -313,6 +313,7 @@ export class RunnerSession {
     this.#toolContext = {
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, calls: this.#calls, hostCommands: this.hostCommands, wholeResults: this.#wholeResults, operations: this.#operations,
       requireSessionTool: tool => this.#availability.requireSessionTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId),
+      remoteDefinition: name => this.#defined.current(name),
       metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
       programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
@@ -1443,7 +1444,7 @@ export class RunnerSession {
     return extensionView({
       binding: this.binding, config: this.config.extensions, sandboxed: this.sandboxedExtensionChannel(), builtins: () => this.#builtins, hostConfig: () => this.hostConfig(),
       requiredExtensions: () => this.requiredExtensions(), toolNames: () => this.tools.map(tool => tool.name),
-      definedToolsOff: (off, extensions) => this.#availability.definedToolsOff(off, extensions), browserUnavailable: () => this.#availability.browserUnavailable(),
+      definedToolsOff: (off, extensions, remoteTools) => this.#availability.definedToolsOff(off, extensions, remoteTools), browserUnavailable: () => this.#availability.browserUnavailable(),
       tunnelUnavailable: () => this.#availability.tunnelUnavailable(), missingPrograms: off => this.#availability.missingPrograms(off),
     });
   }

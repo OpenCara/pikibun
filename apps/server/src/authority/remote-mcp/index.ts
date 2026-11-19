@@ -223,7 +223,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
         read_only_tools_json = ?, tools_json = ?, enabled = ?, discovered_at = ?, error = ?, updated_by = ?, updated_at = ?
       WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
       .bind(name, url, ciphertext, JSON.stringify(Object.keys(headers)), JSON.stringify(readOnlyTools),
-        found ? JSON.stringify(found.tools) : row.tools_json, enabled ? 1 : 0,
+        found && !found.error ? JSON.stringify(found.tools) : row.tools_json, enabled ? 1 : 0,
         found ? (found.error ? row.discovered_at : at) : row.discovered_at, found ? found.error : row.error, actor, at, serverId, workspaceId, workspaceId, actor).first();
     if (!saved) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);

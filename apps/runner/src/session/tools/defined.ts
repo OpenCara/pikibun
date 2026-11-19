@@ -38,23 +38,31 @@ export function definedTool(context: ToolContext, definition: ToolDefinition): T
       } });
   }
   if (definition.inputSchema) {
-    const validator = compile(definition.inputSchema, { unresolvedRefs: "reject" });
+    const validators = new Map<string, ReturnType<typeof compile>>();
+    const validatorOf = (schema: object) => {
+      const key = JSON.stringify(schema);
+      let found = validators.get(key);
+      if (!found) validators.set(key, found = compile(schema, { unresolvedRefs: "reject" }));
+      return found;
+    };
     return defineTool({ name: definition.name, description: definition.description, parameters: unsafe<Record<string, unknown>>(definition.inputSchema),
       execute: async (input, api, _call) => {
         await context.requireSessionTool(definition.name);
-        const attribution = await calls.actor(api, definition.write);
+        const current = await context.remoteDefinition(definition.name);
+        if (!current) throw new RunnerError(403, `${definition.name} is no longer offered in this workspace. Nothing ran.`);
+        const attribution = await calls.actor(api, current.write);
         const args = (input ?? {}) as Record<string, unknown>;
-        const errors = validator.errors(args);
+        const errors = validatorOf(current.inputSchema!).errors(args);
         if (errors.length) {
           throw new RunnerError(400, `${definition.name}: ${errors.slice(0, 3).map(error => `${error.path || "arguments"} ${error.message}`).join("; ").slice(0, 500)}. Nothing ran.`);
         }
-        await calls.check(api, definition.name, definition.write ? { write: true } : {});
+        await calls.check(api, definition.name, current.write ? { write: true } : {});
         const state = await context.metadata();
         const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
         if (!run.admissionId) throw new RunnerError(403, `${definition.name} needs a message, not a side question`);
         const request = { sessionId: binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId), arguments: args };
         await context.authorize(run.initiatedBy, "write");
-        const result = config.brokered ? await config.brokered(definition.route, request) : await context.operations.internalBroker(definition.route, request);
+        const result = config.brokered ? await config.brokered(current.route, request) : await context.operations.internalBroker(current.route, request);
         return text({ ...attribution, ...(result && typeof result === "object" && !Array.isArray(result) ? result : { result }) });
       } });
   }
