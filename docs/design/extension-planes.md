@@ -130,12 +130,14 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
      5. the session itself opens extensions on a sandboxed channel (`channel.sandboxed === true`, so never on an
         unsandboxed host, never in an on-host session, and never on Windows until its container runs `ProcessChannel`).
    - **Network and file boundary during `npm install`:** `npm` runs **inside a dedicated installing sandbox** (`Sandbox`
-     on Linux, `SeatbeltBackend` on macOS, with its own empty home directory so the host owner's `~/.npmrc` and
-     `~/.gitconfig` aren't visible) behind a local `EgressProxy` whose fixed `EgressGrant` allows HTTPS `CONNECT` to
-     `registry.npmjs.org` alone (`{ mode: "allowlist", domains: ["registry.npmjs.org"], packageRegistries: false }`,
-     checked through `non-public-addresses.ts`). Because the proxy sits in front of `npm` before any dependency is
-     resolved, a direct tarball URL (`http://127.0.0.1/.../x.tgz`), a Git dependency or a redirect to any host other
-     than `registry.npmjs.org` (or to a non-public IP) is refused before a connection is made.
+     on Linux, `SeatbeltBackend` on macOS, with its own empty home directory and both `npm_config_userconfig` and
+     `npm_config_globalconfig` pointed at `/dev/null` so neither `~/.npmrc` nor a host-wide `$PREFIX/etc/npmrc` under
+     `/usr` or the Node.js install can supply a registry token or setting) behind a local `EgressProxy` whose fixed
+     `EgressGrant` allows HTTPS `CONNECT` to `registry.npmjs.org` alone
+     (`{ mode: "allowlist", domains: ["registry.npmjs.org"], packageRegistries: false }`, checked through
+     `non-public-addresses.ts`). Because the proxy sits in front of `npm` before any dependency is resolved, a direct
+     tarball URL (`http://127.0.0.1/.../x.tgz`), a Git dependency or a redirect to any host other than
+     `registry.npmjs.org` (or to a non-public IP) is refused before a connection is made.
    - **Post-install checks (defense in depth):** `npm` runs with `--registry=https://registry.npmjs.org`,
      `npm_config_allow_git=none`, `--ignore-scripts` and `--legacy-peer-deps`. Before the staged directory moves into
      `ExtensionCache`, the connector checks that every entry in `package-lock.json` resolved from
