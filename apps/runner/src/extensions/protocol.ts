@@ -44,8 +44,24 @@ export type ToolResultEvent = {
 
 export type ToolOutput = { content: (TextContent | ImageContent)[]; details?: unknown };
 
+export interface CompleteRequest {
+  source: string;
+  model?: { provider: string; id: string };
+  systemPrompt?: string;
+  messages: { role: "user"; content: (TextContent | ImageContent)[]; timestamp?: number }[];
+  maxTokens?: number;
+}
+
+export interface CompleteAnswer {
+  content: TextContent[];
+  stopReason: string;
+  errorMessage?: string;
+}
+
+export type CompleteHandler = (request: CompleteRequest, signal: AbortSignal) => Promise<CompleteAnswer>;
+
 export interface ExtensionRequests {
-  open: [{ source: string; files: string[]; models: Model<string>[]; mount?: string },
+  open: [{ source: string; files: string[]; models: Model<string>[]; mount?: string; modelCalls?: true },
     { errors: string[]; tools: ExtensionToolDescription[]; commands?: ExtensionCommandDescription[] }];
   command: [Scoped & { name: string; args: string }, CommandAnswer];
   emit: [Scoped & { event: { type: string } & Record<string, unknown> }, null];
