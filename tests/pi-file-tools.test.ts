@@ -314,7 +314,7 @@ test("a path outside the worktree is refused with why, on every backend, before 
     : async () => { touched.push(String(name)); return { text: "x" }; } }) as unknown as SessionWorkspace;
   const metadata = state();
   const tool = pikibunTools(sandbox, metadata);
-  for (const path of ["/etc/hostname", "~/.bashrc", "~", "C:\\x", "\\\\server\\x"]) {
+  for (const path of ["/etc/hostname", "/", "//", "~/.bashrc", "~", "C:\\x", "C:/x", "\\\\server\\x"]) {
     for (const [name, args] of [["read", { path }], ["ls", { path }], ["write", { path, content: "x" }], ["grep", { pattern: "x", path }], ["find", { pattern: "*", path }]] as const) {
       await assert.rejects(tool(name).execute(args as never, api(metadata), {} as never),
         (error: unknown) => error instanceof RunnerError && error.status === 400 && /is not a worktree path/.test(error.message)
@@ -322,6 +322,10 @@ test("a path outside the worktree is refused with why, on every backend, before 
     }
   }
   assert.deepEqual(touched, []);
+  if (process.platform !== "win32") {
+    assert.deepEqual(await tool("read").execute({ path: "a:b.txt" } as never, api(metadata), {} as never).then(result => result.output), [{ type: "text", text: "x" }],
+      "off Windows, a name with a colon is a worktree file, not a drive");
+  }
 });
 
 test("in a session on the host, read takes a host path only in a message that may run host commands; the other file tools stay in the worktree", async t => {

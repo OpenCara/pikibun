@@ -24,6 +24,11 @@ function worktreeArgument(path: string, onHost: boolean): string {
   catch (error) { if (error instanceof PathRefusal) throw new RunnerError(400, error.message); throw error; }
 }
 
+function rawPath(input: unknown, check: (path: string) => string): void {
+  const path = (input as { path?: unknown }).path;
+  if (typeof path === "string" && path) check(path);
+}
+
 function piResult(attribution: ToolAttribution, text: string, details?: object) {
   return { output: [{ type: "text" as const, text }], details: JSON.parse(JSON.stringify({ ...details, pikibun: attribution })) as JsonObject };
 }
@@ -79,6 +84,7 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       description: `List a worktree directory, the worktree's top by default: one entry a line, sorted without regard to case, with / after a directory, dotfiles included. Links are listed as they are, never followed. At most ${LS_DEFAULT_ENTRIES} entries unless limit says otherwise.`,
       execute: async (input, api, _call) => {
         const args = input as { path?: string; limit?: number };
+        inWorktree(args.path ?? ".");
         const attribution = await calls.actor(api, false);
         await calls.check(api, "ls");
         const listed = lsText(await sandbox.listEntries(inWorktree(args.path?.replace(/\/+$/, "") || "."), () => calls.recheck(attribution)), args.limit);
@@ -88,7 +94,7 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       description: `Search the worktree's text files for a regular expression (or, with literal, exact text), as grep -rn does, without a shell. path narrows it to a directory or one file; glob picks files relative to path: one without / matches file names at any depth (*.ts), one with / matches paths (src/**/*.ts). context adds up to ${searchLimits.context} lines around each match; ignoreCase; limit (${searchLimits.defaultResults} matches by default, at most ${searchLimits.maxResults}). It skips .git directories as it walks, and node_modules unless all is true; links, binary and non-UTF-8 files and files over 1 MB are skipped, and .gitignore isn't read. Each match is path:line: text and each context line path-line- text, with paths relative to path; lines over ${GREP_LINE_CHARS} characters are cut. Then read with offset and limit reads around a match.`,
       execute: async (input, api, _call) => {
         let request: SearchRequest;
-        try { request = searchRequest(input as Record<string, unknown>); inWorktree(request.path); }
+        try { rawPath(input, inWorktree); request = searchRequest(input as Record<string, unknown>); inWorktree(request.path); }
         catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid search"); }
         const attribution = await calls.actor(api, false);
         await calls.check(api, "grep");
@@ -99,7 +105,7 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       description: `Find files and directories in the worktree by glob, without a shell. A pattern without / matches names at any depth (*.ts, *.{ts,tsx}); one with / matches paths below path (src/**/*.spec.ts); an all-lowercase pattern matches either case. path is the directory to search (the worktree's top by default). Each result is a path from path, one a line, with / after a directory; ${findLimits.defaultResults} unless limit (at most ${findLimits.maxResults}). It skips .git directories, and node_modules unless all is true; links are listed, never followed, and .gitignore isn't read.`,
       execute: async (input, api, _call) => {
         let request: FindRequest;
-        try { request = findRequest(input as Record<string, unknown>); inWorktree(request.path); }
+        try { rawPath(input, inWorktree); request = findRequest(input as Record<string, unknown>); inWorktree(request.path); }
         catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid find"); }
         const attribution = await calls.actor(api, false);
         await calls.check(api, "find");

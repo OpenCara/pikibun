@@ -31,7 +31,7 @@ export const prepareEditArguments = (args: unknown): unknown => createEditToolDe
 export class PathRefusal extends Error {}
 
 export function outsideWorktree(path: string): boolean {
-  return path === "~" || /^~[\\/]/.test(path) || /^[\\/]/.test(path) || /^[A-Za-z]:/.test(path);
+  return path === "~" || /^~[\\/]/.test(path) || /^[\\/]/.test(path) || (process.platform === "win32" ? /^[A-Za-z]:/ : /^[A-Za-z]:([\\/]|$)/).test(path);
 }
 
 export function worktreePath(path: string, hint = ""): string {
