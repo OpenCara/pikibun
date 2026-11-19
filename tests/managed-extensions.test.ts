@@ -117,8 +117,8 @@ test("a bundled copy's version is its package's: as committed from source, its l
     assert.equal(extension.version, manifest.version, extension.info.source);
   }
   assert.deepEqual(connectorPikiExtensions.filter(item => item.version !== undefined).map(item => item.info.source), ["piki:prompt-audit", "piki:pr-flow", "piki:context-files", "piki:sub-agents"]);
-  assert.deepEqual(connectorPikiExtensions.filter(item => managedSource(item.info.source)).map(item => item.info.source), ["piki:pr-flow", "piki:context-files", "piki:sub-agents"],
-    "the prompt audit runs only as built in until it can run in the extension process");
+  assert.deepEqual(connectorPikiExtensions.filter(item => managedSource(item.info.source)).map(item => item.info.source),
+    ["piki:prompt-audit", "piki:pr-flow", "piki:context-files", "piki:sub-agents"], "the prompt audit too, now that it calls models from its own process");
 });
 
 test("a pinned package that passes every check loads in place of the bundled copy, reports its version, and isn't an installed extension", async t => {
@@ -295,18 +295,17 @@ test("a pin for a piki: name this connector doesn't know installs and loads it; 
   assert.equal(host.report().installed.find(item => item.source === "piki:gone")!.error, "@pikibun/pi-gone@1.0.0 needs connector 9.0.0 or later: update it (npx pikibun@latest connect)");
 });
 
-test("a pin can't replace what the connector runs itself: its command and session-tool extensions, and the prompt audit until it can run elsewhere", async t => {
-  const f = await fixture(t, { "@pikibun/pi-gh": {}, "@pikibun/pi-prompt-audit": {}, "@pikibun/pi-auto-mode": {}, "@pikibun/pi-schedule": {} });
+test("a pin can't replace what the connector runs itself: its command and session-tool extensions; the prompt audit, which can now call models from its own process, can be pinned", async t => {
+  const f = await fixture(t, { "@pikibun/pi-gh": {}, "@pikibun/pi-auto-mode": {}, "@pikibun/pi-schedule": {} });
   const host = f.host({ pikiExtensions: connectorPikiExtensions });
   await host.load();
   const sources = host.loaded.map(item => item.summary.source);
-  assert.equal(await host.applyManaged([pin({ source: "piki:gh", package: "@pikibun/pi-gh", version: "9.0.0" }),
-    pin({ source: "piki:prompt-audit", package: "@pikibun/pi-prompt-audit", version: "9.0.0" }), pin({ source: "piki:auto-mode", package: "@pikibun/pi-auto-mode" }),
+  assert.equal(await host.applyManaged([pin({ source: "piki:gh", package: "@pikibun/pi-gh", version: "9.0.0" }), pin({ source: "piki:auto-mode", package: "@pikibun/pi-auto-mode" }),
     pin({ source: "piki:schedule", package: "@pikibun/pi-schedule" })]), false);
   assert.deepEqual(host.loaded.map(item => item.summary.source), sources);
   assert.ok(host.loaded.every(item => item.factories));
   assert.equal(f.installs.length, 0);
-  assert.ok(f.logs.some(line => /piki:prompt-audit: the pin for @pikibun\/pi-prompt-audit@9.0.0 is ignored/.test(line)));
+  assert.equal(managedSource("piki:prompt-audit"), true);
 });
 
 test("an open session keeps the version it opened with; a session opened after the pin runs the managed package", async t => {

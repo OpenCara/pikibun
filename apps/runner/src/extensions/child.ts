@@ -1,10 +1,12 @@
 import "./jiti-environment.js";
 import { createServer, Socket } from "node:net";
 import { ExtensionWorker } from "./worker.js";
-import type { ExtensionMethod } from "./protocol.js";
+import type { CompleteAnswer, CompleteRequest, ExtensionMethod } from "./protocol.js";
 import { lineReader } from "./lines.js";
+import { completeAnswerOf } from "./complete.js";
 
-type Incoming = { id: number; method: ExtensionMethod; params: Record<string, unknown> } | { cancel: number };
+type Incoming = { id: number; method: ExtensionMethod; params: Record<string, unknown> } | { cancel: number }
+  | { answered: number; value?: CompleteAnswer; error?: string };
 type Outgoing = { id?: number } & Record<string, unknown>;
 
 const CONNECT_TIMEOUT_MS = 60_000;
@@ -67,10 +69,34 @@ const send = (message: Outgoing) => {
     write(message.id !== undefined ? { id: message.id, error: reason } : { warn: { source: "", message: reason } });
   }
 };
-const worker = new ExtensionWorker({ directory, warn: (source, message) => send({ warn: { source, message } }) });
+const asked = new Map<number, { resolve(answer: CompleteAnswer): void; reject(error: Error): void }>();
+let nextAsk = 1;
+const complete = (request: CompleteRequest, signal: AbortSignal) => new Promise<CompleteAnswer>((resolve, reject) => {
+  const ask = nextAsk++;
+  const aborted = () => {
+    if (!asked.delete(ask)) return;
+    send({ cancelAsk: ask });
+    reject(new Error("The model call was aborted"));
+  };
+  asked.set(ask, { resolve: answer => { signal.removeEventListener("abort", aborted); resolve(answer); },
+    reject: error => { signal.removeEventListener("abort", aborted); reject(error); } });
+  signal.addEventListener("abort", aborted, { once: true });
+  send({ ask, complete: request });
+  if (signal.aborted) aborted();
+});
+const worker = new ExtensionWorker({ directory, warn: (source, message) => send({ warn: { source, message } }), complete });
 const running = new Map<number, AbortController>();
 
 serve(message => {
+  if ("answered" in message) {
+    const waiting = asked.get(message.answered);
+    asked.delete(message.answered);
+    if (!waiting) return;
+    const answer = message.error === undefined ? completeAnswerOf(message.value) : undefined;
+    if (!answer) waiting.reject(new Error(typeof message.error === "string" ? message.error.slice(0, 2000) : "The model call gave no answer"));
+    else waiting.resolve(answer);
+    return;
+  }
   if ("cancel" in message) {
     running.get(message.cancel)?.abort();
     return;

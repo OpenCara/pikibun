@@ -10,7 +10,8 @@ import { CONNECTOR_ENVIRONMENT } from "../connector-environment.js";
 import { shellQuote } from "../program-command.js";
 import { pinServiceSocket, SANDBOX_SERVICE_SOCKETS, type ServiceProcess } from "../session-service.js";
 import { lineReader } from "./lines.js";
-import type { ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionToolDescription } from "./protocol.js";
+import type { CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionToolDescription } from "./protocol.js";
+import { completeLimits, completeRequestOf } from "./complete.js";
 
 export type WorkerCommandFor = (directory: string, mounts: readonly string[]) => WorkerCommand | Promise<WorkerCommand>;
 
@@ -21,7 +22,8 @@ export interface WorkerCommand {
   cwd?: string;
 }
 
-type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string; error?: string } | { warn: { source: string; message: string } };
+type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string; error?: string } | { warn: { source: string; message: string } }
+  | { ask: number; complete?: CompleteRequest; invalid?: true } | { cancelAsk: number };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === "string");
@@ -39,6 +41,12 @@ export function replyOf(value: unknown): Reply | undefined {
     const warn = value.warn;
     return isObject(warn) && typeof warn.source === "string" && typeof warn.message === "string" ? { warn: { source: warn.source, message: warn.message } } : undefined;
   }
+  if ("ask" in value) {
+    if (typeof value.ask !== "number" || !Number.isSafeInteger(value.ask)) return undefined;
+    const complete = completeRequestOf(value.complete);
+    return complete ? { ask: value.ask, complete } : { ask: value.ask, invalid: true };
+  }
+  if ("cancelAsk" in value) return typeof value.cancelAsk === "number" && Number.isSafeInteger(value.cancelAsk) ? { cancelAsk: value.cancelAsk } : undefined;
   const { id, error, handlers, tools, toolsSignature } = value;
   if (typeof id !== "number" || !Number.isSafeInteger(id)) return undefined;
   if (error !== undefined) return typeof error === "string" ? { id, error } : undefined;
@@ -77,6 +85,7 @@ export interface ProcessChannelOptions {
   launch?: WorkerLaunch;
   mountAllowed?(path: string): boolean;
   log?(line: string): void;
+  complete?: CompleteHandler;
 }
 
 const SHUTDOWN_GRACE_MS = 2000;
@@ -294,7 +303,7 @@ export function refusedChannel(reason: string): ExtensionChannel {
 }
 
 type Pending = { method: ExtensionMethod; resolve(answer: ExtensionAnswer<ExtensionMethod>): void; reject(error: Error): void };
-type Run = { link?: WorkerLink; opened: Set<string> };
+type Run = { link?: WorkerLink; opened: Set<string>; asks: Map<number, AbortController> };
 
 export class ProcessChannel implements ExtensionChannel {
   #live?: Run;
@@ -386,12 +395,12 @@ export class ProcessChannel implements ExtensionChannel {
   }
 
   async #start(): Promise<Run> {
-    const run: Run = { opened: new Set() };
+    const run: Run = { opened: new Set(), asks: new Map() };
     this.#live = run;
     this.#stale = false;
     const log = this.options.log ?? (line => { process.stderr.write(`Extension process: ${line.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 1000)}\n`); });
     try {
-      run.link = await this.#launch({ reply: reply => this.#reply(reply), log, ended: reason => this.#ended(run, reason) }, [...this.#mounts]);
+      run.link = await this.#launch({ reply: reply => this.#reply(reply, run), log, ended: reason => this.#ended(run, reason) }, [...this.#mounts]);
     } catch (error) {
       if (this.#live === run) this.#live = undefined;
       throw new Error(`The extension process couldn't start: ${error instanceof Error ? error.message : String(error)}`);
@@ -471,7 +480,36 @@ export class ProcessChannel implements ExtensionChannel {
     });
   }
 
-  #reply(reply: Reply): void {
+  #answerAsk(run: Run, ask: number, request: CompleteRequest | undefined): void {
+    const answer = (message: Record<string, unknown>) => {
+      run.asks.delete(ask);
+      if (this.#live === run) run.link?.send({ answered: ask, ...message }, () => {});
+    };
+    if (!request) return answer({ error: "The model call wasn't one the connector takes" });
+    const opened = this.#opened.get(request.source);
+    if (!this.options.complete || !opened?.modelCalls || !run.opened.has(request.source)) {
+      this.options.warn(request.source, "it asked for a model call, which only the extensions the host lets call models may make; it was refused");
+      return answer({ error: "Installed extensions can't call models in Pikibun: the host's credentials stay with its connector." });
+    }
+    if (run.asks.size >= 4) return answer({ error: "Too many model calls at once" });
+    const controller = new AbortController();
+    run.asks.set(ask, controller);
+    const timer = setTimeout(() => controller.abort(), completeLimits.timeoutMs + 5000);
+    timer.unref();
+    void this.options.complete(request, controller.signal)
+      .then(value => answer({ value }), (error: unknown) => answer({ error: (error instanceof Error ? error.message : String(error)).slice(0, 2000) }))
+      .finally(() => clearTimeout(timer));
+  }
+
+  #reply(reply: Reply, run?: Run): void {
+    if ("ask" in reply) {
+      if (run && this.#live === run) this.#answerAsk(run, reply.ask, reply.complete);
+      return;
+    }
+    if ("cancelAsk" in reply) {
+      run?.asks.get(reply.cancelAsk)?.abort();
+      return;
+    }
     if ("warn" in reply) {
       const { source, message } = reply.warn;
       if (source) this.options.warn(source, message);
@@ -486,6 +524,8 @@ export class ProcessChannel implements ExtensionChannel {
   }
 
   #ended(run: Run, reason: string): void {
+    for (const controller of run.asks.values()) controller.abort();
+    run.asks.clear();
     if (this.#live !== run) return;
     this.#live = undefined;
     if (this.#ready === run) this.#ready = undefined;
