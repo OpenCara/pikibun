@@ -21,7 +21,7 @@ const packages: Record<string, { factory: ExtensionFactory; version: string }> =
   "sub-agents": { factory: subAgentsExtension, version: subAgentsPackage.version },
 };
 
-export const bundledOnlySources: ReadonlySet<string> = new Set(["piki:prompt-audit"]);
+export const bundledOnlySources: ReadonlySet<string> = new Set<string>();
 
 export interface PikiExtension {
   info: PikiExtensionInfo;

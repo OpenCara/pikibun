@@ -36,7 +36,7 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    `--managed-extensions` ([extension loading](extension-loading.md)): the source stays `piki:<name>` and the report
    gives the package's version. The host runs the newest of the pinned package, the newest it has run before and the
    bundled copy, whose version is the one committed in `extensions/<name>/package.json`. A pin can also name a `piki:`
-   source the connector doesn't know, which then comes only from npm. `prompt-audit` runs only as bundled for now.
+   source the connector doesn't know, which then comes only from npm. A pinned `prompt-audit` runs in a process of its own outside the session's sandbox and calls its model through the connector ([extension planes](extension-planes.md#phase-4-as-built)).
 3. **One tool per command**, named for it (`gh`, `glab`, `az`), whose arguments are the command's, as a list: it runs
    without a shell (in the sandbox, every word quoted), in the session's worktree or a `directory` in it, with stdin
    closed and no prompts, colors, pagers or update checks, until it exits, its call stops or it reaches its

@@ -1,8 +1,10 @@
 # Decoupling extensions from connectors (#438)
 
-Status: phases 1 to 3 are built (phase 2 with the owner's go-ahead); phase 4 is a plan. Each phase below is one pull
-request. See [Phase 1 as built](#phase-1-as-built), [Phase 2 as built](#phase-2-as-built) and
-[Phase 3 as built](#phase-3-as-built) where the code settles details of the text below.
+Status: phases 1 to 3 are built (phase 2 with the owner's go-ahead), and phase 4's model calls with the prompt audit's
+unbundling; its CLI definitions and `allowModelCalls` for required extensions are still a plan. Each phase below is one
+pull request. See [Phase 1 as built](#phase-1-as-built), [Phase 2 as built](#phase-2-as-built),
+[Phase 3 as built](#phase-3-as-built) and [Phase 4 as built](#phase-4-as-built) where the code settles details of the
+text below.
 
 ## Why
 
@@ -317,4 +319,27 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   the connector waits 30 s longer than that for `mcp/` routes, so it never reports a call as failed that the Pikibun server
   still completes. An event-stream answer is taken as soon as the response with the request's id arrives, without
   waiting for the server to close the stream. A failed re-listing keeps the tools last listed and shows the error.
+
+## Phase 4 as built
+
+- **`complete` goes from the extension process to the connector**, not the other way: the child sends
+  `{ ask, complete: CompleteRequest }`, and the connector answers `{ answered, value | error }` (`child.ts`, `process.ts`);
+  an abort in the extension sends `{ cancelAsk }`, and a process that stops aborts its calls. `ExtensionWorker` gives a
+  source opened with `modelCalls: true` a described registry whose `streamSimple` makes that request (`streamOver`); every
+  other source's still throws `MODEL_CALLS_REFUSED`.
+- **Only `piki:prompt-audit` for now** (`modelCallSources`, `apps/runner/src/extensions/complete.ts`). The connector
+  checks it again on every request (the source was opened with `modelCalls` in the process that asks), validates the
+  request (user messages only, at most 32, text and `image/*` parts, bounded sizes), and calls the session's model or
+  the one named with its own registry (`completeWith`): at most 4,096 tokens, 60 seconds, 4 at once, text-only answers.
+- **The guard runs outside the session's sandbox.** A managed prompt audit opens in a third channel of
+  `SessionExtensions` (`guardChannel`): a `ProcessChannel` the connector starts as the host's user, not
+  `extensionProcess` (the session's sandbox), so the agent whose messages it audits can't touch the process. Its code is
+  a pinned, digest-checked `@pikibun/` package, as trusted as the connector.
+- **`bundledOnlySources` is empty**, so a pin for `piki:prompt-audit` now applies like one for `pr-flow`. No pin exists
+  yet, so every host still runs the bundled copy in the connector until a release pins one.
+- **Not yet:** `allowModelCalls` for a host's required extensions needs a `HostConfig` field older connectors don't
+  refuse (their parser takes a fixed set of keys in each required extension); and `gh`, `glab` and `az` as
+  `ProgramToolDefinition`s need the engine to learn what `apps/runner/src/extensions/piki/command.ts` does today (which
+  subcommands and API methods write, leased tokens in the sandbox, the host's sign-in for on-host sessions). Both are
+  their own pull requests.
 

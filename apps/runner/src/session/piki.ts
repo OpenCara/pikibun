@@ -6,6 +6,7 @@ import type { ChosenExtension } from "../../../../packages/shared/src/host-exten
 import type { ApiReach } from "../../../../packages/shared/src/network.js";
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation, type RunnerBinding } from "../../../../packages/shared/src/types.js";
 import type { ExtensionHost } from "../extensions/adapter.js";
+import { completeWith } from "../extensions/complete.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "../extensions/piki/command.js";
 import { commandLimits } from "../host-config.js";
 import { RunnerError } from "../protocol.js";
@@ -49,13 +50,15 @@ export class SessionPiki {
 
   host(): ExtensionHost {
     const { binding, config } = this.options;
+    const model = () => {
+      const current = this.options.model();
+      return current && config.extensions?.modelRegistry?.find(current.provider, current.modelId) as never;
+    };
+    const registry = config.extensions?.modelRegistry;
     return {
       directory: this.options.sandbox.hostWorktree,
-      ...(config.extensions?.modelRegistry ? { modelRegistry: config.extensions.modelRegistry } : {}),
-      model: () => {
-        const current = this.options.model();
-        return current && config.extensions?.modelRegistry?.find(current.provider, current.modelId) as never;
-      },
+      ...(registry ? { modelRegistry: registry, complete: (request, signal) => completeWith({ modelRegistry: registry, model }, request, signal) } : {}),
+      model,
       thinkingLevel: () => this.options.thinkingLevel(),
       state: async source => {
         const item = (await this.options.extensionChoice()).chosen.find(candidate => candidate.source === source);

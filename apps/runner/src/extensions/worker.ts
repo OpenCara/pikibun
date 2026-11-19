@@ -3,19 +3,21 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Message, Model, TextContent } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, type AssistantMessage, type Context as ModelContext, type ImageContent, type Message, type Model, type TextContent } from "@earendil-works/pi-ai";
 import { createEventBus, createExtensionRuntime, ExtensionRunner, SessionManager, type AgentToolResult, type ExtensionActions, type ExtensionContext,
   type ExtensionContextActions, type ExtensionFactory, type ModelRegistry, type ToolCallEvent, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
 import { isJsonValue } from "./json.js";
 import { loadSource, piLoader, summarizeModules, supportedEvents } from "./load.js";
-import type { ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription, RequestContext, Scoped, ToolOutput } from "./protocol.js";
+import type { CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription, RequestContext, Scoped,
+  ToolOutput } from "./protocol.js";
 
 export interface WorkerOptions {
   directory: string;
   warn(source: string, message: string): void;
   factories?(source: string): { path: string; factory: ExtensionFactory }[] | undefined;
   live?: { model(): Model<string> | undefined; thinkingLevel(): string | undefined; modelRegistry?: ModelRegistry };
+  complete?: CompleteHandler;
 }
 
 export const MODEL_CALLS_REFUSED = "Installed extensions can't call models in Pikibun: a session's model and its host's model list are visible to them, the host's credentials are not.";
@@ -33,12 +35,49 @@ export function modelDescription<T extends Model<string> | undefined>(model: T):
   return JSON.parse(JSON.stringify(rest)) as T;
 }
 
-function describedRegistry(models: () => Model<string>[]): ModelRegistry {
+function userContent(content: unknown): (TextContent | ImageContent)[] {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((part): (TextContent | ImageContent)[] => {
+    if (part?.type === "text" && typeof part.text === "string") return [{ type: "text", text: part.text }];
+    if (part?.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string") return [{ type: "image", data: part.data, mimeType: part.mimeType }];
+    return [];
+  });
+}
+
+export function completionRequest(source: string, model: Model<string> | undefined, context: ModelContext, maxTokens?: number): CompleteRequest {
+  const messages = (context.messages ?? []).map(message => {
+    if (message.role !== "user") throw new Error("An extension's model call sends only user messages");
+    return { role: "user" as const, content: userContent(message.content), ...(typeof message.timestamp === "number" ? { timestamp: message.timestamp } : {}) };
+  });
+  return { source, ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
+    ...(typeof context.systemPrompt === "string" ? { systemPrompt: context.systemPrompt } : {}), messages,
+    ...(typeof maxTokens === "number" ? { maxTokens } : {}) };
+}
+
+function streamOver(source: string, complete: CompleteHandler) {
+  return (model: Model<string> | undefined, context: ModelContext, options?: { signal?: AbortSignal; maxTokens?: number }) => {
+    const stream = createAssistantMessageEventStream();
+    const signal = options?.signal ?? new AbortController().signal;
+    const message = (content: TextContent[], stopReason: string, errorMessage?: string): AssistantMessage => ({
+      role: "assistant", content, api: model?.api ?? "unknown", provider: model?.provider ?? "unknown", model: model?.id ?? "unknown",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason, ...(errorMessage ? { errorMessage } : {}), timestamp: Date.now(),
+    } as unknown as AssistantMessage);
+    void Promise.resolve().then(() => complete(completionRequest(source, model, context, options?.maxTokens), signal))
+      .then(answer => stream.end(message(answer.content, answer.stopReason, answer.errorMessage)),
+        (error: unknown) => stream.end(message([], signal.aborted ? "aborted" : "error", error instanceof Error ? error.message : String(error))));
+    return stream;
+  };
+}
+
+function describedRegistry(models: () => Model<string>[], streamSimple?: ReturnType<typeof streamOver>): ModelRegistry {
   const known: Record<string, unknown> = {
     getAll: () => models(),
     getAvailable: () => models(),
     find: (provider: string, id: string) => models().find(model => model.provider === provider && model.id === id),
     getError: () => undefined,
+    ...(streamSimple ? { streamSimple } : {}),
   };
   return new Proxy(known, {
     get: (target, name) => typeof name === "string" && name in target ? target[name] : typeof name === "string" && name !== "then"
@@ -217,7 +256,9 @@ export class ExtensionWorker {
     const runtime = createExtensionRuntime();
     const factories = this.options.factories?.(source);
     const result = await loadSource(factories ? { files: params.files, factories } : { files: params.files }, directory, createEventBus(), runtime);
-    const runner = new ExtensionRunner(result.extensions, runtime, directory, SessionManager.inMemory(directory), this.#registry ?? (undefined as never));
+    const registry = !this.options.live && params.modelCalls && this.options.complete
+      ? describedRegistry(() => this.#models, streamOver(source, this.options.complete)) : this.#registry;
+    const runner = new ExtensionRunner(result.extensions, runtime, directory, SessionManager.inMemory(directory), registry ?? (undefined as never));
     runner.bindCore(noActions(runner, message => warn(source, message), () => this.thinkingLevel()), contextActions(() => this.model()));
     const declined = async () => ({ cancelled: true });
     runner.bindCommandContext({ waitForIdle: async () => {}, newSession: declined, fork: declined, navigateTree: declined, switchSession: declined,

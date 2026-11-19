@@ -261,8 +261,17 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
   managed packages) gets a registry that finds and lists the host's models, without their `headers`, and refuses every
   other method, `streamSimple` and `getApiKeyForProvider` among them, with `MODEL_CALLS_REFUSED`. Its `ctx.model` is a
   description too.
-- **The connector's own extensions keep the registry.** The prompt audit calls a model on purpose, with the owner's
-  account, and it is reviewed and released with the connector (`bundledOnlySources`), so it never comes from npm.
+- **The connector's own extensions keep the registry.** The prompt audit's bundled copy calls a model on purpose, with
+  the owner's account, reviewed and released with the connector.
+- **A pinned prompt audit asks the connector, and never holds a key** (#438 phase 4; `apps/runner/src/extensions/complete.ts`,
+  `process.ts` `#answerAsk`, `worker.ts` `streamOver`). A managed `@pikibun/pi-prompt-audit` runs in a process of its own,
+  started by the connector outside the session's sandbox, so the agent it audits can't reach it. Its registry's
+  `streamSimple` sends a `complete` request (user messages, a system prompt, a model by provider and id) over the
+  process's channel; the connector checks that the source is in `modelCallSources` and was opened with `modelCalls` in
+  that very process, calls the model with its own registry (at most 4,096 tokens, 60 seconds, 4 calls at once), and
+  answers text only. Keys, `models.json` headers and the model's thinking never cross. Any other source, or a request it
+  can't parse, is refused and logged. The pin itself is checked as every managed package is (digest, scope, versions only
+  go up).
 - **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
   through Pi's API now is what they will reach from their own process.
 

@@ -10,7 +10,8 @@ import { pikibunOwn, type LoadedSource } from "./load.js";
 import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
 import { wholeForScripts } from "../script-output.js";
-import type { CommandAnswer, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription } from "./protocol.js";
+import { modelCallSources } from "./complete.js";
+import type { CommandAnswer, CompleteHandler, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription } from "./protocol.js";
 import { addedPrompt, directChannel, ExtensionWorker, modelDescription } from "./worker.js";
 import { ProcessChannel } from "./process.js";
 
@@ -30,6 +31,7 @@ export interface ExtensionHost {
   warn(source: string, message: string): void;
   readonly piki?: PikiSession;
   extensionProcess?(warn: (source: string, message: string) => void): ExtensionChannel;
+  complete?: CompleteHandler;
 }
 
 export const ExtensionPrompts = defineDoc<{ prompts: Record<string, string> }>({ kind: "pikibun.extension-prompts", version: 1, scope: "conversation",
@@ -129,6 +131,7 @@ export class SessionExtensions {
   #started = false;
   #connector?: ExtensionChannel;
   #isolated?: ExtensionChannel;
+  #guard?: ExtensionChannel;
 
   constructor(private readonly host: ExtensionHost, reserved: Iterable<string> = []) {
     this.#reserved = new Set(reserved);
@@ -156,11 +159,17 @@ export class SessionExtensions {
     return this.#isolated ??= host.extensionProcess?.(warn) ?? new ProcessChannel({ directory: host.directory, warn });
   }
 
+  private guardChannel(): ExtensionChannel {
+    const { host } = this;
+    return this.#guard ??= new ProcessChannel({ directory: host.directory, warn: (source, message) => host.warn(source, message),
+      ...(host.complete ? { complete: host.complete } : {}) });
+  }
+
   async ensure(sources: readonly LoadedSource[]): Promise<void> {
     const opened: OpenedSource[] = [];
-    const mounts = sources.filter(loaded => !loaded.factories && !loaded.summary.error && !this.#opened.some(item => item.source === loaded.summary.source))
-      .map(loaded => loaded.mount);
-    if (mounts.length) this.channel(false).mount?.(mounts);
+    const sandboxedMounts = sources.filter(loaded => !loaded.factories && !loaded.summary.error && !modelCallSources.has(loaded.summary.source)
+      && !this.#opened.some(item => item.source === loaded.summary.source)).map(loaded => loaded.mount);
+    if (sandboxedMounts.length) this.channel(false).mount?.(sandboxedMounts);
     for (const loaded of sources) {
       const source = loaded.summary.source;
       if (this.#opened.some(item => item.source === source) || loaded.summary.error) continue;
@@ -169,9 +178,11 @@ export class SessionExtensions {
         const factories = piki ? loaded.factories!.map(item => ({ path: item.path, factory: piki.forSession(this.host.piki ?? noPikiSession) })) : loaded.factories;
         if (factories) this.#factories.set(source, factories);
         const models = factories ? [] : listedModels(this.host);
-        const channel = this.channel(factories !== undefined);
+        const guard = factories === undefined && modelCallSources.has(source);
+        const channel = guard ? this.guardChannel() : this.channel(factories !== undefined);
         const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
-        const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}) });
+        const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}),
+          ...(guard && this.host.complete ? { modelCalls: true as const } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
@@ -307,7 +318,7 @@ export class SessionExtensions {
 
   async shutdown(): Promise<void> {
     await this.each({ type: "session_shutdown", reason: "quit" });
-    for (const channel of [this.#connector, this.#isolated]) await channel?.close().catch(() => {});
+    for (const channel of [this.#connector, this.#isolated, this.#guard]) await channel?.close().catch(() => {});
   }
 }
 

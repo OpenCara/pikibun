@@ -133,9 +133,9 @@ The catalogue's entries are four kinds of thing, and each kind leaves the connec
    tag at its commit (`scripts/set-release-version.mjs`). A bundled copy with changes since that tag still reports the
    tag, so a pin of that version replaces it with the published one, never with an older one.
 
-   Some sources run only from their bundled copy, whatever is pinned: a list in the connector, which holds
-   `piki:prompt-audit` until phase 4 (it needs the host's model keys, which the extension process of phase 2 won't
-   have). The connector ignores a pin for one of them, and so for a source whose connector copy isn't a hook package:
+   Some sources run only from their bundled copy, whatever is pinned: a list in the connector (`bundledOnlySources`),
+   which held `piki:prompt-audit` until it could ask the connector for model calls from its own process; it is empty
+   now ([extension planes](extension-planes.md#phase-4-as-built)). The connector ignores a pin for one of them, and so for a source whose connector copy isn't a hook package:
    a command extension (`piki:gh`), a session-tool switch or one the control plane runs (`piki:auto-mode`).
 
 8. **A new version applies when a session next opens the extension.** A session opens each extension the first time
