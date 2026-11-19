@@ -260,6 +260,9 @@ key, so two directories of one repository are two extensions, and another commit
 
 ## Later
 
+- Decoupling extensions from connectors across Pikibun-server / remote, session-sandbox and host planes (auto-caching
+  pinned `npm:` packages on sandboxed hosts, Pikibun-server extension metadata, Remote MCP servers and policy-gated
+  model calls): planned in [extension-planes.md](extension-planes.md) (#438).
 - Isolation in the session's sandbox on Windows, whose process container is started through a runner of its own: the rest of
   [extension-isolation.md](extension-isolation.md)'s step 3.
 - Pikibun's own hook packages (`piki:pr-flow`, `piki:context-files`, `piki:prompt-audit`) installed by the store at a

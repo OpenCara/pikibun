@@ -126,6 +126,8 @@ So the connector is now an engine for both kinds, and the control plane describe
 
 ## Later
 
+- Bounded JSON Schema (`inputSchema`), `readOnlySafe` and Workspace Remote MCP tools as brokered definitions: planned in
+  [extension-planes.md](extension-planes.md) (#438).
 - `python` and `git` as definitions: python's `venv` parameter and `-m module` launching, and git's subcommand list and
   abbreviated, clustered options, need rule kinds of their own.
 - `gh`, `glab` and `az` as program tools in the sandbox, with the proxy's credentials as a definition's field.

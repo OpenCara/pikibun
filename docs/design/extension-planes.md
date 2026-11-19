@@ -80,16 +80,18 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
      32 `extensionLimits.connector` slots and skipping 24 empty loader runs at connector start.
 
 2. **Workspace extensions lock an immutable digest (`integrity`).**
-   - `workspace_extensions` gains `integrity TEXT` (nullable; migrations for SQLite and Postgres).
+   - Workspace extensions lock an immutable digest (`integrity`) for `npm:` packages (`workspace_extensions.integrity`,
+     nullable `TEXT`; migrations for SQLite and Postgres).
    - For `npm:<package>@<version>`, `PUT /api/workspaces/:id/extensions` resolves the version's `dist.integrity`
-     (`sha512-...`, matching `INTEGRITY` in `packages/shared/src/managed-extensions.ts`) from the npm registry (or
-     accepts a caller-supplied `sha512-...` that matches the registry when reachable) and stores it. If the Pikibun
-     server cannot reach the registry when the row is saved, `integrity` starts `NULL` (so airgapped self-hosted setups
-     still save the extension for manually installed Plane 3 hosts) and is locked on the first verified install report or
-     refresh; once set for `(workspace_id, source)`, `integrity` never changes without changing `source`.
-   - For `git:<url>@<commit>[#<directory>]`, the 40-character hexadecimal commit SHA already pins the Git object; npm's
-     `package-lock.json` is checked to confirm the resolved URL ends with `#<commit>` and installs one package with
-     `--ignore-scripts`.
+     (`sha512-...`, matching `INTEGRITY` in `packages/shared/src/managed-extensions.ts`) from
+     `https://registry.npmjs.org` (or accepts a caller-supplied `sha512-...` that matches the registry when reachable)
+     and stores it. If the Pikibun server cannot reach the registry when the row is saved, `integrity` starts `NULL` (so
+     airgapped self-hosted setups still save the extension for manually installed Plane 3 hosts) and is locked on the
+     first verified install report or refresh; once set for `(workspace_id, source)`, `integrity` never changes without
+     changing `source`.
+   - `git:<url>@<commit>[#<directory>]` sources stay Plane 3 (installed explicitly by the host's owner in
+     `ExtensionStore`): an arbitrary `https://` Git URL could otherwise reach a shared host's private network or
+     tailnet when fetched outside a session's proxy.
    - `WorkspaceExtension` and `HostRequiredExtension` carry optional `integrity?: string` on the wire; older connectors
      ignore unknown fields or receive `WorkspaceExtension` without `integrity` unless they send `extensionLocks: true`
      in `POST /api/connectors/self/extensions/workspace`.
@@ -113,28 +115,34 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
      keeping at most 128 cached packages (`CACHE_PACKAGES_LIMIT`). Explicit `pikibun extensions add` entries stay in
      `<state-dir>/extensions/sources.json` (`ExtensionStore`) and are never pruned.
 
-4. **Lazy auto-provisioning on Plane 2 (sandboxed sessions only).**
-   - Auto-provisioning of a workspace's `npm:` or `git:` extension runs **only** when all four hold:
-     1. `remoteInstalls` is true (not `pikibun connect --no-remote-installs`);
-     2. the host's `autoCacheExtensions` option is enabled (opt-in in phase 1 via `--auto-cache-extensions` and
+4. **Lazy auto-provisioning on Plane 2 (sandboxed sessions, `npm:` packages with `integrity`).**
+   - Auto-provisioning of a workspace's `npm:` extension runs **only** when all five hold:
+     1. `source` is `npm:<package>@<version>` with a `sha512-...` `integrity` lock;
+     2. `remoteInstalls` is true (not `pikibun connect --no-remote-installs`);
+     3. the host's `autoCacheExtensions` option is enabled (opt-in in phase 1 via `--auto-cache-extensions` and
         `HostConfig.autoCacheExtensions`; on by default for sandboxed hosts in phase 2 after owner go-ahead);
-     3. the connector's `describe` runs inside an OS sandbox (`sandboxDescribe` on Linux, `helperDescribe` on macOS);
-     4. the session itself opens extensions on a sandboxed channel (`channel.sandboxed === true`, so never on an
+     4. the connector's `describe` runs inside an OS sandbox (`sandboxDescribe` on Linux, `helperDescribe` on macOS);
+     5. the session itself opens extensions on a sandboxed channel (`channel.sandboxed === true`, so never on an
         unsandboxed host, never in an on-host session, and never on Windows until its container runs `ProcessChannel`).
-   - For `npm:` sources, `integrity` must be present on the `WorkspaceExtension` (or `HostRequiredExtension`) and match
-     `package-lock.json`'s `packages["node_modules/<pkg>"].integrity` (`--ignore-scripts`, `--legacy-peer-deps`).
-     Unlike `@pikibun/*` managed pins (which have zero transitive dependencies), third-party Pi extensions may have pure
-     JS dependencies in `node_modules`: npm runs with `--ignore-scripts` for the entire tree, every entry in
-     `package-lock.json` must come from `https://registry.npmjs.org/` (no `git+`, `file:`, `http:` or tarball URL
-     dependencies, `hasInstallScript` ignored because `--ignore-scripts` is passed), and the root dependency's version
-     and `integrity` must equal the workspace's lock.
+   - npm runs against `https://registry.npmjs.org` alone (`--registry=https://registry.npmjs.org`,
+     `npm_config_allow_git=none`, `--ignore-scripts`, `--legacy-peer-deps`) with `npm_config_userconfig` and
+     `npm_config_globalconfig` pointed at `/dev/null` (an empty file on Windows), so a shared host's `~/.npmrc` tokens,
+     private registries and Git credentials are never read or sent. Every entry in `package-lock.json` must resolve from
+     `https://registry.npmjs.org/`, and the root package's version and `integrity` must equal the workspace's lock.
+   - **What that bounds, and what it doesn't:** the root package's tarball is verified by two parties (npm and the
+     Pikibun server's stored `integrity`), nothing runs during `npm install`, and the loaded code runs only inside the
+     describing sandbox and the session's sandboxed `ProcessChannel` (`MODEL_CALLS_REFUSED`, behind the workspace's
+     egress proxy). A third-party package's own transitive npm dependencies, if it declares ranges, resolve from the
+     public registry when the cache entry is populated and run inside that same sandbox, as `pnpm install` inside a
+     session's worktree does.
    - When a session prepares a message (`chosenExtensions` in `apps/runner/src/session.ts`), any enabled workspace
-     extension (or `requiredExtensions` entry) not in `ExtensionStore` that meets the four rules above is ensured in
+     extension (or `requiredExtensions` entry) not in `ExtensionStore` that meets the five rules above is ensured in
      `ExtensionCache` (under `START_TIMEOUT_MS`, 60 seconds, with a 10-minute backoff per failed `(source, integrity)`
      key so a broken package doesn't stall every message), described in the describing sandbox, and opened in the
      session's sandboxed `ProcessChannel`.
-   - On Plane 3 (unsandboxed hosts, on-host sessions, Windows, or `--no-remote-installs`), nothing is auto-fetched:
-     `sessionExtensions` keeps requiring an explicit install in `ExtensionStore`, and the session panel says why.
+   - On Plane 3 (unsandboxed hosts, on-host sessions, Windows, `git:` sources, or `--no-remote-installs`), nothing is
+     auto-fetched: `sessionExtensions` keeps requiring an explicit install in `ExtensionStore`, and the session panel
+     says why.
 
 5. **Pikibun server caches extension descriptions by `(source, integrity)` (`extension_descriptions`).**
    - A new table `extension_descriptions (source TEXT, integrity TEXT, description_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (source, integrity))`
