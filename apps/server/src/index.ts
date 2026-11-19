@@ -4,7 +4,7 @@ import type { AppEnv } from './types.js';
 import {
   assertVaultConfigured, authenticate, csrfGuard, localOwner, registerAdmin, registerAppCodes, registerAuth, registerGitAccounts, registerHostAccess,
   registerNetworkPolicies, registerOidc, registerPasswordAuth, registerPushIdentities, registerRepositories, registerAudienceSharing,
-  registerSourceOAuth, registerSources, registerWorkspaceConnections, registerGitHubReach,
+  registerSourceOAuth, registerSources, registerWorkspaceConnections, registerGitHubReach, registerRemoteMcp,
 } from './authority/index.js';
 import { registerCatalog } from './catalog.js';
 import { registerSessions } from './sessions.js';
@@ -101,6 +101,7 @@ registerCatalog(app);
 registerWorkspaceInvites(app);
 registerRepositories(app);
 registerSources(app);
+registerRemoteMcp(app);
 registerWorkspaceConnections(app);
 registerSourceOAuth(app);
 registerPushIdentities(app);

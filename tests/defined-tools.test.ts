@@ -19,6 +19,7 @@ import { bundledToolDefinitions, parseToolDefinition, parseToolDefinitions, rese
 import { pikiExtension, pikiSessionToolExtensions } from "../packages/shared/src/piki-extensions.js";
 import { pikibunToolDescriptions } from "../packages/shared/src/workspace-tools.js";
 import { parseWorkspaceExtensions, type WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
+import { sanitizeInputSchema } from "../packages/shared/src/input-schema.js";
 import { toolNames, type OperationRecord, type AuthorizationRequest, type RunnerAction, type RunnerBinding, type RunnerTicket } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { writeFile } from "node:fs/promises";
@@ -154,6 +155,68 @@ test("operations name the tools this server defines, and connectors take the swi
   assert.throws(() => parseWorkspaceExtensions([...regular, { source: "npm:one-too-many@1.0.0" }]), /Invalid extensions/);
   const known = pikiSessionToolExtensions().map(item => off(item.source));
   assert.equal(parseWorkspaceExtensions([...regular, ...known, off("piki:jvm"), off("piki:notes")]).length, 32 + known.length + 2);
+});
+
+test("a brokered tool may take a bounded JSON Schema instead of parameters: a schema it can't bound is refused, never trusted", () => {
+  const tracker: BrokeredToolDefinition = { kind: "brokered", name: "tracker_search", extensions: ["piki:remote-mcp"], description: "Search the tracker.",
+    parameters: {}, target: [], route: "mcp/tracker/0123456789abcdef", write: false,
+    inputSchema: { type: "object", properties: { query: { type: "string", maxLength: 100 }, labels: { type: "array", items: { type: "string", enum: ["bug", "feature"] } } }, required: ["query"] } };
+  assert.deepEqual(parseToolDefinition(JSON.parse(JSON.stringify(tracker))), tracker);
+  assert.throws(() => parseToolDefinition({ ...tracker, parameters: { query: { type: "string" } } }), /inputSchema/, "parameters or a schema, not both");
+  assert.throws(() => parseToolDefinition({ ...tracker, target: ["query"] }), /Invalid tool definition/);
+  const deep = (depth: number): Record<string, unknown> => depth ? { type: "object", properties: { next: deep(depth - 1) } } : { type: "string" };
+  for (const [why, schema] of [
+    ["a $ref", { type: "object", properties: { a: { $ref: "#/$defs/a" } } }],
+    ["patternProperties", { type: "object", patternProperties: { "^a": { type: "string" } } }],
+    ["another root type", { type: "array" }],
+    ["a long pattern", { type: "object", properties: { a: { type: "string", pattern: "a".repeat(300) } } }],
+    ["a pattern that isn't one", { type: "object", properties: { a: { type: "string", pattern: "(" } } }],
+    ["too deep", deep(7)],
+    ["too many properties", { type: "object", properties: Object.fromEntries(Array.from({ length: 65 }, (_, index) => ["p" + index, { type: "string" }])) }],
+    ["too large", { type: "object", properties: Object.fromEntries(Array.from({ length: 40 }, (_, index) => ["p" + index, { type: "string", description: "x".repeat(2000) }])) }],
+  ] as const) {
+    assert.equal(sanitizeInputSchema(schema), undefined, why);
+    assert.throws(() => parseToolDefinition({ ...tracker, inputSchema: schema }), /Invalid tool definition/, why);
+  }
+  assert.deepEqual(sanitizeInputSchema({ $schema: "x", properties: { a: { type: "string", examples: ["x"], "x-vendor": 1 } } }), { type: "object", properties: { a: { type: "string" } } },
+    "keywords outside the bounded set are left out");
+});
+
+test("a session offers its workspace's remote tools, checks their arguments against their schema, and brokers each call with its admission",
+  { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-remote-tools-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("tracker_search", { labels: ["bug"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("tracker_search", { query: "bug" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Done."),
+  ] as never);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const tracker: BrokeredToolDefinition = { kind: "brokered", name: "tracker_search", extensions: ["piki:remote-mcp"], description: "Search the tracker.",
+    parameters: {}, target: [], route: "mcp/tracker/0123456789abcdef", write: false,
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } };
+  const calls: { route: string; request: Record<string, unknown> }[] = [];
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-remote-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false, remoteTools: [tracker] }) },
+    toolDefinitions: async () => bundledToolDefinitions,
+    brokered: async (route, request) => { calls.push({ route, request }); return { result: "3 issues" }; },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "remote-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Search.", requestId: "first", admissionId: await sha256("remote first") }, "write");
+  await idle(session);
+  const transcript = (await session.view()).entries.map(entry => entry.text).join("\n");
+  assert.match(transcript, /3 issues/);
+  assert.equal(calls.length, 1, "the call without its required query never left the session");
+  assert.equal(calls[0]!.route, "mcp/tracker/0123456789abcdef");
+  assert.deepEqual({ ...calls[0]!.request, callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId: await sha256("remote first"), callId: undefined, arguments: { query: "bug" } });
 });
 
 function binding(id: string): RunnerBinding {

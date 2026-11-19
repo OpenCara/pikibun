@@ -1,8 +1,8 @@
 # Decoupling extensions from connectors (#438)
 
-Status: phases 1 and 2 are built (phase 2 with the owner's go-ahead); phases 3 and 4 are a plan. Each phase below is one
-pull request. See [Phase 1 as built](#phase-1-as-built) and [Phase 2 as built](#phase-2-as-built) where the code settles
-details of the text below.
+Status: phases 1 to 3 are built (phase 2 with the owner's go-ahead); phase 4 is a plan. Each phase below is one pull
+request. See [Phase 1 as built](#phase-1-as-built), [Phase 2 as built](#phase-2-as-built) and
+[Phase 3 as built](#phase-3-as-built) where the code settles details of the text below.
 
 ## Why
 
@@ -277,4 +277,36 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
 - **Describing fails closed:** the `ExtensionCache` describer passes `refusingDescribe` as the fallback to
   `sandboxDescribe` and `helperDescribe`, so a cache path the sandbox refuses to mount fails rather than falling back to
   an unsandboxed `processDescribe`.
+
+
+## Phase 3 as built
+
+- **`inputSchema` replaces `parameters` for a brokered tool that has one** (`packages/shared/src/tool-definitions.ts`,
+  bounded by `sanitizeInputSchema` in `packages/shared/src/input-schema.ts`): the root is `type: "object"`, at most 64
+  properties in all, 6 levels deep and 32 KB serialized; `$ref`, `$defs`, `definitions` and `patternProperties` refuse
+  the schema, a `pattern` must compile and be at most 256 characters, and keywords outside the bounded set (`$schema`,
+  `examples`, vendor keys) are dropped. Such a definition has empty `parameters` and `target`. Older connectors skip a
+  definition with a key they don't know (`parseToolDefinitions` passes over what fails to parse), so they never see one.
+- **`readOnlySafe` is the existing `write` flag.** A brokered tool with `write: false` already runs in Read-only messages
+  (`ToolCalls.check` refuses only write effects there), so no second flag was added. Side questions (`mode: "ask"`) have
+  no run admission and still can't call brokered tools; the Pikibun server checks the admission as for `source_read`.
+- **Workspace remote MCP servers** (`workspace_mcp_servers`, an authority table; `apps/server/src/authority/remote-mcp/`):
+  owners and admins add up to 8 per workspace (`/api/workspaces/:id/mcp-servers`) by name, a prefix
+  (`^[a-z][a-z0-9]{0,15}$`, unique in the workspace, starting each tool's name), an `https://` address without
+  credentials, and up to 8 headers, which are encrypted with `VAULT_KEY` (context `remote-mcp:<id>`), never shown again
+  (only their names) and never audited. The Pikibun server speaks Streamable HTTP (JSON or SSE answers, `Mcp-Session-Id`,
+  `MCP-Protocol-Version: 2025-06-18`), lists tools on save and on **List tools again** (15 s), and calls them (60 s),
+  each answer capped at 1 MB and a result shown to the model at 64 KB, text parts only.
+- **Only public addresses**: `publicHttpsTransport` connects with a `lookup` that refuses any resolved address in
+  `NON_PUBLIC_IPV4` / `NON_PUBLIC_IPV6` as it connects (so a name that rebinds to a private address after a check gets
+  nowhere), refuses literal private addresses, and follows no redirect.
+- **Delivery**: connectors that send `remoteTools: true` on `/api/connectors/self/extensions/workspace` get
+  `WorkspaceExtensionsAnswer.remoteTools`, brokered definitions named `<prefix>_<tool>`, switched by
+  `piki:remote-mcp` (on unless a workspace turns it off), routed to `mcp/<prefix>/<16-hex key of the tool's name>`, which
+  the connector forwards to `/api/connectors/self/mcp/:prefix/:key` with the session, requester, admission and
+  `arguments`. The session validates `arguments` against the schema before forwarding, and the Pikibun server again
+  (pi-schema `compile`) before calling.
+- **Untrusted `readOnlyHint`**: every tool is `write: true` unless its name is in the registration's `readOnlyTools`;
+  a write tool is refused for a Read-only message's admission (`run_admissions.access = 'read'`), and every call is
+  audited as `workspace.mcp.called` with the server, tool and whether it may write.
 

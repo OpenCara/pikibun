@@ -1,12 +1,14 @@
 import { defineExtension, type Extension, type Registry, type ToolRegistration } from "@earendil-works/pi-durable";
 import { bundledToolDefinitions, type ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
+import type { WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
 import { rememberToolDefinitions } from "../defined-tools.js";
 import { wholeForScripts } from "../script-output.js";
 
 export interface SessionDefinitionsOptions {
   sessionId: string;
   windows: boolean;
-  config: { toolDefinitions?: () => Promise<readonly ToolDefinition[]> };
+  workspaceId?: string;
+  config: { toolDefinitions?: () => Promise<readonly ToolDefinition[]>; extensions?: { workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer> } };
   tool(definition: ToolDefinition): ToolRegistration;
   registry(): Registry | undefined;
   toolNames(): string[];
@@ -39,7 +41,15 @@ export class SessionDefinitions {
     const config = this.options.config;
     const fetched = config.toolDefinitions ? await config.toolDefinitions().catch(() => undefined) : undefined;
     if (fetched) rememberToolDefinitions(fetched);
-    return fetched ?? bundledToolDefinitions;
+    const remote = await this.remote();
+    return [...(fetched ?? bundledToolDefinitions), ...remote];
+  }
+
+  private async remote(): Promise<readonly ToolDefinition[]> {
+    const { workspaceId, config } = this.options;
+    if (!workspaceId || !config.extensions) return [];
+    const answer = await config.extensions.workspace(workspaceId).catch(() => undefined);
+    return answer?.remoteTools ?? [];
   }
 
   usable(definitions: readonly ToolDefinition[], own: readonly string[]): ToolDefinition[] {

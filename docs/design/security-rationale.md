@@ -183,6 +183,34 @@ What it doesn't protect against: outside a sandboxed session on Linux or macOS, 
 host's user, outside the sandbox ([extension isolation](extension-isolation.md)), and a version reaches every host that
 opted in within a sync. That is why it stays opt-in on hosts without the sandbox until extensions run in it on every platform.
 
+## Workspace remote MCP servers
+
+`apps/server/src/authority/remote-mcp/` (`index.ts`, `client.ts`, `transport.ts`), `packages/shared/src/remote-mcp.ts`,
+`packages/shared/src/input-schema.ts`; the plan is [Decoupling extensions from connectors](extension-planes.md) (#438,
+phase 3). The Pikibun server calls a workspace's remote MCP servers itself and offers their tools to sessions as brokered
+tools. What bounds that:
+
+- **Credentials stay on the Pikibun server.** Headers are encrypted with `VAULT_KEY` under a per-server context, never
+  returned (only their names), never audited, and never sent to a connector or a session: hosts get only tool
+  definitions.
+- **No private networks.** Only `https://` addresses without credentials; the transport's `lookup` refuses every
+  resolved address in `NON_PUBLIC_IPV4` / `NON_PUBLIC_IPV6` at connect time (no rebinding window), literal private
+  addresses are refused, and redirects aren't followed. So a workspace admin can't use the Pikibun server to reach its own
+  network, a cloud metadata address or a tailnet.
+- **A call needs what a write message gives.** The connector route checks the requester's live write permission, the
+  session's host, an unexpired run admission of the requester's message, and that the server and tool are still there
+  and enabled in the session's workspace, before and again after the call. Tool groups name Pikibun's own tools, so they
+  don't list remote MCP tools one by one; a workspace turns all of them off with `piki:remote-mcp`, or a server with its
+  **Enabled** switch.
+- **Read-only is decided by the workspace, not the server.** `readOnlyHint` is ignored; a tool is read-only only if an
+  owner or admin listed it, and any other tool is refused for a Read-only message's admission.
+- **Untrusted schemas and answers are bounded.** Input schemas are sanitized to a small keyword set with size, depth and
+  property limits and no references; arguments are validated in the session and on the Pikibun server; answers are capped
+  at 1 MB and results at 64 KB of text; non-text content is left out.
+
+What it doesn't protect against: a server the workspace chose can return misleading text (the model is told to treat it
+as information), and it sees the arguments the model sends it.
+
 ## Sandboxed auto-cached workspace extensions
 
 `apps/runner/src/extensions/cache.ts` (`ExtensionCache`, `sandboxExtensionInstaller`, `helperExtensionInstaller`,

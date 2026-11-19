@@ -1,0 +1,128 @@
+import { signal, Text, untracked, View } from "nsh";
+import { remoteMcpLimits, type WorkspaceMcpServer } from "../../../../packages/shared/src/remote-mcp";
+import { descriptionSummary } from "../../../../packages/shared/src/workspace-tools";
+import { segment, type Workspace } from "../shared";
+import { session } from "../lib/auth";
+import { createAction, createResource } from "../lib/resource";
+import { Icon } from "../icons";
+import { monospace, palette, text } from "../theme";
+import { Checkbox, Field, TextField } from "../form";
+import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Section, Small } from "../ui";
+
+interface McpServersResponse { servers: WorkspaceMcpServer[]; admin: boolean }
+
+export function WorkspaceMcpServers(props: { workspace: Workspace }) {
+  const path = () => `/api/workspaces/${segment(props.workspace.id)}/mcp-servers`;
+  const resource = createResource<McpServersResponse>(path);
+  const action = createAction();
+  const adding = signal(false);
+  const data = () => resource.data();
+  const admin = () => data()?.admin === true;
+  async function patch(server: WorkspaceMcpServer, body: Record<string, unknown>, notice: string) {
+    if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}`, { method: "PATCH", body }); }, notice)) resource.refresh();
+  }
+  async function remove(server: WorkspaceMcpServer) {
+    if (!await confirm({ title: `Remove ${server.name}?`, confirmLabel: "Remove", destructive: true,
+      message: "Sessions stop offering its tools from their next message, and Pikibun deletes the headers it kept for it." })) return;
+    if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}`, { method: "DELETE" }); }, "Removed.")) resource.refresh();
+  }
+  return (
+    <Section title="Remote MCP servers" testID="workspace-mcp-servers" info={<View style={{ gap: 8 }}>
+      <Note>Remote MCP servers add tools to this workspace's sessions without anything installed on hosts: Pikibun itself calls each server's https:// address, with headers (an API key, say) it keeps encrypted, which no session or host ever sees.</Note>
+      <Note>Each tool's name starts with its server's prefix. Tools may change things unless an owner or admin marks them read-only here: only those run in Read-only messages. A server's own claim that a tool only reads counts for nothing.</Note>
+      <Note>A server's answers were written by whoever runs it: sessions treat them as information, not as instructions.</Note>
+    </View>} action={admin() && (data()?.servers.length ?? 0) < remoteMcpLimits.servers ? <Button small variant="outline" icon="plus" label="Add server" onPress={() => adding.set(true)} /> : undefined}>
+      <ResourceState inline loading={resource.loading() && !data()} error={resource.error()} retry={resource.refresh}>
+        <If when={data()}>
+          {current => (
+            <>
+              <If when={!current().servers.length}>
+                <EmptyState title="No remote MCP servers">{admin() ? "Add one by its https:// address to offer its tools to every session here." : "Owners and admins add the remote MCP servers this workspace's sessions use."}</EmptyState>
+              </If>
+              <Each of={current().servers} key={server => server.id}>
+                {server => (
+                  <CollapsibleRow leading={<Icon name="sparkles" size={16} color={palette().muted} />} title={`${server().name} · ${server().prefix}_`}
+                    hint={server().error ? `${server().url}\n${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}`}
+                    trailing={<Badge tone={server().error ? "danger" : server().enabled ? "success" : "neutral"}>{server().error ? "Error" : server().enabled ? "On" : "Off"}</Badge>}>
+                    <If when={server().error}><Banner tone="danger" title="Its tools couldn't be listed">{server().error!}</Banner></If>
+                    <Each of={server().tools} key={tool => tool.name}>
+                      {(tool, index) => (
+                        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 4, paddingVertical: 8, borderTopWidth: index() ? 1 : 0, borderColor: palette().border }}>
+                          <View style={{ flex: 1, minWidth: 180, gap: 2 }}>
+                            <Text style={{ fontFamily: monospace, fontSize: text.small, color: palette().text }}>{tool().toolName}</Text>
+                            <Small>{descriptionSummary(tool().description, 200) || "No description"}</Small>
+                          </View>
+                          <If when={admin()} else={<Badge tone={tool().readOnly ? "success" : "warning"}>{tool().readOnly ? "Read-only" : "May write"}</Badge>}>
+                            <Checkbox label="Read-only" checked={tool().readOnly} disabled={action.busy()}
+                              onChange={on => void patch(server(), { readOnlyTools: on ? [...server().readOnlyTools, tool().name] : server().readOnlyTools.filter(item => item !== tool().name) },
+                                on ? `${tool().toolName} now runs in Read-only messages too.` : `${tool().toolName} no longer runs in Read-only messages.`)} />
+                          </If>
+                        </View>
+                      )}
+                    </Each>
+                    <If when={!server().tools.length && !server().error}><Small>It offers no tools.</Small></If>
+                    <If when={admin()}>
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                        <Checkbox label="Enabled" checked={server().enabled} disabled={action.busy()}
+                          onChange={on => void patch(server(), { enabled: on }, on ? "Sessions offer its tools from their next message." : "Sessions stop offering its tools from their next message.")} />
+                        <View style={{ flex: 1 }} />
+                        <Button small variant="outline" icon="refresh" label="List tools again" disabled={action.busy()} onPress={() => void patch(server(), { refresh: true }, "Listed its tools again.")} />
+                        <Button small variant="ghost" icon="trash" label="Remove" disabled={action.busy()} onPress={() => void remove(server())} />
+                      </View>
+                    </If>
+                  </CollapsibleRow>
+                )}
+              </Each>
+            </>
+          )}
+        </If>
+      </ResourceState>
+      <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+      <If when={adding()}>
+        <AddServerSheet busy={action.busy()} error={action.error()} close={() => adding.set(false)}
+          save={async body => {
+            if (await action.run(async () => { await session().api(path(), { method: "POST", body }); }, "Added. Sessions offer its tools from their next message.")) {
+              adding.set(false);
+              resource.refresh();
+            }
+          }} />
+      </If>
+    </Section>
+  );
+}
+
+function AddServerSheet(props: { busy: boolean; error: string; close: () => void; save: (body: Record<string, unknown>) => Promise<void> }) {
+  const name = signal("");
+  const prefix = signal("");
+  const url = signal("");
+  const header = signal(untracked(() => "Authorization"));
+  const value = signal("");
+  const ready = () => name().trim() && /^[a-z][a-z0-9]{0,15}$/.test(prefix()) && url().startsWith("https://");
+  function submit() {
+    if (!ready()) return;
+    void props.save({ name: name().trim(), prefix: prefix(), url: url().trim(), ...(header().trim() && value() ? { headers: { [header().trim()]: value() } } : {}) });
+  }
+  return (
+    <FormSheet open title="Add remote MCP server" onClose={() => { if (!props.busy) props.close(); }}
+      footer={<>
+        <Button label="Cancel" disabled={props.busy} onPress={props.close} />
+        <Button variant="primary" label={props.busy ? "Adding…" : "Add"} disabled={props.busy || !ready()} onPress={submit} />
+      </>}>
+      <Field label="Name"><TextField value={name()} onChange={value => name.set(value)} disabled={props.busy} maxLength={remoteMcpLimits.name} placeholder="Linear" autoFocus /></Field>
+      <Field label="Prefix" hint="Starts each of its tools' names: a lowercase letter, then up to 15 lowercase letters or digits">
+        <TextField monospace value={prefix()} onChange={value => prefix.set(value)} disabled={props.busy} maxLength={16} placeholder="linear" autoCapitalize="none" autoCorrect={false} />
+      </Field>
+      <Field label="Address" hint="The server's Streamable HTTP endpoint. Pikibun reaches public https:// addresses only">
+        <TextField monospace value={url()} onChange={value => url.set(value)} disabled={props.busy} maxLength={remoteMcpLimits.url} placeholder="https://mcp.example.com/mcp" keyboardType="url" autoCapitalize="none" autoCorrect={false} />
+      </Field>
+      <Field label="Header" hint="Optional: a header Pikibun sends with every request, such as Authorization: Bearer <key>. Kept encrypted; nobody sees it again">
+        <View style={{ gap: 8 }}>
+          <TextField monospace value={header()} onChange={value => header.set(value)} disabled={props.busy} maxLength={remoteMcpLimits.headerName} autoCapitalize="none" autoCorrect={false} />
+          <TextField masked value={value()} onChange={next => value.set(next)} disabled={props.busy} maxLength={remoteMcpLimits.headerValue} placeholder="Bearer …" autoCapitalize="none" autoCorrect={false} />
+        </View>
+      </Field>
+      <Note>Its tools may change things until you mark them read-only once they are listed.</Note>
+      <Feedback error={props.error} />
+    </FormSheet>
+  );
+}

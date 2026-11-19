@@ -1,4 +1,5 @@
 import { workspaceToolDefinition } from "./workspace-management.js";
+import { sanitizeInputSchema, type InputSchema } from "./input-schema.js";
 
 export interface ProgramGrammar {
   valued?: readonly string[];
@@ -52,6 +53,7 @@ export interface BrokeredToolDefinition {
   route: string;
   write: boolean;
   instructions?: string;
+  inputSchema?: InputSchema;
 }
 
 export type ToolDefinition = ProgramToolDefinition | BrokeredToolDefinition;
@@ -68,7 +70,8 @@ const DIRECTORY = /^\/[A-Za-z0-9._+-]+(?:\/[A-Za-z0-9._+-]+)*$/;
 const PROGRAM = /^[a-z0-9][a-z0-9._+-]{0,63}$/;
 const TOOL = /^[a-z][a-z0-9_]{0,63}$/;
 const EXTENSION = /^piki:[a-z0-9][a-z0-9-]{0,63}$/;
-const ROUTE = /^[a-z0-9-]+(?:\/[a-z0-9-]+){0,3}$/;
+export const BROKERED_ROUTE = /^[a-z0-9-]+(?:\/[a-z0-9-]+){0,3}$/;
+const ROUTE = BROKERED_ROUTE;
 const PARAMETER = /^[a-z][a-z0-9_]{0,63}$/;
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value)
@@ -214,9 +217,14 @@ function parseParameter(value: unknown, what: string): BrokeredParameter {
 }
 
 function parseBrokered(value: Record<string, unknown>): BrokeredToolDefinition {
-  keys(value, ["kind", "name", "extensions", "description", "parameters", "target", "route", "write", "instructions"], "brokered tool");
+  keys(value, ["kind", "name", "extensions", "description", "parameters", "target", "route", "write", "instructions", "inputSchema"], "brokered tool");
   const common = parseCommon(value);
   const what = (part: string) => `${part} of ${common.name}`;
+  let inputSchema: InputSchema | undefined;
+  if (value.inputSchema !== undefined) {
+    inputSchema = sanitizeInputSchema(value.inputSchema);
+    if (!inputSchema || !isObject(value.parameters) || Object.keys(value.parameters).length || !Array.isArray(value.target) || value.target.length) fail(what("inputSchema"));
+  }
   if (!isObject(value.parameters) || Object.keys(value.parameters).length > toolDefinitionLimits.parameters) fail(what("parameters"));
   const parameters: Record<string, BrokeredParameter> = {};
   for (const [name, parameter] of Object.entries(value.parameters)) {
@@ -229,7 +237,7 @@ function parseBrokered(value: Record<string, unknown>): BrokeredToolDefinition {
   if (typeof value.write !== "boolean") fail(what("write"));
   if (value.instructions !== undefined && !isText(value.instructions)) fail(what("instructions"));
   return { kind: "brokered", ...common, parameters, target, route: value.route, write: value.write,
-    ...(value.instructions !== undefined ? { instructions: value.instructions } : {}) };
+    ...(value.instructions !== undefined ? { instructions: value.instructions } : {}), ...(inputSchema ? { inputSchema } : {}) };
 }
 
 export function parseToolDefinition(value: unknown): ToolDefinition {

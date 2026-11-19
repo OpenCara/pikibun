@@ -319,7 +319,7 @@ export class RunnerSession {
       tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
     };
     this.#defined = new SessionDefinitions({
-      sessionId: binding.session.id, windows: process.platform === "win32" && this.sandbox.isolated, config,
+      sessionId: binding.session.id, workspaceId: binding.session.workspaceId, windows: process.platform === "win32" && this.sandbox.isolated, config,
       tool: definition => definedTool(this.#toolContext, definition), registry: () => this.#registry, toolNames: () => this.tools.map(tool => tool.name),
       added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); },
     });

@@ -24,6 +24,9 @@ import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared
 import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
 import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
+import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
+import type { RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
+import { publicLookup } from '../apps/server/src/authority/remote-mcp/transport.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'connectors-test-secret-not-for-deployment';
@@ -3816,4 +3819,96 @@ test('members connect Dropbox by signing in; the state, PKCE and the member are 
   const audit = JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all());
   assert.ok(!/sl\.access-|refresh-\d/.test(audit));
   assert.ok(dropbox.calls.every(call => call.url === 'https://api.dropboxapi.com/oauth2/token' || !call.body.includes('refresh-')));
+});
+
+function mcpFake(token: string) {
+  const calls: { method: string; headers: Record<string, string>; params: unknown }[] = [];
+  const tools = [
+    { name: 'search_issues', description: 'Search issues.', annotations: { readOnlyHint: true },
+      inputSchema: { type: 'object', properties: { query: { type: 'string', maxLength: 100 } }, required: ['query'], $schema: 'https://json-schema.org/draft/2020-12/schema' } },
+    { name: 'create-issue', description: 'Create an issue.', annotations: { readOnlyHint: true },
+      inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] } },
+    { name: 'recursive', description: 'Refused: it uses $ref.', inputSchema: { type: 'object', properties: { a: { $ref: '#/$defs/a' } } } },
+  ];
+  const transport = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
+    const body = JSON.parse(request.body) as { id?: number; method: string; params?: Record<string, unknown> };
+    calls.push({ method: body.method, headers: request.headers, params: body.params });
+    if (request.headers.Authorization !== `Bearer ${token}`) return { status: 401, headers: {}, body: '' };
+    if (body.id === undefined) return { status: 202, headers: {}, body: '' };
+    const answer = (result: unknown) => ({ status: 200, headers: { 'content-type': 'text/event-stream', 'mcp-session-id': 'mcp-session-1' },
+      body: 'event: message\ndata: ' + JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) + '\n\n' });
+    if (body.method === 'initialize') return answer({ protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fake', version: '1' } });
+    if (body.method === 'tools/list') return answer({ tools });
+    if (body.method === 'tools/call') {
+      const params = body.params as { name: string; arguments: Record<string, unknown> };
+      return answer({ content: [{ type: 'text', text: params.name + ': ' + JSON.stringify(params.arguments) }, { type: 'image', data: 'xx', mimeType: 'image/png' }] });
+    }
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { code: -32601, message: 'no' } }) };
+  };
+  return { calls, transport };
+}
+
+test('workspace remote MCP servers: admins register them with vault-held headers, sessions call their tools through Pikibun, and only marked tools run in Read-only messages', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const secret = 'mcp-bearer-secret-0123456789';
+  const mcp = mcpFake(secret);
+  f.env.REMOTE_MCP_TRANSPORT = mcp.transport;
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const body = { name: 'Tracker', prefix: 'tracker', url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer ' + secret }, readOnlyTools: ['search_issues'] };
+  await denied(await s.creator.request('POST', path, body), 403, 'forbidden');
+  await denied(await s.admin.request('POST', path, { ...body, url: 'http://mcp.example.com/mcp' }), 400, 'invalid_mcp_server');
+  await denied(await s.admin.request('POST', path, { ...body, prefix: 'Tracker' }), 400, 'invalid_mcp_server');
+  await denied(await s.admin.request('POST', path, { ...body, headers: { Host: 'evil' } }), 400, 'invalid_mcp_server');
+  const { server } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path, body), 201);
+  assert.deepEqual(server.tools.map(tool => [tool.name, tool.toolName, tool.readOnly]), [['search_issues', 'tracker_search_issues', true], ['create-issue', 'tracker_create_issue', false]],
+    'a tool whose schema uses $ref is left out, and a server\'s readOnlyHint counts for nothing');
+  assert.deepEqual(server.headerNames, ['Authorization']);
+  await denied(await s.admin.request('POST', path, body), 409, 'mcp_prefix_taken');
+  const listedText = await (await s.creator.request('GET', path)).text();
+  const stored = JSON.stringify(f.sqlite.prepare('SELECT * FROM workspace_mcp_servers').all()) + JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all());
+  assert.ok(!listedText.includes(secret) && !stored.includes(secret), 'the header value is stored only encrypted and never shown or audited');
+
+  const answer = parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true })));
+  assert.deepEqual(answer.remoteTools?.map(tool => [tool.name, tool.write]), [['tracker_search_issues', false], ['tracker_create_issue', true]]);
+  assert.ok(answer.remoteTools!.every(tool => /^mcp\/tracker\/[0-9a-f]{16}$/.test(tool.route) && tool.inputSchema && !('$schema' in tool.inputSchema)));
+  assert.match(answer.remoteTools![1]!.description, /Read-only messages don't run it/);
+  assert.equal(parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id }))).remoteTools, undefined);
+
+  const owner = s.session.ownerId;
+  const [searchRoute, createRoute] = answer.remoteTools!.map(tool => tool.route);
+  const call = (route: string, args: unknown, admissionId = admit(f, s.session.id, owner)) =>
+    self(f, s.connector, route, { sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', arguments: args });
+  const searched = await json<{ result: string }>(await call(searchRoute!, { query: 'bug' }));
+  assert.equal(searched.result, 'search_issues: {"query":"bug"}\n[image content left out]');
+  await denied(await call(searchRoute!, { query: 7 }), 400, 'invalid_arguments');
+  await denied(await call(searchRoute!, { query: 'bug' }, admit(f, s.session.id, owner, { mode: 'ask' })), 403, 'mcp_call_not_admitted');
+  const readOnly = token();
+  f.sqlite.prepare('INSERT INTO run_admissions (id,session_id,actor_id,mode,request_id,content_hash,expires_at,created_at,access) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(readOnly, s.session.id, owner, 'write', 'request-' + readOnly, 'h'.repeat(43), Math.floor(Date.now() / 1000) + 3600, new Date().toISOString(), 'read');
+  assert.ok((await json<{ result: string }>(await call(searchRoute!, { query: 'x' }, readOnly))).result.startsWith('search_issues'));
+  await denied(await call(createRoute!, { title: 'New' }, readOnly), 403, 'mcp_tool_writes');
+  assert.ok((await json<{ result: string }>(await call(createRoute!, { title: 'New' }))).result.startsWith('create-issue'));
+  assert.ok(mcp.calls.filter(item => item.method === 'tools/call').every(item => item.headers['Mcp-Session-Id'] === 'mcp-session-1' && item.headers['MCP-Protocol-Version'] === '2025-06-18'));
+  const audits = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.called'").all().map(row => JSON.parse(String(row.detail_json)));
+  assert.deepEqual(audits.map(item => [item.tool, item.write]), [['search_issues', false], ['search_issues', false], ['create-issue', true]]);
+
+  const { server: off } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { enabled: false }));
+  assert.equal(off.enabled, false);
+  await denied(await call(searchRoute!, { query: 'bug' }), 404, 'mcp_tool_not_found');
+  assert.deepEqual(parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true }))).remoteTools, []);
+  const { server: wrong } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { enabled: true, headers: { Authorization: 'Bearer wrong' } }));
+  assert.match(wrong.error ?? '', /refused the credentials/);
+  assert.deepEqual(wrong.tools, []);
+  await json(await s.admin.request('DELETE', path + '/' + server.id));
+  assert.deepEqual((await json<{ servers: unknown[] }>(await s.creator.request('GET', path))).servers, []);
+});
+
+test('the remote MCP transport reaches only public addresses, checked as it connects', async () => {
+  const lookup = (addresses: string[]) => publicLookup((_host, callback) => callback(null, addresses.map(address => ({ address, family: address.includes(':') ? 6 : 4 }))));
+  const resolve = (fn: ReturnType<typeof publicLookup>) => new Promise<{ error: Error | null; address: string }>(done =>
+    fn('mcp.example.com', {}, ((error: Error | null, address: string) => done({ error, address })) as never));
+  assert.equal((await resolve(lookup(['93.184.216.34']))).address, '93.184.216.34');
+  for (const address of ['127.0.0.1', '10.0.0.5', '169.254.169.254', '100.100.100.100', '::1', 'fd00::1']) {
+    assert.match((await resolve(lookup(['93.184.216.34', address]))).error?.message ?? '', /isn't public/, address);
+  }
 });

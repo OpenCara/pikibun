@@ -5,6 +5,7 @@ import type { ConnectorHub } from './connector-hub-types.js';
 import type { Database } from './db/types.js';
 import type { ObjectStorage } from './storage/types.js';
 import type { WorkspaceDatabaseProvider } from './workspace-databases/types.js';
+import type { RemoteMcpTransport } from '../../../packages/shared/src/remote-mcp.js';
 
 export interface Env {
   DB: Database;
@@ -12,6 +13,7 @@ export interface Env {
   BUCKET?: ObjectStorage;
   WORKSPACE_DATABASES?: WorkspaceDatabaseProvider;
   NPM_REGISTRY_FETCH?: typeof fetch;
+  REMOTE_MCP_TRANSPORT?: RemoteMcpTransport;
   LOG?: (line: string) => void;
   APP_ORIGIN: string;
   PIKIBUN_VERSION?: string;
