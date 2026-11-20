@@ -588,8 +588,12 @@ What this gives up: as with direct Git reads, a host shared with the workspace c
 (an hour at most) and read the workspace's repositories the owner can read with it. Reads through the token aren't
 limited to the workspace's repositories by the proxy for GraphQL and non-repository paths; the token's own repository
 scope is what limits them. On the owner's own host, the owner's own credentials reach what the owner can, through the
-proxy, for the session's API requests (GitLab and Azure DevOps reads) and its approved calls (writes): GraphQL mutations
-aren't limited to the workspace's repositories; REST writes to GitHub are.
+proxy, for the session's API requests (GitLab and Azure DevOps reads) and its approved calls (writes). Under a lease,
+GitHub requests the proxy can't tie to a repository go with the owner's sign-in whatever their reach: GraphQL queries
+and mutations, and REST paths outside `/repos/{owner}/{name}` (`/user/repos`, `/search/...`, `/repositories/{id}/...`).
+So a lease's call reads, and through mutations writes, any repository the owner can; only REST paths that name a
+repository, and Git, are held to the workspace's. This is intended; why: [security
+rationale](security-rationale.md#github-repositories-outside-the-workspace) (#398).
 
 ### Not yet
 
