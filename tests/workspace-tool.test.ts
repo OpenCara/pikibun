@@ -235,7 +235,10 @@ test('an agent reads and manages its workspace as its message\'s sender, through
   await f.ok(f.tool('owner-session', ownerId, write, { action: 'set_tool_group', user: f.member.user.id, group: 'role' }));
   await f.refused(f.tool('owner-session', ownerId, write, { action: 'set_tool_group', user: f.member.user.id, group: 'nope' }), 404, 'not_found');
   await f.refused(f.tool('owner-session', ownerId, write, { action: 'remove_repository', repository: 'acme/app' }), 404, 'not_found');
-  await f.refused(f.tool('owner-session', ownerId, write, { action: 'add_repository', repository: 'acme/app', provider: 'gitlab' }), 400, 'invalid_input');
+  await f.refused(f.tool('owner-session', ownerId, write, { action: 'add_repository', repository: 'acme/app', provider: 'gitlab' }), 409, 'git_account_required');
+  await f.refused(f.tool('owner-session', ownerId, write, { action: 'add_repository', repository: 'https://gitlab.com/acme/app' }), 409, 'git_account_required');
+  await f.refused(f.tool('owner-session', ownerId, write, { action: 'add_repository', repository: 'gitlab.com/acme/app' }), 409, 'git_account_required');
+  await f.refused(f.tool('owner-session', ownerId, write, { action: 'add_repository', repository: 'https://github.com/acme' }), 400, 'invalid_input');
   await f.refused(f.tool('owner-session', ownerId, write, { action: 'decline_join_request', user: 'test:nobody' }), 404, 'not_found');
 
   const audited = f.sqlite.prepare("SELECT session_id, actor_id, detail_json FROM audit WHERE action = 'session.workspace_tool.changed' ORDER BY created_at").all() as

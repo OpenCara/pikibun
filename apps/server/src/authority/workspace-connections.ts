@@ -1,6 +1,6 @@
 import { workspaceAdminSQL } from './access.js';
 import type { Hono } from 'hono';
-import { gitProviderHasForge, gitProviderNames, plainRepositoryPath, repositoryLimits, type GitProvider, type ProviderRepositoryList, type TokenGitProvider } from '../../../../packages/shared/src/repositories.js';
+import { gitProviderHasForge, gitProviderNames, repositoryLimits, type GitProvider, type ProviderRepositoryList, type TokenGitProvider } from '../../../../packages/shared/src/repositories.js';
 import { documentKindNames, type DocumentItemType, type DocumentKind } from '../../../../packages/shared/src/sources.js';
 import {
   sourceReadAsValues, workspaceDocumentProviders, workspaceGitProviders, workspaceConnectionLimit,
@@ -11,8 +11,8 @@ import { auditStatement } from './audit.js';
 import { requireMember } from './access.js';
 import { fail, id, identifier, jsonObject, now } from '../http.js';
 import { decryptToken, encryptToken } from './vault.js';
-import { accountInput, credentialOrganization, providerRepository } from './git/accounts.js';
-import { gitProviderAdapters, plainRepositoryId } from './git/providers.js';
+import { accountInput, credentialOrganization, lookupRepositoryName, providerRepository } from './git/accounts.js';
+import { gitProviderAdapters } from './git/providers.js';
 import type { GitCredential } from './git/types.js';
 import { recheckAccess, verifyRepository, type RepositoryAccess } from './repositories.js';
 import { documentAdapters } from './sources/sources.js';
@@ -187,16 +187,16 @@ export function registerWorkspaceConnections(app: Hono<AppEnv>): void {
     const provider = row.provider as TokenGitProvider;
     const path = c.req.query('path');
     let repositories;
-    if (!gitProviderHasForge(provider)) {
-      if (path === undefined) return c.json({ repositories: [], truncated: false } satisfies ProviderRepositoryList);
-      const fullName = plainRepositoryPath(row.host, path) ?? fail(400, 'invalid_repository', `Enter the repository's clone URL on ${row.host}, or its path there.`);
+    if (path !== undefined) {
+      const fullName = lookupRepositoryName(provider, row.host, path);
       const access = await workspaceGitAccess(c.env, workspaceId, provider, row.host, fullName);
       if (access.provider === 'github') return fail(400, 'invalid_workspace_connection', 'Not a token connection.');
-      repositories = [providerRepository(provider, await gitProviderAdapters.git.repository(access.account.credential, { id: await plainRepositoryId(fullName), fullName }))];
+      if (access.account.credential.id !== row.id) fail(400, 'invalid_repository', `Enter a repository of this connection's organization, ${row.organization}.`);
+      repositories = [providerRepository(provider, await gitProviderAdapters[provider].lookup(access.account.credential, fullName))];
       await recheckAccess(c.env, access);
       return c.json({ repositories, truncated: false } satisfies ProviderRepositoryList);
     }
-    if (path !== undefined) fail(400, 'invalid_repository', 'Only Git server connections look repositories up by path.');
+    if (!gitProviderHasForge(provider)) return c.json({ repositories: [], truncated: false } satisfies ProviderRepositoryList);
     const credential: GitCredential = { id: row.id, provider, host: row.host, organization: row.organization, username: row.username,
       token: await decryptToken(c.env, aad(row.id), row.ciphertext) };
     const result = await gitProviderAdapters[provider].list(credential);

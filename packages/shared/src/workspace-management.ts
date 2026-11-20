@@ -48,7 +48,8 @@ export const workspaceToolDescription = "Manage this Pikibun workspace (the one 
   + "Changes (owners and admins, not in a Read-only message): rename {name}; add_member {user, role} and set_role {user, role} (role viewer, member, collaborator or admin; only the owner makes admins); "
   + "remove_member {user}; accept_join_request {user, role?} (member by default) and decline_join_request {user}; "
   + "set_tool_group {user, group} (a tool group's id from tool_groups, or role to follow their role's tools); "
-  + "add_repository {repository, provider?, host?, repository_id?, ref?} (repository as owner/name; provider github by default, which looks up its id; other providers need repository_id) "
+  + "add_repository {repository, provider?, host?, repository_id?, ref?} (repository as its URL, such as https://github.com/owner/name, or owner/name; any repository the sender's account for that provider can read, "
+  + "whose id it looks up with that account; provider github by default, or the URL's for github.com, gitlab.com, bitbucket.org and dev.azure.com; host the URL's for self-hosted providers) "
   + "and remove_repository {repository} (its id or owner/name); "
   + "set_extension {extension, enabled?, settings?} (an extension's source, such as piki:node or npm:<package>@<version>; enabled and settings, a JSON object of its options, never secrets, "
   + "are kept as they are when left out, and a new extension is added on) and remove_extension {extension}; "
@@ -66,8 +67,8 @@ export const workspaceToolDefinition: BrokeredToolDefinition = {
     user: { type: "string", pattern: userPattern, maxLength: 140, description: "A member's id, as members or join_requests list it (github:123).", invalid: "user is a member's id, as members or join_requests list it (github:123)" },
     role: { type: "string", enum: [...assignableWorkspaceRoles], description: "viewer, member, collaborator or admin.", invalid: `role is one of ${assignableWorkspaceRoles.join(", ")}` },
     name: { type: "string", line: true, maxLength: 200, description: "The workspace's new name.", invalid: "name is one line of at most 200 characters" },
-    repository: { type: "string", line: true, maxLength: 512, description: "A repository: owner/name to add; its id or owner/name to remove.", invalid: "repository is owner/name, or a repository's id" },
-    repository_id: { type: "string", pattern: "^[A-Za-z0-9_.:/-]{1,256}$", description: "The provider's id of the repository, for providers other than GitHub.", invalid: "repository_id is the provider's id of the repository" },
+    repository: { type: "string", line: true, maxLength: 512, description: "A repository: its URL or owner/name to add; its id or owner/name to remove.", invalid: "repository is a repository's URL, owner/name, or a repository's id" },
+    repository_id: { type: "string", pattern: "^[A-Za-z0-9_.:/-]{1,256}$", description: "The provider's id of the repository; looked up with the sender's account when left out.", invalid: "repository_id is the provider's id of the repository" },
     provider: { type: "string", enum: [...gitProviders], description: "The repository's Git provider, github by default.", invalid: `provider is one of ${gitProviders.join(", ")}` },
     host: { type: "string", pattern: "^[A-Za-z0-9.-]{1,253}(?::[0-9]{1,5})?$", description: "The Git server's host name, for self-hosted providers.", invalid: "host is a host name" },
     ref: { type: "string", line: true, maxLength: 255, description: "The branch sessions clone, the repository's default branch when left out.", invalid: "ref is a branch, tag or commit of one line" },

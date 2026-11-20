@@ -3,6 +3,7 @@ import test, { type TestContext } from 'node:test';
 import { HTTPException } from 'hono/http-exception';
 import { gitProviderAdapters } from '../apps/server/src/authority/git/providers.js';
 import type { GitCredential } from '../apps/server/src/authority/git/types.js';
+import { repositoryFullName, repositoryUrlHost, repositoryUrlOnHost } from '../packages/shared/src/repositories.js';
 
 const sha = 'a'.repeat(40);
 
@@ -275,4 +276,92 @@ test('Azure DevOps rejects other organizations and bad tokens', async t => {
   assert.deepEqual(await failure(adapter.commit(credential, ref, 'nope')), unavailable);
   assert.deepEqual(await failure(adapter.repository(credential, ref)), unavailable);
   assert.ok(!calls.some(call => call.url.includes('fabrikam')));
+});
+
+test('every adapter looks a repository up by its name, not only among those its account lists', async t => {
+  const credential = (provider: GitCredential['provider'], host: string, organization = '', username: string | null = null): GitCredential =>
+    ({ id: 'acct', provider, host, organization, username, token: 'token' });
+  const azureRepository = { id: 'r-id', name: 'Engine Room', project: { name: 'Core', visibility: 'public' }, defaultBranch: 'refs/heads/main' };
+  const calls = mockFetch(t, {
+    'https://git.example.com/api/v3/repos/octo/tools': json({ id: 7, full_name: 'octo/tools', default_branch: 'main', private: false }),
+    [`https://gitlab.com/api/v4/projects/${encodeURIComponent('group/sub/app')}`]: json({ id: 42, path_with_namespace: 'group/sub/app', default_branch: 'main', visibility: 'public' }),
+    [`https://gitlab.com/api/v4/projects/${encodeURIComponent('group/empty')}`]: json({ id: 43, path_with_namespace: 'group/empty', default_branch: null, visibility: 'public' }),
+    'https://code.example.org/api/v1/repos/team/repo': json({ id: 5, full_name: 'team/repo', default_branch: 'main', private: false, empty: false }),
+    'https://code.example.org/api/v1/repos/team/hidden': json({ message: 'not found' }, { status: 404 }),
+    'https://api.bitbucket.org/2.0/repositories/alpha/one': json({ uuid: '{one}', full_name: 'alpha/one', mainbranch: { name: 'main' }, is_private: false }),
+    'https://dev.azure.com/contoso/Core/_apis/git/repositories/Engine%20Room?api-version=7.1': json(azureRepository),
+  });
+  assert.deepEqual(await gitProviderAdapters['github-enterprise'].lookup(credential('github-enterprise', 'git.example.com'), 'octo/tools'),
+    { id: '7', fullName: 'octo/tools', defaultBranch: 'main', private: false });
+  assert.deepEqual(await gitProviderAdapters.gitlab.lookup(credential('gitlab', 'gitlab.com'), 'group/sub/app'),
+    { id: '42', fullName: 'group/sub/app', defaultBranch: 'main', private: false });
+  assert.equal((await failure(gitProviderAdapters.gitlab.lookup(credential('gitlab', 'gitlab.com'), 'group/empty'))).code, 'git_repository_empty');
+  assert.deepEqual(await gitProviderAdapters.gitea.lookup(credential('gitea', 'code.example.org'), 'team/repo'),
+    { id: '5', fullName: 'team/repo', defaultBranch: 'main', private: false });
+  assert.deepEqual(await failure(gitProviderAdapters.gitea.lookup(credential('gitea', 'code.example.org'), 'team/hidden')), unavailable);
+  assert.deepEqual(await gitProviderAdapters.bitbucket.lookup(credential('bitbucket', 'bitbucket.org'), 'alpha/one'),
+    { id: '{one}', fullName: 'alpha/one', defaultBranch: 'main', private: false });
+  const azure = credential('azure-devops', 'dev.azure.com', 'contoso');
+  assert.deepEqual(await gitProviderAdapters['azure-devops'].lookup(azure, 'contoso/Core/Engine Room'),
+    { id: 'r-id', fullName: 'contoso/Core/Engine Room', defaultBranch: 'main', private: false });
+  assert.deepEqual(await failure(gitProviderAdapters['azure-devops'].lookup(azure, 'fabrikam/Core/app')), unavailable);
+  for (const [provider, host, name] of [['gitea', 'code.example.org', '../etc/passwd'], ['bitbucket', 'bitbucket.org', 'a/b/c'], ['github-enterprise', 'git.example.com', 'x']] as const) {
+    assert.equal((await failure(gitProviderAdapters[provider].lookup(credential(provider, host), name))).code, 'invalid_repository');
+  }
+  assert.equal(calls.length, 7);
+  assert.ok(calls.every(call => call.redirect === 'manual'));
+  assert.ok(!calls.some(call => call.url.includes('fabrikam')));
+});
+
+test('a repository URL of any form names the repository on the account\'s host, and only there', () => {
+  for (const [provider, host, input, name] of [
+    ['github', 'github.com', 'https://github.com/facebook/react', 'facebook/react'],
+    ['github', 'github.com', 'https://github.com/facebook/react.git', 'facebook/react'],
+    ['github', 'github.com', 'https://www.github.com/facebook/react/tree/main/packages?tab=readme#top', 'facebook/react'],
+    ['github', 'github.com', 'git@github.com:facebook/react.git', 'facebook/react'],
+    ['github', 'github.com', 'ssh://git@github.com/facebook/react.git', 'facebook/react'],
+    ['github', 'github.com', 'github.com/facebook/react', 'facebook/react'],
+    ['github', 'github.com', '  facebook/react  ', 'facebook/react'],
+    ['github', 'github.com', 'https://gitlab.com/facebook/react', null],
+    ['github', 'github.com', 'https://user:secret@github.com/facebook/react', null],
+    ['github', 'github.com', 'ftp://github.com/facebook/react', null],
+    ['github', 'github.com', 'facebook', null],
+    ['github', 'github.com', 'facebook/react/extra', null],
+    ['github', 'github.com', 'https://github.com/facebook', null],
+    ['github', 'github.com', '', null],
+    ['github-enterprise', 'git.example.com:8443', 'https://git.example.com:8443/octo/tools/pulls', 'octo/tools'],
+    ['github-enterprise', 'git.example.com:8443', 'git@git.example.com:octo/tools.git', 'octo/tools'],
+    ['github-enterprise', 'git.example.com:8443', 'https://git.example.com/octo/tools', null],
+    ['gitlab', 'gitlab.com', 'https://gitlab.com/group/sub/app/-/tree/main', 'group/sub/app'],
+    ['gitlab', 'gitlab.com', 'https://gitlab.com/group/sub/app.git', 'group/sub/app'],
+    ['gitlab', 'gitlab.com', 'group/sub/app', 'group/sub/app'],
+    ['bitbucket', 'bitbucket.org', 'https://me@bitbucket.org/alpha/one.git', 'alpha/one'],
+    ['bitbucket', 'bitbucket.org', 'https://bitbucket.org/alpha/one/src/main/', 'alpha/one'],
+    ['azure-devops', 'dev.azure.com', 'https://dev.azure.com/Contoso/Core/_git/Engine%20Room', 'contoso/Core/Engine Room'],
+    ['azure-devops', 'dev.azure.com', 'https://contoso@dev.azure.com/contoso/Core/_git/api?path=/src', 'contoso/Core/api'],
+    ['azure-devops', 'dev.azure.com', 'https://dev.azure.com/contoso/_git/api', 'contoso/api/api'],
+    ['azure-devops', 'dev.azure.com', 'git@ssh.dev.azure.com:v3/contoso/Core/api', 'contoso/Core/api'],
+    ['azure-devops', 'dev.azure.com', 'https://contoso.visualstudio.com/DefaultCollection/Core/_git/api', 'contoso/Core/api'],
+    ['azure-devops', 'dev.azure.com', 'contoso/Core/api', 'contoso/Core/api'],
+    ['azure-devops', 'dev.azure.com', 'https://dev.azure.com/contoso/Core', null],
+    ['azure-devops', 'dev.azure.com', 'https://dev.azure.com/v3/Core/_git/api', 'v3/Core/api'],
+    ['gitea', 'www.code.example.org', 'https://www.code.example.org/team/app.git', 'team/app'],
+    ['gitea', 'code.example.org', 'https://www.code.example.org/team/app.git', null],
+    ['git', 'www.git.example.com', 'https://www.git.example.com/team/app.git', 'team/app.git'],
+    ['gitea', 'code.example.org', 'https://code.example.org/john.doe/tools', 'john.doe/tools'],
+    ['gitea', 'code.example.org', 'john.doe/tools', 'john.doe/tools'],
+    ['gitea', 'code.example.org', 'https://other.example.org/john.doe/tools', null],
+    ['git', 'git.example.com', 'https://git.example.com/team/app.git', 'team/app.git'],
+    ['git', 'git.example.com', 'git@git.example.com:team/app.git', null],
+  ] as const) assert.equal(repositoryFullName(provider, host, input), name, `${provider} ${input}`);
+  assert.equal(repositoryUrlHost('https://www.github.com/a/b'), 'github.com');
+  assert.equal(repositoryUrlHost('git@ssh.dev.azure.com:v3/o/p/r'), 'dev.azure.com');
+  assert.equal(repositoryUrlHost('https://contoso.visualstudio.com/p/_git/r'), 'dev.azure.com');
+  assert.equal(repositoryUrlHost('https://www.code.example.org/a/b'), 'www.code.example.org');
+  assert.equal(repositoryUrlHost('owner/name'), null);
+  assert.equal(repositoryUrlOnHost('git@git.example.com:octo/tools.git', 'git.example.com:8443'), true);
+  assert.equal(repositoryUrlOnHost('https://git.example.com/octo/tools', 'git.example.com:8443'), false);
+  assert.equal(repositoryUrlOnHost('https://www.github.com/a/b', 'github.com'), true);
+  assert.equal(repositoryUrlOnHost('owner/name', 'github.com'), null);
+  assert.equal(repositoryUrlHost('not a url'), null);
 });

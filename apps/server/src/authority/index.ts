@@ -34,10 +34,10 @@ export { createToolGroup, deleteToolGroup, memberToolGroup, memberToolGroups, re
 
 export { assertVaultConfigured, decryptToken, encryptToken } from './vault.js';
 export {
-  cloneRepositories, githubRepositoryIdentity, legacyRepositoryFixture, publicRepository, registerRepositories, type RepositorySettingsRow, repositorySettingsSelect,
+  cloneRepositories, legacyRepositoryFixture, lookupRepository, publicRepository, registerRepositories, type RepositorySettingsRow, repositorySettingsSelect,
   requireConfiguredWorkspace,
 } from './repositories.js';
-export { registerGitAccounts } from './git/accounts.js';
+export { gitHost, registerGitAccounts } from './git/accounts.js';
 export { registerWorkspaceConnections } from './workspace-connections.js';
 export { egressGrant, gitDirect, gitRelay, registerNetworkPolicies, workspaceNetworkPolicy } from './network.js';
 export { apiCredential } from './api-access.js';

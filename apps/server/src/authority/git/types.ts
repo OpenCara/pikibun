@@ -18,5 +18,6 @@ export interface GitProviderAdapter {
   verify(credential: GitCredential): Promise<{ login: string }>;
   list(credential: GitCredential): Promise<ProviderRepositoryList>;
   repository(credential: GitCredential, repository: RepositoryRef): Promise<ProviderRepository>;
+  lookup(credential: GitCredential, fullName: string): Promise<ProviderRepository>;
   commit(credential: GitCredential, repository: RepositoryRef, ref: string): Promise<string>;
 }
