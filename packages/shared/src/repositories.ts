@@ -143,7 +143,10 @@ export function repositoryFullName(provider: GitProvider, host: string, value: s
   let segments: string[] | null;
   if (location && (location.host === host || (location.ssh && location.host === host.replace(/:\d+$/, "")))) segments = location.segments;
   else if (location && (/^[a-z][a-z0-9+.-]*:/i.test(input) || input.includes("@"))) return null;
-  else segments = pathSegments(input);
+  else {
+    segments = pathSegments(input);
+    if (segments && ["github", "github-enterprise", "bitbucket", "gitea"].includes(provider) && segments.length !== 2) return null;
+  }
   const name = segments && forgeRepositoryName(provider, segments);
   return name && validRepositoryName(provider, name) ? name : null;
 }

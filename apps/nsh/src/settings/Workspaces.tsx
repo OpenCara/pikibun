@@ -2,7 +2,7 @@ import { signal, Text, untracked, View } from "nsh";
 import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type UserProfile, type WorkspaceRole } from "../../../../packages/shared/src/types";
 import { adminManagedRoles } from "../../../../packages/shared/src/policy";
 import {
-  gitProviderHasForge, gitProviderNames, repositoryLimits, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type WorkspaceRepository,
+  gitProviderHasForge, gitProviderNames, repositoryLimits, repositoryUrlHost, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type WorkspaceRepository,
   type WorkspaceRepositoryList,
 } from "../../../../packages/shared/src/repositories";
 import type { WorkspaceSourceList } from "../../../../packages/shared/src/sources";
@@ -19,7 +19,7 @@ import { Icon } from "../icons";
 import { palette, text } from "../theme";
 import { Checkbox, Field, Select, TextField } from "../form";
 import {
-  Badge, Banner, Button, CardBody, confirm, CopyField, DropdownMenu, EmptyState, Feedback, FormSheet, IconButton, IdentityBadge, Note, ResourceState, Row, Section, Small, StatusDot,
+  Badge, Banner, Button, CardBody, confirm, CopyField, DropdownMenu, EmptyState, Feedback, FormSheet, IconButton, IdentityBadge, Note, ResourceState, Row, Section, Segmented, Small, StatusDot,
 } from "../ui";
 import { NewWorkspaceSheet } from "../components/NewWorkspaceSheet";
 import { Card, gitAccountLabel, GroupTitle } from "./accounts";
@@ -289,20 +289,33 @@ function Repositories(props: {
   );
 }
 
+const urlExamples: Record<GitAccount["provider"], (host: string) => string> = {
+  github: host => `https://${host}/owner/name`,
+  "github-enterprise": host => `https://${host}/owner/name`,
+  gitlab: host => `https://${host}/group/project`,
+  bitbucket: host => `https://${host}/workspace/name`,
+  "azure-devops": host => `https://${host}/organization/project/_git/name`,
+  gitea: host => `https://${host}/owner/name`,
+  git: host => `https://${host}/team/project.git`,
+};
+const explicitUrl = (value: string) => /^[a-z][a-z0-9+.-]*:\/\/|^[^\s@/:]+@[^\s/:]+:/i.test(value.trim());
+
 function RepositoryPicker(props: { open: boolean; workspace: Workspace; accounts: GitAccount[]; repositories: WorkspaceRepository[]; disabled: boolean; refresh: () => void; close: () => void;
   go: SectionProps["go"] }) {
   const accountId = signal("");
+  const mode = signal<"url" | "list">("url");
   const selectedId = signal("");
   const ref = signal("");
   const path = signal("");
   const found = signal<ProviderRepository | null>(null);
   const account = () => props.accounts.find(item => item.id === accountId()) ?? props.accounts[0];
-  const listed = () => (account() ? gitProviderHasForge(account()!.provider) : true);
-  const workspaceConnection = () => account()?.id.startsWith(workspaceAccountPrefix) ?? false;
-  const repositoriesPath = () => {
-    const current = account();
+  const forge = () => (account() ? gitProviderHasForge(account()!.provider) : false);
+  const listed = () => forge() && mode() === "list";
+  const isWorkspaceAccount = (item: GitAccount | undefined) => item?.id.startsWith(workspaceAccountPrefix) ?? false;
+  const workspaceConnection = () => isWorkspaceAccount(account());
+  const repositoriesPath = (current = account()) => {
     if (!current) return null;
-    return workspaceConnection()
+    return isWorkspaceAccount(current)
       ? `/api/workspaces/${segment(props.workspace.id)}/connections/${segment(current.id.slice(workspaceAccountPrefix.length))}/repositories`
       : `/api/git/accounts/${segment(current.id)}/repositories`;
   };
@@ -315,19 +328,37 @@ function RepositoryPicker(props: { open: boolean; workspace: Workspace; accounts
   const blocked = () => props.disabled || action.busy() || lookup.busy() || (listed() && (resource.loading() || Boolean(resource.error()))) || !account() || !selected()
     || alreadyBound(selected()!) || props.repositories.length >= repositoryLimits.repositories;
   const providerName = () => (account() ? gitProviderNames[account()!.provider] : "Git");
+  const example = () => (account() ? urlExamples[account()!.provider](account()!.host) : "https://github.com/owner/name");
   const choose = (id: string) => { selectedId.set(id); ref.set(""); };
-  const chooseAccount = (id: string) => { accountId.set(id); choose(""); path.set(""); found.set(null); };
+  const chooseAccount = (id: string) => { accountId.set(id); choose(""); path.set(""); found.set(null); lookup.clear(); };
+  const chooseMode = (next: "url" | "list") => { mode.set(next); choose(""); found.set(null); lookup.clear(); };
+  function accountFor(value: string): GitAccount | undefined {
+    const current = account();
+    const host = repositoryUrlHost(value);
+    if (!current || !host || host === current.host) return current;
+    const matches = props.accounts.filter(item => item.host === host);
+    const match = matches.find(item => item.provider === current.provider && isWorkspaceAccount(item) === isWorkspaceAccount(current))
+      ?? matches.find(item => !isWorkspaceAccount(item)) ?? matches[0];
+    if (match) return match;
+    if (explicitUrl(value)) {
+      throw new Error(`No connected account reads ${host}. Connect one in Settings → Profile, or ask an owner to add a workspace connection for it`);
+    }
+    return current;
+  }
   function find() {
-    if (!account() || lookup.busy() || !path().trim()) return;
+    const value = path().trim();
+    if (!account() || lookup.busy() || !value) return;
     found.set(null); ref.set("");
     void lookup.run(async () => {
-      const result = await session().api<ProviderRepositoryList>(`${repositoriesPath()}?path=${encodeURIComponent(path().trim())}`);
+      const target = accountFor(value);
+      if (target && target.id !== account()?.id) accountId.set(target.id);
+      const result = await session().api<ProviderRepositoryList>(`${repositoriesPath(target)}?path=${encodeURIComponent(value)}`);
       found.set(result.repositories[0] ?? null);
     });
   }
   function dismiss() {
     if (action.busy()) return;
-    selectedId.set(""); ref.set(""); path.set(""); found.set(null);
+    selectedId.set(""); ref.set(""); path.set(""); found.set(null); lookup.clear();
     props.close();
   }
   function add() {
@@ -361,15 +392,19 @@ function RepositoryPicker(props: { open: boolean; workspace: Workspace; accounts
             : { value: item.id, label: gitAccountLabel(item), hint: item.login }))} />
       </Field>
       <If when={workspaceConnection()}><Note>{`Sessions read this repository with the workspace's connection (${account()?.login}), not their owner's account. Pushes still use the session owner's account or the workspace's push access`}</Note></If>
+      <If when={forge()}>
+        <Segmented<"url" | "list"> small testID="repository-picker-mode" value={mode()} onChange={chooseMode}
+          options={[{ value: "url", label: "By URL", icon: "link" }, { value: "list", label: "Your repositories", icon: "branch" }]} />
+      </If>
       <If when={listed()}
-        else={<Note>{`A Git server lists no repositories: enter the one to add. Pikibun reads it with this ${workspaceConnection() ? "connection" : "account"} to check it${workspaceConnection() ? "" : ", and sessions read it with their owner's own account for the same server"}. Never paste a token`}</Note>}>
-        <Note>{`Only repositories this ${providerName()} account can access are listed. Sessions read them with their owner's own account for the same provider. Never paste a token or clone URL`}</Note>
+        else={<Note>{`Any repository this ${workspaceConnection() ? "connection" : "account"} can read, including public ones you don't maintain. Pikibun reads it with this ${workspaceConnection() ? "connection" : "account"} to check it${workspaceConnection() ? "" : ", and sessions read it with their owner's own account for the same provider"}. Never paste a token`}</Note>}>
+        <Note>{`Only repositories this ${providerName()} account can access are listed. Sessions read them with their owner's own account for the same provider. To add another repository, such as a public one you don't maintain, use By URL`}</Note>
       </If>
       <If when={!listed() && account()}>
-        <Field label="Clone URL or path" hint={`The repository's https:// clone URL on ${account()?.host}, or its path there, such as team/project.git`}>
+        <Field label="Repository URL" hint={`Its web or clone URL, such as ${example()}${forge() ? `, or its ${account()!.provider === "azure-devops" ? "organization/project/name" : account()!.provider === "gitlab" ? "group/project" : "owner/name"}` : `, or its path on ${account()?.host}`}. A URL of another connected account's host switches to that account`}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <TextField flex monospace value={path()} onChange={value => { path.set(value); found.set(null); }} disabled={props.disabled || action.busy() || lookup.busy()}
-              maxLength={600} placeholder={`https://${account()?.host}/team/project.git`} onSubmit={find} />
+            <TextField flex monospace testID="repository-url" value={path()} onChange={value => { path.set(value); found.set(null); }} disabled={props.disabled || action.busy() || lookup.busy()}
+              maxLength={600} placeholder={example()} onSubmit={find} />
             <Button small variant="outline" label={lookup.busy() ? "Checking…" : "Look up"} disabled={props.disabled || action.busy() || lookup.busy() || !path().trim()} onPress={find} />
           </View>
         </Field>
@@ -382,7 +417,7 @@ function RepositoryPicker(props: { open: boolean; workspace: Workspace; accounts
       </If>
       <If when={listed()}>
         <ResourceState inline loading={resource.loading()} error={resource.error()} retry={resource.refresh}>
-          <If when={resource.data()?.repositories.length} else={<EmptyState title="No repositories found">{`Check your ${providerName()} account and organization access`}</EmptyState>}>
+          <If when={resource.data()?.repositories.length} else={<EmptyState title="No repositories found">{`Check your ${providerName()} account and organization access, or add one By URL`}</EmptyState>}>
             <Field label={`${providerName()} repository`}
               hint={resource.data()?.truncated ? `Only the first ${repositoryLimits.pickerRepositories} repositories this account can access are listed` : undefined}>
               <Select<string> label={`${providerName()} repository`} placeholder="Choose a repository" value={selected()?.id} disabled={props.disabled || action.busy()} onChange={choose}
@@ -393,7 +428,7 @@ function RepositoryPicker(props: { open: boolean; workspace: Workspace; accounts
           </If>
         </ResourceState>
       </If>
-      <If when={resource.error()}>
+      <If when={listed() && resource.error()}>
         <Note>Review your Git accounts and repository access, then retry. An owner or admin with access can also configure this workspace</Note>
         <View style={{ flexDirection: "row" }}><Button small variant="ghost" label="Open profile" onPress={() => { props.close(); props.go({ name: "settings", section: "profile" }); }} /></View>
       </If>

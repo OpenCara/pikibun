@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
 import { sessionToolExtensionOn } from '../../../packages/shared/src/piki-extensions.js';
 import { extensionPackageKey, normalizeExtensionSource, type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
-import { gitProviders, type GitProvider, type WorkspaceRepository } from '../../../packages/shared/src/repositories.js';
+import { gitProviderHosts, gitProviders, repositoryFullName, repositoryUrlHost, type GitProvider, type WorkspaceRepository } from '../../../packages/shared/src/repositories.js';
 import { networkModes, type NetworkMode, type NetworkPolicy } from '../../../packages/shared/src/network.js';
 import { assignableWorkspaceRoles, type Workspace } from '../../../packages/shared/src/types.js';
 import {
@@ -13,7 +13,7 @@ import {
   type WorkspaceToolAction, type WorkspaceToolParameter,
 } from '../../../packages/shared/src/workspace-management.js';
 import {
-  admissionExpired, auditStatement, githubRepositoryIdentity, registerNetworkPolicies, registerRepositories, registerSources, requireCallbackScope,
+  admissionExpired, auditStatement, gitHost, lookupRepository, registerNetworkPolicies, registerRepositories, registerSources, requireCallbackScope,
   requireToolCall, sessionAccess, workspaceExtensions,
 } from './authority/index.js';
 import { registerCatalog } from './catalog.js';
@@ -30,6 +30,7 @@ type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: st
 type Fields = Partial<Record<Exclude<WorkspaceToolParameter, 'action' | 'enabled'>, string>> & { enabled?: boolean };
 
 const INTERNAL_ORIGIN = 'http://workspace-tool.pikibun.internal';
+const publicGitProviders: Record<string, GitProvider> = { 'github.com': 'github', 'gitlab.com': 'gitlab', 'bitbucket.org': 'bitbucket', 'dev.azure.com': 'azure-devops' };
 
 const line = (field: string, max: number) => text(field, max).transform(value => value.trim())
   .refine(value => value !== '' && !/[\x00-\x1f\x7f]/.test(value), `${field} is one line.`).optional();
@@ -131,14 +132,15 @@ async function run(env: Env, row: SessionRow, actorId: string, action: Workspace
     case 'decline_join_request': return call('DELETE', `${workspace}/join-requests/${encodeURIComponent(input.user!)}`);
     case 'set_tool_group': return call('PUT', `${member(input.user!)}/tool-group`, { groupId: input.group === 'role' ? null : input.group });
     case 'add_repository': {
-      const provider = (input.provider ?? 'github') as GitProvider;
-      let repositoryId = input.repository_id;
-      if (repositoryId === undefined) {
-        if (provider !== 'github') fail(400, 'invalid_input', 'For a repository outside GitHub, give its repository_id as the provider shows it.');
-        repositoryId = await githubRepositoryIdentity(env, actorId, input.repository!);
-      }
-      return call('POST', `${workspace}/repositories`, { provider, ...(input.host ? { host: input.host } : {}), repositoryId, fullName: input.repository,
-        ...(input.ref ? { ref: input.ref } : {}) }) ;
+      const given = input.repository!;
+      const url = /^[a-z][a-z0-9+.-]*:\/\/|^[^\s@/:]+@[^\s/:]+:/i.test(given) ? repositoryUrlHost(given) : null;
+      const provider = (input.provider ?? (url ? publicGitProviders[url] : undefined) ?? 'github') as GitProvider;
+      const host = gitHost(provider, input.host ?? (url && !gitProviderHosts[provider].fixed ? url : undefined));
+      const fullName = repositoryFullName(provider, host, given) ?? fail(400, 'invalid_input',
+        `repository is the repository's URL on ${host}, or its name there, such as owner/name.`);
+      const found = input.repository_id === undefined ? await lookupRepository(env, actorId, provider, host, fullName) : null;
+      return call('POST', `${workspace}/repositories`, { provider, host, repositoryId: found?.id ?? input.repository_id, fullName: found?.fullName ?? fullName,
+        ...(input.ref ? { ref: input.ref } : {}) });
     }
     case 'remove_repository': {
       const { repositories } = await call<{ repositories: WorkspaceRepository[] }>('GET', `${workspace}/repositories`);

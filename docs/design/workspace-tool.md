@@ -54,10 +54,12 @@ button is. The `workspace` tool lets the agent make the change, within the same 
    one thing (the mode, or one domain), then save the whole policy as the settings page does, so two saves at the same
    moment keep the later one, as two saves from the page would.
 
-8. **Adding a GitHub repository by name.** The repositories route wants the provider's repository id, which the agent
-   rarely knows. For GitHub the tool looks it up with the sender's GitHub sign-in (`githubRepositoryIdentity`), the
-   same access the route then verifies with. Other providers' adapters look repositories up by id, so they need
-   `repository_id`.
+8. **Adding a repository by its URL or name.** The repositories route wants the provider's repository id, which the
+   agent rarely knows. The tool reads `repository` as the settings page's **By URL** does (`repositoryFullName`: a web
+   or clone URL, an SSH remote, or the name itself), takes the provider from a github.com, gitlab.com, bitbucket.org or
+   dev.azure.com URL and the host from a self-hosted one, and looks the id up by name with the sender's own account for
+   that provider (`lookupRepository`), the same access the route then verifies with. It binds the canonical name the
+   provider answers with, so a name typed in another case still binds. `repository_id` skips the lookup.
 
 9. **Recorded with the session.** Besides the route's own entry, each change adds `session.workspace_tool.changed` with
    the session, the call id, the action and the values it named, never an extension's settings, which may hold

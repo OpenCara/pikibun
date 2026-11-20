@@ -116,6 +116,10 @@ function commitSha(provider: TokenGitProvider, value: unknown): string {
   return value;
 }
 
+function named(provider: TokenGitProvider, fullName: string): string {
+  if (!validRepositoryName(provider, fullName)) fail(400, 'invalid_repository', `Use a valid ${label(provider)} repository.`);
+  return fullName;
+}
 function target(provider: TokenGitProvider, repository: RepositoryRef): RepositoryRef {
   if (!validRepositoryId(repository.id) || !validRepositoryName(provider, repository.fullName)) {
     fail(400, 'invalid_repository', `Use a valid ${label(provider)} repository.`);
@@ -175,6 +179,11 @@ const githubEnterprise: GitProviderAdapter = {
     const { body } = await getJson('github-enterprise', `${api.base}/repositories/${encodeURIComponent(id)}`, api.headers);
     return githubEnterpriseRepository(body);
   },
+  async lookup(credential, fullName) {
+    const api = githubEnterpriseApi(credential);
+    const { body } = await getJson('github-enterprise', `${api.base}/repos/${named('github-enterprise', fullName)}`, api.headers);
+    return githubEnterpriseRepository(body);
+  },
   async commit(credential, repository, ref) {
     const api = githubEnterpriseApi(credential);
     const { fullName } = target('github-enterprise', repository);
@@ -220,6 +229,11 @@ const gitlab: GitProviderAdapter = {
     const { body } = await getJson('gitlab', `${api.base}/projects/${encodeURIComponent(id)}`, api.headers);
     return gitlabRepository(body) ?? emptyRepository('gitlab');
   },
+  async lookup(credential, fullName) {
+    const api = gitlabApi(credential);
+    const { body } = await getJson('gitlab', `${api.base}/projects/${encodeURIComponent(named('gitlab', fullName))}`, api.headers);
+    return gitlabRepository(body) ?? emptyRepository('gitlab');
+  },
   async commit(credential, repository, ref) {
     const api = gitlabApi(credential);
     const { id } = target('gitlab', repository);
@@ -256,6 +270,11 @@ const gitea: GitProviderAdapter = {
     const api = giteaApi(credential);
     const { id } = target('gitea', repository);
     const { body } = await getJson('gitea', `${api.base}/repositories/${encodeURIComponent(id)}`, api.headers);
+    return giteaRepository(body) ?? emptyRepository('gitea');
+  },
+  async lookup(credential, fullName) {
+    const api = giteaApi(credential);
+    const { body } = await getJson('gitea', `${api.base}/repos/${named('gitea', fullName)}`, api.headers);
     return giteaRepository(body) ?? emptyRepository('gitea');
   },
   async commit(credential, repository, ref) {
@@ -341,6 +360,10 @@ const bitbucket: GitProviderAdapter = {
     const { body } = await getJson('bitbucket', `${bitbucketApi}/repositories/${fullName}`, bitbucketHeaders(credential));
     return bitbucketRepository(body) ?? emptyRepository('bitbucket');
   },
+  async lookup(credential, fullName) {
+    const { body } = await getJson('bitbucket', `${bitbucketApi}/repositories/${named('bitbucket', fullName)}`, bitbucketHeaders(credential));
+    return bitbucketRepository(body) ?? emptyRepository('bitbucket');
+  },
   async commit(credential, repository, ref) {
     const { fullName } = target('bitbucket', repository);
     const { body } = await getJson('bitbucket',
@@ -407,6 +430,16 @@ const azureDevOps: GitProviderAdapter = {
   async repository(credential, repository) {
     const api = azureTarget(credential, repository);
     const { body } = await getJson('azure-devops', `${api.base}/_apis/git/repositories/${api.id}?api-version=7.1`, api.headers, { denied: azureDeniedStatuses });
+    const item = record('azure-devops', body);
+    if (item.isDisabled === true) accessFailure('azure-devops', false);
+    return azureRepository(api.organization, item) ?? emptyRepository('azure-devops');
+  },
+  async lookup(credential, fullName) {
+    const api = azureApi(credential);
+    const [organization, project, name] = named('azure-devops', fullName).split('/') as [string, string, string];
+    if (organization.toLowerCase() !== api.organization) accessFailure('azure-devops', false);
+    const { body } = await getJson('azure-devops',
+      `${api.base}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(name)}?api-version=7.1`, api.headers, { denied: azureDeniedStatuses });
     const item = record('azure-devops', body);
     if (item.isDisabled === true) accessFailure('azure-devops', false);
     return azureRepository(api.organization, item) ?? emptyRepository('azure-devops');
@@ -480,6 +513,9 @@ const gitServer: GitProviderAdapter = {
     if (branch === null) return emptyRepository('git');
     const anonymous = await plainAdvertisement(credential, fullName, 'git-upload-pack', true).catch(() => null);
     return { id: await plainRepositoryId(fullName), fullName, defaultBranch: repositoryRef(branch), private: anonymous?.ok !== true };
+  },
+  async lookup(credential, fullName) {
+    return gitServer.repository(credential, { id: await plainRepositoryId(named('git', fullName)), fullName });
   },
   async commit(credential, repository, ref) {
     const { fullName } = target('git', repository);

@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { GitAccount, GitHubDeviceSignIn, GitHubDeviceSignInState, GitProvider, ProviderRepository, ProviderRepositoryList, TokenGitProvider } from '../../../../../packages/shared/src/repositories.js';
-import { gitProviderHosts, gitProviderNames, gitProviders, plainRepositoryPath, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../../packages/shared/src/repositories.js';
+import { gitProviderHosts, gitProviderNames, gitProviders, repositoryFullName, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../../packages/shared/src/repositories.js';
 import type { Env, GitCredentialRow, AppEnv } from '../../types.js';
 import { auditAfterChange, auditStatement } from '../audit.js';
 import { revokeGitHubToken } from '../auth.js';
@@ -11,8 +11,8 @@ import { z } from 'zod';
 import { fail, id, identifier, jsonObject, localMode, now, testMode } from '../../http.js';
 import { body, fields } from '../../schemas.js';
 import { decryptToken, encryptToken } from '../vault.js';
-import { githubRepositories, validRepositoryRef } from '../repositories.js';
-import { gitProviderAdapters, plainRepositoryId } from './providers.js';
+import { githubRepositories, githubRepositoryLookup, validRepositoryRef } from '../repositories.js';
+import { gitProviderAdapters } from './providers.js';
 import type { GitCredential } from './types.js';
 
 export interface LoadedCredential {
@@ -81,6 +81,21 @@ export async function recheckCredential(env: Env, access: LoadedCredential): Pro
   const row = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM git_credentials WHERE id = ? AND user_id = ?')
     .bind(access.credential.id, access.userId).first();
   if (row?.ciphertext !== access.ciphertext) fail(403, 'git_access_changed', 'Git account access changed; retry with the current connection.');
+}
+
+const lookupExamples: Record<GitProvider, (host: string) => string> = {
+  github: host => `https://${host}/owner/name, or its owner/name`,
+  'github-enterprise': host => `https://${host}/owner/name, or its owner/name`,
+  gitlab: host => `https://${host}/group/project, or its group/project`,
+  bitbucket: host => `https://${host}/workspace/name, or its workspace/name`,
+  'azure-devops': host => `https://${host}/organization/project/_git/name, or its organization/project/name`,
+  gitea: host => `https://${host}/owner/name, or its owner/name`,
+  git: host => `https://${host}/team/project.git, or its path there, such as team/project.git`,
+};
+
+export function lookupRepositoryName(provider: GitProvider, host: string, path: string): string {
+  return repositoryFullName(provider, host, path) ?? fail(400, 'invalid_repository',
+    `Enter the repository's URL on ${host}, such as ${lookupExamples[provider](host)}.`);
 }
 
 export function providerRepository(provider: GitProvider, value: unknown): ProviderRepository {
@@ -369,18 +384,18 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
     const userId = c.get('auth').userId;
     const accountId = c.req.param('id');
     const path = c.req.query('path');
-    if (path !== undefined && accountId === 'github') fail(400, 'invalid_repository', 'Only Git server accounts look repositories up by path.');
-    if (accountId === 'github') return c.json(await githubRepositories(c.env, userId));
+    if (accountId === 'github') {
+      if (path === undefined) return c.json(await githubRepositories(c.env, userId));
+      const repository = await githubRepositoryLookup(c.env, userId, lookupRepositoryName('github', 'github.com', path));
+      return c.json({ repositories: [repository], truncated: false } satisfies ProviderRepositoryList);
+    }
     const row = await c.env.DB.query<GitCredentialRow>('SELECT * FROM git_credentials WHERE id = ? AND user_id = ?')
       .bind(identifier(accountId), userId).first();
     if (!row) fail(404, 'not_found', 'Git account not found.');
     const access = await loaded(c.env, row);
     if (path !== undefined) {
-      if (row.provider !== 'git') fail(400, 'invalid_repository', 'Only Git server accounts look repositories up by path.');
-      const fullName = plainRepositoryPath(row.host, path) ?? fail(400, 'invalid_repository',
-        `Enter the repository's clone URL on ${row.host}, or its path there, such as team/project.git.`);
-      const repository = providerRepository('git', await gitProviderAdapters.git.repository(access.credential,
-        { id: await plainRepositoryId(fullName), fullName }));
+      const fullName = lookupRepositoryName(row.provider, row.host, path);
+      const repository = providerRepository(row.provider, await gitProviderAdapters[row.provider].lookup(access.credential, fullName));
       await recheckCredential(c.env, access);
       return c.json({ repositories: [repository], truncated: false } satisfies ProviderRepositoryList);
     }

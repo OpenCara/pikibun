@@ -283,6 +283,28 @@ test('picker uses the acting GitHub token, projects safe metadata and lists ever
   await denied(await alice.request('GET', githubPicker), 502, 'invalid_github_response');
 });
 
+test('any GitHub repository the sign-in can read is looked up by its URL and bound, though the picker doesn\'t list it', async t => {
+  const f = await fixture(t); const remote = github(t); const alice = await f.client('alice');
+  remote.state.picker = async () => Response.json([]);
+  assert.deepEqual((await json<ProviderRepositoryList>(await alice.request('GET', githubPicker))).repositories, []);
+  const lookup = (path: string) => alice.request('GET', `${githubPicker}?path=${encodeURIComponent(path)}`);
+  for (const path of [`https://github.com/${metadata.full_name}/tree/main`, `git@github.com:${metadata.full_name}.git`, `github.com/${metadata.full_name}.git`, metadata.full_name]) {
+    assert.deepEqual(await json(await lookup(path)),
+      { repositories: [{ id: String(metadata.id), fullName: metadata.full_name, defaultBranch: 'main', private: true }], truncated: false }, path);
+    assert.equal(remote.calls.at(-1)!.authorization, `Bearer ${alice.githubToken}`);
+  }
+  const before = remote.calls.length;
+  for (const path of [`https://gitlab.com/${metadata.full_name}`, `https://token:x@github.com/${metadata.full_name}`, 'acme', 'a/b/c d']) {
+    await denied(await lookup(path), 400, 'invalid_repository');
+  }
+  assert.equal(remote.calls.length, before, 'what names no repository on github.com never reaches GitHub');
+  remote.state.metadata = async () => Response.json({ message: 'Not Found' }, { status: 404 });
+  await denied(await lookup(metadata.full_name), 403, 'github_repository_unavailable');
+  remote.state.metadata = async () => Response.json(metadata);
+  const team = await workspace(alice);
+  assert.equal((await bindRepository(alice, team.id, { ...repositoryInput, ref: 'main' })).fullName, metadata.full_name);
+});
+
 test('a server people sign in to takes no pasted github.com token: only one that runs for its owner alone does', async t => {
   const f = await fixture(t); const remote = github(t); const alice = await f.client('alice');
   await denied(await alice.request('PUT', '/api/git/accounts/github', { token: 'ghp_pasted' }), 400, 'invalid_git_provider');
@@ -676,7 +698,7 @@ function gitea(t: TestContext) {
     calls.push({ url, authorization: new Headers(init?.headers).get('authorization'), redirect: init?.redirect });
     if (url === `${giteaApi}/user`) return state.user();
     if (url === `${giteaApi}/user/repos?page=1&limit=30`) return state.picker();
-    if (url === giteaRepository) return state.metadata();
+    if (url === giteaRepository || url === `${giteaApi}/repos/acme/tools`) return state.metadata();
     if (url === giteaCommit) return state.resolve();
     if (url === giteaPinnedCommit) return state.pinned();
     if (url === giteaArchive) return state.archive();
@@ -739,6 +761,30 @@ test('token accounts are verified, stored encrypted, never returned, private to 
   const audit = f.sqlite.prepare("SELECT action, detail_json FROM audit WHERE action LIKE 'git.account.%' ORDER BY created_at, action").all();
   assert.deepEqual(audit.map(row => row.action).sort(), ['git.account.connected', 'git.account.connected', 'git.account.removed']);
   for (const secret of [giteaToken(alice), 'rotated-gitea-token']) assert.ok(!JSON.stringify(audit).includes(secret));
+});
+
+test('a forge account, and a workspace connection, look any repository up by its URL', async t => {
+  const f = await fixture(t); const remote = gitea(t); const alice = await f.client('alice');
+  const account = await connectGitea(alice);
+  const picker = `/api/git/accounts/${account.id}/repositories`;
+  const expected = { repositories: [{ id: '42', fullName: 'acme/tools', defaultBranch: 'main', private: true }], truncated: false };
+  for (const path of [`https://${giteaHost}/acme/tools.git`, `https://${giteaHost}/acme/tools/src/branch/main`, 'acme/tools']) {
+    assert.deepEqual(await json(await alice.request('GET', `${picker}?path=${encodeURIComponent(path)}`)), expected, path);
+    assert.deepEqual([remote.calls.at(-1)!.url, remote.calls.at(-1)!.authorization], [`${giteaApi}/repos/acme/tools`, `token ${giteaToken(alice)}`]);
+  }
+  const before = remote.calls.length;
+  await denied(await alice.request('GET', `${picker}?path=${encodeURIComponent('https://github.com/acme/tools')}`), 400, 'invalid_repository');
+  assert.equal(remote.calls.length, before);
+
+  const team = await workspace(alice);
+  const { connection } = await json<{ connection: { id: string } }>(await alice.request('POST', `/api/workspaces/${team.id}/connections`,
+    { family: 'git', provider: 'gitea', host: giteaHost, token: 'gitea-bot-token' }), 201);
+  const shared = `/api/workspaces/${team.id}/connections/${connection.id}/repositories`;
+  assert.deepEqual(await json(await alice.request('GET', `${shared}?path=${encodeURIComponent(`https://${giteaHost}/acme/tools`)}`)), expected);
+  assert.deepEqual([remote.calls.at(-1)!.url, remote.calls.at(-1)!.authorization], [`${giteaApi}/repos/acme/tools`, 'token gitea-bot-token']);
+  await denied(await alice.request('GET', `${shared}?path=${encodeURIComponent('https://other.example.com/acme/tools')}`), 400, 'invalid_repository');
+  const bob = await f.client('bob'); await member(alice, team.id, bob);
+  await denied(await bob.request('GET', `${shared}?path=acme/tools`), 403, 'forbidden');
 });
 
 test('disconnecting GitHub deletes the sign-in token, revokes it with GitHub and keeps the owner signed in', async t => {
@@ -930,7 +976,7 @@ test('a plain Git server account takes a user name, looks repositories up by pat
   assert.ok(calls.every(call => call.url.startsWith(`https://${gitServerHost}/`) && call.redirect === 'manual'));
   await denied(await alice.request('GET', `${picker}?path=${encodeURIComponent('https://other.example.com/team/app.git')}`), 400, 'invalid_repository');
   await denied(await alice.request('GET', `${picker}?path=team/missing.git`), 403, 'git_repository_unavailable');
-  await denied(await alice.request('GET', `/api/git/accounts/github/repositories?path=team/app.git`), 400, 'invalid_repository');
+  await denied(await alice.request('GET', `/api/git/accounts/github/repositories?path=${encodeURIComponent(gitServerRemote)}`), 400, 'invalid_repository');
 
   const team = await workspace(alice);
   const bound = await bindRepository(alice, team.id, { provider: 'git', host: gitServerHost, repositoryId: repository.id, fullName: repository.fullName } as never);

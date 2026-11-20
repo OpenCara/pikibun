@@ -327,6 +327,33 @@ describe("settings", () => {
     await app.waitFor("id:workspace-w1");
   });
 
+  test("Workspaces adds a repository by any URL, switching to the account of its host, without listing the account's repositories", async () => {
+    const url = "https://gitlab.com/group/project/-/tree/main";
+    const lookup = `${ORIGIN}/api/git/accounts/g2/repositories?path=${encodeURIComponent(url)}`;
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/git/accounts`]: { body: { accounts: [
+        { id: "github", provider: "github", host: "github.com", organization: "", login: "ada", createdAt: null },
+        { id: "g2", provider: "gitlab", host: "gitlab.com", organization: "", login: "ada-gl", createdAt: "2026-01-01T00:00:00.000Z" },
+      ] } },
+      [`GET ${lookup}`]: { body: { repositories: [{ id: "42", fullName: "group/project", defaultBranch: "main", private: false }], truncated: false } },
+      [`POST ${ORIGIN}/api/workspaces/w1/repositories`]: { status: 201, body: { repository: { id: "r2", workspaceId: "w1", provider: "gitlab", host: "gitlab.com",
+        repositoryId: "42", fullName: "group/project", ref: "main", private: false, createdAt: "2026-01-01T00:00:00.000Z", forbidDefaultBranchPush: false, lfs: false, readAs: "members" } } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:add-repository");
+    await app.press("id:add-repository");
+    await app.waitFor("id:repository-url");
+    await app.type("id:repository-url", url);
+    await app.press("text:Look up");
+    await app.waitFor("text:group/project");
+    expect(app.texts().join(" ")).toContain("Public · default branch main");
+    await app.press("text:Bind repository");
+    await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/repositories`) !== undefined);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/repositories`)).toEqual({ provider: "gitlab", host: "gitlab.com", repositoryId: "42", fullName: "group/project" });
+    expect(app.requests().some(item => /\/api\/git\/accounts\/[^/]+\/repositories$/.test(item.url))).toBe(false);
+  });
+
   test("Workspaces lets an admin choose when hosts keep the workspace's prompt caches warm", async () => {
     const app = await openSettings("workspaces", {
       [`PUT ${ORIGIN}/api/workspaces/w1/cache-warming`]: { body: { settings: { mode: "streaming" } } },

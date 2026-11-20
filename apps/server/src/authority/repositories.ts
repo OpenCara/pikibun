@@ -205,11 +205,19 @@ export async function githubRepositories(env: Env, userId: string): Promise<Prov
   await recheckGitHubAccess(env, access);
   return listing;
 }
-export async function githubRepositoryIdentity(env: Env, userId: string, fullName: string): Promise<string> {
+export async function githubRepositoryLookup(env: Env, userId: string, fullName: string): Promise<ProviderRepository> {
   const access = await githubAccess(env, userId);
   const metadata = githubRepository(await githubJSON(access, `/repos/${repositoryName('github', fullName)}`));
   await recheckGitHubAccess(env, access);
-  return metadata.id;
+  return metadata;
+}
+export async function lookupRepository(env: Env, userId: string, provider: GitProvider, host: string, fullName: string): Promise<ProviderRepository> {
+  if (provider === 'github') return githubRepositoryLookup(env, userId, fullName);
+  const access = await repositoryAccess(env, userId, provider, host, fullName);
+  if (access.provider === 'github') return fail(400, 'invalid_repository', 'Not a token account.');
+  const metadata = providerRepository(provider, await gitProviderAdapters[provider].lookup(access.account.credential, fullName));
+  await recheckAccess(env, access);
+  return metadata;
 }
 export async function githubRepositoryMetadata(access: GitHubAccess, fullName: string): Promise<ProviderRepository> {
   return githubRepository(await githubJSON(access, `/repos/${repositoryName('github', fullName)}`));
