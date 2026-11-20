@@ -935,19 +935,23 @@ export class RunnerSession {
     const sandbox = this.sandbox;
     if (sandbox instanceof HelperWorkspace && sandbox.runsProcesses) {
       if (!sandbox.nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
-      return (warn, complete) => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox),
-        ...(complete ? { complete } : {}) });
+      return (warn, options) => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox),
+        ...(options?.complete ? { complete: options.complete } : {}) });
     }
     if (!(sandbox instanceof Sandbox)) return undefined;
     const nodeBin = sandbox.nodeBin;
     if (!nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
-    return (warn, complete) => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), ...(complete ? { complete } : {}), launch: sandboxLaunch({
-      socketDirectory: serviceSocketDirectory(`${this.binding.session.id}\0extensions`, this.directory), nodeBin, worktree: sandbox.worktree,
+    return (warn, options) => {
+      const key = `${this.binding.session.id}\0extensions${options?.key ? `\0${options.key}` : ""}`;
+      return new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path),
+        ...(options?.complete ? { complete: options.complete } : {}), launch: sandboxLaunch({
+      socketDirectory: serviceSocketDirectory(key, this.directory), nodeBin, worktree: sandbox.worktree,
       start: async (command, binds, onOutput, signal) => {
         const config = await this.hostConfig();
         return sandbox.startService(command, async () => {}, { limits: serviceLimits(serviceLifetimeLimits.max, availableParallelism()), unbounded: true, gpu: config.gpu,
-          socketDirectory: serviceSocketDirectory(`${this.binding.session.id}\0extensions`, this.directory), onOutput, signal, binds });
+          socketDirectory: serviceSocketDirectory(key, this.directory), onOutput, signal, binds });
       } }) });
+    };
   }
 
   private sessionTunnel(): SessionTunnel {
