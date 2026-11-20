@@ -1,7 +1,6 @@
 # Decoupling extensions from connectors (#438)
 
-Status: phases 1 to 3 are built (phase 2 with the owner's go-ahead), and phase 4's model calls with the prompt audit's
-unbundling; its CLI definitions and `allowModelCalls` for required extensions are still a plan. Each phase below is one
+Status: phases 1 to 4 are built (phase 2 with the owner's go-ahead). Each phase below is one
 pull request. See [Phase 1 as built](#phase-1-as-built), [Phase 2 as built](#phase-2-as-built),
 [Phase 3 as built](#phase-3-as-built) and [Phase 4 as built](#phase-4-as-built) where the code settles details of the
 text below.
@@ -337,9 +336,29 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   a pinned, digest-checked `@pikibun/` package, as trusted as the connector.
 - **`bundledOnlySources` is empty**, so a pin for `piki:prompt-audit` now applies like one for `pr-flow`. No pin exists
   yet, so every host still runs the bundled copy in the connector until a release pins one.
-- **Not yet:** `allowModelCalls` for a host's required extensions needs a `HostConfig` field older connectors don't
-  refuse (their parser takes a fixed set of keys in each required extension); and `gh`, `glab` and `az` as
-  `ProgramToolDefinition`s need the engine to learn what `apps/runner/src/extensions/piki/command.ts` does today (which
-  subcommands and API methods write, leased tokens in the sandbox, the host's sign-in for on-host sessions). Both are
-  their own pull requests.
+- **`allowModelCalls` on a host's required extensions** (#438 phase 4, second part): the host's owner ticks **May call
+  models** on a required extension (`RequiredExtension.allowModelCalls`, kept in `connector_configs.required_extensions_json`,
+  no migration). Older connectors take a fixed set of keys in each required extension, so `/api/connectors/self/config`
+  leaves the key out for a connector that doesn't announce the `modelCalls` capability. A connector that does opens such an
+  extension with `modelCalls` in a process of its own (`SessionExtensions.callerChannel`, keyed by source and, in the
+  Linux sandbox, with its own socket): sandboxed where the session is, since it is someone else's code, and holding
+  nothing else, because the source a child names in a request is only its word for it. Each such process, like each
+  guard process, answers model calls for its own source only (`bound`), whatever the child claims, and the session's
+  shared extension process answers none, so no other extension can spend the owner's accounts under its name. The
+  connector checks the setting again on every call (`SessionPiki.host().complete`), so turning it off refuses the next
+  call without waiting for the session to reopen.
+- **`gh`, `glab` and `az` are data** (`kind: "cli"`, `packages/shared/src/cli-definitions.ts`), not
+  `ProgramToolDefinition`s: those run a program in the sandbox under the session's grants, while these tools run on the
+  host's sign-in or with a leased forge token, refuse what would show a token, and tell reads from writes per subcommand
+  and API method. So the definition carries the rules (refusals; read-only groups or verbs; `api`, `rest` and `devops
+  invoke` request rules; `@file`, `--web`, file-writing and secret-word checks; the `gh` watch interval) and
+  the engine (`apps/runner/src/extensions/piki/cli-engine.ts`) keeps how a call runs (`command.ts`: environment, the
+  sandbox and its lease, the host's sign-in, output). The connector builds its own `ghSpec`, `glabSpec` and
+  `azureCliSpec` from the bundled definitions, so the existing tests hold the data to the old code's behavior.
+- **Served definitions only tighten.** `/api/connectors/self/tools` answers `clis` beside `tools` (older connectors read
+  only `tools`). A connector that reads them applies a served definition on top of its own: a call is refused if either
+  refuses it, and counts as a write if either says so (`PikiSession.servedRules`). So Pikibun can refuse more, or count
+  more commands as writes, without a connector release, but neither a compromised Pikibun server nor a mistaken release
+  can loosen what the connector holds, such as the refusals that keep its tokens hidden. A definition that would refuse
+  nothing, names another extension, or sets variables or roots outside bounded patterns is passed over.
 

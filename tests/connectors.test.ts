@@ -22,6 +22,7 @@ import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
 import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
+import { bundledCliDefinitions, parseCliDefinitions } from '../packages/shared/src/cli-definitions.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
 import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
@@ -2895,6 +2896,15 @@ test('only a host\'s owner requires extensions of every session on it, which its
   await denied(await creator.request('PATCH', path, { requiredExtensions: [], browser: { source: 'auto' } }), 403, 'host_owner_required');
   f.sqlite.prepare('UPDATE connector_configs SET required_extensions_json = ? WHERE connector_id = ?').run(JSON.stringify([{ source: 'npm:broken' }, required[0]]), id);
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, commandTimeoutSeconds: 120, requiredExtensions: [required[0]] } });
+
+  const calling = [required[0]!, { source: 'npm:cc-safety-net@2.7.2', settings: {}, allowModelCalls: true }];
+  await denied(await host.request('PATCH', path, { requiredExtensions: [{ ...calling[1], allowModelCalls: 'yes' }] }), 400, 'invalid_host_config');
+  await denied(await creator.request('PATCH', path, { requiredExtensions: calling }), 403, 'host_owner_required');
+  assert.deepEqual((await json<{ config: { requiredExtensions: unknown[] } }>(await host.request('PATCH', path, { requiredExtensions: calling }))).config.requiredExtensions, calling);
+  assert.deepEqual((await json<{ config: { requiredExtensions: unknown[] } }>(await self(f, s.connector, 'config', {}))).config.requiredExtensions,
+    [required[0], { source: 'npm:cc-safety-net@2.7.2', settings: {} }], 'a connector that predates model calls never sees the key it would refuse');
+  f.sqlite.prepare("UPDATE connectors SET capabilities_json = json_set(capabilities_json, '$.modelCalls', json('true')) WHERE id = ?").run(id);
+  assert.deepEqual((await json<{ config: { requiredExtensions: unknown[] } }>(await self(f, s.connector, 'config', {}))).config.requiredExtensions, calling);
 });
 
 test('a host\'s owner and admins disable its models for everyone: a disabled model is neither listed, started from nor chosen', async t => {
@@ -3681,8 +3691,11 @@ test('a workspace whose only source is a Notion page can be shared with hosts an
 
 test('a connector reads the tools this server defines as data, only with its own credential', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
-  const { tools } = await json<{ tools: unknown[] }>(await self(f, s.connector, 'tools', {}));
+  const answer = await json<{ tools: unknown[]; clis: unknown }>(await self(f, s.connector, 'tools', {}));
+  const { tools } = answer;
   assert.deepEqual(parseToolDefinitions({ tools }), bundledToolDefinitions, 'they parse as a connector parses them, unchanged');
+  assert.deepEqual(parseToolDefinitions(answer), bundledToolDefinitions, 'an older connector reads the same tools, passing over the CLI definitions beside them');
+  assert.deepEqual(parseCliDefinitions(answer.clis), bundledCliDefinitions);
   assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read', 'workspace']);
   await denied(await s.creator.request('POST', '/api/connectors/self/tools', {}), 401, 'connector_authentication_required');
 });

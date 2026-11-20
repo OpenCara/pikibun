@@ -25,6 +25,7 @@ import type { IdentityStore } from "./identity.js";
 import { localChangesRequest, type LocalChanges, type LocalChangesRequest } from "../../../packages/shared/src/local-changes.js";
 import { LOCAL_CHANGES_SECONDS, localChangesCommand, NotARepository, parseLocalChanges } from "./local-changes.js";
 import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
+import type { CliDefinition } from "../../../packages/shared/src/cli-definitions.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
 import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import { serviceLifetimeLimits, type HostTunnelStatus, type SessionTunnelReport, type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
@@ -127,6 +128,7 @@ export type RunnerConfig = {
   githubRead?: (request: GitHubReadRequest) => Promise<GitHubIssueView>;
   githubWaitPollMs?: number;
   toolDefinitions?: () => Promise<readonly ToolDefinition[]>;
+  cliDefinitions?: () => Promise<readonly CliDefinition[]>;
   brokered?: (route: string, request: Record<string, unknown>) => Promise<unknown>;
   githubMerge?: (request: GitHubMergeRequest) => Promise<GitHubMergeResult>;
   githubIssue?: (request: GitHubIssueRequest) => Promise<GitHubIssueResult>;
@@ -935,18 +937,23 @@ export class RunnerSession {
     const sandbox = this.sandbox;
     if (sandbox instanceof HelperWorkspace && sandbox.runsProcesses) {
       if (!sandbox.nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
-      return warn => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox) });
+      return (warn, options) => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox),
+        ...(options?.complete ? { complete: options.complete } : {}) });
     }
     if (!(sandbox instanceof Sandbox)) return undefined;
     const nodeBin = sandbox.nodeBin;
     if (!nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
-    return warn => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: sandboxLaunch({
-      socketDirectory: serviceSocketDirectory(`${this.binding.session.id}\0extensions`, this.directory), nodeBin, worktree: sandbox.worktree,
+    return (warn, options) => {
+      const key = `${this.binding.session.id}\0extensions${options?.key ? `\0${options.key}` : ""}`;
+      return new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path),
+        ...(options?.complete ? { complete: options.complete } : {}), launch: sandboxLaunch({
+      socketDirectory: serviceSocketDirectory(key, this.directory), nodeBin, worktree: sandbox.worktree,
       start: async (command, binds, onOutput, signal) => {
         const config = await this.hostConfig();
         return sandbox.startService(command, async () => {}, { limits: serviceLimits(serviceLifetimeLimits.max, availableParallelism()), unbounded: true, gpu: config.gpu,
-          socketDirectory: serviceSocketDirectory(`${this.binding.session.id}\0extensions`, this.directory), onOutput, signal, binds });
+          socketDirectory: serviceSocketDirectory(key, this.directory), onOutput, signal, binds });
       } }) });
+    };
   }
 
   private sessionTunnel(): SessionTunnel {

@@ -16,6 +16,7 @@ import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { hardwareLimits, parseHardware, readReportedHardware } from '../../../packages/shared/src/hardware.js';
 import { body, fields, parsed } from './schemas.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
+import { bundledCliDefinitions } from '../../../packages/shared/src/cli-definitions.js';
 import { CONNECTOR_VERSION_HEADER, connectorTooOld, MINIMUM_CONNECTOR_VERSION, validVersion } from '../../../packages/shared/src/version.js';
 import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import type { Query } from './db/types.js';
@@ -332,7 +333,7 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/self/mcp/:prefix/:key', async c => remoteMcpCall(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/tools', async c => {
     await authenticateConnector(c);
-    return c.json({ tools: toolDefinitions });
+    return c.json({ tools: toolDefinitions, clis: bundledCliDefinitions });
   });
   app.post('/api/connectors/self/schedules', async c => agentSchedules(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sessions', async c => agentSessions(c, (await authenticateConnector(c)).id));
@@ -345,7 +346,12 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/self/config', async c => {
     const row = await authenticateConnector(c);
     const config = await connectorHostConfig(c.env, row.id);
-    return c.json({ config: knowsGitSubdirectories(row) ? config : { ...config, requiredExtensions: config.requiredExtensions.filter(item => !inRepositoryDirectory(item.source)) } });
+    let capabilities: ReturnType<typeof parseCapabilities> | undefined;
+    try { capabilities = parseCapabilities(row.capabilities_json ?? '{}'); } catch { capabilities = undefined; }
+    const required = config.requiredExtensions
+      .filter(item => knowsGitSubdirectories(row) || !inRepositoryDirectory(item.source))
+      .map(item => capabilities?.modelCalls === true || !item.allowModelCalls ? item : { source: item.source, settings: item.settings });
+    return c.json({ config: { ...config, requiredExtensions: required } });
   });
   app.post('/api/connectors/self/git/relay/:bindingId/:service', async c => gitRelay(c, await authenticateConnector(c)));
   app.post('/api/connectors/self/git/direct', async c => gitDirect(c, await authenticateConnector(c)));
