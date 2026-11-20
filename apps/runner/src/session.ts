@@ -25,6 +25,7 @@ import type { IdentityStore } from "./identity.js";
 import { localChangesRequest, type LocalChanges, type LocalChangesRequest } from "../../../packages/shared/src/local-changes.js";
 import { LOCAL_CHANGES_SECONDS, localChangesCommand, NotARepository, parseLocalChanges } from "./local-changes.js";
 import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
+import type { CliDefinition } from "../../../packages/shared/src/cli-definitions.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
 import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import { serviceLifetimeLimits, type HostTunnelStatus, type SessionTunnelReport, type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
@@ -127,6 +128,7 @@ export type RunnerConfig = {
   githubRead?: (request: GitHubReadRequest) => Promise<GitHubIssueView>;
   githubWaitPollMs?: number;
   toolDefinitions?: () => Promise<readonly ToolDefinition[]>;
+  cliDefinitions?: () => Promise<readonly CliDefinition[]>;
   brokered?: (route: string, request: Record<string, unknown>) => Promise<unknown>;
   githubMerge?: (request: GitHubMergeRequest) => Promise<GitHubMergeResult>;
   githubIssue?: (request: GitHubIssueRequest) => Promise<GitHubIssueResult>;

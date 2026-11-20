@@ -3,6 +3,7 @@ import type { ConnectorCredentials, RestoreDescriptor } from "../../../../packag
 import { connectorLimits } from "../../../../packages/shared/src/connector.js";
 import { sha256 } from "../../../../packages/shared/src/crypto.js";
 import { bundledToolDefinitions, type ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
+import type { CliDefinition } from "../../../../packages/shared/src/cli-definitions.js";
 import type { SessionTunnelReport } from "../../../../packages/shared/src/tunnel.js";
 import { sessionActivities, type AuthorizationRequest, type AuthorizationResult, type SessionActivity, type SessionBranch } from "../../../../packages/shared/src/types.js";
 import { buildVersion, CONNECTOR_VERSION_HEADER, DEVELOPMENT_CONNECTOR_VERSION } from "../../../../packages/shared/src/version.js";
@@ -131,9 +132,16 @@ export class ControlPlaneCalls {
     return bytes;
   }
 
-  async toolDefinitions(): Promise<readonly ToolDefinition[]> {
-    this.#toolDefinitionsSource ??= new ToolDefinitionsSource(async () =>
+  #definitions(): ToolDefinitionsSource {
+    return this.#toolDefinitionsSource ??= new ToolDefinitionsSource(async () =>
       this.callback(await this.options.connection(), "/api/connectors/self/tools", {}, TOOL_DEFINITIONS_LIMIT));
-    return await this.#toolDefinitionsSource.get() ?? bundledToolDefinitions;
+  }
+
+  async toolDefinitions(): Promise<readonly ToolDefinition[]> {
+    return await this.#definitions().get() ?? bundledToolDefinitions;
+  }
+
+  async cliDefinitions(): Promise<readonly CliDefinition[]> {
+    return this.#definitions().clis();
   }
 }

@@ -1,7 +1,6 @@
 # Decoupling extensions from connectors (#438)
 
-Status: phases 1 to 3 are built (phase 2 with the owner's go-ahead), and phase 4's model calls with the prompt audit's
-unbundling; its CLI definitions and `allowModelCalls` for required extensions are still a plan. Each phase below is one
+Status: phases 1 to 4 are built (phase 2 with the owner's go-ahead). Each phase below is one
 pull request. See [Phase 1 as built](#phase-1-as-built), [Phase 2 as built](#phase-2-as-built),
 [Phase 3 as built](#phase-3-as-built) and [Phase 4 as built](#phase-4-as-built) where the code settles details of the
 text below.
@@ -348,8 +347,18 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   shared extension process answers none, so no other extension can spend the owner's accounts under its name. The
   connector checks the setting again on every call (`SessionPiki.host().complete`), so turning it off refuses the next
   call without waiting for the session to reopen.
-- **Not yet:** `gh`, `glab` and `az` as
-  `ProgramToolDefinition`s need the engine to learn what `apps/runner/src/extensions/piki/command.ts` does today (which
-  subcommands and API methods write, leased tokens in the sandbox, the host's sign-in for on-host sessions). Both are
-  their own pull requests.
+- **`gh`, `glab` and `az` are data** (`kind: "cli"`, `packages/shared/src/cli-definitions.ts`), not
+  `ProgramToolDefinition`s: those run a program in the sandbox under the session's grants, while these tools run on the
+  host's sign-in or with a leased forge token, refuse what would show a token, and tell reads from writes per subcommand
+  and API method. So the definition carries the rules (refusals; read-only groups or verbs; `api`, `rest` and `devops
+  invoke` request rules; `@file`, `--web`, file-writing and secret-word checks; the `gh` watch interval) and
+  the engine (`apps/runner/src/extensions/piki/cli-engine.ts`) keeps how a call runs (`command.ts`: environment, the
+  sandbox and its lease, the host's sign-in, output). The connector builds its own `ghSpec`, `glabSpec` and
+  `azureCliSpec` from the bundled definitions, so the existing tests hold the data to the old code's behavior.
+- **Served definitions only tighten.** `/api/connectors/self/tools` answers `clis` beside `tools` (older connectors read
+  only `tools`). A connector that reads them applies a served definition on top of its own: a call is refused if either
+  refuses it, and counts as a write if either says so (`PikiSession.servedRules`). So Pikibun can refuse more, or count
+  more commands as writes, without a connector release, but neither a compromised Pikibun server nor a mistaken release
+  can loosen what the connector holds, such as the refusals that keep its tokens hidden. A definition that would refuse
+  nothing, names another extension, or sets variables or roots outside bounded patterns is passed over.
 

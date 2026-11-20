@@ -22,6 +22,7 @@ import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
 import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
+import { bundledCliDefinitions, parseCliDefinitions } from '../packages/shared/src/cli-definitions.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
 import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
@@ -3690,8 +3691,11 @@ test('a workspace whose only source is a Notion page can be shared with hosts an
 
 test('a connector reads the tools this server defines as data, only with its own credential', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
-  const { tools } = await json<{ tools: unknown[] }>(await self(f, s.connector, 'tools', {}));
+  const answer = await json<{ tools: unknown[]; clis: unknown }>(await self(f, s.connector, 'tools', {}));
+  const { tools } = answer;
   assert.deepEqual(parseToolDefinitions({ tools }), bundledToolDefinitions, 'they parse as a connector parses them, unchanged');
+  assert.deepEqual(parseToolDefinitions(answer), bundledToolDefinitions, 'an older connector reads the same tools, passing over the CLI definitions beside them');
+  assert.deepEqual(parseCliDefinitions(answer.clis), bundledCliDefinitions);
   assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read', 'workspace']);
   await denied(await s.creator.request('POST', '/api/connectors/self/tools', {}), 401, 'connector_authentication_required');
 });

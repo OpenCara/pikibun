@@ -7,6 +7,8 @@ import type { ApiReach } from "../../../../packages/shared/src/network.js";
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation, type RunnerBinding } from "../../../../packages/shared/src/types.js";
 import type { ExtensionHost } from "../extensions/adapter.js";
 import { completeWith, modelCallSources } from "../extensions/complete.js";
+import { cliRules } from "../extensions/piki/cli-engine.js";
+import type { CliDefinition } from "../../../../packages/shared/src/cli-definitions.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "../extensions/piki/command.js";
 import { commandLimits } from "../host-config.js";
 import { RunnerError } from "../protocol.js";
@@ -24,7 +26,7 @@ type PikiCall = { write: boolean; forgeWrites: boolean; attribution: { initiated
 
 export interface SessionPikiOptions {
   binding: RunnerBinding;
-  config: { pikiHostSignIn?: boolean; extensions?: { modelRegistry?: ModelRegistry } };
+  config: { pikiHostSignIn?: boolean; extensions?: { modelRegistry?: ModelRegistry }; cliDefinitions?: () => Promise<readonly CliDefinition[]> };
   sandbox: SessionWorkspace;
   onHost: boolean;
   sandboxed: boolean;
@@ -92,6 +94,10 @@ export class SessionPiki {
       ...(this.options.sandboxed && !onHost ? { sandbox: (run: PikiSandboxRun) => this.#runCommand(run) } : {}),
       saveOutput: (callId, tool, output) => this.#saveOutput(callId, tool, output),
       fromScript: callId => this.#pikiCalls.get(callId)?.script === true,
+      ...(config.cliDefinitions ? { servedRules: async (name: string) => {
+        const served = (await config.cliDefinitions!().catch(() => [])).find(item => item.name === name);
+        return served ? cliRules(served) : undefined;
+      } } : {}),
       forgeWrites: callId => this.#pikiCalls.get(callId)?.forgeWrites === true,
     };
   }

@@ -183,6 +183,20 @@ What it doesn't protect against: outside a sandboxed session on Linux or macOS, 
 host's user, outside the sandbox ([extension isolation](extension-isolation.md)), and a version reaches every host that
 opted in within a sync. That is why it stays opt-in on hosts without the sandbox until extensions run in it on every platform.
 
+## gh, glab and az rules from the Pikibun server
+
+`packages/shared/src/cli-definitions.ts`, `apps/runner/src/extensions/piki/cli-engine.ts`, `command.ts`
+(`servedRules`); the plan is [Decoupling extensions from connectors](extension-planes.md#phase-4-as-built). These tools
+run with the host owner's sign-in or a leased forge token, so their refusals keep tokens hidden and their read rules
+keep Read-only messages and members without the forge's writing tools from writing.
+
+- **The connector's rules are the floor.** It builds them from the definitions bundled in its release; a definition
+  the Pikibun server serves is applied on top: refused if either refuses, a write if either says so. A served
+  definition can't drop a refusal or count a write as a read.
+- **Bounded data.** Served definitions are parsed with fixed keys, sizes and patterns (option names, variable names,
+  plain values, absolute roots, compiling regular expressions); one that fails, or would refuse every call, is passed
+  over. Only the rules are taken from them: the command, its environment and its sandbox roots stay the connector's.
+
 ## Workspace remote MCP servers
 
 `apps/server/src/authority/remote-mcp/` (`index.ts`, `client.ts`, `transport.ts`), `packages/shared/src/remote-mcp.ts`,
