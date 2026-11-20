@@ -216,6 +216,7 @@ export interface PikiSession {
   forgeWrites?: (callId: string) => boolean;
   saveOutput?: (callId: string, tool: string, output: string) => Promise<string>;
   fromScript?: (callId: string) => boolean;
+  servedRules?: (name: string) => Promise<Pick<CliSpec, "refused" | "writes"> | undefined>;
 }
 
 export const noPikiSession: PikiSession = Object.freeze({ hostSignIn: false });
@@ -255,14 +256,17 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
       async execute(toolCallId, params: Static<typeof parameters>, signal, _onUpdate, ctx) {
         if (params.args.some(arg => arg.includes("\0"))) throw new Error("An argument holds a NUL character.");
         const args = spec.prepare ? [...spec.prepare(params.args)] : params.args;
-        const refused = spec.refused(args);
+        const served = await session.servedRules?.(spec.info.name).catch(() => undefined);
+        const rules = served ? { refused: (given: readonly string[]) => spec.refused(given) ?? served.refused(given),
+          writes: (given: readonly string[]) => spec.writes(given) ?? served.writes(given) } : spec;
+        const refused = rules.refused(args);
         if (refused) throw new Error(`Refused: ${refused}. Nothing ran.`);
         const readOnly = pi.getFlag(READ_ONLY) === true;
         if (readOnly) {
-          const writes = spec.writes(args);
+          const writes = rules.writes(args);
           if (writes) throw new Error(`Refused: this workspace runs ${spec.command} read-only, and ${writes}. Nothing ran.`);
         } else if (session.forgeWrites?.(toolCallId) !== true) {
-          const writes = spec.writes(args);
+          const writes = rules.writes(args);
           if (writes) {
             throw new Error(`Refused: ${writes}, and ${spec.command} writes only in a message whose sender and session owner both have `
               + `${forgeWriteTools.join(", ")} in their tool groups (Settings → Workspaces → Tool groups). Nothing ran.`);

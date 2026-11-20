@@ -106,6 +106,7 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
       return view as GitHubIssueView;
     },
     toolDefinitions: async () => calls.toolDefinitions(),
+    cliDefinitions: async () => calls.cliDefinitions(),
     brokered: async (route, request) => {
       if (!BROKERED_ROUTE.test(route)) throw new RunnerError(400, "Invalid brokered tool route");
       const timeout = route.startsWith("mcp/") ? (remoteMcpLimits.callSeconds + 30) * 1000 : undefined;

@@ -11,6 +11,7 @@ import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
 import { brokeredArguments, brokeredTarget, knownDefinedProgramTool, programCommand, programRequest, refusedCommand } from "../apps/runner/src/defined-tools.js";
 import { ToolDefinitionsSource, TOOL_DEFINITIONS_TTL_MS } from "../apps/runner/src/tool-definitions-source.js";
+import { ghDefinition } from "../packages/shared/src/cli-definitions.js";
 import { validateOperation } from "../apps/runner/src/protocol.js";
 import { parseOperation } from "../apps/server/src/authority/operations.js";
 import { connectorWorkspaceExtensions } from "../apps/server/src/extensions.js";
@@ -135,6 +136,9 @@ test("a connector asks for the definitions once a minute, and keeps the last one
   assert.equal(asked, 2, "not asked again at once after a failure");
   const fresh = new ToolDefinitionsSource(async () => { throw new Error("404 Not Found"); }, () => now);
   assert.equal(await fresh.get(), undefined, "a control plane that predates them: the bundled ones");
+  assert.deepEqual(await fresh.clis(), [], "and no served CLI rules, so only the connector's own apply");
+  const withClis = new ToolDefinitionsSource(async () => ({ tools: [jvm], clis: [ghDefinition, { kind: "cli", name: "broken" }] }), () => now);
+  assert.deepEqual((await withClis.clis()).map(item => item.name), ["gh"]);
 });
 
 test("operations name the tools this server defines, and connectors take the switches of the extensions they name", () => {

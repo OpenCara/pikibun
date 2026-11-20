@@ -11,6 +11,8 @@ import { spawnSync } from 'node:child_process';
 import { apiWrites, cliEnvironment, commandWords, optionValues, sandboxDirectory, sandboxMissingFile, sandboxShellCommand, type CliRun, type PikiSandboxRun,
   type PikiSession } from '../apps/runner/src/extensions/piki/command.js';
 import { ghSpec } from '../apps/runner/src/extensions/piki/gh.js';
+import { cliRules } from '../apps/runner/src/extensions/piki/cli-engine.js';
+import { bundledCliDefinitions, ghDefinition, parseCliDefinition, parseCliDefinitions, type CliDefinition } from '../packages/shared/src/cli-definitions.js';
 import { glabSpec } from '../apps/runner/src/extensions/piki/glab.js';
 import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
 import { fitsModel, SAVED_OUTPUT_BYTES } from '../apps/runner/src/tool-output.js';
@@ -239,6 +241,30 @@ async function ghTool(t: TestContext, readOnly = false, session: PikiSession = {
     .then(output => (output.content[0] as { text: string }).text);
   return { call, worktree, root };
 }
+
+test('gh, glab and az are data: their definitions round-trip, a definition that could refuse nothing or isn\'t one is refused, and served rules only tighten', async t => {
+  for (const definition of bundledCliDefinitions) assert.deepEqual(parseCliDefinition(JSON.parse(JSON.stringify(definition))), definition);
+  for (const [why, change] of [
+    ['a refusal that matches every call', { refuse: [{ reason: 'all' }] }], ['a pattern that isn\'t one', { refuse: [{ argPattern: '(', reason: 'x' }] }],
+    ['another extension', { extension: 'piki:glab' }], ['an unknown key', { run: 'sh' }], ['a variable that isn\'t a name', { setEnv: { 'A B': '1' } }],
+    ['a value the shell would read', { setEnv: { A: '$(x)' } }], ['a relative sandbox root', { sandboxRoots: ['opt/az'] }],
+  ] as const) assert.throws(() => parseCliDefinition({ ...JSON.parse(JSON.stringify(ghDefinition)), ...change }), /Invalid CLI definition/, why);
+  assert.deepEqual(parseCliDefinitions([{ kind: 'cli', name: 'bad' }, ghDefinition, { ...ghDefinition }]).map(item => item.name), ['gh'], 'a bad one is passed over, a repeated one kept once');
+
+  const loosening = { ...ghDefinition, refuse: [], reads: { ...ghDefinition.reads, groups: { ...ghDefinition.reads.groups, pr: ['merge', 'list'] } } };
+  const tightening = { ...ghDefinition, refuse: [...ghDefinition.refuse, { words: ['secret', 'list'], reason: 'listing secrets is refused on this Pikibun' }],
+    reads: { ...ghDefinition.reads, groups: { ...ghDefinition.reads.groups, run: ['list'] } } };
+  let served: CliDefinition = loosening;
+  const session: PikiSession = { hostSignIn: true, forgeWrites: () => true, servedRules: async name => name === 'gh' ? cliRules(served) : undefined };
+  const { call } = await ghTool(t, true, session);
+  await assert.rejects(call({ args: ['pr', 'merge', '1'] }), /read-only, and gh pr merge is not a command that only reads/, 'served rules never loosen what the connector holds');
+  await assert.rejects(call({ args: ['auth', 'token'] }), /gh auth token would show its token/, 'nor drop its refusals');
+  assert.match(await call({ args: ['secret', 'list'] }), /arg=secret/);
+  served = tightening;
+  await assert.rejects(call({ args: ['secret', 'list'] }), /Refused: listing secrets is refused on this Pikibun\. Nothing ran\./);
+  await assert.rejects(call({ args: ['run', 'view', '7'] }), /read-only, and gh run view is not a command that only reads/, 'a served rule may count more commands as writes');
+  assert.match(await call({ args: ['run', 'list'] }), /arg=list/);
+});
 
 test('the gh tool runs gh in the worktree, or a directory in it, and returns its output; failures and refusals say why', async t => {
   const { call, worktree } = await ghTool(t);
