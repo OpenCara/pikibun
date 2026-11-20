@@ -48,6 +48,7 @@ export interface HostConfig {
 export interface RequiredExtension {
   source: string;
   settings: ExtensionSettings;
+  allowModelCalls?: true;
 }
 
 export const hostConfigLimits = Object.freeze({
@@ -74,18 +75,18 @@ export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
   if (input.length > hostConfigLimits.requiredExtensions) throw new Error(`A host requires at most ${hostConfigLimits.requiredExtensions} extensions`);
   const packages = new Set<string>();
   const parsed = input.map(item => {
-    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => key !== "source" && key !== "settings")) {
+    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => key !== "source" && key !== "settings" && key !== "allowModelCalls")) {
       throw new Error("Invalid required extension");
     }
-    const { source, settings } = item as { source?: unknown; settings?: unknown };
-    if (typeof source !== "string") throw new Error("Invalid required extension");
+    const { source, settings, allowModelCalls } = item as { source?: unknown; settings?: unknown; allowModelCalls?: unknown };
+    if (typeof source !== "string" || (allowModelCalls !== undefined && typeof allowModelCalls !== "boolean")) throw new Error("Invalid required extension");
     let normalized: string;
     try { normalized = normalizeExtensionSource(source); }
     catch (error) { throw new Error(`Invalid required extension: ${error instanceof Error ? error.message : "its source"}`); }
     const key = extensionPackageKey(normalized);
     if (packages.has(key)) throw new Error(`A host requires one version of ${key}`);
     packages.add(key);
-    return { source: normalized, settings: parseExtensionSettings(settings ?? {}) };
+    return { source: normalized, settings: parseExtensionSettings(settings ?? {}), ...(allowModelCalls === true ? { allowModelCalls: true as const } : {}) };
   });
   if (new TextEncoder().encode(JSON.stringify(parsed)).length > hostConfigLimits.requiredExtensionsBytes) {
     throw new Error(`Required extensions and their settings take at most ${hostConfigLimits.requiredExtensionsBytes / 1024} KB`);
