@@ -272,6 +272,10 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
   answers text only. Keys, `models.json` headers and the model's thinking never cross. Any other source, or a request it
   can't parse, is refused and logged. The pin itself is checked as every managed package is (digest, scope, versions only
   go up).
+- **A required extension calls models only where the host's owner said so.** `allowModelCalls` is owner-only host
+  configuration, confirmed in the UI with what it costs; the connector re-reads it on every call, and such an extension
+  still runs where installed extensions run (the session's sandbox where there is one), so it gets model answers, never
+  keys or the host's files.
 - **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
   through Pi's API now is what they will reach from their own process.
 

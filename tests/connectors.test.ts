@@ -2895,6 +2895,15 @@ test('only a host\'s owner requires extensions of every session on it, which its
   await denied(await creator.request('PATCH', path, { requiredExtensions: [], browser: { source: 'auto' } }), 403, 'host_owner_required');
   f.sqlite.prepare('UPDATE connector_configs SET required_extensions_json = ? WHERE connector_id = ?').run(JSON.stringify([{ source: 'npm:broken' }, required[0]]), id);
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, commandTimeoutSeconds: 120, requiredExtensions: [required[0]] } });
+
+  const calling = [required[0]!, { source: 'npm:cc-safety-net@2.7.2', settings: {}, allowModelCalls: true }];
+  await denied(await host.request('PATCH', path, { requiredExtensions: [{ ...calling[1], allowModelCalls: 'yes' }] }), 400, 'invalid_host_config');
+  await denied(await creator.request('PATCH', path, { requiredExtensions: calling }), 403, 'host_owner_required');
+  assert.deepEqual((await json<{ config: { requiredExtensions: unknown[] } }>(await host.request('PATCH', path, { requiredExtensions: calling }))).config.requiredExtensions, calling);
+  assert.deepEqual((await json<{ config: { requiredExtensions: unknown[] } }>(await self(f, s.connector, 'config', {}))).config.requiredExtensions,
+    [required[0], { source: 'npm:cc-safety-net@2.7.2', settings: {} }], 'a connector that predates model calls never sees the key it would refuse');
+  f.sqlite.prepare("UPDATE connectors SET capabilities_json = json_set(capabilities_json, '$.modelCalls', json('true')) WHERE id = ?").run(id);
+  assert.deepEqual((await json<{ config: { requiredExtensions: unknown[] } }>(await self(f, s.connector, 'config', {}))).config.requiredExtensions, calling);
 });
 
 test('a host\'s owner and admins disable its models for everyone: a disabled model is neither listed, started from nor chosen', async t => {

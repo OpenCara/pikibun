@@ -73,6 +73,9 @@ test("a host configuration is whole and within bounds, or refused", () => {
 
 test("a host requires extensions by normalized source, one version of each package, with valid settings, and only its owner sets them", () => {
   assert.deepEqual(parseRequiredExtensions([]), []);
+  assert.deepEqual(parseRequiredExtensions([{ source: "npm:guard@1.0.0", allowModelCalls: true }, { source: "npm:other@1.0.0", allowModelCalls: false }]),
+    [{ source: "npm:guard@1.0.0", settings: {}, allowModelCalls: true }, { source: "npm:other@1.0.0", settings: {} }]);
+  assert.throws(() => parseRequiredExtensions([{ source: "npm:guard@1.0.0", allowModelCalls: "yes" }]), /required extension/);
   assert.deepEqual(parseRequiredExtensions([{ source: "piki:prompt-audit", settings: { policy: "Never read ~/clients.", audit: "all" } }, { source: "npm:cc-safety-net@2.7.2" }]),
     [{ source: "piki:prompt-audit", settings: { audit: "all", policy: "Never read ~/clients." } }, { source: "npm:cc-safety-net@2.7.2", settings: {} }]);
   assert.deepEqual(parseRequiredExtensions([{ source: "git:github.com/acme/guard@" + "a".repeat(40), settings: {} }]).map(item => item.source),

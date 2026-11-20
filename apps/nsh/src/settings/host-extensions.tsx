@@ -255,6 +255,13 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
     if (saved && on && extension.modules.some(module => module.flags.length)) configuring.set({ extension: { source: extension.source, settings: {} }, flags: extension.modules.flatMap(module => module.flags) });
   }
   const isRequired = (source: string) => required().some(item => item.source === source);
+  const callsModels = (source: string) => required().some(item => item.source === source && item.allowModelCalls === true);
+  async function setModelCalls(source: string, on: boolean) {
+    if (on && !await confirm({ title: "Let it call models?", confirmLabel: "Allow",
+      message: `${source} may then ask this host's connector to call your models, on your provider accounts, for every session here: at most 4,096 tokens and 60 seconds a call. Your keys stay with the connector; the extension gets the model's text answer.` })) return;
+    void saveRequired(required().map(item => item.source !== source ? item : on ? { ...item, allowModelCalls: true as const } : { source: item.source, settings: item.settings }),
+      on ? `${source} may call this host's models from its next session.` : `${source} no longer calls this host's models.`);
+  }
   const installedSources = () => new Set(report()?.installed.map(item => item.source) ?? []);
   const unavailable = () => (report() ? missingRequiredExtensions(required(), report()!.installed).flatMap(source => required().filter(item => item.source === source)) : []);
   const missing = () => (data()?.workspaces ?? []).flatMap(workspace => workspace.extensions.filter(item => item.availability.status !== "installed" && item.availability.status !== "auto-cache").map(item => ({ workspace, ...item })));
@@ -311,6 +318,10 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
                       <Checkbox label="Require of every session" checked={isRequired(source())}
                         disabled={action.busy() || revoked() || (!isRequired(source()) && required().length >= hostConfigLimits.requiredExtensions)}
                         onChange={on => void setRequired(extension(), on)} />
+                    </If>
+                    <If when={owner() && isRequired(source()) && !isPikiExtensionSource(source())}>
+                      <Checkbox label={props.connector.capabilities.modelCalls ? "May call models" : "May call models (update the connector)"} checked={callsModels(source())}
+                        disabled={action.busy() || revoked() || !props.connector.capabilities.modelCalls} onChange={on => void setModelCalls(source(), on)} />
                     </If>
                     <If when={owner() && isRequired(source()) && extension().modules.some(module => module.flags.length)}>
                       <Button small variant="outline" icon="pencil" label="Settings" disabled={action.busy()}

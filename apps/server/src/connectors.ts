@@ -345,7 +345,12 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/self/config', async c => {
     const row = await authenticateConnector(c);
     const config = await connectorHostConfig(c.env, row.id);
-    return c.json({ config: knowsGitSubdirectories(row) ? config : { ...config, requiredExtensions: config.requiredExtensions.filter(item => !inRepositoryDirectory(item.source)) } });
+    let capabilities: ReturnType<typeof parseCapabilities> | undefined;
+    try { capabilities = parseCapabilities(row.capabilities_json ?? '{}'); } catch { capabilities = undefined; }
+    const required = config.requiredExtensions
+      .filter(item => knowsGitSubdirectories(row) || !inRepositoryDirectory(item.source))
+      .map(item => capabilities?.modelCalls === true || !item.allowModelCalls ? item : { source: item.source, settings: item.settings });
+    return c.json({ config: { ...config, requiredExtensions: required } });
   });
   app.post('/api/connectors/self/git/relay/:bindingId/:service', async c => gitRelay(c, await authenticateConnector(c)));
   app.post('/api/connectors/self/git/direct', async c => gitDirect(c, await authenticateConnector(c)));

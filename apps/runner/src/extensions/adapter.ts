@@ -30,8 +30,9 @@ export interface ExtensionHost {
   readonly commandTimeoutMs?: number;
   warn(source: string, message: string): void;
   readonly piki?: PikiSession;
-  extensionProcess?(warn: (source: string, message: string) => void): ExtensionChannel;
+  extensionProcess?(warn: (source: string, message: string) => void, options?: { complete?: CompleteHandler; key?: string }): ExtensionChannel;
   complete?: CompleteHandler;
+  modelCallsAllowed?(source: string): Promise<boolean>;
 }
 
 export const ExtensionPrompts = defineDoc<{ prompts: Record<string, string> }>({ kind: "pikibun.extension-prompts", version: 1, scope: "conversation",
@@ -131,7 +132,8 @@ export class SessionExtensions {
   #started = false;
   #connector?: ExtensionChannel;
   #isolated?: ExtensionChannel;
-  #guard?: ExtensionChannel;
+  readonly #guards = new Map<string, ExtensionChannel>();
+  readonly #callers = new Map<string, ExtensionChannel>();
 
   constructor(private readonly host: ExtensionHost, reserved: Iterable<string> = []) {
     this.#reserved = new Set(reserved);
@@ -159,16 +161,42 @@ export class SessionExtensions {
     return this.#isolated ??= host.extensionProcess?.(warn) ?? new ProcessChannel({ directory: host.directory, warn });
   }
 
-  private guardChannel(): ExtensionChannel {
+  private bound(source: string): CompleteHandler | undefined {
+    const complete = this.host.complete;
+    return complete ? (request, signal) => complete({ ...request, source }, signal) : undefined;
+  }
+
+  private guardChannel(source: string): ExtensionChannel {
     const { host } = this;
-    return this.#guard ??= new ProcessChannel({ directory: host.directory, warn: (source, message) => host.warn(source, message),
-      ...(host.complete ? { complete: host.complete } : {}) });
+    const existing = this.#guards.get(source);
+    if (existing) return existing;
+    const complete = this.bound(source);
+    const channel = new ProcessChannel({ directory: host.directory, warn: (from, message) => host.warn(from, message), ...(complete ? { complete } : {}) });
+    this.#guards.set(source, channel);
+    return channel;
+  }
+
+  private callerChannel(source: string): ExtensionChannel {
+    const { host } = this;
+    const existing = this.#callers.get(source);
+    if (existing) return existing;
+    const warn = (from: string, message: string) => host.warn(from, message);
+    const complete = this.bound(source);
+    const channel = host.extensionProcess?.(warn, { ...(complete ? { complete } : {}), key: source })
+      ?? new ProcessChannel({ directory: host.directory, warn, ...(complete ? { complete } : {}) });
+    this.#callers.set(source, channel);
+    return channel;
   }
 
   async ensure(sources: readonly LoadedSource[]): Promise<void> {
     const opened: OpenedSource[] = [];
+    const callers = new Set<string>();
+    for (const loaded of sources) {
+      const source = loaded.summary.source;
+      if (!loaded.factories && !loaded.summary.error && !modelCallSources.has(source) && this.host.complete && await this.host.modelCallsAllowed?.(source) === true) callers.add(source);
+    }
     const sandboxedMounts = sources.filter(loaded => !loaded.factories && !loaded.summary.error && !modelCallSources.has(loaded.summary.source)
-      && !this.#opened.some(item => item.source === loaded.summary.source)).map(loaded => loaded.mount);
+      && !callers.has(loaded.summary.source) && !this.#opened.some(item => item.source === loaded.summary.source)).map(loaded => loaded.mount);
     if (sandboxedMounts.length) this.channel(false).mount?.(sandboxedMounts);
     for (const loaded of sources) {
       const source = loaded.summary.source;
@@ -179,10 +207,12 @@ export class SessionExtensions {
         if (factories) this.#factories.set(source, factories);
         const models = factories ? [] : listedModels(this.host);
         const guard = factories === undefined && modelCallSources.has(source);
-        const channel = guard ? this.guardChannel() : this.channel(factories !== undefined);
+        const caller = factories === undefined && callers.has(source);
+        const modelCalls = !!this.host.complete && (guard || caller);
+        const channel = guard ? this.guardChannel(source) : caller ? this.callerChannel(source) : this.channel(factories !== undefined);
         const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}),
-          ...(guard && this.host.complete ? { modelCalls: true as const } : {}) });
+          ...(modelCalls ? { modelCalls: true as const } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
@@ -318,7 +348,7 @@ export class SessionExtensions {
 
   async shutdown(): Promise<void> {
     await this.each({ type: "session_shutdown", reason: "quit" });
-    for (const channel of [this.#connector, this.#isolated, this.#guard]) await channel?.close().catch(() => {});
+    for (const channel of [this.#connector, this.#isolated, ...this.#guards.values(), ...this.#callers.values()]) await channel?.close().catch(() => {});
   }
 }
 
