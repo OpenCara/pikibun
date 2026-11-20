@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 import { HTTPException } from 'hono/http-exception';
 import { gitProviderAdapters } from '../apps/server/src/authority/git/providers.js';
 import type { GitCredential } from '../apps/server/src/authority/git/types.js';
-import { repositoryFullName, repositoryUrlHost } from '../packages/shared/src/repositories.js';
+import { repositoryFullName, repositoryUrlHost, repositoryUrlOnHost } from '../packages/shared/src/repositories.js';
 
 const sha = 'a'.repeat(40);
 
@@ -344,6 +344,10 @@ test('a repository URL of any form names the repository on the account\'s host, 
     ['azure-devops', 'dev.azure.com', 'https://contoso.visualstudio.com/DefaultCollection/Core/_git/api', 'contoso/Core/api'],
     ['azure-devops', 'dev.azure.com', 'contoso/Core/api', 'contoso/Core/api'],
     ['azure-devops', 'dev.azure.com', 'https://dev.azure.com/contoso/Core', null],
+    ['azure-devops', 'dev.azure.com', 'https://dev.azure.com/v3/Core/_git/api', 'v3/Core/api'],
+    ['gitea', 'www.code.example.org', 'https://www.code.example.org/team/app.git', 'team/app'],
+    ['gitea', 'code.example.org', 'https://www.code.example.org/team/app.git', null],
+    ['git', 'www.git.example.com', 'https://www.git.example.com/team/app.git', 'team/app.git'],
     ['gitea', 'code.example.org', 'https://code.example.org/john.doe/tools', 'john.doe/tools'],
     ['gitea', 'code.example.org', 'john.doe/tools', 'john.doe/tools'],
     ['gitea', 'code.example.org', 'https://other.example.org/john.doe/tools', null],
@@ -353,6 +357,11 @@ test('a repository URL of any form names the repository on the account\'s host, 
   assert.equal(repositoryUrlHost('https://www.github.com/a/b'), 'github.com');
   assert.equal(repositoryUrlHost('git@ssh.dev.azure.com:v3/o/p/r'), 'dev.azure.com');
   assert.equal(repositoryUrlHost('https://contoso.visualstudio.com/p/_git/r'), 'dev.azure.com');
+  assert.equal(repositoryUrlHost('https://www.code.example.org/a/b'), 'www.code.example.org');
   assert.equal(repositoryUrlHost('owner/name'), null);
+  assert.equal(repositoryUrlOnHost('git@git.example.com:octo/tools.git', 'git.example.com:8443'), true);
+  assert.equal(repositoryUrlOnHost('https://git.example.com/octo/tools', 'git.example.com:8443'), false);
+  assert.equal(repositoryUrlOnHost('https://www.github.com/a/b', 'github.com'), true);
+  assert.equal(repositoryUrlOnHost('owner/name', 'github.com'), null);
   assert.equal(repositoryUrlHost('not a url'), null);
 });

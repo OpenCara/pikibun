@@ -354,6 +354,27 @@ describe("settings", () => {
     expect(app.requests().some(item => /\/api\/git\/accounts\/[^/]+\/repositories$/.test(item.url))).toBe(false);
   });
 
+  test("Workspaces matches an SSH remote to the account of its server, whose HTTPS host has a port", async () => {
+    const remote = "git@git.example.com:octo/tools.git";
+    const lookup = `${ORIGIN}/api/git/accounts/ghe/repositories?path=${encodeURIComponent(remote)}`;
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/git/accounts`]: { body: { accounts: [
+        { id: "github", provider: "github", host: "github.com", organization: "", login: "ada", createdAt: null },
+        { id: "ghe", provider: "github-enterprise", host: "git.example.com:8443", organization: "", login: "ada", createdAt: "2026-01-01T00:00:00.000Z" },
+      ] } },
+      [`GET ${lookup}`]: { body: { repositories: [{ id: "7", fullName: "octo/tools", defaultBranch: "main", private: true }], truncated: false } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:add-repository");
+    await app.press("id:add-repository");
+    await app.waitFor("id:repository-url");
+    await app.type("id:repository-url", remote);
+    await app.press("text:Look up");
+    await app.waitFor("text:octo/tools");
+    expect(app.texts().join(" ")).not.toContain("No connected account reads");
+  });
+
   test("Workspaces lets an admin choose when hosts keep the workspace's prompt caches warm", async () => {
     const app = await openSettings("workspaces", {
       [`PUT ${ORIGIN}/api/workspaces/w1/cache-warming`]: { body: { settings: { mode: "streaming" } } },

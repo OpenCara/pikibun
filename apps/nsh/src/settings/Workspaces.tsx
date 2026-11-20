@@ -2,7 +2,7 @@ import { signal, Text, untracked, View } from "nsh";
 import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type UserProfile, type WorkspaceRole } from "../../../../packages/shared/src/types";
 import { adminManagedRoles } from "../../../../packages/shared/src/policy";
 import {
-  gitProviderHasForge, gitProviderNames, repositoryLimits, repositoryUrlHost, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type WorkspaceRepository,
+  gitProviderHasForge, gitProviderNames, repositoryLimits, repositoryUrlHost, repositoryUrlOnHost, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type WorkspaceRepository,
   type WorkspaceRepositoryList,
 } from "../../../../packages/shared/src/repositories";
 import type { WorkspaceSourceList } from "../../../../packages/shared/src/sources";
@@ -334,14 +334,13 @@ function RepositoryPicker(props: { open: boolean; workspace: Workspace; accounts
   const chooseMode = (next: "url" | "list") => { mode.set(next); choose(""); found.set(null); lookup.clear(); };
   function accountFor(value: string): GitAccount | undefined {
     const current = account();
-    const host = repositoryUrlHost(value);
-    if (!current || !host || host === current.host) return current;
-    const matches = props.accounts.filter(item => item.host === host);
+    if (!current || repositoryUrlOnHost(value, current.host) !== false) return current;
+    const matches = props.accounts.filter(item => repositoryUrlOnHost(value, item.host));
     const match = matches.find(item => item.provider === current.provider && isWorkspaceAccount(item) === isWorkspaceAccount(current))
       ?? matches.find(item => !isWorkspaceAccount(item)) ?? matches[0];
     if (match) return match;
     if (explicitUrl(value)) {
-      throw new Error(`No connected account reads ${host}. Connect one in Settings → Profile, or ask an owner to add a workspace connection for it`);
+      throw new Error(`No connected account reads ${repositoryUrlHost(value)}. Connect one in Settings → Profile, or ask an owner to add a workspace connection for it`);
     }
     return current;
   }

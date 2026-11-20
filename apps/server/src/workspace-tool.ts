@@ -133,7 +133,7 @@ async function run(env: Env, row: SessionRow, actorId: string, action: Workspace
     case 'set_tool_group': return call('PUT', `${member(input.user!)}/tool-group`, { groupId: input.group === 'role' ? null : input.group });
     case 'add_repository': {
       const given = input.repository!;
-      const url = /^[a-z][a-z0-9+.-]*:\/\/|^[^\s@/:]+@[^\s/:]+:/i.test(given) ? repositoryUrlHost(given) : null;
+      const url = repositoryUrlHost(given);
       const provider = (input.provider ?? (url ? publicGitProviders[url] : undefined) ?? 'github') as GitProvider;
       const host = gitHost(provider, input.host ?? (url && !gitProviderHosts[provider].fixed ? url : undefined));
       const fullName = repositoryFullName(provider, host, given) ?? fail(400, 'invalid_input',
