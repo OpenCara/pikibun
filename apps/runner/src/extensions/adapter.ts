@@ -30,8 +30,9 @@ export interface ExtensionHost {
   readonly commandTimeoutMs?: number;
   warn(source: string, message: string): void;
   readonly piki?: PikiSession;
-  extensionProcess?(warn: (source: string, message: string) => void): ExtensionChannel;
+  extensionProcess?(warn: (source: string, message: string) => void, complete?: CompleteHandler): ExtensionChannel;
   complete?: CompleteHandler;
+  modelCallsAllowed?(source: string): Promise<boolean>;
 }
 
 export const ExtensionPrompts = defineDoc<{ prompts: Record<string, string> }>({ kind: "pikibun.extension-prompts", version: 1, scope: "conversation",
@@ -156,7 +157,8 @@ export class SessionExtensions {
       return this.#connector ??= directChannel(new ExtensionWorker({ directory: host.directory, warn, factories: source => this.#factories.get(source),
         live: { model: () => host.model(), thinkingLevel: () => host.thinkingLevel?.(), ...(host.modelRegistry ? { modelRegistry: host.modelRegistry } : {}) } }));
     }
-    return this.#isolated ??= host.extensionProcess?.(warn) ?? new ProcessChannel({ directory: host.directory, warn });
+    return this.#isolated ??= host.extensionProcess?.(warn, host.complete)
+      ?? new ProcessChannel({ directory: host.directory, warn, ...(host.complete ? { complete: host.complete } : {}) });
   }
 
   private guardChannel(): ExtensionChannel {
@@ -179,10 +181,11 @@ export class SessionExtensions {
         if (factories) this.#factories.set(source, factories);
         const models = factories ? [] : listedModels(this.host);
         const guard = factories === undefined && modelCallSources.has(source);
+        const modelCalls = factories === undefined && !!this.host.complete && (guard || await this.host.modelCallsAllowed?.(source) === true);
         const channel = guard ? this.guardChannel() : this.channel(factories !== undefined);
         const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}),
-          ...(guard && this.host.complete ? { modelCalls: true as const } : {}) });
+          ...(modelCalls ? { modelCalls: true as const } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));

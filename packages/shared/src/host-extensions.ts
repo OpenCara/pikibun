@@ -305,7 +305,7 @@ export function extensionAvailability(source: string, installed: readonly Instal
   return other ? { status: "other-version", installed: other.source } : { status: "missing" };
 }
 
-export interface HostRequiredExtension { source: string; settings: ExtensionSettings }
+export interface HostRequiredExtension { source: string; settings: ExtensionSettings; allowModelCalls?: true }
 
 export interface ChosenExtension { source: string; dev: boolean; workspace?: WorkspaceExtension; required?: HostRequiredExtension }
 

@@ -337,8 +337,14 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   a pinned, digest-checked `@pikibun/` package, as trusted as the connector.
 - **`bundledOnlySources` is empty**, so a pin for `piki:prompt-audit` now applies like one for `pr-flow`. No pin exists
   yet, so every host still runs the bundled copy in the connector until a release pins one.
-- **Not yet:** `allowModelCalls` for a host's required extensions needs a `HostConfig` field older connectors don't
-  refuse (their parser takes a fixed set of keys in each required extension); and `gh`, `glab` and `az` as
+- **`allowModelCalls` on a host's required extensions** (#438 phase 4, second part): the host's owner ticks **May call
+  models** on a required extension (`RequiredExtension.allowModelCalls`, kept in `connector_configs.required_extensions_json`,
+  no migration). Older connectors take a fixed set of keys in each required extension, so `/api/connectors/self/config`
+  leaves the key out for a connector that doesn't announce the `modelCalls` capability. A connector that does opens such an
+  extension with `modelCalls` in its usual channel (the session's sandbox where there is one: it is someone else's code,
+  so unlike Pikibun's pinned prompt audit it doesn't run as the host's user), and checks the setting again on every
+  call (`SessionPiki.host().complete`), so turning it off refuses the next call without waiting for the session to reopen.
+- **Not yet:** `gh`, `glab` and `az` as
   `ProgramToolDefinition`s need the engine to learn what `apps/runner/src/extensions/piki/command.ts` does today (which
   subcommands and API methods write, leased tokens in the sandbox, the host's sign-in for on-host sessions). Both are
   their own pull requests.

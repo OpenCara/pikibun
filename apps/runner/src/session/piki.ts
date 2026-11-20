@@ -6,7 +6,7 @@ import type { ChosenExtension } from "../../../../packages/shared/src/host-exten
 import type { ApiReach } from "../../../../packages/shared/src/network.js";
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation, type RunnerBinding } from "../../../../packages/shared/src/types.js";
 import type { ExtensionHost } from "../extensions/adapter.js";
-import { completeWith } from "../extensions/complete.js";
+import { completeWith, modelCallSources } from "../extensions/complete.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "../extensions/piki/command.js";
 import { commandLimits } from "../host-config.js";
 import { RunnerError } from "../protocol.js";
@@ -55,9 +55,18 @@ export class SessionPiki {
       return current && config.extensions?.modelRegistry?.find(current.provider, current.modelId) as never;
     };
     const registry = config.extensions?.modelRegistry;
+    const modelCallsAllowed = async (source: string) => modelCallSources.has(source)
+      || (await this.options.extensionChoice()).chosen.some(item => item.source === source && item.required?.allowModelCalls === true);
     return {
       directory: this.options.sandbox.hostWorktree,
-      ...(registry ? { modelRegistry: registry, complete: (request, signal) => completeWith({ modelRegistry: registry, model }, request, signal) } : {}),
+      ...(registry ? {
+        modelRegistry: registry,
+        modelCallsAllowed,
+        complete: async (request, signal) => {
+          if (!await modelCallsAllowed(request.source)) throw new Error("This host's owner no longer lets this extension call models.");
+          return completeWith({ modelRegistry: registry, model }, request, signal);
+        },
+      } : {}),
       model,
       thinkingLevel: () => this.options.thinkingLevel(),
       state: async source => {

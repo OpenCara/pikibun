@@ -70,6 +70,46 @@ test("a session runs a managed prompt audit in a guard process of the host's, ne
   assert.equal(sandboxAsked, 0, "the session's sandbox channel was never used");
 });
 
+test("a required extension its host's owner lets call models runs in the session's own channel and calls them through the connector, until the owner stops it", async t => {
+  const root = await directory(t);
+  const file = join(root, "guard.ts");
+  await writeFile(file, `export default function (pi) {
+      pi.on("input", async (_event, ctx) => {
+        const reply = await ctx.modelRegistry.streamSimple(ctx.model, { messages: [{ role: "user", content: "judge", timestamp: 0 }] }, { maxTokens: 50 }).result();
+        ctx.ui.notify(reply.stopReason + ":" + (reply.content[0]?.text ?? reply.errorMessage), "info");
+        return { action: "continue" };
+      });
+    }`);
+  let allowed = true;
+  const asked: CompleteRequest[] = [];
+  const used: string[] = [];
+  const complete = async (request: CompleteRequest) => {
+    if (!allowed) throw new Error("This host's owner no longer lets this extension call models.");
+    asked.push(request);
+    return { content: [{ type: "text" as const, text: "fine" }], stopReason: "stop" };
+  };
+  const host: ExtensionHost = {
+    directory: root, model: () => model, state: async () => ({ active: true, settings: {} }),
+    runTool: async (_call, execute) => execute(new AbortController().signal), hookTimeoutMs: 30_000, inputTimeoutMs: 60_000, warn: () => {},
+    extensionProcess: (warn, given) => { used.push(given ? "session channel with model calls" : "session channel");
+      return new ProcessChannel({ directory: root, warn, log: () => {}, ...(given ? { complete: given } : {}) }); },
+    complete, modelCallsAllowed: async source => source === "npm:guard@1.0.0",
+  };
+  const extensions = new SessionExtensions(host);
+  t.after(() => extensions.shutdown());
+  const guard = { installed: { source: "npm:guard@1.0.0" }, root, files: [file], summary: { source: "npm:guard@1.0.0", dev: false, modules: [] } } as unknown as LoadedSource;
+  await extensions.ensure([guard]);
+  extensions.select(["npm:guard@1.0.0"]);
+  const first = await extensions.input(["npm:guard@1.0.0"], "hello", [], "rpc");
+  assert.equal(first.action, "continue");
+  assert.deepEqual(used, ["session channel with model calls"]);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0]!.source, "npm:guard@1.0.0");
+  allowed = false;
+  await extensions.input(["npm:guard@1.0.0"], "again", [], "rpc");
+  assert.equal(asked.length, 1, "the connector asks again on every call, so turning it off takes effect at once");
+});
+
 test("an extension the host doesn't let call models can't: its process's registry refuses, and the connector refuses a call it asks for anyway", async t => {
   const root = await directory(t);
   const file = join(root, "sneaky.ts");
