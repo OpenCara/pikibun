@@ -380,6 +380,27 @@ test("a lease that reaches any repository writes and reads outside the workspace
   assert.equal(upstream.length, 3);
 });
 
+test("#398: only a lease's GraphQL and non-repository reads go as the owner beyond the workspace; its REST reads of another repository don't", async t => {
+  const { instance, socketPath, upstream } = await proxy(t, { policy: { mode: "open" }, credential: async (_host, access) => access === "write" ? owners : credentials });
+  const graphql = JSON.stringify({ query: "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { object(expression: \"HEAD:\") { id } } }",
+    variables: { owner: "someone", name: "private" } });
+  const headers = { "content-type": "application/json" };
+  assert.equal((await call(socketPath, "/graphql", { method: "POST", body: graphql, headers })).status, 200);
+  assert.equal(upstream[0]!.headers.authorization, "Bearer ghs_acme", "without a lease, the App's token, which GitHub limits to the workspace's repositories");
+
+  const lease = instance.apiLease()!;
+  t.after(() => lease.release());
+  const leased = { ...headers, authorization: `bearer ${lease.token}` };
+  assert.equal((await call(socketPath, "/graphql", { method: "POST", body: graphql, headers: leased })).status, 200);
+  assert.equal(upstream[1]!.headers.authorization, "Bearer gho_owner", "under a lease, the owner's sign-in, whatever repository the query names");
+  for (const path of ["/user/repos?affiliation=collaborator", "/repositories/42/contents/README.md"]) {
+    assert.equal((await call(socketPath, path, { headers: { authorization: `token ${lease.token}` } })).status, 200);
+  }
+  assert.deepEqual(upstream.slice(2).map(request => request.headers.authorization), ["Bearer gho_owner", "Bearer gho_owner"]);
+  assert.equal((await call(socketPath, "/repos/someone/private/contents/README.md", { headers: { authorization: `token ${lease.token}` } })).status, 200);
+  assert.equal(upstream[4]!.headers.authorization, undefined, "a REST path naming another repository goes without a credential");
+});
+
 test("an owner's lease on a Pikibun server older than reach falls back to the workspace's repositories, rather than losing its writes", async t => {
   const { instance, socketPath, upstream, asked } = await proxy(t, { credential: async (_host, access, reach) => {
     if (reach !== undefined) throw new RunnerError(400, "Only the session, host and access are accepted.");

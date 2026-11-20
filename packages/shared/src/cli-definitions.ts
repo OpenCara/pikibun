@@ -70,6 +70,7 @@ export const ghDefinition: CliDefinition = {
     `A watch reads again every ${GH_WATCH_INTERVAL_SECONDS} seconds unless it names its own --interval: don't make it shorter, and don't poll in a loop instead, since every read counts against a GitHub rate limit that all of the owner's sessions share.`,
     "It reads the workspace's repositories always. It writes (comments, pull requests, merges, reruns) only on the session owner's own host, outside read-only;",
     "where it refuses a write, comment, open issues and merge with github_comment, github_issue and github_merge.",
+    "Where it may write, its GraphQL and API paths that name no repository (user/repos, search) go as the owner, beyond the workspace's repositories.",
     "Where the workspace set it read-only, only commands that read run.",
     "Commands that would show its token (auth token, --show-token) are refused.",
   ].join(" "),
