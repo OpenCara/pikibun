@@ -11,7 +11,8 @@ import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
 import { wholeForScripts } from "../script-output.js";
 import { modelCallSources } from "./complete.js";
-import type { CommandAnswer, CompleteHandler, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription } from "./protocol.js";
+import type { CommandAnswer, CompleteHandler, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionSkill,
+  ExtensionToolDescription } from "./protocol.js";
 import { addedPrompt, directChannel, ExtensionWorker, modelDescription } from "./worker.js";
 import { ProcessChannel } from "./process.js";
 import { extensionNamespace, namespaceKey, reservedNamespaceKeys } from "../session/namespaces.js";
@@ -114,6 +115,7 @@ async function activeSettings(host: ExtensionHost, source: string): Promise<Exte
 
 interface OpenedSource extends Link {
   dev: boolean;
+  packageSkills?: boolean;
   label?: { name?: string; description?: string };
   commands: ExtensionCommandDescription[];
   tools: ToolRegistration[];
@@ -215,12 +217,13 @@ export class SessionExtensions {
         const channel = guard ? this.guardChannel(source) : caller ? this.callerChannel(source) : this.channel(factories !== undefined);
         const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}),
-          ...(modelCalls ? { modelCalls: true as const } : {}) });
+          ...(modelCalls ? { modelCalls: true as const } : {}), ...(loaded.skills?.length ? { skills: loaded.skills } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
         const extension = build(link, loaded.summary.dev, result.tools, offered, this.host, result.commands ?? []);
         extension.label = { ...(loaded.summary.name ? { name: loaded.summary.name } : {}), ...(loaded.summary.description ? { description: loaded.summary.description } : {}) };
+        if (loaded.skills?.length) extension.packageSkills = true;
         this.#opened.push(extension);
         opened.push(extension);
       } catch (error) {
@@ -328,6 +331,19 @@ export class SessionExtensions {
     const answer = await withTimeout(() => request(this.host, opened, "command", { source, settings, name, args }),
       this.host.commandTimeoutMs ?? this.host.hookTimeoutMs, `/${name}`, opened.channel);
     return { notices: answer.notices.map(String), messages: answer.messages.map(String) };
+  }
+
+  async skills(sources: readonly string[]): Promise<{ source: string; skills: ExtensionSkill[] }[]> {
+    const provided: { source: string; skills: ExtensionSkill[] }[] = [];
+    for (const source of sources) {
+      const opened = this.#opened.find(item => item.source === source);
+      if (!opened || this.#broken.has(source) || !(opened.packageSkills || opened.handlers.has("resources_discover"))) continue;
+      await this.one(opened, "resources_discover", async settings => {
+        const skills = await request(this.host, opened, "skills", { source, settings });
+        if (Array.isArray(skills) && skills.length) provided.push({ source, skills });
+      });
+    }
+    return provided;
   }
 
   sandboxed(source: string): boolean {

@@ -17,6 +17,19 @@ export interface ExtensionCommandDescription {
 
 export type CommandAnswer = { notices: string[]; messages: string[] };
 
+export interface ExtensionSkillFile {
+  path: string;
+  text: string;
+}
+
+export interface ExtensionSkill {
+  name: string;
+  description: string;
+  disableModelInvocation: boolean;
+  file: string;
+  files: ExtensionSkillFile[];
+}
+
 export interface RequestContext {
   model?: Model<string>;
   thinkingLevel?: string;
@@ -61,7 +74,7 @@ export interface CompleteAnswer {
 export type CompleteHandler = (request: CompleteRequest, signal: AbortSignal) => Promise<CompleteAnswer>;
 
 export interface ExtensionRequests {
-  open: [{ source: string; files: string[]; models: Model<string>[]; mount?: string; modelCalls?: true },
+  open: [{ source: string; files: string[]; models: Model<string>[]; mount?: string; modelCalls?: true; skills?: string[] },
     { errors: string[]; tools: ExtensionToolDescription[]; commands?: ExtensionCommandDescription[] }];
   command: [Scoped & { name: string; args: string }, CommandAnswer];
   emit: [Scoped & { event: { type: string } & Record<string, unknown> }, null];
@@ -75,6 +88,7 @@ export interface ExtensionRequests {
   beforeSettle: [Scoped, { continue: boolean; text: string }];
   compact: [Scoped & { reason: string; instructions?: string; messages: Message[] }, { cancel?: true; summary?: string } | null];
   execute: [Scoped & { tool: string; callId: string; args: Record<string, unknown> }, ToolOutput];
+  skills: [Scoped, ExtensionSkill[]];
   describe: [{ root: string; files: string[]; mount?: string }, ExtensionModuleSummary[]];
   shutdown: [Record<string, never>, null];
 }

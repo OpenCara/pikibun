@@ -9,8 +9,9 @@ import { createEventBus, createExtensionRuntime, ExtensionRunner, SessionManager
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
 import { isJsonValue } from "./json.js";
 import { loadSource, piLoader, summarizeModules, supportedEvents } from "./load.js";
-import type { CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription, RequestContext, Scoped,
-  ToolOutput } from "./protocol.js";
+import { collectSkills, discoveredPath } from "./skills.js";
+import type { CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionSkill, ExtensionToolDescription,
+  RequestContext, Scoped, ToolOutput } from "./protocol.js";
 
 export interface WorkerOptions {
   directory: string;
@@ -146,6 +147,7 @@ type Handlers = { [M in ExtensionMethod]: (params: ExtensionParams<M>, signal?: 
 
 export class ExtensionWorker {
   readonly #runners = new Map<string, ExtensionRunner>();
+  readonly #skillPaths = new Map<string, string[]>();
   #context: RequestContext = {};
   #models: Model<string>[] = [];
   readonly #registry: ModelRegistry | undefined;
@@ -194,6 +196,7 @@ export class ExtensionWorker {
         return typeof result?.compaction?.summary === "string" ? { summary: result.compaction.summary } : null;
       },
       execute: (params, signal) => this.execute(params, signal),
+      skills: params => this.skills(params),
       command: params => this.command(params),
       describe: async params => {
         const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
@@ -209,6 +212,7 @@ export class ExtensionWorker {
           try { runner.shutdown(); } catch { }
         }
         this.#runners.clear();
+        this.#skillPaths.clear();
         return null;
       },
     };
@@ -266,10 +270,24 @@ export class ExtensionWorker {
     runner.onError(error => warn(source, `${error.event}: ${error.error}`));
     noticesOf(runner, message => warn(source, message));
     this.#runners.set(source, runner);
+    if (params.skills?.length) this.#skillPaths.set(source, params.skills.filter(path => typeof path === "string"));
     const tools = describeTools(runner);
     const commands = runner.getRegisteredCommands().map(command => ({ name: command.invocationName,
       ...(typeof command.description === "string" && command.description ? { description: command.description } : {}) }));
     return { errors: result.errors.map(error => error.error), tools, commands };
+  }
+
+  private async skills(params: ExtensionParams<"skills">): Promise<ExtensionSkill[]> {
+    const runner = this.runner(params);
+    const paths = [...this.#skillPaths.get(params.source) ?? []];
+    if (runner.hasHandlers("resources_discover")) {
+      const { skillPaths } = await runner.emitResourcesDiscover(this.options.directory, "startup");
+      for (const item of skillPaths) {
+        const path = discoveredPath(item.path, item.extensionPath);
+        if (path) paths.push(path);
+      }
+    }
+    return collectSkills(paths);
   }
 
   private async command(params: ExtensionParams<"command">): Promise<ExtensionRequests["command"][1]> {
