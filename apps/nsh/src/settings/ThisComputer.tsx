@@ -158,11 +158,11 @@ function CommandSection(props: { environment: LocalEnvironment; refresh: () => P
               </If>
               <If when={problem().kind !== "failed"}>
                 <View style={{ flexDirection: "row" }}>
-                  <Button variant="primary" icon="download" testID="this-computer-install-button" busy={env.installing()} disabled={env.installing() || props.busy || env.hostsRunning()}
+                  <Button variant="primary" icon="download" testID="this-computer-install-button" busy={env.installing()} disabled={env.installing() || props.busy || Boolean(env.stopFirst())}
                     label={env.installing() ? (update() ? "Updating pikibun" : "Installing pikibun") : update() ? "Update pikibun" : "Install pikibun"} onPress={install} />
                 </View>
                 <If when={env.installing()}><Small>npm is installing pikibun: this takes a minute. Its output is under Recent activity below.</Small></If>
-                <If when={!env.installing() && env.hostsRunning()}><Small testID="this-computer-install-hosts-running">{`Stop the hosts that run ${place()} first: they run the command this replaces.`}</Small></If>
+                <If when={!env.installing() && env.stopFirst()}><Small testID="this-computer-install-hosts-running">{env.stopFirst()}</Small></If>
                 <Feedback error={action.error()} />
                 <If when={env.installError()}>
                   <Feedback error={env.installError()} />

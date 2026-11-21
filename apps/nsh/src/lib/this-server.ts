@@ -54,7 +54,7 @@ export class ThisServer {
   });
 
   constructor(private readonly confirmUnsandboxed: (warning: string) => Promise<boolean>) {
-    nativeEnvironment().use({ idle: () => untracked(this.status).state === "stopped", restart: () => this.channel.shutdown() });
+    nativeEnvironment().use({ kind: "server", running: () => this.status().state !== "stopped", restart: () => this.channel.shutdown() });
   }
 
   running(): string | undefined {

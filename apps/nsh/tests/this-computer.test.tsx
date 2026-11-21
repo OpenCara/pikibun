@@ -637,6 +637,26 @@ describe("Local hosts", () => {
     await app.waitFor("id:local-host-stop-default");
   });
 
+  test("an update during a sign-in leaves the sign-in to finish, then restarts the host's command", async () => {
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, piSignedIn: false, cliVersion: "0.40.0", reports: "0.38.0" });
+    const launched = () => Number(app.texts().find(text => text.startsWith("launches: "))?.slice("launches: ".length));
+    await app.waitFor("id:local-host-open-default");
+    await app.press("id:local-host-open-default");
+    await app.waitFor("id:this-computer-sign-in-start");
+    await app.press("id:this-computer-sign-in-start");
+    await app.waitFor("id:this-computer-sign-in-answer");
+    await app.waitFor("id:this-computer-install-button");
+    const before = launched();
+    await app.press("id:this-computer-install-button");
+    await app.waitUntil(() => sent().includes("install") && !app.shows("id:this-computer-command"));
+    expect(launched()).toBe(before);
+    await app.type("id:this-computer-sign-in-answer", "sk-ant-secret");
+    await app.press("id:this-computer-sign-in-submit");
+    await app.waitUntil(() => showsText("Pi is signed in to Anthropic in this Mac."));
+    await app.waitUntil(() => launched() > before);
+    expect(app.shows("id:home-command-update")).toBe(false);
+  });
+
   test("with no model in Pi yet, pairing is refused before a code is made, pointing at the sign-in", async () => {
     const { app, sent, showsText } = await openPanel({ piSignedIn: false });
     await app.waitFor("id:this-computer-pair-button");

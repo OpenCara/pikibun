@@ -81,10 +81,11 @@ function CommandProblem(props: { kind: "missing" | "outdated" | "failed"; messag
         </If>
         <If when={props.kind !== "failed"}>
           <View style={{ flexDirection: "row" }}>
-            <Button variant="primary" icon="download" testID="self-host-install" busy={host.installing()} disabled={host.installing() || props.server.inspecting()}
+            <Button variant="primary" icon="download" testID="self-host-install" busy={host.installing()} disabled={host.installing() || props.server.inspecting() || Boolean(host.stopFirst())}
               label={host.installing() ? (update() ? "Updating pikibun" : "Installing pikibun") : update() ? "Update pikibun" : "Install pikibun"} onPress={install} />
           </View>
           <If when={host.installing()}><Small>npm is installing pikibun: this takes a minute. Its output is under Local hosts' Recent activity.</Small></If>
+          <If when={!host.installing() && host.stopFirst()}><Small testID="self-host-install-running">{host.stopFirst()}</Small></If>
           <Feedback error={host.installError() || action.error()} />
           <If when={host.installError()}>
             <Small>To install it in a terminal instead:</Small>
