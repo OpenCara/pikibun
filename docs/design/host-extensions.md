@@ -89,6 +89,7 @@ the session's own, then maps what it registered:
 | `agent_before_settle` | `GenerationHooks.onYield`: `continue` sends one more turn |
 | `session_before_compact` | `CompactionHooks.beforeCompact`: `cancel`, or `compaction.summary` |
 | `session_start`, `session_shutdown` | When the session opens and closes |
+| `resources_discover`, `pi.skills` | Its skills: before each message and side ask, with the package's own (`pi.skills`, or its `skills/` folder), copied into the worktree's `.pikibun/skills` and listed for the model ([skills](skills.md#phase-2-skills-that-extensions-ship-as-built)). The prompt and theme paths it returns are ignored |
 | `registerFlag`, `getFlag` | The extension's settings, set by the workspace |
 | `exec` | Runs on the host, in the session's worktree |
 | `ctx.cwd`, `ctx.signal`, `ctx.model`, `getThinkingLevel` | The session's worktree on the host, the call's signal, and the model and reasoning level of the message running (a message may switch them) |

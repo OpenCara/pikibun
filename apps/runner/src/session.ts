@@ -77,6 +77,7 @@ import { requeue, RunQueue, submissionRequestId, type RunContent } from "./sessi
 import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, SessionCommands, type ExtensionCommand } from "./session/commands.js";
 import { piText } from "./session/pi-text.js";
 import { SessionSkills, type Skill } from "./session/skills.js";
+import { ExtensionSkillFiles } from "./session/extension-skills.js";
 import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
 import { addTitleUsage, titleRequestInput, titleTimeoutMs, writeTitle } from "./session/titles.js";
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
@@ -338,7 +339,17 @@ export class RunnerSession {
     const find = async (pattern: string, limit: number) =>
       (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, alreadyAllowed)).paths;
     const read = (path: string) => this.sandbox.readFile(path, alreadyAllowed);
-    this.#skills = new SessionSkills({ find, read, text: piText });
+    const skillFiles = new ExtensionSkillFiles({
+      write: (path, text) => this.sandbox.writeFile(path, text, alreadyAllowed),
+      remove: async path => { await this.sandbox.fileOperation({ kind: "delete", path, recursive: true }, alreadyAllowed); },
+    });
+    this.#skills = new SessionSkills({ find, read, text: piText, provided: async () => {
+      const host = this.#hostExtensions;
+      if (this.closing || this.#packed) return [];
+      if (!host || !this.config.extensions) return skillFiles.sync([]);
+      const sources = (await this.extensionChoice()).chosen.map(item => item.source).filter(source => host.isOpen(source));
+      return skillFiles.sync(await host.skills(sources));
+    } });
     this.#commands = new SessionCommands({
       compact: (run, instructions) => this.compact(run, instructions),
       extensionCommands: () => this.extensionCommands(),
@@ -593,7 +604,7 @@ export class RunnerSession {
   }
 
   private async listedSkills(): Promise<Skill[]> {
-    return await this.#availability.skillsListed() ? this.#skills.current() : [];
+    return this.#skills.current(undefined, await this.#availability.skillsListed());
   }
 
   private async sudoAllowed(): Promise<boolean> {
@@ -919,7 +930,9 @@ export class RunnerSession {
     if (run.mode !== "write" || !this.#hostExtensions?.extensions.length) return;
     const text = typeof content === "string" ? content : (content ?? []).flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
     const images = typeof content === "string" ? [] : (content ?? []).flatMap(part => part.type === "image" ? [{ type: "image" as const, data: part.data, mimeType: part.mimeType }] : []);
-    const prompts = extensions.length ? await this.#hostExtensions.beforeAgentStart(text, images.length ? images : undefined).catch(() => ({})) : {};
+    const listed = skills.filter(skill => skill.origin !== undefined && skill.listed && skill.description)
+      .map(skill => ({ name: skill.title, description: skill.description!, location: skill.path }));
+    const prompts = extensions.length ? await this.#hostExtensions.beforeAgentStart(text, images.length ? images : undefined, listed).catch(() => ({})) : {};
     await conversation.commit(async tx => { (await tx.doc(ExtensionPrompts, conversation.id)).prompts = prompts; }, context);
   }
 

@@ -332,7 +332,7 @@ export class ExtensionCache {
       ...(entries.description ? { description: entries.description } : {}),
       modules,
     };
-    return { installed: { source, package: pkg }, root, files: entries.files, mount, summary };
+    return { installed: { source, package: pkg }, root, files: entries.files, mount, ...(entries.skills.length ? { skills: entries.skills } : {}), summary };
   }
 
   private async withKeyLock<T>(packagesDir: string, key: string, signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
@@ -428,6 +428,7 @@ export class ExtensionCache {
           root,
           files: stagedEntries.files.map(file => join(root, relative(stagedRoot, file))),
           mount,
+          ...(stagedEntries.skills.length ? { skills: stagedEntries.skills.map(path => join(root, relative(stagedRoot, path))) } : {}),
           summary: {
             source,
             dev: false,

@@ -56,21 +56,64 @@ skill it loads. That is what `piki:context-files` does with `AGENTS.md`, which i
 for the same reason ([security rationale](security-rationale.md#slash-commands-the-host-runs)). Whether it should be on
 by default is the workspace owners' call, not this change's.
 
-Not changed: the host owner's own `~/.pi/agent/skills` aren't read, nor skills a Pi package ships (`pi.skills`).
+Not changed: the host owner's own `~/.pi/agent/skills` aren't read. Skills a Pi package ships came in phase 2.
 
-## Phase 2: skills that extensions ship
+## Phase 2: skills that extensions ship (as built)
 
-A Pi package can ship skills (`pi.skills` in its `package.json`, or paths from a `resources_discover` handler). The
-extension loader drops both today. The agent can't open them from the sandbox, as they are on the host, outside the
-worktree. So the session would serve them itself: the loader reads the package's skills when it loads the source
-(within the package's directory, links out refused, as `piki:context-files` reads files), sends their text with the
-source's summary, and the session lists them with the worktree's under the extension's source and loads one on demand,
-either through a small `skill` tool or by placing a copy under the worktree's `.pikibun/skills/`. A skill an
-extension ships is on whenever the extension is.
+A Pi package ships skills in two ways Pi itself reads: `pi.skills` in its `package.json` (paths or globs in the
+package, `!` to leave one out; without any `pi` resource field, its `skills/` folder by convention), and the paths a
+`resources_discover` handler returns. Before this, the extension loader dropped both. The agent couldn't open them
+anyway: they are on the host (or in the extension's process), outside the worktree the sandbox sees.
 
-## Phase 3: workflow extensions' procedure as skills
+- **The extension's process reads them.** `packageEntries` finds the package's skill paths as it finds its modules,
+  refusing one outside the package, and the session passes them when it opens the source. The worker answers a new
+  `skills` request: it emits `resources_discover` (relative paths are taken from the module's folder; a module with no
+  file, such as the connector's own, must return absolute ones), adds the package's paths, and reads them with Pi's
+  own `loadSkills`, so names, descriptions and `disable-model-invocation` are Pi's. For each skill (at most 20 a
+  source) it sends the text files of its folder: no dot files, no `node_modules`, no links, no binary files, at most
+  50 files, 256 KB a file and 1 MB a skill. A `SKILL.md` at the top of the temporary directory is refused, as its
+  folder would be all of it.
+- **The session copies them into the worktree.** Before each message and side ask, the session asks every open,
+  active extension that handles `resources_discover` or has package skills, and copies what they answer to
+  `.pikibun/skills/<extension>/<skill>/` through its own file access (`ExtensionSkillFiles`): only files that changed
+  are written, a skill that goes away has its folder removed, and the first copy in a session clears what an earlier
+  run left. `<extension>` is the source's last name (`pr-flow`, `pi-web-access`), with a short hash where two
+  sources share one. A copy rather than a `skill` tool, because a skill's files are then where its text says they are:
+  the agent reads them with `read`, and runs a script the skill brings with the program tools.
+- **Listed whenever the extension is on.** An extension's skills are listed with the repositories' and answer to
+  `/skill:name`, whatever `piki:skills` says: the workspace's owners chose the extension, as the host's owner
+  installed it, and the switch is for repositories' skills, which anyone who can push writes. The list says that
+  skills under `.pikibun/skills` come with the workspace's extensions and aren't to be edited. A copy is written again
+  when the extension's skill changes, not when the agent edited it, as the session doesn't read the copies back.
+  A session without extensions still clears what an earlier run copied.
+- **What an extension sends is checked.** Names must be command names, a description is required, file paths may not
+  leave the skill's folder or start with a dot, and a skill whose own file couldn't be written isn't listed.
 
-Each workflow extension keeps a short rule in the system prompt and ships the rest as a skill: `piki:sub-agents` first,
-then `piki:pr-flow`, whose steps (review windows, waiting, merging) depend on the workspace's settings, so its skill is
-filled in from them. The extensions keep what only code can do. Each move is judged by #343's eval before it ships,
-and `piki:pr-flow` goes last: a session that didn't load its skill would skip the flow.
+The prompt and theme paths `resources_discover` returns are ignored, as before.
+
+## Phase 3: workflow extensions' procedure as skills (as built)
+
+`piki:pr-flow` and `piki:sub-agents` each ship their procedure as a skill, `pull-request-flow` and `sub-agents`, and
+keep a short rule in the system prompt. Their code stays: the push gate, the notes after each tool call, the
+sub-agent defaults and limits.
+
+- **Filled in from the settings.** A skill in a package is a fixed file, but these procedures depend on the
+  workspace's settings (the review window, the merge method, auto-merge, the placement defaults). So each extension
+  writes its skill when `resources_discover` asks for it, in a folder of its own under the temporary directory, from
+  the settings of that moment, and removes it at `session_shutdown`. The skill holds exactly the text the system
+  prompt held before.
+- **The short rule.** `pull-request-flow`: what the flow is for and when it applies, its steps in one sentence with
+  the workspace's window and merge rule, the pre-push check, and the session's own pull requests; it says to read the
+  skill before the first change in a clone, and that each step's note says what comes next. `sub-agents`: when to
+  hand work over, how many per message, and to read the skill before `sessions create`. With `max-sub-agents` 0 there
+  is no skill, only the line that says none may start.
+- **Only where the skill is listed.** An extension gives the short rule only when its own skill is among
+  `systemPromptOptions.skills` of its `before_agent_start` event, which is where Pi puts the skills it lists. The
+  session fills it with the extension skills its prompt lists, so a skill whose copy failed, or a look that ran out of
+  time, leaves the whole procedure in the prompt. A connector from before phase 2 passes none, so it gets the whole
+  procedure too; Pi itself lists the skill once `resources_discover` gave it.
+- **Why it is safe enough without #343's eval.** The procedure the model needs at each step of `pr-flow` is also in
+  the note added to the step's tool result (open the draft, make it ready, wait until, merge or hand over), which
+  this change leaves as it was, and the short rule names every step. #343's eval would still tell whether the
+  shorter prompt changes how often sessions follow the flow; it isn't built yet, so this was checked by tests of the
+  prompts and of a session, not by a model.

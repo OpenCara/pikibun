@@ -351,6 +351,13 @@ the host instead of going to the model.
   files with its own tools and rules. Looking for them asks the Pikibun server nothing: the list is part of a view,
   whose reader was already let in (and which the app reads from its own host without the server), and a command's
   message was authorized when it was sent and is again before it runs.
+- **An extension's skills are its own text, copied into the worktree.** An extension's process reads its skills (its
+  package's, and the paths its `resources_discover` returns, which may be anywhere that process can read, as its own
+  code can read them anyway) and sends their folders' text files, bounded, without links, dot files or binaries. The
+  session writes them under `.pikibun/skills` through its own file access, so nothing leaves the worktree, and lists
+  them whatever `piki:skills` says: the workspace's owners chose the extension and the host's owner installed it, as
+  for its tools and prompt. Anyone who can read the session's files can read the copies, as they can read the
+  extension's prompt in the transcript's system message, so an extension mustn't put secrets in a skill.
 - **The list is the host's word.** The server passes it through with the view; the client keeps only names of the
   expected shape and bounded text (`parseSessionCommands`), and a name the client has itself always wins, so a
   repository can't take over `/model` or `/new`.

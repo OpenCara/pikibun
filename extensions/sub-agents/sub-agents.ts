@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionFactory, ToolCallEvent, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 
 export const subAgentsFlags = Object.freeze({
@@ -182,9 +185,7 @@ export function subAgentsPrompt(settings: SubAgentsSettings, state: Pick<SubAgen
     "",
     "With the sessions tool you can hand sub-tasks to sub-agents: new sessions you start with sessions create {title, message, placement?, model?, thinking?}, each on the host that suits its task. "
       + "Without the sessions tool (the workspace adds it as Other sessions), none of this applies.",
-    settings.delegate === "when-asked"
-      ? "- When: only when the person asks for work to be split up or run elsewhere."
-      : "- When: split work into sub-agents where its parts are independent and can run at once (a module each, a test matrix, research on several questions), or where a part needs hardware or a model this session's host lacks (a GPU, more memory or CPUs, another platform, a stronger or cheaper model). Keep small or tightly coupled work in this session, and involve sub-agents only where the person would expect it.",
+    whenLine(settings),
     state.placementUnsupported
       ? "- Where: this Pikibun server can't place by host conditions; name a model sessions list returns, which runs on that model's host."
       : `- Where: Pikibun places each sub-agent on the least loaded online host you may start sessions on that meets its placement: {gpu: true} for rendering, ML or CUDA work, min_cpus and min_memory_gb for heavy builds, min_free_disk_gb for large data, platform and arch for platform-specific work${state.modelsRefused ? "" : ", models for the models a task may run on (a strong one for hard work, a fast one for simple work; any match qualifies and load decides, so name one alone to insist on it)"}. sessions list shows each host's hardware, active sessions and load. The result names the host it chose.`,
@@ -201,6 +202,59 @@ export function subAgentsPrompt(settings: SubAgentsSettings, state: Pick<SubAgen
   return lines.join("\n");
 }
 
+function whenLine(settings: SubAgentsSettings): string {
+  return settings.delegate === "when-asked"
+    ? "- When: only when the person asks for work to be split up or run elsewhere."
+    : "- When: split work into sub-agents where its parts are independent and can run at once (a module each, a test matrix, research on several questions), or where a part needs hardware or a model this session's host lacks (a GPU, more memory or CPUs, another platform, a stronger or cheaper model). Keep small or tightly coupled work in this session, and involve sub-agents only where the person would expect it.";
+}
+
+export const SUB_AGENTS_SKILL = "sub-agents";
+export const SUB_AGENTS_SKILL_DESCRIPTION = "How this workspace hands sub-tasks to sub-agents, sessions started with the sessions tool: when to split work, where each one runs "
+  + "(placement, models and the workspace's defaults), what its message must hold, and how to collect results. Read it before you call sessions create.";
+
+type PromptState = Parameters<typeof subAgentsPrompt>[1];
+
+export function subAgentsSkill(settings: SubAgentsSettings, state: PromptState): string {
+  const body = subAgentsPrompt(settings, state).replace(/^## Sub-agents\n/, "# Sub-agents\n");
+  return `---\nname: ${SUB_AGENTS_SKILL}\ndescription: ${JSON.stringify(SUB_AGENTS_SKILL_DESCRIPTION)}\n---\n\n${body}\n`;
+}
+
+export function subAgentsRule(settings: SubAgentsSettings, state: PromptState): string {
+  if (settings.maxSubAgents === 0) return subAgentsPrompt(settings, state);
+  return [
+    "## Sub-agents",
+    "",
+    "With the sessions tool you can hand sub-tasks to sub-agents: new sessions you start with sessions create. "
+      + "Without the sessions tool (the workspace adds it as Other sessions), none of this applies.",
+    whenLine(settings),
+    `- How many: at most ${settings.maxSubAgents} sub-agent${settings.maxSubAgents === 1 ? "" : "s"} per message.`,
+    `- How: before you call sessions create, read the ${SUB_AGENTS_SKILL} skill (listed with the skills) for where each one runs, what its message must hold `
+      + "and how to collect the results.",
+  ].join("\n");
+}
+
+function skillListed(event: unknown, name: string): boolean {
+  const skills = (event as { systemPromptOptions?: { skills?: unknown } } | undefined)?.systemPromptOptions?.skills;
+  return Array.isArray(skills) && skills.some(item => (item as { name?: unknown } | null)?.name === name);
+}
+
+class SkillFolder {
+  #directory: string | undefined;
+
+  write(name: string, content: string): string {
+    this.#directory ??= mkdtempSync(join(tmpdir(), "pi-sub-agents-"));
+    const folder = join(this.#directory, name);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "SKILL.md"), content);
+    return folder;
+  }
+
+  remove(): void {
+    if (this.#directory) rmSync(this.#directory, { recursive: true, force: true });
+    this.#directory = undefined;
+  }
+}
+
 export const subAgentsExtension: ExtensionFactory = pi => {
   pi.registerFlag("placement", { type: "string", default: "", description: subAgentsFlags.placement });
   pi.registerFlag("models", { type: "string", default: "", description: subAgentsFlags.models });
@@ -211,9 +265,21 @@ export const subAgentsExtension: ExtensionFactory = pi => {
   const settings = () => readSettings(name => pi.getFlag(name));
   const state = new SubAgentsState();
 
+  const skill = new SkillFolder();
+
+  pi.on("resources_discover", () => {
+    const current = settings();
+    if (current.maxSubAgents === 0) return undefined;
+    try { return { skillPaths: [skill.write(SUB_AGENTS_SKILL, subAgentsSkill(current, state))] }; }
+    catch { return undefined; }
+  });
+
+  pi.on("session_shutdown", () => { skill.remove(); });
+
   pi.on("before_agent_start", event => {
     state.newMessage();
-    return { systemPrompt: `${event.systemPrompt}\n\n${subAgentsPrompt(settings(), state)}` };
+    const current = settings();
+    return { systemPrompt: `${event.systemPrompt}\n\n${skillListed(event, SUB_AGENTS_SKILL) ? subAgentsRule(current, state) : subAgentsPrompt(current, state)}` };
   });
 
   pi.on("tool_call", (event: ToolCallEvent) => {

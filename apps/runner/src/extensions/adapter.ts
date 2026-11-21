@@ -11,7 +11,8 @@ import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
 import { wholeForScripts } from "../script-output.js";
 import { modelCallSources } from "./complete.js";
-import type { CommandAnswer, CompleteHandler, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription } from "./protocol.js";
+import type { CommandAnswer, CompleteHandler, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionSkill,
+  ExtensionToolDescription, ListedSkill } from "./protocol.js";
 import { addedPrompt, directChannel, ExtensionWorker, modelDescription } from "./worker.js";
 import { ProcessChannel } from "./process.js";
 import { extensionNamespace, namespaceKey, reservedNamespaceKeys } from "../session/namespaces.js";
@@ -114,6 +115,7 @@ async function activeSettings(host: ExtensionHost, source: string): Promise<Exte
 
 interface OpenedSource extends Link {
   dev: boolean;
+  packageSkills?: boolean;
   label?: { name?: string; description?: string };
   commands: ExtensionCommandDescription[];
   tools: ToolRegistration[];
@@ -215,12 +217,13 @@ export class SessionExtensions {
         const channel = guard ? this.guardChannel(source) : caller ? this.callerChannel(source) : this.channel(factories !== undefined);
         const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}),
-          ...(modelCalls ? { modelCalls: true as const } : {}) });
+          ...(modelCalls ? { modelCalls: true as const } : {}), ...(loaded.skills?.length ? { skills: loaded.skills } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
         const extension = build(link, loaded.summary.dev, result.tools, offered, this.host, result.commands ?? []);
         extension.label = { ...(loaded.summary.name ? { name: loaded.summary.name } : {}), ...(loaded.summary.description ? { description: loaded.summary.description } : {}) };
+        if (loaded.skills?.length) extension.packageSkills = true;
         this.#opened.push(extension);
         opened.push(extension);
       } catch (error) {
@@ -330,6 +333,19 @@ export class SessionExtensions {
     return { notices: answer.notices.map(String), messages: answer.messages.map(String) };
   }
 
+  async skills(sources: readonly string[]): Promise<{ source: string; skills: ExtensionSkill[] }[]> {
+    const provided: { source: string; skills: ExtensionSkill[] }[] = [];
+    for (const source of sources) {
+      const opened = this.#opened.find(item => item.source === source);
+      if (!opened || this.#broken.has(source) || !(opened.packageSkills || opened.handlers.has("resources_discover"))) continue;
+      await this.one(opened, "resources_discover", async settings => {
+        const skills = await request(this.host, opened, "skills", { source, settings });
+        if (Array.isArray(skills) && skills.length) provided.push({ source, skills });
+      });
+    }
+    return provided;
+  }
+
   sandboxed(source: string): boolean {
     return this.#opened.find(item => item.source === source)?.sandboxed === true;
   }
@@ -339,13 +355,14 @@ export class SessionExtensions {
     return this.each({ type: "session_start", reason: "startup" });
   }
 
-  async beforeAgentStart(prompt: string, images: ImageContent[] | undefined): Promise<Record<string, string>> {
+  async beforeAgentStart(prompt: string, images: ImageContent[] | undefined, skills: readonly ListedSkill[] = []): Promise<Record<string, string>> {
     const prompts: Record<string, string> = {};
     await this.each({ type: "agent_start" });
     for (const extension of this.#opened) {
       await this.one(extension, "before_agent_start", async settings => {
         if (!extension.handlers.has("before_agent_start")) return;
-        const text = await request(this.host, extension, "beforeAgentStart", { source: extension.source, settings, prompt, ...(images?.length ? { images } : {}) });
+        const text = await request(this.host, extension, "beforeAgentStart", { source: extension.source, settings, prompt, ...(images?.length ? { images } : {}),
+          ...(skills.length ? { skills: [...skills] } : {}) });
         if (text) prompts[extension.source] = text;
       });
     }

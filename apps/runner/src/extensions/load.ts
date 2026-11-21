@@ -14,7 +14,7 @@ import { pikiModulePath, connectorPikiExtensions, type PikiExtension } from "./p
 
 export const supportedEvents = new Set(["session_start", "session_shutdown", "before_agent_start", "agent_start", "agent_end", "agent_settled",
   "turn_start", "turn_end", "message_end", "input", "tool_call", "tool_result", "tool_execution_start", "tool_execution_end", "context",
-  "context_with_system", "agent_before_settle", "session_before_compact"]);
+  "context_with_system", "agent_before_settle", "session_before_compact", "resources_discover"]);
 
 interface PiLoader {
   loadExtensions(paths: string[], cwd: string, eventBus?: EventBus, runtime?: ExtensionRuntime): Promise<LoadExtensionsResult>;
@@ -31,36 +31,63 @@ const ENTRY = /\.(?:ts|js|mts|mjs)$/;
 const isFile = (path: string) => stat(path).then(found => found.isFile(), () => false);
 const isDirectory = (path: string) => stat(path).then(found => found.isDirectory(), () => false);
 
-export async function packageEntries(directory: string, requireManifest: boolean): Promise<{ files: string[]; name?: string; version?: string; description?: string }> {
-  let manifest: { name?: unknown; version?: unknown; description?: unknown; keywords?: unknown; pi?: { extensions?: unknown } } = {};
+type PackageManifest = { name?: unknown; version?: unknown; description?: unknown; keywords?: unknown; pi?: Record<string, unknown> };
+
+async function declaredPaths(directory: string, declared: unknown, field: string): Promise<{ included: string[]; excluded: Set<string> }> {
+  if (!Array.isArray(declared) || declared.some(item => typeof item !== "string")) throw new Error(`"pi.${field}" in its package.json lists paths`);
+  const included: string[] = [];
+  const excluded = new Set<string>();
+  for (const pattern of declared as string[]) {
+    const negated = pattern.startsWith("!");
+    const matches: string[] = [];
+    if (/[*?[{]/.test(pattern)) for await (const match of glob(negated ? pattern.slice(1) : pattern, { cwd: directory })) matches.push(match);
+    else matches.push(negated ? pattern.slice(1) : pattern);
+    for (const match of matches) {
+      const file = resolve(directory, match);
+      if (relative(directory, file).startsWith("..") || isAbsolute(relative(directory, file))) throw new Error(`"pi.${field}" names ${pattern}, outside the package`);
+      if (negated) excluded.add(file);
+      else included.push(file);
+    }
+  }
+  return { included, excluded };
+}
+
+const RESOURCE_FIELDS = ["extensions", "skills", "prompts", "themes"];
+
+export async function packageSkills(directory: string, manifest: PackageManifest): Promise<string[]> {
+  const pi = manifest.pi && typeof manifest.pi === "object" ? manifest.pi : undefined;
+  if (pi && RESOURCE_FIELDS.some(field => pi[field] !== undefined)) {
+    if (pi.skills === undefined) return [];
+    const { included, excluded } = await declaredPaths(directory, pi.skills, "skills");
+    const paths: string[] = [];
+    for (const path of included) if (!excluded.has(path) && (await isDirectory(path) || (await isFile(path) && path.endsWith(".md")))) paths.push(path);
+    return paths;
+  }
+  return await isDirectory(join(directory, "skills")) ? [join(directory, "skills")] : [];
+}
+
+export async function packageEntries(directory: string, requireManifest: boolean): Promise<{ files: string[]; skills: string[]; name?: string; version?: string; description?: string }> {
+  let manifest: PackageManifest = {};
   try { manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Its package.json can't be read"); }
   const about = { ...(typeof manifest.name === "string" ? { name: manifest.name } : {}), ...(typeof manifest.version === "string" ? { version: manifest.version } : {}),
     ...(typeof manifest.description === "string" ? { description: manifest.description.slice(0, extensionLimits.text) } : {}) };
+  const skills = await packageSkills(directory, manifest);
   const files: string[] = [];
   const declared = manifest.pi?.extensions;
   if (declared !== undefined) {
     if (!Array.isArray(declared) || declared.some(item => typeof item !== "string")) throw new Error(`"pi.extensions" in its package.json lists module paths`);
-    const excluded = new Set<string>();
-    for (const pattern of declared as string[]) {
-      const negated = pattern.startsWith("!");
-      const matches: string[] = [];
-      if (/[*?[{]/.test(pattern)) for await (const match of glob(negated ? pattern.slice(1) : pattern, { cwd: directory })) matches.push(match);
-      else matches.push(negated ? pattern.slice(1) : pattern);
-      for (const match of matches) {
-        const file = resolve(directory, match);
-        if (relative(directory, file).startsWith("..") || isAbsolute(relative(directory, file))) throw new Error(`"pi.extensions" names ${pattern}, outside the package`);
-        if (negated) excluded.add(file);
-        else if (await isDirectory(file)) files.push(...(await directoryEntries(file)));
-        else if (await isFile(file)) files.push(file);
-      }
+    const { included, excluded } = await declaredPaths(directory, declared, "extensions");
+    for (const file of included) {
+      if (await isDirectory(file)) files.push(...(await directoryEntries(file)));
+      else if (await isFile(file)) files.push(file);
     }
-    return { files: files.filter(file => !excluded.has(file)), ...about };
+    return { files: files.filter(file => !excluded.has(file)), skills, ...about };
   }
-  if (await isDirectory(join(directory, "extensions"))) return { files: await directoryEntries(join(directory, "extensions")), ...about };
+  if (await isDirectory(join(directory, "extensions"))) return { files: await directoryEntries(join(directory, "extensions")), skills, ...about };
   if (requireManifest) throw new Error(`${about.name ?? basename(directory)} isn't a Pi extension package: its package.json has no "pi": { "extensions": [...] } and it has no extensions/ directory`);
-  for (const index of ["index.ts", "index.js"]) if (await isFile(join(directory, index))) return { files: [join(directory, index)], ...about };
-  return { files, ...about };
+  for (const index of ["index.ts", "index.js"]) if (await isFile(join(directory, index))) return { files: [join(directory, index)], skills, ...about };
+  return { files, skills, ...about };
 }
 
 async function directoryEntries(directory: string): Promise<string[]> {
@@ -84,6 +111,7 @@ export interface LoadedSource {
   factories?: { path: string; factory: ExtensionFactory }[];
   managed?: ManagedInstall;
   mount?: string;
+  skills?: string[];
   summary: InstalledExtension;
 }
 
@@ -182,10 +210,12 @@ export async function loadManaged(store: ExtensionStore, installed: ManagedInsta
   const summary: InstalledExtension = { source: installed.source, dev: false, version: installed.version, modules: [] };
   let root = "";
   let files: string[] = [];
+  let skills: string[] = [];
   try {
     root = store.managedLocation(installed);
     const entries = await packageEntries(root, true);
     files = entries.files;
+    skills = entries.skills;
     Object.assign(summary, entries.name ? { name: entries.name } : {}, entries.description ? { description: entries.description } : {});
     if (entries.name !== installed.package || entries.version !== installed.version) throw new Error(`Its package.json names ${entries.name ?? "no package"}@${entries.version ?? "no version"}, not ${installed.package}@${installed.version}`);
     if (!files.length) throw new Error("It has no extension modules");
@@ -193,7 +223,7 @@ export async function loadManaged(store: ExtensionStore, installed: ManagedInsta
   } catch (error) {
     summary.error = message(error);
   }
-  return { installed: { source: installed.source }, root, files, managed: installed, ...(root ? { mount: installMount(root) } : {}), summary };
+  return { installed: { source: installed.source }, root, files, managed: installed, ...(root ? { mount: installMount(root) } : {}), ...(skills.length ? { skills } : {}), summary };
 }
 
 export async function loadInstalled(store: ExtensionStore, pikiExtensions: readonly PikiExtension[] = connectorPikiExtensions,
@@ -214,10 +244,12 @@ export async function loadInstalled(store: ExtensionStore, pikiExtensions: reado
       const root = (await isDirectory(location)) ? location : join(location, "..");
       const summary: InstalledExtension = { source: source.source, dev, modules: [] };
       let files: string[] = [];
+      let skills: string[] = [];
       try {
         if (await isDirectory(location)) {
           const entries = await packageEntries(location, !dev);
           files = entries.files;
+          skills = entries.skills;
           Object.assign(summary, entries.name ? { name: entries.name } : {}, entries.version ? { version: entries.version } : {}, entries.description ? { description: entries.description } : {});
           if (!files.length) throw new Error("It has no extension modules");
         } else if (await isFile(location) && ENTRY.test(location)) files = [location];
@@ -226,7 +258,7 @@ export async function loadInstalled(store: ExtensionStore, pikiExtensions: reado
       } catch (error) {
         summary.error = message(error);
       }
-      loaded.push({ installed: source, root, files, mount: installMount(location), summary });
+      loaded.push({ installed: source, root, files, mount: installMount(location), ...(skills.length ? { skills } : {}), summary });
     }
   } finally {
     await rm(cwd, { recursive: true, force: true }).catch(() => {});

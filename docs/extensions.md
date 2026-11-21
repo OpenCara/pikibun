@@ -192,6 +192,12 @@ A skill is a folder with a `SKILL.md` ([Agent Skills](https://agentskills.io)): 
 - **It has no package and no tools.** The session does this itself, so hosts install nothing beyond a connector of this release; an older one leaves the list out.
 - **A skill is its repository's text.** Whoever can push to a repository writes its skills, and a public repository cloned to read has them too: with this on, their descriptions reach the agent without anyone typing a name, and the agent is told to follow the skill it loads. That is why it is off until a workspace adds it. See [the design](design/skills.md).
 
+### Extensions' skills
+
+An extension can ship skills, as Pi packages do: `pi.skills` in its `package.json` (or a `skills/` folder), or paths its `resources_discover` handler returns. Before each message and side ask, the session copies the skills of the workspace's extensions that are on into the worktree's `.pikibun/skills/<extension>/<skill>/` and lists them for the agent, with or without `piki:skills`, as an extension's tools and prompt come with it. They answer to `/skill:<name>` too. A copy brings the text files of the skill's folder (no dot files, links or binaries; at most 50 files and 1 MB), so the agent runs a script the skill brings with the program tools. Don't edit the copies: they are the extension's, a change to its skill writes them again, and turning the extension off removes them.
+
+`piki:pr-flow` and `piki:sub-agents` work this way: their whole procedure is a skill, `pull-request-flow` and `sub-agents`, filled in from the workspace's settings, and each message's system prompt keeps a short rule that says when it applies and to read the skill. Where their skill isn't listed (on a connector from before this, or when the copy failed), they add the whole procedure to the prompt as before.
+
 ## Remote MCP servers
 
 A workspace's owners and admins add remote MCP servers under **Settings → Workspaces →** the workspace **→ Remote MCP servers**: a name, a prefix that starts each of its tools' names (`linear` gives `linear_create_issue`), its Streamable HTTP `https://` address, and optionally a header such as `Authorization: Bearer <key>`. Pikibun itself calls the server, so hosts install nothing and no session or host sees the header, which Pikibun keeps encrypted and shows only by name. Pikibun lists the server's tools when it is added and on **List tools again**, and every session of the workspace offers them from its next message, on connectors of this release or later.
