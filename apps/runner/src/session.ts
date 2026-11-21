@@ -74,7 +74,9 @@ import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
 import { requeue, RunQueue, submissionRequestId, type RunContent } from "./session/run-queue.js";
-import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, SessionCommands, type ExtensionCommand } from "./session/commands.js";
+import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, SessionCommands, type ExtensionCommand } from "./session/commands.js";
+import { piText } from "./session/pi-text.js";
+import { SessionSkills } from "./session/skills.js";
 import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
 import { addTitleUsage, titleRequestInput, titleTimeoutMs, writeTitle } from "./session/titles.js";
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
@@ -210,6 +212,8 @@ export class RunnerSession {
   private closing = false;
   readonly #queue: RunQueue;
   readonly #commands: SessionCommands;
+  readonly #skills: SessionSkills;
+  #skillsListed = false;
   readonly #commandSources = new Set<string>();
   readonly #cachedSources = new Map<string, LoadedSource>();
   private modelRef!: { provider: string; modelId: string };
@@ -332,6 +336,10 @@ export class RunnerSession {
       added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); this.groupTools(); },
     });
     const alreadyAllowed = async () => {};
+    const find = async (pattern: string, limit: number) =>
+      (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, alreadyAllowed)).paths;
+    const read = (path: string) => this.sandbox.readFile(path, alreadyAllowed);
+    this.#skills = new SessionSkills({ find, read, text: piText });
     this.#commands = new SessionCommands({
       compact: (run, instructions) => this.compact(run, instructions),
       extensionCommands: () => this.extensionCommands(),
@@ -342,9 +350,10 @@ export class RunnerSession {
         await this.#piki.requireCommand(run.initiatedBy, command.source, command.name, host.sandboxed(command.source));
         return host.command(command.source, command.name, args);
       },
-      find: async (pattern, limit) => (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, alreadyAllowed)).paths,
-      read: path => this.sandbox.readFile(path, alreadyAllowed),
-      expansion: piExpansion,
+      find,
+      read,
+      text: piText,
+      skills: this.#skills,
     });
     this.#queue = new RunQueue({
       commands: this.#commands,
@@ -580,7 +589,7 @@ export class RunnerSession {
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
       linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser,
-      sudo: mode !== "ask" && this.#sudoOffered });
+      sudo: mode !== "ask" && this.#sudoOffered, skills: this.#skillsListed ? this.#skills.known() : [] });
   }
 
   private async sudoAllowed(): Promise<boolean> {
@@ -879,6 +888,10 @@ export class RunnerSession {
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
     if (run.mode === "write") await this.#sudo?.prepare();
+    if (run.mode === "write") {
+      this.#skillsListed = await this.#availability.skillsListed();
+      if (this.#skillsListed) await this.#skills.current();
+    }
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();
     const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.#availability.browserUnavailable() : undefined;

@@ -10,8 +10,10 @@ import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@e
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { RunnerService } from "../apps/runner/src/server.js";
-import { COMMAND_FILES, commandFiles, COMPACTED, COMPACTION_STARTED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, ranBefore, SessionCommands,
+import { COMPACTED, COMPACTION_STARTED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, PROMPT_FILES, promptFiles, ranBefore, SessionCommands,
   type SessionCommandsOptions } from "../apps/runner/src/session/commands.js";
+import { piText } from "../apps/runner/src/session/pi-text.js";
+import { SessionSkills } from "../apps/runner/src/session/skills.js";
 import type { Run } from "../apps/runner/src/session/state.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { parseWorkspaceExtensions } from "../packages/shared/src/host-extensions.js";
@@ -25,31 +27,26 @@ test("a message is a command when it starts with a slash and a name, whatever fo
   for (const text of ["", "compact", " /compact", "/", "/usr/local/bin is missing", "//comment", "/-x", "say /compact"]) assert.equal(parseCommand(text), undefined, JSON.stringify(text));
 });
 
-test("prompt templates and skills are the files Pi would take, in the worktree and one clone down", () => {
-  assert.deepEqual(commandFiles([
+test("prompt templates are the files Pi would take, in the worktree and one clone down", () => {
+  assert.deepEqual(promptFiles([
     "app/.pi/prompts/review.md", ".pi/prompts/review.md", ".pi/prompts/notes.txt", "app/.pi/prompts/deep/nested.md", "app/.pi/prompts/ship it.md",
-    "app/.pi/skills/release/SKILL.md", "app/.pi/skills/release/extra/SKILL.md", "app/.pi/skills/release/notes.md", "app/.agents/skills/lint.md",
-    ".agents/skills/group/audit/SKILL.md", "app/.pi/skills/SKILL.md", "app/docs/.pi/prompts/deep.md", "app/src/prompts/x.md", "app/.pi/skills/release/",
+    "app/.pi/skills/release/SKILL.md", "app/.agents/skills/lint.md", "app/docs/.pi/prompts/deep.md", "app/src/prompts/x.md", "app/.agents/prompts/a.md",
   ]), [
-    { kind: "prompt", name: "worktree:review", path: ".pi/prompts/review.md" },
-    { kind: "skill", name: "lint", path: "app/.agents/skills/lint.md" },
-    { kind: "prompt", name: "app:review", path: "app/.pi/prompts/review.md" },
-    { kind: "skill", name: "audit", path: ".agents/skills/group/audit/SKILL.md" },
-    { kind: "skill", name: "release", path: "app/.pi/skills/release/SKILL.md" },
+    { name: "worktree:review", path: ".pi/prompts/review.md" },
+    { name: "app:review", path: "app/.pi/prompts/review.md" },
   ]);
-  assert.match(COMMAND_FILES, /\.pi\/prompts/);
-  assert.deepEqual(commandFiles(["web/.pi/prompts/release.md", "api/.pi/prompts/release.md", "api/.pi/skills/ship/SKILL.md", "api/.agents/skills/ship.md",
-    "docs/.pi/prompts/only.md", "bad name/.pi/prompts/release.md", "skill/.pi/prompts/release.md", "worktree/.pi/prompts/release.md"]).map(file => [file.name, file.path]), [
-    ["ship", "api/.agents/skills/ship.md"],
+  assert.equal(PROMPT_FILES, "{,*/}.pi/prompts/*.md");
+  assert.deepEqual(promptFiles(["web/.pi/prompts/release.md", "api/.pi/prompts/release.md", "docs/.pi/prompts/only.md", "bad name/.pi/prompts/release.md",
+    "skill/.pi/prompts/release.md", "worktree/.pi/prompts/release.md"]).map(file => [file.name, file.path]), [
     ["api:release", "api/.pi/prompts/release.md"],
     ["only", "docs/.pi/prompts/only.md"],
     ["web:release", "web/.pi/prompts/release.md"],
   ], "a name two clones claim is offered by neither alone, but under each clone's name; one clone keeps Pi's own order (#380, finding 50). Clones named skill or worktree, "
     + "whose qualified names would read as a skill or the root's, and names too long to type, aren't offered");
   const long = "r".repeat(64);
-  assert.deepEqual(commandFiles([`${"a".repeat(64)}/.pi/prompts/${long}.md`, `api/.pi/prompts/${long}.md`]).map(file => file.name), [`api:${long}`],
+  assert.deepEqual(promptFiles([`${"a".repeat(64)}/.pi/prompts/${long}.md`, `api/.pi/prompts/${long}.md`]).map(file => file.name), [`api:${long}`],
     "a qualified name longer than a command may be isn't offered");
-  assert.deepEqual(commandFiles([".pi/prompts/x.md", "worktree/.pi/prompts/x.md"]).map(file => file.name), ["worktree:x"], "the root keeps worktree:");
+  assert.deepEqual(promptFiles([".pi/prompts/x.md", "worktree/.pi/prompts/x.md"]).map(file => file.name), ["worktree:x"], "the root keeps worktree:");
 });
 
 test("the list of commands a client gets keeps only well-formed entries", () => {
@@ -74,6 +71,9 @@ function fakeCommands(overrides: Partial<SessionCommandsOptions> = {}) {
     "app/.pi/skills/release/SKILL.md": "---\nname: release\ndescription: Cut a release\n---\n# Releasing\n\nRun scripts/tag.sh.\n",
   };
   let now = 0;
+  const find = async (pattern: string) => { log.push(`find ${pattern}`); return Object.keys(files); };
+  const read = async (path: string) => { if (!(path in files)) throw new Error("missing"); return files[path]!; };
+  const skills = new SessionSkills({ find, read, text: piText, now: () => now });
   const commands = new SessionCommands({
     compact: async (_run, instructions) => { log.push(`compact ${instructions ?? ""}`.trim()); },
     extensionCommands: async () => [{ source: "npm:greeter@1.0.0", name: "greet", description: "Say hello" }, { source: "npm:greeter@1.0.0", name: "ask" }],
@@ -83,9 +83,10 @@ function fakeCommands(overrides: Partial<SessionCommandsOptions> = {}) {
       if (args === "bell") return { notices: ["Ring\u0007once\u001b[31m", " twice ", "\n"], messages: [] };
       return command.name === "ask" ? { notices: ["ignored"], messages: [`Asked: ${args}`, " "] } : { notices: args ? [`Hello ${args}`] : [], messages: [] };
     },
-    find: async () => { log.push("find"); return Object.keys(files); },
-    read: async path => { if (!(path in files)) throw new Error("missing"); return files[path]!; },
-    expansion: piExpansion,
+    find,
+    read,
+    text: piText,
+    skills,
     now: () => now,
     ...overrides,
   });
@@ -104,10 +105,11 @@ test("a host lists /compact, its extensions' commands, and the worktree's templa
     { name: "greet", kind: "extension", description: "Say hello" },
     { name: "ask", kind: "extension", description: "A command of npm:greeter@1.0.0" },
     { name: "review", kind: "prompt", description: "Prompt template .pi/prompts/review.md", argument: "arguments" },
-    { name: "skill:release", kind: "skill", description: "Skill app/.pi/skills/release/SKILL.md", argument: "arguments" },
+    { name: "skill:release", kind: "skill", description: "Cut a release", argument: "arguments" },
   ]);
   await commands.list();
-  assert.equal(log.filter(item => item === "find").length, 1, "the worktree is looked at again only after a while");
+  assert.deepEqual(log.filter(item => item.startsWith("find")).sort(), ["find {,*/}.pi/prompts/*.md", "find {,*/}{.pi,.agents,.claude}/skills/{*.md,**/SKILL.md}"],
+    "the worktree is looked at again only after a while, once for templates and once for skills");
 });
 
 test("/compact and an extension's command run on the host, and never in a side ask or a Read-only message", async () => {
@@ -145,7 +147,7 @@ test("a template fills in its arguments as Pi does, a skill comes in Pi's block,
   assert.equal(await commands.expand("/review api.ts"), "Review api.ts closely. All: api.ts. Focus: everything");
   assert.equal(await commands.expand("/skill:release v1.2"),
     '<skill name="release" location="app/.pi/skills/release/SKILL.md">\nReferences are relative to app/.pi/skills/release.\n\n# Releasing\n\nRun scripts/tag.sh.\n</skill>\n\nv1.2');
-  assert.equal(log.filter(item => item === "find").length, 1);
+  assert.equal(log.filter(item => item.startsWith("find")).length, 2);
   assert.equal(await commands.expand("/release v1.2"), "/release v1.2", "a skill isn't a template");
   assert.equal(await commands.expand("/skill:review"), "/skill:review");
   assert.equal(await commands.expand("/etc/hosts is wrong"), "/etc/hosts is wrong");
@@ -154,7 +156,7 @@ test("a template fills in its arguments as Pi does, a skill comes in Pi's block,
   assert.equal(await commands.expand("/new thing"), "Brand new: thing", "a template added since the last look is found");
   delete files[".pi/prompts/review.md"];
   assert.equal(await commands.expand("/review api.ts"), "/review api.ts", "one that can't be read stays as typed");
-  const moved = fakeCommands({ expansion: async () => { throw new Error("Pi's template code moved"); } });
+  const moved = fakeCommands({ text: async () => { throw new Error("Pi's template code moved"); } });
   assert.equal(await moved.commands.expand("/review api.ts"), "/review api.ts", "and so does one Pi's code can't fill in");
 });
 
@@ -239,7 +241,7 @@ test("a session runs /compact, extension commands, templates and skills from its
     { name: "ask", kind: "extension", description: "Ask the model" },
     { name: "review", kind: "prompt", description: "Prompt template .pi/prompts/review.md", argument: "arguments" },
     { name: "smuggle", kind: "prompt", description: "Prompt template .pi/prompts/smuggle.md", argument: "arguments" },
-    { name: "skill:release", kind: "skill", description: "Skill app/.pi/skills/release/SKILL.md", argument: "arguments" },
+    { name: "skill:release", kind: "skill", description: "Cut a release", argument: "arguments" },
   ]);
 
   view = await send("/compact keep the plan");

@@ -107,13 +107,16 @@ messages.
 - **Prompt templates** are Pi's: `.pi/prompts/*.md` in the worktree and in each repository cloned into it, with
   `$1`, `$@`, `$ARGUMENTS` and `${1:-default}` in the text, filled in by Pi's own `substituteArgs`. `/name arguments`
   sends the template with the arguments filled in, without its front matter.
-- **Skills** are `SKILL.md` files under `.pi/skills` and `.agents/skills` in the same places. `/skill:name arguments`
-  sends the skill's text in Pi's `<skill>` block, with its location as a worktree path, so the agent opens the skill's
-  other files with `read`. Skills aren't listed in the system prompt for the model to pick by itself: that is #323.
+- **Skills** are `SKILL.md` files under `.pi/skills`, `.agents/skills` and `.claude/skills` in the same places, named
+  and described by their front matter as in Pi. `/skill:name arguments` sends the skill's text in Pi's `<skill>` block,
+  with its location as a worktree path, so the agent opens the skill's other files with `read`. They are found and
+  expanded by `session/skills.ts`, apart from this command code, and listed in the system prompt for the model to pick
+  by itself only where the workspace turned on `piki:skills`: see [Skills, apart from extensions](skills.md).
 - **Read as the session reads files.** Templates and skills are found and read through the session's own file access
   (the sandbox's helper), never by the connector opening paths under the worktree, so a link that leaves the worktree
   is refused there as for the `read` tool. They come from whoever can push to the repository, or from the session's
-  own commands (a file needn't be committed), and do nothing until someone types their name.
+  own commands (a file needn't be committed), and do nothing until someone types their name, but for the skills
+  `piki:skills` lists.
 - **A name in two places is qualified.** Within one clone (or the worktree's root) the first file of a name wins, in
   Pi's own order. Where two places claim one name, neither keeps it: each is offered as `/<clone>:<name>` (or
   `/skill:<clone>:<name>`), and `worktree:` names the root's, so a public repository cloned to read can't answer for
@@ -121,9 +124,10 @@ messages.
   as a skill, or as the root's), nor is a qualified name longer than a command may be.
 - **One look for the list, one read for a command.** Each file access is a sandboxed call, and a session's file
   calls run one after another, behind a command that is running. So the view never waits for the worktree: it lists
-  what the last look found (one `find`, at most every two minutes, started by a view and finished in the background),
-  and shows each template's and skill's path rather than the description in its front matter, which would cost one
-  read per file. A command typed for a file the list doesn't have yet looks again before it gives up, and the file is
+  what the last look found (one `find` for templates and one for skills, at most every two minutes, started by a view
+  and finished in the background), and shows each template's path rather than the description in its front matter,
+  which would cost one read per file. A skill's description is shown, as its name needs that read anyway
+  ([skills](skills.md#phase-1-skills-of-their-own-this-change)). A command typed for a file the list doesn't have yet looks again before it gives up, and the file is
   read when it is used, so the text sent is the file's as it is then.
 - **A side ask or a Read-only message** takes templates and skills, which are only text, and refuses `/compact` and
   extension commands, which act.

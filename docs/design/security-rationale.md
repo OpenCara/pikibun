@@ -340,7 +340,12 @@ the host instead of going to the model.
   is refused as it is for `read`. They are any file of the worktree in those places, committed or not: written by
   whoever can push to a clone, but also by the session's own commands, and at the worktree's root, which no repository
   owns. They reach the model only when someone types their name, and an expanded one passes the `input` handlers again
-  (review 380, finding 48). A name that files in two places claim (two clones, or a clone and the worktree's root) is
+  (review 380, finding 48). The one exception is the workspace's choice: with `piki:skills` on, each listed skill's name,
+  description and path reach the system prompt with no name typed, from any clone, a public one cloned to read included,
+  and the agent is told to follow a skill it loads; so it is off until an owner or admin adds it, as
+  `piki:context-files` is for `AGENTS.md`. The list is bounded (100 skills read, 1,024 characters a description,
+  20,000 for the section), its text is XML-escaped, and it tells the agent a skill widens nothing the session may do
+  ([skills](skills.md)). A name that files in two places claim (two clones, or a clone and the worktree's root) is
   offered by neither alone: each is listed as `<clone>:<name>` (`worktree:<name>` at the root), so which file a name
   means never depends on where a directory sorts (review 380, finding 50). A skill's `location` is a worktree path, so the agent opens its other
   files with its own tools and rules. Looking for them asks the Pikibun server nothing: the list is part of a view,
