@@ -7,6 +7,7 @@ import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsol
 import { stdioTransport, type Transport } from "./app-host-transport.js";
 import { pairingCodePattern, pairingIdPattern, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "../../../packages/shared/src/app-host-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
+import { buildVersion } from "../../../packages/shared/src/version.js";
 import { identityDirectory } from "./identity.js";
 import { startPrivateHome, type PrivateHome } from "./private-home.js";
 import { ConnectorSetupError, RunnerError } from "./protocol.js";
@@ -249,5 +250,5 @@ export function runAppHost(args: string[]): void {
   transport.onClose(() => { void shutdown(); });
   process.once("SIGTERM", () => { void shutdown(); });
   process.once("SIGINT", () => { void shutdown(); });
-  emit({ type: "ready" });
+  emit({ type: "ready", ...(buildVersion ? { version: buildVersion } : {}) });
 }

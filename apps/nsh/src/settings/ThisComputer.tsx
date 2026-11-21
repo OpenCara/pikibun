@@ -137,7 +137,7 @@ function CommandSection(props: { environment: LocalEnvironment; refresh: () => P
   const place = () => `${env.wsl ? "in" : "on"} ${env.where()}`;
   const node = () => (env.wsl ? `Node.js 24 or newer there (for example with nvm: ${NVM_INSTALL})` : `Node.js 24 or newer (nodejs.org${computerTitle === "This Mac" ? ", or brew install node" : ""})`);
   return (
-    <If when={env.problem()}>
+    <If when={env.problem() ?? (env.stale() ? { kind: "outdated" as const } : null)}>
       {problem => {
         const update = () => problem().kind === "outdated";
         const refresh = () => <Button small variant="outline" icon="refresh" label="Refresh" testID="this-computer-retry" disabled={props.busy || env.installing()} onPress={() => void props.refresh()} />;
@@ -148,7 +148,9 @@ function CommandSection(props: { environment: LocalEnvironment; refresh: () => P
                 else={
                   <Banner tone="warning" title={update() ? `Update Pikibun's command ${place()}` : `Install Pikibun's command ${place()}`} actions={refresh()}>
                     {update()
-                      ? `The pikibun command ${place()} is older than this app, which runs pikibun host. Update it from npm here.`
+                      ? (env.stale() && !env.problem()
+                        ? `${env.wsl ? `Hosts in ${env.where()} run` : `${computerTitle} runs`} pikibun ${env.stale()!.version}, older than the ${env.stale()!.wanted} this version of Pikibun comes with: its hosts may miss fixes and features they need. Update it from npm here.`
+                        : `The pikibun command ${place()} is older than this app, which runs pikibun host. Update it from npm here.`)
                       : `${env.wsl ? `Hosts in ${env.where()}` : computerTitle} run sessions with the pikibun command, as pikibun connect does in a terminal. Install it from npm here: it needs ${node()}.`}
                   </Banner>
                 }>
@@ -156,11 +158,11 @@ function CommandSection(props: { environment: LocalEnvironment; refresh: () => P
               </If>
               <If when={problem().kind !== "failed"}>
                 <View style={{ flexDirection: "row" }}>
-                  <Button variant="primary" icon="download" testID="this-computer-install-button" busy={env.installing()} disabled={env.installing() || props.busy || env.hostsRunning()}
+                  <Button variant="primary" icon="download" testID="this-computer-install-button" busy={env.installing()} disabled={env.installing() || props.busy || Boolean(env.stopFirst())}
                     label={env.installing() ? (update() ? "Updating pikibun" : "Installing pikibun") : update() ? "Update pikibun" : "Install pikibun"} onPress={install} />
                 </View>
                 <If when={env.installing()}><Small>npm is installing pikibun: this takes a minute. Its output is under Recent activity below.</Small></If>
-                <If when={!env.installing() && env.hostsRunning()}><Small testID="this-computer-install-hosts-running">{`Stop the hosts that run ${place()} first: they run the command this replaces.`}</Small></If>
+                <If when={!env.installing() && env.stopFirst()}><Small testID="this-computer-install-hosts-running">{env.stopFirst()}</Small></If>
                 <Feedback error={action.error()} />
                 <If when={env.installError()}>
                   <Feedback error={env.installError()} />

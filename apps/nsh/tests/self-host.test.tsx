@@ -109,6 +109,42 @@ describe("Self host", () => {
     expect(app.enabled("id:self-host-start")).toBe(true);
   });
 
+  test("a command older than the app's is said to be, and is never replaced while Pikibun runs on it", async () => {
+    const { app, sent, showsText } = await openPanel({ cliVersion: "0.40.0", reports: "0.38.0" });
+    await app.waitFor("id:self-host-install");
+    expect(showsText("This Mac runs pikibun 0.38.0, older than the 0.40.0 this version of Pikibun comes with.")).toBe(true);
+    expect(app.enabled("id:self-host-install")).toBe(true);
+    app.onDialog(() => "Run unsandboxed");
+    await app.press("id:self-host-start");
+    await app.waitFor("id:self-host-stop");
+    await app.waitFor("id:self-host-install-running");
+    expect(showsText("Stop Pikibun on this Mac under Self host first: it runs the command this replaces.")).toBe(true);
+    expect(app.enabled("id:self-host-install")).toBe(false);
+    expect(sent()).not.toContain("install");
+    await app.press("id:self-host-stop");
+    await app.waitUntil(() => app.enabled("id:self-host-install"));
+    await app.press("id:self-host-install");
+    await app.waitUntil(() => !app.shows("id:self-host-command"));
+    expect(sent()).toContain("install");
+  });
+
+  test("Pikibun started while npm updates the command keeps the warning until it is stopped and its command relaunched", async () => {
+    const { app, sent, showsText } = await openPanel({ cliVersion: "0.40.0", reports: "0.38.0", npmMs: 1500 });
+    await app.waitFor("id:self-host-install");
+    await app.press("id:self-host-install");
+    app.onDialog(() => "Run unsandboxed");
+    await app.press("id:self-host-start");
+    await app.waitFor("id:self-host-stop");
+    expect(showsText("npm is installing pikibun")).toBe(true);
+    await app.waitUntil(() => sent().includes("install") && !showsText("npm is installing pikibun"));
+    expect(showsText("This Mac runs pikibun 0.38.0, older than the 0.40.0")).toBe(true);
+    await app.press("id:self-host-stop");
+    await app.waitUntil(() => !app.shows("id:self-host-command"));
+    await app.press("id:self-host-start");
+    await app.waitFor("id:self-host-stop");
+    expect(app.shows("id:self-host-command")).toBe(false);
+  });
+
   test("a command too old for serve --stdio is updated the same way", async () => {
     const { app, showsText } = await openPanel({ command: "outdated" });
     await app.waitFor("id:self-host-install");

@@ -1,16 +1,16 @@
 import { readFile } from "fs/promises";
 import { platform, signal, Storage, untracked, type Signal } from "nsh";
 import nshProcess from "process";
-import { APP_VERSION } from "../app-version";
+import { APP_VERSION, CLI_VERSION } from "../app-version";
 import type {
   HostEvent, HostInspection, HostRequest, HostState, LocalPage, LocalView, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
 } from "../../../../packages/shared/src/app-host-protocol";
 import {
-  appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, NVM_INSTALL, parseWslList, pikibunCommand, plainOutput, spawnPikibun, WSL, WSL_DISTRO,
+  appCliFolder, CommandChannel, commandDirectory, commandProblem, commandVersion, installCommand, NVM_INSTALL, parseWslList, pikibunCommand, plainOutput, spawnPikibun, WSL, WSL_DISTRO,
   wslInstallCommand, type CommandLink, type CommandTarget, type LaunchProblem, type LogLine,
 } from "./pikibun-command";
 import { auth } from "./auth";
-import { isVersion } from "./version";
+import { compareVersions, isVersion } from "./version";
 import { lastLines } from "./windows-cmd";
 
 export { appCliFolder, INSTALL_COMMAND, installCommand, NVM_INSTALL, parseWslList, wslInstallCommand, wslPikibunCommand } from "./pikibun-command";
@@ -157,10 +157,17 @@ async function ownCopyVersion(): Promise<string | null> {
 export interface CommandUpdate {
   appVersion: string;
   ownCopy(): Promise<string | null>;
+  cliVersion?: string;
+  commandVersion?(target: HostTarget): Promise<string | null>;
 }
 
-let commandUpdate: CommandUpdate = { appVersion: APP_VERSION, ownCopy: ownCopyVersion };
+const defaultUpdate: CommandUpdate = { appVersion: APP_VERSION, ownCopy: ownCopyVersion, cliVersion: CLI_VERSION, commandVersion };
+let commandUpdate: CommandUpdate = defaultUpdate;
 export function setCommandUpdate(next: CommandUpdate): void { commandUpdate = next; }
+
+export interface StaleCommand { version: string; wanted: string }
+
+interface CommandUser { kind: "host" | "server"; running(): boolean; restart(): Promise<void> }
 
 type InstallResult = { code?: number | null; error?: string | null };
 
@@ -220,12 +227,67 @@ export class LocalEnvironment {
   readonly installError = signal("");
   readonly problem = signal<LaunchProblem | null>(null);
   readonly logs = signal<LogLine[]>([]);
+  readonly stale = signal<StaleCommand | null>(null);
   private updated?: Promise<void>;
+  private readonly users = new Set<CommandUser>();
+  private readonly versions = new Map<CommandUser, string>();
+  private readonly checks = new Map<CommandUser, number>();
 
   constructor(readonly target: HostTarget) {}
 
+  use(user: CommandUser): void { this.users.add(user); }
+
+  private wanted(): string | undefined {
+    const wanted = commandUpdate.cliVersion;
+    return wanted !== undefined && isVersion(wanted) ? wanted : undefined;
+  }
+
+  started(user: CommandUser, reported: string | undefined): void {
+    if (!this.wanted()) return;
+    const check = (this.checks.get(user) ?? 0) + 1;
+    this.checks.set(user, check);
+    const probe = commandUpdate.commandVersion;
+    const version = reported !== undefined ? Promise.resolve(reported) : probe ? probe(this.target).catch(() => null) : Promise.resolve(null);
+    void version.then(found => {
+      if (this.checks.get(user) !== check) return;
+      if (found) this.versions.set(user, found);
+      else this.versions.delete(user);
+      this.judge();
+    });
+  }
+
+  exited(user: CommandUser): void {
+    this.checks.set(user, (this.checks.get(user) ?? 0) + 1);
+    if (this.versions.delete(user)) this.judge();
+  }
+
+  private judge(): void {
+    const wanted = this.wanted();
+    if (!wanted) return;
+    let oldest: string | undefined;
+    for (const version of this.versions.values()) {
+      if (compareVersions(version, wanted) === -1 && (oldest === undefined || compareVersions(version, oldest) === -1)) oldest = version;
+    }
+    const before = untracked(this.stale);
+    if (oldest === undefined) { if (before) this.stale.set(null); return; }
+    if (before?.version === oldest && before.wanted === wanted) return;
+    this.stale.set({ version: oldest, wanted });
+    this.log("warning", `${this.title()} runs pikibun ${oldest}, older than the ${wanted} this version of Pikibun comes with, so its hosts may miss fixes and features they need. Choose Update pikibun${this.wsl ? "" : " under Local hosts"} to update it${untracked(() => this.stopFirst()) ? ", once what runs it is stopped" : ""}.`);
+  }
+
+  private async restartAll(): Promise<void> {
+    await Promise.all([...this.users].map(user => user.restart().catch(() => undefined)));
+  }
+
   get key(): string { return environmentKey(this.target); }
   hostsRunning(): boolean { return localHosts().all().some(host => host.environment === this && host.state() !== "stopped"); }
+  serverRunning(): boolean { return [...this.users].some(user => user.kind === "server" && user.running()); }
+
+  stopFirst(): string {
+    if (this.hostsRunning()) return `Stop the hosts that run ${this.wsl ? "in" : "on"} ${this.where()} first: they run the command this replaces.`;
+    if (this.serverRunning()) return `Stop Pikibun on ${computerName} under Self host first: it runs the command this replaces.`;
+    return "";
+  }
   get wsl(): boolean { return Boolean(this.target.wsl); }
   where(): string { return this.target.wsl ? wslName(this.target.wsl.distro) : computerName; }
   title(): string { return this.target.wsl ? wslName(this.target.wsl.distro) : computerTitle; }
@@ -308,7 +370,8 @@ export class LocalEnvironment {
 
   async install(check: () => Promise<LaunchProblem | null | undefined>): Promise<Outcome> {
     if (untracked(this.installing)) return { ok: false, error: "pikibun is already being installed." };
-    if (untracked(() => this.hostsRunning())) return { ok: false, error: `Stop the hosts that run in ${this.where()} first: they run the command this replaces.` };
+    const running = untracked(() => this.stopFirst());
+    if (running) return { ok: false, error: running };
     this.installError.set("");
     const { where, lines, result } = await this.runInstall();
     const failure = result.code !== 0 ? installFailure(lines, result, this.target) : undefined;
@@ -318,6 +381,7 @@ export class LocalEnvironment {
       return { ok: false, error: failure };
     }
     this.log("info", where === "app" ? "npm installed pikibun in Pikibun's own folder." : where === "wsl" ? `npm installed pikibun in ${this.where()}.` : "npm installed pikibun.");
+    await this.restartAll();
     if (where !== "global" && isVersion(commandUpdate.appVersion)) await Storage.setItem(this.updatedKey(), commandUpdate.appVersion).catch(() => undefined);
     if ((await check())?.kind === "missing") {
       const message = where === "app"
@@ -333,6 +397,11 @@ export class LocalEnvironment {
 }
 
 const environments = new Map<string, LocalEnvironment>();
+const environmentList = signal<LocalEnvironment[]>([]);
+
+export function staleCommands(): { environment: LocalEnvironment; stale: StaleCommand }[] {
+  return environmentList().flatMap(environment => { const stale = environment.stale(); return stale ? [{ environment, stale }] : []; });
+}
 
 export function localEnvironment(target: HostTarget = {}): LocalEnvironment {
   const key = environmentKey(target);
@@ -340,6 +409,8 @@ export function localEnvironment(target: HostTarget = {}): LocalEnvironment {
   if (!environment) {
     environment = new LocalEnvironment(target.wsl ? { wsl: target.wsl.distro ? { distro: target.wsl.distro } : {} } : {});
     environments.set(key, environment);
+    const created = environment;
+    void Promise.resolve().then(() => environmentList.update(list => [...list, created]));
   }
   return environment;
 }
@@ -458,11 +529,13 @@ export class LocalHost {
     this.channel = new CommandChannel<HostEvent, HostRequest>({
       launch: () => launcher(hostArgs(untracked(this.config).stateDir), target), before: () => this.environment.commandUpdated(), eventTypes: hostEventTypes,
       problem: (lines, code) => launchProblem(lines, code, target), subject: "The host",
+      onReady: version => this.environment.started(this.user, version),
       failure: (id, message, notReady) => ({ type: "result", id, ok: false, error: { code: notReady ? "unsupported" : "failed", message } }),
       onEvent: event => this.handleEvent(event),
       onOutput: line => this.log("info", line),
       onExit: (code, expected) => this.handleExit(code, expected),
     });
+    this.environment.use(this.user);
   }
 
   get id(): string { return untracked(this.config).id; }
@@ -537,6 +610,8 @@ export class LocalHost {
   }
 
   private handleExit(code: number | null | undefined, expected: boolean): void {
+    this.restartPending = false;
+    this.environment.exited(this.user);
     const wasRunning = untracked(this.state) !== "stopped";
     this.state.set("stopped");
     this.running.set(null);
@@ -549,6 +624,7 @@ export class LocalHost {
   }
 
   async refresh(server?: string): Promise<HostInspection | undefined> {
+    await this.fresh();
     const origin = untracked(this.config).server || server;
     this.inspecting.set(true);
     try {
@@ -618,6 +694,7 @@ export class LocalHost {
     if (untracked(this.config).resume) this.setResume(undefined);
     if (!this.channel.running || untracked(this.state) === "stopped") return { ok: true };
     const result = await this.channel.request({ type: "stop" });
+    await this.fresh();
     return result.ok ? { ok: true } : this.refuse(result.error.message);
   }
 
@@ -678,6 +755,7 @@ export class LocalHost {
     if (!result.ok && result.error.code !== "cancelled") current.error = result.error.message;
     this.current = undefined;
     update();
+    await this.fresh();
     if (!result.ok) return { ok: false, error: result.error.message };
     this.log("info", `Pi is signed in to ${name} in ${this.where()}.${untracked(this.state) === "stopped" ? "" : " Its models are offered from the host's next start."}`);
     await Promise.all([this.loadProviders(), this.refresh()]);
@@ -685,6 +763,20 @@ export class LocalHost {
   }
 
   private current?: SignInView & { login?: number; openBrowser?: (url: string) => void };
+  private restartPending = false;
+  private readonly user: CommandUser = { kind: "host", running: () => this.state() !== "stopped", restart: () => this.restartCommand() };
+
+  private restartCommand(): Promise<void> {
+    if (!this.channel.running) return Promise.resolve();
+    this.restartPending = true;
+    return this.fresh();
+  }
+
+  private async fresh(): Promise<void> {
+    if (!this.restartPending || untracked(this.state) !== "stopped" || untracked(this.signIn)?.state === "running") return;
+    this.restartPending = false;
+    if (this.channel.running) await this.channel.shutdown();
+  }
 
   private handleLogin(login: number, event: LoginEvent): void {
     const current = this.current;

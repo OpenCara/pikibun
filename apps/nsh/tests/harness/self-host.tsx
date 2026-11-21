@@ -8,12 +8,17 @@ import { ThisServerPanel } from "../../src/settings/SelfHost";
 
 const LOCAL = "http://127.0.0.1:7878";
 const SIGN_IN_TOKEN = "c".repeat(43);
-const params = embedder.params as { app?: unknown; command?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown; noToken?: unknown };
+const params = embedder.params as {
+  app?: unknown; command?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown; noToken?: unknown; cliVersion?: unknown; reports?: unknown; npmMs?: unknown;
+};
 let command = String(params.command ?? "ok");
 const sent = signal<string[]>([]);
-if (typeof params.appVersion === "string") {
+const cliVersion = typeof params.cliVersion === "string" ? params.cliVersion : undefined;
+let reports = typeof params.reports === "string" ? params.reports : undefined;
+if (typeof params.appVersion === "string" || cliVersion) {
   const ownCopy = typeof params.ownCopy === "string" ? params.ownCopy : null;
-  setCommandUpdate({ appVersion: params.appVersion, ownCopy: async () => ownCopy });
+  setCommandUpdate({ appVersion: typeof params.appVersion === "string" ? params.appVersion : "dev", ownCopy: async () => ownCopy,
+    ...(cliVersion ? { cliVersion, commandVersion: async () => null } : {}) });
 }
 
 function link(answer: (request: { type: string; id: number; [key: string]: unknown }, emit: (value: unknown) => void) => void, refuse: () => string[] | null): HostLink {
@@ -26,7 +31,7 @@ function link(answer: (request: { type: string; id: number; [key: string]: unkno
   setTimeout(() => {
     const lines = refuse();
     if (lines) { for (const line of lines) for (const listener of output) listener(line); exit(lines[0]!.includes("not found") ? 127 : 1); return; }
-    emit({ type: "ready" });
+    emit({ type: "ready", ...(reports ? { version: reports } : {}) });
   }, 1);
   return {
     send: message => answer(message as { type: string; id: number }, emit),
@@ -71,7 +76,7 @@ setHostLauncher(() => link((request, emit) => {
 setInstaller((): InstallRun => {
   sent.update(list => [...list, "install"]);
   const exits: ((result: { code?: number | null }) => void)[] = [];
-  setTimeout(() => { command = "ok"; for (const listener of exits) listener({ code: 0 }); }, 5);
+  setTimeout(() => { command = "ok"; if (cliVersion) reports = cliVersion; for (const listener of exits) listener({ code: 0 }); }, typeof params.npmMs === "number" ? params.npmMs : 5);
   return {
     line: installCommand("macos", "/bin/zsh", appCliFolder("macos", "/Users/ada/Library/Application Support/com.pikibun.app")).line,
     where: "app",

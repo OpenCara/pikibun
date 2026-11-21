@@ -29,7 +29,7 @@ export interface ServerStatus {
 }
 
 export type ServerEvent =
-  | { type: "ready" }
+  | { type: "ready"; version?: string }
   | { type: "result"; id: number; ok: true; inspection?: ServerInspection }
   | { type: "result"; id: number; ok: false; error: { message: string } }
   | ({ type: "status" } & ServerStatus)

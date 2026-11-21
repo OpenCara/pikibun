@@ -132,7 +132,7 @@ export interface HostError {
 }
 
 export type HostEvent =
-  | { type: "ready" }
+  | { type: "ready"; version?: string }
   | { type: "result"; id: number; ok: true; inspection?: HostInspection; providers?: LoginProvider[]; view?: LocalView;
     page?: LocalPage | null }
   | { type: "login"; login: number; event: LoginEvent }

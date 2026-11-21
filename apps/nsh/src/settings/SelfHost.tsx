@@ -39,7 +39,7 @@ export function ThisServerPanel(props: { server: ThisServer; signedInTo?: string
   void server.load().then(() => server.refresh());
   return (
     <SectionPage testID="settings-self-host">
-      <If when={server.problem()}>{problem => <CommandProblem kind={problem().kind} message={"message" in problem() ? (problem() as { message: string }).message : ""} server={server} />}</If>
+      <If when={server.problem() ?? (nativeEnvironment().stale() ? { kind: "outdated" as const } : null)}>{problem => <CommandProblem kind={problem().kind} message={"message" in problem() ? (problem() as { message: string }).message : ""} server={server} />}</If>
       <If when={nativeEnvironment().updating()}>
         <Section title="Pikibun's command" testID="self-host-updating">
           <CardBody>
@@ -71,7 +71,9 @@ function CommandProblem(props: { kind: "missing" | "outdated" | "failed"; messag
           else={
             <Banner tone="warning" title={update() ? `Update Pikibun's command on ${computerName}` : `Install Pikibun's command on ${computerName}`} actions={refresh()}>
               {update()
-                ? `${computerTitle}'s pikibun command is older than this app, which runs pikibun serve --stdio. Update it from npm here.`
+                ? (host.stale() && props.kind === "outdated" && !props.server.problem()
+                  ? `${computerTitle} runs pikibun ${host.stale()!.version}, older than the ${host.stale()!.wanted} this version of Pikibun comes with. Update it from npm here.`
+                  : `${computerTitle}'s pikibun command is older than this app, which runs pikibun serve --stdio. Update it from npm here.`)
                 : `Pikibun runs its server with the pikibun command, as pikibun serve does in a terminal. Install it from npm here: it needs Node.js 24 or newer (nodejs.org${computerTitle === "This Mac" ? ", or brew install node" : ""}).`}
             </Banner>
           }>
@@ -79,10 +81,11 @@ function CommandProblem(props: { kind: "missing" | "outdated" | "failed"; messag
         </If>
         <If when={props.kind !== "failed"}>
           <View style={{ flexDirection: "row" }}>
-            <Button variant="primary" icon="download" testID="self-host-install" busy={host.installing()} disabled={host.installing() || props.server.inspecting()}
+            <Button variant="primary" icon="download" testID="self-host-install" busy={host.installing()} disabled={host.installing() || props.server.inspecting() || Boolean(host.stopFirst())}
               label={host.installing() ? (update() ? "Updating pikibun" : "Installing pikibun") : update() ? "Update pikibun" : "Install pikibun"} onPress={install} />
           </View>
           <If when={host.installing()}><Small>npm is installing pikibun: this takes a minute. Its output is under Local hosts' Recent activity.</Small></If>
+          <If when={!host.installing() && host.stopFirst()}><Small testID="self-host-install-running">{host.stopFirst()}</Small></If>
           <Feedback error={host.installError() || action.error()} />
           <If when={host.installError()}>
             <Small>To install it in a terminal instead:</Small>

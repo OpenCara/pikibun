@@ -5,6 +5,7 @@ import { assertConnectorPlatform, assertPrerequisites, hostIsolation, loadConnec
 import type { LocalModels } from '../../../runner/src/local-pi.js';
 import { ConnectorSetupError } from '../../../runner/src/protocol.js';
 import { identityDirectory } from '../../../runner/src/identity.js';
+import { buildVersion } from '../../../../packages/shared/src/version.js';
 import { ConfigurationError } from '../config.js';
 import type { ServerEvent, ServerHostState, ServerInspection, ServerRequest, ServerStartRequest, ServerStatus } from '../../../../packages/shared/src/app-server-protocol.js';
 import { startLocalHost, type LocalHost } from './host.js';
@@ -165,5 +166,5 @@ export function runAppServer(args: string[]): void {
   transport.onClose(() => { void shutdown(); });
   process.once('SIGTERM', () => { void shutdown(); });
   process.once('SIGINT', () => { void shutdown(); });
-  emit({ type: 'ready' });
+  emit({ type: 'ready', ...(buildVersion ? { version: buildVersion } : {}) });
 }
