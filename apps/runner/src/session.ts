@@ -33,6 +33,7 @@ import { SessionTunnel } from "./session/tunnel.js";
 import { SudoPrompts } from "./sudo-prompts.js";
 import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
+import { namespaceExtensions, selectedNamespaces, toolNamespaces, WORKSPACE_TOOLS } from "./session/namespaces.js";
 import { CacheWarmers, cachedSettings, rememberRequests, sessionWarming } from "./session/cache-warming.js";
 import { defaultCacheWarmingMode, type SessionCacheWarming } from "../../../packages/shared/src/cache-warming.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
@@ -184,6 +185,7 @@ export class RunnerSession {
   private root!: Conversation;
   #shared!: Conversation;
   #extension!: Extension;
+  #namespaces: Extension[] = [];
   readonly #defined: SessionDefinitions;
   readonly #availability: ToolAvailability;
   #registry?: Registry;
@@ -324,7 +326,7 @@ export class RunnerSession {
     this.#defined = new SessionDefinitions({
       sessionId: binding.session.id, workspaceId: binding.session.workspaceId, windows: process.platform === "win32" && this.sandbox.isolated, config,
       tool: definition => definedTool(this.#toolContext, definition), registry: () => this.#registry, toolNames: () => this.tools.map(tool => tool.name),
-      added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); },
+      added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); this.groupTools(); },
     });
     const alreadyAllowed = async () => {};
     this.#commands = new SessionCommands({
@@ -628,10 +630,11 @@ export class RunnerSession {
       report: error => process.stderr.write(`Session ${this.binding.session.id}: cache warming failed: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`),
     }));
     this.#warmers = warmers;
-    const extension = defineExtension({ name: "workspace-tools", tools: this.tools, hooks: [renamedToolsHook(), warmers.hooks()] });
+    const extension = defineExtension({ name: WORKSPACE_TOOLS, tools: this.tools, hooks: [renamedToolsHook(), warmers.hooks()] });
     this.#extension = extension;
     registry.install(extension);
     this.#registry = registry;
+    this.groupTools();
     if (!this.#packed) {
       this.#builtins = new SessionBuiltins({ outputs: api => this.#calls.outputFiles(api) });
       for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
@@ -666,7 +669,7 @@ export class RunnerSession {
     const harness = this.harness;
     void harness.closed.then(end => { if (end.kind === "failed" && harness === this.harness) this.#failed = true; });
     this.root = await this.harness.root(context, { agent: {
-      model: this.modelRef, ...(resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {}), extensions: [extension],
+      model: this.modelRef, ...(resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {}), extensions: this.sessionExtensions(this.tools),
       tools: this.tools, instructions: this.agentInstructions("write"),
     } });
     await this.root.commit(async tx => {
@@ -706,6 +709,15 @@ export class RunnerSession {
       for (const run of Object.values((await this.metadata()).runs)) if (run.screening && run.status === "queued") void this.#queue.screen(run.key);
     }
     this.#activity?.start();
+  }
+
+  private groupTools(): void {
+    this.#namespaces = namespaceExtensions(this.tools, toolNamespaces(this.tools, this.#defined.definitions, this.#defined.servers));
+    for (const group of this.#namespaces) this.#registry?.install(group);
+  }
+
+  private sessionExtensions(enabled: readonly ToolRegistration[]): Extension[] {
+    return [...selectedNamespaces(this.#namespaces, enabled.map(tool => tool.name)), this.#extension, ...this.#defined.extensions];
   }
 
   private async resumeWork(): Promise<void> {
@@ -856,13 +868,14 @@ export class RunnerSession {
     const builtins = run.mode === "write" && this.#builtins
       ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
       : [];
+    const enabled = this.tools.filter(tool => !off.has(tool.name));
     const change: AgentChange = {
       ...(options.model ? { model: { provider: options.model.provider, modelId: options.model.modelId } } : {}),
       ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       ...(run.mode === "write" ? {
-        tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools).filter(tool => !own.has(tool.name)),
+        tools: [...enabled, ...extensions.flatMap(extension => extension.tools).filter(tool => !own.has(tool.name)),
           ...builtins.flatMap(extension => extension.tools ?? [])],
-        extensions: [this.#extension, ...this.#defined.extensions, ...extensions.map(extension => extension.extension), ...builtins],
+        extensions: [...this.sessionExtensions(enabled), ...extensions.map(extension => extension.extension), ...builtins],
         instructions: this.agentInstructions(options.access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
           new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name)))),
       } : {}),
@@ -1031,7 +1044,7 @@ export class RunnerSession {
     if (!host || !config) return [];
     const { chosen } = await this.extensionChoice();
     await this.openExtensions(chosen.map(item => item.source));
-    const { selected, created } = host.select(chosen.map(item => item.source));
+    const { selected, created } = host.select(chosen.map(item => item.source), this.#namespaces.flatMap(group => group.namespace ? [group.namespace.name] : []));
     for (const extension of created) this.#registry?.install(extension);
     return selected;
   }
@@ -1313,7 +1326,7 @@ export class RunnerSession {
       else {
         const agent = await shared.agent(context);
         next = await this.harness.createConversation({ ownership: { kind: "ownerless" }, agent: {
-          model: agent.model ?? this.modelRef, thinkingLevel: agent.thinkingLevel, extensions: [this.#extension, ...this.#defined.extensions],
+          model: agent.model ?? this.modelRef, thinkingLevel: agent.thinkingLevel, extensions: this.sessionExtensions(this.tools),
           tools: this.tools, instructions: this.agentInstructions("write"),
         } }, context);
       }

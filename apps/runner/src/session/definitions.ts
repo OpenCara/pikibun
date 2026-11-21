@@ -1,5 +1,6 @@
 import { defineExtension, type Extension, type Registry, type ToolRegistration } from "@earendil-works/pi-durable";
 import { bundledToolDefinitions, type BrokeredToolDefinition, type ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
+import type { RemoteMcpServerSummary } from "../../../../packages/shared/src/remote-mcp.js";
 import type { WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
 import { rememberToolDefinitions } from "../defined-tools.js";
 import { wholeForScripts } from "../script-output.js";
@@ -18,6 +19,7 @@ export interface SessionDefinitionsOptions {
 export class SessionDefinitions {
   #definitions: ToolDefinition[] = [];
   #extensions: Extension[] = [];
+  #servers: RemoteMcpServerSummary[] = [];
   readonly #notes = new Set<string>();
 
   constructor(private readonly options: SessionDefinitionsOptions) {}
@@ -28,6 +30,10 @@ export class SessionDefinitions {
 
   get extensions(): readonly Extension[] {
     return this.#extensions;
+  }
+
+  get servers(): readonly RemoteMcpServerSummary[] {
+    return this.#servers;
   }
 
   #note(name: string, what: string): void {
@@ -42,19 +48,20 @@ export class SessionDefinitions {
     const fetched = config.toolDefinitions ? await config.toolDefinitions().catch(() => undefined) : undefined;
     if (fetched) rememberToolDefinitions(fetched);
     const remote = await this.remote();
-    return [...(fetched ?? bundledToolDefinitions), ...remote];
+    if (remote.servers) this.#servers = remote.servers;
+    return [...(fetched ?? bundledToolDefinitions), ...remote.tools];
   }
 
   async current(name: string): Promise<BrokeredToolDefinition | undefined> {
-    const found = (await this.remote()).find(item => item.name === name);
+    const found = (await this.remote()).tools.find(item => item.name === name);
     return found?.kind === "brokered" && found.inputSchema ? found : undefined;
   }
 
-  private async remote(): Promise<readonly ToolDefinition[]> {
+  private async remote(): Promise<{ tools: readonly ToolDefinition[]; servers?: RemoteMcpServerSummary[] }> {
     const { workspaceId, config } = this.options;
-    if (!workspaceId || !config.extensions) return [];
+    if (!workspaceId || !config.extensions) return { tools: [] };
     const answer = await config.extensions.workspace(workspaceId).catch(() => undefined);
-    return answer?.remoteTools ?? [];
+    return { tools: answer?.remoteTools ?? [], ...(answer ? { servers: answer.remoteServers ?? [] } : {}) };
   }
 
   usable(definitions: readonly ToolDefinition[], own: readonly string[]): ToolDefinition[] {

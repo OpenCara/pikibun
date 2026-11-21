@@ -4,6 +4,7 @@ import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 import { parseMemberToolGroups, type MemberToolGroup } from "./tool-groups.js";
 import { parseManagedExtensions, type ManagedExtensionPin } from "./managed-extensions.js";
 import { parseToolDefinition, toolDefinitionLimits, type BrokeredToolDefinition } from "./tool-definitions.js";
+import { parseRemoteMcpServers, type RemoteMcpServerSummary } from "./remote-mcp.js";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -362,6 +363,7 @@ export interface WorkspaceExtensionsAnswer {
   toolGroups?: Record<string, MemberToolGroup>;
   ownerPrivate?: true;
   remoteTools?: BrokeredToolDefinition[];
+  remoteServers?: RemoteMcpServerSummary[];
 }
 
 function parseRemoteTools(value: unknown): BrokeredToolDefinition[] {
@@ -394,7 +396,8 @@ export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensi
   return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools,
     ...(typeof value.autoCache === "boolean" ? { autoCache: value.autoCache } : {}), ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
     ...(value.ownerPrivate === true ? { ownerPrivate: true as const } : {}),
-    ...(value.remoteTools !== undefined ? { remoteTools: parseRemoteTools(value.remoteTools) } : {}) };
+    ...(value.remoteTools !== undefined ? { remoteTools: parseRemoteTools(value.remoteTools) } : {}),
+    ...(value.remoteServers !== undefined ? { remoteServers: parseRemoteMcpServers(value.remoteServers) } : {}) };
 }
 
 export function parseExtensionsSync(value: unknown): ExtensionsSync {
