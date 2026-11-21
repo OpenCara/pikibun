@@ -99,6 +99,22 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   names stay: sessions made back then still hold records with those names and statuses, their views show them, their
   backups restore them, and their hosts compare a session's stored state as it is. New records are only ever
   `executing`, then `executed`, `failed` or `interrupted`.
+- **Images are fitted once, by whoever makes them, and the hook comes last.** `apps/runner/src/images.ts` holds the one
+  Photon processor, its host-wide line (`inTurn`, one image at a time, 8 waiting), its decode caps and timeout, and
+  the limits: the conversation model's `imageLimits`, each bounded by Pikibun's cap (`MAX_MODEL_IMAGE_LIMITS`,
+  1568×1568, 512 KB), so a model that declares tighter limits gets those. Pi falls back to 2000×2000 and 4.5 MiB for a
+  model that declares none, which is every catalog model today; a stored image lives in the session's database and
+  backups and is replayed in every later request, against prompt-cache writes and request-size limits, and Anthropic
+  scales anything over 1568 px down on its side anyway, so the cap keeps Pikibun's earlier size. `read`, browser screenshots and pasted images prepare their own, to the
+  model they go to, and so keep their own refusals (`read` answers that it's busy; a message is refused with 422). Every
+  other tool's images, code mode's `image()` and extension and MCP tools' among them, go through pi-durable's
+  `fit-images` `afterTool` hook (`fitImagesExtension`), with the same processor wrapped (`modelImages`): it is the last
+  of each conversation's extensions, so it fits what the other extensions' hooks leave. The hook decodes every image
+  it sees; an image the line itself prepared (its digest kept, 256 at most) that still fits is handed back as it is,
+  without a turn, so `read`'s result is never fitted twice nor left out because the line is full meanwhile. A busy line
+  leaves a hook's image out with a note, as Pi does for any image it can't prepare. A queued message's images were
+  fitted to the model it named, or the conversation's, when sent (and so are those a screening extension changes); when it runs, those its model takes smaller are fitted
+  again (`fitInputImages`), by their headers alone otherwise.
 - **Every call to the control plane is posted one way.** `ControlPlaneCalls` builds the request in one place, so each
   call carries the connector's version, and the activity, tunnel and branch reports share one body that checks the
   connection's generation before and after.

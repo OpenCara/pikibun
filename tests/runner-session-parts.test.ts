@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { crc32, deflateSync } from "node:zlib";
 import type { EgressGrant, EgressRepository } from "../packages/shared/src/network.js";
 import type { OperationRecord, AuthorizationResult, Operation } from "../packages/shared/src/types.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
@@ -32,7 +33,7 @@ import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/s
 import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session/piki.js";
 import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
 import { contextView, extensionView, lastRequest, sessionView, SessionUsage, usageView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
-import { INPUT_EMPTY, RunQueue, steersInto, submissionRequestId, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
+import { INPUT_EMPTY, RunQueue, steersInto, submissionRequestId, type RunContent, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
 import { ConversationIdle, type ConversationId } from "@earendil-works/pi-durable";
 import { ToolAvailability, type ToolAvailabilityOptions } from "../apps/runner/src/session/availability.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
@@ -868,7 +869,7 @@ async function queueFixture(t: TestContext, runs: Partial<Metadata["runs"][strin
     metadata: async () => structuredClone(state), mutate: async change => { change(state); },
     authorize: async actorId => { if (actorId === "github:9") throw new RunnerError(403, "revoked"); },
     requiredRefusal: async () => undefined, extensionChoice: async () => ({ chosen: [] }),
-    applyOptions: async (_conversation, run) => { events.push(`options ${run.key}`); }, drain: () => { events.push("drain"); queue.drain(); },
+    applyOptions: async (_conversation, run, content) => { events.push(`options ${run.key}`); return content; }, drain: () => { events.push("drain"); queue.drain(); },
     ...options,
   });
   const idle = async () => { for (let index = 0; index < 5; index++) { await lock; await new Promise(resolve => setImmediate(resolve)); } };
@@ -934,6 +935,32 @@ test("run queue: a run that settles after the session reopened is left alone; sc
   await images.queue.sweepInputs();
   assert.equal(await images.inputs.read("r0"), undefined, "a run that no longer waits loses its images");
   assert.deepEqual(events, ["options r0", "submit r0 \"go\""]);
+});
+
+test("run queue: images a screening extension changes are prepared to the limits of the message's model", async t => {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const checksum = Buffer.alloc(4);
+    checksum.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, checksum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(400, 0);
+  header.writeUInt32BE(100, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const wide = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), chunk("IHDR", header), chunk("IDAT", deflateSync(Buffer.alloc((400 * 3 + 1) * 100))), chunk("IEND", Buffer.alloc(0))]);
+  const host = { input: async () => ({ action: "continue", text: "look", images: [{ type: "image", data: wide.toString("base64"), mimeType: "image/png" }] }) };
+  const asked: Run[] = [];
+  const screening = await queueFixture(t, [{ screening: true, content: "hi" }], { hostExtensions: () => host as never,
+    imageLimits: async run => { asked.push(run); return { maxWidth: 100, maxHeight: 100, maxBytes: 512 * 1024 }; } });
+  await screening.queue.screen("r0");
+  assert.deepEqual(asked.map(run => run.key), ["r0"]);
+  const stored = await screening.inputs.read("r0");
+  assert.equal(stored?.length, 1);
+  assert.equal(Buffer.from(stored![0]!.data, "base64").readUInt32BE(16), 100);
 });
 
 test("run queue: only the running sender's next shared message, with the same options and no images, steers; anything else waits", () => {
@@ -1039,7 +1066,7 @@ function steerHarness() {
       };
     },
   };
-  const options = { harness: () => harness as never, applyOptions: async (_conversation: unknown, run: Run) => { events.push(`options ${run.key}`); } };
+  const options = { harness: () => harness as never, applyOptions: async (_conversation: unknown, run: Run, content: RunContent) => { events.push(`options ${run.key}`); return content; } };
   return { harness, options, events, submissions, flags, track };
 }
 
