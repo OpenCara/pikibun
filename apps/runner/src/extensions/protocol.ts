@@ -22,6 +22,12 @@ export interface ExtensionSkillFile {
   text: string;
 }
 
+export interface ListedSkill {
+  name: string;
+  description: string;
+  location: string;
+}
+
 export interface ExtensionSkill {
   name: string;
   description: string;
@@ -79,7 +85,7 @@ export interface ExtensionRequests {
   command: [Scoped & { name: string; args: string }, CommandAnswer];
   emit: [Scoped & { event: { type: string } & Record<string, unknown> }, null];
   input: [Scoped & { text: string; images: ImageContent[]; inputSource: "interactive" | "rpc" }, InputAnswer];
-  beforeAgentStart: [Scoped & { prompt: string; images?: ImageContent[] }, string];
+  beforeAgentStart: [Scoped & { prompt: string; images?: ImageContent[]; skills?: ListedSkill[] }, string];
   toolCall: [Scoped & { id: string; name: string; input: Record<string, unknown> }, { block?: string; input: Record<string, unknown> }];
   toolResult: [Scoped & { event: ToolResultEvent }, { content?: (TextContent | ImageContent)[]; isError?: boolean; details?: unknown } | null];
   context: [Scoped & { messages: Message[] }, Message[] | null];

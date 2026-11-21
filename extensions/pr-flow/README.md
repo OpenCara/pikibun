@@ -23,9 +23,10 @@ request made ready (with the time its review window ends), a push after that, a 
 
 The whole procedure is also a skill, `pull-request-flow`, filled in from the settings and offered through
 `resources_discover` (written to a folder of its own under the temporary directory, removed at `session_shutdown`).
-Once a host has asked for it (Pi at startup, Pikibun before each message, which copies it into the worktree's
-`.pikibun/skills`), the system prompt keeps only a short rule: when the flow applies, its steps in one sentence, and
-to read the skill before the first change in a clone. A host that never asks gets the whole procedure in the prompt.
+Where the skill is listed (`before_agent_start`'s `systemPromptOptions.skills` names it: Pi lists it at startup,
+Pikibun copies it into the worktree's `.pikibun/skills` before each message), the system prompt keeps only a short
+rule: when the flow applies, its steps in one sentence, and to read the skill before the first change in a clone.
+Where it isn't, the prompt gets the whole procedure.
 
 ## Settings
 

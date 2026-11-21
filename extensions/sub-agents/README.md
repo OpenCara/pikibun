@@ -19,10 +19,10 @@ It registers no tool. It adds the policy to each message's system prompt (`befor
 host qualified (`tool_result`). The `sessions` tool's own rules still apply: the agent starts sessions only on its
 sender's own hosts (and this session's host), as that sender, within the workspace's limits.
 
-The policy is also a skill, `sub-agents`, filled in from the settings and offered through `resources_discover`. Once a
-host has asked for it (Pi at startup, Pikibun before each message), the system prompt keeps only when to hand work
-over, how many per message, and to read the skill before `sessions create`. A host that never asks gets the whole
-policy in the prompt; with `max-sub-agents` 0 there is no skill.
+The policy is also a skill, `sub-agents`, filled in from the settings and offered through `resources_discover`. Where the
+skill is listed (`before_agent_start`'s `systemPromptOptions.skills` names it), the system prompt keeps only when to
+hand work over, how many per message, and to read the skill before `sessions create`. Where it isn't, the prompt gets
+the whole policy; with `max-sub-agents` 0 there is no skill.
 
 ## Settings
 

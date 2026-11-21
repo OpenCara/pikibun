@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage, type Context as ModelContext, type ImageContent, type Message, type Model, type TextContent } from "@earendil-works/pi-ai";
 import { createEventBus, createExtensionRuntime, ExtensionRunner, SessionManager, type AgentToolResult, type ExtensionActions, type ExtensionContext,
   type ExtensionContextActions, type ExtensionFactory, type ModelRegistry, type ToolCallEvent, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
@@ -313,7 +313,9 @@ export class ExtensionWorker {
     if (!runner.hasHandlers("before_agent_start")) return "";
     const { buildSystemPrompt } = await import(new URL("./core/system-prompt.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href) as
       { buildSystemPrompt(options: { cwd: string; selectedTools?: string[] }): string };
-    const options = { cwd: this.options.directory, selectedTools: [] as string[] };
+    const skills = (params.skills ?? []).filter(skill => typeof skill?.name === "string" && typeof skill.location === "string")
+      .map(skill => ({ name: skill.name, description: String(skill.description ?? ""), filePath: skill.location, baseDir: dirname(skill.location), disableModelInvocation: false }));
+    const options = { cwd: this.options.directory, selectedTools: [] as string[], ...(skills.length ? { skills: skills as never[] } : {}) };
     const base = buildSystemPrompt(options);
     const result = await runner.emitBeforeAgentStart({ messageType: "user", prompt: params.prompt, ...(params.images?.length ? { images: params.images } : {}) }, options);
     const final = buildSystemPrompt(result.systemPromptOptions as never);

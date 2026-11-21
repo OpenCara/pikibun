@@ -184,7 +184,7 @@ test("piki:sub-agents' skill is its policy, and its prompt keeps when, and how m
   assert.equal(subAgentsRule(none, state), subAgentsPrompt(none, state), "with none allowed, the one line says so, and there is no skill to read");
 });
 
-test("in a session's extensions, pr-flow and sub-agents offer their skills through resources_discover, and shorten their prompts once a host asked", async t => {
+test("in a session's extensions, pr-flow and sub-agents offer their skills through resources_discover, and shorten their prompts only where the skill is listed", async t => {
   const root = await scratch(t);
   const loaded = (await loadInstalled(new ExtensionStore(join(root, "state")), connectorPikiExtensions.filter(item => ["pr-flow", "sub-agents"].includes(item.info.name))));
   let subAgents: Record<string, string> = { "max-sub-agents": "2" };
@@ -204,19 +204,23 @@ test("in a session's extensions, pr-flow and sub-agents offer their skills throu
     ["piki:sub-agents", [["sub-agents", "SKILL.md", ["SKILL.md"]]]],
   ]);
   assert.match(provided[0]!.skills[0]!.files[0]!.text, /4\. Wait for review: 45 minutes/, "filled in from the settings");
-  const next = await session.beforeAgentStart("Fix the parser", undefined);
+  const unlisted = await session.beforeAgentStart("Fix the parser", undefined);
+  assert.match(unlisted["piki:pr-flow"]!, /4\. Wait for review: 45 minutes/, "asked for its skill but not told it is listed (a copy that failed, say), it keeps the whole procedure");
+  const listed = [{ name: "pull-request-flow", description: "The flow", location: ".pikibun/skills/pr-flow/pull-request-flow/SKILL.md" },
+    { name: "sub-agents", description: "Sub-agents", location: ".pikibun/skills/sub-agents/sub-agents/SKILL.md" }];
+  const next = await session.beforeAgentStart("Fix the parser", undefined, listed);
   assert.match(next["piki:pr-flow"]!, /read the pull-request-flow skill/);
   assert.doesNotMatch(next["piki:pr-flow"]!, /4\. Wait for review/);
   assert.match(next["piki:sub-agents"]!, /read the sub-agents skill/);
+  assert.match((await session.beforeAgentStart("x", undefined, listed.slice(1)))["piki:pr-flow"]!, /4\. Wait for review/, "each looks for its own skill");
   subAgents = { "max-sub-agents": "0" };
   assert.deepEqual((await session.skills(["piki:sub-agents"])).length, 0, "with no sub-agents allowed there is nothing to read");
-  assert.match((await session.beforeAgentStart("x", undefined))["piki:sub-agents"]!, /lets no message start sub-agent sessions/);
+  assert.match((await session.beforeAgentStart("x", undefined, listed))["piki:sub-agents"]!, /lets no message start sub-agent sessions/);
 });
 
-test("a session copies its extensions' skills into the worktree and lists them for the model, with or without piki:skills, and /skill: sends them", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
-  const root = await scratch(t);
-  const loaded = (await loadInstalled(new ExtensionStore(join(root, "extensions")))).filter(item => item.summary.source === "piki:pr-flow");
-  let answer = { extensions: parseWorkspaceExtensions([{ source: "piki:pr-flow" }]), automaticTools: true };
+const sessionOptions = { skip: !["linux", "darwin"].includes(process.platform) };
+
+async function startSession(t: { after(fn: () => unknown): void }, root: string, extensions?: { loaded: Awaited<ReturnType<typeof loadInstalled>>; answer: () => unknown }) {
   const prompts: string[] = [];
   const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow: 1_000_000 }] });
   const respond: FauxResponseFactory = async request => {
@@ -238,7 +242,7 @@ test("a session copies its extensions' skills into the worktree and lists them f
     connectorId: "host-connector", allowFaux: true, unsandboxed: true,
     authorize: async input => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    extensions: { installed: () => loaded, workspace: async () => answer },
+    ...(extensions ? { extensions: { installed: () => extensions.loaded, workspace: async () => extensions.answer() as never } } : {}),
   });
   await service.initialize();
   t.after(() => service.close());
@@ -249,7 +253,6 @@ test("a session copies its extensions' skills into the worktree and lists them f
   };
   const session = await service.provision(target, await claims("create"));
   const worktree = (session as unknown as { sandbox: { hostWorktree: string } }).sandbox.hostWorktree;
-  await put(join(worktree, ".pikibun", "skills", "stale", "old", "SKILL.md"), skillText("old", "Left by an earlier run"));
   let sent = 0;
   const send = async (content: string) => {
     const requestId = `r${sent++}`;
@@ -257,6 +260,15 @@ test("a session copies its extensions' skills into the worktree and lists them f
     for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
     return session.view();
   };
+  return { session, worktree, send, prompts };
+}
+
+test("a session copies its extensions' skills into the worktree and lists them for the model, with or without piki:skills, and /skill: sends them", sessionOptions, async t => {
+  const root = await scratch(t);
+  const loaded = (await loadInstalled(new ExtensionStore(join(root, "extensions")))).filter(item => item.summary.source === "piki:pr-flow");
+  let answer = { extensions: parseWorkspaceExtensions([{ source: "piki:pr-flow" }]), automaticTools: true };
+  const { session, worktree, send, prompts } = await startSession(t, root, { loaded, answer: () => answer });
+  await put(join(worktree, ".pikibun", "skills", "stale", "old", "SKILL.md"), skillText("old", "Left by an earlier run"));
   const copy = join(worktree, ".pikibun", "skills", "pr-flow", "pull-request-flow", "SKILL.md");
 
   await send("hello");
@@ -279,4 +291,12 @@ test("a session copies its extensions' skills into the worktree and lists them f
   await send("again");
   assert.doesNotMatch(prompts.at(-1)!, /pull-request-flow/, "turned off, its skill goes with it");
   await assert.rejects(access(copy), "and its copy is removed");
+});
+
+test("a session without extensions still clears the copies an earlier run left", sessionOptions, async t => {
+  const root = await scratch(t);
+  const { worktree, send } = await startSession(t, root);
+  await put(join(worktree, ".pikibun", "skills", "pr-flow", "pull-request-flow", "SKILL.md"), skillText("pull-request-flow", "An old copy"));
+  await send("hello");
+  await assert.rejects(access(join(worktree, ".pikibun", "skills", "pr-flow")), "nothing lists it, and nothing is left for the agent to read with old settings");
 });

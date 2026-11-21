@@ -577,6 +577,11 @@ export function prFlowRule(settings: PrFlowSettings, flows: readonly PullRequest
   return lines.join("\n");
 }
 
+export function skillListed(event: unknown, name: string): boolean {
+  const skills = (event as { systemPromptOptions?: { skills?: unknown } } | undefined)?.systemPromptOptions?.skills;
+  return Array.isArray(skills) && skills.some(item => (item as { name?: unknown } | null)?.name === name);
+}
+
 export class SkillFolder {
   #directory: string | undefined;
 
@@ -614,21 +619,16 @@ export const prFlowExtension: ExtensionFactory = pi => {
   const clones = (worktree: string | undefined) => (directory: string) => !!worktree && existsSync(join(worktree, directory, ".git"));
 
   const skill = new SkillFolder("pi-pr-flow-");
-  let offered = false;
 
   pi.on("resources_discover", () => {
-    offered = false;
-    try {
-      const path = skill.write(PR_FLOW_SKILL, prFlowSkill(settings()));
-      offered = true;
-      return { skillPaths: [path] };
-    } catch { return undefined; }
+    try { return { skillPaths: [skill.write(PR_FLOW_SKILL, prFlowSkill(settings()))] }; }
+    catch { return undefined; }
   });
 
   pi.on("session_shutdown", () => { skill.remove(); });
 
   pi.on("before_agent_start", event => ({
-    systemPrompt: `${event.systemPrompt}\n\n${offered ? prFlowRule(settings(), state.flows) : prFlowPrompt(settings(), state.flows)}`,
+    systemPrompt: `${event.systemPrompt}\n\n${skillListed(event, PR_FLOW_SKILL) ? prFlowRule(settings(), state.flows) : prFlowPrompt(settings(), state.flows)}`,
   }));
 
   pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {

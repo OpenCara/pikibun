@@ -83,7 +83,9 @@ anyway: they are on the host (or in the extension's process), outside the worktr
 - **Listed whenever the extension is on.** An extension's skills are listed with the repositories' and answer to
   `/skill:name`, whatever `piki:skills` says: the workspace's owners chose the extension, as the host's owner
   installed it, and the switch is for repositories' skills, which anyone who can push writes. The list says that
-  skills under `.pikibun/skills` come with the workspace's extensions and are replaced by the next copy.
+  skills under `.pikibun/skills` come with the workspace's extensions and aren't to be edited. A copy is written again
+  when the extension's skill changes, not when the agent edited it, as the session doesn't read the copies back.
+  A session without extensions still clears what an earlier run copied.
 - **What an extension sends is checked.** Names must be command names, a description is required, file paths may not
   leave the skill's folder or start with a dot, and a skill whose own file couldn't be written isn't listed.
 
@@ -105,9 +107,11 @@ sub-agent defaults and limits.
   skill before the first change in a clone, and that each step's note says what comes next. `sub-agents`: when to
   hand work over, how many per message, and to read the skill before `sessions create`. With `max-sub-agents` 0 there
   is no skill, only the line that says none may start.
-- **Only where the host lists the skill.** An extension gives the short rule only once `resources_discover` reached
-  it in that session, which a connector from before phase 2 never emits: there, and in a Pi that didn't discover
-  resources, it gives the whole procedure as before. Pi itself emits it at startup and lists the skill.
+- **Only where the skill is listed.** An extension gives the short rule only when its own skill is among
+  `systemPromptOptions.skills` of its `before_agent_start` event, which is where Pi puts the skills it lists. The
+  session fills it with the extension skills its prompt lists, so a skill whose copy failed, or a look that ran out of
+  time, leaves the whole procedure in the prompt. A connector from before phase 2 passes none, so it gets the whole
+  procedure too; Pi itself lists the skill once `resources_discover` gave it.
 - **Why it is safe enough without #343's eval.** The procedure the model needs at each step of `pr-flow` is also in
   the note added to the step's tool result (open the draft, make it ready, wait until, merge or hand over), which
   this change leaves as it was, and the short rule names every step. #343's eval would still tell whether the

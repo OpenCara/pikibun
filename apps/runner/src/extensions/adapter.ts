@@ -12,7 +12,7 @@ import { noPikiSession, type PikiSession } from "./piki/command.js";
 import { wholeForScripts } from "../script-output.js";
 import { modelCallSources } from "./complete.js";
 import type { CommandAnswer, CompleteHandler, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionSkill,
-  ExtensionToolDescription } from "./protocol.js";
+  ExtensionToolDescription, ListedSkill } from "./protocol.js";
 import { addedPrompt, directChannel, ExtensionWorker, modelDescription } from "./worker.js";
 import { ProcessChannel } from "./process.js";
 import { extensionNamespace, namespaceKey, reservedNamespaceKeys } from "../session/namespaces.js";
@@ -355,13 +355,14 @@ export class SessionExtensions {
     return this.each({ type: "session_start", reason: "startup" });
   }
 
-  async beforeAgentStart(prompt: string, images: ImageContent[] | undefined): Promise<Record<string, string>> {
+  async beforeAgentStart(prompt: string, images: ImageContent[] | undefined, skills: readonly ListedSkill[] = []): Promise<Record<string, string>> {
     const prompts: Record<string, string> = {};
     await this.each({ type: "agent_start" });
     for (const extension of this.#opened) {
       await this.one(extension, "before_agent_start", async settings => {
         if (!extension.handlers.has("before_agent_start")) return;
-        const text = await request(this.host, extension, "beforeAgentStart", { source: extension.source, settings, prompt, ...(images?.length ? { images } : {}) });
+        const text = await request(this.host, extension, "beforeAgentStart", { source: extension.source, settings, prompt, ...(images?.length ? { images } : {}),
+          ...(skills.length ? { skills: [...skills] } : {}) });
         if (text) prompts[extension.source] = text;
       });
     }

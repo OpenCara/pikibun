@@ -345,7 +345,8 @@ export class RunnerSession {
     });
     this.#skills = new SessionSkills({ find, read, text: piText, provided: async () => {
       const host = this.#hostExtensions;
-      if (!host || !this.config.extensions || this.closing || this.#packed) return [];
+      if (this.closing || this.#packed) return [];
+      if (!host || !this.config.extensions) return skillFiles.sync([]);
       const sources = (await this.extensionChoice()).chosen.map(item => item.source).filter(source => host.isOpen(source));
       return skillFiles.sync(await host.skills(sources));
     } });
@@ -929,7 +930,9 @@ export class RunnerSession {
     if (run.mode !== "write" || !this.#hostExtensions?.extensions.length) return;
     const text = typeof content === "string" ? content : (content ?? []).flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
     const images = typeof content === "string" ? [] : (content ?? []).flatMap(part => part.type === "image" ? [{ type: "image" as const, data: part.data, mimeType: part.mimeType }] : []);
-    const prompts = extensions.length ? await this.#hostExtensions.beforeAgentStart(text, images.length ? images : undefined).catch(() => ({})) : {};
+    const listed = skills.filter(skill => skill.origin !== undefined && skill.listed && skill.description)
+      .map(skill => ({ name: skill.title, description: skill.description!, location: skill.path }));
+    const prompts = extensions.length ? await this.#hostExtensions.beforeAgentStart(text, images.length ? images : undefined, listed).catch(() => ({})) : {};
     await conversation.commit(async tx => { (await tx.doc(ExtensionPrompts, conversation.id)).prompts = prompts; }, context);
   }
 

@@ -233,6 +233,11 @@ export function subAgentsRule(settings: SubAgentsSettings, state: PromptState): 
   ].join("\n");
 }
 
+function skillListed(event: unknown, name: string): boolean {
+  const skills = (event as { systemPromptOptions?: { skills?: unknown } } | undefined)?.systemPromptOptions?.skills;
+  return Array.isArray(skills) && skills.some(item => (item as { name?: unknown } | null)?.name === name);
+}
+
 class SkillFolder {
   #directory: string | undefined;
 
@@ -261,17 +266,12 @@ export const subAgentsExtension: ExtensionFactory = pi => {
   const state = new SubAgentsState();
 
   const skill = new SkillFolder();
-  let offered = false;
 
   pi.on("resources_discover", () => {
     const current = settings();
-    offered = false;
     if (current.maxSubAgents === 0) return undefined;
-    try {
-      const path = skill.write(SUB_AGENTS_SKILL, subAgentsSkill(current, state));
-      offered = true;
-      return { skillPaths: [path] };
-    } catch { return undefined; }
+    try { return { skillPaths: [skill.write(SUB_AGENTS_SKILL, subAgentsSkill(current, state))] }; }
+    catch { return undefined; }
   });
 
   pi.on("session_shutdown", () => { skill.remove(); });
@@ -279,7 +279,7 @@ export const subAgentsExtension: ExtensionFactory = pi => {
   pi.on("before_agent_start", event => {
     state.newMessage();
     const current = settings();
-    return { systemPrompt: `${event.systemPrompt}\n\n${offered ? subAgentsRule(current, state) : subAgentsPrompt(current, state)}` };
+    return { systemPrompt: `${event.systemPrompt}\n\n${skillListed(event, SUB_AGENTS_SKILL) ? subAgentsRule(current, state) : subAgentsPrompt(current, state)}` };
   });
 
   pi.on("tool_call", (event: ToolCallEvent) => {
