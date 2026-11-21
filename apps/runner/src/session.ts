@@ -7,6 +7,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
 import { ConversationIdle, createRegistry, defineExtension, Harness, InboxDoc, UsageDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import type { ImageLimits } from "@earendil-works/pi-durable/tools";
 import type { AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, WithdrawResult } from "../../../packages/shared/src/types.js";
 import { accessModes, sessionToolNames, thinkingLevels } from "../../../packages/shared/src/types.js";
 import type { SessionsToolRequest, SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
@@ -35,6 +36,7 @@ import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
 import { namespaceExtensions, selectedNamespaces, toolNamespaces, WORKSPACE_TOOLS } from "./session/namespaces.js";
 import { CacheWarmers, cachedSettings, rememberRequests, sessionWarming } from "./session/cache-warming.js";
+import { ProviderReleases, sessionReleases } from "./session/provider-release.js";
 import { defaultCacheWarmingMode, type SessionCacheWarming } from "../../../packages/shared/src/cache-warming.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import { confinedLaunch, ProcessChannel, refusedChannel, sandboxLaunch } from "./extensions/process.js";
@@ -56,7 +58,7 @@ import { entryImages } from "./session/entries.js";
 import { ArtifactContent, ArtifactIndex, listArtifacts, readArtifact } from "./session/artifacts.js";
 import { artifactRequest, type Artifact, type ArtifactSummary } from "../../../packages/shared/src/artifacts.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
-import { MessageInputs, prepareMessageImages } from "./session/inputs.js";
+import { fitInputImages, MessageInputs, prepareMessageImages } from "./session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import { agentInstructions, type InstructionsMode } from "./session/instructions.js";
@@ -71,7 +73,7 @@ import { definedTool } from "./session/tools/defined.js";
 import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
-import { requeue, RunQueue, submissionRequestId } from "./session/run-queue.js";
+import { requeue, RunQueue, submissionRequestId, type RunContent } from "./session/run-queue.js";
 import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, SessionCommands, type ExtensionCommand } from "./session/commands.js";
 import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
 import { addTitleUsage, titleRequestInput, titleTimeoutMs, writeTitle } from "./session/titles.js";
@@ -80,7 +82,7 @@ import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
 import {
   hostGitLfs, Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
-import { thumbnailImage } from "./images.js";
+import { fitImagesExtension, modelImageLimits, thumbnailImage, tightestImageLimits } from "./images.js";
 import type { GitRemote } from "./git-remote.js";
 import type { RepositoryCache } from "./repo-cache.js";
 import type { ResourceConfig } from "./resources.js";
@@ -241,6 +243,7 @@ export class RunnerSession {
   #sudoOffered = false;
   readonly #titles = new Set<AbortController>();
   #warmers: CacheWarmers | undefined;
+  #releases: ProviderReleases | undefined;
   readonly #warmingSettings = cachedSettings(async (): Promise<SessionCacheWarming> =>
     this.config.cacheWarming ? this.config.cacheWarming(this.binding.session.id) : { mode: defaultCacheWarmingMode, child: false });
 
@@ -351,7 +354,9 @@ export class RunnerSession {
       exclusive: operation => this.exclusive(operation), metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), requiredRefusal: open => this.requiredRefusal(open),
       extensionChoice: () => this.extensionChoice(), applyOptions: (conversation, run, content) => this.applyOptions(conversation, run, content),
+      imageLimits: run => this.uploadImageLimits(run.options),
       drain: () => this.drainQueue(),
+      settled: conversationId => this.#releases?.touch(conversationId),
     });
     this.#piki = new SessionPiki({
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
@@ -624,15 +629,23 @@ export class RunnerSession {
     const own = this.buildTools();
     this.tools = [...own, ...await this.#defined.load(own.map(tool => tool.name))];
     this.#warmers?.close();
-    const warmers: CacheWarmers = new CacheWarmers(sessionWarming({
+    this.#releases?.close();
+    const releases: ProviderReleases = new ProviderReleases(sessionReleases({
+      harness: (): Harness | undefined => (this.closing || this.#releases !== releases ? undefined : this.harness),
+      warming: id => this.#warmers?.warming.includes(id) ?? false,
+      report: error => process.stderr.write(`Session ${this.binding.session.id}: releasing an idle conversation's provider resources failed: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`),
+    }));
+    this.#releases = releases;
+    const warmers: CacheWarmers = new CacheWarmers({ ...sessionWarming({
       harness: (): Harness | undefined => (this.closing || this.#warmers !== warmers ? undefined : this.harness), metadata: () => this.metadata(),
       settings: this.#warmingSettings,
       report: error => process.stderr.write(`Session ${this.binding.session.id}: cache warming failed: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`),
-    }));
+    }), ended: id => releases.touch(id) });
     this.#warmers = warmers;
-    const extension = defineExtension({ name: WORKSPACE_TOOLS, tools: this.tools, hooks: [renamedToolsHook(), warmers.hooks()] });
+    const extension = defineExtension({ name: WORKSPACE_TOOLS, tools: this.tools, hooks: [renamedToolsHook(), warmers.hooks(), ...releases.hooks()] });
     this.#extension = extension;
     registry.install(extension);
+    registry.install(fitImagesExtension);
     this.#registry = registry;
     this.groupTools();
     if (!this.#packed) {
@@ -669,7 +682,7 @@ export class RunnerSession {
     const harness = this.harness;
     void harness.closed.then(end => { if (end.kind === "failed" && harness === this.harness) this.#failed = true; });
     this.root = await this.harness.root(context, { agent: {
-      model: this.modelRef, ...(resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {}), extensions: this.sessionExtensions(this.tools),
+      model: this.modelRef, ...(resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {}), extensions: [...this.sessionExtensions(this.tools), fitImagesExtension],
       tools: this.tools, instructions: this.agentInstructions("write"),
     } });
     await this.root.commit(async tx => {
@@ -749,8 +762,8 @@ export class RunnerSession {
             continue;
           }
         } else {
-          await this.applyOptions(conversation, run, content);
-          submission = await conversation.submit({ type: "input", content, requestId: submissionRequestId(run) }, context);
+          const fitted = await this.applyOptions(conversation, run, content);
+          submission = await conversation.submit({ type: "input", content: fitted, requestId: submissionRequestId(run) }, context);
         }
       } else submission = await this.harness.submission(run.submissionId as SubmissionId, context);
       if (submission) {
@@ -848,7 +861,14 @@ export class RunnerSession {
     this.#queue.drain();
   }
 
-  private async applyOptions(conversation: Conversation, run: Run, content?: string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]): Promise<void> {
+  private async applyOptions(conversation: Conversation, run: Run, content: RunContent): Promise<RunContent> {
+    await this.configureRun(conversation, run, content);
+    if (typeof content === "string") return content;
+    const ref = (await conversation.agent(context)).model ?? this.modelRef;
+    return fitInputImages(content, modelImageLimits(this.models.getModel(ref.provider, ref.modelId)));
+  }
+
+  private async configureRun(conversation: Conversation, run: Run, content: RunContent): Promise<void> {
     let options = run.options ?? {};
     if (options.auto) {
       const chosen = run.auto ?? await this.chooseAutoModel(conversation, run, options.auto, content);
@@ -875,7 +895,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...enabled, ...extensions.flatMap(extension => extension.tools).filter(tool => !own.has(tool.name)),
           ...builtins.flatMap(extension => extension.tools ?? [])],
-        extensions: [...this.sessionExtensions(enabled), ...extensions.map(extension => extension.extension), ...builtins],
+        extensions: [...this.sessionExtensions(enabled), ...extensions.map(extension => extension.extension), ...builtins, fitImagesExtension],
         instructions: this.agentInstructions(options.access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
           new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name)))),
       } : {}),
@@ -1142,6 +1162,20 @@ export class RunnerSession {
     return open;
   }
 
+  private async uploadImageLimits(options: unknown): Promise<ImageLimits> {
+    const ref = (value: unknown): { provider: string; modelId: string } | undefined => {
+      const model = value as { provider?: unknown; modelId?: unknown } | null | undefined;
+      return model && typeof model === "object" && typeof model.provider === "string" && typeof model.modelId === "string"
+        ? { provider: model.provider, modelId: model.modelId } : undefined;
+    };
+    const chosen = options && typeof options === "object" ? options as { model?: unknown; auto?: unknown } : {};
+    const listed = chosen.auto && typeof chosen.auto === "object" ? (chosen.auto as { candidates?: unknown }).candidates : undefined;
+    const candidates = Array.isArray(listed) ? listed.flatMap(item => ref(item) ?? []) : [];
+    const targets = candidates.length ? candidates
+      : [ref(chosen.model) ?? (await this.#shared.agent(context).catch(() => undefined))?.model ?? this.modelRef];
+    return tightestImageLimits(targets.map(target => modelImageLimits(this.models.getModel(target.provider, target.modelId))));
+  }
+
   private async requireImageModel(options: ChatOptions | undefined): Promise<void> {
     const target = options?.model ?? (await this.#shared.agent(context)).model ?? this.modelRef;
     const model = this.models.getModel(target.provider, target.modelId);
@@ -1163,7 +1197,7 @@ export class RunnerSession {
     if ((input.admissionId !== undefined && (mode !== "write" || typeof input.admissionId !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(input.admissionId)))
       || (this.config.connectorId && mode === "write" && input.admissionId === undefined))
       throw new RunnerError(400, "Invalid or missing Worker write admission");
-    const prepared = images.length ? await prepareMessageImages(images) : [];
+    const prepared = images.length ? await prepareMessageImages(images, await this.uploadImageLimits(input.options)) : [];
     const content = input.content;
     const screen = (await this.extensionGate()).screen || parseCommand(content) !== undefined;
     return this.exclusive(async () => {
@@ -1326,7 +1360,7 @@ export class RunnerSession {
       else {
         const agent = await shared.agent(context);
         next = await this.harness.createConversation({ ownership: { kind: "ownerless" }, agent: {
-          model: agent.model ?? this.modelRef, thinkingLevel: agent.thinkingLevel, extensions: this.sessionExtensions(this.tools),
+          model: agent.model ?? this.modelRef, thinkingLevel: agent.thinkingLevel, extensions: [...this.sessionExtensions(this.tools), fitImagesExtension],
           tools: this.tools, instructions: this.agentInstructions("write"),
         } }, context);
       }
@@ -1628,6 +1662,7 @@ export class RunnerSession {
     this.#resumed = false;
     this.#activity?.stop();
     this.#warmers?.close();
+    this.#releases?.close();
     const tunnel = this.#tunnel;
     this.#tunnel = undefined;
     await tunnel?.close().catch(() => {});

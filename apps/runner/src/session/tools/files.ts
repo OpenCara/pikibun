@@ -3,7 +3,7 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "../../file-operations.js";
 import { commandLimits } from "../../host-config.js";
-import { prepareImage, type FileContent } from "../../images.js";
+import { conversationImageLimits, prepareImage, type FileContent } from "../../images.js";
 import { RunnerError } from "../../protocol.js";
 import { editTarget, findText, GREP_LINE_CHARS, PI_OUTPUT_LIMITS, grepText, imageText, LS_DEFAULT_ENTRIES, lsText, outsideWorktree, PathRefusal, piParameters, prepareEditArguments, readText, runPiEdit,
   worktreePath, type EditInput } from "../../pi-file-tools.js";
@@ -75,7 +75,7 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
           try { read = readText(file.text, args.offset, args.limit, inScriptCall()); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid range"); }
           return piResult(attribution, read.text, read.details);
         }
-        const prepared = await prepareImage(file.image, file.mimeType);
+        const prepared = await prepareImage(file.image, await conversationImageLimits(api));
         if ("error" in prepared) return { output: [], isError: true, diagnostics: [{ severity: "error" as const, code: "image", message: prepared.error }] };
         const { image } = prepared;
         return { output: [{ type: "text" as const, text: imageText(image.mimeType) }, { type: "image" as const, data: image.data, mimeType: image.mimeType }], details: { pikibun: attribution } };

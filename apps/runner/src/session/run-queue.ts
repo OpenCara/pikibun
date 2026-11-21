@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { ConversationIdle, type CompactionSettings, type Conversation, type ConversationId, type Harness, type SettledSubmissionRecord, type Submission,
   type SubmissionId, type SubmissionRecord } from "@earendil-works/pi-durable";
+import type { ImageLimits } from "@earendil-works/pi-durable/tools";
 import { parseChatImages } from "../../../../packages/shared/src/chat-images.js";
 import type { HostCompaction } from "../../../../packages/shared/src/host-config.js";
 import type { ChosenExtension } from "../../../../packages/shared/src/host-extensions.js";
@@ -73,8 +74,10 @@ export interface RunQueueOptions {
   authorize(actorId: string, permission: "ask" | "write"): Promise<unknown>;
   requiredRefusal(open: boolean): Promise<string | undefined>;
   extensionChoice(): Promise<{ chosen: ChosenExtension[] }>;
-  applyOptions(conversation: Conversation, run: Run, content: RunContent): Promise<void>;
+  applyOptions(conversation: Conversation, run: Run, content: RunContent): Promise<RunContent>;
+  imageLimits?(run: Run): Promise<ImageLimits>;
   drain(): void;
+  settled?(conversationId: number): void;
 }
 
 export class RunQueue {
@@ -98,6 +101,7 @@ export class RunQueue {
       if (!joined && observed.mode === "write") void this.options.hostExtensions()?.agentEnd([], settled.status !== "done").catch(() => {});
       const conversation = await harness.conversation(observed.conversationId as ConversationId, context);
       await conversation?.waitForIdle(context);
+      this.options.settled?.(observed.conversationId);
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
       const cause = settled.status === "unanswered" && settled.reason === "model_error" && !compaction ? modelFailureCause(settled.detail) : undefined;
       const failed = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model");
@@ -247,8 +251,8 @@ export class RunQueue {
           meta.runs[run.key]!.started = true;
           meta.runs[run.key]!.startEntry = transcript.entries.at(-1)?.id ?? 0;
         });
-        await this.options.applyOptions(conversation, run, content);
-        const submission = await conversation.submit({ type: "input", content, requestId: run.key }, context);
+        const fitted = await this.options.applyOptions(conversation, run, content);
+        const submission = await conversation.submit({ type: "input", content: fitted, requestId: run.key }, context);
         await this.options.mutate(meta => {
           meta.runs[run.key]!.submissionId = submission.id;
           meta.runs[run.key]!.status = "running";
@@ -280,7 +284,8 @@ export class RunQueue {
       if (outcome.text.length > 100_000 || (!outcome.text.trim() && !outcome.images.length)) outcome = { action: "refused", by: "", notice: INPUT_EMPTY };
       else if (changed) {
         const parsed = parseChatImages(outcome.images.map(image => ({ mimeType: image.mimeType, data: image.data })));
-        images = "error" in parsed ? undefined : parsed.images.length ? await prepareMessageImages(parsed.images).catch(() => undefined) : [];
+        const limits = run && this.options.imageLimits ? await this.options.imageLimits(run).catch(() => undefined) : undefined;
+        images = "error" in parsed ? undefined : parsed.images.length ? await prepareMessageImages(parsed.images, limits).catch(() => undefined) : [];
         if (!images) outcome = { action: "refused", by: "", notice: INPUT_IMAGES };
         else if (images.length) await this.options.inputs.write(key, images);
         else await this.options.inputs.discard([key]);
