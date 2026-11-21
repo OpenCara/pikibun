@@ -107,6 +107,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "blender", source: "piki:blender", title: "Blender", sessionTools: ["blender"], optIn: true,
+    description: "The blender tool: the agent runs Blender headless (-b) in the session's sandbox, with its arguments as a list and without a shell, to build, inspect, convert and render 3D scenes and run bpy Python scripts, each call checked as a command is. Off until added here.",
+    providers: [],
+  },
+  {
     name: "browser", source: "piki:browser", title: "Browser", sessionTools: ["browser"],
     description: "The browser tool: the agent drives a headless Chromium in the session's sandbox (open a page, click, type, run a script, take a screenshot), serving the web app it works on for the call, each call checked as a command is. Its screenshots show in the session panel's Browser tab. Runs only in the Linux sandbox, with Chromium on the host. Off until added here.",
     providers: [],
