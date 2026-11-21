@@ -5,6 +5,7 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { openLocalStateTakingOver, readDiscovery } from '../apps/server/src/local/discovery.js';
@@ -221,4 +222,24 @@ test('a headless Pikibun on this computer is found, answers forwarded requests o
   await assert.rejects(home.forward({ method: 'GET', path: '/api/private-sessions' }, AbortSignal.timeout(2000)));
   assert.equal(await home.sessions(AbortSignal.timeout(2000)), null);
   await taken.release();
+});
+
+test('a private home that is already waiting for the lease leaves it to the hand-over in progress, not takes it when the headless server lets go', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'private-home-')));
+  const stateDir = join(root, 'server');
+  const { state, release } = await openLocalState(stateDir, { port: await freePort() });
+  const server = await startLocalServer({ stateDir, state, release, mode: 'local', headless: true, onHandover: () => { void server.close(); } });
+  const home = createPrivateHome({ localModels: { manifest: async () => [] } as never }, { stateDir, retryMs: 50 });
+  let taken: { release(): Promise<void> } | undefined;
+  t.after(async () => {
+    const stopping = home.stop();
+    await taken?.release();
+    await stopping;
+    await server.close().catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  });
+  await delay(500);
+  taken = await openLocalStateTakingOver(stateDir, {}, 10_000);
+  await server.close();
+  assert.equal(await readDiscovery(stateDir), undefined, 'the home started no server of its own in the lease it was waiting for');
 });
