@@ -66,7 +66,6 @@ export function imageType(bytes: Uint8Array): string | undefined {
 
 export type FileContent = { readonly text: string } | { readonly image: Uint8Array; readonly mimeType: string };
 
-
 type ImageHeader = { readonly width: number; readonly height: number; readonly bytesPerPixel: number; readonly animated: boolean };
 
 let processor: Promise<ImageProcessor> | undefined;

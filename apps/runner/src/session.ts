@@ -1144,8 +1144,9 @@ export class RunnerSession {
       return model && typeof model === "object" && typeof model.provider === "string" && typeof model.modelId === "string"
         ? { provider: model.provider, modelId: model.modelId } : undefined;
     };
-    const chosen = options && typeof options === "object" ? options as { model?: unknown; auto?: { candidates?: unknown } } : {};
-    const candidates = Array.isArray(chosen.auto?.candidates) ? chosen.auto.candidates.flatMap(item => ref(item) ?? []) : [];
+    const chosen = options && typeof options === "object" ? options as { model?: unknown; auto?: unknown } : {};
+    const listed = chosen.auto && typeof chosen.auto === "object" ? (chosen.auto as { candidates?: unknown }).candidates : undefined;
+    const candidates = Array.isArray(listed) ? listed.flatMap(item => ref(item) ?? []) : [];
     const targets = candidates.length ? candidates
       : [ref(chosen.model) ?? (await this.#shared.agent(context).catch(() => undefined))?.model ?? this.modelRef];
     return tightestImageLimits(targets.map(target => modelImageLimits(this.models.getModel(target.provider, target.modelId))));
