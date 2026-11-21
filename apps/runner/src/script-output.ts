@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "@earendil-works/chord/context";
 import { boundOutput as boundText } from "@earendil-works/chord/output";
-import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type { ToolExecutionApi, ToolExecutionResult, ToolPark, ToolRegistration } from "@earendil-works/pi-durable";
 import { MODEL_OUTPUT, SAVED_OUTPUT_BYTES, scriptOutput } from "./tool-output.js";
 
 type Limits = { maxBytes: number; maxLines: number; retain: "head" | "tail" };
@@ -10,6 +10,10 @@ type Content = NonNullable<ToolExecutionResult["output"]>;
 export const SCRIPT_OUTPUT_LIMITS = { maxBytes: SAVED_OUTPUT_BYTES + 1024, maxLines: Number.MAX_SAFE_INTEGER } as const;
 
 const scriptCalls = new AsyncLocalStorage<boolean>();
+
+export function isToolPark(returned: ToolExecutionResult | ToolPark): returned is ToolPark {
+  return "sleep" in returned || "wait" in returned;
+}
 
 export function inScriptCall(): boolean {
   return scriptCalls.getStore() === true;
@@ -74,7 +78,9 @@ export function wholeForScripts(tool: ToolRegistration): ToolRegistration {
     outputLimits: { maxBytes: Math.max(limits.maxBytes, SCRIPT_OUTPUT_LIMITS.maxBytes), maxLines: Math.max(limits.maxLines, SCRIPT_OUTPUT_LIMITS.maxLines), retain: limits.retain },
     execute: async (args: never, api: ToolExecutionApi, context: Context) => {
       const script = await calledByScript(api, context);
-      const result = withRetained(await scriptCalls.run(script, () => tool.execute(args, api, context)), api);
+      const returned = await scriptCalls.run(script, () => tool.execute(args, api, context));
+      if (isToolPark(returned)) return returned;
+      const result = withRetained(returned, api);
       return script ? capForScript(result) : boundForModel(result, limits);
     },
   } as ToolRegistration;
