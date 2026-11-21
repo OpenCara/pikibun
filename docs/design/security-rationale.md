@@ -343,7 +343,7 @@ the host instead of going to the model.
   (review 380, finding 48). The one exception is the workspace's choice: with `piki:skills` on, each listed skill's name,
   description and path reach the system prompt with no name typed, from any clone, a public one cloned to read included,
   and the agent is told to follow a skill it loads; so it is off until an owner or admin adds it, as
-  `piki:context-files` is for `AGENTS.md`. The list is bounded (100 skills read, 1,024 characters a description,
+  `piki:context-files` is for `AGENTS.md`. Each message and side ask reads the switch itself, so turning it off holds from the next one's prompt (what earlier prompts listed stays in the conversation's history, which a side ask shares, as all earlier context does). The list is bounded (100 skills, 200 files read, 1,024 characters a description,
   20,000 for the section), its text is XML-escaped, and it tells the agent a skill widens nothing the session may do
   ([skills](skills.md)). A name that files in two places claim (two clones, or a clone and the worktree's root) is
   offered by neither alone: each is listed as `<clone>:<name>` (`worktree:<name>` at the root), so which file a name

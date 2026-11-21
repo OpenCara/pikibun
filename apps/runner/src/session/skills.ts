@@ -5,6 +5,7 @@ import type { PiText } from "./pi-text.js";
 export const SKILL_DIRECTORIES = [".pi", ".agents", ".claude"] as const;
 export const SKILL_FILES = `{,*/}{${SKILL_DIRECTORIES.join(",")}}/skills/{*.md,**/SKILL.md}`;
 export const MAX_SKILLS = sessionCommandLimits.perKind;
+export const MAX_SKILL_READS = 2 * MAX_SKILLS;
 export const MAX_DESCRIPTION = 1024;
 export const SKILLS_PROMPT_CHARS = 20_000;
 const LIST_MS = 120_000;
@@ -123,11 +124,16 @@ export class SessionSkills {
 
   private scan(): Promise<Skill[]> {
     this.#scanning ??= (async () => {
-      const candidates = skillCandidates(await this.options.find(SKILL_FILES, sessionCommandLimits.files)).slice(0, MAX_SKILLS);
+      const candidates = skillCandidates(await this.options.find(SKILL_FILES, sessionCommandLimits.files)).slice(0, MAX_SKILL_READS);
       const { frontmatter } = await this.options.text();
       const files: { candidate: SkillCandidate; content: string }[] = [];
+      let kept = 0;
       for (const candidate of candidates) {
-        try { files.push({ candidate, content: await this.options.read(candidate.path) }); } catch { }
+        if (kept >= MAX_SKILLS) break;
+        let content: string;
+        try { content = await this.options.read(candidate.path); } catch { continue; }
+        files.push({ candidate, content });
+        if (candidate.declared || skillDescription(frontmatter(content).frontmatter.description)) kept++;
       }
       const list = readSkills(files, frontmatter);
       this.#skills = { at: this.#now(), list };

@@ -12,7 +12,7 @@ import { connectorPikiExtension, managedSource } from "../apps/runner/src/extens
 import { RunnerService } from "../apps/runner/src/server.js";
 import { agentInstructions } from "../apps/runner/src/session/instructions.js";
 import { piText } from "../apps/runner/src/session/pi-text.js";
-import { MAX_DESCRIPTION, readSkills, SessionSkills, skillBlock, skillCandidates, SKILL_FILES, skillsPrompt, type Skill } from "../apps/runner/src/session/skills.js";
+import { MAX_DESCRIPTION, MAX_SKILL_READS, MAX_SKILLS, readSkills, SessionSkills, skillBlock, skillCandidates, SKILL_FILES, skillsPrompt, type Skill } from "../apps/runner/src/session/skills.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { parseWorkspaceExtensions, withSessionToolsListed } from "../packages/shared/src/host-extensions.js";
 import { extensionSwitchOn, pikiExtension, sessionToolsOff } from "../packages/shared/src/piki-extensions.js";
@@ -127,6 +127,24 @@ test("a session's skills are read through its file access, looked at again when 
   assert.ok(log.includes("find"), "a stale list is looked at again");
 });
 
+test("loose files without a description don't crowd skills out: the cap counts skills, and reads stay bounded", async () => {
+  const files: Record<string, string> = {};
+  for (let index = 0; index < 150; index++) files[`app/.pi/skills/note${String(index).padStart(3, "0")}.md`] = "# Just a note";
+  files["app/.pi/skills/release/SKILL.md"] = "---\ndescription: Cut a release\n---\n";
+  let reads = 0;
+  const skills = new SessionSkills({ find: async () => Object.keys(files), read: async path => { reads++; return files[path]!; }, text: piText });
+  assert.deepEqual((await skills.current()).map(item => item.name), ["release"], "a skill past 150 loose notes is still found");
+  for (const path of Object.keys(files)) delete files[path];
+  for (let index = 0; index < 300; index++) files[`app/.pi/skills/s${String(index).padStart(3, "0")}/SKILL.md`] = "---\ndescription: A skill\n---\n";
+  reads = 0;
+  assert.equal((await skills.current()).length, MAX_SKILLS);
+  assert.equal(reads, MAX_SKILLS, "reading stops once it has as many skills as it keeps");
+  for (let index = 0; index < 400; index++) files[`app/.pi/skills/n${String(index).padStart(3, "0")}.md`] = "# Just a note";
+  reads = 0;
+  assert.deepEqual(await skills.current(), [], "past its budget of reads, it stops, even with no skill found");
+  assert.equal(reads, MAX_SKILL_READS);
+});
+
 test("piki:skills is the workspace's switch for listing skills: off until added, with no package and no tools", () => {
   const info = pikiExtension("piki:skills")!;
   assert.equal(info.optIn, true);
@@ -161,7 +179,7 @@ test("a session lists its worktree's skills in the system prompt only where the 
   const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow: 1_000_000 }] });
   const respond: FauxResponseFactory = async request => {
     faux.appendResponses([respond]);
-    prompts.push(request.messages.flatMap(message => message.role === "system" ? [getSystemMessageText(message)] : []).join("\n"));
+    prompts.push(request.messages.flatMap(message => message.role === "system" ? [getSystemMessageText(message)] : []).at(-1) ?? "");
     return fauxAssistantMessage("ok");
   };
   faux.setResponses([respond]);
@@ -199,6 +217,10 @@ test("a session lists its worktree's skills in the system prompt only where the 
     await session.submit(await claims("submit"), { content, requestId, admissionId: await sha256(requestId), options: { access: "auto" } }, "write");
     for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
   };
+  const ask = async (content: string) => {
+    await session.submit(await claims("ask"), { content, requestId: randomUUID() }, "ask");
+    for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
+  };
 
   await send("hello");
   assert.doesNotMatch(prompts.at(-1)!, /available_skills/, "off until the workspace adds piki:skills");
@@ -210,4 +232,14 @@ test("a session lists its worktree's skills in the system prompt only where the 
   assert.doesNotMatch(prompt, /manual/, "one that disables model invocation isn't listed");
   assert.deepEqual((await session.view()).commands?.filter(command => command.kind === "skill").map(command => [command.name, command.description]),
     [["skill:manual", "Only when asked"], ["skill:release", "Cut a release"]], "both still answer to /skill:");
+  await ask("which skills?");
+  assert.match(prompts.at(-1)!, /<name>release<\/name>/, "a side ask lists them too");
+  answer = { ...answer, extensions: parseWorkspaceExtensions([]) };
+  await delay(10);
+  await ask("and now?");
+  assert.doesNotMatch(prompts.at(-1)!, /available_skills/, "a side ask reads the switch itself, so one turned off since the last message lists nothing");
+  answer = { ...answer, extensions: parseWorkspaceExtensions([{ source: "piki:skills" }]) };
+  await delay(10);
+  await ask("on again?");
+  assert.match(prompts.at(-1)!, /<name>release<\/name>/, "and one turned on since lists them without waiting for a message");
 });

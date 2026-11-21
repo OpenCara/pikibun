@@ -37,8 +37,12 @@ until [slash commands](slash-commands.md) brought `/skill:name`. This note is #3
   `disable-model-invocation: true`.
 - **One read per skill.** Finding a skill's name and description means reading its file, through the session's file
   access as before. The host looks at most every two minutes for the command list, and again before each message
-  whose prompt lists skills, waiting at most a few seconds before it uses what it found last. At most 100 skills are
-  read. The command list now shows each skill's description.
+  and side ask whose prompt lists skills, waiting at most a few seconds before it uses what it found last. Each
+  message and side ask reads the workspace's switch itself, so turning it off takes effect at the next one's prompt.
+  pi-durable keeps each prompt in the conversation's history, and a side ask forks it, so what earlier prompts listed
+  stays there, as everything said earlier does. Reading
+  stops at 100 skills, or after 200 files (loose Markdown files without a description are read but aren't skills, so
+  they don't count toward the 100). The command list now shows each skill's description.
 - **Listed for the model where the workspace turns it on.** With `piki:skills` on, each message's system prompt lists
   the skills the model may load, as Pi does: name, description, and location as a worktree path, with how to load
   one (`read`) and how to run what a skill says to run without a shell. Descriptions are cut to Pi's 1,024 characters,
