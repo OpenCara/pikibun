@@ -182,6 +182,34 @@ test("a tool that parks keeps parking through wholeForScripts: the Harness sleep
   assert.match(shown, /Output truncated to its beginning/, "the result after the wake is bounded for the model as any other");
 });
 
+test("a script's call of a tool that parks waits for its wake and gets its result", async t => {
+  const context = BACKGROUND_CONTEXT;
+  const builtins = new SessionBuiltins();
+  t.after(() => builtins.close());
+  const runs: (string | undefined)[] = [];
+  const later = wholeForScripts(defineTool({ name: "later", description: "Answers after a wake.", parameters: obj({}, { open: true }),
+    execute: async (_args, api) => {
+      runs.push(api.wake?.reason);
+      return api.wake === undefined ? { sleep: { checkpoint: { started: true }, until: api.now() + 50 } } : { output: [{ type: "text", text: `woke with ${JSON.stringify(api.checkpoint)}` }] };
+    } }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: "return await tools.later({});" }), { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+  const models = createModels(); models.setProvider(faux.provider);
+  const registry = createRegistry();
+  const workspace = defineExtension({ name: "workspace-tools", tools: [later] });
+  registry.install(workspace);
+  const codemode = builtins.extensions.get("pi:codemode")!;
+  registry.install(codemode);
+  const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
+  t.after(() => harness.close(context));
+  const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" }, extensions: [workspace, codemode], tools: [later, ...codemode.tools!] } });
+  const settled = await (await root.submit({ type: "input", content: "go" }, context)).wait(context);
+  assert.equal(settled.status, "done");
+  assert.deepEqual(runs, [undefined, "time"]);
+  const shown = JSON.stringify((await root.context(context)).entries.filter(entry => entry.kind === ToolResultEntry.kind).at(-1));
+  assert.match(shown, /woke with \{\\"started\\":true\}/);
+});
+
 test("a session runs at most a few scripts at once", async t => {
   const sandbox = new LimitedCodemodeSandbox();
   t.after(() => sandbox.close());

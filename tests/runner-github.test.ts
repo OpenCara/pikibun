@@ -293,3 +293,49 @@ test("github_read waits for checks by reading again, and says how the wait ended
   assert.match(results[1]!, /Approved\./);
   assert.equal((await session.view()).approvals.length, 0, "reads ask nobody");
 });
+
+test("a github_read wait sleeps between reads holding nothing, so it goes on after the runner restarts", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-github-wait-restart-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const reads: GitHubReadRequest[] = [];
+  const view = (status: string): GitHubIssueView => ({ repository: "acme/alpha", number: 7, url: "https://github.com/acme/alpha/pull/7", title: "Fix", state: "open",
+    author: "alice", createdAt: "2026-01-01T00:00:00Z", body: "", labels: [], comments: [], pullRequest: { draft: false, merged: false, mergeable: true, mergeableState: "clean",
+      head: { ref: "f", sha: "a".repeat(40), repository: "acme/alpha" }, base: { ref: "main", sha: "b".repeat(40) }, reviews: [], reviewComments: [],
+      checks: [{ name: "verify", status, conclusion: status === "completed" ? "success" : null }] } });
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("github_read", { repository: "acme/alpha", issue: 7, wait: "checks", timeout_seconds: 600 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("CI passed."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = (status: string, pollMs: number) => new RunnerService({
+    dataDir: directory, sharedSecret: "runner-github-wait-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    githubRead: async request => { reads.push(request); return view(status); },
+    githubWaitPollMs: pollMs,
+  });
+  const id = "github-wait-restart-session";
+  const before = service("in_progress", 1500);
+  await before.initialize();
+  const first = await before.provision(binding(id), await ticket(id, "create"));
+  await first.submit(await ticket(id, "submit"), { content: "Wait for CI.", requestId: "wait", admissionId: await sha256("github wait admission") }, "write");
+  for (let tries = 0; reads.length === 0 && tries < 500; tries++) await delay(10);
+  await delay(200);
+  assert.equal(reads.length, 1, "the first read, then a sleep until the next");
+  assert.equal((await first.view()).busy, true);
+  await before.close();
+
+  const after = service("completed", 10);
+  await after.initialize();
+  t.after(() => after.close());
+  const session = await after.get(id);
+  await idle(session);
+  assert.equal(reads.length, 2, "the sleep's read, by the reopened runner");
+  assert.equal(new Set(reads.map(read => read.callId)).size, 1, "one call's reads, before and after the restart");
+  const results = (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
+  assert.equal(results.length, 1);
+  assert.match(results[0]!, /"waited":\{"for":"checks","outcome":"checks-completed","seconds":\d+\}/);
+  assert.match((await session.view()).entries.map(entry => entry.text).join("\n"), /CI passed\./);
+});
