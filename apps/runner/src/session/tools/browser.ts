@@ -56,7 +56,7 @@ export function browserTool(context: ToolContext): ToolRegistration {
       await hostCommands.requireHostEnvironment();
       const { unbounded } = await calls.check(api, "browser", { write: true, shell: true });
       const approval = await context.operations.run(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { unbounded }, call.abortSignal);
-      return calls.browserOutcome(approval, () => calls.recheck(attribution), approvalText);
+      return calls.browserOutcome(approval, api, () => calls.recheck(attribution), approvalText);
     } });
 }
 

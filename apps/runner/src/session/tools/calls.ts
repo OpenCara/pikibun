@@ -6,7 +6,7 @@ import type { AnyToolName, OperationRecord } from "../../../../../packages/share
 import type { StoredOperation } from "../../operation-record.js";
 import type { OutputFiles } from "../../extensions/builtin.js";
 import { callLimits, commandLimits, type CommandLimits } from "../../host-config.js";
-import { prepareImage } from "../../images.js";
+import { conversationImageLimits, prepareImage } from "../../images.js";
 import { RunnerError } from "../../protocol.js";
 import type { SandboxAuthorize } from "../../sandbox.js";
 import { inScriptCall } from "../../script-output.js";
@@ -86,14 +86,14 @@ export class ToolCalls {
     await this.options.authorize(attribution.initiatedBy, attribution.mode === "ask" ? "ask" : "write");
   }
 
-  async browserOutcome(approval: OperationRecord, recheck: () => Promise<void>, approvalText: (approval: StoredOperation) => ToolExecutionResult): Promise<ToolExecutionResult> {
+  async browserOutcome(approval: OperationRecord, api: ToolExecutionApi, recheck: () => Promise<void>, approvalText: (approval: StoredOperation) => ToolExecutionResult): Promise<ToolExecutionResult> {
     const report = approval.status === "executed" && approval.result ? parseBrowserReport(approval.result.trim()) : undefined;
     if (!report) return approvalText(approval as StoredOperation);
     const output: ToolExecutionResult["output"] = [{ type: "text", text: JSON.stringify({ ...approval, result: undefined, admissionId: undefined, callId: undefined, report }) }];
     if (report.screenshot) {
       try {
         const file = await this.options.sandbox.readContent(report.screenshot, recheck);
-        const prepared = "image" in file ? await prepareImage(file.image, file.mimeType) : undefined;
+        const prepared = "image" in file ? await prepareImage(file.image, await conversationImageLimits(api)) : undefined;
         if (prepared && "image" in prepared) output.push({ type: "image", data: prepared.image.data, mimeType: prepared.image.mimeType });
       } catch { }
     }

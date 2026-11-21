@@ -2,21 +2,38 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatImage } from "../../../../packages/shared/src/chat-images.js";
-import { IMAGE_BUSY, IMAGE_ERROR, imageType, prepareImage } from "../images.js";
+import type { ImageLimits } from "@earendil-works/pi-durable/tools";
+import { fitsImageLimits, IMAGE_BUSY, IMAGE_ERROR, imageType, MAX_MODEL_IMAGE_LIMITS, prepareImage } from "../images.js";
 import { RunnerError } from "../protocol.js";
 
 export type InputImage = { mimeType: string; data: string };
 
-export async function prepareMessageImages(images: readonly ChatImage[]): Promise<InputImage[]> {
+export async function prepareMessageImages(images: readonly ChatImage[], limits: ImageLimits = MAX_MODEL_IMAGE_LIMITS): Promise<InputImage[]> {
   const prepared: InputImage[] = [];
   for (const image of images) {
     const bytes = Buffer.from(image.data, "base64");
     if (imageType(bytes) !== image.mimeType) throw new RunnerError(422, IMAGE_ERROR);
-    const result = await prepareImage(bytes, image.mimeType);
+    const result = await prepareImage(bytes, limits);
     if ("error" in result) throw new RunnerError(422, result.error === IMAGE_BUSY ? "Too many images are being prepared at once. Send the message again shortly" : result.error);
     prepared.push({ mimeType: result.image.mimeType, data: result.image.data });
   }
   return prepared;
+}
+
+type InputPart = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+
+export async function fitInputImages(content: string | InputPart[], limits: ImageLimits): Promise<string | InputPart[]> {
+  const fits = (part: InputPart) => part.type !== "image" || fitsImageLimits(Buffer.from(part.data, "base64"), limits);
+  if (typeof content === "string" || content.every(fits)) return content;
+  const fitted: InputPart[] = [];
+  const notes: string[] = [];
+  for (const part of content) {
+    if (part.type !== "image" || fits(part)) { fitted.push(part); continue; }
+    const result = await prepareImage(Buffer.from(part.data, "base64"), limits);
+    if ("image" in result) fitted.push({ type: "image", data: result.image.data, mimeType: result.image.mimeType });
+    else notes.push(`An image (${part.mimeType}) cannot be prepared for the model and was left out.`);
+  }
+  return notes.length ? [...fitted, { type: "text", text: notes.join("\n") }] : fitted;
 }
 
 export class MessageInputs {

@@ -73,7 +73,7 @@ export interface RunQueueOptions {
   authorize(actorId: string, permission: "ask" | "write"): Promise<unknown>;
   requiredRefusal(open: boolean): Promise<string | undefined>;
   extensionChoice(): Promise<{ chosen: ChosenExtension[] }>;
-  applyOptions(conversation: Conversation, run: Run, content: RunContent): Promise<void>;
+  applyOptions(conversation: Conversation, run: Run, content: RunContent): Promise<RunContent>;
   drain(): void;
 }
 
@@ -247,8 +247,8 @@ export class RunQueue {
           meta.runs[run.key]!.started = true;
           meta.runs[run.key]!.startEntry = transcript.entries.at(-1)?.id ?? 0;
         });
-        await this.options.applyOptions(conversation, run, content);
-        const submission = await conversation.submit({ type: "input", content, requestId: run.key }, context);
+        const fitted = await this.options.applyOptions(conversation, run, content);
+        const submission = await conversation.submit({ type: "input", content: fitted, requestId: run.key }, context);
         await this.options.mutate(meta => {
           meta.runs[run.key]!.submissionId = submission.id;
           meta.runs[run.key]!.status = "running";
