@@ -69,8 +69,8 @@ export class ProviderReleases {
       const sessionId = busy ? undefined : await this.#session.providerSessionId(conversation);
       if (!current()) return;
       if (busy || this.#session.warming(conversation)) return this.touch(conversation);
-      this.#pending.delete(conversation);
       if (sessionId !== undefined) cleanupSessionResources(sessionId);
+      this.#pending.delete(conversation);
     } catch (error) {
       if (!current()) return;
       this.#pending.delete(conversation);

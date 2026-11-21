@@ -144,6 +144,15 @@ test("a failing release is reported and doesn't keep the conversation pending", 
   await clock.advance(15 * MINUTE);
   assert.match(String(reported[0]), /storage closed/);
   assert.deepEqual(releases.pending, []);
+
+  t.after(registerSessionResourceCleanup(() => { throw new Error("socket stuck"); }));
+  const failing = fakeSession();
+  const cleanups = new ProviderReleases(failing.session, clock);
+  cleanups.touch(2);
+  await clock.advance(15 * MINUTE);
+  assert.equal(failing.reported.length, 1, "a provider's cleanup that throws is reported too");
+  assert.match(String((failing.reported[0] as AggregateError).errors[0]), /socket stuck/);
+  assert.deepEqual(cleanups.pending, []);
 });
 
 test("in a session, each conversation's own provider session is released once it idles past the delay and its warming ended", async t => {
