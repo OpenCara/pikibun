@@ -12,6 +12,7 @@ import { openLocalStateTakingOver, readDiscovery } from '../apps/server/src/loca
 import { createPrivateHome } from '../apps/server/src/local/home.js';
 import { startLocalServer } from '../apps/server/src/local/launch.js';
 import { LocalStateBusyError, openLocalState } from '../apps/server/src/local/state.js';
+import type { PrivateHome } from '../apps/runner/src/private-home.js';
 import type { ConnectorRelayEnvelope } from '../apps/server/src/connector-transport.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import {
@@ -164,14 +165,35 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+function cleanup(t: TestContext): (step: () => unknown) => void {
+  const steps: Array<() => unknown> = [];
+  t.after(async () => {
+    const failures: unknown[] = [];
+    for (const step of steps.reverse()) {
+      try { await step(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length > 0) throw new AggregateError(failures, 'The test could not clean up after itself');
+  });
+  return step => { steps.push(step); };
+}
+
+function stopHome(home: PrivateHome, taken: () => { release(): Promise<void> } | undefined): () => Promise<void> {
+  return async () => {
+    const stopping = home.stop();
+    await taken()?.release();
+    await stopping;
+  };
+}
+
 test('a headless Pikibun on this computer is found, answers forwarded requests only with its secret and only for its private sessions, and hands over', async t => {
+  const later = cleanup(t);
   const root = await realpath(await mkdtemp(join(tmpdir(), 'private-home-')));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  later(() => rm(root, { recursive: true, force: true }));
   const stateDir = join(root, 'server');
   const { state, release } = await openLocalState(stateDir, { port: await freePort() });
   let handedOver = false;
   const server = await startLocalServer({ stateDir, state, release, mode: 'local', headless: true, onHandover: () => { handedOver = true; void server.close(); } });
-  t.after(() => server.close().catch(() => {}));
+  later(() => server.close().catch(() => {}));
   await assert.rejects(openLocalState(stateDir), LocalStateBusyError);
   const found = await readDiscovery(stateDir);
   assert.ok(found?.headless);
@@ -208,7 +230,8 @@ test('a headless Pikibun on this computer is found, answers forwarded requests o
   assert.equal(archived.status, 200, `it acts as its owner: ${await archived.clone().text()}`);
 
   const home = createPrivateHome({ localModels: { manifest: async () => [] } as never }, { stateDir, retryMs: 50 });
-  t.after(() => home.stop());
+  let taken: { release(): Promise<void> } | undefined;
+  later(stopHome(home, () => taken));
   const listed = await home.sessions(AbortSignal.timeout(5000));
   assert.deepEqual(listed?.map(item => [(item as SessionRecord).id, (item as SessionRecord).status]), [['private-one', 'archived']],
     'a second process finds the running one and lists its private sessions');
@@ -216,28 +239,24 @@ test('a headless Pikibun on this computer is found, answers forwarded requests o
   assert.equal(one.status, 200);
   assert.equal((JSON.parse(Buffer.from(one.data, 'base64').toString()) as { session: SessionRecord }).session.id, 'private-one');
 
-  const taken = await openLocalStateTakingOver(stateDir, {}, 10_000);
+  taken = await openLocalStateTakingOver(stateDir, {}, 10_000);
   assert.ok(handedOver, 'pikibun serve takes the state over from a headless one');
   assert.equal(await readDiscovery(stateDir), undefined);
   await assert.rejects(home.forward({ method: 'GET', path: '/api/private-sessions' }, AbortSignal.timeout(2000)));
   assert.equal(await home.sessions(AbortSignal.timeout(2000)), null);
-  await taken.release();
 });
 
-test('a private home that is already waiting for the lease leaves it to the hand-over in progress, not takes it when the headless server lets go', async t => {
+test('a private home that was already waiting for the lease does not take it from a hand-over in progress', async t => {
+  const later = cleanup(t);
   const root = await realpath(await mkdtemp(join(tmpdir(), 'private-home-')));
+  later(() => rm(root, { recursive: true, force: true }));
   const stateDir = join(root, 'server');
   const { state, release } = await openLocalState(stateDir, { port: await freePort() });
   const server = await startLocalServer({ stateDir, state, release, mode: 'local', headless: true, onHandover: () => { void server.close(); } });
+  later(() => server.close().catch(() => {}));
   const home = createPrivateHome({ localModels: { manifest: async () => [] } as never }, { stateDir, retryMs: 50 });
   let taken: { release(): Promise<void> } | undefined;
-  t.after(async () => {
-    const stopping = home.stop();
-    await taken?.release();
-    await stopping;
-    await server.close().catch(() => {});
-    await rm(root, { recursive: true, force: true });
-  });
+  later(stopHome(home, () => taken));
   await delay(500);
   taken = await openLocalStateTakingOver(stateDir, {}, 10_000);
   await server.close();
