@@ -1,16 +1,16 @@
 import { readFile } from "fs/promises";
 import { platform, signal, Storage, untracked, type Signal } from "nsh";
 import nshProcess from "process";
-import { APP_VERSION } from "../app-version";
+import { APP_VERSION, CLI_VERSION } from "../app-version";
 import type {
   HostEvent, HostInspection, HostRequest, HostState, LocalPage, LocalView, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
 } from "../../../../packages/shared/src/app-host-protocol";
 import {
-  appCliFolder, CommandChannel, commandDirectory, commandProblem, installCommand, NVM_INSTALL, parseWslList, pikibunCommand, plainOutput, spawnPikibun, WSL, WSL_DISTRO,
+  appCliFolder, CommandChannel, commandDirectory, commandProblem, commandVersion, installCommand, NVM_INSTALL, parseWslList, pikibunCommand, plainOutput, spawnPikibun, WSL, WSL_DISTRO,
   wslInstallCommand, type CommandLink, type CommandTarget, type LaunchProblem, type LogLine,
 } from "./pikibun-command";
 import { auth } from "./auth";
-import { isVersion } from "./version";
+import { compareVersions, isVersion } from "./version";
 import { lastLines } from "./windows-cmd";
 
 export { appCliFolder, INSTALL_COMMAND, installCommand, NVM_INSTALL, parseWslList, wslInstallCommand, wslPikibunCommand } from "./pikibun-command";
@@ -157,10 +157,17 @@ async function ownCopyVersion(): Promise<string | null> {
 export interface CommandUpdate {
   appVersion: string;
   ownCopy(): Promise<string | null>;
+  cliVersion?: string;
+  commandVersion?(target: HostTarget): Promise<string | null>;
 }
 
-let commandUpdate: CommandUpdate = { appVersion: APP_VERSION, ownCopy: ownCopyVersion };
+const defaultUpdate: CommandUpdate = { appVersion: APP_VERSION, ownCopy: ownCopyVersion, cliVersion: CLI_VERSION, commandVersion };
+let commandUpdate: CommandUpdate = defaultUpdate;
 export function setCommandUpdate(next: CommandUpdate): void { commandUpdate = next; }
+
+export interface StaleCommand { version: string; wanted: string }
+
+interface CommandUser { idle(): boolean; restart(): Promise<void> }
 
 type InstallResult = { code?: number | null; error?: string | null };
 
@@ -220,9 +227,34 @@ export class LocalEnvironment {
   readonly installError = signal("");
   readonly problem = signal<LaunchProblem | null>(null);
   readonly logs = signal<LogLine[]>([]);
+  readonly stale = signal<StaleCommand | null>(null);
   private updated?: Promise<void>;
+  private checks = 0;
+  private readonly users = new Set<CommandUser>();
 
   constructor(readonly target: HostTarget) {}
+
+  use(user: CommandUser): void { this.users.add(user); }
+
+  started(reported: string | undefined): void {
+    const wanted = commandUpdate.cliVersion;
+    if (wanted === undefined || !isVersion(wanted)) return;
+    const check = ++this.checks;
+    const probe = commandUpdate.commandVersion;
+    const version = reported !== undefined ? Promise.resolve(reported) : probe ? probe(this.target).catch(() => null) : Promise.resolve(null);
+    void version.then(found => {
+      if (check !== this.checks) return;
+      if (!found || compareVersions(found, wanted) !== -1) { this.stale.set(null); return; }
+      const before = untracked(this.stale);
+      this.stale.set({ version: found, wanted });
+      if (before?.version === found && before.wanted === wanted) return;
+      this.log("warning", `${this.title()} runs pikibun ${found}, older than the ${wanted} this version of Pikibun comes with, so its hosts may miss fixes and features they need. Choose Update pikibun${this.wsl ? "" : " under Local hosts"} to update it${untracked(() => this.hostsRunning()) ? ", once its hosts are stopped" : ""}.`);
+    });
+  }
+
+  private async restartIdle(): Promise<void> {
+    await Promise.all([...this.users].filter(user => user.idle()).map(user => user.restart().catch(() => undefined)));
+  }
 
   get key(): string { return environmentKey(this.target); }
   hostsRunning(): boolean { return localHosts().all().some(host => host.environment === this && host.state() !== "stopped"); }
@@ -318,6 +350,9 @@ export class LocalEnvironment {
       return { ok: false, error: failure };
     }
     this.log("info", where === "app" ? "npm installed pikibun in Pikibun's own folder." : where === "wsl" ? `npm installed pikibun in ${this.where()}.` : "npm installed pikibun.");
+    this.checks++;
+    this.stale.set(null);
+    await this.restartIdle();
     if (where !== "global" && isVersion(commandUpdate.appVersion)) await Storage.setItem(this.updatedKey(), commandUpdate.appVersion).catch(() => undefined);
     if ((await check())?.kind === "missing") {
       const message = where === "app"
@@ -333,6 +368,11 @@ export class LocalEnvironment {
 }
 
 const environments = new Map<string, LocalEnvironment>();
+const environmentList = signal<LocalEnvironment[]>([]);
+
+export function staleCommands(): { environment: LocalEnvironment; stale: StaleCommand }[] {
+  return environmentList().flatMap(environment => { const stale = environment.stale(); return stale ? [{ environment, stale }] : []; });
+}
 
 export function localEnvironment(target: HostTarget = {}): LocalEnvironment {
   const key = environmentKey(target);
@@ -340,6 +380,8 @@ export function localEnvironment(target: HostTarget = {}): LocalEnvironment {
   if (!environment) {
     environment = new LocalEnvironment(target.wsl ? { wsl: target.wsl.distro ? { distro: target.wsl.distro } : {} } : {});
     environments.set(key, environment);
+    const created = environment;
+    void Promise.resolve().then(() => environmentList.update(list => [...list, created]));
   }
   return environment;
 }
@@ -458,11 +500,13 @@ export class LocalHost {
     this.channel = new CommandChannel<HostEvent, HostRequest>({
       launch: () => launcher(hostArgs(untracked(this.config).stateDir), target), before: () => this.environment.commandUpdated(), eventTypes: hostEventTypes,
       problem: (lines, code) => launchProblem(lines, code, target), subject: "The host",
+      onReady: version => this.environment.started(version),
       failure: (id, message, notReady) => ({ type: "result", id, ok: false, error: { code: notReady ? "unsupported" : "failed", message } }),
       onEvent: event => this.handleEvent(event),
       onOutput: line => this.log("info", line),
       onExit: (code, expected) => this.handleExit(code, expected),
     });
+    this.environment.use({ idle: () => untracked(this.state) === "stopped", restart: () => this.channel.shutdown() });
   }
 
   get id(): string { return untracked(this.config).id; }

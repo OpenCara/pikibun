@@ -137,7 +137,7 @@ function CommandSection(props: { environment: LocalEnvironment; refresh: () => P
   const place = () => `${env.wsl ? "in" : "on"} ${env.where()}`;
   const node = () => (env.wsl ? `Node.js 24 or newer there (for example with nvm: ${NVM_INSTALL})` : `Node.js 24 or newer (nodejs.org${computerTitle === "This Mac" ? ", or brew install node" : ""})`);
   return (
-    <If when={env.problem()}>
+    <If when={env.problem() ?? (env.stale() ? { kind: "outdated" as const } : null)}>
       {problem => {
         const update = () => problem().kind === "outdated";
         const refresh = () => <Button small variant="outline" icon="refresh" label="Refresh" testID="this-computer-retry" disabled={props.busy || env.installing()} onPress={() => void props.refresh()} />;
@@ -148,7 +148,9 @@ function CommandSection(props: { environment: LocalEnvironment; refresh: () => P
                 else={
                   <Banner tone="warning" title={update() ? `Update Pikibun's command ${place()}` : `Install Pikibun's command ${place()}`} actions={refresh()}>
                     {update()
-                      ? `The pikibun command ${place()} is older than this app, which runs pikibun host. Update it from npm here.`
+                      ? (env.stale() && !env.problem()
+                        ? `${env.wsl ? `Hosts in ${env.where()} run` : `${computerTitle} runs`} pikibun ${env.stale()!.version}, older than the ${env.stale()!.wanted} this version of Pikibun comes with: its hosts may miss fixes and features they need. Update it from npm here.`
+                        : `The pikibun command ${place()} is older than this app, which runs pikibun host. Update it from npm here.`)
                       : `${env.wsl ? `Hosts in ${env.where()}` : computerTitle} run sessions with the pikibun command, as pikibun connect does in a terminal. Install it from npm here: it needs ${node()}.`}
                   </Banner>
                 }>

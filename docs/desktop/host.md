@@ -25,6 +25,8 @@ If **Install Pikibun's command** appears, choose **Install pikibun**. npm instal
 
 The app keeps that copy current: the first time it starts after an update of the app, it installs the `pikibun` released with the new version from npm before any host starts again, which takes about a minute. It installs that exact version, the latest `cli-v` release when the app was released, never whatever npm calls latest at the time, so nobody who could move npm's `latest` tag changes what runs on your computer without a release of the app. If that fails (no network, say), the hosts start with the command they have, **Recent activity** says why, and the app tries again the next time it opens. A `pikibun` you installed in a terminal is yours to update (`npm install -g pikibun@latest`); when it is too old for the app, the same place offers **Update pikibun**. Stop the hosts that run there first: the app never replaces the command under a running host.
 
+Each time a host (or Pikibun on this computer) starts, the app checks the version of the `pikibun` it actually runs, wherever it came from: its own copy, one installed in a terminal, or the one in a WSL distribution. When that is older than the version released with the app (an update that failed, say, or a terminal install that was never updated), the host still runs, but the app says so: a notice on the home screen, a warning under **Recent activity**, and **Update pikibun** on **Local hosts**, which installs the released version into the app's own folder, ahead of any other on PATH. Once it is installed, the next start of each stopped host runs it.
+
 ## 2. Add a host
 
 Under **Add a host** (or **Add a host** beside **Hosts on this Mac**, once there is one):

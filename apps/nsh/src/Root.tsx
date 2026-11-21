@@ -1,6 +1,7 @@
 import { computed, effect, keymap, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
 import { HomeUpdate } from "./components/AppUpdate";
+import { HomeCommandUpdate } from "./components/CommandUpdate";
 import { CommandPalette } from "./components/CommandPalette";
 import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
@@ -232,6 +233,7 @@ function Shell() {
                     <Page title="Sessions" leading={drawsHeaders ? <Logo size={22} /> : settingsButton()} actions={drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions()}>
                       <View style={{ flex: 1 }}>
                         <HomeUpdate style={{ paddingHorizontal: 16, paddingTop: 12 }} />
+                        <HomeCommandUpdate style={{ paddingHorizontal: 16, paddingTop: 12 }} openLocalHosts={() => openSettings("desktop")} />
                         <SessionList onOpen={openSession} onNew={() => startNew()} onNewIn={startNew} onWorkspaceSettings={workspaceSettings}
                           onNewWorkspace={() => creatingWorkspace.set(true)} />
                       </View>
@@ -247,6 +249,7 @@ function Shell() {
                           else={
                             <>
                               <HomeUpdate style={{ width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 20, paddingTop: 20 }} />
+                              <HomeCommandUpdate style={{ width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 20, paddingTop: 20 }} openLocalHosts={() => openSettings("desktop")} />
                               <Each of={[homeKey()]} key={value => String(value)}>
                                 {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} go={go} />}
                               </Each>

@@ -6,10 +6,11 @@ import {
 } from "../../src/lib/this-computer";
 import { Button } from "../../src/ui";
 import { LocalHostsPanel } from "../../src/settings/ThisComputer";
+import { HomeCommandUpdate } from "../../src/components/CommandUpdate";
 
 const params = embedder.params as {
   command?: unknown; wslCommand?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; servers?: unknown; npm?: unknown; npmMs?: unknown; appVersion?: unknown;
-  ownCopy?: unknown; pairedDirs?: unknown; distros?: unknown; id?: unknown; wslSandbox?: unknown;
+  ownCopy?: unknown; pairedDirs?: unknown; distros?: unknown; id?: unknown; wslSandbox?: unknown; cliVersion?: unknown; reports?: unknown; probes?: unknown;
 };
 const SERVER = typeof params.server === "string" ? params.server : "https://pikibun.test";
 const SERVERS = Array.isArray(params.servers) ? params.servers as string[] : [SERVER];
@@ -19,15 +20,18 @@ const npm = String(params.npm ?? "ok");
 const npmMs = typeof params.npmMs === "number" ? params.npmMs : 5;
 const LATEST = "0.10.0";
 let ownCopy: string | null = typeof params.ownCopy === "string" ? params.ownCopy : null;
-if (typeof params.appVersion === "string") {
-  setCommandUpdate({ appVersion: params.appVersion, ownCopy: async () => {
-    if (ownCopy === "unreadable") throw new Error("filesystem read of `cli/node_modules/pikibun/package.json` is not granted by capabilities.fs.read");
-    return ownCopy;
-  } });
-}
+const cliVersion = typeof params.cliVersion === "string" ? params.cliVersion : undefined;
+let reports = typeof params.reports === "string" ? params.reports : undefined;
+const probes = typeof params.probes === "string" ? params.probes : null;
 let distros: string[] | null = params.distros === null ? null : Array.isArray(params.distros) ? params.distros as string[] : ["Ubuntu"];
 setWslLister(async () => distros);
 const sent = signal<string[]>([]);
+if (typeof params.appVersion === "string" || cliVersion) {
+  setCommandUpdate({ appVersion: typeof params.appVersion === "string" ? params.appVersion : "dev", ownCopy: async () => {
+    if (ownCopy === "unreadable") throw new Error("filesystem read of `cli/node_modules/pikibun/package.json` is not granted by capabilities.fs.read");
+    return ownCopy;
+  }, ...(cliVersion ? { cliVersion, commandVersion: async () => { sent.update(list => [...list, "pikibun --version"]); return probes; } } : {}) });
+}
 const DEFAULT_DIR = "/Users/ada/.local/share/pikibun/connector";
 const pairings = new Map<string, string>();
 if (typeof params.paired === "string") pairings.set(DEFAULT_DIR, params.paired);
@@ -57,7 +61,10 @@ const inspection = (dir: string, allowLoopback: boolean, target: HostTarget): Ho
 };
 const providers = (): LoginProvider[] => [{ id: "anthropic", name: "Anthropic", signedIn, methods: [{ type: "api_key", name: "Anthropic API key" }] }];
 
+const launches = signal(0);
+
 function fakeHost(args: string[], target: HostTarget): HostLink {
+  launches.update(count => count + 1);
   const at = args.indexOf("--state-dir");
   const place = wslPlace(target);
   const dir = `${place ? `${place}:` : ""}${at < 0 ? DEFAULT_DIR : args[at + 1]!}`;
@@ -75,7 +82,7 @@ function fakeHost(args: string[], target: HostTarget): HostLink {
     if (state === "missing") { for (const listener of output) listener(place ? "bash: line 1: exec: pikibun: not found" : "zsh:1: command not found: pikibun"); exit(127); return; }
     if (state === "outdated") { for (const listener of output) listener("Unknown command: host"); exit(2); return; }
     if (state === "no-wsl") { for (const listener of output) listener("Windows Subsystem for Linux has no installed distributions."); exit(1); return; }
-    emit({ type: "ready" });
+    emit({ type: "ready", ...(reports ? { version: reports } : {}) });
   }, 1);
   return {
     send: message => {
@@ -139,6 +146,7 @@ function fakeInstall(target: HostTarget): InstallRun {
       code = 243;
     } else {
       if (npm === "ok") { if (place) wslCommandState = "ok"; else command = "ok"; }
+      if (cliVersion) reports = cliVersion;
       if (!global && !place) ownCopy = LATEST;
       say(["", "added 1 package in 2s"]);
     }
@@ -161,10 +169,12 @@ mount(() => (
       sent.update(list => [...list, server === SERVER ? `pairing ${name}` : `pairing ${name} for ${server}`]);
       return { id: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", code: "Z3AQnmLC6x9-xm2HZqXObhdMmKQhqLOKk3ST1ZuBYIw" };
     }} />
+    <HomeCommandUpdate openLocalHosts={() => sent.update(list => [...list, "open local hosts"])} />
     <Button testID="fake-terminal-install" label="Install in a terminal" onPress={() => { command = "ok"; }} />
     <Button testID="fake-old-command" label="Make the command old" onPress={() => { command = "outdated"; }} />
     <Button testID="fake-wsl-installed" label="Set up WSL" onPress={() => { distros = ["Ubuntu-24.04"]; }} />
     <Text>{`install error: ${nativeEnvironment().installError()}`}</Text>
+    <Text>{`launches: ${launches()}`}</Text>
     <Text>{`this computer's hosts: ${thisComputerHostIds(SERVER).join(",") || "none"}`}</Text>
     <Text>{`hosts: ${localHosts().all().map(item => `${item.pairedWith() ?? "unpaired"}=${item.state()}`).join(" ")}`}</Text>
     <Button testID="fake-resume" label="Resume hosting" onPress={() => resumeThisComputer()} />

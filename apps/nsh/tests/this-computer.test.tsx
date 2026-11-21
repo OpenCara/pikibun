@@ -1,7 +1,7 @@
 import { describe, expect, open, test } from "nsh/test";
 import type { HostEvent, HostRequest } from "../../../packages/shared/src/app-host-protocol";
 import { agentSocketImport } from "../src/lib/agent-socket";
-import { CommandChannel, pikibunCommand } from "../src/lib/pikibun-command";
+import { CommandChannel, pikibunCommand, reportedVersion } from "../src/lib/pikibun-command";
 import {
   appCliFolder, COMMAND_UPDATED_KEY, hostArgs, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, parseWslList, serverStateDir, updateFailure,
   validHostConfigs, wslInstallCommand, wslPikibunCommand,
@@ -90,6 +90,13 @@ describe("starting Pikibun's command", () => {
       .toMatch(/^npm couldn't update Pikibun's command \(npm error code ENOTFOUND npm error network request to https:\/\/registry\.npmjs\.org\/pikibun failed\)\. This (Computer|Mac) keeps the one it has, and Pikibun tries again the next time it opens\.$/);
     expect(updateFailure([], { code: null, error: "timed out after 300000 ms" })).toMatch(/^npm couldn't update Pikibun's command \(timed out after 300000 ms\)\./);
     expect(updateFailure([], { code: 1 })).toMatch(/^npm couldn't update Pikibun's command \(exit code 1\)\./);
+  });
+
+  test("reads the version pikibun --version printed, past what the login shell said first", () => {
+    expect(reportedVersion(["bash: no job control in this shell", "0.38.0"])).toBe("0.38.0");
+    expect(reportedVersion(["0.41.0-rc.1"])).toBe("0.41.0-rc.1");
+    expect(reportedVersion(["Unknown command: --version"])).toBe(null);
+    expect(reportedVersion([])).toBe(null);
   });
 
   test("tells a missing command from an old one, and shows anything else as it said", () => {
@@ -499,6 +506,50 @@ describe("Local hosts", () => {
     await app.press("id:this-computer-install-button");
     await app.waitUntil(() => !app.shows("id:this-computer-command"));
     expect(sent()).toContain("install");
+  });
+
+  test("a command older than the one the app was released with is run, but the page and the home screen say so and offer to update it", async () => {
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, cliVersion: "0.40.0", reports: "0.38.0" });
+    await app.waitFor("id:home-command-update");
+    expect(app.shows("id:local-host-start-default")).toBe(true);
+    expect(showsText("This Mac runs its hosts with pikibun 0.38.0, older than the 0.40.0 this version of Pikibun comes with")).toBe(true);
+    expect(showsText("This Mac runs pikibun 0.38.0, older than the 0.40.0 this version of Pikibun comes with: its hosts may miss fixes")).toBe(true);
+    expect(sent()).not.toContain("pikibun --version");
+    await app.press("id:home-command-update-open");
+    expect(sent()).toContain("open local hosts");
+    await app.press("text:Recent activity");
+    await app.waitUntil(() => showsText("warning: This Mac runs pikibun 0.38.0, older than the 0.40.0 this version of Pikibun comes with"));
+    const launched = () => Number(app.texts().find(text => text.startsWith("launches: "))?.slice("launches: ".length));
+    const before = launched();
+    await app.press("id:this-computer-install-button");
+    await app.waitUntil(() => !app.shows("id:this-computer-command") && !app.shows("id:home-command-update"));
+    expect(sent()).toContain("install");
+    await app.waitUntil(() => launched() > before);
+    await app.press("id:this-computer-refresh");
+    await app.waitUntil(() => showsText("npm installed pikibun in Pikibun's own folder."));
+    expect(app.shows("id:home-command-update")).toBe(false);
+  });
+
+  test("a command too old to report its version when it starts is asked for it", async () => {
+    const old = await openPanel({ paired: SERVER, cliVersion: "0.40.0", probes: "0.30.0" });
+    await old.app.waitFor("id:home-command-update");
+    expect(old.sent()).toContain("pikibun --version");
+    expect(old.showsText("pikibun 0.30.0, older than the 0.40.0")).toBe(true);
+    const current = await openPanel({ paired: SERVER, cliVersion: "0.40.0", reports: "0.40.0" });
+    await current.app.waitFor("id:local-host-start-default");
+    expect(current.app.shows("id:home-command-update")).toBe(false);
+    expect(current.app.shows("id:this-computer-command")).toBe(false);
+    const newer = await openPanel({ paired: SERVER, cliVersion: "0.40.0", reports: "0.41.0" });
+    await newer.app.waitFor("id:local-host-start-default");
+    expect(newer.app.shows("id:home-command-update")).toBe(false);
+  });
+
+  test("Later puts the home screen's notice off, but the page still offers the update", async () => {
+    const { app } = await openPanel({ paired: SERVER, cliVersion: "0.40.0", reports: "0.38.0" });
+    await app.waitFor("id:home-command-update");
+    await app.press("id:home-command-update-later");
+    await app.waitUntil(() => !app.shows("id:home-command-update"));
+    expect(app.shows("id:this-computer-install-button")).toBe(true);
   });
 
   test("an install that fails says why, and offers the command to run in a terminal", async () => {

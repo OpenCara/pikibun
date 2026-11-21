@@ -38,6 +38,7 @@ export class ThisServer {
   private loaded?: Promise<void>;
   private readonly channel = new CommandChannel<ServerEvent, ServerRequest>({
     launch: () => launcher(), before: () => nativeEnvironment().commandUpdated(), eventTypes: new Set(["ready", "result", "status", "log"]), problem: serverLaunchProblem, subject: "Pikibun",
+    onReady: version => nativeEnvironment().started(version),
     failure: (id, message) => ({ type: "result", id, ok: false, error: { message } }),
     onEvent: event => {
       if (event.type === "log") { this.log(event.level, event.message); return; }
@@ -52,7 +53,9 @@ export class ThisServer {
     },
   });
 
-  constructor(private readonly confirmUnsandboxed: (warning: string) => Promise<boolean>) {}
+  constructor(private readonly confirmUnsandboxed: (warning: string) => Promise<boolean>) {
+    nativeEnvironment().use({ idle: () => untracked(this.status).state === "stopped", restart: () => this.channel.shutdown() });
+  }
 
   running(): string | undefined {
     const status = this.status();

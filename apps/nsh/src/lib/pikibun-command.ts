@@ -117,6 +117,30 @@ export function spawnPikibun(args: readonly string[], target: CommandTarget = {}
   };
 }
 
+const VERSION_TIMEOUT_MS = 30_000;
+const REPORTED_VERSION = /^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?)$/;
+
+export function reportedVersion(lines: readonly string[]): string | null {
+  for (const line of [...lines].reverse()) {
+    const match = REPORTED_VERSION.exec(line.trim());
+    if (match) return match[1]!;
+  }
+  return null;
+}
+
+export function commandVersion(target: CommandTarget = {}): Promise<string | null> {
+  return new Promise(resolve => {
+    let link: CommandLink;
+    try { link = spawnPikibun(["--version"], target); }
+    catch { resolve(null); return; }
+    const lines: string[] = [];
+    const deadline = setTimeout(() => link.kill(), VERSION_TIMEOUT_MS);
+    link.onOutput(line => { lines.push(line); if (lines.length > 40) lines.shift(); });
+    link.onExit(result => { clearTimeout(deadline); resolve(result.code === 0 ? reportedVersion(lines) : null); });
+    link.end();
+  });
+}
+
 export type LaunchProblem =
   | { kind: "missing" }
   | { kind: "outdated" }
@@ -144,6 +168,7 @@ export interface ChannelOptions<Event extends { type: string }> {
   problem(lines: readonly string[], code: number | null | undefined): LaunchProblem;
   failure(id: number, message: string, notReady: boolean): Result<Event>;
   subject: string;
+  onReady?(version: string | undefined): void;
   onEvent(event: Exclude<Event, Result<Event> | { type: "ready" }>): void;
   onOutput(line: string): void;
   onExit(code: number | null | undefined, expected: boolean): void;
@@ -188,7 +213,14 @@ export class CommandChannel<Event extends { type: string }, Req extends { id: nu
       });
       link.onMessage(value => {
         if (!this.isEvent(value)) return;
-        if (value.type === "ready") { isReady = true; settled = true; resolve(); return; }
+        if (value.type === "ready") {
+          isReady = true;
+          settled = true;
+          const version = (value as { version?: unknown }).version;
+          this.options.onReady?.(typeof version === "string" ? version : undefined);
+          resolve();
+          return;
+        }
         if (value.type !== "result") { this.options.onEvent(value as Exclude<Event, Result<Event> | { type: "ready" }>); return; }
         const result = value as Result<Event> & { id: number };
         const settle = this.pending.get(result.id);
