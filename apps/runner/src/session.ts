@@ -350,6 +350,7 @@ export class RunnerSession {
       exclusive: operation => this.exclusive(operation), metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), requiredRefusal: open => this.requiredRefusal(open),
       extensionChoice: () => this.extensionChoice(), applyOptions: (conversation, run, content) => this.applyOptions(conversation, run, content),
+      imageLimits: run => this.uploadImageLimits(run.options),
       drain: () => this.drainQueue(),
     });
     this.#piki = new SessionPiki({

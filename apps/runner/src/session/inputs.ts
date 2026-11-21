@@ -3,7 +3,7 @@ import { mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatImage } from "../../../../packages/shared/src/chat-images.js";
 import type { ImageLimits } from "@earendil-works/pi-durable/tools";
-import { fitsImageLimits, IMAGE_BUSY, IMAGE_ERROR, imageType, MAX_MODEL_IMAGE_LIMITS, prepareImage } from "../images.js";
+import { fitsImageLimits, IMAGE_BUSY, IMAGE_ERROR, IMAGES_BUSY, imageType, MAX_MODEL_IMAGE_LIMITS, prepareImage } from "../images.js";
 import { RunnerError } from "../protocol.js";
 
 export type InputImage = { mimeType: string; data: string };
@@ -31,7 +31,7 @@ export async function fitInputImages(content: string | InputPart[], limits: Imag
     if (part.type !== "image" || fits(part)) { fitted.push(part); continue; }
     const result = await prepareImage(Buffer.from(part.data, "base64"), limits);
     if ("image" in result) fitted.push({ type: "image", data: result.image.data, mimeType: result.image.mimeType });
-    else notes.push(`An image (${part.mimeType}) cannot be prepared for the model and was left out.`);
+    else notes.push(`An image (${part.mimeType}) cannot be prepared for the model and was left out${result.error === IMAGE_BUSY ? `: ${IMAGES_BUSY}` : ""}.`);
   }
   return notes.length ? [...fitted, { type: "text", text: notes.join("\n") }] : fitted;
 }

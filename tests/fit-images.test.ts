@@ -268,4 +268,10 @@ test("a queued message's images are fitted again when the model it runs on takes
   assert.deepEqual(size(fitted[2] as ImageContent), [100, 25]);
   assert.equal(await fitInputImages([content[0]!, small], narrow).then(result => typeof result !== "string" && result[1] === small), true);
   assert.equal(await fitInputImages("text alone", narrow), "text alone");
+  const release = occupy();
+  let busy: Awaited<ReturnType<typeof fitInputImages>>;
+  try { busy = await fitInputImages(content, narrow); }
+  finally { await release(); }
+  assert.deepEqual(busy, [content[0], small, { type: "text", text: "An image (image/png) cannot be prepared for the model and was left out: too many images are being prepared at once; try again shortly." }],
+    "while the line is full, the note says trying again would work");
 });

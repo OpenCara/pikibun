@@ -113,7 +113,7 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   it sees; an image the line itself prepared (its digest kept, 256 at most) that still fits is handed back as it is,
   without a turn, so `read`'s result is never fitted twice nor left out because the line is full meanwhile. A busy line
   leaves a hook's image out with a note, as Pi does for any image it can't prepare. A queued message's images were
-  fitted to the model it named, or the conversation's, when sent; when it runs, those its model takes smaller are fitted
+  fitted to the model it named, or the conversation's, when sent (and so are those a screening extension changes); when it runs, those its model takes smaller are fitted
   again (`fitInputImages`), by their headers alone otherwise.
 - **Every call to the control plane is posted one way.** `ControlPlaneCalls` builds the request in one place, so each
   call carries the connector's version, and the activity, tunnel and branch reports share one body that checks the
