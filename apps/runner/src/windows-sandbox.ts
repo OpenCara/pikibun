@@ -203,7 +203,7 @@ export class WindowsBackend implements HelperBackend {
       ...context.environment,
       SANDBOX_GITDIR: layout.git, SANDBOX_GIT: this.#git, SANDBOX_BASH: this.#bash, SANDBOX_OWNER_CONFIG: layout.ownerConfig,
       ...(mirrors.length ? { SANDBOX_MIRRORS: mirrors.join("\n") } : {}),
-      SystemRoot: system, windir: system, PATH: context.gitShim && port !== undefined ? `${layout.bin};${this.path}` : this.path,
+      SystemRoot: system, windir: system, PATH: context.gitShim && port !== undefined ? `${layout.bin};${context.environment.PATH ?? this.path}` : context.environment.PATH ?? this.path,
       TEMP: join(layout.home, ".tmp"), TMP: join(layout.home, ".tmp"), USERPROFILE: layout.home,
       LOCALAPPDATA: join(layout.home, "AppData", "Local"), APPDATA: join(layout.home, "AppData", "Roaming"),
       MSYSTEM: "MINGW64", CHERE_INVOKING: "1",
@@ -211,8 +211,8 @@ export class WindowsBackend implements HelperBackend {
       ...(port !== undefined ? { SANDBOX_EGRESS_PROXY: context.environment.HTTPS_PROXY!, SANDBOX_EGRESS_NO_PROXY: context.environment.NO_PROXY ?? "" } : {}),
     };
     const readonly = [system, dirname(this.#node), this.#gitRoot, this.#bash, layout.bin, layout.ownerConfig, layout.caBundle, join(layout.worktree, ".git"),
-      ...(context.gitWritable ? [] : [layout.git]), ...mirrors];
-    const readwrite = context.readOnly ? [] : [layout.home, layout.worktree, ...(context.gitWritable ? [layout.git] : [])];
+      ...(context.gitWritable ? [] : [layout.git]), ...mirrors, ...(context.sharedTools ? [context.sharedTools] : [])];
+    const readwrite = context.readOnly ? [] : [layout.home, layout.worktree, ...(context.gitWritable ? [layout.git] : []), ...(context.packageCache ? [context.packageCache] : [])];
     if (context.readOnly) readonly.push(layout.home, layout.worktree);
     const containerRequest = {
       command: `"${this.#node}" --preserve-symlinks-main --preserve-symlinks "${join(layout.bin, "helper.mjs")}"`,

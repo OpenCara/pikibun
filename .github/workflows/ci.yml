@@ -182,7 +182,7 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node --import tsx --test tests/sandbox-conformance.test.ts tests/native-sandboxes.test.ts tests/windows-cmd.test.ts tests/pi-file-tools.test.ts
+      - run: node --import tsx --test tests/sandbox-conformance.test.ts tests/native-sandboxes.test.ts tests/windows-cmd.test.ts tests/pi-file-tools.test.ts tests/shared-tools.test.ts tests/package-cache.test.ts
 
   # TRUST_PROXY with forwarded requests, on the image's own Node: its health check sends no forwarded headers, so it
   # stayed healthy while every request through a TLS proxy was a 500 (#71).

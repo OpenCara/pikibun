@@ -18,6 +18,7 @@ import { detectGpu, HostConfigSource } from "./host-config.js";
 import type { GpuKind, RepositoryCacheMode } from "../../../packages/shared/src/host-config.js";
 import { recoverResourceOrphans } from "./resources.js";
 import { RepositoryCache } from "./repo-cache.js";
+import { prepareSharedTools, sharedToolsPath } from "./shared-tools.js";
 import { RunnerService, createRunnerApp, type PortableReport } from "./server.js";
 import { IdentityStore } from "./identity.js";
 import { parseSettings } from "../../../packages/shared/src/identity.js";
@@ -289,6 +290,7 @@ export class LocalConnector {
     if (!this.options.runtimeFactory && process.platform !== "linux" && !this.options.unsandboxed && !this.options.sandboxBackend)
       throw new Error("This platform has no sandbox unless one is chosen (sandboxBackend); no host-shell fallback");
     this.directory = await privateDirectory(this.options.dataDir);
+    if (!this.options.unsandboxed) await prepareSharedTools(sharedToolsPath(this.directory)).catch(() => undefined);
     if (this.options.identityDir) {
       const identity = new IdentityStore(resolve(this.options.identityDir));
       try {

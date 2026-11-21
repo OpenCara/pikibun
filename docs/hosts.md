@@ -145,6 +145,36 @@ With bubblewrap, every session runs in its own sandbox: no direct network (see [
 
 Commands (`git`, `node`, `python`) also need resource limits. A connector started with `--resources PATH` (an operator-provisioned cgroup v2 configuration: CPU, memory, process and disk limits, described in [`apps/runner/src/resources.ts`](../apps/runner/src/resources.ts)) runs them in every session. Without it, commands run without limits only in sessions of the host's owner and of members they [granted host commands](#host-admins-and-host-command-grants), for messages of theirs, since that grant already lets them run any command on the host itself (see [What a session may do](approvals.md#the-rules)). They still run in the sandbox, as the session's owner, and once the grant ends, the next command is refused. In every other member's session on that host, commands are refused.
 
+### Shared tools
+
+A session starts with an empty home, so what one session installs there (an Azure CLI extension, a script, a small program) is gone in the next. To give every sandboxed session on a host the same tools, its owner puts them in the host's **shared tools folder**, `tools` in the connector's state directory (`~/.local/share/pikibun/connector/tools` by default). The connector makes it, empty, when it starts. Each command of a sandboxed session (Linux, macOS and Windows sandboxes; not sessions on the host, which have the owner's own home) sees it read-only:
+
+| | |
+|---|---|
+| `$PIKIBUN_TOOLS` | The folder: `/opt/pikibun/tools` in the Linux sandbox, its own path on the host in the macOS and Windows ones |
+| `$PIKIBUN_TOOLS/bin` | Added at the end of `PATH`, so its programs and scripts run by name without shadowing the system's |
+| `$PIKIBUN_TOOLS/azure-cli-extensions` | The Azure CLI's system extension directory (`AZURE_EXTENSION_SYS_DIR`), so extensions there load in every session, while `az extension add` in a session still installs into its own home |
+
+For example, to give every session `az boards`, `az repos` and `az pipelines`:
+
+```sh
+AZURE_EXTENSION_SYS_DIR=~/.local/share/pikibun/connector/tools/azure-cli-extensions az extension add --name azure-devops --system
+```
+
+- **Only the host's owner fills it,** from their own terminal: sessions can't write it. What it holds runs in every sandboxed session on the host, members' included, so put there only what you would run yourself.
+- **It must stay yours alone:** a directory of the connector's user that its group and others can't write. Otherwise sessions don't get it, so another user of the computer can't plant programs that sessions run. It is checked before each command, so a change takes effect at the next one, without restarting the connector.
+- **Built for the host:** a session runs what is there on the host's own system and Python, so install it with the same programs the sandbox runs (in the Linux sandbox, the host's `/usr`). A program the sandbox doesn't have, or one built against another Python, fails there as it would anywhere else.
+- **Not in backups.** It belongs to the host: a session moved to another host gets that host's folder, if any.
+
+### Package caches
+
+What pip, npm and uv download (packages, wheels they built, registry answers) is kept on the host and shared by **one person's sessions** on it, so the next session installs from there instead of downloading again. Each session owner has a cache of their own, `package-cache/<hash of their id>` in the connector's state directory, made private to the connector's user; another owner's sessions neither see nor write it. A command gets it at `/opt/pikibun/cache` in the Linux sandbox (its own path on the host in the macOS and Windows ones), named by `PIP_CACHE_DIR`, `npm_config_cache` and `UV_CACHE_DIR`.
+
+- **Only commands that may write and run without the host's resource limits** get it: those in sessions of the host's owner and of members they [granted host commands](#host-admins-and-host-command-grants), for messages of theirs. On a host started with `--resources`, whose limits cover a session's own disk, and in Read-only messages, commands keep their caches in the session's home, as before.
+- **It installs nothing.** Each session still installs into its own home or virtual environment; the cache only spares the download. Shared tools are what reach every session already installed.
+- **A cache is trusted like its owner's own sessions:** a command in one of them can change what a later one installs from it, as it could change anything else of that person's. It is never shared between people.
+- **It isn't pruned yet.** Delete `package-cache` (or one owner's folder in it) to free its space; the next command makes it again, empty.
+
 ### A browser for sessions
 
 The agent's [browser tool](extensions.md#the-browser-pikibrowser) runs a headless Chromium in the session's sandbox: the host's, since sessions download nothing. Its owner chooses where it comes from on the host's page, under **Extensions** → `piki:browser`, which also shows how it stands (**Ready**, **No Chromium**, **Downloading**, **Download failed**, **Off**), the executable sessions run and, when there is one, what went wrong:
