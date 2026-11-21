@@ -891,6 +891,18 @@ test("run queue: the next queued message runs once nothing else does, as its sen
   assert.equal(state.runs.r2!.status, "running", "a settled run lets the next one start");
 });
 
+test("run queue: a settled run tells the session its conversation went idle, once the conversation is", async t => {
+  const idled: number[] = [];
+  const { queue, state, settle, idle } = await queueFixture(t, [{ content: "go", conversationId: 5 }], { settled: conversationId => { idled.push(conversationId); } });
+  queue.drain();
+  await idle();
+  assert.deepEqual(idled, [], "not while the run works");
+  settle[0]!({ status: "done" });
+  await idle();
+  assert.equal(state.runs.r0!.status, "settled");
+  assert.deepEqual(idled, [5]);
+});
+
 test("run queue: nothing starts while the session closes or its repositories prepare; a refusal or lost images end the message", async t => {
   const closing = await queueFixture(t, [{}]);
   closing.flags.closing = true;

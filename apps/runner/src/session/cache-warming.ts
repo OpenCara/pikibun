@@ -62,6 +62,7 @@ export interface WarmingSession {
   phase(conversation: number, request: ModelRequest): Promise<CacheWarmingPhase | undefined>;
   record(conversation: number, refresh: AssistantMessage): Promise<void>;
   report(error: unknown): void;
+  ended?(conversation: number): void;
 }
 
 type Warmer = {
@@ -111,6 +112,7 @@ export class CacheWarmers {
     this.#warmers.delete(conversation);
     warmer.cancel?.();
     warmer.controller.abort();
+    this.#session.ended?.(conversation);
   }
 
   close(): void {
