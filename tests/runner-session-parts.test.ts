@@ -32,7 +32,7 @@ import type { ProgramToolDefinition, ToolDefinition } from "../packages/shared/s
 import { SessionPiki, type SessionPikiOptions } from "../apps/runner/src/session/piki.js";
 import type { PikiSandboxRun } from "../apps/runner/src/extensions/piki/command.js";
 import { contextView, extensionView, lastRequest, sessionView, SessionUsage, usageView, type ExtensionViewSource, type ViewSource } from "../apps/runner/src/session/view.js";
-import { INPUT_EMPTY, RunQueue, steersInto, submissionRequestId, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
+import { INPUT_EMPTY, RunQueue, steersInto, submissionRequestId, type RunContent, type RunQueueOptions } from "../apps/runner/src/session/run-queue.js";
 import { ConversationIdle, type ConversationId } from "@earendil-works/pi-durable";
 import { ToolAvailability, type ToolAvailabilityOptions } from "../apps/runner/src/session/availability.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
@@ -868,7 +868,7 @@ async function queueFixture(t: TestContext, runs: Partial<Metadata["runs"][strin
     metadata: async () => structuredClone(state), mutate: async change => { change(state); },
     authorize: async actorId => { if (actorId === "github:9") throw new RunnerError(403, "revoked"); },
     requiredRefusal: async () => undefined, extensionChoice: async () => ({ chosen: [] }),
-    applyOptions: async (_conversation, run) => { events.push(`options ${run.key}`); }, drain: () => { events.push("drain"); queue.drain(); },
+    applyOptions: async (_conversation, run, content) => { events.push(`options ${run.key}`); return content; }, drain: () => { events.push("drain"); queue.drain(); },
     ...options,
   });
   const idle = async () => { for (let index = 0; index < 5; index++) { await lock; await new Promise(resolve => setImmediate(resolve)); } };
@@ -1039,7 +1039,7 @@ function steerHarness() {
       };
     },
   };
-  const options = { harness: () => harness as never, applyOptions: async (_conversation: unknown, run: Run) => { events.push(`options ${run.key}`); } };
+  const options = { harness: () => harness as never, applyOptions: async (_conversation: unknown, run: Run, content: RunContent) => { events.push(`options ${run.key}`); return content; } };
   return { harness, options, events, submissions, flags, track };
 }
 
