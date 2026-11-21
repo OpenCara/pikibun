@@ -146,6 +146,21 @@ test("a failing release is reported and doesn't keep the conversation pending", 
   assert.deepEqual(releases.pending, []);
 });
 
+test("a provider whose cleanup throws is reported, and the other providers' cleanups still ran", async t => {
+  const released = observeReleases(t);
+  t.after(registerSessionResourceCleanup(sessionId => { if (sessionId === "provider-1") throw new Error("socket already closed"); }));
+  const clock = fakeClock();
+  const { session, reported } = fakeSession();
+  const releases = new ProviderReleases(session, clock);
+  releases.touch(1);
+  await clock.advance(15 * MINUTE);
+  assert.deepEqual(released, ["provider-1"]);
+  assert.equal(reported.length, 1);
+  assert.ok(reported[0] instanceof AggregateError);
+  assert.match(String((reported[0] as AggregateError).errors[0]), /socket already closed/);
+  assert.deepEqual(releases.pending, []);
+});
+
 test("in a session, each conversation's own provider session is released once it idles past the delay and its warming ended", async t => {
   const released = observeReleases(t);
   const faux = fauxProvider({ models: [{ id: "faux-1", cost: { input: 1_000_000, output: 1, cacheRead: 1, cacheWrite: 1_000_000 } }] });

@@ -9,6 +9,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { obj } from "@earendil-works/pi-schema";
+import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { RunnerService } from "../apps/runner/src/server.js";
@@ -64,6 +65,9 @@ test("remote MCP servers and workspace Pi extensions get namespaces that don't t
   const remote = remoteNamespaces([{ prefix: "b", name: "Same" }, { prefix: "a", name: "same" }, { prefix: "c", name: "GitHub" }], ["c", "b", "a", "d"]);
   assert.deepEqual([...remote].map(([prefix, namespace]) => [prefix, namespace.name]), [["a", "same"], ["b", "mcp_b"], ["c", "mcp_c"], ["d", "mcp_d"]],
     "by prefix, so the first name stays the same whatever order the tools come in");
+  const clash = remoteNamespaces([{ prefix: "a", name: "mcp_b" }, { prefix: "b", name: "files" }], ["a", "b"]);
+  assert.deepEqual([...clash].map(([prefix, namespace]) => [prefix, namespace.name]), [["a", "mcp_b"], ["b", "mcp_b_2"]],
+    "a fallback another server's name took gets a suffix, so two servers never share a namespace");
 
   assert.equal(extensionNamespace("piki:gh", { name: "GitHub CLI" }, reservedNamespaceKeys), sessionNamespaces.github, "gh joins Pikibun's github tools");
   assert.equal(extensionNamespace("piki:glab", {}, reservedNamespaceKeys)!.name, "gitlab");
@@ -73,6 +77,34 @@ test("remote MCP servers and workspace Pi extensions get namespaces that don't t
   assert.equal(extensionNamespace("npm:files@1.0.0", { name: "Files" }, reservedNamespaceKeys), undefined, "a name Pikibun's tools have isn't taken");
   assert.equal(extensionNamespace("npm:tracker@1.0.0", { name: "tracker" }, new Set(["tracker"])), undefined);
   assert.equal(extensionNamespace("local:/x/shout.ts", {}, reservedNamespaceKeys), undefined, "nor one without a name");
+});
+
+test("a workspace extension's namespace follows the names taken, and a variant the registry no longer holds is installed again when it comes back",
+  { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-namespace-variants-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "shout.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    export default function (pi) {
+      pi.registerTool({ name: "shout", label: "Shout", description: "Shout text.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+    }`);
+  const summary = { source: "local:shout", dev: true, name: "shouter", modules: [{ path: "shout.ts", tools: [{ name: "shout", description: "" }], events: [], flags: [], noops: [], ignored: [] }] };
+  const host: ExtensionHost = { directory: root, model: () => undefined, state: async () => ({ active: true, settings: {} }),
+    runTool: async (_call, execute) => execute(new AbortController().signal), hookTimeoutMs: 5000, warn: () => {} };
+  const session = new SessionExtensions(host, []);
+  t.after(() => session.shutdown());
+  await session.ensure([{ installed: { source: "local:shout" }, root, files: [file], summary } as never]);
+  const named = session.select(["local:shout"]);
+  assert.equal(named.selected[0]!.extension.namespace?.name, "shouter");
+  assert.deepEqual(named.created, [named.selected[0]!.extension]);
+  const taken = session.select(["local:shout"], ["shouter"]);
+  assert.equal(taken.selected[0]!.extension.namespace, undefined, "a name another namespace has leaves its tools ungrouped");
+  assert.equal(taken.selected[0]!.extension.name, named.selected[0]!.extension.name, "under the same registry name");
+  assert.deepEqual(taken.created, [taken.selected[0]!.extension]);
+  const back = session.select(["local:shout"]);
+  assert.equal(back.selected[0]!.extension, named.selected[0]!.extension, "the cached variant comes back");
+  assert.deepEqual(back.created, [named.selected[0]!.extension], "and is installed again, as the registry holds the other under its name");
+  assert.deepEqual(session.select(["local:shout"]).created, [], "not while the registry holds it");
 });
 
 test("a session's code mode section lists its tools by namespace, the same from turn to turn, and scripts find them with describeNamespace and searchTools",

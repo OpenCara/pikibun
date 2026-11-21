@@ -70,7 +70,9 @@ export class ProviderReleases {
       if (!current()) return;
       if (busy || this.#session.warming(conversation)) return this.touch(conversation);
       this.#pending.delete(conversation);
-      if (sessionId !== undefined) cleanupSessionResources(sessionId);
+      if (sessionId === undefined) return;
+      try { cleanupSessionResources(sessionId); }
+      catch (error) { this.#session.report(error); }
     } catch (error) {
       if (!current()) return;
       this.#pending.delete(conversation);
