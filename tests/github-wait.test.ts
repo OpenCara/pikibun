@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { githubInstructions, githubWaiter, githubWaitLimits, ownChanges, viewFingerprint, waitForGitHub, type GitHubWait } from "../apps/runner/src/github-wait.js";
+import { githubInstructions, githubWaiter, githubWaitLimits, githubWaitTurn, isGitHubWaitState, ownChanges, startGitHubWait, viewFingerprint, waitForGitHub, type GitHubWait, type GitHubWaitState } from "../apps/runner/src/github-wait.js";
 import type { GitHubIssueView, GitHubPullRequestView, Operation, OperationRecord } from "../packages/shared/src/types.js";
 
 const pull = (change: Partial<GitHubPullRequestView> = {}): GitHubPullRequestView => ({
@@ -125,6 +125,33 @@ test("a wait reads again until it is over, its last sleep cut to end at the dead
   const failed = await run("change", [running], 600, 2);
   assert.equal(failed.view, running);
   assert.deepEqual(failed.waited, { for: "change", outcome: "stopped", seconds: 60, reason: "GitHub reads need a write message from the requester sent within the last hour." });
+});
+
+test("a wait's state is plain JSON, small, and answers the same after a round trip, as a parked github_read keeps it between wakes", () => {
+  const comment = { id: 501, author: "alice", createdAt: "2026-11-04T01:00:00Z", body: "x".repeat(50_000), url: "u" };
+  const first = view({ comments: [comment], body: "y".repeat(50_000) }, pull({ checks: [check("in_progress")] }));
+  const stored = (state: GitHubWaitState) => JSON.parse(JSON.stringify(state)) as unknown;
+  const change = stored(startGitHubWait("change", first, 1_000_000, 600_000));
+  assert.ok(isGitHubWaitState(change));
+  assert.ok(JSON.stringify(change).length < 2000, "digests, not the thread's text");
+  const own = { comments: new Set([502]), heads: [] };
+  const turn = (state: GitHubWaitState, next: typeof first, now: number) => githubWaitTurn(state, next, now, own, 30_000);
+  assert.deepEqual(turn(change, first, 1_030_000), { kind: "poll", state: change, at: 1_060_000 });
+  const mine = { ...comment, id: 502, body: "Fixed." };
+  assert.equal(turn(change, view({ comments: [comment, mine], body: first.body }, pull({ checks: [check("in_progress")] })), 1_030_000).kind, "poll", "its own comment");
+  assert.deepEqual(turn(change, view({ comments: [{ ...comment, body: "edited" }], body: first.body }, pull({ checks: [check("in_progress")] })), 1_060_000),
+    { kind: "done", waited: { for: "change", outcome: "changed", seconds: 60 } });
+  assert.deepEqual(turn(change, first, 1_590_000), { kind: "poll", state: change, at: 1_600_000 }, "the last sleep ends at the deadline");
+  assert.deepEqual(turn(change, first, 1_600_000), { kind: "done", waited: { for: "change", outcome: "timeout", seconds: 600 } });
+  const pushed = view({}, pull({ head: { ref: "feature", sha: "c".repeat(40), repository: "acme/app" } }));
+  const checks = stored(startGitHubWait("checks", first, 0, 1_800_000)) as GitHubWaitState;
+  const moved = turn(checks, pushed, 300_000);
+  assert.equal(moved.kind, "poll");
+  const later = stored((moved as { state: GitHubWaitState }).state) as GitHubWaitState;
+  assert.equal(turn(later, pushed, 300_000 + githubWaitLimits.noChecksSeconds * 1000 - 1).kind, "poll", "a new head's checks haven't registered yet");
+  assert.deepEqual(turn(later, pushed, 300_000 + githubWaitLimits.noChecksSeconds * 1000), { kind: "done", waited: { for: "checks", outcome: "no-checks", seconds: 420 } });
+  assert.equal(isGitHubWaitState({ for: "soon", startedAt: 0, deadline: 1, headSince: 0, head: null, first: {} }), false);
+  assert.equal(isGitHubWaitState(undefined), false);
 });
 
 test("with the gh tool, the instructions read and wait for checks with gh, keeping github_* for a change and the writes gh refuses", () => {

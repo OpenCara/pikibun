@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { arr, bool, int, num, obj, opt, str } from "@earendil-works/pi-schema";
@@ -50,7 +49,7 @@ export function sessionsTool(context: ToolContext): ToolRegistration {
     })),
     limit: opt(int({ minimum: 1, maximum: crossSessionLimits.readEntries })),
     timeout_seconds: opt(int({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
-  }, { open: true }), execute: async (args, api, call) => {
+  }, { open: true }), execute: async (args, api) => {
     await context.requireSessionTool("sessions");
     const attribution = await calls.actor(api, true);
     const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
@@ -74,15 +73,15 @@ export function sessionsTool(context: ToolContext): ToolRegistration {
       throw new RunnerError(403, `${result.reason} The session's owner can let content pass between sessions whose readers differ under the session's Details. Nothing was sent or read.`);
     };
     if (!wait) return text({ ...attribution, ...await broker() });
-    const deadline = Date.now() + (args.timeout_seconds ?? crossSessionLimits.defaultWaitSeconds) * 1000;
-    for (;;) {
-      const result = await broker();
-      const done = "outcome" in result && result.outcome?.done === true;
-      if (done || Date.now() + WAIT_POLL_MS > deadline) {
-        const { entries: _entries, ...shown } = result as Extract<SessionsToolResult, { entries: unknown }>;
-        return text({ ...attribution, ...shown, ...(done ? {} : { timedOut: true }) });
-      }
-      await sleep(WAIT_POLL_MS, undefined, { signal: call.abortSignal });
+    const checkpoint = api.checkpoint as { deadline?: unknown } | undefined;
+    if (api.wake !== undefined && !Number.isFinite(checkpoint?.deadline)) throw new RunnerError(500, "This wait lost its place; call wait again");
+    const deadline = api.wake === undefined ? api.now() + (args.timeout_seconds ?? crossSessionLimits.defaultWaitSeconds) * 1000 : checkpoint!.deadline as number;
+    const result = await broker();
+    const done = "outcome" in result && result.outcome?.done === true;
+    if (done || api.now() + WAIT_POLL_MS > deadline) {
+      const { entries: _entries, ...shown } = result as Extract<SessionsToolResult, { entries: unknown }>;
+      return text({ ...attribution, ...shown, ...(done ? {} : { timedOut: true }) });
     }
+    return { sleep: { checkpoint: { deadline }, until: api.now() + WAIT_POLL_MS } };
   } });
 }
