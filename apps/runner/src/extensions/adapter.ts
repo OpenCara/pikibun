@@ -14,6 +14,7 @@ import { modelCallSources } from "./complete.js";
 import type { CommandAnswer, CompleteHandler, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionToolDescription } from "./protocol.js";
 import { addedPrompt, directChannel, ExtensionWorker, modelDescription } from "./worker.js";
 import { ProcessChannel } from "./process.js";
+import { extensionNamespace, namespaceKey, reservedNamespaceKeys } from "../session/namespaces.js";
 
 export { addedPrompt };
 
@@ -113,6 +114,7 @@ async function activeSettings(host: ExtensionHost, source: string): Promise<Exte
 
 interface OpenedSource extends Link {
   dev: boolean;
+  label?: { name?: string; description?: string };
   commands: ExtensionCommandDescription[];
   tools: ToolRegistration[];
   sections: ReturnType<typeof section>[];
@@ -127,6 +129,7 @@ export class SessionExtensions {
   readonly #reserved: Set<string>;
   readonly #factories = new Map<string, Factories>();
   #selected: SessionExtension[] = [];
+  readonly #handed = new Map<string, Extension>();
   readonly #warned = new Set<string>();
   readonly #broken = new Set<string>();
   #started = false;
@@ -217,6 +220,7 @@ export class SessionExtensions {
         if (result.errors.length) this.#broken.add(source);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
         const extension = build(link, loaded.summary.dev, result.tools, offered, this.host, result.commands ?? []);
+        extension.label = { ...(loaded.summary.name ? { name: loaded.summary.name } : {}), ...(loaded.summary.description ? { description: loaded.summary.description } : {}) };
         this.#opened.push(extension);
         opened.push(extension);
       } catch (error) {
@@ -227,11 +231,12 @@ export class SessionExtensions {
     if (this.#started) for (const extension of opened) await this.emit(extension, { type: "session_start", reason: "startup" });
   }
 
-  select(sources: readonly string[]): { selected: SessionExtension[]; created: Extension[] } {
+  select(sources: readonly string[], namespaces: Iterable<string> = []): { selected: SessionExtension[]; created: Extension[] } {
     const opened = sources.flatMap(source => this.#opened.filter(item => item.source === source));
     const settled = settleToolNames(opened.map(item => ({ source: item.source, tools: item.tools.map(tool => tool.name) })), this.#reserved);
     const selected: SessionExtension[] = [];
     const created: Extension[] = [];
+    const taken = new Set([...reservedNamespaceKeys, ...[...namespaces].map(namespaceKey)]);
     for (const { source, kept, lost } of settled) {
       const opened = this.#opened.find(item => item.source === source)!;
       for (const name of lost) {
@@ -241,12 +246,18 @@ export class SessionExtensions {
         this.host.warn(source, `tool ${name} is left out: an earlier extension or the session has a tool named so`);
       }
       const tools = opened.tools.filter(tool => kept.includes(tool.name));
-      const key = tools.map(tool => `${tool.name}\0${registrationSignature.get(tool) ?? ""}`).sort().join("\n");
+      const namespace = tools.length ? extensionNamespace(source, opened.label ?? {}, taken) : undefined;
+      if (namespace) taken.add(namespaceKey(namespace.name));
+      const toolKey = tools.map(tool => `${tool.name}\0${registrationSignature.get(tool) ?? ""}`).sort().join("\n");
+      const key = namespace ? `${toolKey}\n\0${JSON.stringify(namespace)}` : toolKey;
       let extension = opened.variants.get(key);
       if (!extension) {
-        const name = tools.length === opened.tools.length ? extensionKey(source) : `${extensionKey(source)}-${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
-        extension = defineExtension({ name, tools, sections: opened.sections, hooks: opened.hooks });
+        const name = tools.length === opened.tools.length ? extensionKey(source) : `${extensionKey(source)}-${createHash("sha256").update(toolKey).digest("hex").slice(0, 8)}`;
+        extension = defineExtension({ name, tools, sections: opened.sections, hooks: opened.hooks, ...(namespace ? { namespace } : {}) });
         opened.variants.set(key, extension);
+      }
+      if (this.#handed.get(extension.name) !== extension) {
+        this.#handed.set(extension.name, extension);
         created.push(extension);
       }
       selected.push({ source, dev: opened.dev, extension, tools });

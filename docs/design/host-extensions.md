@@ -127,6 +127,24 @@ options and lifecycle), so a workspace can't name one. Pikibun wraps the useful 
   refused in Read-only messages exactly as the model's own call would be. Scripts survive a restart (pi-durable's
   journal). The script itself runs outside the OS sandbox, in a worker thread of the connector, but QuickJS gives it no
   Node, file system, network or timers.
+- **Code mode's namespaces** (`apps/runner/src/session/namespaces.ts`). The `codemode` prompt section lists tools by
+  pi-durable's namespaces (`Extension.namespace`): `## <name>` and a one-line description, then as many declarations as
+  its 3,000-token budget holds; scripts find the rest with `describeNamespace()` and `searchTools(q, { namespace })`.
+  Pikibun's own tools fall into `files`, `programs` (git, python and every program tool, the control plane's
+  included), `github` (the github_* tools and git_push), `sessions` (sessions, schedule), `browser` (browser, tunnel),
+  `artifacts`, `documents` (source_read) and `workspace`. Each is an extension of its own, `workspace-tools:<name>`,
+  holding only those tools; `workspace-tools` still holds every tool and the hooks (renamed tools, cache warming), so
+  the hooks run once and a conversation stored before, which names only `workspace-tools`, keeps its tools. A tool
+  belongs to the first selected extension that names it, so the namespace extensions come first. A message selects
+  only those with a tool on, so a namespace with nothing to call isn't listed; namespaces are listed by name, and the
+  extensions are made again only when the session's tools change, so the section stays the same from turn to turn
+  for the prompt cache. A remote MCP server's tools (route `mcp/<prefix>/...`) get a namespace named as the server
+  is (`remoteServers` in the workspace's extensions answer, from connectors that ask for `remoteTools`), or
+  `mcp_<prefix>` where that name is taken or the control plane predates it. A workspace Pi extension with tools
+  gets its package's name and description, unless another namespace has that name; `piki:gh` joins `github`, and
+  `piki:glab` and `piki:azure-cli` are `gitlab` and `azure`. Variants of one extension that differ only in their
+  namespace share a registry name, so a selection hands the session a cached variant to install again whenever another
+  was installed under its name since.
 - The session view lists the built-ins the next message gets (`SessionView.extensions.builtin`).
 
 ## Installing
