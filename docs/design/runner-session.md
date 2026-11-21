@@ -35,6 +35,7 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
 | `session/view.ts` | What a session's view shows (functions over the state the session gives them) |
 | `session/titles.ts` | The `title` action: one completion with the session's model that names the session, its usage added to the shared conversation's |
 | `session/cache-warming.ts` | Refreshing the prompt cache of a conversation shortly before it expires ([Prompt cache warming](cache-warming.md)) |
+| `session/provider-release.ts` | Releasing a conversation's process-local provider resources once it has been idle for 15 minutes ([Releasing idle conversations' provider resources](provider-release.md)) |
 | `session/run-queue.ts` | Running queued shared messages one at a time (a sender's next shared message, with the same options, steers their run at work instead) and side asks beside them, screening them with extensions, and settling their runs |
 | `session/uploads.ts`, `inputs.ts`, `mirrors.ts`, `whole-results.ts`, `branch-reports.ts`, `host-commands.ts`, `tunnel.ts`, `entries.ts` | As before: uploads, queued images, cache mirrors, whole results, branch reports, the host-command policy, tunnels, transcript entries |
 | `connector/control-plane.ts` | The connector's calls to the control plane, each tied to the connection it was made on |
