@@ -101,8 +101,11 @@ parts, opens and closes the session, holds the `exclusive` lock, reads and chang
   `executing`, then `executed`, `failed` or `interrupted`.
 - **Images are fitted once, by whoever makes them, and the hook comes last.** `apps/runner/src/images.ts` holds the one
   Photon processor, its host-wide line (`inTurn`, one image at a time, 8 waiting), its decode caps and timeout, and
-  the limits: the conversation model's `imageLimits`, each bounded by Pi's defaults (2000×2000, 4.5 MiB), as a model's
-  declared limits may be missing or huge. `read`, browser screenshots and pasted images prepare their own, to the
+  the limits: the conversation model's `imageLimits`, each bounded by Pikibun's cap (`MAX_MODEL_IMAGE_LIMITS`,
+  1568×1568, 512 KB), so a model that declares tighter limits gets those. Pi falls back to 2000×2000 and 4.5 MiB for a
+  model that declares none, which is every catalog model today; a stored image lives in the session's database and
+  backups and is replayed in every later request, against prompt-cache writes and request-size limits, and Anthropic
+  scales anything over 1568 px down on its side anyway, so the cap keeps Pikibun's earlier size. `read`, browser screenshots and pasted images prepare their own, to the
   model they go to, and so keep their own refusals (`read` answers that it's busy; a message is refused with 422). Every
   other tool's images, code mode's `image()` and extension and MCP tools' among them, go through pi-durable's
   `fit-images` `afterTool` hook (`fitImagesExtension`), with the same processor wrapped (`modelImages`): it is the last

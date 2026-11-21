@@ -129,7 +129,9 @@ test("an oversized image from any tool reaches the model fitted to the conversat
   assert.deepEqual(images(plain), [block(wide)], "within the limits it is kept as the tool made it");
   assert.doesNotMatch(text(plain), /Resized/);
 
-  assert.deepEqual(size(images(await call("long", "huge"))[0]!), [MAX_MODEL_IMAGE_LIMITS.maxWidth, 25], "a model's huge limits are bounded");
+  assert.deepEqual(MAX_MODEL_IMAGE_LIMITS, { maxWidth: 1568, maxHeight: 1568, maxBytes: 512 * 1024 }, "Pikibun's cap");
+  assert.deepEqual(size(images(await call("long", "huge"))[0]!), [1568, Math.round(30 * 1568 / 2400)], "a model's huge limits are bounded");
+  assert.deepEqual(size(images(await call("long", "plain"))[0]!), [1568, Math.round(30 * 1568 / 2400)], "and a model that declares none gets the cap, not Pi's larger defaults");
   assert.deepEqual(modelImageLimits(undefined), MAX_MODEL_IMAGE_LIMITS);
 
   const small = block(png(8, 6));

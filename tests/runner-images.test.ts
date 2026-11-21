@@ -170,7 +170,7 @@ test("collaborators' clients read the transcript's images as thumbnails or as th
   assert.deepEqual(await ask({ entryId: message.id, index: 0, size: "thumbnail" }), { mimeType: "image/png", data: base64(small) });
   assert.deepEqual(await ask({ entryId: message.id, index: 0, size: "full" }), { mimeType: "image/png", data: base64(small) });
   const whole = await ask({ entryId: message.id, index: 1, size: "full" });
-  assert.equal(Buffer.from(whole.data, "base64").readUInt32BE(16), 2000, "fitted to the model's limits, Pi's defaults for a model that declares none");
+  assert.equal(Buffer.from(whole.data, "base64").readUInt32BE(16), 1568, "fitted to the model's limits, bounded by Pikibun's cap");
   const thumbnail = await ask({ entryId: message.id, index: 1, size: "thumbnail" });
   const bytes = Buffer.from(thumbnail.data, "base64");
   assert.ok(thumbnail.data.length <= 64 * 1024);

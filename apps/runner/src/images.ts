@@ -5,12 +5,12 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Extension, ToolExecutionApi } from "@earendil-works/pi-durable";
 import { createFitImagesExtension } from "@earendil-works/pi-durable/images/fit";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
-import { DEFAULT_IMAGE_LIMITS, imageLimits, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
+import { imageLimits, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
 import { entryImageLimits } from "../../../packages/shared/src/entry-images.js";
 
 export const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
-export const MAX_MODEL_IMAGE_LIMITS: ImageLimits = DEFAULT_IMAGE_LIMITS;
+export const MAX_MODEL_IMAGE_LIMITS: ImageLimits = { maxWidth: 1568, maxHeight: 1568, maxBytes: 512 * 1024 };
 
 const MAX_DECODE_BYTES = 512 * 1024 * 1024;
 const PREPARE_TIMEOUT_MS = 30_000;
