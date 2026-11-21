@@ -38,7 +38,7 @@ export class ThisServer {
   private loaded?: Promise<void>;
   private readonly channel = new CommandChannel<ServerEvent, ServerRequest>({
     launch: () => launcher(), before: () => nativeEnvironment().commandUpdated(), eventTypes: new Set(["ready", "result", "status", "log"]), problem: serverLaunchProblem, subject: "Pikibun",
-    onReady: version => nativeEnvironment().started(version),
+    onReady: version => nativeEnvironment().started(this.user, version),
     failure: (id, message) => ({ type: "result", id, ok: false, error: { message } }),
     onEvent: event => {
       if (event.type === "log") { this.log(event.level, event.message); return; }
@@ -47,14 +47,31 @@ export class ThisServer {
     },
     onOutput: line => this.log("info", line),
     onExit: (code, expected) => {
+      this.restartPending = false;
+      nativeEnvironment().exited(this.user);
       const wasRunning = untracked(this.status).state !== "stopped";
       this.status.set(STOPPED);
       if (!expected && wasRunning) this.fail(`Pikibun on ${computerName} stopped unexpectedly (code ${code ?? "unknown"}). Start it again when ready.`);
     },
   });
 
+  private restartPending = false;
+  private readonly user = { kind: "server" as const, running: () => this.status().state !== "stopped", restart: () => this.restartCommand() };
+
   constructor(private readonly confirmUnsandboxed: (warning: string) => Promise<boolean>) {
-    nativeEnvironment().use({ kind: "server", running: () => this.status().state !== "stopped", restart: () => this.channel.shutdown() });
+    nativeEnvironment().use(this.user);
+  }
+
+  private restartCommand(): Promise<void> {
+    if (!this.channel.running) return Promise.resolve();
+    this.restartPending = true;
+    return this.fresh();
+  }
+
+  private async fresh(): Promise<void> {
+    if (!this.restartPending || untracked(this.status).state !== "stopped") return;
+    this.restartPending = false;
+    if (this.channel.running) await this.channel.shutdown();
   }
 
   running(): string | undefined {
@@ -102,6 +119,7 @@ export class ThisServer {
   }
 
   async refresh(): Promise<ServerInspection | undefined> {
+    await this.fresh();
     this.inspecting.set(true);
     try {
       const result = await this.channel.request({ type: "inspect" });
@@ -143,6 +161,7 @@ export class ThisServer {
     this.setResume(undefined);
     if (!this.channel.running || untracked(this.status).state === "stopped") return { ok: true };
     const result = await this.channel.request({ type: "stop" });
+    await this.fresh();
     return result.ok ? { ok: true } : this.refuse(result.error.message);
   }
 

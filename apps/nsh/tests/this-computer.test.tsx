@@ -637,6 +637,29 @@ describe("Local hosts", () => {
     await app.waitFor("id:local-host-stop-default");
   });
 
+  test("a host started while npm updates the command keeps the warning until it is stopped, and its next start runs the new command", async () => {
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, cliVersion: "0.40.0", reports: "0.38.0", npmMs: 1500 }, {
+      [HOSTS_KEY]: JSON.stringify([{ id: "default", server: SERVER, name: "This Mac", sandbox: "none" }]),
+    });
+    const launched = () => Number(app.texts().find(text => text.startsWith("launches: "))?.slice("launches: ".length));
+    await app.waitFor("id:this-computer-install-button");
+    await app.press("id:this-computer-install-button");
+    app.onDialog(() => "Run unsandboxed");
+    await app.press("id:local-host-start-default");
+    await app.waitFor("id:local-host-stop-default");
+    expect(showsText("npm is installing pikibun")).toBe(true);
+    await app.waitUntil(() => sent().includes("install") && !showsText("npm is installing pikibun"));
+    expect(app.shows("id:home-command-update")).toBe(true);
+    expect(app.shows("id:this-computer-install-hosts-running")).toBe(true);
+    const before = launched();
+    await app.press("id:local-host-stop-default");
+    await app.waitUntil(() => !app.shows("id:home-command-update"));
+    await app.press("id:local-host-start-default");
+    await app.waitFor("id:local-host-stop-default");
+    expect(launched()).toBeGreaterThan(before);
+    expect(app.shows("id:home-command-update")).toBe(false);
+  });
+
   test("an update during a sign-in leaves the sign-in to finish, then restarts the host's command", async () => {
     const { app, sent, showsText } = await openPanel({ paired: SERVER, piSignedIn: false, cliVersion: "0.40.0", reports: "0.38.0" });
     const launched = () => Number(app.texts().find(text => text.startsWith("launches: "))?.slice("launches: ".length));
@@ -648,13 +671,14 @@ describe("Local hosts", () => {
     await app.waitFor("id:this-computer-install-button");
     const before = launched();
     await app.press("id:this-computer-install-button");
-    await app.waitUntil(() => sent().includes("install") && !app.shows("id:this-computer-command"));
+    await app.waitUntil(() => sent().includes("install") && !showsText("npm is installing pikibun"));
     expect(launched()).toBe(before);
+    expect(app.shows("id:home-command-update")).toBe(true);
     await app.type("id:this-computer-sign-in-answer", "sk-ant-secret");
     await app.press("id:this-computer-sign-in-submit");
     await app.waitUntil(() => showsText("Pi is signed in to Anthropic in this Mac."));
     await app.waitUntil(() => launched() > before);
-    expect(app.shows("id:home-command-update")).toBe(false);
+    await app.waitUntil(() => !app.shows("id:home-command-update") && !app.shows("id:this-computer-command"));
   });
 
   test("with no model in Pi yet, pairing is refused before a code is made, pointing at the sign-in", async () => {

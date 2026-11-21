@@ -229,31 +229,54 @@ export class LocalEnvironment {
   readonly logs = signal<LogLine[]>([]);
   readonly stale = signal<StaleCommand | null>(null);
   private updated?: Promise<void>;
-  private checks = 0;
   private readonly users = new Set<CommandUser>();
+  private readonly versions = new Map<CommandUser, string>();
+  private readonly checks = new Map<CommandUser, number>();
 
   constructor(readonly target: HostTarget) {}
 
   use(user: CommandUser): void { this.users.add(user); }
 
-  started(reported: string | undefined): void {
+  private wanted(): string | undefined {
     const wanted = commandUpdate.cliVersion;
-    if (wanted === undefined || !isVersion(wanted)) return;
-    const check = ++this.checks;
+    return wanted !== undefined && isVersion(wanted) ? wanted : undefined;
+  }
+
+  started(user: CommandUser, reported: string | undefined): void {
+    if (!this.wanted()) return;
+    const check = (this.checks.get(user) ?? 0) + 1;
+    this.checks.set(user, check);
     const probe = commandUpdate.commandVersion;
     const version = reported !== undefined ? Promise.resolve(reported) : probe ? probe(this.target).catch(() => null) : Promise.resolve(null);
     void version.then(found => {
-      if (check !== this.checks) return;
-      if (!found || compareVersions(found, wanted) !== -1) { this.stale.set(null); return; }
-      const before = untracked(this.stale);
-      this.stale.set({ version: found, wanted });
-      if (before?.version === found && before.wanted === wanted) return;
-      this.log("warning", `${this.title()} runs pikibun ${found}, older than the ${wanted} this version of Pikibun comes with, so its hosts may miss fixes and features they need. Choose Update pikibun${this.wsl ? "" : " under Local hosts"} to update it${untracked(() => this.stopFirst()) ? ", once what runs it is stopped" : ""}.`);
+      if (this.checks.get(user) !== check) return;
+      if (found) this.versions.set(user, found);
+      else this.versions.delete(user);
+      this.judge();
     });
   }
 
-  private async restartIdle(): Promise<void> {
-    await Promise.all([...this.users].filter(user => !untracked(() => user.running())).map(user => user.restart().catch(() => undefined)));
+  exited(user: CommandUser): void {
+    this.checks.set(user, (this.checks.get(user) ?? 0) + 1);
+    if (this.versions.delete(user)) this.judge();
+  }
+
+  private judge(): void {
+    const wanted = this.wanted();
+    if (!wanted) return;
+    let oldest: string | undefined;
+    for (const version of this.versions.values()) {
+      if (compareVersions(version, wanted) === -1 && (oldest === undefined || compareVersions(version, oldest) === -1)) oldest = version;
+    }
+    const before = untracked(this.stale);
+    if (oldest === undefined) { if (before) this.stale.set(null); return; }
+    if (before?.version === oldest && before.wanted === wanted) return;
+    this.stale.set({ version: oldest, wanted });
+    this.log("warning", `${this.title()} runs pikibun ${oldest}, older than the ${wanted} this version of Pikibun comes with, so its hosts may miss fixes and features they need. Choose Update pikibun${this.wsl ? "" : " under Local hosts"} to update it${untracked(() => this.stopFirst()) ? ", once what runs it is stopped" : ""}.`);
+  }
+
+  private async restartAll(): Promise<void> {
+    await Promise.all([...this.users].map(user => user.restart().catch(() => undefined)));
   }
 
   get key(): string { return environmentKey(this.target); }
@@ -358,9 +381,7 @@ export class LocalEnvironment {
       return { ok: false, error: failure };
     }
     this.log("info", where === "app" ? "npm installed pikibun in Pikibun's own folder." : where === "wsl" ? `npm installed pikibun in ${this.where()}.` : "npm installed pikibun.");
-    this.checks++;
-    this.stale.set(null);
-    await this.restartIdle();
+    await this.restartAll();
     if (where !== "global" && isVersion(commandUpdate.appVersion)) await Storage.setItem(this.updatedKey(), commandUpdate.appVersion).catch(() => undefined);
     if ((await check())?.kind === "missing") {
       const message = where === "app"
@@ -508,13 +529,13 @@ export class LocalHost {
     this.channel = new CommandChannel<HostEvent, HostRequest>({
       launch: () => launcher(hostArgs(untracked(this.config).stateDir), target), before: () => this.environment.commandUpdated(), eventTypes: hostEventTypes,
       problem: (lines, code) => launchProblem(lines, code, target), subject: "The host",
-      onReady: version => this.environment.started(version),
+      onReady: version => this.environment.started(this.user, version),
       failure: (id, message, notReady) => ({ type: "result", id, ok: false, error: { code: notReady ? "unsupported" : "failed", message } }),
       onEvent: event => this.handleEvent(event),
       onOutput: line => this.log("info", line),
       onExit: (code, expected) => this.handleExit(code, expected),
     });
-    this.environment.use({ kind: "host", running: () => this.state() !== "stopped", restart: () => this.restartCommand() });
+    this.environment.use(this.user);
   }
 
   get id(): string { return untracked(this.config).id; }
@@ -589,6 +610,8 @@ export class LocalHost {
   }
 
   private handleExit(code: number | null | undefined, expected: boolean): void {
+    this.restartPending = false;
+    this.environment.exited(this.user);
     const wasRunning = untracked(this.state) !== "stopped";
     this.state.set("stopped");
     this.running.set(null);
@@ -601,6 +624,7 @@ export class LocalHost {
   }
 
   async refresh(server?: string): Promise<HostInspection | undefined> {
+    await this.fresh();
     const origin = untracked(this.config).server || server;
     this.inspecting.set(true);
     try {
@@ -670,6 +694,7 @@ export class LocalHost {
     if (untracked(this.config).resume) this.setResume(undefined);
     if (!this.channel.running || untracked(this.state) === "stopped") return { ok: true };
     const result = await this.channel.request({ type: "stop" });
+    await this.fresh();
     return result.ok ? { ok: true } : this.refuse(result.error.message);
   }
 
@@ -730,7 +755,7 @@ export class LocalHost {
     if (!result.ok && result.error.code !== "cancelled") current.error = result.error.message;
     this.current = undefined;
     update();
-    if (this.restartAfterSignIn && untracked(this.state) === "stopped") await this.restartCommand();
+    await this.fresh();
     if (!result.ok) return { ok: false, error: result.error.message };
     this.log("info", `Pi is signed in to ${name} in ${this.where()}.${untracked(this.state) === "stopped" ? "" : " Its models are offered from the host's next start."}`);
     await Promise.all([this.loadProviders(), this.refresh()]);
@@ -738,12 +763,19 @@ export class LocalHost {
   }
 
   private current?: SignInView & { login?: number; openBrowser?: (url: string) => void };
-  private restartAfterSignIn = false;
+  private restartPending = false;
+  private readonly user: CommandUser = { kind: "host", running: () => this.state() !== "stopped", restart: () => this.restartCommand() };
 
   private restartCommand(): Promise<void> {
-    if (untracked(this.signIn)?.state === "running") { this.restartAfterSignIn = true; return Promise.resolve(); }
-    this.restartAfterSignIn = false;
-    return this.channel.shutdown();
+    if (!this.channel.running) return Promise.resolve();
+    this.restartPending = true;
+    return this.fresh();
+  }
+
+  private async fresh(): Promise<void> {
+    if (!this.restartPending || untracked(this.state) !== "stopped" || untracked(this.signIn)?.state === "running") return;
+    this.restartPending = false;
+    if (this.channel.running) await this.channel.shutdown();
   }
 
   private handleLogin(login: number, event: LoginEvent): void {

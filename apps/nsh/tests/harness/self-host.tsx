@@ -9,7 +9,7 @@ import { ThisServerPanel } from "../../src/settings/SelfHost";
 const LOCAL = "http://127.0.0.1:7878";
 const SIGN_IN_TOKEN = "c".repeat(43);
 const params = embedder.params as {
-  app?: unknown; command?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown; noToken?: unknown; cliVersion?: unknown; reports?: unknown;
+  app?: unknown; command?: unknown; sandboxed?: unknown; hostProblem?: unknown; appVersion?: unknown; ownCopy?: unknown; noToken?: unknown; cliVersion?: unknown; reports?: unknown; npmMs?: unknown;
 };
 let command = String(params.command ?? "ok");
 const sent = signal<string[]>([]);
@@ -76,7 +76,7 @@ setHostLauncher(() => link((request, emit) => {
 setInstaller((): InstallRun => {
   sent.update(list => [...list, "install"]);
   const exits: ((result: { code?: number | null }) => void)[] = [];
-  setTimeout(() => { command = "ok"; if (cliVersion) reports = cliVersion; for (const listener of exits) listener({ code: 0 }); }, 5);
+  setTimeout(() => { command = "ok"; if (cliVersion) reports = cliVersion; for (const listener of exits) listener({ code: 0 }); }, typeof params.npmMs === "number" ? params.npmMs : 5);
   return {
     line: installCommand("macos", "/bin/zsh", appCliFolder("macos", "/Users/ada/Library/Application Support/com.pikibun.app")).line,
     where: "app",
