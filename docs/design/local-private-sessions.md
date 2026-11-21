@@ -54,6 +54,10 @@ forwarding to it, and a message sent from any of them is queued in the one sessi
 - **Taken over by the one you ask for.** `pikibun serve` and Self host open the state with
   `openLocalStateTakingOver`: a lease held by a headless server is handed over (`POST /api/local/handover` with its
   secret), behind a short `handover.json` marker that keeps the other processes' homes from taking the lease back first.
+  A home reads the marker before it waits for the lease and again once it holds it: waiting takes up to five seconds,
+  so a home that was already waiting when the marker was written would otherwise take the lease the headless server
+  lets go of, and the one you started would find it taken. A home that finds the marker the second time lets go of the
+  lease at once.
   The headless server stops; its process's home waits and takes over again once the one you started stops.
 - **Its host runs the private sessions.** Its own connector (`<state>/connector`, `apps/server/src/local/host.ts`)
   is the only process that opens them, with the options of the process that started it (models, sandbox, resources),

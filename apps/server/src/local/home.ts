@@ -72,7 +72,7 @@ export function createPrivateHome(host: PrivateHomeHost, options: PrivateHomeOpt
       if (!(error instanceof LocalStateBusyError)) problem(`The Pikibun on this computer, which holds your private sessions, can't start: ${error instanceof Error ? error.message : 'its state is unusable'}`);
       return;
     }
-    if (lifetime.signal.aborted) { await opened.release(); return; }
+    if (lifetime.signal.aborted || await handoverPending(stateDir).catch(() => false)) { await opened.release(); return; }
     let server: LocalServer;
     try {
       server = await startLocalServer({ stateDir, state: opened.state, release: opened.release, mode: 'local', headless: true, onHandover: handover });
