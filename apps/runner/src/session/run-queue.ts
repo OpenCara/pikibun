@@ -75,6 +75,7 @@ export interface RunQueueOptions {
   extensionChoice(): Promise<{ chosen: ChosenExtension[] }>;
   applyOptions(conversation: Conversation, run: Run, content: RunContent): Promise<void>;
   drain(): void;
+  settled?(conversationId: number): void;
 }
 
 export class RunQueue {
@@ -98,6 +99,7 @@ export class RunQueue {
       if (!joined && observed.mode === "write") void this.options.hostExtensions()?.agentEnd([], settled.status !== "done").catch(() => {});
       const conversation = await harness.conversation(observed.conversationId as ConversationId, context);
       await conversation?.waitForIdle(context);
+      if (conversation) this.options.settled?.(conversation.id);
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
       const cause = settled.status === "unanswered" && settled.reason === "model_error" && !compaction ? modelFailureCause(settled.detail) : undefined;
       const failed = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model");

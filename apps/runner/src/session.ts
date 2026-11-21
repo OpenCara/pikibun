@@ -34,6 +34,7 @@ import { SudoPrompts } from "./sudo-prompts.js";
 import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
 import { CacheWarmers, cachedSettings, rememberRequests, sessionWarming } from "./session/cache-warming.js";
+import { ProviderReleases, sessionReleases } from "./session/provider-release.js";
 import { defaultCacheWarmingMode, type SessionCacheWarming } from "../../../packages/shared/src/cache-warming.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import { confinedLaunch, ProcessChannel, refusedChannel, sandboxLaunch } from "./extensions/process.js";
@@ -239,6 +240,7 @@ export class RunnerSession {
   #sudoOffered = false;
   readonly #titles = new Set<AbortController>();
   #warmers: CacheWarmers | undefined;
+  #releases: ProviderReleases | undefined;
   readonly #warmingSettings = cachedSettings(async (): Promise<SessionCacheWarming> =>
     this.config.cacheWarming ? this.config.cacheWarming(this.binding.session.id) : { mode: defaultCacheWarmingMode, child: false });
 
@@ -350,6 +352,7 @@ export class RunnerSession {
       authorize: (actorId, permission) => this.authorize(actorId, permission), requiredRefusal: open => this.requiredRefusal(open),
       extensionChoice: () => this.extensionChoice(), applyOptions: (conversation, run, content) => this.applyOptions(conversation, run, content),
       drain: () => this.drainQueue(),
+      settled: conversationId => this.#releases?.touch(conversationId),
     });
     this.#piki = new SessionPiki({
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
@@ -622,13 +625,20 @@ export class RunnerSession {
     const own = this.buildTools();
     this.tools = [...own, ...await this.#defined.load(own.map(tool => tool.name))];
     this.#warmers?.close();
-    const warmers: CacheWarmers = new CacheWarmers(sessionWarming({
+    this.#releases?.close();
+    const releases: ProviderReleases = new ProviderReleases(sessionReleases({
+      harness: (): Harness | undefined => (this.closing || this.#releases !== releases ? undefined : this.harness),
+      warming: id => this.#warmers?.warming.includes(id) ?? false,
+      report: error => process.stderr.write(`Session ${this.binding.session.id}: releasing an idle conversation's provider resources failed: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`),
+    }));
+    this.#releases = releases;
+    const warmers: CacheWarmers = new CacheWarmers({ ...sessionWarming({
       harness: (): Harness | undefined => (this.closing || this.#warmers !== warmers ? undefined : this.harness), metadata: () => this.metadata(),
       settings: this.#warmingSettings,
       report: error => process.stderr.write(`Session ${this.binding.session.id}: cache warming failed: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`),
-    }));
+    }), ended: id => releases.touch(id) });
     this.#warmers = warmers;
-    const extension = defineExtension({ name: "workspace-tools", tools: this.tools, hooks: [renamedToolsHook(), warmers.hooks()] });
+    const extension = defineExtension({ name: "workspace-tools", tools: this.tools, hooks: [renamedToolsHook(), warmers.hooks(), ...releases.hooks()] });
     this.#extension = extension;
     registry.install(extension);
     this.#registry = registry;
@@ -1615,6 +1625,7 @@ export class RunnerSession {
     this.#resumed = false;
     this.#activity?.stop();
     this.#warmers?.close();
+    this.#releases?.close();
     const tunnel = this.#tunnel;
     this.#tunnel = undefined;
     await tunnel?.close().catch(() => {});
