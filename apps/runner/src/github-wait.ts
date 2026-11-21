@@ -118,11 +118,26 @@ export function startGitHubWait(wait: GitHubWait, first: GitHubIssueView, now: n
   return { for: wait, startedAt: now, deadline: now + timeoutMs, first: viewDigest(first), head: first.pullRequest?.head.sha ?? null, headSince: now };
 }
 
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const listOf = (value: unknown, item: (entry: unknown) => boolean) => Array.isArray(value) && value.every(item);
+const tuple = (...parts: ((part: unknown) => boolean)[]) => (entry: unknown) =>
+  Array.isArray(entry) && entry.length === parts.length && parts.every((part, index) => part(entry[index]));
+const isText = (value: unknown) => typeof value === "string";
+const isId = (value: unknown) => Number.isSafeInteger(value);
+
+function isViewDigest(value: unknown): value is GitHubViewDigest {
+  if (!record(value) || !isText(value.state) || !isText(value.title) || !isText(value.body) || !listOf(value.labels, isText) || !record(value.omitted)
+    || !listOf(value.comments, tuple(isId, isText))) return false;
+  const pull = value.pull;
+  return pull === null || (record(pull) && typeof pull.merged === "boolean" && typeof pull.draft === "boolean" && isText(pull.head)
+    && listOf(pull.reviews, tuple(isId, isText, isText)) && listOf(pull.reviewComments, tuple(isId, isText))
+    && listOf(pull.checks, tuple(isText, isText, conclusion => conclusion === null || isText(conclusion))));
+}
+
 export function isGitHubWaitState(value: unknown): value is GitHubWaitState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const state = value as Record<string, unknown>;
-  return githubWaits.includes(state.for as GitHubWait) && [state.startedAt, state.deadline, state.headSince].every(Number.isFinite)
-    && (state.head === null || typeof state.head === "string") && !!state.first && typeof state.first === "object";
+  if (!record(value)) return false;
+  return githubWaits.includes(value.for as GitHubWait) && [value.startedAt, value.deadline, value.headSince].every(Number.isFinite)
+    && (value.head === null || isText(value.head)) && isViewDigest(value.first);
 }
 
 function githubWaitOutcome(state: GitHubWaitState, view: GitHubIssueView, now: number, own: OwnChanges): { outcome: GitHubWaitOutcome | undefined; state: GitHubWaitState } {

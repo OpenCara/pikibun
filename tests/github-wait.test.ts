@@ -152,6 +152,11 @@ test("a wait's state is plain JSON, small, and answers the same after a round tr
   assert.deepEqual(turn(later, pushed, 300_000 + githubWaitLimits.noChecksSeconds * 1000), { kind: "done", waited: { for: "checks", outcome: "no-checks", seconds: 420 } });
   assert.equal(isGitHubWaitState({ for: "soon", startedAt: 0, deadline: 1, headSince: 0, head: null, first: {} }), false);
   assert.equal(isGitHubWaitState(undefined), false);
+  const kept = change as GitHubWaitState;
+  assert.equal(isGitHubWaitState({ ...kept, first: {} }), false, "a digest that lost its shape, as from another build");
+  assert.equal(isGitHubWaitState({ ...kept, first: { ...kept.first, comments: [[501]] } }), false);
+  assert.equal(isGitHubWaitState({ ...kept, first: { ...kept.first, pull: { ...kept.first.pull, checks: [["verify", "queued"]] } } }), false);
+  assert.equal(isGitHubWaitState({ ...kept, first: { ...kept.first, pull: null } }), true, "an issue's digest has no pull request");
 });
 
 test("with the gh tool, the instructions read and wait for checks with gh, keeping github_* for a change and the writes gh refuses", () => {
