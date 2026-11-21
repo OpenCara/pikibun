@@ -144,8 +144,9 @@ messages.
   that takes no commands (archived and packed, or closing), and `/compact` there says only that it isn't taken now.
 
 Not read: the host owner's own `~/.pi/agent/prompts` and `~/.pi/agent/skills`, which are their files, not the
-workspace's, and would be shown to other members' sessions; and the prompts and skills a Pi package ships (`pi.prompts`,
-`pi.skills`), which the agent couldn't open from the sandbox.
+workspace's, and would be shown to other members' sessions; and the prompt templates a Pi package ships (`pi.prompts`).
+The skills a workspace's extensions ship are copied into the worktree's `.pikibun/skills` and answer to `/skill:name`
+([skills](skills.md#phase-2-skills-that-extensions-ship-as-built)).
 
 ## Left out
 

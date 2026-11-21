@@ -80,7 +80,8 @@ test('every connector has its Pikibun extensions: each command-line one offers o
       continue;
     }
     if (item.summary.source === 'piki:pr-flow') {
-      assert.deepEqual([module!.tools, module!.events, module!.noops, module!.ignored], [[], ['before_agent_start', 'tool_call', 'tool_result'], [], []]);
+      assert.deepEqual([module!.tools, [...module!.events].sort(), module!.noops, module!.ignored],
+        [[], ['before_agent_start', 'resources_discover', 'session_shutdown', 'tool_call', 'tool_result'], [], []], 'its skill comes through resources_discover');
       assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['review-minutes', 'string', '30'], ['merge-method', 'string', 'squash'],
         ['wait-for-checks', 'boolean', true], ['auto-merge', 'boolean', true], ['pre-push-check', 'string', '']]);
       continue;
@@ -91,7 +92,8 @@ test('every connector has its Pikibun extensions: each command-line one offers o
       continue;
     }
     if (item.summary.source === 'piki:sub-agents') {
-      assert.deepEqual([module!.tools, [...module!.events].sort(), module!.noops, module!.ignored], [[], ['before_agent_start', 'tool_call', 'tool_result'], [], []]);
+      assert.deepEqual([module!.tools, [...module!.events].sort(), module!.noops, module!.ignored],
+        [[], ['before_agent_start', 'resources_discover', 'session_shutdown', 'tool_call', 'tool_result'], [], []]);
       assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['placement', 'string', ''], ['models', 'string', ''], ['balance', 'boolean', true],
         ['max-sub-agents', 'string', '5'], ['notify', 'boolean', true], ['delegate', 'string', 'when-useful']]);
       continue;

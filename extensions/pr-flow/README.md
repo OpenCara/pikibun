@@ -21,6 +21,12 @@ forge's CLI). It adds the flow to the system prompt of each message (`before_age
 result where a step is due (`tool_result`): the first change in a clone without a pull request, a draft opened, a pull
 request made ready (with the time its review window ends), a push after that, a merge.
 
+The whole procedure is also a skill, `pull-request-flow`, filled in from the settings and offered through
+`resources_discover` (written to a folder of its own under the temporary directory, removed at `session_shutdown`).
+Once a host has asked for it (Pi at startup, Pikibun before each message, which copies it into the worktree's
+`.pikibun/skills`), the system prompt keeps only a short rule: when the flow applies, its steps in one sentence, and
+to read the skill before the first change in a clone. A host that never asks gets the whole procedure in the prompt.
+
 ## Settings
 
 | Setting | Default | What it does |

@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import type { ExtensionContext, ExtensionFactory, ToolCallEvent, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 
@@ -540,6 +541,61 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
   return lines.join("\n");
 }
 
+export const PR_FLOW_SKILL = "pull-request-flow";
+export const PR_FLOW_SKILL_DESCRIPTION = "This workspace's pull request flow for every change to a repository, step by step: the draft at the first change, "
+  + "ready for review once done, the review window and how to answer review points, checks, and the merge or the hand-over. Read it before you change files in a clone.";
+
+export function prFlowSkill(settings: PrFlowSettings): string {
+  const body = prFlowPrompt(settings).replace(/^## Pull request flow\n/, "# Pull request flow\n");
+  return `---\nname: ${PR_FLOW_SKILL}\ndescription: ${JSON.stringify(PR_FLOW_SKILL_DESCRIPTION)}\n---\n\n${body}\n`;
+}
+
+export function prFlowRule(settings: PrFlowSettings, flows: readonly PullRequestFlow[] = [], now = Date.now()): string {
+  const checks = settings.waitForChecks ? " once its checks pass" : "";
+  const handOver = "tell the person it is ready for them to merge: this workspace leaves merges to people (auto-merge is off), so never merge it yourself, "
+    + "nor queue an automatic merge";
+  const after = settings.reviewMinutes === 0
+    ? (settings.autoMerge ? `merge it (${settings.mergeMethod}) as soon as it is ready${checks}, without waiting for reviews` : `as soon as it is ready, ${handOver}`)
+    : `then a ${minuteWindow(settings.reviewMinutes)} review window, in which you fix the review points you judge valid, answer each one, and wait again after `
+      + `each pushed fix; then ${settings.autoMerge ? `merge it (${settings.mergeMethod})${checks}, but never over a request for changes you didn't make` : handOver}`;
+  const lines = [
+    "## Pull request flow",
+    "",
+    "This workspace carries each change to a repository through a pull request (a merge request on GitLab), from the first edit to the merge. Follow it "
+      + "whenever you change files in a clone of one of the workspace's repositories, unless the person asks for something else (no pull request, no merge, "
+      + "another branch). Questions, reviews and explorations that change nothing need none of it.",
+    "",
+    `In short: a draft pull request at your first change in a clone (commit, push to the session's own branch, open it as a draft); keep pushing as you work; `
+      + `ready for review once the change is done and its tests pass; ${after}. Tell the person its link when it opens, `
+      + `when it is ready, and when it is merged or left open. Before your first change in a clone, read the ${PR_FLOW_SKILL} skill (listed with the skills) `
+      + "for each step's calls and its rules; after each step, the note added to the tool's result says what comes next.",
+    ...(settings.prePushCheck ? ["", `Before each push of a clone you changed, run \`${settings.prePushCheck}\` there (directory: the clone) with the program tool it needs, `
+      + "and fix what it finds: a push before it passed is refused."] : []),
+  ];
+  const known = flows.filter(flow => flow.pull || flow.told);
+  if (known.length) lines.push("", `This session's pull requests, as of ${clock(now)}:`, ...known.map(flow => flowLine(flow, settings, now)));
+  return lines.join("\n");
+}
+
+export class SkillFolder {
+  #directory: string | undefined;
+
+  constructor(private readonly prefix: string) {}
+
+  write(name: string, content: string): string {
+    this.#directory ??= mkdtempSync(join(tmpdir(), this.prefix));
+    const folder = join(this.#directory, name);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "SKILL.md"), content);
+    return folder;
+  }
+
+  remove(): void {
+    if (this.#directory) rmSync(this.#directory, { recursive: true, force: true });
+    this.#directory = undefined;
+  }
+}
+
 export const prFlowExtension: ExtensionFactory = pi => {
   pi.registerFlag("review-minutes", { type: "string", default: String(DEFAULT_REVIEW_MINUTES), description: prFlowFlags["review-minutes"] });
   pi.registerFlag("merge-method", { type: "string", default: "squash", description: prFlowFlags["merge-method"] });
@@ -557,7 +613,23 @@ export const prFlowExtension: ExtensionFactory = pi => {
   const gate = new PushGate();
   const clones = (worktree: string | undefined) => (directory: string) => !!worktree && existsSync(join(worktree, directory, ".git"));
 
-  pi.on("before_agent_start", event => ({ systemPrompt: `${event.systemPrompt}\n\n${prFlowPrompt(settings(), state.flows)}` }));
+  const skill = new SkillFolder("pi-pr-flow-");
+  let offered = false;
+
+  pi.on("resources_discover", () => {
+    offered = false;
+    try {
+      const path = skill.write(PR_FLOW_SKILL, prFlowSkill(settings()));
+      offered = true;
+      return { skillPaths: [path] };
+    } catch { return undefined; }
+  });
+
+  pi.on("session_shutdown", () => { skill.remove(); });
+
+  pi.on("before_agent_start", event => ({
+    systemPrompt: `${event.systemPrompt}\n\n${offered ? prFlowRule(settings(), state.flows) : prFlowPrompt(settings(), state.flows)}`,
+  }));
 
   pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
     const reason = gate.refusal(event.toolName, (event.input ?? {}) as Record<string, unknown>, settings().prePushCheck ?? "", clones(ctx?.cwd));
