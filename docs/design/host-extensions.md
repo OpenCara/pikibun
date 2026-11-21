@@ -142,7 +142,9 @@ options and lifecycle), so a workspace can't name one. Pikibun wraps the useful 
   is (`remoteServers` in the workspace's extensions answer, from connectors that ask for `remoteTools`), or
   `mcp_<prefix>` where that name is taken or the control plane predates it. A workspace Pi extension with tools
   gets its package's name and description, unless another namespace has that name; `piki:gh` joins `github`, and
-  `piki:glab` and `piki:azure-cli` are `gitlab` and `azure`.
+  `piki:glab` and `piki:azure-cli` are `gitlab` and `azure`. Variants of one extension that differ only in their
+  namespace share a registry name, so a selection hands the session a cached variant to install again whenever another
+  was installed under its name since.
 - The session view lists the built-ins the next message gets (`SessionView.extensions.builtin`).
 
 ## Installing

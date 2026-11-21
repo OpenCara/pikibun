@@ -129,6 +129,7 @@ export class SessionExtensions {
   readonly #reserved: Set<string>;
   readonly #factories = new Map<string, Factories>();
   #selected: SessionExtension[] = [];
+  readonly #handed = new Map<string, Extension>();
   readonly #warned = new Set<string>();
   readonly #broken = new Set<string>();
   #started = false;
@@ -254,6 +255,9 @@ export class SessionExtensions {
         const name = tools.length === opened.tools.length ? extensionKey(source) : `${extensionKey(source)}-${createHash("sha256").update(toolKey).digest("hex").slice(0, 8)}`;
         extension = defineExtension({ name, tools, sections: opened.sections, hooks: opened.hooks, ...(namespace ? { namespace } : {}) });
         opened.variants.set(key, extension);
+      }
+      if (this.#handed.get(extension.name) !== extension) {
+        this.#handed.set(extension.name, extension);
         created.push(extension);
       }
       selected.push({ source, dev: opened.dev, extension, tools });

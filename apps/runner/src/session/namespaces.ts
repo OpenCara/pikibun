@@ -53,7 +53,8 @@ export function remoteNamespaces(servers: readonly RemoteMcpServerSummary[], pre
   const namespaces = new Map<string, ToolNamespace>();
   for (const prefix of [...new Set(prefixes)].sort()) {
     const label = oneLine(named.get(prefix) ?? "", NAME_LIMIT);
-    const name = label && !taken.has(namespaceKey(label)) ? label : `mcp_${prefix}`;
+    let name = label && !taken.has(namespaceKey(label)) ? label : `mcp_${prefix}`;
+    for (let suffix = 2; taken.has(namespaceKey(name)); suffix++) name = `mcp_${prefix}_${suffix}`;
     taken.add(namespaceKey(name));
     namespaces.set(prefix, { name, description: oneLine(`The workspace's remote MCP server ${label || prefix}: its tools, named ${prefix}_*, run through Pikibun with credentials no session sees.`, DESCRIPTION_LIMIT) });
   }
