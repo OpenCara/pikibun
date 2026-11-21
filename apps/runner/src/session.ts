@@ -74,7 +74,9 @@ import { SessionDefinitions } from "./session/definitions.js";
 import { ToolAvailability } from "./session/availability.js";
 import { SessionPiki } from "./session/piki.js";
 import { requeue, RunQueue, submissionRequestId, type RunContent } from "./session/run-queue.js";
-import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, piExpansion, SessionCommands, type ExtensionCommand } from "./session/commands.js";
+import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, SessionCommands, type ExtensionCommand } from "./session/commands.js";
+import { piText } from "./session/pi-text.js";
+import { SessionSkills, type Skill } from "./session/skills.js";
 import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
 import { addTitleUsage, titleRequestInput, titleTimeoutMs, writeTitle } from "./session/titles.js";
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
@@ -210,6 +212,7 @@ export class RunnerSession {
   private closing = false;
   readonly #queue: RunQueue;
   readonly #commands: SessionCommands;
+  readonly #skills: SessionSkills;
   readonly #commandSources = new Set<string>();
   readonly #cachedSources = new Map<string, LoadedSource>();
   private modelRef!: { provider: string; modelId: string };
@@ -332,6 +335,10 @@ export class RunnerSession {
       added: (tools, names) => { this.tools.push(...tools); this.#hostExtensions?.reserve(names); this.groupTools(); },
     });
     const alreadyAllowed = async () => {};
+    const find = async (pattern: string, limit: number) =>
+      (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, alreadyAllowed)).paths;
+    const read = (path: string) => this.sandbox.readFile(path, alreadyAllowed);
+    this.#skills = new SessionSkills({ find, read, text: piText });
     this.#commands = new SessionCommands({
       compact: (run, instructions) => this.compact(run, instructions),
       extensionCommands: () => this.extensionCommands(),
@@ -342,9 +349,10 @@ export class RunnerSession {
         await this.#piki.requireCommand(run.initiatedBy, command.source, command.name, host.sandboxed(command.source));
         return host.command(command.source, command.name, args);
       },
-      find: async (pattern, limit) => (await this.sandbox.find({ kind: "find", path: ".", pattern, byPath: true, ignoreCase: false, maxResults: limit, all: false }, alreadyAllowed)).paths,
-      read: path => this.sandbox.readFile(path, alreadyAllowed),
-      expansion: piExpansion,
+      find,
+      read,
+      text: piText,
+      skills: this.#skills,
     });
     this.#queue = new RunQueue({
       commands: this.#commands,
@@ -574,13 +582,18 @@ export class RunnerSession {
   }
 
   private agentInstructions(mode: InstructionsMode, off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason,
-    tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set()): string {
+    tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set(),
+    skills: readonly Skill[] = []): string {
     return agentInstructions({ base: this.binding.agent.instructions, agentTools: sessionToolNames(this.binding.agent.tools), mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
       extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
       linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser,
-      sudo: mode !== "ask" && this.#sudoOffered });
+      sudo: mode !== "ask" && this.#sudoOffered, skills });
+  }
+
+  private async listedSkills(): Promise<Skill[]> {
+    return await this.#availability.skillsListed() ? this.#skills.current() : [];
   }
 
   private async sudoAllowed(): Promise<boolean> {
@@ -879,6 +892,7 @@ export class RunnerSession {
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
     if (run.mode === "write") await this.#sudo?.prepare();
+    const skills = run.mode === "write" ? await this.listedSkills() : [];
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();
     const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.#availability.browserUnavailable() : undefined;
@@ -897,7 +911,7 @@ export class RunnerSession {
           ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [...this.sessionExtensions(enabled), ...extensions.map(extension => extension.extension), ...builtins, fitImagesExtension],
         instructions: this.agentInstructions(options.access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
-          new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name)))),
+          new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name))), skills),
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
@@ -1236,7 +1250,8 @@ export class RunnerSession {
         const transcript = await shared.context(context);
         const head = transcript.entries.at(-1);
         const fork = { ownership: { kind: "ownerless" as const }, agent: {
-          model: (await shared.agent(context)).model ?? this.modelRef, instructions: this.agentInstructions("ask"),
+          model: (await shared.agent(context)).model ?? this.modelRef,
+          instructions: this.agentInstructions("ask", new Set(), undefined, undefined, new Set(), new Set(), await this.listedSkills()),
           tools: this.tools.filter(tool => readOnlyTools.includes(tool.name) && sessionToolNames(this.binding.agent.tools).includes(tool.name)),
         } };
         conversation = head ? await shared.fork(head.id, fork, context) : await this.harness.createConversation(fork, context);

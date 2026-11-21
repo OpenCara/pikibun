@@ -1,5 +1,8 @@
 import { sessionCommandLimits, type SessionCommand } from "../../../../packages/shared/src/session-commands.js";
 import { RunnerError } from "../protocol.js";
+import { inPiOrder, ownerOf, qualifiedNames } from "./names.js";
+import type { PiText } from "./pi-text.js";
+import type { Skill } from "./skills.js";
 import type { Run } from "./state.js";
 
 export const COMPACTION_STARTED = "Compaction started. The summary shows here once Pi has written it; a conversation too short to summarize stays as it is.";
@@ -10,9 +13,8 @@ export const compactionFailed = (reason: string) => `Compaction failed: ${reason
 export const ranBefore = (name: string) => `The host stopped while /${name} ran, so whether it finished isn't known. It wasn't run again: send it again if it should be.`;
 const shown = (text: string) => text.replace(/[\x00-\x09\x0b-\x1f\x7f]+/g, " ").trim();
 export const ACTS = "changes the session, which a side ask or a Read-only message doesn't do: send it as a shared message that may act. Nothing ran.";
-export const COMMAND_FILES = "{,*/}{.pi/prompts/*.md,{.pi,.agents}/skills/{*.md,**/SKILL.md}}";
+export const PROMPT_FILES = "{,*/}.pi/prompts/*.md";
 const FILE_LIST_MS = 120_000;
-const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export interface ParsedCommand {
   name: string;
@@ -35,8 +37,7 @@ export interface ExtensionCommand {
   description?: string;
 }
 
-export interface CommandFile {
-  kind: "prompt" | "skill";
+export interface PromptFile {
   name: string;
   path: string;
 }
@@ -47,97 +48,26 @@ export interface SessionCommandsOptions {
   runExtensionCommand(run: Run, command: ExtensionCommand, args: string): Promise<{ notices: string[]; messages: string[] }>;
   find(pattern: string, limit: number): Promise<string[]>;
   read(path: string): Promise<string>;
-  expansion(): Promise<{
-    substitute(content: string, args: string): string;
-    body(content: string): string;
-    skillName(content: string): string | undefined;
-  }>;
+  text(): Promise<PiText>;
+  skills: { listed(): Skill[]; expand(name: string, args: string): Promise<string | undefined> };
   now?(): number;
 }
 
-export const WORKTREE_OWNER = "worktree";
-const RESERVED_OWNERS = new Set([WORKTREE_OWNER, "skill"]);
-
-export function commandFiles(paths: readonly string[]): CommandFile[] {
-  const sorted = [...paths].map(path => path.replace(/\/+$/, "")).sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
-  const found: (CommandFile & { owner: string })[] = [];
-  const skillRoots: string[] = [];
-  const taken = new Set<string>();
-  const add = (file: CommandFile, owner: string) => {
-    const key = `${owner}\n${file.kind}\n${file.name}`;
-    if (!NAME.test(file.name) || taken.has(key)) return;
-    taken.add(key);
-    found.push({ ...file, owner });
-  };
-  for (const path of sorted) {
+export function promptFiles(paths: readonly string[]): PromptFile[] {
+  const found: (PromptFile & { owner: string })[] = [];
+  for (const path of inPiOrder(paths)) {
     const parts = path.split("/");
     const file = parts.at(-1)!;
-    const at = parts.findIndex((part, index) => (part === ".pi" || part === ".agents") && index <= 1);
-    if (at < 0) continue;
-    const owner = at === 1 ? parts[0]! : "";
-    if (parts[at] === ".pi" && parts[at + 1] === "prompts" && parts.length === at + 3 && file.endsWith(".md")) {
-      add({ kind: "prompt", name: file.slice(0, -3), path }, owner);
-    } else if (parts[at + 1] === "skills") {
-      const directory = parts.slice(0, -1).join("/");
-      if (skillRoots.some(root => directory.startsWith(`${root}/`))) continue;
-      if (file === "SKILL.md" && parts.length > at + 3) {
-        skillRoots.push(directory);
-        add({ kind: "skill", name: parts.at(-2)!, path }, owner);
-      } else if (parts.length === at + 3 && file.endsWith(".md") && file !== "SKILL.md") add({ kind: "skill", name: file.slice(0, -3), path }, owner);
-    }
+    const at = parts.findIndex((part, index) => part === ".pi" && index <= 1);
+    if (at < 0 || parts[at + 1] !== "prompts" || parts.length !== at + 3 || !file.endsWith(".md")) continue;
+    found.push({ name: file.slice(0, -3), path, owner: ownerOf(parts, at) });
   }
-  const owners = new Map<string, Set<string>>();
-  for (const file of found) {
-    const key = `${file.kind}\n${file.name}`;
-    owners.set(key, (owners.get(key) ?? new Set()).add(file.owner));
-  }
-  const files: CommandFile[] = [];
-  const names = new Set<string>();
-  for (const { owner, ...file } of found) {
-    const shared = owners.get(`${file.kind}\n${file.name}`)!.size > 1;
-    const qualifier = owner || WORKTREE_OWNER;
-    if (shared && (!NAME.test(qualifier) || (owner && RESERVED_OWNERS.has(owner)))) continue;
-    const name = shared ? `${qualifier}:${file.name}` : file.name;
-    if ((file.kind === "skill" ? "skill:".length : 0) + name.length > sessionCommandLimits.name) continue;
-    const key = `${file.kind}\n${name}`;
-    if (names.has(key) || files.filter(item => item.kind === file.kind).length >= sessionCommandLimits.perKind) continue;
-    names.add(key);
-    files.push({ ...file, name });
-  }
-  return files;
+  return qualifiedNames(found);
 }
-
-type Expansion = Awaited<ReturnType<SessionCommandsOptions["expansion"]>>;
-let expansion: Promise<Expansion> | undefined;
-
-export function piExpansion(): Promise<Expansion> {
-  expansion ??= load().catch(error => { expansion = undefined; throw error; });
-  return expansion;
-}
-
-async function load(): Promise<Expansion> {
-  const at = (path: string) => new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent")).href;
-  const templates = await import(at("./core/prompt-templates.js")) as { parseCommandArgs(args: string): string[]; substituteArgs(content: string, args: string[]): string };
-  const { parseFrontmatter } = await import(at("./utils/frontmatter.js")) as { parseFrontmatter(content: string): { frontmatter: Record<string, unknown>; body: string } };
-  const parsed = (content: string) => {
-    try { return parseFrontmatter(content); } catch { return { frontmatter: {}, body: content }; }
-  };
-  return {
-    substitute: (content, args) => templates.substituteArgs(content, templates.parseCommandArgs(args)),
-    body: content => parsed(content).body,
-    skillName: content => {
-      const { name } = parsed(content).frontmatter;
-      return typeof name === "string" && NAME.test(name) ? name : undefined;
-    },
-  };
-}
-
-const directoryOf = (path: string) => path.split("/").slice(0, -1).join("/") || ".";
-const quoted = (value: string) => value.replaceAll("\"", "'");
 
 export class SessionCommands {
-  #files: { at: number; list: CommandFile[] } | undefined;
-  #scanning: Promise<CommandFile[]> | undefined;
+  #files: { at: number; list: PromptFile[] } | undefined;
+  #scanning: Promise<PromptFile[]> | undefined;
 
   constructor(private readonly options: SessionCommandsOptions) {}
 
@@ -145,22 +75,23 @@ export class SessionCommands {
     return this.options.now?.() ?? Date.now();
   }
 
-  private scan(): Promise<CommandFile[]> {
-    this.#scanning ??= this.options.find(COMMAND_FILES, sessionCommandLimits.files).then(paths => {
-      const list = commandFiles(paths);
+  private scan(): Promise<PromptFile[]> {
+    this.#scanning ??= this.options.find(PROMPT_FILES, sessionCommandLimits.files).then(paths => {
+      const list = promptFiles(paths);
       this.#files = { at: this.#now(), list };
       return list;
     }).finally(() => { this.#scanning = undefined; });
     return this.#scanning;
   }
 
-  private listed(): CommandFile[] {
+  private listed(): PromptFile[] {
     if (!this.#files || this.#now() - this.#files.at > FILE_LIST_MS) void this.scan().catch(() => {});
     return this.#files?.list ?? [];
   }
 
-  private async found(matches: (file: CommandFile) => boolean): Promise<CommandFile | undefined> {
-    return this.#files?.list.find(matches) ?? (await this.scan().catch(() => [] as CommandFile[])).find(matches);
+  private async found(name: string): Promise<PromptFile | undefined> {
+    const matches = (file: PromptFile) => file.name === name;
+    return this.#files?.list.find(matches) ?? (await this.scan().catch(() => [] as PromptFile[])).find(matches);
   }
 
   async list(): Promise<SessionCommand[]> {
@@ -174,9 +105,10 @@ export class SessionCommands {
     for (const command of await this.options.extensionCommands().catch(() => [])) {
       add({ name: command.name, kind: "extension", description: (command.description || `A command of ${command.source}`).slice(0, sessionCommandLimits.description) });
     }
-    const files = this.listed();
-    for (const file of files.filter(item => item.kind === "prompt")) add({ name: file.name, kind: "prompt", description: `Prompt template ${file.path}`, argument: "arguments" });
-    for (const file of files.filter(item => item.kind === "skill")) add({ name: `skill:${file.name}`, kind: "skill", description: `Skill ${file.path}`, argument: "arguments" });
+    for (const file of this.listed()) add({ name: file.name, kind: "prompt", description: `Prompt template ${file.path}`, argument: "arguments" });
+    for (const skill of this.options.skills.listed()) {
+      add({ name: `skill:${skill.name}`, kind: "skill", description: (skill.description ?? `Skill ${skill.path}`).slice(0, sessionCommandLimits.description), argument: "arguments" });
+    }
     return commands;
   }
 
@@ -212,17 +144,13 @@ export class SessionCommands {
   async expand(text: string): Promise<string> {
     const parsed = parseCommand(text);
     if (!parsed) return text;
-    const skill = parsed.name.startsWith("skill:") ? parsed.name.slice("skill:".length) : undefined;
-    const file = await this.found(item => skill !== undefined ? item.kind === "skill" && item.name === skill : item.kind === "prompt" && item.name === parsed.name);
+    if (parsed.name.startsWith("skill:")) return await this.options.skills.expand(parsed.name.slice("skill:".length), parsed.args) ?? text;
+    const file = await this.found(parsed.name);
     if (!file) return text;
-    let content: string;
-    let expansion: Expansion;
     try {
-      content = await this.options.read(file.path);
-      expansion = await this.options.expansion();
+      const content = await this.options.read(file.path);
+      const { substitute, frontmatter } = await this.options.text();
+      return substitute(frontmatter(content).body, parsed.args);
     } catch { return text; }
-    if (file.kind === "prompt") return expansion.substitute(expansion.body(content), parsed.args);
-    const block = `<skill name="${quoted(expansion.skillName(content) ?? file.name)}" location="${quoted(file.path)}">\nReferences are relative to ${directoryOf(file.path)}.\n\n${expansion.body(content).trim()}\n</skill>`;
-    return parsed.args ? `${block}\n\n${parsed.args}` : block;
   }
 }

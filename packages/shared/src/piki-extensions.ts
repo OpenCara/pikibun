@@ -169,6 +169,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "skills", source: "piki:skills", title: "Skills", sessionTools: [], optIn: true,
+    description: "Lists the skills of the repositories in each session's worktree (Agent Skills: SKILL.md files under .pi/skills, .agents/skills or .claude/skills) in each message's system prompt, by name and description, so the agent reads one when a task matches it, as Pi does. A skill is its repository's text, so this reaches the model whatever repository was cloned. The session does it itself, with no package and no tools. Off, skills still answer to /skill:name. Off until added here.",
+    providers: [],
+  },
+  {
     name: "sub-agents", source: "piki:sub-agents", title: "Sub-agents", workflow: true, needs: ["piki:sessions"],
     description: "Has the agent hand sub-tasks to sub-agents, sessions it starts with the sessions tool (adding it adds Other sessions too): independent parts that can run at once, or parts that need hardware or a model its host lacks. Pikibun places each on the least loaded host that meets its conditions (a GPU, CPUs, memory, disk, platform, models), with the workspace's placement and models settings added where the agent sets none; max-sub-agents bounds each message, and each reports back when it finishes.",
     providers: [],

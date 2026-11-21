@@ -1510,13 +1510,13 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
     return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
   } });
   await startFixture(fixture);
-  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:artifacts', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'];
+  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:artifacts', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:skills', 'piki:sub-agents'];
   const first = (await syncs.next()).report;
   assert.deepEqual([first.installed.map(item => item.source), (first.browser as { state: string }).state], [all, 'missing']);
   const second = (await syncs.next()).report;
   assert.deepEqual([second.installed.map(item => item.source), second.browser], [all, undefined], 'tried again at once, without the browser\'s status');
   assert.deepEqual((await syncs.next()).report, { installed: [], remoteInstalls: true }, 'and again, without them');
-  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:artifacts', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:sub-agents'],
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:workspace', 'piki:artifacts', 'piki:prompt-audit', 'piki:pr-flow', 'piki:context-files', 'piki:skills', 'piki:sub-agents'],
     'sessions still have them');
 });
 

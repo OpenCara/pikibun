@@ -140,6 +140,13 @@ export class ToolAvailability {
     throw new RunnerError(403, `${tool} isn't among the tools of the person who sent this message (${group.name}): a message runs only the tools both its sender and the session's owner have. Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
   }
 
+  async skillsListed(): Promise<boolean> {
+    const config = this.options.config.extensions;
+    if (!config) return false;
+    const answer = await config.workspace(this.options.binding.session.workspaceId).catch(() => undefined);
+    return !!answer && extensionSwitchOn("piki:skills", answer.extensions);
+  }
+
   async documentKindsOff(): Promise<Set<DocumentKind>> {
     const config = this.options.config.extensions;
     if (!config) return new Set();
