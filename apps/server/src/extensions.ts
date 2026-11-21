@@ -136,13 +136,14 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     const settings = await connectorExtensionSettings(c.env, row.id);
     const toolGroups = await memberToolGroups(c.env, workspaceId);
     const ownerPrivate = await isPersonalWorkspace(c.env, workspaceId, row.owner_id);
+    const remote = remoteTools ? await workspaceRemoteTools(c.env, workspaceId) : undefined;
     return c.json({
       extensions: shown,
       automaticTools: settings.automaticTools,
       ...(options.extensionLocks && settings.autoCache !== 'host' ? { autoCache: settings.autoCache === 'on' } : {}),
       ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
       ...(ownerPrivate ? { ownerPrivate: true } : {}),
-      ...(remoteTools ? { remoteTools: await workspaceRemoteTools(c.env, workspaceId) } : {}),
+      ...(remote ? { remoteTools: remote.tools, remoteServers: remote.servers } : {}),
     });
   });
 }

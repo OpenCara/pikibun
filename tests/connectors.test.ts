@@ -3886,7 +3886,10 @@ test('workspace remote MCP servers: admins register them with vault-held headers
   assert.deepEqual(answer.remoteTools?.map(tool => [tool.name, tool.write]), [['tracker_search_issues', false], ['tracker_create_issue', true]]);
   assert.ok(answer.remoteTools!.every(tool => /^mcp\/tracker\/[0-9a-f]{16}$/.test(tool.route) && tool.inputSchema && !('$schema' in tool.inputSchema)));
   assert.match(answer.remoteTools![1]!.description, /Read-only messages don't run it/);
-  assert.equal(parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id }))).remoteTools, undefined);
+  assert.deepEqual(answer.remoteServers, [{ prefix: 'tracker', name: 'Tracker' }], 'each server that offers tools, for its code mode namespace');
+  const without = parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id })));
+  assert.equal(without.remoteTools, undefined);
+  assert.equal(without.remoteServers, undefined);
 
   const owner = s.session.ownerId;
   const [searchRoute, createRoute] = answer.remoteTools!.map(tool => tool.route);

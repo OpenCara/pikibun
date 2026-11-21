@@ -33,6 +33,11 @@ export interface WorkspaceMcpServer {
   updatedAt: string;
 }
 
+export interface RemoteMcpServerSummary {
+  prefix: string;
+  name: string;
+}
+
 const PREFIX = /^[a-z][a-z0-9]{0,15}$/;
 const HEADER = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 const forbiddenHeaders = new Set(["host", "content-length", "content-type", "accept", "connection", "transfer-encoding", "cookie", "mcp-session-id",
@@ -41,6 +46,24 @@ const MCP_TOOL = /^[A-Za-z0-9_.\-/]{1,128}$/;
 
 export function validRemoteMcpPrefix(value: unknown): value is string {
   return typeof value === "string" && PREFIX.test(value);
+}
+
+export function remoteMcpRoutePrefix(route: string): string | undefined {
+  const prefix = /^mcp\/([^/]+)\/[^/]+$/.exec(route)?.[1];
+  return validRemoteMcpPrefix(prefix) ? prefix : undefined;
+}
+
+export function parseRemoteMcpServers(value: unknown): RemoteMcpServerSummary[] {
+  if (!Array.isArray(value)) throw new Error("remoteServers must be a list");
+  const servers: RemoteMcpServerSummary[] = [];
+  for (const item of value.slice(0, 64)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const { prefix, name } = item as { prefix?: unknown; name?: unknown };
+    if (!validRemoteMcpPrefix(prefix) || typeof name !== "string" || servers.some(other => other.prefix === prefix)) continue;
+    const line = name.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, remoteMcpLimits.name);
+    servers.push({ prefix, name: line || prefix });
+  }
+  return servers;
 }
 
 export function remoteMcpUrl(value: unknown): string {

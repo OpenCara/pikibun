@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import {
   remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl, validRemoteMcpPrefix,
-  type RemoteMcpTool, type RemoteMcpTransport, type WorkspaceMcpServer,
+  type RemoteMcpServerSummary, type RemoteMcpTool, type RemoteMcpTransport, type WorkspaceMcpServer,
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
 import type { AppContext, AppEnv, Env, SessionRow } from '../../types.js';
@@ -92,16 +92,19 @@ async function serverRow(env: Env, workspaceId: string, serverId: string): Promi
     ?? fail(404, 'not_found', 'Remote MCP server not found.');
 }
 
-export async function workspaceRemoteTools(env: Env, workspaceId: string): Promise<BrokeredToolDefinition[]> {
+export async function workspaceRemoteTools(env: Env, workspaceId: string): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[] }> {
   const rows = await env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE workspace_id = ? AND enabled = 1 ORDER BY created_at, prefix')
     .bind(workspaceId).all();
   const definitions: BrokeredToolDefinition[] = [];
+  const servers: RemoteMcpServerSummary[] = [];
   for (const row of rows) {
+    let offered = false;
     for (const definition of remoteMcpDefinitions({ name: row.name, prefix: row.prefix, readOnlyTools: parsedList(row.read_only_tools_json), tools: parsedTools(row.tools_json) })) {
-      if (definitions.length < 64 && !definitions.some(other => other.name === definition.name)) definitions.push(definition);
+      if (definitions.length < 64 && !definitions.some(other => other.name === definition.name)) { definitions.push(definition); offered = true; }
     }
+    if (offered) servers.push({ prefix: row.prefix, name: row.name });
   }
-  return definitions;
+  return { tools: definitions, servers };
 }
 
 export async function remoteMcpCall(c: AppContext, connectorId: string): Promise<Response> {
