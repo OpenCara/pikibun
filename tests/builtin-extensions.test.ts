@@ -141,6 +141,47 @@ test("a script gets a tool's whole output, up to about 1 MB, while the model's o
   assert.match(await run("direct:line"), /^\{"items":[\s\S]*Output truncated to its beginning: 0 lines, \d+ bytes dropped/);
 });
 
+test("a tool that parks keeps parking through wholeForScripts: the Harness sleeps it, wakes it, and bounds the result it gives then", async t => {
+  const context = BACKGROUND_CONTEXT;
+  let clock = 0;
+  const long = `${"y".repeat(99)}\n`.repeat(5000);
+  const runs: (string | undefined)[] = [];
+  const later = wholeForScripts(defineTool({ name: "later", description: "Answers after a wake.", parameters: obj({}, { open: true }),
+    execute: async (_args, api) => {
+      runs.push(api.wake?.reason);
+      return api.wake === undefined ? { sleep: { until: api.now() + 1000 } } : { output: [{ type: "text", text: long }] };
+    } }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([fauxAssistantMessage(fauxToolCall("later", {}), { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+  const models = createModels(); models.setProvider(faux.provider);
+  const registry = createRegistry();
+  const workspace = defineExtension({ name: "workspace-tools", tools: [later] });
+  registry.install(workspace);
+  const harness = await Harness.open(new MemoryStorage(), { models, registry, now: () => clock }, context);
+  t.after(() => harness.close(context));
+  const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" }, extensions: [workspace], tools: [later] } });
+  const submission = await root.submit({ type: "input", content: "go" }, context);
+  let settled = false;
+  const waited = submission.wait(context).finally(() => { settled = true; });
+  let parked = false;
+  for (let tries = 0; !settled && tries < 2000; tries++) {
+    await delay(5);
+    const wake = harness.wake();
+    if (!wake.active && wake.at !== undefined) {
+      parked = true;
+      clock = wake.at;
+      harness.resume();
+    }
+  }
+  assert.equal((await waited).status, "done");
+  assert.ok(parked, "the call slept on the Harness clock rather than returning its park as a result");
+  assert.deepEqual(runs, [undefined, "time"]);
+  const entry = (await root.context(context)).entries.filter(item => item.kind === ToolResultEntry.kind).at(-1) as unknown as { model: { content: { text?: string }[] }[] };
+  const shown = entry.model[0]!.content.map(part => part.text ?? "").join("\n");
+  assert.ok(Buffer.byteLength(shown) < 52 * 1024, `${Buffer.byteLength(shown)}`);
+  assert.match(shown, /Output truncated to its beginning/, "the result after the wake is bounded for the model as any other");
+});
+
 test("a session runs at most a few scripts at once", async t => {
   const sandbox = new LimitedCodemodeSandbox();
   t.after(() => sandbox.close());

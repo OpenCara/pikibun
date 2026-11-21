@@ -477,6 +477,7 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
       },
       afterTools: async () => {
         await quiet("turn_end", settings => ask("turnEnd", { source, settings, turnIndex: turn }));
+        return undefined;
       },
       onYield: async () => {
         if (!has("agent_before_settle")) return undefined;
