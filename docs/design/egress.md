@@ -482,7 +482,14 @@ host, the host's proxy makes the request at the forge itself.
   code: `gitUpstreamHeaders` (Git's own user agent, protocol and request types only), `fetchGit` (manual redirects,
   fixed credential-free errors) and the LFS batch and download (`lfsProviderBatch`, `lfsDownload`: the credential only
   for the provider's origin and only when the action brings none, an action's headers never across origins, exactly
-  the pointer's size). On the host, a download that points off the provider's own origin is made only when every address
+  the pointer's size). A download link must be https without a password; a user name is taken only where the
+  credential may go (the provider's origin), and is dropped rather than sent: Azure DevOps names the organization there
+  (`https://<org>@dev.azure.com/<org>/<project>/_git/<repo>/info/lfs/objects/<oid>`), as in its clone URLs. For Azure
+  DevOps, an organization's legacy `https://<org>.visualstudio.com` counts as the provider's origin, as its batch
+  answers may name it, and no other organization's does. Redirects take no user name and keep the credential and the
+  action's headers only on the same origin. Azure DevOps downloads ask for `application/octet-stream`, since Azure
+  DevOps answers a JSON-preferring request with the object's description instead of its content; other providers'
+  downloads send no Accept of their own. On the host, a download that points off the provider's own origin is made only when every address
   of its name is public, as for the proxy's tunnels, since its content goes to the sandbox, and it connects to exactly
   the addresses checked (`pinnedFetch`: its own agent, which never resolves the name again or takes a proxy from the
   environment), so DNS rebinding can't send it elsewhere; otherwise it is relayed. On a host whose DNS answers with a
