@@ -54,7 +54,10 @@ panel's **App** tab, what lets the web client frame the app, desktops in the san
    fontconfig file of its own (the sandbox has no `/etc/fonts`, as the browser found) and its output passed on, and
    serves the viewer's files and the WebSocket bridge on the declared port, on loopback. The bridge relays binary
    WebSocket frames to the display's RFB port and back (RFC 6455: masked client frames, ping, close; at most 16 viewers,
-   frames up to 16 MiB). It ends when the program does, or when it is stopped, and takes the display with it.
+   frames up to 16 MiB). It ends when the program does, or when it is stopped, and takes the display with it. There is
+   no window manager: one more program to find on hosts, for an app that is usually one window; windows open at the
+   top left without decorations. The viewer's page is noVNC's own `vnc.html`, asked to connect at once, scale the
+   display to the frame and reconnect after a drop.
 8. **The host's programs.** Nothing is downloaded: `Xvnc` (TigerVNC: `tigervnc-standalone-server` on Debian and Ubuntu,
    `tigervnc-server-minimal` on Fedora, `tigervnc` on Arch) and noVNC's files (`novnc`, found under `/usr/share/novnc`
    or `/usr/share/webapps/novnc`) come from the host's packages, which the sandbox sees in its read-only `/usr`. Where
@@ -79,6 +82,7 @@ panel's **App** tab, what lets the web client frame the app, desktops in the san
 | `serve.desktop` | `packages/shared/src/browser.ts` (`BrowserServe`, `desktopLimits`); `apps/runner/src/browser-command.ts` (`serveRequest`); `session/tools/browser.ts` |
 | The desktop helper | `apps/runner/src/sandbox-python/desktop.py` (`DESKTOP_DRIVER`), started by `service.py` and `browser.py`; `sandbox.ts` mounts it at `/opt/pikibun/desktop/pikibun-desktop` |
 | NVIDIA's devices | `apps/runner/src/host-config.ts` (`gpuMounts`); `tests/host-config.test.ts` |
+| Tests | `apps/nsh/tests/panel.test.tsx` (the App tab), `tests/desktop-driver.test.ts` (the helper, with a stand-in `Xvnc`), `tests/tunnel.test.ts`, `tests/static.test.ts`, `tests/sandbox-python.test.ts` |
 
 ## Later
 

@@ -21,8 +21,8 @@ import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
 import type { IsolatedWorkspace } from "./workspace.js";
 import { CREATE_FILE, OPEN_FILE, privateEntry } from "./platform.js";
-import { BROWSER_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER, SERVICE_DRIVER } from "./sandbox-python.generated.js";
-import { SANDBOX_SERVICE_DRIVER, SANDBOX_SERVICE_SOCKETS, type ServiceExit, type ServiceProcess } from "./session-service.js";
+import { BROWSER_DRIVER, DESKTOP_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER, SERVICE_DRIVER } from "./sandbox-python.generated.js";
+import { SANDBOX_DESKTOP_DRIVER, SANDBOX_SERVICE_DRIVER, SANDBOX_SERVICE_SOCKETS, type ServiceExit, type ServiceProcess } from "./session-service.js";
 import { holdHandles } from "./hold.js";
 import { connectorNode, sandboxNodeMount, type NodeToolchain, type SandboxNodeMount } from "./node-toolchain.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
@@ -477,6 +477,11 @@ export class Sandbox implements IsolatedWorkspace {
         await rm(service, { force: true });
         await writeFile(service, SERVICE_DRIVER, { mode: 0o500 });
         await chmod(service, 0o500);
+        const desktop = join(this.#root, "desktop", "pikibun-desktop");
+        await mkdir(join(this.#root, "desktop"), { recursive: true, mode: 0o700 });
+        await rm(desktop, { force: true });
+        await writeFile(desktop, DESKTOP_DRIVER, { mode: 0o500 });
+        await chmod(desktop, 0o500);
         if (this.#egressSocket !== undefined) {
           const bundle = join(this.#root, CA_BUNDLE_FILE);
           const staged = `${bundle}.new`;
@@ -760,6 +765,7 @@ export class Sandbox implements IsolatedWorkspace {
       ...(browser ? ["--ro-bind-try", join(this.#root, "browser", "pikibun-browser"), SANDBOX_BROWSER_DRIVER] : []),
       ...(browser?.mount ? ["--ro-bind-try", browser.mount.source, browser.mount.target] : []),
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
+      ...(request.kind === "bash" ? ["--ro-bind-try", join(this.#root, "desktop", "pikibun-desktop"), SANDBOX_DESKTOP_DRIVER] : []),
       ...(service?.binds ?? []).flatMap(bind => ["--ro-bind-try", bind, bind]),
       ...(request.kind === "bash" ? command.binds ?? [] : []).flatMap(bind => ["--ro-bind-try", bind, bind]),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),

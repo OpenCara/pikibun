@@ -21,6 +21,7 @@ MAX_ENTRY = 500
 MAX_VALUE = 4000
 MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 DEFAULT_VIEWPORT = (1280, 800)
+DESKTOP = '/opt/pikibun/desktop/pikibun-desktop'
 NODE_PROGRAMS = ('node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack')
 NODE_ENVIRONMENT = 'NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true'
 PYTHON_PROGRAMS = ('python3', 'pip', 'pip3', 'uv', 'uvx', 'poetry', 'pytest')
@@ -622,7 +623,18 @@ def serve_launch(spec: Dict[str, Any], node_bin: Optional[str]) -> Tuple[List[st
         name, value = item.split('=', 1)
         env[name] = value
     env['PATH'] = ':'.join(first + [os.environ.get('PATH') or '/usr/bin:/bin', '/usr/local/bin'])
-    return [program] + [str(arg) for arg in spec.get('args') or []], directory, env
+    return serve_desktop(spec, [program] + [str(arg) for arg in spec.get('args') or []]), directory, env
+
+
+def serve_desktop(spec: Dict[str, Any], argv: List[str]) -> List[str]:
+    screen = spec.get('desktop')
+    if screen is None:
+        return argv
+    if not isinstance(screen, dict) or type(screen.get('width')) is not int or type(screen.get('height')) is not int:
+        raise BrowserError('serve.desktop is {width, height}')
+    if not os.path.isfile(DESKTOP):
+        raise BrowserError('this sandbox has no desktop helper: the host\'s connector is older than desktops')
+    return [DESKTOP, '--port', str(spec['port']), '--size', '%dx%d' % (screen['width'], screen['height']), '--'] + argv
 
 
 def serve(spec: Dict[str, Any], node_bin: Optional[str], log: str, deadline: float) -> 'subprocess.Popen[bytes]':

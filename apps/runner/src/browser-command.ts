@@ -1,4 +1,4 @@
-import { browserActions, browserKeys, browserLimits, type BrowserAction, type BrowserActionName, type BrowserRequest, type BrowserServe } from "../../../packages/shared/src/browser.js";
+import { browserActions, browserKeys, browserLimits, desktopLimits, type BrowserAction, type BrowserActionName, type BrowserRequest, type BrowserServe } from "../../../packages/shared/src/browser.js";
 import { nodePrograms, nodeRequest } from "./node-command.js";
 import { pythonPrograms, pythonRequest } from "./python-command.js";
 import { programShellCommand, shellQuote } from "./program-command.js";
@@ -95,10 +95,20 @@ function action(value: unknown, index: number): BrowserAction {
 
 export const servePrograms: readonly string[] = Object.freeze([...nodePrograms, ...pythonPrograms]);
 
+function desktopRequest(value: unknown): { width: number; height: number } {
+  if (!object(value) || Object.keys(value).some(key => key !== "width" && key !== "height" && value[key] !== undefined)) {
+    throw new Error("serve.desktop is {width?, height?}");
+  }
+  return {
+    width: value.width === undefined ? desktopLimits.width : integer(value.width, "serve.desktop.width", desktopLimits.minWidth, desktopLimits.maxWidth),
+    height: value.height === undefined ? desktopLimits.height : integer(value.height, "serve.desktop.height", desktopLimits.minHeight, desktopLimits.maxHeight),
+  };
+}
+
 export function serveRequest(serve: unknown): BrowserServe {
-  const keys = ["program", "args", "directory", "venv", "port", "timeout_seconds"];
+  const keys = ["program", "args", "directory", "venv", "port", "timeout_seconds", "desktop"];
   if (!object(serve) || Object.keys(serve).some(key => !keys.includes(key) && serve[key] !== undefined)) {
-    throw new Error("serve is {program, args?, directory?, venv?, port, timeout_seconds?}");
+    throw new Error("serve is {program, args?, directory?, venv?, port, timeout_seconds?, desktop?}");
   }
   if (typeof serve.program !== "string" || !servePrograms.includes(serve.program)) {
     throw new Error(`serve.program is one of the node and python tools' programs: ${servePrograms.join(", ")}`);
@@ -116,6 +126,7 @@ export function serveRequest(serve: unknown): BrowserServe {
   if (serve.timeout_seconds !== undefined) {
     result.timeout_seconds = integer(serve.timeout_seconds, "serve.timeout_seconds", browserLimits.serveSeconds.min, browserLimits.serveSeconds.max);
   }
+  if (serve.desktop !== undefined) result.desktop = desktopRequest(serve.desktop);
   return result;
 }
 

@@ -10,7 +10,7 @@ import { join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseHostTunnelConfig, parseHostTunnelStatus, parseSessionTunnelReport, quickTunnelUrl, serviceOutputLimits, tunnelUnavailableReason,
   tunnelUnavailableText, validTunnelUrl, type SessionTunnelReport } from "../packages/shared/src/tunnel.js";
-import { tunnelRequest } from "../apps/runner/src/tunnel-command.js";
+import { serveCommand, tunnelRequest } from "../apps/runner/src/tunnel-command.js";
 import { pinServiceSocket, SERVICE_MARK, SessionService, serviceLimits, serviceShellCommand, type ServiceExit, type ServiceProcess } from "../apps/runner/src/session-service.js";
 import { SessionTunnel } from "../apps/runner/src/session/tunnel.js";
 import { HostTunnels, HostTunnelSource, NO_ADDRESS, type QuickTunnel } from "../apps/runner/src/tunnel-host.js";
@@ -90,6 +90,10 @@ test("the tunnel tool takes start with serve, checked as the browser's serve is,
   assert.deepEqual(tunnelRequest({ action: "start", serve: { program: "python3", args: ["-m", "http.server", "8000"], venv: ".venv", port: 8000, timeout_seconds: 120 } }),
     { action: "start", serve: { program: "python3", args: ["-m", "http.server", "8000"], venv: ".venv", port: 8000, timeout_seconds: 120 }, access: "link" });
   assert.equal(tunnelRequest({ action: "start", serve: { program: "node", port: 3000 }, access: "public" }).access, "public");
+  assert.deepEqual(tunnelRequest({ action: "start", serve: { program: "python3", args: ["gui.py"], port: 6080, desktop: {} } }).serve,
+    { program: "python3", args: ["gui.py"], port: 6080, desktop: { width: 1280, height: 800 } }, "a desktop of the default size");
+  assert.deepEqual(tunnelRequest({ action: "start", serve: { program: "python3", args: ["gui.py"], port: 6080, desktop: { width: 1920, height: 1080 } } }).serve?.desktop,
+    { width: 1920, height: 1080 });
   const refusals: [unknown, RegExp][] = [
     [undefined, /takes \{action/], [{}, /action is one of start, status, stop/], [{ action: "open" }, /action is one of/],
     [{ action: "start" }, /start needs serve/], [{ action: "status", serve: { program: "node", port: 1 } }, /status takes nothing else/],
@@ -102,6 +106,10 @@ test("the tunnel tool takes start with serve, checked as the browser's serve is,
     [{ action: "start", serve: { program: "node", args: ["server.js"], directory: "../elsewhere", port: 3000 } }, /serve: directory is a path within the session's worktree/],
     [{ action: "start", serve: { program: "node", venv: ".venv", port: 3000 } }, /serve.venv is a virtual environment, for Python's programs/],
     [{ action: "start", serve: { program: "node", port: 3000, url: "http://x" } }, /serve is \{program/],
+    [{ action: "start", serve: { program: "python3", port: 6080, desktop: { width: 100 } } }, /serve.desktop.width is a whole number from 320 to 3840/],
+    [{ action: "start", serve: { program: "python3", port: 6080, desktop: { height: 5000 } } }, /serve.desktop.height is a whole number from 240 to 2160/],
+    [{ action: "start", serve: { program: "python3", port: 6080, desktop: { depth: 8 } } }, /serve.desktop is \{width\?, height\?\}/],
+    [{ action: "start", serve: { program: "python3", port: 6080, desktop: true } }, /serve.desktop is \{width\?, height\?\}/],
   ];
   for (const [input, refusal] of refusals) assert.throws(() => tunnelRequest(input), refusal, JSON.stringify(input));
 });
@@ -111,6 +119,8 @@ test("a service runs as one quoted command: the driver, the socket it listens on
   assert.equal(serviceShellCommand(serve, { nodeBin: "/opt/pikibun/node/bin" }),
     `'/opt/pikibun/service/pikibun-service' '--socket' '/run/pikibun-service/http.sock' '--node-bin' '/opt/pikibun/node/bin' '${JSON.stringify(serve).replaceAll("'", `'\\''`)}' </dev/null 2>&1`);
   assert.ok(!serviceShellCommand({ program: "python3", port: 8000 }, { nodeBin: "/opt/pikibun/node/bin" }).includes("--node-bin"));
+  assert.equal(serveCommand({ program: "python3", args: ["gui.py"], port: 6080, desktop: { width: 800, height: 600 } }), "python3 gui.py on a 800x600 desktop",
+    "the panel says a desktop is what's online");
   assert.deepEqual(serviceLimits(3600, 4), { seconds: 3600, cpuSeconds: 14_400, fileBytes: 16 * 1024 ** 3, openFiles: 8192 });
   assert.equal(serviceLimits(10, 1).seconds, 300);
   assert.equal(serviceLimits(1e9, 1).seconds, 86_400);

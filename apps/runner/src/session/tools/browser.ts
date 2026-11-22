@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
-import { browserActions, browserKeys, browserLimits, browserUnavailableText, type BrowserRequest } from "../../../../../packages/shared/src/browser.js";
+import { browserActions, browserKeys, browserLimits, browserUnavailableText, desktopLimits, type BrowserRequest } from "../../../../../packages/shared/src/browser.js";
 import { tunnelActions, tunnelUnavailableText } from "../../../../../packages/shared/src/tunnel.js";
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation } from "../../../../../packages/shared/src/types.js";
 import { browserRequest, browserShellCommand, servePrograms } from "../../browser-command.js";
@@ -10,6 +10,14 @@ import { programLimits } from "../../program-command.js";
 import { RunnerError } from "../../protocol.js";
 import { tunnelAccesses, tunnelRequest, type TunnelRequest } from "../../tunnel-command.js";
 import { approvalText, text, type ToolContext } from "./context.js";
+
+const desktopSchema = () => opt(obj({ width: opt(int({ minimum: desktopLimits.minWidth, maximum: desktopLimits.maxWidth })),
+  height: opt(int({ minimum: desktopLimits.minHeight, maximum: desktopLimits.maxHeight })) }, { open: true }));
+
+const desktopDescription = `serve.desktop {width?, height?} (${desktopLimits.width}x${desktopLimits.height} by default) is for an app with no web page (a GUI program): `
+  + "the program then starts on a virtual display of its own (TigerVNC's Xvnc, drawn with the CPU), and port serves that display as a remote desktop in the browser "
+  + "(noVNC), which takes clicks and typing; start a GUI program from a Python or Node.js launcher, such as python3 -c \"import subprocess; subprocess.run(['blender'])\". "
+  + "It needs Xvnc and noVNC installed on the host.";
 
 export function browserTool(context: ToolContext): ToolRegistration {
   const { calls, hostCommands, sandbox } = context;
@@ -23,7 +31,8 @@ export function browserTool(context: ToolContext): ToolRegistration {
     + "so do a whole flow in one call. Its network is the sandbox's: other hosts through the session's proxy, as the workspace allows, and "
     + "localhost only within the call, so start the web app under test with serve {program, args, directory?, venv?, port}: one of the node and "
     + `python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, which runs from before `
-    + "the page opens until the call ends. Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
+    + "the page opens until the call ends. " + desktopDescription.replace("port serves", "port (open http://localhost:<port>/) serves") + " "
+    + "Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
     + "It stops at the host's command time limit.",
     executionMode: "sequential",
     parameters: obj({
@@ -40,7 +49,7 @@ export function browserTool(context: ToolContext): ToolRegistration {
       timeout_seconds: opt(int({ minimum: browserLimits.timeoutSeconds.min, maximum: browserLimits.timeoutSeconds.max })),
       serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
         directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
-        timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
+        timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })), desktop: desktopSchema() }, { open: true })),
     }, { open: true }),
     execute: async (args, api, call) => {
       await context.requireSessionTool("browser");
@@ -63,9 +72,11 @@ export function browserTool(context: ToolContext): ToolRegistration {
 export function tunnelTool(context: ToolContext): ToolRegistration {
   const { calls, hostCommands } = context;
   return defineTool({ name: "tunnel", description: "Put the web server you work on online at a public https:// address, through a Cloudflare quick tunnel (https://<name>.trycloudflare.com). "
-    + "start {serve: {program, args, directory?, venv?, port, timeout_seconds?}} runs the server in the session's sandbox as a service that keeps running after the call: "
+    + "start {serve: {program, args, directory?, venv?, port, timeout_seconds?, desktop?}} runs the server in the session's sandbox as a service that keeps running after the call: "
     + `one of the node and python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, `
     + "listening on port on localhost; once the port answers (within timeout_seconds, 60 by default) cloudflared, on the host, puts it online, and the call answers with the address. "
+    + desktopDescription + " "
+    + "People use what is online in the session panel's App tab, as it runs. "
     + "A start replaces the one online. status gives the address, whether cloudflared is connected, the uptime and the server's last lines of output; stop takes it offline. "
     + "It stays online until stopped, until someone stops the session's work, until the session closes or is archived, or for the host's service lifetime at most. "
     + "It starts only for the host's owner or a member they granted host commands, and isn't taken in a read-only request. "
@@ -77,7 +88,7 @@ export function tunnelTool(context: ToolContext): ToolRegistration {
       access: opt(StringEnum(tunnelAccesses)),
       serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
         directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
-        timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
+        timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })), desktop: desktopSchema() }, { open: true })),
     }, { open: true }),
     execute: async (args, api, call) => {
       await context.requireSessionTool("tunnel");

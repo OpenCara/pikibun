@@ -173,6 +173,8 @@ Each tunnel is one `cloudflared tunnel --url http://127.0.0.1:<port>` process, w
 
 Each start is decided like a host command, by you or a member you granted host commands: it publishes from your machine's network. The server keeps running for the host's **Service lifetime** at most (see [Host configuration](#host-configuration)).
 
+For [desktops](extensions.md#desktops-for-apps-without-a-web-page) (apps with no web page, shown in the browser), install TigerVNC's `Xvnc` and noVNC on the host: `sudo apt install tigervnc-standalone-server novnc` on Debian, Ubuntu and WSL2, `sudo dnf install tigervnc-server-minimal novnc` on Fedora, `tigervnc` and `novnc` on Arch. Sessions find them in the host's `/usr`; nothing is downloaded, and nothing else of the host is given to them. Fonts the desktop's apps draw with come from `/usr/share/fonts` too.
+
 A session whose workspace has the browser on, on a host that has no Chromium for it, says so as it starts: a warning above its chat box, for whoever can write in it, and a row in the panel's **Extensions** section. Its agent is told too, so it says so rather than trying. Viewers of a session only learn why (no Chromium, downloading, download failed, turned off, no Linux sandbox), never the host's paths or errors.
 
 ## Network access

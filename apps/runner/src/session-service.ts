@@ -9,6 +9,7 @@ import { programShellCommand, shellQuote } from "./program-command.js";
 import type { CommandLimits } from "./host-config.js";
 
 export const SANDBOX_SERVICE_DRIVER = "/opt/pikibun/service/pikibun-service";
+export const SANDBOX_DESKTOP_DRIVER = "/opt/pikibun/desktop/pikibun-desktop";
 export const SANDBOX_SERVICE_SOCKETS = "/run/pikibun-service";
 export const SERVICE_SOCKET = "http.sock";
 export const SERVICE_MARK = "\x1epikibun-service ";
