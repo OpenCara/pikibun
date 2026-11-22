@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,10 @@ args = sys.argv[1:]
 port = int(args[args.index('-rfbport') + 1])
 with open(os.environ['FAKE_XVNC_LOG'], 'w') as log:
     log.write(' '.join(args))
+once = os.environ.get('FAKE_XVNC_FAIL_ONCE')
+if once and not os.path.exists(once):
+    open(once, 'w').close()
+    sys.exit(1)
 listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 listener.bind(('127.0.0.1', port))
@@ -61,6 +65,9 @@ async function setUp(t: test.TestContext) {
   await writeFile(join(web, "vnc.html"), "<!doctype html><title>noVNC</title>");
   await writeFile(join(web, "core", "rfb.js"), "export default class RFB {}");
   await writeFile(join(root, "secret.txt"), "not for the viewer");
+  await mkdir(join(root, "javascript"));
+  await writeFile(join(root, "javascript", "pako.js"), "export const pako = 1;");
+  await symlink(join(root, "javascript", "pako.js"), join(web, "core", "pako.js"));
   const driver = join(root, "pikibun-desktop");
   await writeFile(driver, DESKTOP_DRIVER, { mode: 0o755 });
   return { root, bin, web, driver, log: join(root, "xvnc.log") };
@@ -110,7 +117,10 @@ test("a desktop: Xvnc on a display of its own, the program on it, and noVNC with
   const module = await fetch(`http://127.0.0.1:${port}/core/rfb.js`);
   assert.equal(module.headers.get("content-type"), "text/javascript; charset=utf-8", "noVNC's modules load as JavaScript");
   assert.equal(await module.text(), "export default class RFB {}");
-  for (const path of ["/core/..%2f..%2fsecret.txt", "/%2e%2e/secret.txt", "/core", "/missing.js"]) {
+  const linked = await fetch(`http://127.0.0.1:${port}/core/pako.js`);
+  assert.equal(linked.status, 200, "a file the package links to elsewhere, as distributions do with shared libraries");
+  assert.equal(await linked.text(), "export const pako = 1;");
+  for (const path of ["/core/..%2f..%2fsecret.txt", "/%2e%2e/secret.txt", "/..%2fsecret.txt", "/core", "/missing.js", "/core/pako.js%00"]) {
     assert.equal((await fetch(`http://127.0.0.1:${port}${path}`)).status, 404, `${path}: nothing outside noVNC's files, and no listings`);
   }
 
@@ -146,6 +156,30 @@ test("a desktop: Xvnc on a display of its own, the program on it, and noVNC with
   const rfb = Number(/-rfbport (\d+)/.exec(xvnc)?.[1]);
   assert.equal(await answers(rfb), false, "Xvnc ends with the desktop");
   assert.equal(await answers(port), false, "and so does the viewer's port");
+});
+
+test("a display another desktop took is left for the next one, and a viewer that stops answering is let go", { skip }, async t => {
+  const { root, bin, web, driver, log } = await setUp(t);
+  const port = await freePort();
+  const desktop = run(driver, ["--port", String(port), "--web", web, "--idle", "2", "--", python, "-c", "import time; time.sleep(60)"],
+    { PATH: `${bin}:/usr/bin:/bin`, FAKE_XVNC_LOG: log, FAKE_XVNC_FAIL_ONCE: join(root, "failed-once"), TMPDIR: root, HOME: root });
+  t.after(() => kill(desktop.child));
+  await until(() => desktop.output().includes(`is on port ${port}`) ? true : undefined, "the desktop to be ready");
+  const tried = /Xvnc exited \(1\) before display :(\d+) was ready: another desktop may have taken it; trying the next display/.exec(desktop.output());
+  assert.ok(tried, desktop.output());
+  assert.match(desktop.output(), new RegExp(`display :${Number(tried[1]) + 1} \\(1280x800\\) is on port ${port}`));
+
+  const silent = connect(port, "127.0.0.1");
+  const bytes: Buffer[] = [];
+  silent.on("data", chunk => bytes.push(chunk));
+  const ended = new Promise<number>(resolve => silent.once("close", () => resolve(Date.now())));
+  const started = Date.now();
+  silent.write("GET /websockify HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+  const closedAt = await ended;
+  const received = Buffer.concat(bytes);
+  assert.ok(received.includes(Buffer.from([0x89, 7, ...Buffer.from("pikibun")])), "pinged while it was quiet");
+  assert.ok(received.includes(Buffer.from([0x88, 2, 0x03, 0xe8])), "then closed");
+  assert.ok(closedAt - started >= 2000 && closedAt - started < 10_000, `let go after the idle time, not before (${closedAt - started} ms)`);
 });
 
 test("a desktop ends with its program, with the program's exit code, and says what the host lacks before anything starts", { skip }, async t => {

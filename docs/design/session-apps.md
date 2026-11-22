@@ -54,7 +54,13 @@ panel's **App** tab, what lets the web client frame the app, desktops in the san
    fontconfig file of its own (the sandbox has no `/etc/fonts`, as the browser found) and its output passed on, and
    serves the viewer's files and the WebSocket bridge on the declared port, on loopback. The bridge relays binary
    WebSocket frames to the display's RFB port and back (RFC 6455: masked client frames, ping, close; at most 16 viewers,
-   frames up to 16 MiB). It ends when the program does, or when it is stopped, and takes the display with it. There is
+   frames up to 16 MiB). It pings each viewer every 30 seconds and lets go of one it hasn't heard from in 90 (a laptop
+   that slept, a dropped network), so dead viewers don't hold the 16 places. Two desktops of one session (the tunnel's
+   and a browser call's) share its `/tmp`, so both can pick the same free display: an `Xvnc` that exits before its
+   display is ready is tried again on the next one, five times at most. The viewer's files are served by the request's
+   normalized path inside noVNC's directory, which can't climb out of it; where a distribution links a file elsewhere
+   (a shared JavaScript library), the link is followed, since that directory is the host's read-only `/usr`, which the
+   session can't change. It ends when the program does, or when it is stopped, and takes the display with it. There is
    no window manager: one more program to find on hosts, for an app that is usually one window; windows open at the
    top left without decorations. The viewer's page is noVNC's own `vnc.html`, asked to connect at once, scale the
    display to the frame and reconnect after a drop.

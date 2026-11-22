@@ -22,6 +22,8 @@ WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 MAX_VIEWERS = 16
 MAX_FRAME = 16 * 1024 * 1024
 DISPLAY_WAIT_SECONDS = 30
+DISPLAY_ATTEMPTS = 5
+IDLE_SECONDS = 90
 SIZE_LIMITS = (320, 240, 3840, 2160)
 CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -54,14 +56,18 @@ def say(message: str) -> None:
     sys.stdout.flush()
 
 
-def parse(arguments: List[str]) -> Tuple[int, Tuple[int, int], Optional[str], List[str]]:
+USAGE = 'usage: pikibun-desktop --port <port> [--size <width>x<height>] [--web <directory>] [--idle <seconds>] -- <program> [args...]'
+
+
+def parse(arguments: List[str]) -> Tuple[int, Tuple[int, int], Optional[str], float, List[str]]:
     port = 0
     size = (1280, 800)
     web: Optional[str] = None
+    idle = float(IDLE_SECONDS)
     rest = list(arguments)
     while rest and rest[0] != '--':
         if len(rest) < 2:
-            raise DesktopError('usage: pikibun-desktop --port <port> [--size <width>x<height>] [--web <directory>] -- <program> [args...]')
+            raise DesktopError(USAGE)
         name, value = rest[0], rest[1]
         rest = rest[2:]
         if name == '--port' and value.isdigit() and 0 < int(value) < 65536:
@@ -76,11 +82,13 @@ def parse(arguments: List[str]) -> Tuple[int, Tuple[int, int], Optional[str], Li
             size = (width, height)
         elif name == '--web':
             web = value
+        elif name == '--idle' and value.isdigit() and 0 < int(value) <= 3600:
+            idle = float(value)
         else:
             raise DesktopError('unknown option ' + name)
     if not rest or rest[0] != '--' or len(rest) < 2 or not port:
-        raise DesktopError('usage: pikibun-desktop --port <port> [--size <width>x<height>] [--web <directory>] -- <program> [args...]')
-    return port, size, web, rest[1:]
+        raise DesktopError(USAGE)
+    return port, size, web, idle, rest[1:]
 
 
 def viewer_directory(given: Optional[str]) -> str:
@@ -97,8 +105,8 @@ def find_xvnc(env: Dict[str, str]) -> str:
     return found
 
 
-def free_display() -> int:
-    for number in range(1, 200):
+def free_display(first: int) -> int:
+    for number in range(first, 200):
         if not os.path.exists('/tmp/.X11-unix/X%d' % number) and not os.path.exists('/tmp/.X%d-lock' % number):
             return number
     raise DesktopError('no free display number')
@@ -199,9 +207,11 @@ def read_frame(stream: Any) -> Tuple[int, bytes]:
 
 
 class Bridge:
-    def __init__(self, handler: http.server.BaseHTTPRequestHandler, rfb_port: int):
+    def __init__(self, handler: http.server.BaseHTTPRequestHandler, rfb_port: int, idle: float):
         self.handler = handler
         self.rfb_port = rfb_port
+        self.idle = idle
+        self.heard = time.monotonic()
         self.lock = threading.Lock()
         self.closed = threading.Event()
 
@@ -220,6 +230,17 @@ class Bridge:
             pass
         finally:
             self.close(display)
+
+    def keep_alive(self, display: socket.socket) -> None:
+        while not self.closed.wait(self.idle / 3):
+            if time.monotonic() - self.heard > self.idle:
+                self.close(display)
+                return
+            try:
+                self.send(0x9, b'pikibun')
+            except OSError:
+                self.close(display)
+                return
 
     def close(self, display: socket.socket) -> None:
         if self.closed.is_set():
@@ -243,9 +264,11 @@ class Bridge:
             return
         display.settimeout(None)
         threading.Thread(target=self.from_display, args=(display,), daemon=True).start()
+        threading.Thread(target=self.keep_alive, args=(display,), daemon=True).start()
         try:
             while not self.closed.is_set():
                 opcode, payload = read_frame(self.handler.rfile)
+                self.heard = time.monotonic()
                 if opcode in (0x0, 0x1, 0x2):
                     display.sendall(payload)
                 elif opcode == 0x9:
@@ -259,7 +282,7 @@ class Bridge:
             display.close()
 
 
-def handler_for(root: str, rfb_port: int, viewers: threading.Semaphore) -> Any:
+def handler_for(root: str, rfb_port: int, viewers: threading.Semaphore, idle: float) -> Any:
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
         server_version = 'pikibun-desktop'
@@ -297,7 +320,7 @@ def handler_for(root: str, rfb_port: int, viewers: threading.Semaphore) -> Any:
                     self.send_header('Sec-WebSocket-Protocol', 'binary')
                 self.end_headers()
                 self.wfile.flush()
-                Bridge(self, rfb_port).run()
+                Bridge(self, rfb_port, idle).run()
             finally:
                 viewers.release()
                 self.close_connection = True
@@ -310,9 +333,9 @@ def handler_for(root: str, rfb_port: int, viewers: threading.Semaphore) -> Any:
             if path.rstrip('/') == '/websockify' and 'websocket' in self.headers.get('Upgrade', '').lower() and not head:
                 self.upgrade()
                 return
-            relative = posixpath.normpath(urllib.parse.unquote(path)).lstrip('/')
-            target = os.path.realpath(os.path.join(root, relative))
-            if relative.startswith('..') or not target.startswith(root + os.sep) or not os.path.isfile(target):
+            relative = posixpath.normpath('/' + urllib.parse.unquote(path)).lstrip('/')
+            target = os.path.join(root, relative)
+            if not relative or relative.startswith('..') or '\x00' in relative or not os.path.isfile(target):
                 self.answer(404, b'Not found\n', {'Content-Type': 'text/plain; charset=utf-8'}, head)
                 return
             try:
@@ -347,9 +370,9 @@ class Server6(Server):
     address_family = socket.AF_INET6
 
 
-def serve(port: int, root: str, rfb_port: int) -> List[http.server.HTTPServer]:
+def serve(port: int, root: str, rfb_port: int, idle: float) -> List[http.server.HTTPServer]:
     viewers = threading.Semaphore(MAX_VIEWERS)
-    handler = handler_for(root, rfb_port, viewers)
+    handler = handler_for(root, rfb_port, viewers, idle)
     servers: List[http.server.HTTPServer] = [Server(('127.0.0.1', port), handler)]
     try:
         servers.append(Server6(('::1', port), handler))
@@ -375,14 +398,39 @@ def stop(process: Optional['subprocess.Popen[bytes]']) -> None:
             continue
 
 
+def start_display(xvnc: str, size: Tuple[int, int], stopping: List[bool]) -> Tuple['subprocess.Popen[bytes]', int, int]:
+    first = 1
+    for _attempt in range(DISPLAY_ATTEMPTS):
+        display = free_display(first)
+        rfb_port = free_port()
+        server_args = [xvnc, ':%d' % display, '-geometry', '%dx%d' % size, '-depth', '24', '-rfbport', str(rfb_port), '-localhost',
+                       '-SecurityTypes', 'None', '-AlwaysShared', '-nolisten', 'tcp', '-desktop', 'Pikibun']
+        try:
+            server_process = subprocess.Popen(server_args, stdin=subprocess.DEVNULL)
+        except OSError as error:
+            raise DesktopError('could not start Xvnc: %s' % (error.strerror or error)) from error
+        until = time.monotonic() + DISPLAY_WAIT_SECONDS
+        while not answers(rfb_port):
+            if server_process.poll() is not None:
+                break
+            if stopping or time.monotonic() >= until:
+                stop(server_process)
+                raise DesktopError('Xvnc\'s display was not ready within %d seconds' % DISPLAY_WAIT_SECONDS)
+            time.sleep(0.1)
+        else:
+            return server_process, display, rfb_port
+        say('Xvnc exited (%s) before display :%d was ready: another desktop may have taken it; trying the next display'
+            % (server_process.returncode, display))
+        first = display + 1
+    raise DesktopError('Xvnc could not start a display in %d attempts' % DISPLAY_ATTEMPTS)
+
+
 def main() -> int:
     try:
-        port, size, web, argv = parse(sys.argv[1:])
+        port, size, web, idle, argv = parse(sys.argv[1:])
         root = viewer_directory(web)
         env = dict(os.environ)
         xvnc = find_xvnc(env)
-        display = free_display()
-        rfb_port = free_port()
     except DesktopError as error:
         say(str(error))
         return 2
@@ -393,32 +441,21 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, stopped)
     signal.signal(signal.SIGINT, stopped)
-    server_args = [xvnc, ':%d' % display, '-geometry', '%dx%d' % size, '-depth', '24', '-rfbport', str(rfb_port), '-localhost',
-                   '-SecurityTypes', 'None', '-AlwaysShared', '-nolisten', 'tcp', '-desktop', 'Pikibun']
     try:
-        server_process = subprocess.Popen(server_args, stdin=subprocess.DEVNULL)
-    except OSError as error:
-        say('could not start Xvnc: %s' % (error.strerror or error))
+        server_process, display, rfb_port = start_display(xvnc, size, stopping)
+    except DesktopError as error:
+        say(str(error))
         return 1
     program: Optional['subprocess.Popen[bytes]'] = None
     servers: List[http.server.HTTPServer] = []
     try:
-        until = time.monotonic() + DISPLAY_WAIT_SECONDS
-        while not answers(rfb_port):
-            if server_process.poll() is not None:
-                say('Xvnc exited (%s) before its display was ready' % server_process.returncode)
-                return 1
-            if stopping or time.monotonic() >= until:
-                say('Xvnc\'s display was not ready within %d seconds' % DISPLAY_WAIT_SECONDS)
-                return 1
-            time.sleep(0.1)
         try:
             program = subprocess.Popen(argv, env=program_environment(display), stdin=subprocess.DEVNULL)
         except OSError as error:
             say('could not start %s: %s' % (argv[0], error.strerror or error))
             return 1
         try:
-            servers = serve(port, root, rfb_port)
+            servers = serve(port, root, rfb_port, idle)
         except OSError as error:
             say('could not listen on port %d: %s' % (port, error.strerror or error))
             return 1
