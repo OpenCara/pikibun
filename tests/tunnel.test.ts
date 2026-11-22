@@ -467,10 +467,23 @@ test("by default a quick tunnel opens only through its link: the secret becomes 
   const opened = await at(`/?pikibun_tunnel=${token}&tab=2`);
   assert.equal(opened.status, 303);
   assert.equal(opened.headers.get("location"), "/?tab=2", "the secret leaves the address, the rest of it stays");
-  assert.match(opened.headers.get("set-cookie") ?? "", new RegExp(`^pikibun_tunnel=${token}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax$`));
+  assert.deepEqual(opened.headers.getSetCookie(), [`pikibun_tunnel=${token}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`],
+    "a top-level visit gets the Lax cookie alone, which cross-site requests don't carry");
   const page = await at("/page?x=1", { Cookie: `theme=dark; pikibun_tunnel=${token}` });
   assert.equal(page.status, 200);
   assert.equal(await page.text(), "served /page?x=1 cookie=theme=dark", "the server gets its own cookies, never the tunnel's secret");
+  const inFrame = await at(`/?pikibun_tunnel=${token}`, { "Sec-Fetch-Dest": "iframe" });
+  assert.equal(inFrame.status, 303);
+  assert.deepEqual(inFrame.headers.getSetCookie(), [`pikibun_tunnel=${token}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`,
+    `pikibun_tunnel_frame=${token}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=None; Partitioned`],
+    "opened in a frame, the link also sets a partitioned cookie, kept only under the page that framed it");
+  const framedPage = await at("/page", { Cookie: `pikibun_tunnel_frame=${token}; theme=dark`, "Sec-Fetch-Dest": "iframe" });
+  assert.equal(framedPage.status, 200);
+  assert.equal(await framedPage.text(), "served /page cookie=theme=dark", "the frame's cookie admits, and is taken out too");
+  assert.equal((await at("/page", { Cookie: "pikibun_tunnel_frame=not-the-secret" })).status, 401);
+  const refusedInFrame = await at("/page", { "Sec-Fetch-Dest": "iframe" });
+  assert.equal(refusedInFrame.status, 401);
+  assert.match(await refusedInFrame.text(), /open it in a tab of its own/, "a browser that kept no cookie in the frame is told to open the app in a tab");
   const call = JSON.parse((await readFile(join(root, "calls.jsonl"), "utf8")).trim().split("\n").at(-1)!) as { args: string[] };
   const forward = new URL(call.args[call.args.indexOf("--url") + 1]!);
   const upgrade = async (cookie: string) => {
@@ -486,6 +499,9 @@ test("by default a quick tunnel opens only through its link: the secret becomes 
   const upgraded = await upgrade(`a=1; pikibun_tunnel=${token}`);
   assert.match(upgraded, /^HTTP\/1\.1 101/);
   assert.match(upgraded, /X-Seen-Cookie: a=1\r\n/);
+  const framedUpgrade = await upgrade(`pikibun_tunnel_frame=${token}; b=2`);
+  assert.match(framedUpgrade, /^HTTP\/1\.1 101/, "a WebSocket opened in the frame gets in with the frame's cookie");
+  assert.match(framedUpgrade, /X-Seen-Cookie: b=2\r\n/);
   const linked = async (path: string) => {
     const { connect } = await import("node:net");
     const client = connect(Number(forward.port), "127.0.0.1");

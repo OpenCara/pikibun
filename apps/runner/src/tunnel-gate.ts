@@ -4,8 +4,10 @@ import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 
 export const TUNNEL_GATE_NAME = "pikibun_tunnel";
+export const TUNNEL_FRAME_COOKIE = "pikibun_tunnel_frame";
 const COOKIE_SECONDS = 24 * 3600;
 const DENIED = "This preview is private: open it with the link its Pikibun session gave you.\n";
+const DENIED_FRAMED = "This preview is private, and this browser keeps no cookie for it inside another page: open it in a tab of its own (Open, in the session's App tab).\n";
 
 export function tunnelGateToken(): string {
   return randomBytes(24).toString("base64url");
@@ -22,17 +24,33 @@ function same(given: string | undefined, token: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function cookies(header: string | undefined): { gate: string | undefined; rest: string | undefined } {
-  let gate: string | undefined;
+function cookies(header: string | undefined): { gates: string[]; rest: string | undefined } {
+  const gates: string[] = [];
   const rest: string[] = [];
   for (const part of (header ?? "").split(";")) {
     const trimmed = part.trim();
     if (!trimmed) continue;
     const equals = trimmed.indexOf("=");
-    if (equals > 0 && trimmed.slice(0, equals) === TUNNEL_GATE_NAME) gate = trimmed.slice(equals + 1);
+    const name = equals > 0 ? trimmed.slice(0, equals) : "";
+    if (name === TUNNEL_GATE_NAME || name === TUNNEL_FRAME_COOKIE) gates.push(trimmed.slice(equals + 1));
     else rest.push(trimmed);
   }
-  return { gate, rest: rest.length ? rest.join("; ") : undefined };
+  return { gates, rest: rest.length ? rest.join("; ") : undefined };
+}
+
+function framed(request: IncomingMessage): boolean {
+  const destination = request.headers["sec-fetch-dest"];
+  return destination === "iframe" || destination === "frame";
+}
+
+function admissionCookies(request: IncomingMessage, token: string): string[] {
+  const lasting = `Path=/; Max-Age=${COOKIE_SECONDS}; HttpOnly; Secure`;
+  return [`${TUNNEL_GATE_NAME}=${token}; ${lasting}; SameSite=Lax`,
+    ...(framed(request) ? [`${TUNNEL_FRAME_COOKIE}=${token}; ${lasting}; SameSite=None; Partitioned`] : [])];
+}
+
+function denied(request: IncomingMessage, response: ServerResponse): void {
+  response.writeHead(401, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }).end(framed(request) ? DENIED_FRAMED : DENIED);
 }
 
 function forwardedHeaders(request: IncomingMessage, cookie: string | undefined): OutgoingHttpHeaders {
@@ -49,8 +67,8 @@ function forwardedHeaders(request: IncomingMessage, cookie: string | undefined):
 }
 
 function admitted(request: IncomingMessage, token: string): { cookie: string | undefined } | undefined {
-  const { gate, rest } = cookies(request.headers.cookie);
-  return same(gate, token) ? { cookie: rest } : undefined;
+  const { gates, rest } = cookies(request.headers.cookie);
+  return gates.some(gate => same(gate, token)) ? { cookie: rest } : undefined;
 }
 
 function target(request: IncomingMessage): URL | undefined {
@@ -65,17 +83,17 @@ export function createTunnelGate(socket: string, token: string, track: (connecti
     if (!url) { response.writeHead(400).end(); return; }
     if (url.searchParams.has(TUNNEL_GATE_NAME)) {
       const given = url.searchParams.get(TUNNEL_GATE_NAME) ?? undefined;
-      if (!same(given, token)) { response.writeHead(401, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }).end(DENIED); return; }
+      if (!same(given, token)) { denied(request, response); return; }
       url.searchParams.delete(TUNNEL_GATE_NAME);
       response.writeHead(303, {
         Location: pathOf(url),
-        "Set-Cookie": `${TUNNEL_GATE_NAME}=${token}; Path=/; Max-Age=${COOKIE_SECONDS}; HttpOnly; Secure; SameSite=Lax`,
+        "Set-Cookie": admissionCookies(request, token),
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
       }).end();
       return;
     }
     const admission = admitted(request, token);
-    if (!admission) { response.writeHead(401, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }).end(DENIED); return; }
+    if (!admission) { denied(request, response); return; }
     const upstream = httpRequest({ socketPath: socket, method: request.method, path: pathOf(url), headers: forwardedHeaders(request, admission.cookie) }, answer => {
       answer.on("error", () => response.destroy());
       response.writeHead(answer.statusCode ?? 502, answer.statusMessage, answer.rawHeaders);
