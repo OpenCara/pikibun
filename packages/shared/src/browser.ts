@@ -36,6 +36,8 @@ export interface BrowserAction {
   clear?: boolean;
 }
 
+export const desktopLimits = Object.freeze({ minWidth: 320, maxWidth: 3840, minHeight: 240, maxHeight: 2160, width: 1280, height: 800 });
+
 export interface BrowserServe {
   program: string;
   args?: string[];
@@ -43,6 +45,7 @@ export interface BrowserServe {
   venv?: string;
   port: number;
   timeout_seconds?: number;
+  desktop?: { width: number; height: number };
 }
 
 export interface BrowserRequest {

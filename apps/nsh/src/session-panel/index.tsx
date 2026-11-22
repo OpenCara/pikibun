@@ -8,6 +8,7 @@ import type { SessionActions } from "../lib/session-actions";
 import { withUsernames, type Person } from "../../../../packages/client/src/usernames";
 import { palette, radius } from "../theme";
 import { CollapsibleRow, EmptyState, IconButton, ResourceState, Section, Segmented, Value } from "../ui";
+import { App } from "./App";
 import { Artifacts } from "./Artifacts";
 import { Browser } from "./Browser";
 import { Changes } from "./Changes";
@@ -76,6 +77,7 @@ export const panelTabs: readonly PanelTab[] = [
   { id: "changes", label: "Changes", Component: Changes },
   { id: "review", label: "Review", Component: Review },
   { id: "artifacts", label: "Artifacts", Component: Artifacts },
+  { id: "app", label: "App", Component: App },
   { id: "browser", label: "Browser", Component: Browser },
   { id: "schedules", label: "Schedules", Component: Schedules },
   { id: "activity", label: "Activity", Component: Activity },
@@ -88,10 +90,10 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
   const tab = () => props.tab ?? own();
   const chooseTab = (id: string) => { own.set(id); props.onTab?.(id); };
   const sideways = () => windowSize().width >= 700;
-  const wide = () => tab() === "files" || tab() === "artifacts" || tab() === "browser" || tab() === "review" || tab() === "changes";
+  const wide = () => tab() === "files" || tab() === "artifacts" || tab() === "app" || tab() === "browser" || tab() === "review" || tab() === "changes";
   const expanded = signal(false);
   const expandable = () => sideways() && !nativeSheet;
-  const full = () => expandable() && expanded() && (tab() === "review" || tab() === "changes");
+  const full = () => expandable() && expanded() && (tab() === "review" || tab() === "changes" || tab() === "app");
   const backs = createPanelBacks();
   const closed = (event: { open: boolean; reason?: string }) => {
     if (event.open) return;

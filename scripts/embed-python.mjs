@@ -11,6 +11,7 @@ const programs = [
   ["GIT_SHIM", "git_shim.py"],
   ["BROWSER_DRIVER", "browser.py"],
   ["SERVICE_DRIVER", "service.py"],
+  ["DESKTOP_DRIVER", "desktop.py"],
 ];
 
 export function embedded() {

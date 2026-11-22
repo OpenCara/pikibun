@@ -14,6 +14,7 @@ NODE_ENVIRONMENT = 'NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=
 PYTHON_PROGRAMS = ('python3', 'pip', 'pip3', 'uv', 'uvx', 'poetry', 'pytest')
 PYTHON_ENVIRONMENT = 'NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1'
 MARK = '\x1epikibun-service '
+DESKTOP = '/opt/pikibun/desktop/pikibun-desktop'
 MAX_CONNECTIONS = 256
 RELAY_DRAIN_SECONDS = 60
 
@@ -48,7 +49,18 @@ def launch(spec: Dict[str, Any], node_bin: Optional[str]) -> Tuple[List[str], st
         name, value = item.split('=', 1)
         env[name] = value
     env['PATH'] = ':'.join(first + [os.environ.get('PATH') or '/usr/bin:/bin', '/usr/local/bin'])
-    return [str(program)] + [str(arg) for arg in spec.get('args') or []], directory, env
+    return desktop(spec, [str(program)] + [str(arg) for arg in spec.get('args') or []]), directory, env
+
+
+def desktop(spec: Dict[str, Any], argv: List[str]) -> List[str]:
+    screen = spec.get('desktop')
+    if screen is None:
+        return argv
+    if not isinstance(screen, dict) or type(screen.get('width')) is not int or type(screen.get('height')) is not int:
+        raise ServiceError('desktop is {width, height}')
+    if not os.path.isfile(DESKTOP):
+        raise ServiceError('this sandbox has no desktop helper: the host\'s connector is older than desktops')
+    return [DESKTOP, '--port', str(spec['port']), '--size', '%dx%d' % (screen['width'], screen['height']), '--'] + argv
 
 
 def port_open(port: int) -> bool:

@@ -2,6 +2,7 @@ import { createReadStream, readdirSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
+import { QUICK_TUNNEL_DOMAIN } from '../../../packages/shared/src/tunnel.js';
 
 const contentTypes: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -47,6 +48,7 @@ export function pageContentSecurityPolicy(): string {
     "font-src 'self' data:",
     "connect-src 'self' blob: data:",
     "worker-src 'self' blob:",
+    `frame-src 'self' https://*.${QUICK_TUNNEL_DOMAIN}`,
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",

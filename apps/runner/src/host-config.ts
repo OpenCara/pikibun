@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join, relative, sep } from "node:path";
 import { defaultHostConfig, hostConfigLimits, readHostConfig, type GpuKind, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
@@ -81,7 +81,20 @@ export interface GpuMounts { kind: GpuKind; args: string[]; env: Record<string, 
 const DXG = "dev/dxg";
 const WSL_LIBRARIES = "usr/lib/wsl/lib";
 const RENDER_NODE = /^renderD\d{1,4}$/;
+const NVIDIA_DEVICE = /^nvidia(?:\d{1,3}|ctl|-uvm|-uvm-tools|-modeset)$/;
 const DEVICE_NUMBER = /^\d{1,6}:\d{1,6}$/;
+
+function nvidiaDevices(dev: string): string[] {
+  let names: string[];
+  try { names = readdirSync(dev).filter(name => NVIDIA_DEVICE.test(name)).sort(); }
+  catch { return []; }
+  return names.filter(name => {
+    try {
+      const info = lstatSync(join(dev, name));
+      return !info.isSymbolicLink() && !info.isDirectory();
+    } catch { return false; }
+  });
+}
 
 export function gpuMounts(root = "/"): GpuMounts | undefined {
   let base: string;
@@ -92,9 +105,9 @@ export function gpuMounts(root = "/"): GpuMounts | undefined {
   if (existsSync(at(DXG))) {
     return { kind: "dxg", args: ["--dev-bind", at(DXG), "/dev/dxg"], env: existsSync(at(WSL_LIBRARIES)) ? { LD_LIBRARY_PATH: `/${WSL_LIBRARIES}` } : {} };
   }
-  let names: string[];
+  let names: string[] = [];
   try { names = readdirSync(at("dev/dri")).filter(name => RENDER_NODE.test(name)).sort(); }
-  catch { return undefined; }
+  catch { }
   const devices = at("sys/devices");
   const args: string[] = [];
   const bound = new Set<string>();
@@ -109,6 +122,7 @@ export function gpuMounts(root = "/"): GpuMounts | undefined {
       args.push("--symlink", inside(node), `/sys/dev/char/${number}`);
     } catch { }
   }
+  for (const name of nvidiaDevices(at("dev"))) args.push("--dev-bind", at(`dev/${name}`), `/dev/${name}`);
   return args.length ? { kind: "render", args, env: {} } : undefined;
 }
 

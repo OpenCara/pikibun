@@ -28,5 +28,6 @@ export function tunnelRequest(input: unknown): TunnelRequest {
 }
 
 export function serveCommand(serve: BrowserServe): string {
-  return [serve.program, ...(serve.args ?? [])].join(" ").slice(0, 2000);
+  const command = [serve.program, ...(serve.args ?? [])].join(" ").slice(0, 2000);
+  return serve.desktop ? `${command.slice(0, 1960)} on a ${serve.desktop.width}x${serve.desktop.height} desktop` : command;
 }

@@ -23,7 +23,9 @@ const directive = (policy: string, name: string) => policy.split("; ").find(item
 test("the page's policy lets Native Shell's web runtime start, and no more", () => {
   const policy = pageContentSecurityPolicy();
   assert.equal(directive(policy, "script-src"), "script-src 'self' 'wasm-unsafe-eval'", "the site's own files and WebAssembly: no inline scripts, no blob: modules");
-  assert.doesNotMatch(policy, /'unsafe-eval'|'sha256-|'nonce-|\*/, "no eval, no hashes or nonces, no wildcard");
+  assert.doesNotMatch(policy, /'unsafe-eval'|'sha256-|'nonce-/, "no eval, no hashes or nonces");
+  assert.equal(directive(policy, "frame-src"), "frame-src 'self' https://*.trycloudflare.com", "frames: the runtime's own, and a session's app through its quick tunnel");
+  assert.doesNotMatch(policy.split("; ").filter(item => !item.startsWith("frame-src ")).join("; "), /\*/, "no wildcard but the quick tunnels' subdomains");
   assert.equal(directive(policy, "connect-src"), "connect-src 'self' blob: data:", "requests go to this server only");
   for (const kept of ["object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'", "form-action 'self'", "default-src 'self'"]) {
     assert.ok(policy.split("; ").includes(kept), kept);
