@@ -162,6 +162,31 @@ test("direct Git LFS downloads answer in the relay's own form; the provider's UR
   assert.deepEqual(fallbacks, ["internal.example.com does not resolve to a public address; Git LFS objects are downloaded only from public addresses"]);
 });
 
+test("a direct Git LFS download from Azure DevOps follows its href, whose user is the organization, on the provider's origin", async () => {
+  const azure = "https://dev.azure.com/shiningpie/ShiningPie/_git/ShiningPie";
+  const objectUrl = `${azure}/info/lfs/objects/${oid}`;
+  const calls: [string, string | null][] = [];
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    calls.push([request.url, request.headers.get("authorization")]);
+    if (request.url === `${azure}.git/info/lfs/objects/batch`) {
+      return Response.json({ objects: [{ oid, size: 3, authenticated: true,
+        actions: { download: { href: `https://shiningpie@dev.azure.com/shiningpie/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}` } } }] });
+    }
+    if (request.url === objectUrl) return new Response("big", { headers: { "content-length": "3" } });
+    return new Response("unexpected", { status: 500 });
+  }) as typeof globalThis.fetch;
+  const fallbacks: string[] = [];
+  const pinned: { url: string; addresses: ResolvedAddress[] }[] = [];
+  const { direct } = directGit(async () => readGrant({ remote: azure, authorization: "Basic OnBhdA==", kind: "owner-account" }), fetch, fallbacks, pinned);
+  const body = new Uint8Array(Buffer.from(JSON.stringify({ oid, size: 3 })));
+  const object = await direct.forward({ bindingId: "binding-app", service: "lfs-object", contentType: "application/json", body });
+  assert.deepEqual(fallbacks, []);
+  assert.equal(await object!.text(), "big");
+  assert.deepEqual(calls, [[`${azure}.git/info/lfs/objects/batch`, "Basic OnBhdA=="], [objectUrl, "Basic OnBhdA=="]]);
+  assert.deepEqual(pinned, [], "the provider's own origin is fetched as its Git requests are");
+});
+
 test("behind a fake-IP proxy, Git LFS downloads go direct only once the host's owner trusts it, and never to a private address", async () => {
   const json = (value: unknown) => new Uint8Array(Buffer.from(JSON.stringify(value)));
   const object = { bindingId: "binding-app", service: "lfs-object", contentType: "application/json", body: json({ oid, size: 3 }) } as const;

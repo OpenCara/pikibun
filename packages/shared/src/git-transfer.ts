@@ -112,12 +112,23 @@ function providerMessage(value: unknown, fallback: string): string {
   return typeof value === "string" && /^[\x20-\x7e]{1,200}$/.test(value) ? value : fallback;
 }
 
-function downloadUrl(value: unknown): URL | undefined {
+function downloadUrl(value: unknown, remote?: URL): URL | undefined {
   if (typeof value !== "string" || value.length > 8192) return undefined;
   let url: URL;
   try { url = new URL(value); } catch { return undefined; }
-  if (url.protocol !== "https:" || url.username || url.password || !validGitHost(url.host)) return undefined;
+  if (url.protocol !== "https:" || url.password || !validGitHost(url.host)) return undefined;
+  if (url.username) {
+    if (!remote || url.origin !== remote.origin) return undefined;
+    url.username = "";
+  }
   return url;
+}
+
+function providerOrigin(url: URL, remote: URL): boolean {
+  if (url.origin === remote.origin) return true;
+  if (remote.origin !== "https://dev.azure.com" || url.port) return false;
+  const organization = remote.pathname.split("/")[1]?.toLowerCase();
+  return !!organization && url.hostname === `${organization}.visualstudio.com`;
 }
 
 function actionHeaders(value: unknown): Record<string, string> | undefined {
@@ -230,10 +241,13 @@ export function lfsBatchResult(objects: LfsObject[], answer: Map<string, LfsProv
 
 async function download(target: LfsTarget, action: LfsDownloadAction): Promise<Response> {
   const { provider } = target;
-  let url = downloadUrl(action.href);
+  const remote = new URL(target.remote);
+  let url = downloadUrl(action.href, remote);
   if (!url) throw new GitTransferError(502, "invalid_lfs_response", `${provider} pointed a Git LFS download somewhere Pikibun does not fetch from.`);
+  const accept = { Accept: "application/octet-stream" };
   let headers: Record<string, string> = { ...action.header };
-  if (target.authorization && !Object.keys(headers).some(name => name.toLowerCase() === "authorization") && url.origin === new URL(target.remote).origin) {
+  if (!Object.keys(headers).some(name => name.toLowerCase() === "accept")) Object.assign(headers, accept);
+  if (target.authorization && !Object.keys(headers).some(name => name.toLowerCase() === "authorization") && providerOrigin(url, remote)) {
     headers.Authorization = target.authorization;
   }
   for (let hop = 0; ; hop++) {
@@ -249,7 +263,7 @@ async function download(target: LfsTarget, action: LfsDownloadAction): Promise<R
     let next: URL | undefined;
     try { next = location && hop < LFS_MAX_REDIRECTS ? downloadUrl(new URL(location, url).href) : undefined; } catch { next = undefined; }
     if (!next) throw new GitTransferError(502, "lfs_unavailable", `${provider} redirected a Git LFS download somewhere Pikibun does not fetch from.`);
-    if (next.origin !== url.origin) headers = {};
+    if (next.origin !== url.origin) headers = { ...accept };
     url = next;
   }
 }
