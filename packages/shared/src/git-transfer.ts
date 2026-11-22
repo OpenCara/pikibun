@@ -118,15 +118,17 @@ function downloadUrl(value: unknown, remote?: URL): URL | undefined {
   try { url = new URL(value); } catch { return undefined; }
   if (url.protocol !== "https:" || url.password || !validGitHost(url.host)) return undefined;
   if (url.username) {
-    if (!remote || url.origin !== remote.origin) return undefined;
+    if (!remote || !providerOrigin(url, remote)) return undefined;
     url.username = "";
   }
   return url;
 }
 
+const AZURE_DEVOPS = "https://dev.azure.com";
+
 function providerOrigin(url: URL, remote: URL): boolean {
   if (url.origin === remote.origin) return true;
-  if (remote.origin !== "https://dev.azure.com" || url.port) return false;
+  if (remote.origin !== AZURE_DEVOPS || url.port) return false;
   const organization = remote.pathname.split("/")[1]?.toLowerCase();
   return !!organization && url.hostname === `${organization}.visualstudio.com`;
 }
@@ -244,7 +246,7 @@ async function download(target: LfsTarget, action: LfsDownloadAction): Promise<R
   const remote = new URL(target.remote);
   let url = downloadUrl(action.href, remote);
   if (!url) throw new GitTransferError(502, "invalid_lfs_response", `${provider} pointed a Git LFS download somewhere Pikibun does not fetch from.`);
-  const accept = { Accept: "application/octet-stream" };
+  const accept: Record<string, string> = remote.origin === AZURE_DEVOPS ? { Accept: "application/octet-stream" } : {};
   let headers: Record<string, string> = { ...action.header };
   if (!Object.keys(headers).some(name => name.toLowerCase() === "accept")) Object.assign(headers, accept);
   if (target.authorization && !Object.keys(headers).some(name => name.toLowerCase() === "authorization") && providerOrigin(url, remote)) {

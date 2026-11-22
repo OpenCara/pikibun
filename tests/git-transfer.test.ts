@@ -56,9 +56,11 @@ test("Azure DevOps sending a download on to its blob store gets the credential o
 
 test("an organization on Azure DevOps' legacy visualstudio.com address gets the credential there, and no other organization does", async () => {
   const legacy = `https://shiningpie.visualstudio.com/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`;
-  const own = azureDevOps(legacy, { [legacy]: azureObject });
-  assert.equal(await read(own.target), content);
-  assert.deepEqual(own.calls.slice(1).map(call => [call.url, call.authorization]), [[legacy, authorization]]);
+  for (const href of [legacy, legacy.replace("https://", "https://shiningpie@")]) {
+    const own = azureDevOps(href, { [legacy]: azureObject });
+    assert.equal(await read(own.target), content, href);
+    assert.deepEqual(own.calls.slice(1).map(call => [call.url, call.authorization]), [[legacy, authorization]], href);
+  }
 
   for (const href of [`https://contoso.visualstudio.com/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`,
     `https://shiningpie.visualstudio.com:8443/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`,
@@ -73,7 +75,7 @@ test("Git LFS downloads still refuse credentials in URLs, users off the provider
   for (const href of [`https://shiningpie:pat@dev.azure.com/shiningpie/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`,
     `https://:pat@dev.azure.com/shiningpie/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`,
     `https://shiningpie@media.example.com/${oid}`,
-    `https://shiningpie@shiningpie.visualstudio.com/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`,
+    `https://shiningpie@contoso.visualstudio.com/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`,
     `http://dev.azure.com/shiningpie/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`,
     `https://dev.azure.com:8443/shiningpie/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`.replace("https://", "https://shiningpie@"),
     `/shiningpie/ShiningPie/_git/ShiningPie/info/lfs/objects/${oid}`]) {
@@ -96,6 +98,20 @@ test("Git LFS downloads still refuse credentials in URLs, users off the provider
   await assert.rejects(read(looping.target), refused("lfs_unavailable"));
   assert.deepEqual(looping.calls.slice(1).map(call => [call.url, call.authorization]),
     [[objectUrl, authorization], [hops[0], null], [hops[1], null], [hops[2], null]]);
+});
+
+test("only Azure DevOps downloads ask for application/octet-stream; other providers' requests are as before", async () => {
+  const github = "https://github.com/acme/app.git";
+  const media = `https://lfs-media.githubusercontent.com/${oid}?sig=1`;
+  const accepts: (string | null)[] = [];
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.url === `${github}/info/lfs/objects/batch`) return Response.json({ objects: [{ oid, size, actions: { download: { href: media } } }] });
+    accepts.push(request.headers.get("accept"));
+    return new Response(content, { headers: { "Content-Length": String(size) } });
+  }) as typeof globalThis.fetch;
+  assert.equal(await read({ remote: github, provider: "GitHub", fullName: "acme/app", authorization, fetch }), content);
+  assert.deepEqual(accepts, [null]);
 });
 
 test("an action's own headers are kept on the provider's origin, and none of them go to another one", async () => {
