@@ -228,6 +228,37 @@ describe("a session's panel", () => {
     await old.waitFor("text:This session's host can't show artifacts yet. Its owner can update the pikibun connector there.");
   });
 
+  test("App shows the session's app through its tunnel's link, live, opens it in the browser, and says how to get one when nothing is online", async () => {
+    const link = "https://quiet-river.trycloudflare.com/?pikibun_tunnel=abcdefghijklmnopqrstuvwxyz012345";
+    const tunnel = { url: link, access: "link", startedBy: "u1", startedAt: "2026-11-22T09:00:00.000Z", expiresAt: "2026-11-22T13:00:00.000Z",
+      command: "python3 desktop.py", port: 6080, connected: true };
+    const app = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, tunnel }, revision: "r1" } } });
+    await app.press("text:App");
+    await app.waitFor("id:app-frame");
+    expect(app.shows("text:quiet-river.trycloudflare.com")).toBe(true);
+    expect(app.shows("text:Online")).toBe(true);
+    expect(app.shows("text:python3 desktop.py on port 6080, in the session's sandbox. Anyone with its link can use it too.")).toBe(true);
+    await app.press("id:app-open");
+    expect(app.openedUrls()).toContain(link);
+    await app.press("id:app-reload");
+    await app.waitFor("id:app-frame");
+    await app.press("id:app-expand");
+    await app.waitFor("label:Back to the side panel");
+    expect(app.shows("text:python3 desktop.py on port 6080, in the session's sandbox. Anyone with its link can use it too.")).toBe(false);
+    app.dispose();
+
+    const elsewhere = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, tunnel: { ...tunnel, url: "https://evil.example/?pikibun_tunnel=x" } }, revision: "r1" } } });
+    await elsewhere.press("text:App");
+    await elsewhere.waitFor("id:app-unavailable");
+    expect(elsewhere.shows("id:app-frame")).toBe(false);
+    elsewhere.dispose();
+
+    const none = await openPanel();
+    await none.press("text:App");
+    await none.waitFor("text:Nothing online");
+    expect(none.shows("id:app-frame")).toBe(false);
+  });
+
   test("Schedules lists the schedules made in the session, which belong to the workspace, and opens the workspace's", async () => {
     const models = [{ id: "m2", name: "Claude Opus", provider: "anthropic", modelId: "claude-opus", thinkingLevels: ["off", "low", "high"] }];
     const schedule = { id: "sc1", workspaceId: "w1", sessionId: null, originSessionId: "s1", ownerId: "u1", name: "Review", cron: "0 9 * * 1", timeZone: "UTC",
