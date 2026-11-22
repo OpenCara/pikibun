@@ -256,6 +256,33 @@ test("a GPU is lent as its render device only: WSL's /dev/dxg, or DRM render nod
   assert.equal(detectGpu(root), "dxg");
 });
 
+test("NVIDIA's devices are lent with the render nodes, or alone, so CUDA runs in the sandbox, and never through a link", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pikibun-nvidia-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const base = realpathSync(root);
+  await mkdir(join(root, "dev"), { recursive: true });
+  for (const name of ["nvidiactl", "nvidia0", "nvidia1", "nvidia-uvm", "nvidia-uvm-tools", "nvidia-modeset", "nvidia-unknown", "null"]) {
+    await writeFile(join(root, "dev", name), "");
+  }
+  await mkdir(join(root, "dev/nvidia-caps"));
+  await symlink(join(root, "dev/null"), join(root, "dev/nvidia2"));
+  const nvidia = ["nvidia-modeset", "nvidia-uvm", "nvidia-uvm-tools", "nvidia0", "nvidia1", "nvidiactl"]
+    .flatMap(name => ["--dev-bind", join(base, "dev", name), `/dev/${name}`]);
+  assert.deepEqual(gpuMounts(root), { kind: "render", env: {}, args: nvidia }, "no render node: NVIDIA's devices alone, as render");
+  assert.equal(detectGpu(root), "render");
+
+  await standInGpu(root);
+  assert.deepEqual(gpuMounts(root), { kind: "render", env: {}, args: [
+    "--dev-bind", join(base, "dev/dri/renderD128"), "/dev/dri/renderD128",
+    "--ro-bind", join(base, GPU_DEVICE), `/${GPU_DEVICE}`,
+    "--symlink", `/${GPU_DEVICE}/drm/renderD128`, "/sys/dev/char/226:128",
+    ...nvidia,
+  ] }, "the render node first, then NVIDIA's devices; not a link, a directory or a name of another driver");
+
+  await writeFile(join(root, "dev/dxg"), "");
+  assert.deepEqual(gpuMounts(root), { kind: "dxg", args: ["--dev-bind", join(base, "dev/dxg"), "/dev/dxg"], env: {} }, "WSL lends /dev/dxg as before");
+});
+
 test("a sandboxed command lent the GPU finds its render node, the node's sysfs device and the /sys/dev/char link that names it", { skip: !sandboxed }, async t => {
   const base = realpathSync(await mkdtemp(join(tmpdir(), "pikibun-gpu-sandbox-")));
   t.after(() => rm(base, { recursive: true, force: true }));

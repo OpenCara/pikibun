@@ -183,7 +183,7 @@ backend has to keep every one of them, or say clearly which it drops.
 | CPU, memory, process and disk limits | operator-provisioned cgroup v2 subtree, plus an ext4 or tmpfs volume per sandbox root |
 | Race-free file tools | the Python `HELPER` runs *inside* the namespace and walks pinned directory fds with `O_NOFOLLOW` |
 | Git without hooks, stored credentials or SSH; host CA bundle | `.gitconfig` pinned read-only; `SSL_CERT_FILE` and similar variables |
-| Optional GPU render node | `gpuMounts` (`/dev/dxg` or DRM render nodes) |
+| Optional GPU render node | `gpuMounts` (`/dev/dxg`, or DRM render nodes and NVIDIA's devices) |
 
 The fourth row matters most here. Pikibun hosts are shared between workspace members, so one container per host
 isn't enough: it has to be one boundary **per session**.
