@@ -64,6 +64,7 @@ export interface SeatbeltPolicy {
   egressPort?: number;
   toolRoots: readonly string[];
   mirrors?: readonly string[];
+  writableRoots?: readonly string[];
 }
 
 export function seatbeltMirror(path: string): boolean {
@@ -108,6 +109,13 @@ export function seatbeltProfile(policy: SeatbeltPolicy): { profile: string; para
       + " (literal (param \"ROOT\")))",
     ...(mirrors.length ? [`(allow file-read* ${mirrors.map((_, index) => `(subpath (param "MIRROR_${index}"))`).join(" ")})`] : []),
   ];
+  const writable = policy.readOnly ? [] : policy.writableRoots ?? [];
+  if (!writable.every(root => root.startsWith("/") && !root.split("/").includes("..") && !/[\x00-\x1f\x7f]/.test(root))) throw new Error("Invalid writable root");
+  writable.forEach((root, index) => { parameters[`WRITE_${index}`] = root; });
+  if (writable.length) {
+    const roots = writable.map((_, index) => `(subpath (param "WRITE_${index}"))`).join(" ");
+    lines.push(`(allow file-read* file-write* ${roots})`, `(allow file-map-executable ${roots})`);
+  }
   if (!policy.readOnly) {
     lines.push("(allow file-write* (subpath (param \"HOME_DIR\")) (subpath (param \"WORKTREE\")))");
     lines.push("(allow network-bind (local unix-socket (subpath (param \"HOME_DIR\"))) (local unix-socket (subpath (param \"WORKTREE\"))))");
@@ -183,7 +191,9 @@ export class SeatbeltBackend implements HelperBackend {
     const mirrors = (context.mirrors ?? []).filter(seatbeltMirror);
     const resolved = [...new Set(mirrors.flatMap(path => { try { return [realpathSync(path)]; } catch { return []; } }).filter(seatbeltMirror))];
     const { profile, parameters } = seatbeltProfile({
-      layout, readOnly: context.readOnly, gitWritable: context.gitWritable, toolRoots: this.#tools.roots, mirrors: resolved,
+      layout, readOnly: context.readOnly, gitWritable: context.gitWritable, mirrors: resolved,
+      toolRoots: context.sharedTools ? [...new Set([...this.#tools.roots, context.sharedTools])] : this.#tools.roots,
+      ...(context.packageCache ? { writableRoots: [context.packageCache] } : {}),
       ...(port !== undefined ? { egressPort: port } : {}),
     });
     void request;

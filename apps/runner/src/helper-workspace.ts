@@ -20,6 +20,8 @@ import {
   type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
 import { sandboxCertificates } from "./trust-store.js";
+import { sharedToolsDirectory, sharedToolsEnvironment } from "./shared-tools.js";
+import { packageCacheDirectory, packageCacheEnvironment } from "./package-cache.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
 import type { IsolatedWorkspace } from "./workspace.js";
 
@@ -42,6 +44,8 @@ export interface HelperContext {
   environment: Readonly<Record<string, string>>;
   mirrors?: readonly string[];
   gitShim?: boolean;
+  sharedTools?: string;
+  packageCache?: string;
 }
 
 export interface HelperLaunch {
@@ -69,6 +73,8 @@ export interface HelperWorkspaceOptions {
   egressEnvironment?: () => Record<string, string> | undefined;
   gitLfs?: boolean;
   mirrors?: () => Promise<readonly MirrorMount[]>;
+  sharedTools?: string;
+  packageCache?: string;
 }
 
 const queues = new Map<string, Promise<void>>();
@@ -187,7 +193,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
     return this.#initialization;
   }
 
-  async #operation(request: SandboxRequest, context: { readOnly: boolean; gitWritable?: boolean; egress?: boolean; limits?: CommandLimits },
+  async #operation(request: SandboxRequest, context: { readOnly: boolean; gitWritable?: boolean; egress?: boolean; limits?: CommandLimits; unbounded?: boolean },
     authorize: SandboxAuthorize, signal?: AbortSignal): Promise<string> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
     if (!this.#backend.supports(request.kind)) throw new Error(`The ${this.#backend.name} sandbox can't do this yet (${request.kind})`);
@@ -257,7 +263,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
           throw new Error(`Commands can't run in this session: the ${this.#backend.name} sandbox has no hard per-session resource limits, so they run only in sessions of the host's owner and of members they granted host commands`);
         }
         return this.#operation({ kind: "bash", command: text(operation.command, "command", 64 * 1024, true) },
-          { readOnly, egress: true, limits: options.limits }, authorize, options.signal);
+          { readOnly, egress: true, limits: options.limits, unbounded: options.unbounded === true }, authorize, options.signal);
       }
       case "github.comment":
       case "github.merge":
@@ -370,17 +376,21 @@ export class HelperWorkspace implements IsolatedWorkspace {
     return [...new Set(mounts.map(mount => mount.source).filter(helperMirror))];
   }
 
-  async #run(request: SandboxRequest, context: { readOnly: boolean; gitWritable: boolean; egress: boolean; limits?: CommandLimits }, signal?: AbortSignal,
+  async #run(request: SandboxRequest, context: { readOnly: boolean; gitWritable: boolean; egress: boolean; limits?: CommandLimits; unbounded?: boolean }, signal?: AbortSignal,
     output?: (stdout: Readable, kill: () => void) => void): Promise<string> {
     if (context.readOnly && context.gitWritable) throw new Error("Invalid read-only mount request");
     const long = ["clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"].includes(request.kind);
     const limits = request.kind === "bash" ? context.limits : undefined;
     const deadlineMs = long ? PUSH_TIMEOUT_MS : (limits ?? commandLimits(TIMEOUT_MS / 1000)).seconds * 1000;
     const egress = context.egress ? this.#options.egressEnvironment?.() : undefined;
-    const environment = Object.freeze({ ...this.#environment, ...(egress ?? {}) });
+    const tools = request.kind === "bash" ? sharedToolsDirectory(this.#options.sharedTools) : undefined;
+    const cache = request.kind === "bash" && !context.readOnly && context.unbounded === true ? packageCacheDirectory(this.#options.packageCache) : undefined;
+    const base = { ...this.#environment, ...(egress ?? {}) };
+    const environment = Object.freeze({ ...base, ...(tools ? sharedToolsEnvironment(tools, base.PATH ?? this.#backend.path) : {}),
+      ...(cache ? packageCacheEnvironment(cache) : {}) });
     const mirrors = this.#cached && MIRROR_KINDS.has(request.kind) ? await this.#mirrors() : [];
     const launch = await this.#backend.launch(request, { ...context, egress: egress !== undefined, deadlineMs, environment,
-      ...(mirrors.length ? { mirrors } : {}), ...(this.#shim && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
+      ...(mirrors.length ? { mirrors } : {}), ...(tools ? { sharedTools: tools } : {}), ...(cache ? { packageCache: cache } : {}), ...(this.#shim && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES
       : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     return new Promise<string>((resolveResult, reject) => {
