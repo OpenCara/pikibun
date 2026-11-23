@@ -28,7 +28,7 @@ test("a clone's branch, origin and default branch are read from its Git files", 
   assert.equal(originUrl('[remote "origin"]\n\turl = git@github.com:owner/repo.git # a comment\n'), "git@github.com:owner/repo.git");
 });
 
-test("the worktree's clones report their checked-out branches of the workspace's github.com repositories", async t => {
+test("the worktree's clones report their checked-out branches of the workspace's github.com and Azure DevOps repositories", async t => {
   const root = await mkdtemp(join(tmpdir(), "clone-branches-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".git"), { recursive: true });
@@ -83,6 +83,14 @@ test("the worktree's clones report their checked-out branches of the workspace's
     [{ repository: "owner/repo", branch: "pikibun/fix-abc" }], "a clone on main that pushed HEAD to the session's branch");
   assert.deepEqual(reportedBranches([{ directory: "app", origin: "https://github.com/owner/repo", branch: "pikibun/fix-abc" }], repositories, "pikibun/fix-abc"),
     [{ repository: "owner/repo", branch: "pikibun/fix-abc" }], "once");
+  const azure: EgressRepository[] = [...repositories, { bindingId: "binding-4", provider: "azure-devops", host: "dev.azure.com", fullName: "contoso/My Project/app" }];
+  assert.deepEqual(reportedBranches([
+    { directory: "azure", origin: "https://contoso@dev.azure.com/contoso/My%20Project/_git/app", branch: "feature" },
+    { directory: "gitlab", origin: "https://gitlab.com/owner/repo.git", branch: "x" },
+  ], azure, "pikibun/fix-abc"), [
+    { repository: "contoso/My Project/app", branch: "feature" },
+    { repository: "contoso/My Project/app", branch: "pikibun/fix-abc" },
+  ], "Azure DevOps repositories too, whose pull requests Pikibun also finds");
   const crowded = await mkdtemp(join(tmpdir(), "clone-branches-many-"));
   t.after(() => rm(crowded, { recursive: true, force: true }));
   for (let index = 0; index < 25; index++) await clone(crowded, `c${String(index).padStart(2, "0")}`, { url: "https://github.com/owner/other" });

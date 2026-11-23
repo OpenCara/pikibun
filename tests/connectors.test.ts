@@ -3233,6 +3233,55 @@ test('the Review tab reads the session\'s pull request from GitHub as its owner,
   await denied(await review(), 404, 'github_not_found');
 });
 
+test('the Review tab reads an Azure DevOps pull request of the workspace with the owner\'s Azure DevOps account, checking the repository first', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  const review = (client = s.creator) => client.request('GET', `/api/sessions/${s.session.id}/pull-request`);
+  const repositoryId = '0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e';
+  const createdAt = new Date().toISOString();
+  const azureToken = 'azure-devops-pat-never-shown';
+  const found = new Date().toISOString();
+  f.sqlite.prepare('INSERT INTO session_branches (session_id, repository, branch, reported_at, pull_request_url, pull_request_found_at) VALUES (?,?,?,?,?,?)')
+    .run(s.session.id, 'contoso/Project/app', 'feature', found, 'https://dev.azure.com/contoso/Project/_git/app/pullrequest/7', found);
+  await denied(await review(), 403, 'repository_not_pinned');
+  f.sqlite.prepare(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at) VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run('azure-repository', s.team.id, 'azure-devops', 'dev.azure.com', repositoryId, 'contoso/Project/app', 'main', 1, createdAt);
+  await denied(await review(), 409, 'git_account_required');
+  f.sqlite.prepare(`INSERT INTO git_credentials (id,user_id,provider,host,organization,username,login,ciphertext,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run('azure-account', s.session.ownerId, 'azure-devops', 'dev.azure.com', 'contoso', null, 'owner', await encryptToken(f.env, s.session.ownerId, azureToken), createdAt, createdAt);
+
+  const repository = `https://dev.azure.com/contoso/Project/_apis/git/repositories/${repositoryId}`;
+  let identity = { id: repositoryId, name: 'app', defaultBranch: 'refs/heads/main', project: { id: 'p', name: 'Project', visibility: 'private' } };
+  const routes: Record<string, () => Response> = {
+    [`https://dev.azure.com/contoso/_apis/git/repositories/${repositoryId}?api-version=7.1`]: () => Response.json(identity),
+    [`${repository}/pullrequests/7?api-version=7.1`]: () => Response.json({ pullRequestId: 7, status: 'active', title: 'Fix it', description: 'Details',
+      sourceRefName: 'refs/heads/feature', targetRefName: 'refs/heads/main', repository: { id: repositoryId }, reviewers: [] }),
+    [`${repository}/pullRequests/7/statuses?api-version=7.1`]: () => Response.json({ value: [] }),
+    [`${repository}/pullRequests/7/commits?$top=100&api-version=7.1`]: () => Response.json({ value: [] }),
+    [`${repository}/pullRequests/7/iterations?api-version=7.1`]: () => Response.json({ value: [] }),
+    [`${repository}/pullRequests/7/threads?api-version=7.1`]: () => Response.json({ value: [] }),
+  };
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(url);
+    assert.equal(new Headers(init?.headers).get('authorization'), `Basic ${Buffer.from(`:${azureToken}`).toString('base64')}`);
+    const route = routes[url];
+    assert.ok(route, `unexpected Azure DevOps call ${url}`);
+    return route();
+  });
+  const { review: view } = await json<{ review: PullRequestReview }>(await review());
+  assert.equal(calls[0], `https://dev.azure.com/contoso/_apis/git/repositories/${repositoryId}?api-version=7.1`, 'the repository\'s identity is checked before any read');
+  assert.deepEqual([view.pull.repository, view.pull.number, view.pull.title, view.pull.pullRequest?.head.ref, view.pull.pullRequest?.base.ref, view.files],
+    ['contoso/Project/app', 7, 'Fix it', 'feature', 'main', []]);
+  assert.ok(!JSON.stringify(view).includes(azureToken));
+  await denied(await review(s.host), 403, 'forbidden');
+
+  identity = { ...identity, id: 'replaced-repository' };
+  const before = calls.length;
+  await denied(await review(), 409, 'repository_identity_changed');
+  assert.equal(calls.length, before + 1, 'nothing is read from a replaced repository');
+});
+
 test('the Changes tab reads a clone\'s Git changes through its host, for collaborators, checked and with secrets hidden', async t => {
   const f = await fixture(t); const s = await sharedSession(f);
   const changes = (query = '', client = s.creator) => client.request('GET', `/api/sessions/${s.session.id}/changes${query}`);

@@ -2,7 +2,8 @@ import { computed, effect, Scroll, signal, Text, untracked, View, type JSX } fro
 import { Button as BaseButton, DiffView, ResizablePanel, ResizablePanelGroup, TextView, Tree, type DiffLayout, type DiffSeparator, type DiffStats, type DiffViewRef, type DiffViewStyles, type TreeEntry, type TreeItem } from "nsh/base";
 import type { GitHubReviewCommentView, PullRequestFileStatus, PullRequestFileView, PullRequestReview, SessionRecord } from "../../../../packages/shared/src/types";
 import {
-  filePatch, pullRequestFileStatusLabels, reviewDirectoryIds, reviewFileId, reviewFileOrder, reviewTree, type ReviewTreeNode,
+  filePatch, pullRequestCommitUrl, pullRequestFileStatusLabels, pullRequestFilesUrl, reviewDirectoryIds, reviewFileId, reviewFileOrder, reviewForge, reviewForgeNames,
+  reviewTree, type ReviewTreeNode,
 } from "../../../../packages/shared/src/pull-request-review";
 import { REDACTED, segment } from "../shared";
 import { relativeTime } from "../lib/format";
@@ -20,14 +21,14 @@ const idea = () => (palette().scheme === "dark" ? ideaDark : ideaLight);
 const statusColor = (status: PullRequestFileStatus | undefined) => (status ? idea()[status] : palette().text);
 const faded = (color: string) => `${color}80`;
 
-const githubPull = (url: string) => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(url);
+const forgeName = (url: string) => reviewForgeNames[reviewForge(url) ?? "github"];
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const directoryName = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 export const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
 export function reviewUnavailable(current: SessionRecord): string | null {
   if (!(current.permissions ?? []).includes("write")) {
-    return "The pull request is read with the session owner's GitHub access, which takes the session collaborator role, as the Files tab does. Viewers follow the conversation.";
+    return "The pull request is read with the session owner's access to its forge, which takes the session collaborator role, as the Files tab does. Viewers follow the conversation.";
   }
   return null;
 }
@@ -41,11 +42,11 @@ export function Review(props: PanelTabProps) {
             <If when={current().pullRequest}
               else={<EmptyState title="No pull request yet">When this session's work is opened as a pull request, its changed files and their diffs show here for review.</EmptyState>}>
               {pull => (
-                <If when={githubPull(pull().url)}
+                <If when={reviewForge(pull().url)}
                   else={
-                    <EmptyState title="Not a github.com pull request"
+                    <EmptyState title="Not reviewed here"
                       action={<Button small variant="outline" icon="external-link" label="Open the pull request" testID="review-open-external" onPress={() => openExternal(pull().url)} />}>
-                      Pull requests on github.com are reviewed here. This one opens where it is hosted.
+                      Pull requests on github.com and Azure DevOps are reviewed here. This one opens where it is hosted.
                     </EmptyState>
                   }>
                   <Each of={[pull().url]} key={url => url}>{url => <Reviewer {...props} url={url()} />}</Each>
@@ -113,7 +114,7 @@ function Reviewer(props: PanelTabProps & { url: string }) {
         {() => (
           <DiffPane file={open()} layout={layout()}
             oldTitle={revision(current().pull.pullRequest?.base.ref, current().pull.pullRequest?.base.sha)} newTitle={revision(current().pull.pullRequest?.head.ref, current().pull.pullRequest?.head.sha)}
-            external={{ label: "Open on GitHub", url: `${current().pull.url}/files` }} onLayout={value => chosenLayout.set(value)} onBack={back ? () => selected.set(null) : undefined}
+            external={{ label: `Open on ${forgeName(current().pull.url)}`, url: pullRequestFilesUrl(current().pull.url) }} onLayout={value => chosenLayout.set(value)} onBack={back ? () => selected.set(null) : undefined}
             index={order().indexOf(open().path)} count={order().length} onStep={step} expanded={expanded()} setExpanded={props.setExpanded} />
         )}
       </Each>
@@ -235,7 +236,7 @@ function Sidebar(props: SidebarProps) {
           </View>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <IconButton icon="refresh" label="Refresh the pull request" size={28} disabled={props.loading} onPress={props.onRefresh} testID="review-refresh" />
-            <IconButton icon="external-link" label="Open on GitHub" size={28} onPress={() => openExternal(pull().url)} />
+            <IconButton icon="external-link" label={`Open on ${forgeName(pull().url)}`} size={28} onPress={() => openExternal(pull().url)} />
             <If when={props.setExpanded}>
               {set => <IconButton testID="review-expand" icon={props.expanded ? "minimize" : "maximize"} size={28}
                 label={props.expanded ? "Back to the side panel" : "Expand to the full window"} onPress={() => set()(!props.expanded)} />}
@@ -266,7 +267,7 @@ function Sidebar(props: SidebarProps) {
       </View>
       <If when={props.tab === "files"}>
         <FilesTree files={props.review.files} total={props.review.changedFiles} additions={props.review.additions} deletions={props.review.deletions}
-          omitted={props.review.omitted?.files} elsewhere="on GitHub" comments={comments()} grouped={props.grouped} onGrouped={props.onGrouped} tree={props.tree}
+          omitted={props.review.omitted?.files} elsewhere={`on ${forgeName(pull().url)}`} comments={comments()} grouped={props.grouped} onGrouped={props.onGrouped} tree={props.tree}
           collapsed={props.collapsed} onCollapsed={props.onCollapsed} selected={props.selected} onSelect={props.onSelect} />
       </If>
       <If when={props.tab === "commits"}><Commits review={props.review} /></If>
@@ -427,12 +428,12 @@ function Commits(props: { review: PullRequestReview }) {
   return (
     <Scroll testID="review-commits" style={{ flex: 1 }} contentStyle={{ paddingVertical: 4 }}>
       <If when={props.review.omitted?.commits}>
-        {omitted => <View style={{ paddingHorizontal: 12, paddingVertical: 6 }}><Small>{`Showing the first ${props.review.commits.length} commits; ${plural(omitted(), "more is", "more are")} on GitHub.`}</Small></View>}
+        {omitted => <View style={{ paddingHorizontal: 12, paddingVertical: 6 }}><Small>{`Showing the first ${props.review.commits.length} commits; ${plural(omitted(), "more is", "more are")} on ${forgeName(props.review.pull.url)}.`}</Small></View>}
       </If>
       <Each of={props.review.commits} key={commit => commit.sha}>
         {commit => (
           <BaseButton accessibilityLabel={`Commit ${commit().sha.slice(0, 7)}: ${commit().message.split("\n")[0]}`}
-            onPress={() => openExternal(`${props.review.pull.url}/commits/${commit().sha}`)}
+            onPress={() => openExternal(pullRequestCommitUrl(props.review.pull.url, commit().sha))}
             style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, paddingHorizontal: 12, paddingVertical: 6 }} hoverStyle={{ backgroundColor: palette().hover }}>
             <Icon name="commit" size={14} color={palette().muted} style={{ marginTop: 3 }} />
             <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -452,6 +453,7 @@ function Commits(props: { review: PullRequestReview }) {
 const reviewStates: Record<string, { label: string; tone: Tone }> = {
   APPROVED: { label: "Approved", tone: "success" },
   CHANGES_REQUESTED: { label: "Changes requested", tone: "danger" },
+  REJECTED: { label: "Rejected", tone: "danger" },
   COMMENTED: { label: "Commented", tone: "neutral" },
   DISMISSED: { label: "Dismissed", tone: "neutral" },
   PENDING: { label: "Pending", tone: "warning" },
@@ -535,7 +537,7 @@ function Info(props: { review: PullRequestReview; onSelect: (path: string) => vo
           <Each of={pull().comments} key={item => item.id}>{item => <Remark author={item().author} when={item().createdAt} body={item().body} />}</Each>
         </View>
       </If>
-      <If when={pull().omitted}><Small>Long threads show their newest items. The rest is on GitHub.</Small></If>
+      <If when={pull().omitted}><Small>{`Long threads show their newest items. The rest is on ${forgeName(pull().url)}.`}</Small></If>
     </Scroll>
   );
 }

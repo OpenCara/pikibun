@@ -1,3 +1,4 @@
+import { validRepositoryName } from "./repositories.js";
 import type { PullRequestState, SessionPullRequest } from "./types.js";
 
 export const pullRequestStates: readonly PullRequestState[] = ["draft", "open", "failing", "changes_requested", "merged", "closed"];
@@ -26,6 +27,24 @@ export function isPullRequestState(value: unknown): value is PullRequestState {
 
 export function pullRequestLabel(pull: SessionPullRequest): string {
   return pull.number === undefined ? "PR" : `#${pull.number}`;
+}
+
+export interface AzurePullRequestAddress { fullName: string; number: number }
+
+export function azurePullRequest(url: string): AzurePullRequestAddress | undefined {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return undefined; }
+  if (parsed.protocol !== "https:" || parsed.host !== "dev.azure.com" || parsed.search || parsed.hash) return undefined;
+  let parts: string[];
+  try { parts = parsed.pathname.replace(/\/$/, "").split("/").slice(1).map(decodeURIComponent); } catch { return undefined; }
+  if (parts.length !== 6 || parts[2] !== "_git" || parts[4]!.toLowerCase() !== "pullrequest" || !/^[1-9]\d{0,8}$/.test(parts[5]!)) return undefined;
+  const fullName = `${parts[0]}/${parts[1]}/${parts[3]}`;
+  return validRepositoryName("azure-devops", fullName) ? { fullName, number: Number(parts[5]) } : undefined;
+}
+
+export function azurePullRequestUrl(fullName: string, number: number): string {
+  const [organization, project, repository] = fullName.split("/") as [string, string, string];
+  return `https://dev.azure.com/${organization}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repository)}/pullrequest/${number}`;
 }
 
 export function pullRequestRepository(url: string): string | undefined {

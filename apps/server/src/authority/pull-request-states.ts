@@ -5,6 +5,9 @@ import { now } from '../http.js';
 import type { Env } from '../types.js';
 import { decryptToken } from './vault.js';
 import { forgetDeadGitHubToken } from './github-sign-in.js';
+import { azurePullRequest } from '../../../../packages/shared/src/pull-requests.js';
+import { findAzureBranchPullRequest, readAzurePullRequestState, type AzureRepositoryApi } from './azure-pull-requests.js';
+import { credentialOrganization, loadCredential } from './git/accounts.js';
 
 const githubApi = 'https://api.github.com';
 const remoteTimeout = 20000;
@@ -168,6 +171,77 @@ export async function refreshPullRequestStates(env: Env, limit = sweepLimit): Pr
       .bind(state, pull ? now() : neverStale, row.id).run();
   }
   await refreshBranchPullRequests(env, at, limit);
+  await refreshAzurePullRequests(env, at, limit);
+  await refreshAzureBranchPullRequests(env, at, limit);
+}
+
+async function azureApi(env: Env, ownerId: string, fullName: string, repositoryId: string): Promise<AzureRepositoryApi | undefined> {
+  const account = await loadCredential(env, ownerId, 'azure-devops', 'dev.azure.com', credentialOrganization('azure-devops', fullName));
+  return account ? { credential: account.credential, fullName, repositoryId } : undefined;
+}
+
+interface AzureStaleRow { id: string; pull_request_url: string; owner_id: string; repository_id: string; full_name: string }
+
+async function refreshAzurePullRequests(env: Env, at: number, limit: number): Promise<void> {
+  const rows = await env.DB.query<AzureStaleRow>(`SELECT pc.id, pc.pull_request_url, s.owner_id, r.repository_id, r.full_name FROM push_credentials pc
+    INNER JOIN sessions s ON s.id = pc.session_id
+    INNER JOIN users u ON u.id = s.owner_id
+    INNER JOIN workspace_repositories r ON r.id = pc.binding_id AND r.workspace_id = s.workspace_id AND r.provider = 'azure-devops' AND r.host = 'dev.azure.com'
+    WHERE pc.pull_request_url LIKE 'https://dev.azure.com/%' AND u.suspended_at IS NULL
+      AND pc.id = (SELECT pr.id FROM push_credentials pr WHERE pr.session_id = pc.session_id AND pr.pull_request_url IS NOT NULL
+        ORDER BY pr.completed_at DESC, pr.created_at DESC, pr.id DESC LIMIT 1)
+      AND (pc.pull_request_state IS NULL OR pc.pull_request_state NOT IN ('merged', 'closed'))
+      AND (pc.pull_request_checked_at IS NULL OR pc.pull_request_checked_at < CASE WHEN s.status = 'archived' THEN ? ELSE ? END)
+    ORDER BY (pc.pull_request_checked_at IS NOT NULL), pc.pull_request_checked_at, pc.id LIMIT ?`)
+    .bind(new Date(at - archivedFreshMs).toISOString(), new Date(at - freshMs).toISOString(), limit).all();
+  for (const row of rows) {
+    const pull = azurePullRequest(row.pull_request_url);
+    const ours = pull && pull.fullName.toLowerCase() === row.full_name.toLowerCase() ? pull : undefined;
+    let state: PullRequestState | null = null;
+    if (ours) {
+      try {
+        const api = await azureApi(env, row.owner_id, row.full_name, row.repository_id);
+        if (api) state = await readAzurePullRequestState(api, ours.number);
+      } catch { }
+    }
+    await env.DB.query('UPDATE push_credentials SET pull_request_state = COALESCE(?, pull_request_state), pull_request_checked_at = ? WHERE id = ?')
+      .bind(state, ours ? now() : neverStale, row.id).run();
+  }
+}
+
+interface AzureBranchRow { session_id: string; repository: string; branch: string; pull_request_url: string | null; owner_id: string; created_at: string; repository_id: string }
+
+async function refreshAzureBranchPullRequests(env: Env, at: number, limit: number): Promise<void> {
+  const rows = await env.DB.query<AzureBranchRow>(`SELECT b.session_id, b.repository, b.branch, b.pull_request_url, s.owner_id, s.created_at, r.repository_id
+    FROM session_branches b
+    INNER JOIN sessions s ON s.id = b.session_id
+    INNER JOIN users u ON u.id = s.owner_id
+    INNER JOIN workspace_repositories r ON r.workspace_id = s.workspace_id AND r.provider = 'azure-devops' AND r.host = 'dev.azure.com' AND r.full_name = b.repository
+    WHERE b.repository LIKE '%/%/%' AND u.suspended_at IS NULL
+      AND (b.pull_request_state IS NULL OR b.pull_request_state NOT IN ('merged', 'closed'))
+      AND (b.pull_request_url IS NOT NULL OR s.status <> 'archived')
+      AND (b.pull_request_checked_at IS NULL OR b.pull_request_checked_at < CASE WHEN s.status = 'archived' THEN ? ELSE ? END)
+    ORDER BY (b.pull_request_checked_at IS NOT NULL), b.pull_request_checked_at, b.session_id, b.repository, b.branch LIMIT ?`)
+    .bind(new Date(at - archivedFreshMs).toISOString(), new Date(at - freshMs).toISOString(), limit).all();
+  for (const row of rows) {
+    let found: { url: string; number: number } | undefined;
+    let state: PullRequestState | null = null;
+    try {
+      const api = await azureApi(env, row.owner_id, row.repository, row.repository_id);
+      if (api) {
+        found = await findAzureBranchPullRequest(api, row.branch, row.created_at);
+        if (found) state = await readAzurePullRequestState(api, found.number);
+      }
+    } catch { }
+    const checkedAt = now();
+    if (found && found.url !== row.pull_request_url) {
+      await env.DB.query(`UPDATE session_branches SET pull_request_url = ?, pull_request_state = ?, pull_request_found_at = ?, pull_request_checked_at = ?
+        WHERE session_id = ? AND repository = ? AND branch = ?`).bind(found.url, state, checkedAt, checkedAt, row.session_id, row.repository, row.branch).run();
+    } else {
+      await env.DB.query(`UPDATE session_branches SET pull_request_state = COALESCE(?, pull_request_state), pull_request_checked_at = ?
+        WHERE session_id = ? AND repository = ? AND branch = ?`).bind(state, checkedAt, row.session_id, row.repository, row.branch).run();
+    }
+  }
 }
 
 async function refreshBranchPullRequests(env: Env, at: number, limit: number): Promise<void> {
@@ -176,7 +250,7 @@ async function refreshBranchPullRequests(env: Env, at: number, limit: number): P
     INNER JOIN sessions s ON s.id = b.session_id
     INNER JOIN users u ON u.id = s.owner_id
     INNER JOIN github_tokens t ON t.user_id = s.owner_id
-    WHERE u.auth_kind IN ('github', 'password') AND u.suspended_at IS NULL
+    WHERE u.auth_kind IN ('github', 'password') AND u.suspended_at IS NULL AND b.repository NOT LIKE '%/%/%'
       AND (b.pull_request_state IS NULL OR b.pull_request_state NOT IN ('merged', 'closed'))
       AND (b.pull_request_url IS NOT NULL OR s.status <> 'archived')
       AND (b.pull_request_checked_at IS NULL OR b.pull_request_checked_at < CASE WHEN s.status = 'archived' THEN ? ELSE ? END)

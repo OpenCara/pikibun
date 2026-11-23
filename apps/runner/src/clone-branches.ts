@@ -103,6 +103,8 @@ export async function readCloneBranches(worktree: string): Promise<CloneBranch[]
 
 type ReportedBranch = { repository: string; branch: string };
 
+const reportedForges = [["github", "github.com"], ["azure-devops", "dev.azure.com"]] as const;
+
 const byKey = (branches: Map<string, ReportedBranch>) => [...branches.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 
 export function reportedBranches(clones: readonly CloneBranch[], repositories: readonly EgressRepository[], sessionBranch?: string): ReportedBranch[] {
@@ -111,7 +113,7 @@ export function reportedBranches(clones: readonly CloneBranch[], repositories: r
   const pushed = sessionBranch && validPushBranch(sessionBranch) ? sessionBranch : undefined;
   for (const clone of clones) {
     const repository = repositoryForRemote(repositories, clone.origin);
-    if (!repository || repository.provider !== "github" || repository.host !== "github.com") continue;
+    if (!repository || !reportedForges.some(([provider, host]) => repository.provider === provider && repository.host === host)) continue;
     if (pushed) session.set(`${repository.fullName}\n${pushed}`, { repository: repository.fullName, branch: pushed });
     if (clone.branch) own.set(`${repository.fullName}\n${clone.branch}`, { repository: repository.fullName, branch: clone.branch });
   }

@@ -11,7 +11,8 @@ export async function reportSessionBranches(c: AppContext, connectorId: string):
       || input.branches.length > sessionBranchLimit) fail(400, 'invalid_branches', 'Invalid session branches.');
   const reported = (input.branches as unknown[]).map(item => {
     const value = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : {};
-    if (Object.keys(value).some(key => key !== 'repository' && key !== 'branch') || !validRepositoryName('github', value.repository)
+    if (Object.keys(value).some(key => key !== 'repository' && key !== 'branch')
+        || !(validRepositoryName('github', value.repository) || validRepositoryName('azure-devops', value.repository))
         || !validPushBranch(value.branch)) fail(400, 'invalid_branches', 'Invalid session branches.');
     return { repository: value.repository as string, branch: value.branch as string };
   });
@@ -20,7 +21,7 @@ export async function reportSessionBranches(c: AppContext, connectorId: string):
   await requireCallbackScope(c, row, connectorId);
   if (row.repository_mode !== 'clone') fail(409, 'clone_session_required', 'Only clone sessions report branches.');
   const bound = new Map((await c.env.DB.query<{ full_name: string }>(`SELECT full_name FROM workspace_repositories
-    WHERE workspace_id = ? AND provider = 'github' AND host = 'github.com'`).bind(row.workspace_id).all())
+    WHERE workspace_id = ? AND ((provider = 'github' AND host = 'github.com') OR (provider = 'azure-devops' AND host = 'dev.azure.com'))`).bind(row.workspace_id).all())
     .map(binding => [binding.full_name.toLowerCase(), binding.full_name]));
   const branches = new Map<string, { repository: string; branch: string }>();
   for (const item of reported) {
