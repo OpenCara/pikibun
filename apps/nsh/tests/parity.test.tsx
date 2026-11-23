@@ -146,6 +146,35 @@ describe("a new session", () => {
     expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ workspaceId: "w1", hostEnvironment: true });
   });
 
+  test("on a phone, its warning about running on the host is one line until its details are opened; wider, it shows them", async () => {
+    const details = (app: { texts(): string[] }) => app.texts().some(item => item.includes("as its user, with its files, credentials, network and GPU"));
+    const phone = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
+    }) });
+    await phone.press("id:new-session");
+    await phone.waitFor("id:new-environment");
+    await phone.press("id:new-environment");
+    await phone.press("text:On this host");
+    await phone.waitFor("id:new-on-host");
+    expect(phone.texts()).toContain("Runs on your host, without the sandbox");
+    expect(details(phone)).toBe(false);
+    await phone.press("id:new-on-host-toggle");
+    await phone.waitUntil(() => details(phone));
+    await phone.press("id:new-on-host-toggle");
+    await phone.waitUntil(() => !details(phone));
+    phone.dispose();
+    const desktop = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
+    }) });
+    await desktop.press("id:new-session");
+    await desktop.waitFor("id:new-environment");
+    await desktop.press("id:new-environment");
+    await desktop.press("text:On this host");
+    await desktop.waitFor("id:new-on-host");
+    expect(details(desktop)).toBe(true);
+    expect(desktop.shows("id:new-on-host-toggle")).toBe(false);
+  });
+
   test("keeps running on its host while the host listing refreshes", async () => {
     const app = await open("../App.tsx", { storage: signedIn, clock: {}, network: server({
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
