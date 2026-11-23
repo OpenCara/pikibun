@@ -298,6 +298,7 @@ try:
             except OSError:
                 continue
             counted_out[0] = False
+            seen[0] = 0
             deep = []
             try:
                 usage = walk(fd, [], 0, None, lambda path, mtime: deep.append(path))
