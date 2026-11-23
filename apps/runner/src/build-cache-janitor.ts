@@ -8,10 +8,12 @@ NAME_CHARS = set('abcdefghijklmnopqrstuvwxyz0123456789-')
 DEPTH = 64
 ENTRIES = 1000000
 STEPS = 10000000
+SCAN_COST = 50000000
 WINDOW = 128
 request = json.loads(sys.argv[1])
 seen = [0]
 truncated = [False]
+counted_out = [False]
 
 
 def cache_name(name):
@@ -94,6 +96,7 @@ def walk(fd, prefix, depth, visit, deep=None):
         seen[0] += 1
         if seen[0] > ENTRIES:
             truncated[0] = True
+            counted_out[0] = True
             return total
         total[2] = max(total[2], info.st_mtime)
         if stat.S_ISDIR(info.st_mode):
@@ -120,6 +123,34 @@ def walk(fd, prefix, depth, visit, deep=None):
             if visit is not None:
                 visit(prefix + [name], size, info.st_mtime)
     return total
+
+
+def deep_newest(leaf_fd, path):
+    newest = 0.0
+    stack = [path]
+    entries = 0
+    cost = 0
+    while stack:
+        parts = stack.pop()
+        cost += len(parts)
+        if cost > SCAN_COST:
+            return None
+        try:
+            fd = open_path(leaf_fd, parts)
+        except OSError:
+            continue
+        try:
+            newest = max(newest, os.fstat(fd).st_mtime)
+            for name, info in children(fd):
+                entries += 1
+                if entries > ENTRIES:
+                    return None
+                newest = max(newest, info.st_mtime)
+                if stat.S_ISDIR(info.st_mode):
+                    stack.append(parts + [name])
+        finally:
+            os.close(fd)
+    return newest
 
 
 def remove_tree(parent, name):
@@ -266,16 +297,20 @@ try:
                 fd = open_path(root, parts)
             except OSError:
                 continue
-            before = truncated[0]
-            truncated[0] = False
+            counted_out[0] = False
+            deep = []
             try:
-                usage = walk(fd, [], 0, None)
+                usage = walk(fd, [], 0, None, lambda path, mtime: deep.append(path))
                 mtime = os.fstat(fd).st_mtime
+                newest = max(usage[2], mtime)
+                for path in deep:
+                    if newest > cutoff:
+                        break
+                    found = deep_newest(fd, path)
+                    newest = max(newest, found) if found is not None else float('inf')
             finally:
                 os.close(fd)
-            cut = truncated[0]
-            truncated[0] = before or cut
-            if max(usage[2], mtime) > cutoff:
+            if counted_out[0] or newest > cutoff:
                 continue
             parent = open_path(root, parts[:-1])
             try:

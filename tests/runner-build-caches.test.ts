@@ -100,7 +100,12 @@ test("eviction and pruning reclaim a tree nested deeper than a walk goes", { ski
 
   await mkdir(chain, { recursive: true });
   await writeFile(join(chain, "hidden.o"), "x");
-  const pruned = await store.prune(0, Date.now() + 1000);
+  const later = new Date(Date.now() + 3 * 86_400_000);
+  await utimes(join(chain, "hidden.o"), later, later);
+  const kept = await store.prune(86_400_000, Date.now() + 2 * 86_400_000);
+  assert.equal(kept.removed, 0, "a file written lately past the walk's depth keeps its cache");
+  assert.equal(existsSync(join(chain, "hidden.o")), true);
+  const pruned = await store.prune(0, Date.now() + 4 * 86_400_000);
   assert.equal(pruned.removed, 1, "a cache too deep to walk in full still goes once idle");
   assert.equal(existsSync(join(root, "w")), false);
 });
