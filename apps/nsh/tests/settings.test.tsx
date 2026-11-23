@@ -437,7 +437,7 @@ describe("settings", () => {
     await app.type("id:host-build-cache-gib", "50");
     await app.waitUntil(() => !app.shows("text:The build caches' size limit is a whole number of GiB from 1 to 10000."));
     const asked: string[] = [];
-    app.onDialog(dialog => { asked.push(dialog.title); return "Cancel"; });
+    app.onDialog(dialog => { asked.push(dialog.title ?? ""); return "Cancel"; });
     await app.press("id:host-config-save");
     await app.waitUntil(() => asked.length === 1);
     expect(asked).toEqual(["Share build caches between people on this host?"]);
