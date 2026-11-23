@@ -53,6 +53,11 @@ export function HostDetails(props: { connector: ConnectorInfo }) {
       <Note>{`Sandbox: ${capabilities().unsandboxed ? "disabled by the host owner." : !capabilities().sandbox ? "unverified (not necessarily unavailable): the host's isolation self-test didn't pass when it connected, or it runs an experimental sandbox or an older connector; the runner still checks isolation when preparing each session." : "the host's isolation self-test passed when it connected; reported by the host, not a security attestation."} Resource limits for commands: ${capabilities().productionShell ? "reported; still verified per session." : "not confirmed."}`}</Note>
       <If when={config()?.gitCredentials || capabilities().gitCredentials}><Note>Git credentials: offered by the host owner for pushes in their own sessions, where a workspace's push access uses the host's Git credentials.</Note></If>
       <If when={capabilities().repositoryCache}><Note>Repository cache: this host fetches repositories into its own cache with the host owner's Git credentials, after Pikibun confirms that the session's owner can read them with their own account.</Note></If>
+      <If when={config() && config()!.buildCaches !== "off" && capabilities().buildCaches}>
+        <Note>{config()?.buildCaches === "workspace"
+          ? "Build caches: this host keeps workspaces' build caches. Sessions of a workspace's owner, admins and collaborators who can write files share one copy of each; everyone else's get their own."
+          : "Build caches: this host keeps workspaces' build caches, a separate copy for each session owner."}</Note>
+      </If>
       <If when={(config()?.hostSessions || capabilities().ownerHostSessions) && capabilities().hostConfig && !capabilities().unsandboxed}>
         <Note>{capabilities().ownerHostSessions
           ? `Sessions on the host: its owner${config()?.hostSessions ? ", and members they grant it," : ""} may start sessions that run directly on it, without the sandbox.`
