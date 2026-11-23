@@ -285,7 +285,7 @@ describe("settings", () => {
 
   test("a host without Chromium offers its owner a chat on it, in their private workspace, that installs one", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20 };
     const browser = { source: "piki:browser", dev: false, description: "A headless Chromium", modules: [] };
     const app = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },

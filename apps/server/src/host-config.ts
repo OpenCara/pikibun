@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import { builtinExtensionNames, defaultHostConfig, hostConfigLimits, normalizeBuiltinExtensionNames, ownerOnlyHostConfig, parseBuiltinExtensions, parseHostCompaction,
   parseHostConfigChange, parseRequiredExtensions, type HostConfig, type RepositoryCacheMode } from '../../../packages/shared/src/host-config.js';
+import { buildCacheLimits, buildCacheModes, type BuildCacheMode } from '../../../packages/shared/src/build-caches.js';
 import { isPikiExtensionSource } from '../../../packages/shared/src/host-extensions.js';
 import { defaultHostBrowserConfig, parseHostBrowserConfig } from '../../../packages/shared/src/browser.js';
 import { defaultHostTunnelConfig, parseHostTunnelConfig } from '../../../packages/shared/src/tunnel.js';
@@ -10,17 +11,28 @@ import { auditStatement, managedConnector } from './authority/index.js';
 import { fail, jsonObject, now } from './http.js';
 
 interface ConfigRow { command_timeout_seconds: number; gpu: number; git_credentials: number; repository_cache: RepositoryCacheMode; host_sessions: number; compaction_json: string;
-  builtin_extensions_json: string; required_extensions_json: string; browser_json: string; service_lifetime_seconds: number; tunnel_json: string; fake_ip_tunnels: number }
+  builtin_extensions_json: string; required_extensions_json: string; browser_json: string; service_lifetime_seconds: number; tunnel_json: string; fake_ip_tunnels: number; build_caches: string; build_cache_gib: number | string }
 
 export async function connectorHostConfig(env: Env, connectorId: string): Promise<HostConfig> {
   const row = await env.DB.query<ConfigRow>(`SELECT command_timeout_seconds, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
-    builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json, fake_ip_tunnels FROM connector_configs WHERE connector_id = ?`).bind(connectorId).first();
+    builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json, fake_ip_tunnels, build_caches, build_cache_gib FROM connector_configs WHERE connector_id = ?`).bind(connectorId).first();
   if (!row) return { ...defaultHostConfig, builtinExtensions: [], requiredExtensions: [], browser: { ...defaultHostBrowserConfig }, tunnel: { ...defaultHostTunnelConfig } };
   return { commandTimeoutSeconds: Number(row.command_timeout_seconds), gpu: Number(row.gpu) === 1,
     gitCredentials: Number(row.git_credentials) === 1, repositoryCache: row.repository_cache, hostSessions: Number(row.host_sessions) === 1,
     compaction: storedCompaction(row.compaction_json), builtinExtensions: storedBuiltinExtensions(row.builtin_extensions_json),
     requiredExtensions: storedRequiredExtensions(row.required_extensions_json), browser: storedBrowser(row.browser_json),
-    serviceLifetimeSeconds: storedLifetime(row.service_lifetime_seconds), tunnel: storedTunnel(row.tunnel_json), fakeIpTunnels: Number(row.fake_ip_tunnels) === 1 };
+    serviceLifetimeSeconds: storedLifetime(row.service_lifetime_seconds), tunnel: storedTunnel(row.tunnel_json), fakeIpTunnels: Number(row.fake_ip_tunnels) === 1,
+    buildCaches: storedBuildCacheMode(row.build_caches), buildCacheGiB: storedBuildCacheGiB(row.build_cache_gib) };
+}
+
+function storedBuildCacheMode(value: string): BuildCacheMode {
+  return (buildCacheModes as readonly string[]).includes(value) ? value as BuildCacheMode : 'off';
+}
+
+function storedBuildCacheGiB(value: number | string): number {
+  const gib = Number(value);
+  const { min, max, default: fallback } = buildCacheLimits.gib;
+  return Number.isSafeInteger(gib) && gib >= min && gib <= max ? gib : fallback;
 }
 
 function storedLifetime(value: number | string): number {
@@ -61,12 +73,13 @@ function storedCompaction(json: string): HostConfig['compaction'] {
 const columns: Readonly<Record<keyof HostConfig, string>> = Object.freeze({ commandTimeoutSeconds: 'command_timeout_seconds', gpu: 'gpu',
   gitCredentials: 'git_credentials', repositoryCache: 'repository_cache', hostSessions: 'host_sessions', compaction: 'compaction_json',
   builtinExtensions: 'builtin_extensions_json', requiredExtensions: 'required_extensions_json', browser: 'browser_json',
-  serviceLifetimeSeconds: 'service_lifetime_seconds', tunnel: 'tunnel_json', fakeIpTunnels: 'fake_ip_tunnels' });
+  serviceLifetimeSeconds: 'service_lifetime_seconds', tunnel: 'tunnel_json', fakeIpTunnels: 'fake_ip_tunnels',
+  buildCaches: 'build_caches', buildCacheGiB: 'build_cache_gib' });
 
 function upsert(settings: readonly (keyof HostConfig)[]): string {
   return `INSERT INTO connector_configs (connector_id, command_timeout_seconds, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
-    builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json, fake_ip_tunnels, updated_by, updated_at)
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM connectors WHERE id = ? AND revoked_at IS NULL AND removed_at IS NULL)
+    builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json, fake_ip_tunnels, build_caches, build_cache_gib, updated_by, updated_at)
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM connectors WHERE id = ? AND revoked_at IS NULL AND removed_at IS NULL)
   ON CONFLICT (connector_id) DO UPDATE SET ${settings.map(key => `${columns[key]} = excluded.${columns[key]}, `).join('')}
     updated_by = excluded.updated_by, updated_at = excluded.updated_at
   RETURNING connector_id`;
@@ -90,7 +103,7 @@ export function registerHostConfig(app: Hono<AppEnv>): void {
     let settings = Object.keys(change) as (keyof HostConfig)[];
     if (row.role !== 'owner') {
       if (settings.some(key => ownerOnlyHostConfig.includes(key) && JSON.stringify(change[key]) !== JSON.stringify(current[key]))) {
-        fail(403, 'host_owner_required', 'Only the host\'s owner decides whether it uses its Git credentials, keeps a repository cache, runs sessions without the sandbox, requires extensions of every session on it, where its browser comes from, whether its sessions may put servers online through tunnels or whether their network trusts its local proxy\'s fake-IP addresses.');
+        fail(403, 'host_owner_required', 'Only the host\'s owner decides whether it uses its Git credentials, keeps a repository cache, runs sessions without the sandbox, requires extensions of every session on it, where its browser comes from, whether its sessions may put servers online through tunnels, whether their network trusts its local proxy\'s fake-IP addresses or whether it keeps build caches.');
       }
       settings = settings.filter(key => !ownerOnlyHostConfig.includes(key));
       if (!settings.length) return c.json({ config: current });
@@ -99,7 +112,7 @@ export function registerHostConfig(app: Hono<AppEnv>): void {
     const saved = await c.env.DB.query(upsert(settings))
       .bind(row.id, config.commandTimeoutSeconds, config.gpu ? 1 : 0, config.gitCredentials ? 1 : 0, config.repositoryCache, config.hostSessions ? 1 : 0,
         JSON.stringify(config.compaction), JSON.stringify(config.builtinExtensions), JSON.stringify(config.requiredExtensions), JSON.stringify(config.browser),
-        config.serviceLifetimeSeconds, JSON.stringify(config.tunnel), config.fakeIpTunnels ? 1 : 0, actorId, now(), row.id).first();
+        config.serviceLifetimeSeconds, JSON.stringify(config.tunnel), config.fakeIpTunnels ? 1 : 0, config.buildCaches, config.buildCacheGiB, actorId, now(), row.id).first();
     if (!saved) fail(409, 'connector_revoked', 'Connector is revoked.');
     const effective = await connectorHostConfig(c.env, row.id);
     await auditStatement(c.env, actorId, 'host.config.updated', null, null, { connectorId: row.id, ...effective }).run();
