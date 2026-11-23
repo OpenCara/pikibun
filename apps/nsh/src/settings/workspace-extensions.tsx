@@ -20,6 +20,7 @@ import { monospace, palette, text } from "../theme";
 import { Checkbox, Field, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Row, Section, Small } from "../ui";
 import { ExtensionSettingsFields } from "./extension-fields";
+import { ExtensionsManager, type ExtensionChange } from "./extensions-manager";
 
 interface ExtensionHost {
   id: string; name: string; ownerId: string; ownerName: string;
@@ -120,6 +121,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
   const resource = createResource<ExtensionsResponse>(path);
   const action = createAction();
   const editing = signal<WorkspaceExtension | "new" | null>(null);
+  const managing = signal(false);
   const data = () => resource.data();
   const admin = () => data()?.admin === true;
   async function save(extension: WorkspaceExtension, notice = "Extension saved. Sessions pick it up from their next message."): Promise<boolean> {
@@ -139,6 +141,23 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
       await session().api(`${path()}?source=${encodeURIComponent(extension.source)}`, { method: "DELETE" });
       resource.refresh();
     }, "Extension removed.");
+  }
+  async function applyChanges(changes: ExtensionChange[]) {
+    let applied = 0;
+    const done = await action.run(async () => {
+      try {
+        for (const change of changes) {
+          if (change.remove) await session().api(`${path()}?source=${encodeURIComponent(change.source)}`, { method: "DELETE" });
+          else await session().api(path(), { method: "PUT", body: change.extension });
+          applied += 1;
+        }
+      } catch (reason) {
+        if (applied) { resource.refresh(); managing.set(false); }
+        const detail = reason instanceof Error ? reason.message : String(reason);
+        throw new Error(applied ? `Saved ${applied} of ${changes.length} changes, then: ${detail}` : detail);
+      }
+    }, () => `${changes.length === 1 ? "Change" : `${changes.length} changes`} saved. Sessions pick ${changes.length === 1 ? "it" : "them"} up from their next message.`);
+    if (done) { resource.refresh(); managing.set(false); }
   }
   function removeSessionTools(source: string) {
     void action.run(async () => {
@@ -169,7 +188,14 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
       <Note>Pikibun's own extensions are added as the workspace needs them: Git, GitHub and the forge's command-line tool with its first repository there, a document source's reader with its first source of that kind. Add the others (Node.js, Python, the browser, scheduled prompts, ...) with Add extension.</Note>
       <Note>Installed extensions run in the session's sandbox on Linux hosts, and on macOS hosts with the sandbox, within the network access above, and their tools run for anyone who may send the session messages. Elsewhere, and for Pikibun's own, they run on the host, as its owner's OS user, outside the sandbox: their tool calls run like host commands, for the host's owner and members granted host commands, and for everyone else only where the host's owner lets every session run them.</Note>
       <Note>Settings are the extension's own options. Never put secrets in them: an extension reads keys on its host, which its owner sets up.</Note>
-    </View>} action={admin() && (listed().length < extensionLimits.workspace || sessionToolsOff().length > 0) ? <Button small variant="outline" icon="plus" label="Add extension" onPress={() => editing.set("new")} /> : undefined}>
+    </View>} action={admin() ? (
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        <If when={data()}><Button small variant="outline" icon="list" label="Manage all" testID="manage-extensions" onPress={() => { action.clear(); managing.set(true); }} /></If>
+        <If when={listed().length < extensionLimits.workspace || sessionToolsOff().length > 0}>
+          <Button small variant="outline" icon="plus" label="Add extension" onPress={() => editing.set("new")} />
+        </If>
+      </View>
+    ) : undefined}>
       <ResourceState inline loading={resource.loading() && !data()} error={resource.error()} retry={resource.refresh}>
         <If when={data()}>
           {current => (
@@ -294,6 +320,12 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
           <ExtensionSheet extension={current() === "new" ? undefined : current() as WorkspaceExtension} taken={data()!.extensions} installed={installed()} sessionTools={sessionToolsOff()}
             flags={current() === "new" ? undefined : flagsOf((current() as WorkspaceExtension).source, data()!.hosts)}
             close={() => editing.set(null)} save={async extension => { if (await save(extension)) editing.set(null); }} busy={action.busy()} error={action.error()} />
+        )}
+      </If>
+      <If when={managing() && data() ? data() : null}>
+        {current => (
+          <ExtensionsManager extensions={current().extensions} used={listed().length} close={() => managing.set(false)} apply={applyChanges}
+            busy={action.busy()} error={action.error()} />
         )}
       </If>
     </Section>

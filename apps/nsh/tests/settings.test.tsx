@@ -624,6 +624,28 @@ describe("settings", () => {
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`)).toEqual({ source: "piki:sessions", enabled: true, tools: "automatic", settings: {} });
   });
 
+  test("Extensions manages every extension in one panel and saves the changes together", async () => {
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [], extensions: [
+        { source: "npm:cc-safety-net@2.7.2", enabled: true, tools: "automatic", settings: { mode: "strict" } },
+        { source: "piki:node", enabled: true, tools: "automatic", settings: {} }] } },
+      [`PUT ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [] } },
+      [`DELETE ${ORIGIN}/api/workspaces/w1/extensions?source=piki%3Anode`]: { body: { extensions: [] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:manage-extensions");
+    await app.press("id:manage-extensions");
+    await app.waitFor("id:extensions-manager");
+    await app.press("id:manage-npm:cc-safety-net@2.7.2");
+    await app.press("id:manage-piki:node");
+    await app.waitFor("text:Save 2 changes");
+    await app.press("id:extensions-manager-save");
+    await app.waitUntil(() => app.requests().some(item => item.method === "DELETE" && item.url.endsWith("source=piki%3Anode")));
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`)).toEqual({ source: "npm:cc-safety-net@2.7.2", enabled: false, tools: "automatic", settings: { mode: "strict" } });
+    await app.waitFor("text:2 changes saved. Sessions pick them up from their next message.");
+  });
+
   test("Extensions says that adding Sub-agents adds Other sessions too", async () => {
     const app = await openSettings("workspaces", {
       [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [], extensions: [{ source: "piki:sessions", enabled: false, tools: "automatic", settings: {} }] } },
