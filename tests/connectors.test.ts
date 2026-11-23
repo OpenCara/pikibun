@@ -11,6 +11,7 @@ import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.j
 import { runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
 import { runAutomaticPacking } from '../apps/server/src/automatic-packing.js';
 import { sideAskPreview } from '../apps/server/src/side-asks.js';
+import { archiveDescendantsLimit } from '../apps/server/src/sessions.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase, type FakeHub } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommandGrant, HostModelSettings } from '../packages/shared/src/connector.js';
 import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, PullRequestReview, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
@@ -1843,6 +1844,26 @@ test('an archive takes the sessions a session started along when asked, as far a
   assert.deepEqual([child.id, grandchild.id, other.id].map(status), ['archived', 'archived', 'ready']);
   const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.archived' AND session_id = ?").get(grandchild.id) as { detail_json: string };
   assert.equal(JSON.parse(audit.detail_json).withParent, s.session.id);
+
+  f.sqlite.prepare("UPDATE sessions SET status = 'ready', archived_status = NULL WHERE id IN (?, ?)").run(child.id, grandchild.id);
+  const retried = await json<{ session: SessionRecord; children: { archived: string[]; skipped: number } }>(await s.owner.request('POST', `${path}/archive`, { children: true }));
+  assert.deepEqual([retried.session.status, retried.children], ['archived', { archived: [child.id, grandchild.id], skipped: 0 }], 'Archive all goes on under a parent already archived');
+  await denied(await s.owner.request('POST', `${path}/archive`), 409, 'session_archived');
+  await denied(await s.member.request('POST', `${path}/archive`, { children: true }), 403, 'owner_required');
+});
+
+test('archiving the sessions a session started stops at its limit and says so, and Archive all again goes on from there', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const insert = f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,parent_session_id)
+    SELECT ?, workspace_id, owner_id, agent_version_id, 'Child', 'ready', created_at, visibility, ? FROM sessions WHERE id = ?`);
+  const ids = Array.from({ length: archiveDescendantsLimit + 1 }, (_, index) => `child-${String(index).padStart(3, '0')}`);
+  for (const id of ids) insert.run(id, s.session.id, s.session.id);
+  const path = `/api/sessions/${s.session.id}/archive`;
+  type Answer = { children: { archived: string[]; skipped: number; truncated?: boolean } };
+  const capped = await json<Answer>(await s.owner.request('POST', path, { children: true }));
+  assert.deepEqual(capped.children, { archived: ids.slice(0, archiveDescendantsLimit), skipped: 0, truncated: true });
+  const rest = await json<Answer>(await s.owner.request('POST', path, { children: true }));
+  assert.deepEqual(rest.children, { archived: ids.slice(archiveDescendantsLimit), skipped: 0 });
 });
 
 test('owners pack an archived session\'s files on its host, and unarchiving unpacks them first, as its owner, whoever of those who manage it unarchives it', async t => {

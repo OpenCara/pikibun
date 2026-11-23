@@ -66,12 +66,13 @@ export async function archiveRequest(path: string, choice: ArchiveChoice): Promi
     await session().api(path, { method: "POST" });
     return "Session archived";
   }
-  const result = await session().api<{ children?: { archived: string[]; skipped: number } }>(path, { method: "POST", body: { children: true } });
+  const result = await session().api<{ children?: { archived: string[]; skipped: number; truncated?: boolean } }>(path, { method: "POST", body: { children: true } });
   const archived = result.children?.archived.length ?? 0;
   const skipped = result.children?.skipped ?? 0;
   const also = archived === 0 ? "" : archived === 1 ? " with 1 session it started" : ` with ${archived} sessions it started`;
   const left = skipped === 0 ? "" : skipped === 1 ? ". 1 you don't manage stays open" : `. ${skipped} you don't manage stay open`;
-  return `Session archived${also}${left}`;
+  const more = result.children?.truncated ? ". It started too many to archive at once: archive the rest from the list" : "";
+  return `Session archived${also}${left}${more}`;
 }
 
 export const unarchiveNotice = (current: SessionRecord): string => (current.packed ? "Session unarchived, its files unpacked" : "Session unarchived");

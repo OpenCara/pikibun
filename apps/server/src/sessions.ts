@@ -300,16 +300,20 @@ const archiveBody = fields({ children: z.boolean().optional() }, 'An archive tak
 
 export const archiveDescendantsLimit = 200;
 
-export async function archiveDescendants(c: AppContext, parentId: string): Promise<{ archived: string[]; skipped: number }> {
+export interface ArchivedDescendants { archived: string[]; skipped: number; truncated?: true }
+
+export async function archiveDescendants(c: AppContext, parentId: string, limit = archiveDescendantsLimit): Promise<ArchivedDescendants> {
   const archived: string[] = [];
   let skipped = 0;
+  let truncated = false;
   const seen = new Set([parentId]);
   const queue = [parentId];
-  while (queue.length && seen.size <= archiveDescendantsLimit) {
+  while (queue.length && !truncated) {
     const children = await c.env.DB.query<{ id: string; status: string }>('SELECT id, status FROM sessions WHERE parent_session_id = ? ORDER BY created_at, id')
       .bind(queue.shift()!).all();
     for (const child of children) {
-      if (seen.has(child.id) || seen.size > archiveDescendantsLimit) continue;
+      if (seen.has(child.id)) continue;
+      if (seen.size > limit * 10 || (child.status !== 'archived' && archived.length + skipped >= limit)) { truncated = true; break; }
       seen.add(child.id);
       queue.push(child.id);
       if (child.status === 'archived') continue;
@@ -318,11 +322,15 @@ export async function archiveDescendants(c: AppContext, parentId: string): Promi
         archived.push(child.id);
       } catch (error) {
         if (!(error instanceof HTTPException)) throw error;
+        if (error.status !== 403) {
+          const now = await c.env.DB.query<{ status: string }>('SELECT status FROM sessions WHERE id = ?').bind(child.id).first();
+          if (!now || now.status === 'archived') continue;
+        }
         skipped += 1;
       }
     }
   }
-  return { archived, skipped };
+  return { archived, skipped, ...(truncated ? { truncated: true as const } : {}) };
 }
 
 export async function stopSession(c: AppContext, row: SessionRow, audit: Record<string, unknown> = {}): Promise<number> {
@@ -551,7 +559,11 @@ export function registerSessions(app: Hono<AppEnv>): void {
   });
   app.post('/api/sessions/:id/archive', async c => {
     const input = c.req.header('content-type') ? await body(c, archiveBody, { maxBytes: 1024, message: 'An archive takes only children: true or false.' }) : {};
-    const archived = await archiveSession(c, identifier(c.req.param('id')), input.children ? { children: true } : {});
+    const sessionId = identifier(c.req.param('id'));
+    const retried = input.children
+      ? await requireSessionManager(c, sessionId, 'read', 'Only the session owner, or the workspace\'s owner or an admin, can archive it.')
+      : null;
+    const archived = retried?.row.status === 'archived' ? retried : await archiveSession(c, sessionId, input.children ? { children: true } : {});
     const children = input.children ? await archiveDescendants(c, archived.row.id) : undefined;
     return c.json({ session: sessionRecord(archived.row, archived.permissions), ...(children ? { children } : {}) });
   });
