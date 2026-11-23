@@ -294,6 +294,33 @@ export async function archiveSession(c: AppContext, sessionId: string, audit: Re
   return { ...access, row: archived };
 }
 
+export const archiveDescendantsLimit = 200;
+
+export async function archiveDescendants(c: AppContext, parentId: string): Promise<{ archived: string[]; skipped: number }> {
+  const archived: string[] = [];
+  let skipped = 0;
+  const seen = new Set([parentId]);
+  const queue = [parentId];
+  while (queue.length && seen.size <= archiveDescendantsLimit) {
+    const children = await c.env.DB.query<{ id: string; status: string }>('SELECT id, status FROM sessions WHERE parent_session_id = ? ORDER BY created_at, id')
+      .bind(queue.shift()!).all();
+    for (const child of children) {
+      if (seen.has(child.id) || seen.size > archiveDescendantsLimit) continue;
+      seen.add(child.id);
+      queue.push(child.id);
+      if (child.status === 'archived') continue;
+      try {
+        await archiveSession(c, child.id, { withParent: parentId });
+        archived.push(child.id);
+      } catch (error) {
+        if (!(error instanceof HTTPException)) throw error;
+        skipped += 1;
+      }
+    }
+  }
+  return { archived, skipped };
+}
+
 export async function stopSession(c: AppContext, row: SessionRow, audit: Record<string, unknown> = {}): Promise<number> {
   const result = await runnerJSON<{ stopped: number }>(await runnerRequest(c, row, 'stop', '', {}));
   invalidateSessionView(c, row.id);
@@ -519,8 +546,13 @@ export function registerSessions(app: Hono<AppEnv>): void {
     fail(400, 'invalid_input', 'Change the session title or its tool output, one at a time.');
   });
   app.post('/api/sessions/:id/archive', async c => {
-    const archived = await archiveSession(c, identifier(c.req.param('id')));
-    return c.json({ session: sessionRecord(archived.row, archived.permissions) });
+    const input: Record<string, unknown> = c.req.header('content-type') ? await jsonObject(c, 1024) : {};
+    if (Object.keys(input).some(key => key !== 'children') || (input.children !== undefined && typeof input.children !== 'boolean')) {
+      fail(400, 'invalid_input', 'An archive takes only children: true or false.');
+    }
+    const archived = await archiveSession(c, identifier(c.req.param('id')), input.children ? { children: true } : {});
+    const children = input.children ? await archiveDescendants(c, archived.row.id) : undefined;
+    return c.json({ session: sessionRecord(archived.row, archived.permissions), ...(children ? { children } : {}) });
   });
   app.post('/api/sessions/:id/pack', async c => {
     const packed = await packSession(c, identifier(c.req.param('id')));
