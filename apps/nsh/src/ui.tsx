@@ -123,7 +123,7 @@ export function Banner(props: {
             <BaseButton testID={props.testID ? `${props.testID}-toggle` : undefined} role="button" accessibilityLabel={`${props.title}: ${expanded() ? "hide" : "show"} details`}
               selected={expanded()} onPress={() => expanded.update(open => !open)} hitSlop={4}
               style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: control.xsmall }} activeStyle={{ opacity: 0.7 }}>
-              <Text style={{ flex: 1, minWidth: 0, numberOfLines: expanded() ? undefined : 1, fontSize: text.small, lineHeight: 19, fontWeight: weight.medium,
+              <Text style={{ flex: 1, minWidth: 0, numberOfLines: expanded() ? undefined : 2, fontSize: text.small, lineHeight: 19, fontWeight: weight.medium,
                 color: neutral() ? palette().text : tone().text }}>{props.title}</Text>
               <Text style={{ fontSize: text.caption, color: palette().muted }}>{expanded() ? "Less" : "Details"}</Text>
               <Icon name={expanded() ? "chevron-down" : "chevron-right"} size={12} color={palette().muted} />
