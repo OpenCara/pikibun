@@ -85,6 +85,26 @@ test("pruning and eviction never follow a link a session left in its cache", { s
   assert.equal(existsSync(outside), true);
 });
 
+test("eviction and pruning reclaim a tree nested deeper than a walk goes", { skip: pythonMissing }, async t => {
+  const root = join(await scratch(t, "build-cache-deep-"), "build-caches");
+  const store = new BuildCacheStore(root);
+  const shared = await store.prepare("w", { name: "ccache", scope: "shared" }, "o");
+  const chain = join(shared, ...Array.from({ length: 200 }, () => "d"));
+  await mkdir(chain, { recursive: true });
+  await writeFile(join(chain, "hidden.o"), Buffer.alloc(4096));
+  await writeFile(join(shared, "seen.o"), Buffer.alloc(16 * 1024));
+  const evicted = await store.evict(8 * 1024);
+  assert.ok(evicted.truncated, "the walk says it stopped short");
+  assert.equal(existsSync(join(shared, ...Array.from({ length: 64 }, () => "d"))), false, "what lies past the walk's depth is removed whole");
+  assert.equal(existsSync(join(shared, "seen.o")), false);
+
+  await mkdir(chain, { recursive: true });
+  await writeFile(join(chain, "hidden.o"), "x");
+  const pruned = await store.prune(0, Date.now() + 1000);
+  assert.equal(pruned.removed, 1, "a cache too deep to walk in full still goes once idle");
+  assert.equal(existsSync(join(root, "w")), false);
+});
+
 test("with resource limits, build caches need a filesystem of their own, never an ordinary directory", { skip: process.platform !== "linux" || pythonMissing ? "the resource supervisor runs on Linux with /usr/bin/python3" : undefined }, async t => {
   const directory = await scratch(t, "build-cache-volume-");
   const result = await probeBuildCacheStorage({ cgroupRoot: "/operator/delegated/sessions", controlRoot: "/operator/private-resource-control",

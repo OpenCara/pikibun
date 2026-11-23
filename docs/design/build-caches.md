@@ -148,7 +148,10 @@ skipped, and a link is only ever removed as a link.
 - `pikibun cache prune --older-than DAYS` deletes cache directories whose newest file is older than that (a cache too
   large to count in full is kept). It runs without the Pikibun server, so a cache a workspace deleted goes once nothing
   wrote to it for that long.
-- Walks never follow links and stop at a depth of 64 and a million entries, reporting a walk cut short.
+- Walks never follow links and stop at a depth of 64 and a million entries, reporting a walk cut short. What lies
+  past that depth can't be sized, so eviction removes such directories whole, oldest first, before any file, and a cut
+  walk doesn't keep an idle cache from being pruned. Removal goes down and up a tree without recursion, holding at most
+  128 levels' descriptors and opening the rest again from the top, so no depth stops it.
 - Changing the host setting applies to sessions' next commands; a switch from `workspace` to `owner` leaves the shared
   copies on disk until prune collects them.
 

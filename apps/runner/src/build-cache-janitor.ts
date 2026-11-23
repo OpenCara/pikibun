@@ -7,6 +7,8 @@ DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 NAME_CHARS = set('abcdefghijklmnopqrstuvwxyz0123456789-')
 DEPTH = 64
 ENTRIES = 1000000
+STEPS = 10000000
+WINDOW = 128
 request = json.loads(sys.argv[1])
 seen = [0]
 truncated = [False]
@@ -86,7 +88,7 @@ def open_path(root, parts):
         raise
 
 
-def walk(fd, prefix, depth, visit):
+def walk(fd, prefix, depth, visit, deep=None):
     total = [0, 0, 0.0]
     for name, info in children(fd):
         seen[0] += 1
@@ -97,13 +99,15 @@ def walk(fd, prefix, depth, visit):
         if stat.S_ISDIR(info.st_mode):
             if depth + 1 >= DEPTH:
                 truncated[0] = True
+                if deep is not None:
+                    deep(prefix + [name], info.st_mtime)
                 continue
             try:
                 child = open_dir(name, fd)
             except OSError:
                 continue
             try:
-                inner = walk(child, prefix + [name], depth + 1, visit)
+                inner = walk(child, prefix + [name], depth + 1, visit, deep)
             finally:
                 os.close(child)
             total[0] += inner[0]
@@ -118,7 +122,7 @@ def walk(fd, prefix, depth, visit):
     return total
 
 
-def remove_tree(parent, name, depth=0):
+def remove_tree(parent, name):
     try:
         info = os.stat(name, dir_fd=parent, follow_symlinks=False)
     except FileNotFoundError:
@@ -126,15 +130,63 @@ def remove_tree(parent, name, depth=0):
     if not stat.S_ISDIR(info.st_mode):
         os.unlink(name, dir_fd=parent)
         return
-    if depth >= DEPTH:
-        raise OSError('too deep to remove')
-    fd = open_dir(name, parent)
+    below = []
+    held = []
     try:
-        for child, _ in children(fd):
-            remove_tree(fd, child, depth + 1)
+        for _ in range(STEPS):
+            if not held or held[-1][0] != len(below):
+                reopen(parent, [name] + below, held)
+            fd = held[-1][1]
+            inner = None
+            for child, child_info in children(fd):
+                if stat.S_ISDIR(child_info.st_mode):
+                    inner = child
+                    break
+                os.unlink(child, dir_fd=fd)
+            if inner is not None:
+                below.append(inner)
+                held.append((len(below), open_dir(inner, fd)))
+                if len(held) > WINDOW:
+                    os.close(held.pop(0)[1])
+                continue
+            os.close(held.pop()[1])
+            if not below:
+                os.rmdir(name, dir_fd=parent)
+                return
+            last = below.pop()
+            if not held or held[-1][0] != len(below):
+                reopen(parent, [name] + below, held)
+            os.rmdir(last, dir_fd=held[-1][1])
+        raise OSError('the tree kept growing while it was removed')
     finally:
+        for _, fd in held:
+            os.close(fd)
+
+
+def reopen(parent, parts, held):
+    for _, fd in held:
         os.close(fd)
-    os.rmdir(name, dir_fd=parent)
+    del held[:]
+    fd = os.dup(parent)
+    try:
+        for index, part in enumerate(parts):
+            following = open_dir(part, fd)
+            if held and held[-1][1] == fd:
+                pass
+            else:
+                os.close(fd)
+            fd = following
+            held.append((index, fd))
+            if len(held) > WINDOW:
+                os.close(held.pop(0)[1])
+        fd = None
+    except BaseException:
+        if fd is not None and not any(item[1] == fd for item in held):
+            os.close(fd)
+        for _, item in held:
+            os.close(item)
+        del held[:]
+        raise
 
 
 def unlink_at(leaf_fd, parts):
@@ -223,7 +275,7 @@ try:
                 os.close(fd)
             cut = truncated[0]
             truncated[0] = before or cut
-            if cut or max(usage[2], mtime) > cutoff:
+            if max(usage[2], mtime) > cutoff:
                 continue
             parent = open_path(root, parts[:-1])
             try:
@@ -238,7 +290,9 @@ try:
         print(json.dumps({'removed': removed, 'bytes': freed, 'truncated': truncated[0]}))
     elif mode == 'evict':
         capacity = request['capacity']
+        dedicated = request.get('dedicated')
         files = []
+        deep = []
         total = 0
         for leaf in leaves(root):
             parts = leaf_parts(leaf)
@@ -247,18 +301,43 @@ try:
             except OSError:
                 continue
             try:
-                usage = walk(fd, [], 0, lambda path, size, mtime, parts=parts: files.append((mtime, size, parts, path)))
+                usage = walk(fd, [], 0, lambda path, size, mtime, parts=parts: files.append((mtime, size, parts, path)),
+                             lambda path, mtime, parts=parts: deep.append((mtime, parts, path)))
             finally:
                 os.close(fd)
             total += usage[0]
-        if request.get('dedicated'):
+
+        def used():
             fs = os.fstatvfs(root)
-            total = max(total, (fs.f_blocks - fs.f_bfree) * fs.f_frsize)
+            return (fs.f_blocks - fs.f_bfree) * fs.f_frsize
+
+        if dedicated:
+            total = max(total, used())
         removed = 0
         freed = 0
         if total > capacity * request['evictAt']:
-            files.sort(key=lambda item: item[0])
             goal = capacity * request['evictTo']
+            deep.sort(key=lambda item: item[0])
+            for mtime, parts, path in deep:
+                if dedicated and total <= goal:
+                    break
+                before = used() if dedicated else 0
+                try:
+                    parent = open_path(root, parts + path[:-1])
+                except OSError:
+                    continue
+                try:
+                    remove_tree(parent, path[-1])
+                except OSError:
+                    continue
+                finally:
+                    os.close(parent)
+                removed += 1
+                if dedicated:
+                    gone = max(0, before - used())
+                    total -= gone
+                    freed += gone
+            files.sort(key=lambda item: item[0])
             for mtime, size, parts, path in files:
                 if total <= goal:
                     break
