@@ -3199,7 +3199,7 @@ test('the Review tab reads an Azure DevOps pull request of the workspace with th
     [`${repository}/pullrequests/7?api-version=7.1`]: () => Response.json({ pullRequestId: 7, status: 'active', title: 'Fix it', description: 'Details',
       sourceRefName: 'refs/heads/feature', targetRefName: 'refs/heads/main', repository: { id: repositoryId }, reviewers: [] }),
     [`${repository}/pullRequests/7/statuses?api-version=7.1`]: () => Response.json({ value: [] }),
-    [`${repository}/pullRequests/7/commits?$top=251&api-version=7.1`]: () => Response.json({ value: [] }),
+    [`${repository}/pullRequests/7/commits?$top=100&api-version=7.1`]: () => Response.json({ value: [] }),
     [`${repository}/pullRequests/7/iterations?api-version=7.1`]: () => Response.json({ value: [] }),
     [`${repository}/pullRequests/7/threads?api-version=7.1`]: () => Response.json({ value: [] }),
   };

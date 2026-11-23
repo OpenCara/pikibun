@@ -21,6 +21,7 @@ const listItems = 100;
 const bodyCharacters = 16000;
 const messageCharacters = 4000;
 const changeEntries = 1000;
+const commitPages = 20;
 const buildPolicy = '0609b952-1397-4640-95ec-e00a01b2c241';
 const sha1 = /^[0-9a-f]{40}$/;
 const encoder = new TextEncoder();
@@ -86,7 +87,7 @@ async function bounded(response: Response, limit: number): Promise<Uint8Array | 
   return bytes;
 }
 
-async function get(api: AzureRepositoryApi, url: string, accept: string, limit: number): Promise<Uint8Array | null> {
+async function get(api: AzureRepositoryApi, url: string, accept: string, limit: number, next?: (token: string | null) => void): Promise<Uint8Array | null> {
   let response: Response;
   try {
     response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout),
@@ -101,11 +102,12 @@ async function get(api: AzureRepositoryApi, url: string, accept: string, limit: 
     if (response.status === 429) fail(429, 'azure_devops_rate_limited', 'Azure DevOps is limiting the session owner\'s requests. Try again later.');
     fail(502, 'azure_devops_unavailable', 'Azure DevOps could not complete the request.');
   }
+  next?.(response.headers.get('x-ms-continuationtoken'));
   return bounded(response, limit);
 }
 
-async function json(api: AzureRepositoryApi, url: string): Promise<Record<string, unknown>> {
-  const bytes = await get(api, url, 'application/json', jsonBytes);
+async function json(api: AzureRepositoryApi, url: string, next?: (token: string | null) => void): Promise<Record<string, unknown>> {
+  const bytes = await get(api, url, 'application/json', jsonBytes, next);
   if (!bytes) return fail(502, 'azure_devops_response_too_large', 'Azure DevOps returned more than Pikibun reads.');
   try { return record(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); }
   catch { return fail(502, 'invalid_azure_devops_response', 'Azure DevOps returned an unexpected response.'); }
@@ -230,22 +232,25 @@ async function fileViews(api: AzureRepositoryApi, found: Change[]): Promise<Pull
     if (bytes.subarray(0, 8000).includes(0)) return null;
     return new TextDecoder('utf-8').decode(bytes);
   };
-  const contents: ({ before: string; after: string } | 'binary' | 'too-large' | 'same')[] = new Array(found.length);
+  const read = async (id: string | undefined): Promise<string | null | undefined> => {
+    try { return await blob(id); } catch { return undefined; }
+  };
+  const contents: ({ before: string; after: string } | 'binary' | 'unread' | 'same')[] = new Array(found.length);
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(blobReads, found.length) }, async () => {
     while (next < found.length) {
       const index = next++;
       const change = found[index]!;
       if (change.before && change.before === change.after) { contents[index] = 'same'; continue; }
-      const [before, after] = [await blob(change.before), await blob(change.after)];
-      contents[index] = before === undefined || after === undefined ? 'too-large' : before === null || after === null ? 'binary' : { before, after };
+      const [before, after] = [await read(change.before), await read(change.after)];
+      contents[index] = before === undefined || after === undefined ? 'unread' : before === null || after === null ? 'binary' : { before, after };
     }
   }));
   let held = 0;
   return found.map((change, index): PullRequestFileView => {
     const view: PullRequestFileView = { path: change.path, ...(change.previousPath ? { previousPath: change.previousPath } : {}), status: change.status, additions: 0, deletions: 0 };
     const content = contents[index]!;
-    if (content === 'too-large') return { ...view, truncated: true };
+    if (content === 'unread') return { ...view, truncated: true };
     if (typeof content === 'string') return view;
     const diff = unifiedPatch(content.before, content.after);
     const counted = { ...view, additions: diff.additions, deletions: diff.deletions };
@@ -258,6 +263,22 @@ async function fileViews(api: AzureRepositoryApi, found: Change[]): Promise<Pull
   });
 }
 
+async function commitListing(api: AzureRepositoryApi, number: number): Promise<{ items: Record<string, unknown>[]; total: number }> {
+  const items: Record<string, unknown>[] = [];
+  let total = 0;
+  const cursor: { token: string | null } = { token: null };
+  for (let page = 0; page < commitPages; page++) {
+    const continuation = cursor.token ? `&continuationToken=${encodeURIComponent(cursor.token)}` : '';
+    cursor.token = null;
+    const value = list((await json(api, versioned(`${locate(api).repository}/pullRequests/${number}/commits?$top=${listItems}${continuation}`),
+      token => { cursor.token = token; })).value);
+    total += value.length;
+    items.push(...value.slice(0, Math.max(pullRequestReviewLimits.commits - items.length, 0)));
+    if (!cursor.token || !value.length) break;
+  }
+  return { items, total };
+}
+
 function newest<T extends { createdAt: string }>(items: T[]): { items: T[]; omitted: number } {
   const sorted = [...items].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return { items: sorted.slice(-listItems), omitted: Math.max(sorted.length - listItems, 0) };
@@ -268,7 +289,7 @@ export async function readAzurePullRequestReview(api: AzureRepositoryApi, number
   const url = azurePullRequestUrl(api.fullName, number);
   const pull = await pullRequestDetails(api, number);
   const [commitList, iterations, threads, found] = await Promise.all([
-    json(api, versioned(`${where.repository}/pullRequests/${number}/commits?$top=${pullRequestReviewLimits.commits + 1}`)),
+    commitListing(api, number),
     json(api, versioned(`${where.repository}/pullRequests/${number}/iterations`)),
     json(api, versioned(`${where.repository}/pullRequests/${number}/threads`)),
     checks(api, pull, number),
@@ -280,8 +301,7 @@ export async function readAzurePullRequestReview(api: AzureRepositoryApi, number
   const allChanges = changes(list(changed.changeEntries));
   const more = integer(changed.nextTop) ?? 0;
   const files = await fileViews(api, allChanges.slice(0, pullRequestReviewLimits.files));
-  const listed = list(commitList.value);
-  const commits = listed.slice(0, pullRequestReviewLimits.commits).flatMap((item): PullRequestCommitView[] => {
+  const commits = commitList.items.flatMap((item): PullRequestCommitView[] => {
     const sha = string(item.commitId);
     if (!sha1.test(sha)) return [];
     const author = optionalRecord(item.author);
@@ -289,6 +309,7 @@ export async function readAzurePullRequestReview(api: AzureRepositoryApi, number
   }).reverse();
   const conversation: GitHubCommentView[] = [];
   const reviewComments: GitHubReviewCommentView[] = [];
+  const ids = new Map<string, number>();
   for (const thread of list(threads.value)) {
     const threadId = integer(thread.id);
     if (threadId === null || thread.isDeleted === true) continue;
@@ -299,11 +320,12 @@ export async function readAzurePullRequestReview(api: AzureRepositoryApi, number
     for (const comment of Array.isArray(thread.comments) ? thread.comments.map(optionalRecord) : []) {
       const commentId = integer(comment.id);
       if (commentId === null || comment.isDeleted === true || (comment.commentType !== undefined && comment.commentType !== 'text')) continue;
-      const id = threadId * 10000 + commentId;
-      const parent = integer(comment.parentCommentId);
+      const id = ids.size + 1;
+      ids.set(`${threadId}/${commentId}`, id);
+      const parent = ids.get(`${threadId}/${integer(comment.parentCommentId)}`) ?? null;
       const common = { id, author: person(comment.author), createdAt: string(comment.publishedDate), body: clip(comment.content), url: `${url}?discussionId=${threadId}` };
       if (path) {
-        reviewComments.push({ ...common, inReplyTo: parent ? threadId * 10000 + parent : null, path, line: right ?? left, originalLine: left ?? right, commit: '', diffHunk: '' });
+        reviewComments.push({ ...common, inReplyTo: parent, path, line: right ?? left, originalLine: left ?? right, commit: '', diffHunk: '' });
       } else conversation.push(common);
     }
   }
@@ -332,7 +354,7 @@ export async function readAzurePullRequestReview(api: AzureRepositoryApi, number
   };
   const fileCount = allChanges.length + more;
   const omittedCounts = { ...(fileCount > files.length ? { files: fileCount - files.length } : {}),
-    ...(listed.length > pullRequestReviewLimits.commits ? { commits: listed.length - pullRequestReviewLimits.commits } : {}) };
+    ...(commitList.total > commitList.items.length ? { commits: commitList.total - commitList.items.length } : {}) };
   return {
     pull: view, additions: files.reduce((sum, file) => sum + file.additions, 0), deletions: files.reduce((sum, file) => sum + file.deletions, 0),
     changedFiles: fileCount, commits, files, ...(Object.keys(omittedCounts).length ? { omitted: omittedCounts } : {}),

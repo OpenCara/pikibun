@@ -71,6 +71,7 @@ const oldBlob = "1".repeat(40);
 const newBlob = "2".repeat(40);
 const addedBlob = "3".repeat(40);
 const binaryBlob = "4".repeat(40);
+const lockedBlob = "5".repeat(40);
 const secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ";
 
 function pullRequest(extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -147,7 +148,7 @@ test("the Review tab reads an Azure DevOps pull request: files with diffs Pikibu
     [`${base}/pullRequests/7/statuses?api-version=7.1`]: () => Response.json({ value: [{ id: 1, state: "pending", context: { genre: "ci", name: "build" } }] }),
     [`https://dev.azure.com/contoso/My%20Project/_apis/policy/evaluations?artifactId=${encodeURIComponent(`vstfs:///CodeReview/CodeReviewId/${projectId}/7`)}&api-version=7.1-preview.1`]:
       () => Response.json({ message: "no" }, { status: 403 }),
-    [`${base}/pullRequests/7/commits?$top=251&api-version=7.1`]: () => Response.json({ value: [
+    [`${base}/pullRequests/7/commits?$top=100&api-version=7.1`]: () => Response.json({ value: [
       { commitId: "f".repeat(40), comment: "Second", author: { name: "Ann", date: "2026-11-02T00:00:00Z" } },
       { commitId: "e".repeat(40), comment: "First", author: { name: "Ann", date: "2026-11-01T00:00:00Z" } },
       { commitId: "short", comment: "Dropped" },
@@ -166,12 +167,14 @@ test("the Review tab reads an Azure DevOps pull request: files with diffs Pikibu
       { changeType: "add", item: { path: "/.env", objectId: addedBlob } },
       { changeType: "delete", item: { path: "/logo.png", originalObjectId: binaryBlob } },
       { changeType: "rename", originalPath: "/src/old.ts", item: { path: "/src/new.ts", objectId: oldBlob, originalObjectId: oldBlob } },
+      { changeType: "add", item: { path: "/locked.txt", objectId: lockedBlob } },
       { changeType: "add", item: { path: "/src", isFolder: true } },
     ] }),
     [blob(oldBlob)]: () => new Response("const a = 1;\nconst b = 2;\n"),
     [blob(newBlob)]: () => new Response("const a = 1;\nconst b = 3;\n"),
     [blob(addedBlob)]: () => new Response(`API_KEY=${secret}\n`),
     [blob(binaryBlob)]: () => new Response(new Uint8Array([137, 80, 78, 71, 0, 1])),
+    [blob(lockedBlob)]: () => Response.json({ message: "denied" }, { status: 403 }),
   });
   const review = await readAzurePullRequestReview(api, 7);
   assert.ok(!calls.some(url => url.includes(`/blobs/${oldBlob}`) && calls.filter(other => other === url).length > 1), "each side is read once");
@@ -184,12 +187,39 @@ test("the Review tab reads an Azure DevOps pull request: files with diffs Pikibu
   assert.deepEqual(review.pull.pullRequest?.checks, [{ name: "ci/build", status: "pending", conclusion: null }]);
   assert.deepEqual(review.pull.comments.map(item => [item.author, item.body]), [["Bob", "Looks good"]]);
   assert.deepEqual(review.pull.pullRequest?.reviewComments.map(item => [item.path, item.line, item.body, item.inReplyTo]),
-    [["src/a.ts", 2, "Why?", null], ["src/a.ts", 2, "Because", 40001]]);
+    [["src/a.ts", 2, "Why?", null], ["src/a.ts", 2, "Because", 2]]);
+  assert.deepEqual(review.pull.comments.map(item => item.id), [1]);
+  assert.deepEqual(review.pull.pullRequest?.reviewComments.map(item => item.id), [2, 3], "each comment has its own id, whatever Azure DevOps numbers it");
   assert.deepEqual(review.commits.map(item => [item.sha, item.message]), [["e".repeat(40), "First"], ["f".repeat(40), "Second"]]);
   assert.deepEqual(review.files.map(file => [file.path, file.status, file.previousPath, file.additions, file.deletions, Boolean(file.patch)]), [
     ["src/a.ts", "modified", undefined, 1, 1, true], [".env", "added", undefined, 1, 0, true], ["logo.png", "removed", undefined, 0, 0, false],
-    ["src/new.ts", "renamed", "src/old.ts", 0, 0, false]]);
+    ["src/new.ts", "renamed", "src/old.ts", 0, 0, false], ["locked.txt", "added", undefined, 0, 0, false]]);
+  assert.equal(review.files[4]!.truncated, true, "a file Azure DevOps won't give is left to it, and the rest still shows");
   assert.equal(review.files[0]!.patch, "@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;");
   assert.equal(review.files[1]!.redacted, true);
-  assert.deepEqual([review.additions, review.deletions, review.changedFiles, review.omitted], [2, 1, 4, undefined]);
+  assert.deepEqual([review.additions, review.deletions, review.changedFiles, review.omitted], [2, 1, 5, undefined]);
+});
+
+test("the Review tab counts every commit of a long Azure DevOps pull request, page by page, and shows the newest", async t => {
+  const commits = (from: number, count: number) => Array.from({ length: count }, (_, index) => {
+    const at = from + index;
+    return { commitId: at.toString(16).padStart(40, "0"), comment: `Commit ${at}`, author: { name: "Ann", date: "2026-11-01T00:00:00Z" } };
+  });
+  const page = (token: string | null, value: unknown[]) => () => Response.json({ value }, { headers: token ? { "x-ms-continuationtoken": token } : {} });
+  mock(t, {
+    [`${base}/pullrequests/7?api-version=7.1`]: () => Response.json(pullRequest()),
+    [`${base}/pullRequests/7/statuses?api-version=7.1`]: () => Response.json({ value: [] }),
+    [`https://dev.azure.com/contoso/My%20Project/_apis/policy/evaluations?artifactId=${encodeURIComponent(`vstfs:///CodeReview/CodeReviewId/${projectId}/7`)}&api-version=7.1-preview.1`]:
+      () => Response.json({ value: [] }),
+    [`${base}/pullRequests/7/commits?$top=100&api-version=7.1`]: page("t 1", commits(1000, 100)),
+    [`${base}/pullRequests/7/commits?$top=100&continuationToken=t%201&api-version=7.1`]: page("t2", commits(900, 100)),
+    [`${base}/pullRequests/7/commits?$top=100&continuationToken=t2&api-version=7.1`]: page("t3", commits(800, 100)),
+    [`${base}/pullRequests/7/commits?$top=100&continuationToken=t3&api-version=7.1`]: page(null, commits(700, 100)),
+    [`${base}/pullRequests/7/iterations?api-version=7.1`]: () => Response.json({ value: [] }),
+    [`${base}/pullRequests/7/threads?api-version=7.1`]: () => Response.json({ value: [] }),
+  });
+  const review = await readAzurePullRequestReview(api, 7);
+  assert.equal(review.commits.length, 250);
+  assert.deepEqual(review.omitted, { commits: 150 });
+  assert.equal(review.commits.at(-1)!.message, "Commit 1000", "the newest last, as on GitHub");
 });
