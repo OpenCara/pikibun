@@ -105,7 +105,9 @@ function BuildCacheEditor(props: {
   const writers = signal<readonly string[]>(untracked(() => props.cache?.writerGroups ?? []));
   const touched = signal(false);
   const action = createAction();
-  const missing = () => writers().filter(id => !props.groups.some(group => group.id === id));
+  const deleted = untracked(() => (props.cache?.writerGroups ?? []).filter(id => !props.groups.some(group => group.id === id)));
+  const tooMany = () => writers().length > props.maxGroups;
+  const widened = () => Boolean(props.cache?.writerGroups.length) && writers().length === 0;
   const problems = () => buildCacheProblems({ name: name().trim(), env: env().trim() }, props.caches, props.cache?.name ?? null);
   const invalid = () => Boolean(problems().name || problems().env) || writers().length > props.maxGroups;
   const toggle = (id: string, on: boolean) => writers.update(current => (on ? [...current.filter(item => item !== id), id] : current.filter(item => item !== id)));
@@ -134,17 +136,18 @@ function BuildCacheEditor(props: {
         <TextField testID="build-cache-env" monospace autoCapitalize="characters" autoCorrect={false} autoFocus={Boolean(props.cache)} maxLength={64} value={env()}
           onChange={value => env.set(value)} placeholder="CCACHE_DIR" />
       </Field>
-      <Field label="Writer groups" hint={`Optional, at most ${props.maxGroups}. With none, the role rule alone decides who shares the copy; with some, only the workspace's owner and those groups' people who pass it do.`}>
+      <Field label="Writer groups" hint={`Optional, at most ${props.maxGroups}. With none, the role rule alone decides who shares the copy; with some, only the workspace's owner and those groups' people who pass it do.`}
+        error={tooMany() ? `Choose at most ${props.maxGroups} writer groups.` : widened() ? "With no writer groups left, every admin and collaborator who can write files shares this cache's copy." : undefined}>
         <View style={{ gap: 6 }}>
           <Each of={props.groups} key={group => group.id}>
             {group => <Checkbox testID={`build-cache-group-${group().id}`} label={group().name} checked={writers().includes(group().id)} disabled={action.busy()}
               onChange={on => toggle(group().id, on)} />}
           </Each>
-          <Each of={missing()} key={id => id}>
+          <Each of={deleted} key={id => id}>
             {id => <Checkbox testID={`build-cache-group-${id()}`} label={`${deletedGroup} (${id()})`} hint="Still narrows the copy to the workspace's owner until you untick it"
-              checked disabled={action.busy()} onChange={on => toggle(id(), on)} />}
+              checked={writers().includes(id())} disabled={action.busy()} onChange={on => toggle(id(), on)} />}
           </Each>
-          <If when={props.groups.length === 0 && missing().length === 0}><Small>This workspace has no tool groups of its own; add them under Tool groups.</Small></If>
+          <If when={props.groups.length === 0 && deleted.length === 0}><Small>This workspace has no tool groups of its own; add them under Tool groups.</Small></If>
         </View>
       </Field>
       <Feedback error={action.error()} />

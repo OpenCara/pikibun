@@ -513,6 +513,12 @@ describe("settings", () => {
     expect(app.shows("id:build-cache-name")).toBe(false);
     await app.waitFor("id:build-cache-group-gone");
     await app.press("id:build-cache-group-gone");
+    await app.waitFor("text:With no writer groups left, every admin and collaborator who can write files shares this cache's copy.");
+    expect(app.shows("id:build-cache-group-gone")).toBe(true);
+    await app.press("id:build-cache-group-gone");
+    await app.waitUntil(() => !app.texts().join(" ").includes("With no writer groups left"));
+    await app.press("id:build-cache-group-gone");
+    await app.waitFor("text:With no writer groups left, every admin and collaborator who can write files shares this cache's copy.");
     await app.press("id:build-cache-save");
     await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/build-caches/ccache`) !== undefined);
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/build-caches/ccache`)).toEqual({ env: "CCACHE_DIR", writerGroups: [] });

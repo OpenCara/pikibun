@@ -106,7 +106,11 @@ export function registerBuildCaches(app: Hono<AppEnv>): void {
       if (error instanceof Error && /UNIQUE|unique|duplicate/.test(error.message)) fail(409, 'env_taken', `Another build cache already uses ${cache.env}.`);
       throw error;
     });
-    if (!saved) fail(409, 'build_cache_limit', `A workspace has at most ${buildCacheLimits.caches} build caches.`);
+    if (!saved) {
+      const admin = await c.env.DB.query<{ found: number }>(`SELECT 1 AS found WHERE ${workspaceAdminSQL}`).bind(workspaceId, actor).first();
+      if (!admin) fail(403, 'forbidden', 'Workspace administrator access is required.');
+      fail(409, 'build_cache_limit', `A workspace has at most ${buildCacheLimits.caches} build caches.`);
+    }
     await auditStatement(c.env, actor, existing ? 'workspace.build_cache.updated' : 'workspace.build_cache.created', workspaceId, null,
       { name, env: cache.env, writerGroups: cache.writerGroups }).run();
     return c.json({ caches: await workspaceBuildCaches(c.env.DB, workspaceId), admin: true,
