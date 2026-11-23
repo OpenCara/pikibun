@@ -4,7 +4,7 @@ import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { pageAvailable, routeHash } from "../lib/page";
 import { createAction, type Action } from "../lib/resource";
-import { confirmArchive, unarchiveNotice } from "../lib/session-actions";
+import { archiveRequest, confirmArchive, openDescendants, unarchiveNotice } from "../lib/session-actions";
 import { Field, TextField } from "../form";
 import { Button, Feedback, FormSheet, type MenuAction, type SwipeAction } from "../ui";
 
@@ -32,7 +32,10 @@ export function createSessionMenu(): SessionMenu {
   });
 
   async function archive(current: SessionRecord) {
-    if (await confirmArchive()) await action.run(async () => { await session().api(`${base(current)}/archive`, { method: "POST" }); changed(); }, "Session archived");
+    const choice = await confirmArchive(openDescendants(untracked(data.sessions), current.id).length);
+    if (!choice) return;
+    let notice = "Session archived";
+    await action.run(async () => { notice = await archiveRequest(`${base(current)}/archive`, choice); changed(); }, () => notice);
   }
   async function rename(title: string) {
     const current = untracked(renaming);

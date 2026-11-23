@@ -11,6 +11,7 @@ import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.j
 import { runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
 import { runAutomaticPacking } from '../apps/server/src/automatic-packing.js';
 import { sideAskPreview } from '../apps/server/src/side-asks.js';
+import { archiveDescendantsLimit } from '../apps/server/src/sessions.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase, type FakeHub } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommandGrant, HostModelSettings } from '../packages/shared/src/connector.js';
 import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, PullRequestReview, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
@@ -1807,6 +1808,62 @@ test('owners rename and archive sessions; archived sessions are read-only and un
   const actions = (f.sqlite.prepare('SELECT action FROM audit WHERE session_id = ? ORDER BY created_at, rowid').all(s.session.id) as { action: string }[]).map(row => row.action);
   for (const action of ['session.renamed', 'session.archived', 'session.unarchived']) assert.ok(actions.includes(action), action);
   assert.equal(s.hub.requests.length, 1, 'Renaming and archiving must not contact the host');
+});
+
+test('an archive takes the sessions a session started along when asked, as far as the archiver manages them, and leaves them open otherwise', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const create = async () => (await json<{ session: SessionRecord }>(await s.owner.request('POST', '/api/sessions', s.input), 201)).session;
+  const [child, grandchild, done, other] = [await create(), await create(), await create(), await create()];
+  const parentOf = f.sqlite.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?');
+  parentOf.run(s.session.id, child.id); parentOf.run(child.id, grandchild.id); parentOf.run(s.session.id, done.id);
+  f.sqlite.prepare("UPDATE sessions SET status = 'archived', archived_status = 'ready' WHERE id = ?").run(done.id);
+  const status = (id: string) => f.sqlite.prepare('SELECT status FROM sessions WHERE id = ?').get(id)!.status;
+  const path = `/api/sessions/${s.session.id}`;
+
+  for (const body of [{ children: 'yes' }, { children: true, more: 1 }]) assert.equal((await s.owner.request('POST', `${path}/archive`, body)).status, 400);
+  assert.equal(status(s.session.id), 'ready');
+
+  const alone = await json<{ session: SessionRecord; children?: unknown }>(await s.owner.request('POST', `${path}/archive`, { children: false }));
+  assert.equal(alone.session.status, 'archived');
+  assert.equal(alone.children, undefined);
+  assert.deepEqual([child.id, grandchild.id, other.id].map(status), ['ready', 'ready', 'ready']);
+  await json(await s.owner.request('POST', `${path}/unarchive`));
+
+  const theirs = { id: 'member-session' };
+  f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility)
+    SELECT ?, workspace_id, ?, agent_version_id, 'Theirs', 'ready', created_at, visibility FROM sessions WHERE id = ?`).run(theirs.id, s.member.user.id, s.session.id);
+  parentOf.run(theirs.id, child.id);
+  const refused = await json<{ children: { archived: string[]; skipped: number } }>(await s.member.request('POST', `/api/sessions/${theirs.id}/archive`, { children: true }));
+  assert.deepEqual(refused.children, { archived: [], skipped: 2 });
+  assert.deepEqual([theirs.id, child.id, grandchild.id].map(status), ['archived', 'ready', 'ready']);
+  parentOf.run(s.session.id, child.id);
+
+  const all = await json<{ session: SessionRecord; children: { archived: string[]; skipped: number } }>(await s.owner.request('POST', `${path}/archive`, { children: true }));
+  assert.equal(all.session.status, 'archived');
+  assert.deepEqual(all.children, { archived: [child.id, grandchild.id], skipped: 0 });
+  assert.deepEqual([child.id, grandchild.id, other.id].map(status), ['archived', 'archived', 'ready']);
+  const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.archived' AND session_id = ?").get(grandchild.id) as { detail_json: string };
+  assert.equal(JSON.parse(audit.detail_json).withParent, s.session.id);
+
+  f.sqlite.prepare("UPDATE sessions SET status = 'ready', archived_status = NULL WHERE id IN (?, ?)").run(child.id, grandchild.id);
+  const retried = await json<{ session: SessionRecord; children: { archived: string[]; skipped: number } }>(await s.owner.request('POST', `${path}/archive`, { children: true }));
+  assert.deepEqual([retried.session.status, retried.children], ['archived', { archived: [child.id, grandchild.id], skipped: 0 }], 'Archive all goes on under a parent already archived');
+  await denied(await s.owner.request('POST', `${path}/archive`), 409, 'session_archived');
+  await denied(await s.member.request('POST', `${path}/archive`, { children: true }), 403, 'owner_required');
+});
+
+test('archiving the sessions a session started stops at its limit and says so, and Archive all again goes on from there', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const insert = f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,parent_session_id)
+    SELECT ?, workspace_id, owner_id, agent_version_id, 'Child', 'ready', created_at, visibility, ? FROM sessions WHERE id = ?`);
+  const ids = Array.from({ length: archiveDescendantsLimit + 1 }, (_, index) => `child-${String(index).padStart(3, '0')}`);
+  for (const id of ids) insert.run(id, s.session.id, s.session.id);
+  const path = `/api/sessions/${s.session.id}/archive`;
+  type Answer = { children: { archived: string[]; skipped: number; truncated?: boolean } };
+  const capped = await json<Answer>(await s.owner.request('POST', path, { children: true }));
+  assert.deepEqual(capped.children, { archived: ids.slice(0, archiveDescendantsLimit), skipped: 0, truncated: true });
+  const rest = await json<Answer>(await s.owner.request('POST', path, { children: true }));
+  assert.deepEqual(rest.children, { archived: ids.slice(archiveDescendantsLimit), skipped: 0 });
 });
 
 test('owners pack an archived session\'s files on its host, and unarchiving unpacks them first, as its owner, whoever of those who manage it unarchives it', async t => {

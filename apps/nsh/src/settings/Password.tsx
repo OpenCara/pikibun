@@ -10,7 +10,7 @@ import { SectionPage, SettingsActions, type SectionProps } from "./parts";
 function createGuardedAction() {
   const action = createAction();
   const signInAgain = signal(false);
-  const run = (work: () => Promise<void>, success = "") => {
+  const run = (work: () => Promise<void>, success: string | (() => string) = "") => {
     signInAgain.set(false);
     return action.run(async () => {
       try { await work(); } catch (reason) { signInAgain.set(needsRecentSignIn(reason)); throw reason; }

@@ -374,15 +374,19 @@ export function OptionSheet<T>(props: { open: boolean; title: string; options: O
 }
 
 export async function confirm(options: { title: string; message: string; confirmLabel: string; destructive?: boolean }): Promise<boolean> {
+  return await choose({ title: options.title, message: options.message, choices: [{ id: "confirm", label: options.confirmLabel, destructive: options.destructive }] }) === "confirm";
+}
+
+export async function choose<T extends string>(options: { title: string; message: string; choices: { id: T; label: string; destructive?: boolean }[] }): Promise<T | null> {
   const result = await AlertDialog.show({
     title: options.title,
     description: options.message,
     actions: [
       { id: "cancel", label: "Cancel", role: "cancel" },
-      { id: "confirm", label: options.confirmLabel, role: options.destructive ? "destructive" : "default" },
+      ...options.choices.map(choice => ({ id: choice.id, label: choice.label, role: choice.destructive ? "destructive" as const : "default" as const })),
     ],
   });
-  return result.action === "confirm";
+  return options.choices.find(choice => choice.id === result.action)?.id ?? null;
 }
 
 export function Value(props: { children?: JSX.Element; testID?: string; monospace?: boolean }) {

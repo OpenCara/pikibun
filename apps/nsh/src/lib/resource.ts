@@ -79,7 +79,7 @@ export interface Action {
   busy: Accessor<boolean>;
   error: Accessor<string>;
   notice: Accessor<string>;
-  run: (task: () => Promise<void>, notice?: string) => Promise<boolean>;
+  run: (task: () => Promise<void>, notice?: string | (() => string)) => Promise<boolean>;
   clear: () => void;
 }
 
@@ -98,7 +98,7 @@ export function createAction(): Action {
       notice.set("");
       try {
         await task();
-        notice.set(success);
+        notice.set(typeof success === "function" ? success() : success);
         return true;
       } catch (reason) {
         error.set(errorMessage(reason));

@@ -62,6 +62,33 @@ describe("a session's right-click menu", () => {
     await app.waitFor("text:Session archived");
   });
 
+  test("asks whether to archive the open sessions a session started too, and archives them only when chosen", async () => {
+    const child = { ...sessionRecord, id: "s3", title: "Side task", parentSessionId: "s1" };
+    const grandchild = { ...sessionRecord, id: "s4", title: "Deeper task", parentSessionId: "s3" };
+    const done = { ...sessionRecord, id: "s7", title: "Done task", parentSessionId: "s1", status: "archived" };
+    const app = await desktop({
+      [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [sessionRecord, child, grandchild, done] } },
+      [`POST ${ORIGIN}/api/sessions/s1/archive`]: { body: { session: sessionRecord, children: { archived: ["s3", "s4"], skipped: 0 } } },
+    });
+    await app.waitFor("id:session-row-s1");
+    const titles: string[] = [];
+    app.onDialog(dialog => { titles.push(dialog.title ?? ""); return "Archive this one only"; });
+    await app.rightClick("id:session-row-s1");
+    await app.press("id:menu-archive");
+    await app.waitUntil(() => asked(app, "POST", `${ORIGIN}/api/sessions/s1/archive`));
+    expect(titles).toEqual(["Archive session?"]);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/archive`)).toBe(undefined);
+    await app.waitFor("text:Session archived");
+
+    app.onDialog(() => "Archive all");
+    await app.rightClick("id:session-row-s1");
+    await app.press("id:menu-archive");
+    await app.waitUntil(() => app.requests().filter(item => item.method === "POST" && item.url === `${ORIGIN}/api/sessions/s1/archive`).length === 2);
+    const last = app.requests().filter(item => item.method === "POST" && item.url === `${ORIGIN}/api/sessions/s1/archive`).at(-1)!;
+    expect(JSON.parse(last.body!)).toEqual({ children: true });
+    await app.waitFor("text:Session archived with 2 sessions it started");
+  });
+
   test("unarchives an archived session", async () => {
     const app = await desktop({ [`POST ${ORIGIN}/api/sessions/s2/unarchive`]: { body: { ok: true } } });
     await app.press("id:workspace-options-w1");
