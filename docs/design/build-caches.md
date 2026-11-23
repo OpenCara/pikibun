@@ -2,7 +2,8 @@
 
 Status: phase 1 built (#472): the workspace's caches, the host setting, the role rule and the connector endpoint on the
 Pikibun server (`packages/shared/src/build-caches.ts`, `apps/server/src/build-caches.ts`). Hosts mount nothing until
-phase 2; the phases at the end say what follows.
+phase 2; the phases at the end say what follows. Phase 3's settings are built in the client (the workspace's **Build caches**
+section and the host's **Build caches** setting); which copy each member gets isn't shown yet.
 
 Sessions on a host share Git mirrors and Git LFS files through the [repository cache](repository-cache.md), but
 nothing they build. Every session compiles, encodes and bakes from scratch, and a restored or moved session does it
