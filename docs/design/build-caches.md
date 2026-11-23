@@ -1,6 +1,8 @@
 # Design: host build caches
 
-Status: proposed (#472). Nothing here is built yet; the phases at the end say in what order it would be.
+Status: phase 1 built (#472): the workspace's caches, the host setting, the role rule and the connector endpoint on the
+Pikibun server (`packages/shared/src/build-caches.ts`, `apps/server/src/build-caches.ts`). Hosts mount nothing until
+phase 2; the phases at the end say what follows.
 
 Sessions on a host share Git mirrors and Git LFS files through the [repository cache](repository-cache.md), but
 nothing they build. Every session compiles, encodes and bakes from scratch, and a restored or moved session does it
@@ -83,12 +85,12 @@ and the host learns only the answer.
 ## Delivering it to the host
 
 `POST /api/connectors/self/build-caches` with `{ sessionId }`, after `requireCallbackScope` as for cache warming, answers
-`{ caches: [{ name, env, scope: "shared" | "owner" }] }` from the session's workspace's caches and its owner's role and
-tool group. The connector asks when a session opens and again before a command once its last answer is 30 seconds old
+`{ caches: [{ name, env, scope: "shared" | "owner" }] }` from the session's workspace's caches, its owner's role and
+tool group, and the asking host's setting: `off` answers no caches, and `owner` turns every `shared` into `owner`, so the
+host needs no rule of its own (`sessionBuildCachesFor`). The connector asks when a session opens and again before a command once its last answer is 30 seconds old
 (as it keeps the host's configuration), so a role or group change reaches the next command within half a minute, and a
 command already running keeps what it started with. A failed request keeps the last answer for at most 5 minutes, then
-mounts nothing: a cache is a speed-up, and a stale grant is not. A host in `owner` mode turns every `shared` into
-`owner`. Connectors advertise `buildCaches: true`; the Pikibun server sends the host setting only to those, and
+mounts nothing: a cache is a speed-up, and a stale grant is not. Connectors advertise `buildCaches: true`; the Pikibun server sends the host setting only to those, and
 **Settings → Hosts** says a host must update to offer it.
 
 ## Mounting
