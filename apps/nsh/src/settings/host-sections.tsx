@@ -3,6 +3,7 @@ import type { ConnectorInfo, HostCommandGrant, LocalModelSummary } from "../../.
 import {
   defaultHostConfig, hostConfigLimits, ownerOnlyHostConfig, type CompactionTokens, type HostCompaction, type HostConfig, type RepositoryCacheMode,
 } from "../../../../packages/shared/src/host-config";
+import { buildCacheLimits, buildCacheModes, type BuildCacheMode } from "../../../../packages/shared/src/build-caches";
 import type { HostCommandLevel } from "../../../../packages/shared/src/types";
 import { memberPerson, segment, usernameWithId, type WorkspaceMember } from "../shared";
 import { useAppData } from "../lib/app-data";
@@ -32,10 +33,25 @@ const cacheHints: Record<RepositoryCacheMode, string> = {
   owner: "A separate mirror of each repository for each session owner",
 };
 
+const buildCacheLabels: Record<BuildCacheMode, string> = { off: "Off", workspace: "By role", owner: "Per owner" };
+const buildCacheHints: Record<BuildCacheMode, string> = {
+  off: "No session gets a workspace's build caches",
+  workspace: "A workspace's owner, admins and collaborators who can write files share one copy of each of its build caches; members get their own",
+  owner: "Each session owner gets their own copy of each build cache; nothing is shared between people",
+};
+
+function gibOf(value: string): number | undefined {
+  const digits = value.trim();
+  if (!/^\d{1,5}$/.test(digits)) return undefined;
+  const parsed = Number(digits);
+  return parsed >= buildCacheLimits.gib.min && parsed <= buildCacheLimits.gib.max ? parsed : undefined;
+}
+
 const configInfo = (
   <View style={{ gap: 8 }}>
-    <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache, runs their sessions without the sandbox or trusts a fake-IP proxy on it.</Note>
+    <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache or build caches, runs their sessions without the sandbox or trusts a fake-IP proxy on it.</Note>
     <Note>Running sessions pick up a change within a minute. A repository cache change applies when the host's connector next connects.</Note>
+    <Note>Build caches are directories this host keeps for each workspace's declared caches (Settings → Workspaces → Build caches), which commands find through an environment variable, so tools such as ccache, Gradle or Bazel reuse earlier builds. Past the size limit, the least recently changed files go first. They never enter backups, packs or moves.</Note>
     <Note>The service lifetime bounds a session service: a server a session keeps running after the call that started it, such as the one the tunnel tool puts online. It stops then, and goes offline.</Note>
     <Note>A longer time limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB files, 256 open files) so builds fit. Without provisioned resource limits on the host (connect --resources), a command can use the whole machine for that long.</Note>
   </View>
@@ -54,15 +70,30 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
       if (replaced.length) config.update(current => ({ ...current, ...Object.fromEntries(replaced.map(key => [key, next[key]])) }));
     });
   });
+  const gib = signal(String(untracked(() => config().buildCacheGiB)));
+  const configuredGiB = computed(() => config().buildCacheGiB);
+  effect(() => {
+    const value = configuredGiB();
+    untracked(() => { if (gibOf(gib()) !== value) gib.set(String(value)); });
+  });
+  const gibInvalid = () => config().buildCaches !== "off" && gibOf(gib()) === undefined;
+  const setGiB = (value: string) => {
+    gib.set(value);
+    const parsed = gibOf(value);
+    if (parsed !== undefined) set({ buildCacheGiB: parsed });
+  };
   const action = createAction();
   const changes = () => settings.filter(key => config()[key] !== saved()[key] && (owner() || !ownerOnlyHostConfig.includes(key)));
   const editable = () => !props.connector.revokedAt && !action.busy();
   const capabilities = () => props.connector.capabilities;
   const set = (change: Partial<HostConfig>) => config.update(current => ({ ...current, ...change }));
   async function save() {
+    if (gibInvalid()) return;
     const next = config();
     const before = saved();
     const name = props.connector.name;
+    if (next.buildCaches === "workspace" && before.buildCaches !== "workspace" && !await confirm({ title: "Share build caches between people on this host?", confirmLabel: "Share caches",
+      message: `Sessions on ${name} will get each workspace's build caches. In a workspace, the sessions of its owner, its admins and its collaborators who can write files share one copy of each cache: what one of them builds, the others' tools reuse and run without checking it. They can already change each other's sessions, so this trusts no one more. Members' sessions never write or read that copy: they get their own. A cache's writer groups can narrow who shares it further.` })) return;
     if (next.gitCredentials && !before.gitCredentials && !await confirm({ title: "Use this host's Git credentials?", confirmLabel: "Turn on", destructive: true,
       message: `Pushes in your own sessions on ${name} will use the credentials Git on that machine would use (its credential helpers), wherever a workspace's push access chooses the host's Git credentials. Other members' sessions never use them.` })) return;
     if (next.repositoryCache !== "off" && before.repositoryCache === "off" && !await confirm({ title: "Keep a repository cache on this host?", confirmLabel: "Keep a cache",
@@ -107,6 +138,20 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
           ? <Segmented small value={config().repositoryCache} onChange={repositoryCache => set({ repositoryCache })}
             options={(["off", "host", "owner"] as const).map(value => ({ value, label: cacheLabels[value] }))} />
           : <Badge tone={saved().repositoryCache === "off" ? "neutral" : "success"}>{cacheLabels[saved().repositoryCache]}</Badge>} />
+      <Row title="Build caches" testID="host-build-caches" hint={!owner() ? "Only the host's owner changes this"
+        : !capabilities().buildCaches ? "This host's connector predates this setting: update it (npx pikibun@latest connect) for it to apply. Only sandboxed Linux and macOS hosts offer it"
+        : `${buildCacheHints[config().buildCaches]}. Applies to sessions' next commands`}
+        trailing={owner() && editable() && (capabilities().buildCaches || config().buildCaches !== "off")
+          ? <Segmented small value={config().buildCaches} onChange={buildCaches => set({ buildCaches })}
+            options={buildCacheModes.map(value => ({ value, label: buildCacheLabels[value] }))} />
+          : <Badge tone={saved().buildCaches === "off" ? "neutral" : saved().buildCaches === "workspace" ? "warning" : "success"}>{buildCacheLabels[saved().buildCaches]}</Badge>} />
+      <If when={(owner() ? config() : saved()).buildCaches !== "off"}>
+        <Row title="Build cache size limit" hint={owner() ? `GiB for all of this host's build caches, ${buildCacheLimits.gib.min} to ${buildCacheLimits.gib.max}. A connector started with --build-caches uses that filesystem's capacity instead` : "Only the host's owner changes this"}
+          trailing={owner()
+            ? <View style={{ width: 96 }}><TextField compact keyboardType="number-pad" testID="host-build-cache-gib" accessibilityLabel="Build cache size limit in GiB" value={gib()}
+              disabled={!editable()} onChange={setGiB} /></View>
+            : <Badge>{`${saved().buildCacheGiB} GiB`}</Badge>} />
+      </If>
       <Row title="Sessions on the host" hint={capabilities().unsandboxed ? "This host runs every session without the sandbox"
         : !owner() ? "Only the host's owner changes this"
         : capabilities().ownerHostSessions ? "You may always start sessions that run directly on this machine, without the sandbox, as its user. Members you grant it under Host command access may too while this is on. Turning it off stops their commands within half a minute"
@@ -125,13 +170,14 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
       <If when={!capabilities().hostConfig}>
         <Row title="Update the host's connector" hint="This host's connector predates configuration in Pikibun and keeps its connect options until it is updated (npx pikibun@latest connect). What you save here applies then." />
       </If>
-      <If when={changes().length > 0 || action.error() || action.notice()}>
+      <If when={changes().length > 0 || gibInvalid() || action.error() || action.notice()}>
         <CardBody>
           <Feedback error={action.error()} notice={action.notice()} />
+          <If when={gibInvalid()}><Small tone="danger">{`The build caches' size limit is a whole number of GiB from ${buildCacheLimits.gib.min} to ${buildCacheLimits.gib.max}.`}</Small></If>
           <If when={changes().length > 0}>
             <View style={{ flexDirection: "row", gap: 8 }}>
-              <Button small variant="primary" label="Save configuration" disabled={action.busy()} onPress={() => void save()} testID="host-config-save" />
-              <Button small variant="ghost" label="Discard" disabled={action.busy()} onPress={() => config.set(saved())} />
+              <Button small variant="primary" label="Save configuration" disabled={action.busy() || gibInvalid()} onPress={() => void save()} testID="host-config-save" />
+              <Button small variant="ghost" label="Discard" disabled={action.busy()} onPress={() => { config.set(saved()); gib.set(String(saved().buildCacheGiB)); }} />
             </View>
           </If>
         </CardBody>

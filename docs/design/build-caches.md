@@ -1,10 +1,11 @@
 # Design: host build caches
 
-Status: phases 1 and 2 built (#472). Phase 1: the workspace's caches, the host setting, the role rule and the connector
-endpoint on the Pikibun server (`packages/shared/src/build-caches.ts`, `apps/server/src/build-caches.ts`). Phase 2: the
-Linux and macOS connectors (`apps/runner/src/build-caches.ts`, `build-cache-janitor.ts`, the mounts in `sandbox.ts`,
-`helper-workspace.ts` and `seatbelt.ts`, `--build-caches` and its check in `resources.ts`, `pikibun cache`). The phases
-at the end say what follows.
+Status: phases 1, 2 and 3 built (#472). Phase 1: the workspace's caches, the host setting, the role rule and the
+connector endpoint on the Pikibun server (`packages/shared/src/build-caches.ts`, `apps/server/src/build-caches.ts`).
+Phase 2: the Linux and macOS connectors (`apps/runner/src/build-caches.ts`, `build-cache-janitor.ts`, the mounts in
+`sandbox.ts`, `helper-workspace.ts` and `seatbelt.ts`, `--build-caches` and its check in `resources.ts`, `pikibun cache`).
+Phase 3: the client's settings (the workspace's **Build caches** section and the host's **Build caches** setting); which
+copy each member gets isn't shown yet. The phases at the end say what follows.
 
 Sessions on a host share Git mirrors and Git LFS files through the [repository cache](repository-cache.md), but
 nothing they build. Every session compiles, encodes and bakes from scratch, and a restored or moved session does it
