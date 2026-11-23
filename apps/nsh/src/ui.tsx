@@ -103,18 +103,34 @@ export function Badge(props: { children: string; tone?: Tone; dot?: boolean; ico
 
 const toneIcons: Record<Tone, IconName> = { neutral: "info", info: "info", running: "info", success: "check", warning: "alert", danger: "alert" };
 
-export function Banner(props: { tone?: Tone; title?: string; children?: JSX.Element; actions?: JSX.Element; testID?: string; icon?: IconName }) {
+export function Banner(props: {
+  tone?: Tone; title?: string; children?: JSX.Element; actions?: JSX.Element; testID?: string; icon?: IconName; collapsible?: boolean;
+}) {
   const tone = () => palette().tones[props.tone ?? "neutral"];
   const neutral = () => (props.tone ?? "neutral") === "neutral";
+  const expanded = signal(false);
+  const compact = () => Boolean(props.collapsible && props.title && props.children && phoneWidth());
+  const folded = () => compact() && !expanded();
   return (
-    <View testID={props.testID} role="alert" style={{ flexDirection: "row", gap: 12, borderRadius: radius.medium, borderWidth: 1, paddingVertical: 12, paddingHorizontal: 16,
-      borderColor: tone().border }}>
-      <Icon name={props.icon ?? toneIcons[props.tone ?? "neutral"]} size={16} color={neutral() ? palette().muted : tone().text} style={{ marginTop: 2 }} />
-      <View style={{ flex: 1, gap: 2 }}>
+    <View testID={props.testID} role="alert" style={{ flexDirection: "row", gap: compact() ? 10 : 12, borderRadius: radius.medium, borderWidth: 1,
+      paddingVertical: compact() ? 6 : 12, paddingHorizontal: compact() ? 12 : 16, borderColor: tone().border }}>
+      <Icon name={props.icon ?? toneIcons[props.tone ?? "neutral"]} size={16} color={neutral() ? palette().muted : tone().text}
+        style={{ marginTop: compact() ? 6 : 2 }} />
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <If when={props.title}>
-          <Text style={{ fontSize: text.body, lineHeight: 21, fontWeight: weight.medium, color: neutral() ? palette().text : tone().text }}>{props.title}</Text>
+          <If when={compact()}
+            else={<Text style={{ fontSize: text.body, lineHeight: 21, fontWeight: weight.medium, color: neutral() ? palette().text : tone().text }}>{props.title}</Text>}>
+            <BaseButton testID={props.testID ? `${props.testID}-toggle` : undefined} role="button" accessibilityLabel={`${props.title}: ${expanded() ? "hide" : "show"} details`}
+              selected={expanded()} onPress={() => expanded.update(open => !open)} hitSlop={4}
+              style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: control.xsmall }} activeStyle={{ opacity: 0.7 }}>
+              <Text style={{ flex: 1, minWidth: 0, numberOfLines: expanded() ? undefined : 1, fontSize: text.small, lineHeight: 19, fontWeight: weight.medium,
+                color: neutral() ? palette().text : tone().text }}>{props.title}</Text>
+              <Text style={{ fontSize: text.caption, color: palette().muted }}>{expanded() ? "Less" : "Details"}</Text>
+              <Icon name={expanded() ? "chevron-down" : "chevron-right"} size={12} color={palette().muted} />
+            </BaseButton>
+          </If>
         </If>
-        <If when={props.children}>
+        <If when={props.children && !folded()}>
           <Text style={{ fontSize: text.small, lineHeight: 19, color: palette().muted }}>{props.children}</Text>
         </If>
         <If when={props.actions}>

@@ -305,7 +305,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         </If>
         <If when={runOnHost() ? host() : undefined}>
           {current => (
-            <Banner testID="new-on-host" tone="warning" title={foreign() ? `Runs on ${current().ownerName}'s host, without the sandbox` : "Runs on your host, without the sandbox"}>
+            <Banner testID="new-on-host" collapsible tone="warning" title={foreign() ? `Runs on ${current().ownerName}'s host, without the sandbox` : "Runs on your host, without the sandbox"}>
               {`${foreign() ? `${current().ownerName} granted you sessions on ${current().name}. ` : ""}Its commands run on ${current().name} as its user, with its files, credentials, network and GPU, and no resource limits; the workspace's network access doesn't apply. Approve them as you would commands you run yourself: ${foreign()
                 ? `people you share the session with can decide them only if they also hold host commands on ${current().name}.`
                 : "people you share the session with can't decide them unless you granted them host commands."}`}
