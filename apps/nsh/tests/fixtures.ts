@@ -96,6 +96,7 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/workspaces/w1/approvals`]: { body: { settings: { requesterAutoApprove: false } } },
     [`GET ${ORIGIN}/api/workspaces/w1/child-sessions`]: { body: { settings: { childModels: true } } },
     [`GET ${ORIGIN}/api/workspaces/w1/cache-warming`]: { body: { settings: { mode: "idle" } } },
+    [`GET ${ORIGIN}/api/workspaces/w1/build-caches`]: { body: { caches: [], admin: true, limits: { caches: 16, writerGroups: 16 } } },
     [`GET ${ORIGIN}/api/workspaces/w1/github-reach`]: { body: { settings: { anyRepository: false } } },
     [`GET ${ORIGIN}/api/workspaces/w1/attachments`]: { body: { settings: { maxFileBytes: 10485760 } } },
     [`GET ${ORIGIN}/api/workspaces/w1/packing`]: { body: { settings: { automatic: true } } },

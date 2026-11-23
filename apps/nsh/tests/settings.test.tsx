@@ -1,6 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { notificationRoute } from "../src/lib/notifications";
-import { host, ORIGIN, server, signedIn, user, workspace } from "./fixtures";
+import { host, ORIGIN, server, signedIn, toolGroups, user, workspace } from "./fixtures";
 
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
@@ -285,7 +285,7 @@ describe("settings", () => {
 
   test("a host without Chromium offers its owner a chat on it, in their private workspace, that installs one", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20 };
     const browser = { source: "piki:browser", dev: false, description: "A headless Chromium", modules: [] };
     const app = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },
@@ -417,6 +417,132 @@ describe("settings", () => {
     await app.press("id:tool-group-save");
     await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/tool-groups`) !== undefined);
     expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/tool-groups`)).toEqual({ name: "Releasers", tools: ["read", "git", "git_push", "github_merge"] });
+  });
+
+  test("Hosts lets the owner share build caches by role once confirmed, with a size limit in GiB", async () => {
+    const app = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0",
+        capabilities: { ...host.capabilities, hostConfig: true, buildCaches: true } }] } },
+      [`PATCH ${ORIGIN}/api/connectors/c1/config`]: { body: { ok: true } },
+    });
+    await app.press("id:host-row-c1");
+    await app.waitFor("id:host-build-caches");
+    expect(app.shows("id:host-build-cache-gib")).toBe(false);
+    await app.press("text:By role");
+    await app.waitFor("id:host-build-cache-gib");
+    await app.clear("id:host-build-cache-gib");
+    await app.type("id:host-build-cache-gib", "0");
+    await app.waitFor("text:The build caches' size limit is a whole number of GiB from 1 to 10000.");
+    await app.clear("id:host-build-cache-gib");
+    await app.type("id:host-build-cache-gib", "50");
+    await app.waitUntil(() => !app.shows("text:The build caches' size limit is a whole number of GiB from 1 to 10000."));
+    const asked: string[] = [];
+    app.onDialog(dialog => { asked.push(dialog.title ?? ""); return "Cancel"; });
+    await app.press("id:host-config-save");
+    await app.waitUntil(() => asked.length === 1);
+    expect(asked).toEqual(["Share build caches between people on this host?"]);
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`)).toBeUndefined();
+    app.onDialog(dialog => (dialog.title === "Share build caches between people on this host?" ? "Share caches" : null));
+    await app.press("id:host-config-save");
+    await app.waitUntil(() => bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`) !== undefined);
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`)).toEqual({ buildCaches: "workspace", buildCacheGiB: 50 });
+  });
+
+  test("Hosts says a connector predates build caches, and shows admins the owner's choice read-only", async () => {
+    const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64 };
+    const older = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0", capabilities: { ...host.capabilities, hostConfig: true } }] } },
+    });
+    await older.press("id:host-row-c1");
+    await older.waitFor("id:host-build-caches");
+    expect(older.texts().join(" ")).toContain("Only sandboxed Linux and macOS hosts offer it");
+    expect(older.shows("text:By role")).toBe(false);
+
+    const admin = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, ownerId: "u9", ownerName: "grace", role: "admin", connectedWorkspaceIds: ["w1"], version: "0.40.0", config,
+        capabilities: { ...host.capabilities, hostConfig: true, buildCaches: true } }] } },
+    });
+    await admin.press("id:host-row-c1");
+    await admin.waitFor("id:host-build-caches");
+    expect(admin.shows("text:By role")).toBe(false);
+    expect(admin.shows("id:host-build-cache-gib")).toBe(false);
+    expect(admin.texts().join(" ")).toContain("64 GiB");
+  });
+
+  test("Workspaces lists build caches, names a deleted writer group, and adds and edits caches with the variable checked", async () => {
+    const stamp = "2026-11-20T10:00:00.000Z";
+    const ccache = { name: "ccache", env: "CCACHE_DIR", writerGroups: ["gone"], createdAt: stamp, updatedAt: stamp };
+    const list = { caches: [ccache], admin: true, limits: { caches: 16, writerGroups: 16 } };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/build-caches`]: { body: list },
+      [`GET ${ORIGIN}/api/workspaces/w1/tool-groups`]: { body: { ...toolGroups, groups: [{ id: "g1", name: "Builders", tools: ["read", "write"], createdAt: stamp, updatedAt: stamp }] } },
+      [`PUT ${ORIGIN}/api/workspaces/w1/build-caches/gradle`]: { status: 201, body: list },
+      [`PUT ${ORIGIN}/api/workspaces/w1/build-caches/ccache`]: { body: list },
+      [`DELETE ${ORIGIN}/api/workspaces/w1/build-caches/ccache`]: { body: { ...list, caches: [] } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:build-cache-ccache");
+    await app.waitUntil(() => app.texts().join(" ").includes("CCACHE_DIR · Shared by the workspace's owner and: deleted group"));
+
+    await app.press("id:new-build-cache");
+    await app.waitFor("id:build-cache-editor");
+    await app.type("id:build-cache-name", "ccache");
+    await app.waitFor("text:This workspace already has a build cache named ccache");
+    await app.clear("id:build-cache-name");
+    await app.type("id:build-cache-name", "gradle");
+    await app.type("id:build-cache-env", "PATH");
+    await app.waitFor("text:PATH is a variable the sandbox or the tools set themselves; name another");
+    await app.press("id:build-cache-save");
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/build-caches/gradle`)).toBeUndefined();
+    await app.clear("id:build-cache-env");
+    await app.type("id:build-cache-env", "CCACHE_DIR");
+    await app.waitFor("text:The build cache ccache already uses CCACHE_DIR");
+    await app.clear("id:build-cache-env");
+    await app.type("id:build-cache-env", "GRADLE_BUILD_CACHE");
+    await app.press("id:build-cache-group-g1");
+    await app.press("id:build-cache-save");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/build-caches/gradle`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/build-caches/gradle`)).toEqual({ env: "GRADLE_BUILD_CACHE", writerGroups: ["g1"] });
+    await app.waitUntil(() => !app.shows("id:build-cache-editor"));
+
+    await app.press("id:build-cache-actions-ccache");
+    await app.press("text:Edit");
+    await app.waitFor("id:build-cache-editor");
+    expect(app.shows("id:build-cache-name")).toBe(false);
+    await app.waitFor("id:build-cache-group-gone");
+    await app.press("id:build-cache-group-gone");
+    await app.waitFor("text:With no writer groups left, every admin and collaborator who can write files shares this cache's copy.");
+    expect(app.shows("id:build-cache-group-gone")).toBe(true);
+    await app.press("id:build-cache-group-gone");
+    await app.waitUntil(() => !app.texts().join(" ").includes("With no writer groups left"));
+    await app.press("id:build-cache-group-gone");
+    await app.waitFor("text:With no writer groups left, every admin and collaborator who can write files shares this cache's copy.");
+    await app.press("id:build-cache-save");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/build-caches/ccache`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/build-caches/ccache`)).toEqual({ env: "CCACHE_DIR", writerGroups: [] });
+    await app.waitUntil(() => !app.shows("id:build-cache-editor"));
+
+    app.onDialog(dialog => (dialog.title === "Delete ccache?" ? "Delete cache" : null));
+    await app.press("id:build-cache-actions-ccache");
+    await app.press("text:Delete");
+    await app.waitUntil(() => app.requests().some(item => item.method === "DELETE" && item.url === `${ORIGIN}/api/workspaces/w1/build-caches/ccache`));
+    await app.waitFor("text:ccache deleted.");
+  });
+
+  test("Workspaces shows members the build caches without letting them change any", async () => {
+    const stamp = "2026-11-20T10:00:00.000Z";
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/build-caches`]: { body: { caches: [{ name: "turbo", env: "TURBO_CACHE_DIR", writerGroups: [], createdAt: stamp, updatedAt: stamp }],
+        admin: false, limits: { caches: 16, writerGroups: 16 } } },
+    });
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:build-cache-turbo");
+    expect(app.texts().join(" ")).toContain("TURBO_CACHE_DIR · Shared by owners, admins and collaborators who can write files");
+    expect(app.shows("id:new-build-cache")).toBe(false);
+    expect(app.shows("id:build-cache-actions-turbo")).toBe(false);
   });
 
   test("Extensions adds auto mode as one of Pikibun's features, which needs no host", async () => {

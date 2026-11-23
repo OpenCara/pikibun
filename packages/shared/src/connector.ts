@@ -56,6 +56,7 @@ export interface ConnectorCapabilities {
   privateSessions?: number;
   artifacts?: boolean;
   sessionResources?: boolean;
+  buildCaches?: boolean;
   gpu?: GpuKind;
 }
 

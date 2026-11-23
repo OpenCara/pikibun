@@ -55,6 +55,10 @@ This machine's own setup, when the defaults don't fit:
                            advertised, or every authenticated Pi model when that is unset
   --resources PATH         Operator-provisioned resource configuration JSON (cgroup v2
                            limits that let bash run in every session)
+  --build-caches PATH      Where this host keeps the build caches its owner turns on in
+                           Pikibun (default: build-caches in the state directory). With
+                           --resources it is required for build caches, and must be a
+                           dedicated, private filesystem mount (rw,nosuid,nodev), which bounds them
   --memory-limit MIB       Windows sandbox: memory for each sandboxed step's processes (4096)
   --process-limit N        Windows sandbox: processes per step (256)
   --cpu-limit PERCENT      Windows sandbox: share of this machine's CPU per step (50)
@@ -210,7 +214,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
     help: { type: "boolean" }, server: { type: "string" }, "pairing-id": { type: "string" }, force: { type: "boolean" },
     "state-dir": { type: "string" }, "identity-dir": { type: "string" }, "pi-agent-dir": { type: "string" }, model: { type: "string", multiple: true },
-    resources: { type: "string" }, "allow-insecure-loopback": { type: "boolean" },
+    resources: { type: "string" }, "build-caches": { type: "string" }, "allow-insecure-loopback": { type: "boolean" },
     "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" }, "no-remote-installs": { type: "boolean" },
     "managed-extensions": { type: "boolean" }, "auto-cache-extensions": { type: "boolean" },
     "no-managed-extensions": { type: "boolean" }, "no-auto-cache-extensions": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
@@ -230,6 +234,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     throw new ConnectorSetupError("macOS has no default sandbox: the isolated sandbox needs Linux or WSL2 with bubblewrap. Try macOS's own sandbox with --experimental-sandbox, or run agent work directly on this Mac with --unsafe-no-sandbox and read its warning.");
   }
   if (unsandboxed && values.resources) throw new ConnectorSetupError("--resources configures Linux sandbox limits and cannot be combined with --unsafe-no-sandbox.");
+  if (unsandboxed && values["build-caches"]) throw new ConnectorSetupError("--build-caches is for sandboxed hosts: sessions without a sandbox get no build caches.");
   if (experimental && values.resources) throw new ConnectorSetupError("--resources configures Linux sandbox limits; the Windows sandbox takes --memory-limit, --process-limit and --cpu-limit.");
   if ((values["memory-limit"] || values["process-limit"] || values["cpu-limit"]) && !(experimental && process.platform === "win32")) {
     throw new ConnectorSetupError("--memory-limit, --process-limit and --cpu-limit apply only to the Windows sandbox (--experimental-sandbox on Windows).");
@@ -277,13 +282,16 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const connector = createConnector({
     dataDir, identityDir, ...(privateHome ? { privateHome } : {}),
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
+    ...(values["build-caches"] ? { buildCacheRoot: resolve(values["build-caches"]) } : {}),
     remoteExtensionInstalls: values["no-remote-installs"] !== true,
     ...(values["managed-extensions"] || values["no-managed-extensions"] ? { managedExtensions: values["managed-extensions"] === true } : {}),
     ...(values["auto-cache-extensions"] || values["no-auto-cache-extensions"] ? { autoCacheExtensions: values["auto-cache-extensions"] === true } : {}),
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
     capabilities: hostCapabilities,
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },
-    onWarning: (warning, detail) => { process.stderr.write(warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : "Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.\n"); },
+    onWarning: (warning, detail) => { process.stderr.write(warning === "identity-unavailable" ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n`
+      : warning === "build-caches-unavailable" ? `This host keeps no build caches: ${detail}\n`
+      : "Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.\n"); },
   });
   process.stderr.write(unsandboxed
     ? "Running unsandboxed: commands execute directly on this machine.\n"

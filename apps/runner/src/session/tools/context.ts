@@ -7,6 +7,7 @@ import type { HostTunnelStatus, TunnelUnavailableReason } from "../../../../../p
 import type { BrokeredToolDefinition } from "../../../../../packages/shared/src/tool-definitions.js";
 import type { GitHubIssueView, GitHubReadRequest, RunnerBinding, ScheduleToolRequest, ScheduleToolResult } from "../../../../../packages/shared/src/types.js";
 import type { StoredOperation } from "../../operation-record.js";
+import type { BuildCacheMount } from "../../build-caches.js";
 import type { SessionWorkspace } from "../../workspace.js";
 import type { WholeResults } from "../whole-results.js";
 import type { HostCommandPolicy } from "../host-commands.js";
@@ -46,6 +47,7 @@ export interface ToolContext {
   tunnel(): SessionTunnel | undefined;
   startTunnel(): SessionTunnel;
   grant(): Promise<EgressGrant>;
+  buildCaches?(): Promise<readonly BuildCacheMount[]>;
 }
 
 export const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });

@@ -1,6 +1,7 @@
 import { extensionPackageKey, normalizeExtensionSource, parseExtensionSettings, type ExtensionSettings } from "./host-extensions.js";
 import { defaultHostBrowserConfig, parseHostBrowserConfig, type HostBrowserConfig } from "./browser.js";
 import { defaultHostTunnelConfig, parseHostTunnelConfig, serviceLifetimeLimits, type HostTunnelConfig } from "./tunnel.js";
+import { buildCacheLimits, buildCacheModes, type BuildCacheMode } from "./build-caches.js";
 
 export const repositoryCacheModes = ["off", "host", "owner"] as const;
 export type RepositoryCacheMode = (typeof repositoryCacheModes)[number];
@@ -43,6 +44,8 @@ export interface HostConfig {
   serviceLifetimeSeconds: number;
   tunnel: HostTunnelConfig;
   fakeIpTunnels: boolean;
+  buildCaches: BuildCacheMode;
+  buildCacheGiB: number;
 }
 
 export interface RequiredExtension {
@@ -68,6 +71,8 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   serviceLifetimeSeconds: serviceLifetimeLimits.default,
   tunnel: defaultHostTunnelConfig as HostTunnelConfig,
   fakeIpTunnels: false,
+  buildCaches: "off",
+  buildCacheGiB: buildCacheLimits.gib.default,
 });
 
 export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
@@ -140,7 +145,7 @@ export function parseHostCompaction(value: unknown): HostCompaction {
   return Object.keys(overrides).length ? { ...compaction, modelOverrides: overrides } : compaction;
 }
 
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB"]);
 
 export function parseHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
@@ -159,6 +164,11 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
   if (typeof input.fakeIpTunnels !== "boolean") throw new Error("Invalid fake-IP tunnels setting");
+  if (!buildCacheModes.includes(input.buildCaches as BuildCacheMode)) throw new Error("Invalid build caches setting");
+  const gib = input.buildCacheGiB;
+  if (typeof gib !== "number" || !Number.isSafeInteger(gib) || gib < buildCacheLimits.gib.min || gib > buildCacheLimits.gib.max) {
+    throw new Error(`The build caches' size limit is between ${buildCacheLimits.gib.min} and ${buildCacheLimits.gib.max} GiB`);
+  }
   const lifetime = input.serviceLifetimeSeconds;
   const lifetimes = hostConfigLimits.serviceLifetimeSeconds;
   if (typeof lifetime !== "number" || !Number.isSafeInteger(lifetime) || lifetime < lifetimes.min || lifetime > lifetimes.max) {
@@ -167,7 +177,8 @@ export function parseHostConfig(value: unknown): HostConfig {
   return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
     hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
     requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser),
-    serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel), fakeIpTunnels: input.fakeIpTunnels };
+    serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel), fakeIpTunnels: input.fakeIpTunnels,
+    buildCaches: input.buildCaches as BuildCacheMode, buildCacheGiB: gib };
 }
 
 export function parseHostConfigChange(value: unknown): Partial<HostConfig> {

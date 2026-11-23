@@ -22,6 +22,7 @@ import {
 import { sandboxCertificates } from "./trust-store.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
 import type { IsolatedWorkspace } from "./workspace.js";
+import { buildCacheMount, type BuildCacheMount } from "./build-caches.js";
 
 export interface HelperLayout {
   root: string;
@@ -41,6 +42,7 @@ export interface HelperContext {
   deadlineMs: number;
   environment: Readonly<Record<string, string>>;
   mirrors?: readonly string[];
+  caches?: readonly { path: string; env: string }[];
   gitShim?: boolean;
 }
 
@@ -69,6 +71,7 @@ export interface HelperWorkspaceOptions {
   egressEnvironment?: () => Record<string, string> | undefined;
   gitLfs?: boolean;
   mirrors?: () => Promise<readonly MirrorMount[]>;
+  buildCaches?: () => Promise<readonly BuildCacheMount[]>;
 }
 
 const queues = new Map<string, Promise<void>>();
@@ -370,6 +373,12 @@ export class HelperWorkspace implements IsolatedWorkspace {
     return [...new Set(mounts.map(mount => mount.source).filter(helperMirror))];
   }
 
+  async #caches(): Promise<{ path: string; env: string }[]> {
+    if (!this.#options.buildCaches) return [];
+    try { return (await this.#options.buildCaches()).filter(buildCacheMount).map(mount => ({ path: mount.source, env: mount.env })); }
+    catch { return []; }
+  }
+
   async #run(request: SandboxRequest, context: { readOnly: boolean; gitWritable: boolean; egress: boolean; limits?: CommandLimits }, signal?: AbortSignal,
     output?: (stdout: Readable, kill: () => void) => void): Promise<string> {
     if (context.readOnly && context.gitWritable) throw new Error("Invalid read-only mount request");
@@ -379,8 +388,9 @@ export class HelperWorkspace implements IsolatedWorkspace {
     const egress = context.egress ? this.#options.egressEnvironment?.() : undefined;
     const environment = Object.freeze({ ...this.#environment, ...(egress ?? {}) });
     const mirrors = this.#cached && MIRROR_KINDS.has(request.kind) ? await this.#mirrors() : [];
+    const caches = request.kind === "bash" ? await this.#caches() : [];
     const launch = await this.#backend.launch(request, { ...context, egress: egress !== undefined, deadlineMs, environment,
-      ...(mirrors.length ? { mirrors } : {}), ...(this.#shim && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
+      ...(mirrors.length ? { mirrors } : {}), ...(caches.length ? { caches } : {}), ...(this.#shim && egress !== undefined ? { gitShim: true } : {}) }, this.#layout);
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES
       : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     return new Promise<string>((resolveResult, reject) => {

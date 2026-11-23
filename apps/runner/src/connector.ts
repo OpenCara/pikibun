@@ -16,8 +16,9 @@ import { assertId, ConnectorSetupError } from "./protocol.js";
 import { withHostToolCapabilities } from "./host-capabilities.js";
 import { detectGpu, HostConfigSource } from "./host-config.js";
 import type { GpuKind, RepositoryCacheMode } from "../../../packages/shared/src/host-config.js";
-import { recoverResourceOrphans } from "./resources.js";
+import { probeBuildCacheStorage, recoverResourceOrphans } from "./resources.js";
 import { RepositoryCache } from "./repo-cache.js";
+import { BuildCacheStore } from "./build-caches.js";
 import { RunnerService, createRunnerApp, type PortableReport } from "./server.js";
 import { IdentityStore } from "./identity.js";
 import { parseSettings } from "../../../packages/shared/src/identity.js";
@@ -51,6 +52,7 @@ const IDENTITY_SYNC_MS = 60_000;
 const IDENTITY_REPORT_LIMIT = 500;
 const IDENTITY_ANSWER_LIMIT = 64 * 1024;
 const PRIVATE_REPORT_MS = 5_000;
+const BUILD_CACHE_EVICT_MS = 10 * 60_000;
 const credentialsSchema = z.object({
   connectorId: z.string().regex(IDENTIFIER), token: z.string().regex(TOKEN), controlPlaneUrl: z.string(),
 }).strict();
@@ -198,6 +200,9 @@ export interface ConnectorOptions {
   allowTestShell?: boolean;
   capabilities?: ConnectorCapabilities;
   resources?: RunnerConfig["resources"];
+  buildCacheRoot?: string;
+  buildCaches?: boolean;
+  buildCacheEvictMs?: number;
   unsandboxed?: boolean;
   privateEnvironment?: readonly string[];
   sandboxBackend?: SandboxBackendConfig;
@@ -219,7 +224,7 @@ export interface ConnectorOptions {
   privateHome?: PrivateHome;
   privateReportMs?: number;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
-  onWarning?: (warning: "resources-unavailable" | "identity-unavailable", detail?: string) => void;
+  onWarning?: (warning: "resources-unavailable" | "identity-unavailable" | "build-caches-unavailable", detail?: string) => void;
 }
 
 type Runtime = { value: ConnectorRuntime; repositoryCache: RepositoryCacheMode; resumed: boolean };
@@ -252,6 +257,7 @@ export class LocalConnector {
   private hostExtensions?: HostExtensions;
   private identity?: IdentityStore;
   private hardwareProbe?: HardwareProbe;
+  private buildCaches?: BuildCacheStore;
 
   constructor(private readonly options: ConnectorOptions) {
     this.ready = this.readiness.promise;
@@ -350,6 +356,8 @@ export class LocalConnector {
       try { await recoverResourceOrphans(this.options.resources); }
       catch { this.options.onWarning?.("resources-unavailable"); }
     }
+    if (this.options.buildCaches ?? (linuxSandboxed || seatbeltSandboxed)) this.buildCaches = await this.buildCacheStore();
+    if (this.buildCaches) void this.evictBuildCaches(this.buildCaches);
     const origin = this.options.server === undefined ? undefined : controlPlaneOrigin(this.options.server, this.options.allowInsecureLoopback);
     const replace = this.options.pairing !== undefined && this.options.replacePairing === true;
     this.state = replace ? undefined : await readConnectorState(this.directory, origin, this.options.allowInsecureLoopback);
@@ -445,6 +453,7 @@ export class LocalConnector {
       const runtime = await this.ensureRuntime(generation, answered || !this.runtime ? configured.repositoryCache : this.runtime.repositoryCache);
       this.requireGeneration(generation);
       const advertised = { ...capabilities(this.options.capabilities, { unsandboxed: this.options.unsandboxed, repositoryCache: runtime.repositoryCache !== "off", gpu: this.gpu }),
+        ...(this.buildCaches ? { buildCaches: true } : {}),
         ...(this.identity && runtime.value.portable ? { portableSessions: true } : {}),
         ...(this.options.privateHome ? { privateSessions: PRIVATE_SESSIONS_VERSION } : {}) };
       await this.calls.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
@@ -641,7 +650,40 @@ export class LocalConnector {
       credentials: this.state!, directory: this.directory, secret: this.secret, options: this.options, lifetime: this.lifetime.signal, identity: this.identity,
       hostConfig: this.hostConfig, hostExtensions: this.hostExtensions, browser: () => this.browser, tunnel: () => this.tunnel, tunnels: () => this.tunnels,
       calls: this.calls, connection: () => this.connection(), requireGeneration: generation => this.requireGeneration(generation),
+      ...(this.buildCaches ? { buildCaches: this.buildCaches } : {}),
     }, repositoryCache);
+  }
+
+  private async buildCacheStore(): Promise<BuildCacheStore | undefined> {
+    const root = this.options.buildCacheRoot;
+    if (this.options.resources && !root) {
+      this.options.onWarning?.("build-caches-unavailable", "with --resources, give them a dedicated filesystem with --build-caches PATH");
+      return undefined;
+    }
+    if (this.options.resources && root && !this.options.runtimeFactory) {
+      const probe = await probeBuildCacheStorage(this.options.resources, root);
+      if (!probe.available) {
+        this.options.onWarning?.("build-caches-unavailable", probe.reason ?? "its filesystem couldn't be verified");
+        return undefined;
+      }
+    }
+    try { return new BuildCacheStore(root ?? join(this.directory, "build-caches"), { dedicated: !!this.options.resources }); }
+    catch (error) {
+      this.options.onWarning?.("build-caches-unavailable", error instanceof Error ? error.message : String(error));
+      return undefined;
+    }
+  }
+
+  private async evictBuildCaches(store: BuildCacheStore): Promise<void> {
+    const signal = this.lifetime.signal;
+    while (!signal.aborted) {
+      await delay(this.options.buildCacheEvictMs ?? BUILD_CACHE_EVICT_MS, undefined, { signal }).catch(() => {});
+      if (signal.aborted) return;
+      try {
+        const config = await this.hostConfig.current();
+        if (config.buildCaches !== "off") await store.evict(config.buildCacheGiB * 1024 ** 3);
+      } catch { }
+    }
   }
 
   private repositoryCacheFor(scope: Exclude<RepositoryCacheMode, "off">): RepositoryCache {

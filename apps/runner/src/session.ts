@@ -88,6 +88,8 @@ import {
 import { fitImagesExtension, modelImageLimits, thumbnailImage, tightestImageLimits } from "./images.js";
 import type { GitRemote } from "./git-remote.js";
 import type { RepositoryCache } from "./repo-cache.js";
+import { sandboxBuildCacheTarget, SessionBuildCacheMounts, type BuildCacheStore } from "./build-caches.js";
+import type { SessionBuildCaches } from "../../../packages/shared/src/build-caches.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
 import { backupRefusal, boundedBackup } from "./backup.js";
@@ -149,6 +151,8 @@ export type RunnerConfig = {
   identity?: ClientIdentity;
   portable?: { store: IdentityStore; detached?(sessionId: string): Promise<void> };
   repositoryCache?: RepositoryCache;
+  buildCacheStore?: BuildCacheStore;
+  buildCaches?: (sessionId: string) => Promise<SessionBuildCaches>;
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;
   browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
@@ -198,6 +202,7 @@ export class RunnerSession {
   readonly #uploads: SessionUploads;
   readonly #resources: SessionResources;
   readonly #mirrors: SessionMirrors | undefined;
+  readonly #buildCaches: SessionBuildCacheMounts | undefined;
   readonly #hostGit: HostGitShim | undefined;
   #mirrorsKeptAt = 0;
   readonly #calls: ToolCalls;
@@ -268,6 +273,12 @@ export class RunnerSession {
     }) : undefined;
     this.#hostGit = this.#onHost && this.#mirrors ? new HostGitShim({ mirror: (remote, onProgress) => this.hostMirror(remote, onProgress),
       ...(config.repositoryCache ? { lfs: config.repositoryCache.lfsObjects(binding.owner.id) } : {}) }) : undefined;
+    const cacheTarget = !this.#onHost && config.sandboxBackend?.kind !== "windows" ? (config.sandboxBackend?.kind === "seatbelt"
+      ? (_name: string, source: string) => source : (name: string) => sandboxBuildCacheTarget(name)) : undefined;
+    this.#buildCaches = cacheTarget && config.buildCacheStore && config.buildCaches ? new SessionBuildCacheMounts({
+      fetch: () => config.buildCaches!(binding.session.id), store: config.buildCacheStore, workspaceId: binding.session.workspaceId,
+      ownerId: binding.owner.id, target: cacheTarget,
+    }) : undefined;
     if (this.#hostSession && !binding.session.connectorOwnerId) {
       throw new RunnerError(403, "Only sessions of the host's owner, or of members they granted that, run directly on the host");
     }
@@ -298,6 +309,7 @@ export class RunnerSession {
       const workspace: HelperWorkspace = new HelperWorkspace(binding, join(directory, "sandbox"), backend, {
         egressEnvironment: () => { const endpoint = egress.endpoint; return endpoint && egressEnvironment(branch, endpoint, workspace.layout.caBundle); },
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
+        ...(this.#buildCaches ? { buildCaches: () => this.#buildCaches!.mounts() } : {}),
         ...(this.#clone && hostGitLfs() ? { gitLfs: true } : {}),
       });
       this.sandbox = workspace;
@@ -306,7 +318,8 @@ export class RunnerSession {
       this.sandbox = new Sandbox(binding, join(directory, "sandbox"), config.resources, { egressSocket: this.#egress.socketPath,
         ...(config.browser !== undefined ? { browser: config.browser } : {}),
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
-        ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
+        ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
+        ...(this.#buildCaches ? { buildCaches: () => this.#buildCaches!.mounts() } : {}) });
     }
     this.#resources = new SessionResources({ roots: this.sandbox.processes, directory, groups: this.sandbox.resourceGroups?.() });
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
@@ -327,6 +340,7 @@ export class RunnerSession {
       remoteDefinition: name => this.#defined.current(name),
       metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
+      ...(this.#buildCaches ? { buildCaches: () => this.#buildCaches!.mounts() } : {}),
       programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
       tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
     };
