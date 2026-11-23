@@ -81,7 +81,7 @@ export function SessionView(props: { id: string; page: boolean; front?: () => bo
     const current = live.view();
     return readOnly() || !current || Boolean(live.error()) || current.busy || (current.queue ?? []).some(item => activeStatuses.includes(item.status));
   };
-  const actions = createSessionActions({ session: live.session, manages, backupBlocked,
+  const actions = createSessionActions({ session: live.session, manages, backupBlocked, sessions: data.sessions,
     onChange: () => { live.refresh(); data.refreshSessions(); } });
   const actionsFeedback = () => (panelOpen() || renaming() ? { error: "", notice: "" } : { error: actions.action.error(), notice: actions.action.notice() });
   const pullRequest = () => data.sessions().find(item => item.id === props.id)?.pullRequest ?? live.session()?.pullRequest;

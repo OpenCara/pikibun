@@ -38,6 +38,8 @@ import { keepPortable, portableKeyFor } from './portable-sessions.js';
 import { createForwardedSession, forwardedRecords } from './forwarded-sessions.js';
 import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
 import { nameSessionLater } from './session-titles.js';
+import { body, fields } from './schemas.js';
+import { z } from 'zod';
 
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown, content = ''): Promise<ChatOptions | undefined> {
   if (value === undefined) return undefined;
@@ -294,6 +296,8 @@ export async function archiveSession(c: AppContext, sessionId: string, audit: Re
   return { ...access, row: archived };
 }
 
+const archiveBody = fields({ children: z.boolean().optional() }, 'An archive takes only children: true or false.');
+
 export const archiveDescendantsLimit = 200;
 
 export async function archiveDescendants(c: AppContext, parentId: string): Promise<{ archived: string[]; skipped: number }> {
@@ -546,10 +550,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     fail(400, 'invalid_input', 'Change the session title or its tool output, one at a time.');
   });
   app.post('/api/sessions/:id/archive', async c => {
-    const input: Record<string, unknown> = c.req.header('content-type') ? await jsonObject(c, 1024) : {};
-    if (Object.keys(input).some(key => key !== 'children') || (input.children !== undefined && typeof input.children !== 'boolean')) {
-      fail(400, 'invalid_input', 'An archive takes only children: true or false.');
-    }
+    const input = c.req.header('content-type') ? await body(c, archiveBody, { maxBytes: 1024, message: 'An archive takes only children: true or false.' }) : {};
     const archived = await archiveSession(c, identifier(c.req.param('id')), input.children ? { children: true } : {});
     const children = input.children ? await archiveDescendants(c, archived.row.id) : undefined;
     return c.json({ session: sessionRecord(archived.row, archived.permissions), ...(children ? { children } : {}) });

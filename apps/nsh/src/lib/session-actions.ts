@@ -3,7 +3,7 @@ import type { BackupLocation, SessionRecord } from "../../../../packages/shared/
 import { segment } from "../shared";
 import { session } from "./auth";
 import { createAction, createResource, type Action, type Resource } from "./resource";
-import { confirm } from "../ui";
+import { choose, confirm } from "../ui";
 
 export type Backup = { id: string; sessionId: string; size: number; sha256: string; createdAt: string; location?: BackupLocation; unavailable?: boolean;
   automatic?: boolean; conversationOnly?: boolean };
@@ -29,12 +29,55 @@ export interface SessionActions {
   pack: () => void;
 }
 
-export const confirmArchive = (): Promise<boolean> => confirm({ title: "Archive session?", confirmLabel: "Archive",
-  message: "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. You can unarchive it later." });
+const archiveMessage = "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. You can unarchive it later.";
+
+export function openDescendants(sessions: readonly SessionRecord[], id: string): SessionRecord[] {
+  const byParent = new Map<string, SessionRecord[]>();
+  for (const item of sessions) {
+    if (!item.parentSessionId) continue;
+    byParent.set(item.parentSessionId, [...(byParent.get(item.parentSessionId) ?? []), item]);
+  }
+  const found: SessionRecord[] = [];
+  const seen = new Set([id]);
+  const queue = [id];
+  while (queue.length) {
+    for (const child of byParent.get(queue.shift()!) ?? []) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      queue.push(child.id);
+      if (child.status !== "archived") found.push(child);
+    }
+  }
+  return found;
+}
+
+export type ArchiveChoice = { children: boolean };
+
+export async function confirmArchive(children = 0): Promise<ArchiveChoice | null> {
+  if (children === 0) return await confirm({ title: "Archive session?", confirmLabel: "Archive", message: archiveMessage }) ? { children: false } : null;
+  const started = children === 1 ? "1 open session it started" : `${children} open sessions it started`;
+  const choice = await choose({ title: "Archive session?", message: `${archiveMessage}\n\nThis session started ${started}, directly or through them. Archive ${children === 1 ? "it" : "them"} too, or leave ${children === 1 ? "it" : "them"} open?`,
+    choices: [{ id: "only", label: "Archive this one only" }, { id: "children", label: "Archive all" }] });
+  return choice ? { children: choice === "children" } : null;
+}
+
+export async function archiveRequest(path: string, choice: ArchiveChoice): Promise<string> {
+  if (!choice.children) {
+    await session().api(path, { method: "POST" });
+    return "Session archived";
+  }
+  const result = await session().api<{ children?: { archived: string[]; skipped: number } }>(path, { method: "POST", body: { children: true } });
+  const archived = result.children?.archived.length ?? 0;
+  const skipped = result.children?.skipped ?? 0;
+  const also = archived === 0 ? "" : archived === 1 ? " with 1 session it started" : ` with ${archived} sessions it started`;
+  const left = skipped === 0 ? "" : skipped === 1 ? ". 1 you don't manage stays open" : `. ${skipped} you don't manage stay open`;
+  return `Session archived${also}${left}`;
+}
 
 export const unarchiveNotice = (current: SessionRecord): string => (current.packed ? "Session unarchived, its files unpacked" : "Session unarchived");
 
-export function createSessionActions(options: { session: Accessor<SessionRecord | null>; manages: Accessor<boolean>; backupBlocked: Accessor<boolean>; onChange: () => void }): SessionActions {
+export function createSessionActions(options: { session: Accessor<SessionRecord | null>; manages: Accessor<boolean>; backupBlocked: Accessor<boolean>; onChange: () => void;
+  sessions?: Accessor<readonly SessionRecord[]> }): SessionActions {
   const action = createAction();
   const backup = signal<Backup | null>(null);
   const isOwner = () => options.session()?.ownerId === session().user.id;
@@ -80,11 +123,14 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
   async function archive() {
     const current = options.session();
     if (!current || !options.manages() || action.busy() || current.status === "archived") return;
-    if (!await confirmArchive()) return;
+    const choice = await confirmArchive(openDescendants(options.sessions?.() ?? [], current.id).length);
+    if (!choice) return;
+    const path = `${base()}/archive`;
+    let notice = "Session archived";
     await action.run(async () => {
-      await session().api(`${base()}/archive`, { method: "POST" });
+      notice = await archiveRequest(path, choice);
       options.onChange();
-    }, "Session archived");
+    }, () => notice);
   }
   function unarchive() {
     const current = options.session();
