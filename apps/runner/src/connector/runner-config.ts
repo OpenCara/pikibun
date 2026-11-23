@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { cacheWarmingModes } from "../../../../packages/shared/src/cache-warming.js";
+import { parseSessionBuildCaches } from "../../../../packages/shared/src/build-caches.js";
+import type { BuildCacheStore } from "../build-caches.js";
 import type { ConnectorCredentials } from "../../../../packages/shared/src/connector.js";
 import type { SessionsToolResult } from "../../../../packages/shared/src/cross-session.js";
 import { remoteMcpLimits } from "../../../../packages/shared/src/remote-mcp.js";
@@ -50,6 +52,7 @@ export interface RunnerConfigSource {
   calls: ControlPlaneCalls;
   connection(): Promise<Generation>;
   requireGeneration(generation: Generation): void;
+  buildCaches?: BuildCacheStore;
 }
 
 function runnerExtensions(source: RunnerConfigSource, extensions: HostExtensions): NonNullable<RunnerConfig["extensions"]> {
@@ -162,6 +165,10 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
     requiredExtensions: () => hostConfig.required(),
     cacheWarming: async sessionId => z.object({ mode: z.enum(cacheWarmingModes), child: z.boolean() })
       .parse(await calls.callback(await source.connection(), "/api/connectors/self/cache-warming", { sessionId })),
+    ...(source.buildCaches ? {
+      buildCacheStore: source.buildCaches,
+      buildCaches: async (sessionId: string) => parseSessionBuildCaches(await calls.callback(await source.connection(), "/api/connectors/self/build-caches", { sessionId })),
+    } : {}),
     hostGitCredential: async (remote: string, signal?: AbortSignal) => {
       if (!(await hostConfig.current()).gitCredentials) throw new HostCredentialError("This host's owner hasn't turned on its Git credentials in Pikibun (Settings → Hosts → the host → Configuration)");
       return hostGitAuthorization(remote, { signal });

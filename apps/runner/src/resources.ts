@@ -173,6 +173,22 @@ def verify_storage(root, entries):
     return mount
 
 
+def verify_cache_storage(root, entries):
+    info = os.fstat(root)
+    require(info.st_uid == os.getuid() and not info.st_mode & 0o077, 'build cache volume must be private and runner-owned')
+    path = os.readlink('/proc/self/fd/' + str(root))
+    mount = mount_for(root, entries)
+    require(mount['path'] == path and mount['root'] == '/', 'build cache root must be a dedicated filesystem mount, not a directory or bind subdirectory')
+    require(mount['kind'] in ('tmpfs', 'ext4', 'xfs', 'btrfs'), 'only tmpfs, ext4, xfs or btrfs build cache volumes are supported')
+    require({'rw', 'nosuid', 'nodev'} <= mount['options'], 'build cache volume requires rw,nosuid,nodev')
+    require(len([item for item in entries if item['device'] == mount['device']]) == 1, 'build cache filesystem has shared/bind mount aliases')
+    require(not any(item['path'] != path and beneath(item['path'], path) for item in entries), 'nested build cache mounts are forbidden')
+    require(not beneath(config['controlRoot'], path) and not beneath(config['cgroupRoot'], path), 'resource controls cannot be exposed in a build cache')
+    fs = os.fstatvfs(root)
+    require(fs.f_blocks > 0 and fs.f_files > 0, 'build cache filesystem has no capacity')
+    return mount
+
+
 def lock(cg, control, name, create=False):
     flags = os.O_RDWR | os.O_NONBLOCK | FILE
     created = False
@@ -359,6 +375,14 @@ try:
             finally:
                 os.close(root)
             print(json.dumps({'available': True}))
+        elif mode == 'probe-cache':
+            require(len(sys.argv) == 4 and sys.argv[3], 'a provisioned build cache filesystem must be supplied')
+            root = directory(sys.argv[3], True)
+            try:
+                verify_cache_storage(root, entries)
+            finally:
+                os.close(root)
+            print(json.dumps({'available': True}))
         elif mode == 'recover':
             recover(cg, control)
         elif mode == 'run':
@@ -380,7 +404,7 @@ export function resourceLaunch(config: ResourceConfig, sessionKey: string, args:
   return { command: "/usr/bin/python3", args: ["-I", "-c", SUPERVISOR, JSON.stringify(validateResourceConfig(config)), "run", sessionKey, String(deadlineSeconds), ...args] };
 }
 
-async function controlCommand(config: ResourceConfig, mode: "probe" | "recover", storageRoot = ""): Promise<void> {
+async function controlCommand(config: ResourceConfig, mode: "probe" | "probe-cache" | "recover", storageRoot = ""): Promise<void> {
   const checked = validateResourceConfig(config);
   if (process.platform !== "linux" || process.getuid?.() === 0) throw new Error("An unprivileged Linux resource host is required");
   await new Promise<void>((resolveResult, reject) => {
@@ -407,6 +431,15 @@ export async function probeResources(config?: ResourceConfig, storageRoot?: stri
     return { available: true };
   } catch (error) {
     return { available: false, reason: error instanceof Error ? error.message : "Resource verification failed" };
+  }
+}
+
+export async function probeBuildCacheStorage(config: ResourceConfig, root: string): Promise<ResourceAvailability> {
+  try {
+    await controlCommand(config, "probe-cache", root);
+    return { available: true };
+  } catch (error) {
+    return { available: false, reason: error instanceof Error ? error.message : "Build cache volume verification failed" };
   }
 }
 

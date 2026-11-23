@@ -1,8 +1,10 @@
 # Design: host build caches
 
-Status: phase 1 built (#472): the workspace's caches, the host setting, the role rule and the connector endpoint on the
-Pikibun server (`packages/shared/src/build-caches.ts`, `apps/server/src/build-caches.ts`). Hosts mount nothing until
-phase 2; the phases at the end say what follows.
+Status: phases 1 and 2 built (#472). Phase 1: the workspace's caches, the host setting, the role rule and the connector
+endpoint on the Pikibun server (`packages/shared/src/build-caches.ts`, `apps/server/src/build-caches.ts`). Phase 2: the
+Linux and macOS connectors (`apps/runner/src/build-caches.ts`, `build-cache-janitor.ts`, the mounts in `sandbox.ts`,
+`helper-workspace.ts` and `seatbelt.ts`, `--build-caches` and its check in `resources.ts`, `pikibun cache`). The phases
+at the end say what follows.
 
 Sessions on a host share Git mirrors and Git LFS files through the [repository cache](repository-cache.md), but
 nothing they build. Every session compiles, encodes and bakes from scratch, and a restored or moved session does it
@@ -102,43 +104,57 @@ The connector makes the directory (owned by its user, mode 0700) before the comm
   session sees the same path, so tools that write absolute paths into their cache (ccache's manifests, Gradle's)
   find them again in another session.
 - **macOS (Seatbelt):** the real path, with `(allow file-read* file-write* (subpath …))` beside the session's own
-  grants; the variable names the real path.
+  grants; the variable names the real path. Long-lived processes (`processCommand`) don't get caches in this version.
+- **Read-only steps** get the cache read-only (`--ro-bind`, or the read grant alone), so a Read-only message's command
+  can use what is there and write nothing.
+- **The variable never replaces one the sandbox set**: a cache whose variable the step already has (`HOME`, the egress
+  proxy's, the helper's `SANDBOX_*`) is mounted without it, besides the names `parseBuildCache` refuses outright.
 - **Windows:** a write grant for the session's container on the directory. This is a later phase; until then Windows
   hosts don't advertise `buildCaches`.
-- **Sessions on the host** (unsandboxed) get only their owner's own copy, never the shared one: a sandboxed writer
-  could leave a symlink there that a process outside any sandbox would follow to the host's own files. In a sandbox
-  such a link resolves inside the sandbox's own view (bubblewrap) or is checked against the profile at its target
-  (Seatbelt), so it reaches nothing more than the session could already.
+- **Sessions on the host** (unsandboxed, or a sandboxed host's sessions that run directly on it) get no build caches in
+  this version, and an unsandboxed connector advertises none: a sandboxed writer could leave a symlink in a cache that
+  a process outside any sandbox would follow to the host's own files. In a sandbox such a link resolves inside the
+  sandbox's own view (bubblewrap) or is checked against the profile at its target (Seatbelt), so it reaches nothing
+  more than the session could already. Giving host sessions their owner's own copy is left for later.
 
 ### Disk
 
 A session's own files are bounded by its provisioned filesystem (`writableMaxBytes`, `writableMaxInodes` in
 `--resources`), and a writable bind outside it would escape that bound. So on a connector started with `--resources`,
 build caches need their own bounded filesystem: `--build-caches PATH`, a dedicated mount the operator provisions, checked
-as session filesystems are (its own device, no aliases, capacity and inodes within the configured limits). Without it
-such a connector refuses `workspace` and `owner` and reports why in the host's configuration. A connector without
+as session filesystems are (the resource supervisor's `probe-cache` mode: private and the connector user's, its own
+mount of tmpfs, ext4, xfs or btrfs, `rw,nosuid,nodev`, no aliases or nested mounts, outside the resource controls).
+Its size is the operator's choice and bounds the caches by itself. Without it such a connector keeps no build caches,
+says why when it starts, and advertises none, so Pikibun shows that the host offers none. A connector without
 `--resources` runs commands only for its owner and members they granted host commands, without disk limits anyway, and
 keeps caches under its state directory.
 
 Inside that bound, the host evicts: once a cache root passes 90% of its capacity (or, without `--build-caches`, a
 host-wide **size limit** in the setting, 20 GiB by default), the connector deletes the least recently modified files
-across the caches until it is under 80%, never following links (`lstat`, `O_NOFOLLOW`), and removes empty directories.
-Tools that keep their own limit (ccache's `max_size`) do so too.
+across the caches until it is under 80%, and removes empty directories. It checks every 10 minutes while the host's
+setting isn't `off`. Tools that keep their own limit (ccache's `max_size`) do so too.
+
+Sessions write these directories while the host walks and deletes in them, so a session could swap a directory for a
+link to the host's own files between the host's listing and its deletion. Node has no `openat`, so listing, pruning
+and eviction run in a short Python program (`BUILD_CACHE_JANITOR`) that opens every level with `O_NOFOLLOW` relative to
+its parent's descriptor and unlinks relative to the directory's descriptor: a swapped level fails to open and is
+skipped, and a link is only ever removed as a link.
 
 ## Housekeeping
 
 - `pikibun cache list` adds a line per cache directory: its size, the workspace and name, and whether it is shared or
   whose.
-- `pikibun cache prune --older-than DAYS` deletes cache directories whose newest file is older than that, and the
-  directories of caches the workspace no longer declares.
-- Walks never follow links and stop at a fixed depth and count, reporting a walk cut short.
+- `pikibun cache prune --older-than DAYS` deletes cache directories whose newest file is older than that (a cache too
+  large to count in full is kept). It runs without the Pikibun server, so a cache a workspace deleted goes once nothing
+  wrote to it for that long.
+- Walks never follow links and stop at a depth of 64 and a million entries, reporting a walk cut short.
 - Changing the host setting applies to sessions' next commands; a switch from `workspace` to `owner` leaves the shared
   copies on disk until prune collects them.
 
 ## What sessions are told
 
-`identity` gains `buildCaches: [{ name, env, path, scope }]`, so the agent knows where a tool's cache goes and that a
-shared one holds others' output. The workspace page shows, for each member, which copy their sessions get.
+`identity`'s `commands` gains `buildCaches: [{ name, env, path, scope }]`, so the agent knows where a tool's cache goes and
+that a shared one holds others' output. The workspace page shows, for each member, which copy their sessions get.
 
 ## Out of scope
 

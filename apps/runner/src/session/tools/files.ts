@@ -53,8 +53,10 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       const attribution = await calls.actor(api, false);
       await calls.check(api, "identity");
       const config = await context.hostConfig();
+      const caches = context.buildCaches ? await context.buildCaches().catch(() => []) : [];
       const commands = { timeoutSeconds: commandLimits(config.commandTimeoutSeconds).seconds, gpu: config.gpu && !context.onHost,
-        ...(context.onHost ? { onHost: true } : {}) };
+        ...(context.onHost ? { onHost: true } : {}),
+        ...(caches.length ? { buildCaches: caches.map(cache => ({ name: cache.name, env: cache.env, path: cache.target, scope: cache.scope })) } : {}) };
       return text({ ...await sandbox.identity(() => calls.recheck(attribution)), commands, ...attribution });
     } }),
     defineTool({ name: "read", parameters: piParameters.read, outputLimits: PI_OUTPUT_LIMITS,

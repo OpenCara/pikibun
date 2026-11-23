@@ -279,6 +279,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 - If the Node.js the connector runs with is replaced while it runs (a Homebrew upgrade, say), a session's `git` takes the `node` on `PATH` to ask for the host's copy, and clones without the cache if there is none.
 - On Windows the cache's folder is kept private by your user profile's permissions; on Linux and macOS it must be a directory only the connector's user can open.
 - `npx pikibun@latest cache list` shows each cached repository, its size and how many sessions keep objects in it, and the Git LFS files kept. `npx pikibun@latest cache prune --older-than 30` forgets sessions idle for longer than that many days and collects what nothing reaches any more; a clone in such a session loses the objects it borrowed. It also deletes Git LFS files no session used for that long. Both take `--state-dir`.
+- The same two commands cover the host's build caches: `list` adds each one's size, workspace, and whether it is the shared copy or whose, and `prune` deletes those nothing wrote to for that long, never following a link a session left in one. Give `--build-caches PATH` where the connector was started with it. While build caches are on, the connector itself deletes the least recently written files every 10 minutes once they pass 90% of their size limit (or of their filesystem, with `--build-caches` and `--resources`), down to 80%.
 
 ## Connector options
 
@@ -291,6 +292,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 | `--pi-agent-dir PATH` | Pi's configuration and auth directory (default: Pi's own) |
 | `--model PROVIDER/MODEL` | Offer this model (repeatable) instead of `enabledModels` |
 | `--resources PATH` | Operator-provisioned resource limits that let commands run in every session |
+| `--build-caches PATH` | Where the host keeps [build caches](design/build-caches.md) (default `build-caches` in the state directory); with `--resources`, required for them and checked to be a dedicated, private filesystem mount (`rw,nosuid,nodev`) |
 | `--unsafe-no-sandbox` | Run agent work directly on this machine, without isolation; asks for confirmation |
 | `--allow-insecure-loopback` | Allow an `http://` server on localhost (development) |
 | `--help` | Show all options |

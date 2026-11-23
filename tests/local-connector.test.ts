@@ -406,6 +406,7 @@ type FixtureOptions = {
   hardware?: (body: unknown) => Response | Promise<Response>;
   hardwareReport?: () => Promise<HostHardware>;
   sandboxBackend?: NonNullable<Parameters<typeof createConnector>[0]['sandboxBackend']>;
+  buildCaches?: (body: unknown) => Response | Promise<Response>;
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -428,6 +429,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
     ...(options.privateHome ? { privateHome: options.privateHome, privateReportMs: 20 } : {}),
     ...(options.version ? { version: options.version } : {}), ...(options.identityDir ? { identityDir: options.identityDir } : {}),
     ...(options.sandboxBackend ? { sandboxBackend: options.sandboxBackend } : {}),
+    ...(options.buildCaches ? { buildCaches: true } : {}),
     browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
     tunnel: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.tunnel },
     acquireLease: path => {
@@ -469,6 +471,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
       if (request.url === `${origin}/api/connectors/self/extensions`) return options.extensionsSync?.(JSON.parse(call.body)) ?? Response.json({ requests: [] });
       if (request.url.startsWith(`${origin}/api/connectors/self/identity`) && options.identity) return options.identity(new URL(request.url).pathname, JSON.parse(call.body));
       if (request.url === `${origin}/api/connectors/self/hardware`) return options.hardware?.(JSON.parse(call.body)) ?? Response.json({ error: 'Not found' }, { status: 404 });
+      if (request.url === `${origin}/api/connectors/self/build-caches` && options.buildCaches) return options.buildCaches(JSON.parse(call.body));
       if (request.url === `${origin}/api/connectors/self/private-sessions`) return options.privateSessions?.(JSON.parse(call.body)) ?? Response.json({ error: 'Not found' }, { status: 404 });
       workerCalls.push(call);
       if (request.url === `${origin}/api/connectors/self/manifest`) {
@@ -642,6 +645,24 @@ test('a host keeps the repository cache its configuration names for the whole co
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
   assert.deepEqual(JSON.parse(manifest.body).capabilities, { ...advertisedBase, repositoryCache: true });
   assert.equal(fixture.runtimes[0]!.config.repositoryCache?.scope, 'owner');
+});
+
+test('a sandboxed host keeps build caches in its state directory, says so, and asks Pikibun which copy each session gets', { timeout: 10000 }, async t => {
+  const asked: unknown[] = [];
+  const fixture = await connectorFixture(t, { buildCaches: body => { asked.push(body); return Response.json({ caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner' }] }); } });
+  await startFixture(fixture);
+  const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
+  assert.deepEqual(JSON.parse(manifest.body).capabilities, { ...advertisedBase, buildCaches: true });
+  const config = fixture.runtimes[0]!.config;
+  assert.equal(config.buildCacheStore?.root, join(await realpath(fixture.dataDir), 'build-caches'));
+  assert.equal(config.buildCacheStore?.dedicated, false);
+  assert.deepEqual(await config.buildCaches!('session-1'), { caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner' }] });
+  assert.deepEqual(asked, [{ sessionId: 'session-1' }]);
+
+  const plain = await connectorFixture(t);
+  await startFixture(plain);
+  assert.equal(plain.runtimes[0]!.config.buildCacheStore, undefined, 'a host that keeps none offers none');
+  assert.equal(JSON.parse(plain.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!.body).capabilities.buildCaches, undefined);
 });
 
 test('the macOS and Windows sandboxes keep the repository cache too', { timeout: 10000 }, async t => {

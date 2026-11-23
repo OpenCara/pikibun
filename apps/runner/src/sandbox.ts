@@ -30,6 +30,7 @@ import { browserEnvironment, connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBr
 import type { SessionBrowser } from "./browser-command.js";
 import type { SandboxNodePrograms } from "./program-availability.js";
 import { ProcessRoots, type ResourceGroups } from "./session-resources.js";
+import { buildCacheMount, SANDBOX_BUILD_CACHE_ROOT, type BuildCacheMount } from "./build-caches.js";
 
 export { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 
@@ -54,7 +55,7 @@ export interface SandboxExecutionOptions {
 }
 
 interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; binds?: readonly string[]; service?: { socketDirectory: string; binds?: readonly string[] };
-  onSpawn?: (hold: (held: boolean) => void) => void }
+  onSpawn?: (hold: (held: boolean) => void) => void; caches?: readonly BuildCacheMount[] }
 
 export interface SandboxOptions {
   node?: NodeToolchain | null;
@@ -62,6 +63,7 @@ export interface SandboxOptions {
   egressSocket?: string;
   sessionBranch?: string;
   mirrors?: () => Promise<readonly MirrorMount[]>;
+  buildCaches?: () => Promise<readonly BuildCacheMount[]>;
   gpuRoot?: string;
 }
 
@@ -346,6 +348,7 @@ export class Sandbox implements IsolatedWorkspace {
   readonly #egressSocket: string | undefined;
   readonly #sessionBranch: string | undefined;
   readonly #mirrors: (() => Promise<readonly MirrorMount[]>) | undefined;
+  readonly #buildCaches: (() => Promise<readonly BuildCacheMount[]>) | undefined;
   readonly #gpuRoot: string;
   readonly #shim: boolean;
   readonly #nodeMount: SandboxNodeMount | undefined;
@@ -383,6 +386,7 @@ export class Sandbox implements IsolatedWorkspace {
     this.#egressSocket = options.egressSocket;
     this.#sessionBranch = options.sessionBranch;
     this.#mirrors = options.mirrors;
+    this.#buildCaches = options.buildCaches;
     this.#gpuRoot = options.gpuRoot ?? "/";
     this.#shim = options.egressSocket !== undefined && (options.mirrors !== undefined || hostGitLfs() !== undefined);
     const node = sandboxNodeMount(options.node === undefined ? connectorNode() : options.node ?? undefined);
@@ -510,12 +514,19 @@ export class Sandbox implements IsolatedWorkspace {
       await authorize();
       if (this.#closed) throw new Error("Sandbox is closed");
       if (command.signal?.aborted) throw new SandboxProcessError("Command stopped before it started", null, null, "", "");
-      return this.#run(request, readOnly, gitWritable, requireResources, {}, await this.#mirrorMounts(request), command);
+      const caches = request.kind === "bash" ? await this.#cacheMounts() : [];
+      return this.#run(request, readOnly, gitWritable, requireResources, {}, await this.#mirrorMounts(request), { ...command, ...(caches.length ? { caches } : {}) });
     });
   }
 
   async #mirrorMounts(request: Request): Promise<readonly MirrorMount[]> {
     return this.#mirrors && MIRROR_KINDS.has(request.kind) ? (await this.#mirrors()).filter(mirrorMount) : [];
+  }
+
+  async #cacheMounts(): Promise<readonly BuildCacheMount[]> {
+    if (!this.#buildCaches) return [];
+    try { return (await this.#buildCaches()).filter(mount => buildCacheMount(mount) && mount.target.startsWith(`${SANDBOX_BUILD_CACHE_ROOT}/`)); }
+    catch { return []; }
   }
 
   async readFile(path: string, authorize: SandboxAuthorize): Promise<string> {
@@ -623,9 +634,11 @@ export class Sandbox implements IsolatedWorkspace {
       options.signal?.addEventListener("abort", kill, { once: true });
       this.#services.add(kill);
       let holder: ((held: boolean) => void) | undefined;
+      const caches = await this.#cacheMounts();
       const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
         { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
         { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}) },
+          ...(caches.length ? { caches } : {}),
           onSpawn: hold => { holder = hold; } })
         .then((): ServiceExit => ({ code: 0, signal: null }), (error: unknown): ServiceExit => error instanceof SandboxProcessError
           ? { code: error.exitCode, signal: error.signal as NodeJS.Signals | null, ...(error.exitCode === null && !error.signal ? { failure: error.message.slice(0, 500) } : {}) }
@@ -745,6 +758,7 @@ export class Sandbox implements IsolatedWorkspace {
     const limits = request.kind === "bash" ? command.limits : undefined;
     const browser = request.kind === "bash" ? sandboxBrowserMount(this.#browserSource()) : undefined;
     const service = request.kind === "bash" ? command.service : undefined;
+    const caches = request.kind === "bash" ? command.caches ?? [] : [];
     const args = [
       "--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
       "--cap-drop", "ALL",
@@ -762,6 +776,7 @@ export class Sandbox implements IsolatedWorkspace {
       ...(egress ? ["--ro-bind-try", egress, EGRESS_SOCKET, "--ro-bind", join(this.#root, CA_BUNDLE_FILE), CA_BUNDLE] : []),
       ...(egress && this.#shim ? ["--ro-bind-try", join(this.#root, "bin"), SHIM_DIRECTORY] : []),
       ...mirrors.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
+      ...caches.flatMap(({ source, target }) => [readOnly ? "--ro-bind" : "--bind", source, target]),
       ...(browser ? ["--ro-bind-try", join(this.#root, "browser", "pikibun-browser"), SANDBOX_BROWSER_DRIVER] : []),
       ...(browser?.mount ? ["--ro-bind-try", browser.mount.source, browser.mount.target] : []),
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
@@ -779,6 +794,8 @@ export class Sandbox implements IsolatedWorkspace {
     if (egress && this.#shim) args.push("--setenv", "PATH", `${SHIM_DIRECTORY}:${this.#environment.PATH}`);
     for (const [name, value] of Object.entries(gpu?.env ?? {})) args.push("--setenv", name, value);
     for (const [name, value] of Object.entries(browserEnvironment(browser?.executable))) args.push("--setenv", name, value);
+    const named = new Set(args.flatMap((arg, index) => arg === "--setenv" ? [args[index + 1]!] : []));
+    for (const { env, target } of caches) if (!named.has(env)) args.push("--setenv", env, target);
     args.push("--", "/usr/bin/python3", "-I", "-c", HELPER);
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     const deadline = ["clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"].includes(request.kind)

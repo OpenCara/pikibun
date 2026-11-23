@@ -49,7 +49,7 @@ test('a build cache is a name and a variable the sandbox doesn\'t set, and a hos
   assert.deepEqual(parseBuildCache('assets', { env: 'PARADISE_EXPORT_CACHE', writerGroups: ['b', 'a', 'b'] }).writerGroups, ['a', 'b']);
   for (const name of ['', 'Ccache', '-x', 'a'.repeat(41), 'a/b', '../x', 'a b']) assert.throws(() => parseBuildCache(name, { env: 'X' }), /name/, name);
   for (const env of ['PATH', 'HOME', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'PYTHONPATH', 'NODE_OPTIONS', 'GIT_DIR', 'SSH_AUTH_SOCK', 'HTTPS_PROXY', 'TMPDIR',
-    'PIKIBUN_TOKEN', 'XDG_CACHE_HOME', 'BASH_ENV', 'LC_ALL']) {
+    'PIKIBUN_TOKEN', 'XDG_CACHE_HOME', 'BASH_ENV', 'LC_ALL', 'SANDBOX_MIRRORS', 'SANDBOX_WORKTREE', 'SDKROOT', 'CLANG_MODULE_CACHE_PATH']) {
     assert.throws(() => parseBuildCache('x', { env }), /sets? themselves/, env);
     assert.equal(buildCacheEnvAllowed(env), false, env);
   }
