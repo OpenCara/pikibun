@@ -96,7 +96,8 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
     githubBranch: null as Record<string, unknown> | null, gitlabBranch: null as Record<string, unknown> | null,
     giteaBranch: null as Record<string, unknown> | null, azureAllow: true, resetStatus: 200, resetToken: 'owner-oauth-token-2', resetLost: false, tokenAlive: true, userAlive: true,
     githubPulls: {} as Record<number, { state: string; merged: boolean; draft: boolean; reviews: unknown[]; checkRuns: unknown[]; statuses: unknown[] }>,
-    branchPulls: {} as Record<string, { number: number; html_url: string; created_at: string }[]> };
+    branchPulls: {} as Record<string, { number: number; html_url: string; created_at: string }[]>,
+    azurePulls: {} as Record<number, Record<string, unknown>>, azureBranchPulls: {} as Record<string, Record<string, unknown>[]> };
   const routes: Route[] = [
     (url, init) => {
       if (url.origin !== 'https://api.github.com') return undefined;
@@ -179,6 +180,17 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
       if (url.origin === 'https://dev.azure.com' && url.pathname === `/contoso/_apis/git/repositories/${azureRepositoryId}`) {
         return Response.json({ id: azureRepositoryId, name: 'repo', defaultBranch: 'refs/heads/main', project: { id: azureProjectId, name: 'Project', visibility: 'private' } });
       }
+      const azurePulls = `/contoso/Project/_apis/git/repositories/${azureRepositoryId}/pullrequests`;
+      if (url.origin === 'https://dev.azure.com' && url.pathname === azurePulls) {
+        return Response.json({ value: state.azureBranchPulls[url.searchParams.get('searchCriteria.sourceRefName')!] ?? [] });
+      }
+      const azurePull = url.origin === 'https://dev.azure.com' ? new RegExp(`^${azurePulls}/(\\d+)$`, 'i').exec(url.pathname) : null;
+      if (azurePull) {
+        const pull = state.azurePulls[Number(azurePull[1])];
+        return pull ? Response.json(pull) : Response.json({ message: 'not found' }, { status: 404 });
+      }
+      if (url.origin === 'https://dev.azure.com' && url.pathname.endsWith('/statuses')) return Response.json({ value: [] });
+      if (url.origin === 'https://dev.azure.com' && url.pathname === '/contoso/Project/_apis/policy/evaluations') return Response.json({ value: [] });
       if (url.origin === 'https://dev.azure.com' && /^\/contoso\/_apis\/permissions\/2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87\/(?:4|32)$/.test(url.pathname)) {
         return Response.json({ count: 1, value: [state.azureAllow] });
       }
@@ -486,6 +498,37 @@ test('session lists show the state the control plane last read for their pull re
   await refreshPullRequestStates(f.env);
   assert.equal(f.calls.length, calls);
   assert.equal(f.ledger().filter(row => row.pull_request_url).at(-1)!.pull_request_checked_at, '9999-12-31T00:00:00.000Z', 'the newest is never stale');
+});
+
+test('session lists show the state of an Azure DevOps pull request a push opened, read with the owner\'s Azure DevOps account', async t => {
+  const f = await fixture(t);
+  const state = async () => sessionRecord((await sessionAccess(f.env, 'session', owner))!.row).pullRequest?.state;
+  const issued = await (await f.post(credential, { sessionId: 'session', approvalId: 'tool-az-1', actorId: owner,
+    operation: f.operation({ pullRequest: { title: 'Add feature', body: 'Details' } }), admissionId: f.admit('auto') })).json() as { credentialId: string };
+  assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-az-1', credentialId: issued.credentialId, outcome: 'pushed', tip })).status, 200);
+  const url = 'https://dev.azure.com/contoso/Project/_git/repo/pullrequest/12';
+  f.sqlite.prepare('UPDATE push_credentials SET binding_id = ?, pull_request_url = ?, pull_request_state = NULL, pull_request_checked_at = NULL WHERE id = ?')
+    .run('binding-az', url, issued.credentialId);
+  const stale = () => f.sqlite.prepare('UPDATE push_credentials SET pull_request_checked_at = ? WHERE pull_request_url IS NOT NULL').run('2000-01-01T00:00:00.000Z');
+  const reads = () => f.calls.filter(call => call.url.startsWith(`https://dev.azure.com/contoso/Project/_apis/git/repositories/${azureRepositoryId}/pullrequests/12?`));
+
+  f.state.azurePulls[12] = { pullRequestId: 12, status: 'active', isDraft: false, repository: { id: azureRepositoryId, project: { id: azureProjectId } },
+    reviewers: [{ vote: -10 }] };
+  await refreshPullRequestStates(f.env);
+  assert.equal(await state(), 'changes_requested');
+  assert.equal(reads()[0]!.authorization, basic('', 'owner-azure-devops-token'), 'read as the session owner');
+  f.state.azurePulls[12] = { ...f.state.azurePulls[12]!, status: 'abandoned' };
+  stale(); await refreshPullRequestStates(f.env);
+  assert.equal(await state(), 'closed');
+  const before = reads().length;
+  stale(); await refreshPullRequestStates(f.env);
+  assert.equal(reads().length, before, 'closed pull requests are not read again');
+
+  f.sqlite.prepare('UPDATE push_credentials SET pull_request_url = ?, pull_request_state = NULL, pull_request_checked_at = NULL WHERE id = ?')
+    .run('https://dev.azure.com/contoso/Project/_git/other/pullrequest/12', issued.credentialId);
+  await refreshPullRequestStates(f.env);
+  assert.equal(reads().length, before, 'only a pull request of the pushed repository is read');
+  assert.equal(f.ledger().find(row => row.id === issued.credentialId)!.pull_request_checked_at, '9999-12-31T00:00:00.000Z');
 });
 
 test('token providers mint from the workspace identity and open pull requests with the owner account', async t => {
@@ -1060,6 +1103,41 @@ test('a session on a host shows the pull request GitHub has for a branch its hos
   const before = lookups();
   stale(); await refreshPullRequestStates(f.env);
   assert.equal(lookups(), before, 'merged pull requests are not looked up again');
+});
+
+test('a session on a host shows the pull request Azure DevOps has for a branch its host reported, with its state', async t => {
+  const f = await fixture(t, { host: { owner } });
+  f.sqlite.prepare('UPDATE sessions SET host_environment = 1 WHERE id = ?').run('session');
+  const record = async () => sessionRecord((await sessionAccess(f.env, 'session', owner))!.row).pullRequest;
+  const stale = () => f.sqlite.prepare('UPDATE session_branches SET pull_request_checked_at = ?').run('2000-01-01T00:00:00.000Z');
+  const lookups = () => f.calls.filter(call => call.url.includes('/pullrequests?'));
+
+  const reported = await f.post('/api/internal/branches', { sessionId: 'session', branches: [{ repository: 'Contoso/project/REPO', branch: 'feature' },
+    { repository: 'contoso/Project/other', branch: 'x' }, { repository: 'owner/repo', branch: 'feature' }] });
+  assert.equal(reported.status, 200);
+  assert.deepEqual(f.sqlite.prepare('SELECT repository, branch FROM session_branches ORDER BY repository').all().map(row => [row.repository, row.branch]),
+    [['contoso/Project/repo', 'feature'], ['owner/repo', 'feature']], 'by the workspace\'s name, of its own repositories');
+
+  await refreshPullRequestStates(f.env);
+  assert.equal(lookups().length, 1);
+  assert.equal(new URL(lookups()[0]!.url).searchParams.get('searchCriteria.sourceRefName'), 'refs/heads/feature');
+  assert.equal(lookups()[0]!.authorization, basic('', 'owner-azure-devops-token'), 'looked up as the session owner');
+  assert.ok(!f.calls.some(call => call.url.startsWith('https://api.github.com/repos/contoso')), 'GitHub is not asked about it');
+  assert.equal(await record(), undefined);
+
+  const created = Date.parse(String(f.sqlite.prepare('SELECT created_at FROM sessions WHERE id = ?').get('session')!.created_at));
+  f.state.azureBranchPulls['refs/heads/feature'] = [{ pullRequestId: 12, creationDate: new Date(created + 1000).toISOString(), sourceRefName: 'refs/heads/feature',
+    repository: { id: azureRepositoryId } }];
+  f.state.azurePulls[12] = { pullRequestId: 12, status: 'active', isDraft: true, repository: { id: azureRepositoryId, project: { id: azureProjectId } }, reviewers: [] };
+  stale(); await refreshPullRequestStates(f.env);
+  assert.deepEqual(await record(), { url: 'https://dev.azure.com/contoso/Project/_git/repo/pullrequest/12', number: 12, state: 'draft' });
+
+  f.state.azurePulls[12] = { ...f.state.azurePulls[12]!, status: 'completed' };
+  stale(); await refreshPullRequestStates(f.env);
+  assert.deepEqual(await record(), { url: 'https://dev.azure.com/contoso/Project/_git/repo/pullrequest/12', number: 12, state: 'merged' });
+  const before = lookups().length;
+  stale(); await refreshPullRequestStates(f.env);
+  assert.equal(lookups().length, before, 'merged pull requests are not looked up again');
 });
 
 async function direct(f: Awaited<ReturnType<typeof fixture>>, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, any> }> {

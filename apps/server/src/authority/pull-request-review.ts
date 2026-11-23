@@ -9,7 +9,10 @@ import { fail, identifier } from '../http.js';
 import { requireSession } from './access.js';
 import { githubGet, ownerGitHub, pinnedGitHubRepository, readIssue, verifyPin } from './github-broker.js';
 import { githubPullRequest } from './pull-request-states.js';
-import { recheckAccess, type GitHubAccess } from './repositories.js';
+import { cloneSessionRepository, recheckAccess, repositoryAccess, verifyRepository, type GitHubAccess } from './repositories.js';
+import { azurePullRequest } from '../../../../packages/shared/src/pull-requests.js';
+import { readAzurePullRequestReview } from './azure-pull-requests.js';
+import { requireBinding } from './push/broker.js';
 
 const perPage = 100;
 const filesPerPage = 30;
@@ -69,6 +72,22 @@ function commitViews(items: Record<string, unknown>[]): PullRequestCommitView[] 
 }
 
 
+async function azureReview(c: AppContext, row: SessionRow, pull: { fullName: string; number: number }, authorize: () => Promise<SessionRow>): Promise<Response> {
+  const pin = await cloneSessionRepository(c.env, row, binding => binding.provider === 'azure-devops' && binding.host === 'dev.azure.com'
+    && binding.full_name.toLowerCase() === pull.fullName.toLowerCase());
+  if (!pin || !('provider' in pin)) fail(403, 'repository_not_pinned', `${pull.fullName} is not an Azure DevOps repository of this workspace.`);
+  await requireBinding(c, row.workspace_id, pin);
+  const access = await repositoryAccess(c.env, row.owner_id, 'azure-devops', 'dev.azure.com', pin.fullName);
+  if (access.provider === 'github') fail(409, 'git_account_required', 'The session owner has no Azure DevOps account.');
+  await verifyRepository(access, { repositoryId: pin.repositoryId, fullName: pin.fullName });
+  const review = await readAzurePullRequestReview({ credential: access.account.credential, fullName: pin.fullName, repositoryId: pin.repositoryId }, pull.number);
+  await recheckAccess(c.env, access);
+  const checked = await authorize();
+  if (checked.policy_version !== row.policy_version || checked.owner_id !== row.owner_id) fail(403, 'permission_revoked', 'Session authority changed.');
+  c.header('Cache-Control', 'no-store');
+  return c.json({ review });
+}
+
 export async function sessionPullRequestReview(c: AppContext): Promise<Response> {
   const sessionId = identifier(c.req.param('id'));
   const authorize = async (): Promise<SessionRow> => {
@@ -79,8 +98,10 @@ export async function sessionPullRequestReview(c: AppContext): Promise<Response>
   const row = await authorize();
   const url = row.pull_request_url ? row.pull_request_url : row.branch_pull_request_url;
   if (!url) fail(404, 'no_pull_request', 'This session has no pull request yet.');
+  const azure = azurePullRequest(url);
+  if (azure) return azureReview(c, row, azure, authorize);
   const pull = githubPullRequest(url);
-  if (!pull) fail(409, 'pull_request_unsupported', 'Only github.com pull requests can be reviewed here. Open this one where it is hosted.');
+  if (!pull) fail(409, 'pull_request_unsupported', 'Only pull requests on github.com and Azure DevOps can be reviewed here. Open this one where it is hosted.');
   const pin = await pinnedGitHubRepository(c, row, pull.fullName);
   const github = await ownerGitHub(c.env, row.owner_id);
   await verifyPin(c.env, github, pin);

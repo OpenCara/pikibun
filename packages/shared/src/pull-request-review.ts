@@ -1,3 +1,4 @@
+import { azurePullRequest } from "./pull-requests.js";
 import { REDACTED, redactSecrets } from "./redaction.js";
 import type { PullRequestFileStatus, PullRequestFileView } from "./types.js";
 
@@ -27,6 +28,25 @@ export function redactPatch(patch: string): string {
     const marker = start.index + start[0].length;
     return `${prefix}${redactSecrets(content.slice(0, start.index))}${start[0]}${content.length > marker ? REDACTED : ""}`;
   }).join("\n");
+}
+
+export type ReviewForge = "github" | "azure-devops";
+
+export const reviewForgeNames: Record<ReviewForge, string> = { github: "GitHub", "azure-devops": "Azure DevOps" };
+
+export function reviewForge(url: string): ReviewForge | null {
+  if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(url)) return "github";
+  return azurePullRequest(url) ? "azure-devops" : null;
+}
+
+export function pullRequestFilesUrl(url: string): string {
+  const base = url.replace(/\/$/, "");
+  return reviewForge(url) === "azure-devops" ? `${base}?_a=files` : `${base}/files`;
+}
+
+export function pullRequestCommitUrl(url: string, sha: string): string {
+  const base = url.replace(/\/$/, "");
+  return reviewForge(url) === "azure-devops" ? `${base.replace(/\/pullrequest\/\d+$/i, "")}/commit/${sha}` : `${base}/commits/${sha}`;
 }
 
 export const pullRequestFileStatusLabels: Record<PullRequestFileStatus, string> = {

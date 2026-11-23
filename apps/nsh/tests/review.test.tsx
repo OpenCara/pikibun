@@ -172,6 +172,23 @@ describe("the Review tab of a session's panel", () => {
     expect(viewer.requests().some(request => request.url.endsWith("/pull-request"))).toBe(false);
   });
 
+  test("reviews an Azure DevOps pull request too, linking back to Azure DevOps", async () => {
+    const url = "https://dev.azure.com/contoso/My%20Project/_git/app/pullrequest/7";
+    const azure = { ...sessionRecord, pullRequest: { url, number: 7, state: "open" } };
+    const app = await openReview({
+      [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [azure] } },
+      [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...azure, viewable: true } } },
+      [`GET ${ORIGIN}/api/sessions/s1/pull-request`]: { body: { review: { ...review, pull: { ...review.pull, repository: "contoso/My Project/app", number: 7, url,
+        pullRequest: { ...review.pull.pullRequest, reviews: [{ ...review.pull.pullRequest.reviews[0], state: "REJECTED" }] } } } } },
+    });
+    await app.waitFor("id:review-title");
+    expect(app.requests().some(request => request.url.endsWith("/pull-request"))).toBe(true);
+    expect(app.shows("label:Open on Azure DevOps")).toBe(true);
+    await app.press("text:Info");
+    await app.waitFor("id:review-info");
+    expect(app.shows("text:Rejected")).toBe(true);
+  });
+
   test("says why the pull request couldn't be read, and tries again", async () => {
     const app = await openReview({ [`GET ${ORIGIN}/api/sessions/s1/pull-request`]: { status: 429, body: { error: "The session owner's GitHub rate limit is used up. Try again later." } } });
     await app.waitFor("text:Couldn't load the pull request");
