@@ -5,6 +5,7 @@ import {
 } from '../../../packages/shared/src/hardware.js';
 import type { PlacementHostSummary, PlacementResult } from '../../../packages/shared/src/cross-session.js';
 import type { ThinkingLevel } from '../../../packages/shared/src/types.js';
+import { hostCapabilities } from './authority/hosts.js';
 import { fail } from './http.js';
 import { connectorHostConfig } from './host-config.js';
 import type { Env, ModelRow, SessionRow } from './types.js';
@@ -34,6 +35,18 @@ type HostRow = { id: string; name: string; owner_id: string; owner_name: string 
 
 export function agentMayStartOn(origin: Pick<SessionRow, 'connector_id' | 'owner_id'>, actorId: string, model: Pick<ModelRow, 'connector_id' | 'connector_owner_id'>): boolean {
   return !!model.connector_id && (model.connector_owner_id === actorId || (model.connector_id === origin.connector_id && actorId === origin.owner_id));
+}
+
+export async function hostUnsandboxed(env: Env, connectorId: string | null | undefined): Promise<boolean> {
+  return (await hostCapabilities(env, connectorId))?.unsandboxed === true;
+}
+
+export async function sessionSandboxed(env: Env, session: Pick<SessionRow, 'connector_id' | 'host_environment'>): Promise<boolean> {
+  return Number(session.host_environment ?? 0) !== 1 && !await hostUnsandboxed(env, session.connector_id);
+}
+
+export function sandboxRequired(what: string, host: string, instead: string): never {
+  fail(403, 'sandbox_required', `This session runs in a sandbox, and ${host} runs sessions without one, so its agent doesn't ${what} on its own. ${instead}`);
 }
 
 async function online(env: Env, connectorId: string): Promise<boolean> {
@@ -97,6 +110,8 @@ const conditionNames: Record<PlacementCondition, string> = {
   minFreeMemoryGb: 'min_free_memory_gb', minFreeDiskGb: 'min_free_disk_gb', platform: 'platform', arch: 'arch',
 };
 
+export const unsandboxedPath = 'Where a person\'s message asks for a host without a sandbox, create with host_environment: true and placement {hosts: [its id]}, as list returns it.';
+
 function supportsThinking(host: PlacementHost, model: ModelRow, level: ThinkingLevel): boolean {
   if (!host.chatOptions) return false;
   const offered = host.models.find(item => item.provider === model.provider && item.modelId === model.model_id);
@@ -104,7 +119,7 @@ function supportsThinking(host: PlacementHost, model: ModelRow, level: ThinkingL
 }
 
 export async function placeChild(env: Env, origin: SessionRow, actorId: string, usable: ModelRow[], input: {
-  requirements: PlacementRequirements; model?: Pick<ModelRow, 'provider' | 'model_id'>; thinkingLevel?: ThinkingLevel; now?: number;
+  requirements: PlacementRequirements; model?: Pick<ModelRow, 'provider' | 'model_id'>; thinkingLevel?: ThinkingLevel; sandboxedOnly?: boolean; now?: number;
 }): Promise<{ model: ModelRow; host: PlacementHost; result: PlacementResult }> {
   const { requirements } = input;
   const now = input.now ?? Date.now();
@@ -119,7 +134,7 @@ export async function placeChild(env: Env, origin: SessionRow, actorId: string, 
       : `No host offers ${input.model ? `${input.model.provider}/${input.model.model_id}` : 'this session\'s model'} to you. Name models in placement, or a model list returns.`);
   }
   const hosts = await placementHosts(env, origin, actorId, matching, now);
-  const ruledOut = { hosts: 0, offline: 0, notStartable: 0, thinking: 0, conditions: new Map<string, number>() };
+  const ruledOut = { hosts: 0, offline: 0, notStartable: 0, unsandboxed: 0, thinking: 0, conditions: new Map<string, number>() };
   const qualified: { model: ModelRow; host: PlacementHost; rank: number }[] = [];
   const seen = new Set<string>();
   for (const model of matching) {
@@ -127,10 +142,11 @@ export async function placeChild(env: Env, origin: SessionRow, actorId: string, 
     if (!host) continue;
     const first = !seen.has(host.id);
     seen.add(host.id);
-    const count = (key: 'hosts' | 'offline' | 'notStartable' | 'thinking') => { if (first) ruledOut[key]++; };
+    const count = (key: 'hosts' | 'offline' | 'notStartable' | 'unsandboxed' | 'thinking') => { if (first) ruledOut[key]++; };
     if (requirements.hosts && !requirements.hosts.includes(host.id)) { count('hosts'); continue; }
     if (!host.online) { count('offline'); continue; }
     if (!host.agentMayStart) { count('notStartable'); continue; }
+    if (input.sandboxedOnly && host.sandbox === 'unsandboxed') { count('unsandboxed'); continue; }
     const unmet = unmetConditions({ id: host.id, gpuUsable: host.gpuUsable, ...(host.hardware ? { hardware: host.hardware } : {}) }, requirements, now);
     if (unmet.length) {
       if (first) for (const condition of unmet) ruledOut.conditions.set(conditionNames[condition], (ruledOut.conditions.get(conditionNames[condition]) ?? 0) + 1);
@@ -145,11 +161,13 @@ export async function placeChild(env: Env, origin: SessionRow, actorId: string, 
       ruledOut.hosts ? `${ruledOut.hosts} not among placement hosts` : '',
       ruledOut.offline ? `${ruledOut.offline} offline` : '',
       ruledOut.notStartable ? `${ruledOut.notStartable} another member's host, where only a person can start a session` : '',
+      ruledOut.unsandboxed ? `${ruledOut.unsandboxed} running sessions without a sandbox, where this sandboxed session's agent starts none on its own` : '',
       ...[...ruledOut.conditions].map(([name, n]) => `${n} failing ${name}`),
       ruledOut.thinking ? `${ruledOut.thinking} not offering the model at thinking ${input.thinkingLevel}` : '',
     ].filter(Boolean);
     fail(409, 'placement_unsatisfied', `No host qualifies for placement (${conditions}): of ${seen.size} host${seen.size === 1 ? '' : 's'} offering a matching model, `
-      + `${reasons.join('; ') || 'none answered'}. Relax the conditions, or ask the person to start the session where it should run.`);
+      + `${reasons.join('; ') || 'none answered'}. Relax the conditions, or ask the person to start the session where it should run.`
+      + (ruledOut.unsandboxed ? ` ${unsandboxedPath}` : ''));
   }
   qualified.sort((a, b) => a.host.score - b.host.score
     || Number(b.host.id === origin.connector_id) - Number(a.host.id === origin.connector_id)
