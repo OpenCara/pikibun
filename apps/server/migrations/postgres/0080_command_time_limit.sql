@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0086_command_time_limit.sql.
+-- Postgres translation of sqlite/0087_command_time_limit.sql.
 
 -- The command time limit of a host (HostConfig in packages/shared/src/host-config.ts, docs/hosts.md) now starts at an
 -- hour, its longest, where it started at 30 seconds, its shortest: a first install or build rarely fits in 30 seconds.

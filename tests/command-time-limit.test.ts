@@ -7,7 +7,7 @@ import { callLimits, callTimeout, commandLimits, configuredLimits } from "../app
 import { resourceLaunch } from "../apps/runner/src/resources.js";
 
 const migrations = new URL("../apps/server/migrations/sqlite/", import.meta.url);
-const migration = "0086_command_time_limit.sql";
+const migration = "0087_command_time_limit.sql";
 
 test("a host's command time limit starts at an hour, and No limit lifts it while keeping the seconds older connectors apply", () => {
   assert.equal(defaultHostConfig.commandTimeoutSeconds, 3600);
@@ -47,7 +47,7 @@ test("without a limit a command gets the room of a long one, a timer Node.js tak
 test("hosts whose saved limit was the old 30-second default get the hour; chosen limits stay, and nothing is unlimited until chosen", () => {
   const files = readdirSync(migrations).filter(name => name.endsWith(".sql")).sort();
   assert.ok(files.includes(migration));
-  assert.ok(readdirSync(new URL("../apps/server/migrations/postgres/", import.meta.url)).includes("0079_command_time_limit.sql"), "Postgres has the same migration");
+  assert.ok(readdirSync(new URL("../apps/server/migrations/postgres/", import.meta.url)).includes("0080_command_time_limit.sql"), "Postgres has the same migration");
   const sqlite = new DatabaseSync(":memory:");
   for (const file of files.filter(name => name < migration)) sqlite.exec(readFileSync(new URL(file, migrations), "utf8"));
   sqlite.exec("PRAGMA foreign_keys = OFF");
