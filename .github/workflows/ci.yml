@@ -156,6 +156,14 @@ jobs:
       - run: pnpm test:client
       # The client in a terminal: Native Shell's terminal backend on an in-memory terminal, as @pikibun/tui runs it.
       - run: pnpm test:client-tui
+      # Its Cell screenshots (UTF-8 JSON, one entry per Cell), to see the screens as a terminal draws them; only the
+      # terminal run writes them, so none means the run didn't draw in a terminal.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tui-screens
+          path: apps/nsh/.nsh/screenshots/tui
+          if-no-files-found: error
+          retention-days: 14
       # @pikibun/tui for this runner (the app's bundle, the launcher and the linux-x64 host), then the packaged app in a
       # pseudo-terminal: a bundle the host can't load ends the run at once, where a working one keeps drawing until
       # timeout stops it (124). Its input stays open and silent (sleep), as a terminal nobody types in.
