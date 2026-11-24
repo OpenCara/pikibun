@@ -285,7 +285,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
   app.delete('/api/workspaces/:id', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;
-    await requireMember(c.env, workspaceId, actorId, ['owner']);
+    await requireMember(c.env, workspaceId, actorId);
     const row = await c.env.DB.query<{ name: string; ownerId: string; personal: number; sessions: number }>(`SELECT w.name, w.owner_id AS ownerId,
         (SELECT COUNT(*) FROM personal_workspaces p WHERE p.workspace_id = w.id) AS personal,
         (SELECT COUNT(*) FROM sessions s WHERE s.workspace_id = w.id) AS sessions
@@ -299,6 +299,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     let result: { changes: number }[];
     try {
       result = await c.env.DB.batch([
+        c.env.DB.query<never>('UPDATE workspaces SET owner_id = owner_id WHERE id = ? AND owner_id = ?').bind(workspaceId, actorId),
         ...workspaceDeletionAuditStatements(c.env, actorId, { id: workspaceId, name: row.name }, auditId),
         c.env.DB.query<never>(`UPDATE connector_pairings SET workspace_id = NULL WHERE workspace_id = ? AND ${deleted}`).bind(workspaceId, auditId),
         c.env.DB.query<never>(`DELETE FROM workspaces WHERE id = ? AND ${deleted}`).bind(workspaceId, auditId),
@@ -307,7 +308,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
       if (error instanceof ConstraintError) fail(409, 'workspace_in_use', 'Something else still uses this workspace, such as an agent on one of its models, so it can\'t be deleted.');
       throw error;
     }
-    if (result[3]!.changes !== 1) fail(409, 'workspace_changed', 'The workspace changed. Refresh and try again.');
+    if (result[4]!.changes !== 1) fail(409, 'workspace_changed', 'The workspace changed. Refresh and try again.');
     return c.body(null, 204);
   });
 

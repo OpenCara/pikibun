@@ -56,7 +56,8 @@ test('the owner deletes a shared workspace with no sessions, with its settings, 
   await json(await alice.request('PUT', `${path}/invite-link`), 201);
   f.sqlite.prepare("INSERT INTO models (id, workspace_id, name, provider, model_id, created_at) VALUES ('m1', ?, 'Model', 'faux', 'faux', '2026-01-01')").run(team.id);
 
-  await denied(await bob.request('DELETE', path), 403, 'forbidden');
+  const refused = await json<{ code: string; error: string }>(await bob.request('DELETE', path), 403);
+  assert.deepEqual(refused, { code: 'forbidden', error: 'Only the workspace owner can delete it.' });
   const outsider = await f.client('carol');
   await denied(await outsider.request('DELETE', path), 404, 'not_found');
 
