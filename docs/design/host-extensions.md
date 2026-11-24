@@ -47,9 +47,10 @@ its host has.
    A host's owner and admins turn them on for every session on the host, in every workspace
    (`HostConfig.builtinExtensions`, Host → Extensions), with nothing to install. Pikibun runs pi-durable's own versions,
    because Pi's call other tools through the coding agent's loop (`ctx.executeTool`), which Pikibun doesn't run. Today
-   that is **code mode** (`pi:codemode`, from `@earendil-works/pi-durable/codemode`). Pi's others have no counterpart:
-   `mcp` and `llama.cpp` register MCP servers and providers (ignored, see below), and `tool-search` finds deferred tools,
-   which Pikibun has none of.
+   that is **code mode** (`pi:codemode`, from `@earendil-works/pi-durable/codemode`) and **tool search**
+   (`pi:tool-search`, from `@earendil-works/pi-durable/tool-search`, off unless the host turns it on; see
+   [Built-in extensions](#built-in-extensions)). Pi's others have no counterpart: `mcp` and `llama.cpp` register MCP
+   servers and providers (ignored, see below).
 11. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
     off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0049 (postgres/0042) added them to existing
     workspaces after their own, except where a workspace already used the package or was at its limit. It starts with
@@ -135,6 +136,33 @@ options and lifecycle), so a workspace can't name one. Pikibun wraps the useful 
   refused in Read-only messages exactly as the model's own call would be. Scripts survive a restart (pi-durable's
   journal). The script itself runs outside the OS sandbox, in a worker thread of the connector, but QuickJS gives it no
   Node, file system, network or timers.
+- **Tool search** (`pi:tool-search`, issue #343 step 3): the switch for tool deferral, off by default and not `core`,
+  so a host turns it on under Host → Extensions like any built-in. It waits for the eval of pull request #506 before
+  anyone considers it as a default.
+  - *Off*, nothing changes: the extension isn't installed in the session's registry, no tool is marked deferred, and a
+    message's tools, extensions and instructions are what they were, so the request's tool list and system prompt are
+    byte for byte the same (`tests/tool-deferral.test.ts`).
+  - *On*, a shared message selects pi-durable's `tool_search` extension and, last, `pikibun-deferred-tools`
+    (`deferredToolsExtension` in `extensions/builtin.ts`): copies of the message's enabled tools, Pikibun's own,
+    defined and extensions' alike, marked `deferred: true`, except those every session uses (`upFrontTools`: the file
+    tools, git, git_push and the github_* tools, gh, python, node, codemode and tool_search). A tool belongs to the last
+    selected extension that provides it, so the copies replace the originals; they keep their `execute`, so a loaded
+    tool refuses in a Read-only message, or as switched off, unavailable or outside the sender's tool group, with the
+    same words as before. A tool the message doesn't enable (the tunnel where the host can't run one, the browser
+    outside the Linux sandbox) stays off: `tool_search` searches only the enabled deferred tools, and a call to one
+    still ends `tool_unavailable` as before. The decision is by name only, not by what the conversation did, so it is
+    the same for every message and the prompt cache holds; the languages left out are those Pikibun can't tell are
+    used (rust, go, dotnet, make), which the model loads once it needs them.
+  - *Loading* is pi-durable's: `tool_search` ranks the deferred tools with BM25 and calls `control.addTools`, which
+    appends the names to the conversation's `modelTools.add`. Loaded tools follow the others in load order, and
+    pi-durable places the change as a system entry after the context, so the earlier request stays a prefix of the
+    next one and the cache isn't invalidated ([cache warming](cache-warming.md)). Code mode's section leaves deferred
+    tools out; scripts still call them and find them with `searchTools()`.
+  - *What survives*: `modelTools` is the conversation's stored agent state, so loaded tools stay through a restart
+    (the session also installs both extensions when it opens with the switch on, for a run it resumes), a compaction
+    and going back to an earlier message (pi-durable's fork keeps the agent as of the entry). A fork into a new session copies only the transcript, so the new session reads the tools its
+    `tool_search` results loaded (`loadedToolNames`) and loads them again. Turned off later, the stored names have no
+    effect: the tools are offered as before.
 - **Code mode's namespaces** (`apps/runner/src/session/namespaces.ts`). The `codemode` prompt section lists tools by
   pi-durable's namespaces (`Extension.namespace`): `## <name>` and a one-line description, then as many declarations as
   its 3,000-token budget holds; scripts find the rest with `describeNamespace()` and `searchTools(q, { namespace })`.
@@ -296,4 +324,4 @@ key, so two directories of one repository are two extensions, and another commit
   [extension-loading.md](extension-loading.md).
 - `registerMcpServer` as tools; virtual models (`registerVirtualModel`) among the host's models, and provider code in a process of its own ([extension models](extension-models.md), "Left out").
 - `ctx.ui.confirm`/`select` as cards; asking the session owner instead of refusing tools in Read-only messages.
-- `tool-search` as a built-in, once Pikibun defers tools (MCP servers' tools, say).
+- Tool search on by default, once the eval of pull request #506 says deferral is worth it.
