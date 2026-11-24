@@ -47,6 +47,7 @@ export interface HostConfig {
   fakeIpTunnels: boolean;
   buildCaches: BuildCacheMode;
   buildCacheGiB: number;
+  modelExtensions: string[];
 }
 
 export interface RequiredExtension {
@@ -62,6 +63,7 @@ export const hostConfigLimits = Object.freeze({
   compactionModels: 200,
   requiredExtensions: 16,
   requiredExtensionsBytes: 32 * 1024,
+  modelExtensions: 16,
 });
 
 export const unlimitedCommandSeconds = 2_000_000;
@@ -80,7 +82,25 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   fakeIpTunnels: false,
   buildCaches: "off",
   buildCacheGiB: buildCacheLimits.gib.default,
+  modelExtensions: Object.freeze([]) as unknown as string[],
 });
+
+export function parseModelExtensions(input: unknown): string[] {
+  if (!Array.isArray(input)) throw new Error("Invalid model extensions");
+  if (input.length > hostConfigLimits.modelExtensions) throw new Error(`At most ${hostConfigLimits.modelExtensions} extensions provide a host's models`);
+  const packages = new Set<string>();
+  return input.map(source => {
+    if (typeof source !== "string") throw new Error("Invalid model extension");
+    let normalized: string;
+    try { normalized = normalizeExtensionSource(source); }
+    catch (error) { throw new Error(`Invalid model extension: ${error instanceof Error ? error.message : "its source"}`); }
+    if (!normalized.startsWith("npm:") && !normalized.startsWith("git:")) throw new Error(`${normalized} can't provide models: only an extension installed from npm or Git can`);
+    const key = extensionPackageKey(normalized);
+    if (packages.has(key)) throw new Error(`One version of ${key} provides models`);
+    packages.add(key);
+    return normalized;
+  });
+}
 
 export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
   if (!Array.isArray(input)) throw new Error("Invalid required extensions");
@@ -152,7 +172,7 @@ export function parseHostCompaction(value: unknown): HostCompaction {
   return Object.keys(overrides).length ? { ...compaction, modelOverrides: overrides } : compaction;
 }
 
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB", "modelExtensions"]);
 
 export function parseHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
@@ -186,7 +206,7 @@ export function parseHostConfig(value: unknown): HostConfig {
     hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
     requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser),
     serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel), fakeIpTunnels: input.fakeIpTunnels,
-    buildCaches: input.buildCaches as BuildCacheMode, buildCacheGiB: gib };
+    buildCaches: input.buildCaches as BuildCacheMode, buildCacheGiB: gib, modelExtensions: parseModelExtensions(input.modelExtensions) };
 }
 
 export function parseHostConfigChange(value: unknown): Partial<HostConfig> {
