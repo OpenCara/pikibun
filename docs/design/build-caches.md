@@ -96,6 +96,14 @@ already change every session that reads the copy (`buildCacheWrites`).
   the copy writable. So the Pikibun server answers read-only for every sender while someone who fails the copy's rule
   holds a session role with `write` there, and read-write again once the role is revoked. What an earlier holder left
   in the worktree stays: see the next section.
+- **Only session roles count for that, not the workspace's own senders who fail the rule.** An admin or collaborator
+  outside a cache's writer groups, or one whose tool group can't write files, also sends every session messages, and
+  where their tools allow could leave the same wrapper in a writer's worktree. Their own messages mount the copy read-only, but their presence
+  doesn't make it read-only for the writers: they message every session of the workspace, so counting them would
+  leave a cache with writer groups writable from no session at all. Writer groups therefore narrow whose commands
+  write the copy, not who can influence a writer's build; a workspace that can't accept that from its own admins and
+  collaborators uses `owner` mode. An older connector is the exception, since it can't tell senders apart: there, one
+  such person does leave the cache out.
 - **Who the sender is.** The person whose message started the run (`run.initiatedBy` on the host, the admission's
   actor on the Pikibun server). A scheduled prompt is sent as the session's owner, so it counts as the owner. A
   cross-session message is sent as the person whose message the sending session was working on, so it counts as that
