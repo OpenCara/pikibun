@@ -7,7 +7,7 @@ import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import {
   addMemberStatement, auditAfterChange, defaultWorkspaceExtensionStatements, auditStatement, changeMemberRoleStatement, ownHostsOnlySQL, personalWorkspaceName, removeMemberStatements, requireMember,
-  requireSharedWorkspace, workspaceOwnerStatement,
+  requireSharedWorkspace, workspaceDeletionAuditStatements, workspaceOwnerStatement,
 } from './authority/index.js';
 import { modelDefinition } from './db.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
@@ -299,12 +299,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     let result: { changes: number }[];
     try {
       result = await c.env.DB.batch([
-        c.env.DB.query<never>(`INSERT INTO audit (id, workspace_id, session_id, actor_id, action, detail_json, created_at)
-          SELECT ?, NULL, NULL, ?, 'workspace.deleted', ?, ? WHERE EXISTS (SELECT 1 FROM workspaces w WHERE w.id = ? AND w.owner_id = ?)
-            AND NOT EXISTS (SELECT 1 FROM personal_workspaces WHERE workspace_id = ?)
-            AND NOT EXISTS (SELECT 1 FROM sessions WHERE workspace_id = ?)`)
-          .bind(auditId, actorId, JSON.stringify({ workspaceId, name: row.name }), now(), workspaceId, actorId, workspaceId, workspaceId),
-        c.env.DB.query<never>(`UPDATE audit SET workspace_id = NULL WHERE workspace_id = ? AND ${deleted}`).bind(workspaceId, auditId),
+        ...workspaceDeletionAuditStatements(c.env, actorId, { id: workspaceId, name: row.name }, auditId),
         c.env.DB.query<never>(`UPDATE connector_pairings SET workspace_id = NULL WHERE workspace_id = ? AND ${deleted}`).bind(workspaceId, auditId),
         c.env.DB.query<never>(`DELETE FROM workspaces WHERE id = ? AND ${deleted}`).bind(workspaceId, auditId),
       ]);
