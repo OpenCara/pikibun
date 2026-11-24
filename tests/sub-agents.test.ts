@@ -51,16 +51,18 @@ test("the placement setting reads key=value conditions, and leaves out what it c
   assert.deepEqual(parsePlacementSetting("gpu=false, gpu_vendor=amd"), { placement: { gpu: false }, ignored: ["gpu_vendor"] });
   assert.deepEqual(parsePlacementSetting(undefined), { placement: {}, ignored: [] });
   assert.equal(maxSubAgents("3"), 3);
-  assert.equal(maxSubAgents("50"), 10);
+  assert.equal(maxSubAgents("50"), 50, "no ceiling");
   assert.equal(maxSubAgents("0"), 0);
   assert.equal(maxSubAgents("lots"), DEFAULT_MAX_SUB_AGENTS);
+  assert.equal(maxSubAgents(""), Number.POSITIVE_INFINITY, "empty sets no limit");
+  assert.equal(DEFAULT_MAX_SUB_AGENTS, Number.POSITIVE_INFINITY);
   const settings = readSettings(name => ({ models: "anthropic/*, openai/*|anthropic/*", balance: "off", notify: false, delegate: " When-Asked " } as Record<string, unknown>)[name]);
-  assert.deepEqual([settings.models, settings.balance, settings.notify, settings.delegate, settings.maxSubAgents], [["anthropic/*", "openai/*"], false, false, "when-asked", 5]);
+  assert.deepEqual([settings.models, settings.balance, settings.notify, settings.delegate, settings.maxSubAgents], [["anthropic/*", "openai/*"], false, false, "when-asked", Number.POSITIVE_INFINITY]);
 });
 
 test("each sub-agent the agent starts gets the workspace's conditions where it set none, and a placement for the least loaded host", () => {
   const { registered, call } = load({ placement: "min_free_memory_gb=4, platform=linux", models: "anthropic/*" });
-  assert.deepEqual(registered, [["placement", ""], ["models", ""], ["balance", true], ["max-sub-agents", "5"], ["notify", true], ["delegate", "when-useful"]]);
+  assert.deepEqual(registered, [["placement", ""], ["models", ""], ["balance", true], ["max-sub-agents", ""], ["notify", true], ["delegate", "when-useful"]]);
   assert.deepEqual(call({ action: "create", title: "A", message: "Go" }).input,
     { action: "create", title: "A", message: "Go", notify: true, placement: { min_free_memory_gb: 4, platform: "linux", models: ["anthropic/*"] } });
   assert.deepEqual(call({ action: "create", message: "Go", notify: false, placement: { platform: "darwin", gpu: true } }).input.placement,
@@ -104,6 +106,19 @@ test("a message starts at most max-sub-agents, counting those that started; the 
   const none = load({ "max-sub-agents": "0" });
   assert.match(none.call({ action: "create" }).answer!.reason, /lets no message start sub-agents/);
   assert.match(none.start(), /lets no message start sub-agent sessions/);
+});
+
+test("by default a message may start any number of sub-agents", () => {
+  const { call, result, start } = load();
+  const prompt = start();
+  assert.doesNotMatch(prompt, /How many|per message/);
+  for (let index = 0; index < 25; index++) {
+    const { answer, input, id } = call({ action: "create", message: "Go" });
+    assert.equal(answer, undefined);
+    const note = result(input, created(`s${index}`), false, id)!.content[1]!.text;
+    assert.doesNotMatch(note, /more may start|No more may start|Infinity/);
+    assert.ok(note.endsWith(`message_id: "msg-s${index}"}.`), note);
+  }
 });
 
 test("its notes say where a sub-agent runs and how to collect it, or why no host qualified", () => {

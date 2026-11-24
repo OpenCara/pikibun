@@ -10,7 +10,8 @@ CPUs, memory, free memory or disk, platform, architecture, models), among the ho
 2. **Where each runs.** Every `sessions create` gets the workspace's conditions (`placement`) and model preferences
    (`models`) where the agent left them out, and, with `balance` on, a placement even with no conditions, so the server
    picks the least loaded host offering the model. The agent's own conditions win.
-3. **How many.** At most `max-sub-agents` per message; one more `create` is refused with why.
+3. **How many.** No limit by default; where `max-sub-agents` is set, at most that many per message, and one more
+   `create` is refused with why.
 4. **Collecting results.** With `notify` on, each sub-agent's outcome comes back to the session when it finishes, and
    the agent is told to collect every result (`sessions wait`) and bring them together before it answers.
 
@@ -22,7 +23,7 @@ Pikibun leaves out hosts that run sessions without a sandbox, and the note on su
 
 The policy is also a skill, `sub-agents`, filled in from the settings and offered through `resources_discover`. Where the
 skill is listed (`before_agent_start`'s `systemPromptOptions.skills` names it), the system prompt keeps only when to
-hand work over, how many per message, and to read the skill before `sessions create`. Where it isn't, the prompt gets
+hand work over, how many per message (where a limit is set), and to read the skill before `sessions create`. Where it isn't, the prompt gets
 the whole policy; with `max-sub-agents` 0 there is no skill.
 
 ## Settings
@@ -32,7 +33,7 @@ the whole policy; with `max-sub-agents` 0 there is no skill.
 | `placement` | empty | Conditions for every sub-agent's host: `key=value` pairs separated by commas, such as `min_free_memory_gb=4, platform=linux`. Keys: `gpu`, `gpu_vendor`, `gpu_memory_gb`, `min_cpus`, `min_memory_gb`, `min_free_memory_gb`, `min_free_disk_gb`, `platform`, `arch`, `hosts` and `models` (lists separated by `\|`) |
 | `models` | empty | Model patterns for sub-agents that name no model, separated by commas: model ids, `provider/model`, or globs such as `anthropic/*`. Any of them may run a sub-agent and load decides among them; their order only breaks ties. Empty runs them on the session's own model, on whichever host offers it |
 | `balance` | on | Place every sub-agent on the least loaded qualifying host, even with no conditions |
-| `max-sub-agents` | `5` | How many sub-agents one message may start, 0 to 10; 0 starts none |
+| `max-sub-agents` | empty | How many sub-agents one message may start; empty sets no limit, 0 starts none |
 | `notify` | on | Send each sub-agent's outcome back to the session that started it |
 | `delegate` | `when-useful` | `when-useful` or `when-asked` |
 

@@ -134,7 +134,7 @@ sub-agent defaults and limits.
 - **The short rule.** `pull-request-flow`: what the flow is for and when it applies, its steps in one sentence with
   the workspace's window and merge rule, the pre-push check, and the session's own pull requests; it says to read the
   skill before the first change in a clone, and that each step's note says what comes next. `sub-agents`: when to
-  hand work over, how many per message, and to read the skill before `sessions create`. With `max-sub-agents` 0 there
+  hand work over, how many per message where the workspace sets a limit, and to read the skill before `sessions create`. With `max-sub-agents` 0 there
   is no skill, only the line that says none may start.
 - **Only where the skill is listed.** An extension gives the short rule only when its own skill is among
   `systemPromptOptions.skills` of its `before_agent_start` event, which is where Pi puts the skills it lists. The

@@ -180,7 +180,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "sub-agents", source: "piki:sub-agents", title: "Sub-agents", workflow: true, needs: ["piki:sessions"],
-    description: "Has the agent hand sub-tasks to sub-agents, sessions it starts with the sessions tool (adding it adds Other sessions too): independent parts that can run at once, or parts that need hardware or a model its host lacks. Pikibun places each on the least loaded host that meets its conditions (a GPU, CPUs, memory, disk, platform, models), with the workspace's placement and models settings added where the agent sets none; max-sub-agents bounds each message, and each reports back when it finishes.",
+    description: "Has the agent hand sub-tasks to sub-agents, sessions it starts with the sessions tool (adding it adds Other sessions too): independent parts that can run at once, or parts that need hardware or a model its host lacks. Pikibun places each on the least loaded host that meets its conditions (a GPU, CPUs, memory, disk, platform, models), with the workspace's placement and models settings added where the agent sets none; max-sub-agents can bound each message (no limit by default), and each reports back when it finishes.",
     providers: [],
   },
   {

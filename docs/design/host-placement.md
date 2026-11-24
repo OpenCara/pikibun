@@ -187,11 +187,11 @@ Placement is a parameter the agent may or may not use. `piki:sub-agents` (`exten
 policy, without a tool of its own:
 
 - `before_agent_start` adds when to delegate (`delegate`), how to state conditions per task, the workspace's defaults,
-  the per-message limit and how to collect results.
+  the per-message limit where the workspace sets one, and how to collect results.
 - `tool_call` on `sessions` `create` fills the workspace's `placement` conditions in where the call leaves them out
   (the agent's own win), adds its `models` patterns where the call names no model, adds an empty placement with
   `balance` on so even an unconditioned sub-agent goes to the least loaded host offering its model, sets `notify` for a
-  call with a message, and blocks a create past `max-sub-agents` for the message (counting successful creates and
+  call with a message, and, where the workspace sets `max-sub-agents` (by default there is no limit), blocks a create past it for the message (counting successful creates and
   those still under way, so creates the runtime started together can't pass it; reset by each message's
   `before_agent_start`). A refusal that no host offers the model, of a placement only the extension added, stops it
   adding one for the session. Pikibun's adapter applies changes to `event.input`
