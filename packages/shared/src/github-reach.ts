@@ -2,8 +2,10 @@ export interface GitHubReachSettings {
   anyRepository: boolean;
 }
 
-export const githubReachLocation = "Settings → Workspaces → Your GitHub reach";
+export const defaultGitHubReach: GitHubReachSettings = Object.freeze({ anyRepository: true });
+
+export const githubReachLocation = "Settings → Workspaces → Agents → Your GitHub reach";
 
 export function outsideRepositoryHint(name: string): string {
-  return `${name} is not a github.com repository of this workspace. The session owner can let their own messages act on any GitHub repository they can access (${githubReachLocation}), or add it to the workspace.`;
+  return `${name} is not a github.com repository of this workspace. Only the session owner's own messages act on other GitHub repositories they can access, and only while they leave that on (${githubReachLocation}); otherwise add it to the workspace.`;
 }
