@@ -209,7 +209,8 @@ test("workspace npm extensions lock registry integrity, populate server-verified
     sessionToolSwitches: true,
     extensionLocks: true,
   })));
-  assert.ok(sessionToolsOff(preReportAnswer.extensions).has("node"));
+  assert.ok(sessionToolsOff(preReportAnswer.extensions).has("rust"));
+  assert.ok(!sessionToolsOff(preReportAnswer.extensions).has("node"), "a new workspace starts with the starter tools on");
   assert.equal(preReportAnswer.extensions.find(item => item.source === "npm:@acme/pi-helper@1.0.0")?.integrity, pkgIntegrity);
   assert.equal(preReportAnswer.autoCache, undefined);
 

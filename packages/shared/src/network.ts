@@ -5,7 +5,7 @@ export const networkModes = ["off", "allowlist", "open"] as const;
 export type NetworkMode = (typeof networkModes)[number];
 export interface NetworkPolicy { mode: NetworkMode; domains: string[]; packageRegistries: boolean }
 
-export const defaultNetworkPolicy: NetworkPolicy = Object.freeze({ mode: "off", domains: [], packageRegistries: true }) as NetworkPolicy;
+export const defaultNetworkPolicy: NetworkPolicy = Object.freeze({ mode: "open", domains: [], packageRegistries: true }) as NetworkPolicy;
 export const networkLimits = { domains: 100 } as const;
 
 export const packageRegistryDomains: readonly string[] = Object.freeze([

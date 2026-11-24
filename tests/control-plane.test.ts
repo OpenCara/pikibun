@@ -397,7 +397,8 @@ test('internal broker rejects wrong operations and posts once per tool call of a
     return Response.json({ id: 99, html_url: 'https://github.com/owner/repo/issues/3#issuecomment-99', sensitive: 'must-not-return' });
   };
   t.after(() => { globalThis.fetch = previousFetch; });
-  assert.equal((await request({ ...payload, approvalId: 'tool-call-0', repository: 'owner/other' })).status, 403, 'a comment keeps to the workspace\'s repositories');
+  f.sqlite.prepare("INSERT INTO member_github_reach (workspace_id, user_id, any_repository, updated_at) SELECT workspace_id, owner_id, 0, ? FROM sessions WHERE id = 'session'").run(createdAt);
+  assert.equal((await request({ ...payload, approvalId: 'tool-call-0', repository: 'owner/other' })).status, 403, 'a comment keeps to the workspace\'s repositories once its owner turned their reach off');
   assert.equal(writes, 0);
   const first = await request(payload);
   assert.equal(first.status, 200);

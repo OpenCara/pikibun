@@ -190,10 +190,11 @@ async function fixture(t: TestContext) {
   return { env, sqlite, owner, admin, member, workspace, admit, tool, ok, refused, turnOn };
 }
 
-test('an agent reads and manages its workspace as its message\'s sender, through the workspace\'s own routes, once piki:workspace is on', async t => {
+test('an agent reads and manages its workspace as its message\'s sender, through the workspace\'s own routes, while piki:workspace is on, as a new workspace starts', async t => {
   const f = await fixture(t);
   const ownerId = f.owner.user.id;
   const write = f.admit('owner-session', ownerId);
+  assert.equal((await f.owner.request('PUT', `/api/workspaces/${f.workspace.id}/extensions`, { source: 'piki:workspace', enabled: false })).status, 200);
   await f.refused(f.tool('owner-session', ownerId, write, { action: 'get' }), 403, 'workspace_tool_off');
   await f.turnOn();
 
