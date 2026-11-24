@@ -106,6 +106,7 @@ export interface SessionsToolRequest {
   modelId?: string;
   thinkingLevel?: ThinkingLevel;
   placement?: PlacementRequirements;
+  hostEnvironment?: boolean;
   messageId?: string;
   limit?: number;
 }
@@ -116,13 +117,14 @@ export type SessionsToolResult =
   | { session: CrossSessionSummary; busy: boolean; entries: Pick<EntryView, "id" | "role" | "kind" | "actorId" | "text" | "error">[];
     message?: CrossSessionMessage; outcome?: CrossSessionOutcome }
   | { message: CrossSessionMessage }
-  | { session: CrossSessionSummary; model?: { id: string; provider: string; modelId: string; thinkingLevel?: ThinkingLevel }; placement?: PlacementResult; message?: CrossSessionMessage }
+  | { session: CrossSessionSummary; model?: { id: string; provider: string; modelId: string; thinkingLevel?: ThinkingLevel }; placement?: PlacementResult;
+    hostEnvironment?: true; message?: CrossSessionMessage }
   | { stopped: number }
   | { archived: string }
   | { consent: "audience"; target: string; reason: string };
 
 export function sessionsToolTarget(request: { action: SessionsToolAction; targetSessionId?: string; message?: string; access?: AccessMode; notify?: boolean;
-  title?: string; modelId?: string; thinkingLevel?: string; placement?: PlacementRequirements; messageId?: string }): string {
+  title?: string; modelId?: string; thinkingLevel?: string; placement?: PlacementRequirements; hostEnvironment?: boolean; messageId?: string }): string {
   const parts: string[] = [request.action];
   if (request.targetSessionId) parts.push(`session ${request.targetSessionId}`);
   if (request.messageId) parts.push(`message ${request.messageId}`);
@@ -130,6 +132,7 @@ export function sessionsToolTarget(request: { action: SessionsToolAction; target
   if (request.modelId) parts.push(`model ${request.modelId}`);
   if (request.thinkingLevel) parts.push(`thinking ${request.thinkingLevel}`);
   if (request.placement) parts.push(`placement ${placementTarget(request.placement)}`);
+  if (request.hostEnvironment) parts.push("directly on the host, without the sandbox");
   if (request.access) parts.push(`access ${request.access}`);
   if (request.notify) parts.push("notify");
   const head = parts.join(" · ");

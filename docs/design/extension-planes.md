@@ -297,7 +297,9 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   credentials, and up to 8 headers, which are encrypted with `VAULT_KEY` (context `remote-mcp:<id>`), never shown again
   (only their names) and never audited. The Pikibun server speaks Streamable HTTP (JSON or SSE answers, `Mcp-Session-Id`,
   `MCP-Protocol-Version: 2025-06-18`), lists tools on save and on **List tools again** (15 s), and calls them (60 s),
-  each answer capped at 1 MB and a result shown to the model at 64 KB, text parts only.
+  each answer capped at 1 MB and a result shown to the model at 64 KB, text parts only. A `PATCH` that changes `url`
+  must give `headers` too (`{}` or `null` for none): the stored headers are never sent to another address
+  (`mcp_headers_required`).
 - **Only public addresses**: `publicHttpsTransport` connects with a `lookup` that refuses any resolved address in
   `NON_PUBLIC_IPV4` / `NON_PUBLIC_IPV6` as it connects (so a name that rebinds to a private address after a check gets
   nowhere), refuses literal private addresses, and follows no redirect.
@@ -306,7 +308,8 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   `piki:remote-mcp` (on unless a workspace turns it off), routed to `mcp/<prefix>/<16-hex key of the tool's name>`, which
   the connector forwards to `/api/connectors/self/mcp/:prefix/:key` with the session, requester, admission and
   `arguments`. The session validates `arguments` against the schema before forwarding, and the Pikibun server again
-  (pi-schema `compile`) before calling.
+  (pi-schema `compile`) before calling. That route checks `piki:remote-mcp` itself too (`extensionSwitchOn`, as the
+  host does), and answers `mcp_tools_off` where the workspace turned it off.
 - **Untrusted `readOnlyHint`**: every tool is `write: true` unless its name is in the registration's `readOnlyTools`;
   a write tool is refused for a Read-only message's admission (`run_admissions.access = 'read'`), and every call is
   audited as `workspace.mcp.called` with the server, tool and whether it may write.
@@ -360,5 +363,7 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   refuses it, and counts as a write if either says so (`PikiSession.servedRules`). So Pikibun can refuse more, or count
   more commands as writes, without a connector release, but neither a compromised Pikibun server nor a mistaken release
   can loosen what the connector holds, such as the refusals that keep its tokens hidden. A definition that would refuse
-  nothing, names another extension, or sets variables or roots outside bounded patterns is passed over.
+  nothing, names another extension, or sets variables or roots outside bounded patterns is passed over. A definition's
+  `hints` (text added to a failed run's result, [Lessons enforced in code](enforced-lessons.md)) are served only to a
+  connector that asks with `cliHints: true`: an older one would pass over the whole definition for the unknown key.
 

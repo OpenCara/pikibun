@@ -20,6 +20,7 @@ export interface CliSpec {
   sandboxRoots?: readonly string[];
   refused(args: readonly string[]): string | undefined;
   writes(args: readonly string[]): string | undefined;
+  hints?(args: readonly string[], output: string): string[];
   prepare?(args: readonly string[]): readonly string[];
 }
 
@@ -97,6 +98,7 @@ export function cliEnvironment(spec: Pick<CliSpec, "passEnv" | "setEnv">, source
 const HEAD_BYTES = 256 * 1024;
 const TAIL_BYTES = SAVED_OUTPUT_BYTES - HEAD_BYTES - 256;
 const DEFAULT_TIMEOUT_SECONDS = 300;
+const MAX_HINTS = 4;
 
 class Output {
   #head: Buffer[] = [];
@@ -216,7 +218,7 @@ export interface PikiSession {
   forgeWrites?: (callId: string) => boolean;
   saveOutput?: (callId: string, tool: string, output: string) => Promise<string>;
   fromScript?: (callId: string) => boolean;
-  servedRules?: (name: string) => Promise<Pick<CliSpec, "refused" | "writes"> | undefined>;
+  servedRules?: (name: string) => Promise<Pick<CliSpec, "refused" | "writes" | "hints"> | undefined>;
 }
 
 export const noPikiSession: PikiSession = Object.freeze({ hostSignIn: false });
@@ -276,11 +278,14 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
         const tool = spec.info.tool ?? spec.command;
         const outcome = async (run: CliRun) => {
           const status = run.failure ?? (run.exitCode === 0 ? undefined : run.signal ? `It ended with ${run.signal}` : `It exited with ${run.exitCode}`);
-          const output = run.output.trim() || "(no output)";
-          const text = session.fromScript?.(toolCallId) ? scriptOutput(output) : await boundOutput(output, {
+          const printed = run.output.trim();
+          const output = printed || "(no output)";
+          const hints = !run.failure && !run.signal && (status || !printed)
+            ? [...new Set([...spec.hints?.(args, run.output) ?? [], ...served?.hints?.(args, run.output) ?? []])].slice(0, MAX_HINTS).map(hint => `\nHint: ${hint}`).join("") : "";
+          const text = (session.fromScript?.(toolCallId) ? scriptOutput(output) : await boundOutput(output, {
             ...(session.saveOutput ? { save: (whole: string) => session.saveOutput!(toolCallId, tool, whole) } : {}),
-            ...(status ? { fits: (shown: string) => fitsModel(`${status}.\n${shown}`) } : {}),
-          });
+            ...(status || hints ? { fits: (shown: string) => fitsModel(`${status ? `${status}.\n` : ""}${shown}${hints}`) } : {}),
+          })) + hints;
           if (status) throw new Error(`${status}.\n${text}`);
           return { content: [{ type: "text" as const, text }], details: { exitCode: 0 } };
         };

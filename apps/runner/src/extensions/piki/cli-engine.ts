@@ -1,10 +1,11 @@
-import type { CliDefinition, CliRefusal } from "../../../../../packages/shared/src/cli-definitions.js";
+import type { CliCall, CliDefinition } from "../../../../../packages/shared/src/cli-definitions.js";
 import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
 import { apiWrites, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
 export interface CliRules {
   refused(args: readonly string[]): string | undefined;
   writes(args: readonly string[]): string | undefined;
+  hints(args: readonly string[], output: string): string[];
   prepare?(args: readonly string[]): readonly string[];
 }
 
@@ -38,8 +39,10 @@ export function cliRules(definition: CliDefinition): CliRules {
   const secretWords = reads.secretWords ? new RegExp(reads.secretWords, "i") : undefined;
   const verb = reads.verb ? new RegExp(reads.verb) : undefined;
   const refusals = definition.refuse.map(rule => ({ rule, pattern: rule.argPattern ? new RegExp(rule.argPattern, "i") : undefined }));
+  const hints = (definition.hints ?? []).map(rule => ({ rule, pattern: rule.argPattern ? new RegExp(rule.argPattern, "i") : undefined,
+    output: rule.outputPattern ? new RegExp(rule.outputPattern, "i") : undefined }));
 
-  const matches = (rule: CliRefusal, pattern: RegExp | undefined, args: readonly string[], words: readonly string[]) => {
+  const matches = (rule: CliCall, pattern: RegExp | undefined, args: readonly string[], words: readonly string[]) => {
     if (rule.words?.length) {
       const found = (word: string) => rule.wordPrefixes ? words.some(candidate => candidate.length > 0 && word.startsWith(candidate)) : words.includes(word);
       if (!rule.words.every(found)) return false;
@@ -66,6 +69,11 @@ export function cliRules(definition: CliDefinition): CliRules {
       const args = normalize(original);
       const words = positionals(args);
       return refusals.find(({ rule, pattern }) => matches(rule, pattern, args, words))?.rule.reason;
+    },
+    hints(original, output) {
+      const args = normalize(original);
+      const words = positionals(args);
+      return hints.filter(({ rule, pattern, output: printed }) => matches(rule, pattern, args, words) && (!printed || printed.test(output))).map(({ rule }) => rule.hint);
     },
     writes(original) {
       const args = normalize(original);
@@ -115,6 +123,6 @@ export function cliSpec(definition: CliDefinition): CliSpec {
     description: definition.description,
     passEnv: name => exact.has(name) || prefixes.some(prefix => name.startsWith(prefix)),
     tokenEnv: definition.tokenEnv, setEnv: { ...definition.setEnv }, ...(definition.sandboxRoots ? { sandboxRoots: definition.sandboxRoots } : {}),
-    refused: rules.refused, writes: rules.writes, ...(rules.prepare ? { prepare: rules.prepare } : {}),
+    refused: rules.refused, writes: rules.writes, hints: rules.hints, ...(rules.prepare ? { prepare: rules.prepare } : {}),
   };
 }

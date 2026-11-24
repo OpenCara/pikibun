@@ -134,7 +134,7 @@ export class ControlPlaneCalls {
 
   #definitions(): ToolDefinitionsSource {
     return this.#toolDefinitionsSource ??= new ToolDefinitionsSource(async () =>
-      this.callback(await this.options.connection(), "/api/connectors/self/tools", {}, TOOL_DEFINITIONS_LIMIT));
+      this.callback(await this.options.connection(), "/api/connectors/self/tools", { cliHints: true }, TOOL_DEFINITIONS_LIMIT));
   }
 
   async toolDefinitions(): Promise<readonly ToolDefinition[]> {

@@ -23,7 +23,7 @@ import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
 import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
-import { bundledCliDefinitions, parseCliDefinitions } from '../packages/shared/src/cli-definitions.js';
+import { bundledCliDefinitions, parseCliDefinitions, withoutCliHints } from '../packages/shared/src/cli-definitions.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
 import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
@@ -340,14 +340,21 @@ function admit(f: Fixture, sessionId: string, actorId: string, options: { expire
 }
 
 function githubFetch(t: TestContext) {
-  return t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-    assert.equal(String(input), 'https://api.github.com/repos/owner/repo/issues/3/comments');
-    assert.equal(init?.method, 'POST');
+  let posted = 0;
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     assert.equal(init?.redirect, 'manual');
     assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${githubToken}`);
+    if (String(input) === 'https://api.github.com/repos/owner/repo') {
+      assert.equal(init?.method ?? 'GET', 'GET');
+      return Response.json({ id: 7, full_name: 'owner/repo', default_branch: 'main', private: true });
+    }
+    assert.equal(String(input), 'https://api.github.com/repos/owner/repo/issues/3/comments');
+    assert.equal(init?.method, 'POST');
     assert.deepEqual(JSON.parse(String(init?.body)), { body: 'Exactly approved text' });
+    posted++;
     return Response.json({ id: 99, html_url: 'https://github.com/owner/repo/issues/3#issuecomment-99', secret: githubToken });
   });
+  return { mock: { callCount: () => posted } };
 }
 
 for (const revoked of [false, true]) {
@@ -1286,6 +1293,67 @@ test('a github issue whose outcome was unclear is found by its title, and one th
   assert.match(refusal.error, /opened owner\/repo#64 with this exact title 1 minute ago: https:\/\/github\.com\/owner\/repo\/issues\/64\. Nothing was opened/);
   assert.equal(consumed(again.approvalId), null, 'a refused duplicate leaves the tool call unspent');
   assert.equal(calls.filter(call => call.startsWith('POST')).length, 1);
+  assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
+});
+
+test('github comments keep to the workspace\'s repositories and record where they went; only the owner\'s own message, with their GitHub reach on, posts elsewhere', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_comment']);
+  const calls: string[] = [];
+  let answer: (() => Response) | undefined;
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    calls.push(`${method} ${url}`);
+    assert.equal(init?.redirect, 'manual');
+    assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${githubToken}`);
+    if (url === 'https://api.github.com/repos/owner/repo') return Response.json({ id: 7, full_name: 'owner/repo', default_branch: 'main', private: true });
+    if (url === 'https://api.github.com/repos/Other/Place') return Response.json({ id: 99, full_name: 'other/place', default_branch: 'main', private: true });
+    const posted = /^https:\/\/api\.github\.com\/repos\/(owner\/repo|other\/place)\/issues\/3\/comments$/.exec(url);
+    if (posted && method === 'POST') return answer ? answer() : Response.json({ id: 99, html_url: `https://github.com/${posted[1]}/issues/3#issuecomment-99` });
+    return Response.json({ message: `unexpected ${method} ${url}` }, { status: 500 });
+  });
+  const owner = s.session.ownerId;
+  const comment = (repository: string, actorId = owner) => ({ sessionId: s.session.id, actorId, approvalId: `tool-${token().slice(0, 32)}`,
+    admissionId: admit(f, s.session.id, actorId), repository, issue: 3, body: 'Exactly approved text' });
+  const consumed = (approvalId: string) => f.sqlite.prepare('SELECT created_at FROM automatic_github_effects WHERE approval_id = ?').get(approvalId)?.created_at ?? null;
+  const audited = (action: string) => (f.sqlite.prepare('SELECT detail_json FROM audit WHERE action = ? ORDER BY rowid').all(action) as { detail_json: string }[])
+    .map(row => JSON.parse(row.detail_json)).map(detail => [detail.repository, detail.issue, detail.outsideWorkspace ?? false]);
+
+  const outside = comment('Other/Place');
+  const refused = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/comment', outside), 403);
+  assert.equal(refused.code, 'repository_not_pinned');
+  assert.match(refused.error, /act on any GitHub repository they can access \(Settings → Workspaces → Your GitHub reach\), or add it to the workspace\.$/);
+  assert.deepEqual(calls, [], 'refused before GitHub is asked anything');
+  assert.equal(consumed(outside.approvalId), null, 'a refused repository leaves the tool call unspent');
+
+  assert.deepEqual(await json(await self(f, s.connector, 'github/comment', comment('Owner/Repo'))), { id: 99, url: 'https://github.com/owner/repo/issues/3#issuecomment-99' });
+  assert.deepEqual(calls, ['GET https://api.github.com/repos/owner/repo', 'POST https://api.github.com/repos/owner/repo/issues/3/comments'],
+    'the workspace\'s repository is checked with GitHub and posted to under its own name');
+  assert.deepEqual(audited('github.comment.completed'), [['owner/repo', 3, false]]);
+
+  answer = () => Response.json({ message: 'Not Found' }, { status: 404 });
+  await denied(await self(f, s.connector, 'github/comment', comment('owner/repo')), 502, 'github_rejected');
+  assert.deepEqual(audited('github.comment.failed'), [['owner/repo', 3, false]]);
+  answer = undefined;
+
+  await json(await s.creator.request('PUT', `/api/workspaces/${s.team.id}/github-reach`, { anyRepository: true }));
+  const before = calls.length;
+  assert.deepEqual(await json(await self(f, s.connector, 'github/comment', comment('Other/Place'))), { id: 99, url: 'https://github.com/other/place/issues/3#issuecomment-99' });
+  assert.deepEqual(calls.slice(before), ['GET https://api.github.com/repos/Other/Place', 'POST https://api.github.com/repos/other/place/issues/3/comments'],
+    'GitHub\'s canonical name is the one posted to');
+  assert.deepEqual(audited('github.comment.completed'), [['owner/repo', 3, false], ['other/place', 3, true]]);
+
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
+  const after = calls.length;
+  const borrowed = comment('Other/Place', s.host.user.id);
+  await denied(await self(f, s.connector, 'github/comment', borrowed), 403, 'repository_not_pinned');
+  assert.equal(calls.length, after, 'a collaborator\'s message never posts beyond the workspace, whatever the owner chose');
+  assert.equal(consumed(borrowed.approvalId), null);
+  await json(await self(f, s.connector, 'github/comment', comment('owner/repo', s.host.user.id)));
+  assert.equal(calls.at(-1), 'POST https://api.github.com/repos/owner/repo/issues/3/comments', 'and still posts in the workspace\'s repositories');
+
+  await json(await s.creator.request('PUT', `/api/workspaces/${s.team.id}/github-reach`, { anyRepository: false }));
+  await denied(await self(f, s.connector, 'github/comment', comment('Other/Place')), 403, 'repository_not_pinned');
   assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
 });
 
@@ -3801,7 +3869,11 @@ test('a connector reads the tools this server defines as data, only with its own
   const { tools } = answer;
   assert.deepEqual(parseToolDefinitions({ tools }), bundledToolDefinitions, 'they parse as a connector parses them, unchanged');
   assert.deepEqual(parseToolDefinitions(answer), bundledToolDefinitions, 'an older connector reads the same tools, passing over the CLI definitions beside them');
-  assert.deepEqual(parseCliDefinitions(answer.clis), bundledCliDefinitions);
+  assert.deepEqual(parseCliDefinitions(answer.clis), bundledCliDefinitions.map(withoutCliHints));
+  assert.ok((answer.clis as Record<string, unknown>[]).every(cli => !('hints' in cli)), 'a connector that doesn\'t ask for hints gets none: an older one passes over a definition with a key it doesn\'t know');
+  const hinted = await json<{ clis: unknown }>(await self(f, s.connector, 'tools', { cliHints: true, somethingLater: true }));
+  assert.deepEqual(parseCliDefinitions(hinted.clis), bundledCliDefinitions);
+  assert.ok(bundledCliDefinitions.some(cli => cli.hints?.length), 'and one that asks gets them');
   assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read', 'workspace']);
   await denied(await s.creator.request('POST', '/api/connectors/self/tools', {}), 401, 'connector_authentication_required');
 });
@@ -3942,7 +4014,7 @@ test('members connect Dropbox by signing in; the state, PKCE and the member are 
 });
 
 function mcpFake(token: string) {
-  const calls: { method: string; headers: Record<string, string>; params: unknown }[] = [];
+  const calls: { method: string; url: string; headers: Record<string, string>; params: unknown }[] = [];
   const tools = [
     { name: 'search_issues', description: 'Search issues.', annotations: { readOnlyHint: true },
       inputSchema: { type: 'object', properties: { query: { type: 'string', maxLength: 100 } }, required: ['query'], $schema: 'https://json-schema.org/draft/2020-12/schema' } },
@@ -3952,7 +4024,7 @@ function mcpFake(token: string) {
   ];
   const transport = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
     const body = JSON.parse(request.body) as { id?: number; method: string; params?: Record<string, unknown> };
-    calls.push({ method: body.method, headers: request.headers, params: body.params });
+    calls.push({ method: body.method, url: request.url, headers: request.headers, params: body.params });
     if (request.headers.Authorization !== `Bearer ${token}`) return { status: 401, headers: {}, body: '' };
     if (body.id === undefined) return { status: 202, headers: {}, body: '' };
     const answer = (result: unknown) => ({ status: 200, headers: { 'content-type': 'text/event-stream', 'mcp-session-id': 'mcp-session-1' },
@@ -4014,6 +4086,40 @@ test('workspace remote MCP servers: admins register them with vault-held headers
   assert.ok(mcp.calls.filter(item => item.method === 'tools/call').every(item => item.headers['Mcp-Session-Id'] === 'mcp-session-1' && item.headers['MCP-Protocol-Version'] === '2025-06-18'));
   const audits = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.called'").all().map(row => JSON.parse(String(row.detail_json)));
   assert.deepEqual(audits.map(item => [item.tool, item.write]), [['search_issues', false], ['search_issues', false], ['create-issue', true]]);
+
+  const extensions = '/api/workspaces/' + s.team.id + '/extensions';
+  await json(await s.admin.request('PUT', extensions, { source: 'piki:remote-mcp', enabled: false }));
+  const called = mcp.calls.length;
+  const switchedOff = await json<{ code: string; error: string }>(await call(searchRoute!, { query: 'bug' }), 403);
+  assert.equal(switchedOff.code, 'mcp_tools_off');
+  assert.match(switchedOff.error, /turned off in this workspace \(piki:remote-mcp\)/);
+  await denied(await call(createRoute!, { title: 'New' }), 403, 'mcp_tools_off');
+  assert.equal(mcp.calls.length, called, 'a connector that still calls reaches no server once the workspace turned remote MCP tools off');
+  await json(await s.admin.request('PUT', extensions, { source: 'piki:remote-mcp', enabled: true }));
+  assert.ok((await json<{ result: string }>(await call(searchRoute!, { query: 'bug' }))).result.startsWith('search_issues'));
+  await json(await s.admin.request('DELETE', extensions + '?source=' + encodeURIComponent('piki:remote-mcp')));
+  assert.ok((await json<{ result: string }>(await call(searchRoute!, { query: 'bug' }))).result.startsWith('search_issues'), 'on unless the workspace turned it off');
+
+  const moved = 'https://elsewhere.example.net/mcp';
+  const reached = mcp.calls.length;
+  const kept = await json<{ code: string; error: string }>(await s.admin.request('PATCH', path + '/' + server.id, { url: moved }), 400);
+  assert.equal(kept.code, 'mcp_headers_required');
+  assert.match(kept.error, /Give this server's headers again with its new address, or an empty set to send none/);
+  await denied(await s.admin.request('PATCH', path + '/' + server.id, { url: moved, name: 'Moved', refresh: true }), 400, 'mcp_headers_required');
+  assert.equal(mcp.calls.length, reached, 'nothing is sent to the new address');
+  const unchanged = f.sqlite.prepare('SELECT name, url, header_names_json FROM workspace_mcp_servers WHERE id = ?').get(server.id)!;
+  assert.deepEqual([unchanged.name, unchanged.url, unchanged.header_names_json], ['Tracker', body.url, '["Authorization"]']);
+  const { server: same } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { url: body.url, name: 'Tracker 2' }));
+  assert.deepEqual([same.name, same.headerNames], ['Tracker 2', ['Authorization']], 'an address that doesn\'t change keeps its headers');
+  const { server: cleared } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { url: moved, headers: {} }));
+  assert.deepEqual([cleared.url, cleared.headerNames], [moved, []], 'an explicit empty set of headers moves it and clears them');
+  assert.equal(f.sqlite.prepare('SELECT headers_ciphertext FROM workspace_mcp_servers WHERE id = ?').get(server.id)!.headers_ciphertext, null);
+  const toMoved = mcp.calls.slice(reached).filter(item => item.url === moved);
+  assert.ok(toMoved.length > 0 && toMoved.every(item => !JSON.stringify(item.headers).includes(secret)), 'the new address never sees the header kept for the old one');
+  await denied(await s.admin.request('PATCH', path + '/' + server.id, { url: body.url }), 400, 'mcp_headers_required');
+  const { server: back } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id,
+    { url: body.url, name: 'Tracker', headers: { Authorization: 'Bearer ' + secret } }));
+  assert.deepEqual([back.url, back.headerNames, back.error], [body.url, ['Authorization'], undefined], 'new headers given with the new address go to it');
 
   const { server: off } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { enabled: false }));
   assert.equal(off.enabled, false);
