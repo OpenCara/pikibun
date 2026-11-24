@@ -410,14 +410,19 @@ connector to keep or to send is untrusted.
   to the agent when the message would settle, through the same hook as `agent_before_settle`'s `continue`
   (`GenerationHooks.onYield`), which extensions already had. The turn is part of that run, so it has that message's
   sender, access mode, admission and tools, no more; a side ask runs no extensions, so it gets none. The worker queues at
-  most 8 texts of 16,000 characters for one settle and drops what is queued when the run ends; the connector asks for
-  them only where a run yields.
+  most 8 texts of 16,000 characters for one settle, and the connector asks for them only where a run yields.
+- **A text belongs to the run it was queued in.** Every request carries the connector's number for the run going on
+  (`RequestContext.run`, set as a message starts and cleared as it ends). The worker takes a text only from code that
+  began in a request of that run, while that run is still the one the connector names, and hands texts only to the
+  run they were queued in; the rest is dropped at the next request. So a timer or a promise a tool left behind queues
+  nothing once its message has ended, whether it fires before the next message or during it: what one sender's
+  message started never becomes a turn of another's.
 
 What it doesn't protect against: an extension can keep a run going by sending again at each settle, as it could with
-`agent_before_settle`, until someone stops it. The queue is the worker's own, so an extension that wants to can hold a
-text back and return it in a later message's run, as it could already remember anything and answer `continue` there:
-the text then enters with that later sender's authority, as any text an extension puts before the agent (a prompt
-section, a changed tool result) does. And the conversation is shared: what one message's extension turn wrote is context
+`agent_before_settle`, until someone stops it. The run check is made in the extension's process, so it holds for an
+extension's own mistakes, not against one written to get around it: such an extension can keep a text itself and
+answer `continue` with it in a later message's run, as it could before this, and the text then enters with that later
+sender's authority, as any text an extension puts before the agent (a prompt section, a changed tool result) does. And the conversation is shared: what one message's extension turn wrote is context
 for the next message, whoever sends it.
 
 ## Slash commands the host runs

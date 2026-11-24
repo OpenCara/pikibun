@@ -281,7 +281,10 @@ test("sendUserMessage in a message that is running sends one more turn of that m
       pi.on("agent_end", () => { pi.sendUserMessage("after the end"); });
       pi.registerTool({ name: "nudge", label: "Nudge", description: "Queue a follow-up.", parameters: Type.Object({ text: Type.String() }),
         async execute(_id, params) {
-          if (params.text === "many") for (let index = 0; index < 12; index++) pi.sendUserMessage("follow-up " + index);
+          const [verb, ms] = params.text.split(":");
+          if (verb === "late") setTimeout(() => pi.sendUserMessage("follow-up late"), Number(ms));
+          else if (verb === "hold") await new Promise(resolve => setTimeout(resolve, Number(ms)));
+          else if (params.text === "many") for (let index = 0; index < 12; index++) pi.sendUserMessage("follow-up " + index);
           else if (params.text !== "none") pi.sendUserMessage("follow-up: " + params.text);
           return { content: [{ type: "text", text: "queued" }], details: undefined };
         } });
@@ -333,4 +336,9 @@ test("sendUserMessage in a message that is running sends one more turn of that m
   assert.equal(many[1], Array.from({ length: 8 }, (_item, index) => `follow-up ${index}`).join("\n\n"), "at most 8 are queued for one reply, sent together");
   assert.ok(warnings.some(warning => /sendUserMessage\(\) does nothing outside a command or a message that is running/.test(warning)), warnings.join("\n"));
   assert.ok(warnings.some(warning => /sendUserMessage\(\) queues at most 8 messages for one reply/.test(warning)), warnings.join("\n"));
+  assert.deepEqual(await send("late:150"), ["late:150"]);
+  await delay(400);
+  assert.deepEqual(await send("none"), ["none"], "a timer of a message that ended queues nothing the next message sends");
+  assert.deepEqual(await send("late:300"), ["late:300"]);
+  assert.deepEqual(await send("hold:700"), ["hold:700"], "nor when it fires while the next message runs");
 });

@@ -112,7 +112,7 @@ function describedRegistry(models: () => Model<string>[], streamSimple?: ReturnT
 
 const inputCall = new AsyncLocalStorage<{ notices: string[]; errors: string[] }>();
 const commandCall = new AsyncLocalStorage<{ notices: string[]; messages: string[] }>();
-const runCall = new AsyncLocalStorage<true>();
+const runCall = new AsyncLocalStorage<string>();
 
 export const NOTICE_LIMIT = 500;
 export const NOTICES_PER_SOURCE = 50;
@@ -174,7 +174,8 @@ export class ExtensionWorker {
   readonly #runners = new Map<string, ExtensionRunner>();
   readonly #skillPaths = new Map<string, string[]>();
   readonly #sessions = new Map<string, { current: SessionManager }>();
-  readonly #followUps = new Map<string, string[]>();
+  readonly #followUps = new Map<string, { run: string; texts: string[] }>();
+  #run: string | undefined;
   #context: RequestContext = {};
   #models: Model<string>[] = [];
   readonly #registry: ModelRegistry | undefined;
@@ -184,11 +185,7 @@ export class ExtensionWorker {
     this.#registry = options.live ? options.live.modelRegistry : describedRegistry(() => this.#models);
     this.#handlers = {
       open: params => this.open(params),
-      emit: async params => {
-        if (params.event.type === "agent_end") this.#followUps.delete(params.source);
-        await this.runner(params).emit(params.event as never);
-        return null;
-      },
+      emit: async params => { await this.runner(params).emit(params.event as never); return null; },
       restore: async params => {
         const session = this.#sessions.get(params.source);
         if (!session) throw new Error(`${params.source} isn't open`);
@@ -222,7 +219,7 @@ export class ExtensionWorker {
       beforeSettle: async params => {
         const context = boundary();
         const result = await this.runner(params).emitBoundary({ type: "agent_before_settle", outcome: "completed" } as never, () => context as never);
-        const queued = this.#followUps.get(params.source) ?? [];
+        const queued = this.queued(params.source, runCall.getStore());
         this.#followUps.delete(params.source);
         const text = [...result.entries.map(entry => "content" in entry ? textOf((entry as { content: unknown }).content) : ""), ...queued].filter(Boolean).join("\n\n");
         return { continue: result.continue === true || queued.length > 0, text };
@@ -263,12 +260,17 @@ export class ExtensionWorker {
     if (!Object.hasOwn(this.#handlers, method)) throw new Error(`Unknown extension request ${String(method)}`);
     const handler = this.#handlers[method] as (params: ExtensionParams<M>, signal?: AbortSignal) => Promise<ExtensionRequests[M][1]>;
     if (params.context) this.#context = params.context;
+    if (params.context) {
+      this.#run = params.context.run;
+      for (const [name, queue] of this.#followUps) if (queue.run !== this.#run) this.#followUps.delete(name);
+    }
     const inRun = RUN_METHODS.has(method) || (method === "emit" && RUN_EVENTS.has((params as ExtensionParams<"emit">).event?.type));
-    const value = await requestContext.run(params.context ?? this.#context, () => inRun ? runCall.run(true, () => handler(params, signal)) : handler(params, signal));
+    const run = inRun ? params.context?.run : undefined;
+    const value = await requestContext.run(params.context ?? this.#context, () => run ? runCall.run(run, () => handler(params, signal)) : handler(params, signal));
     const source = (params as { source?: unknown }).source;
     const runner = typeof source === "string" ? this.#runners.get(source) : undefined;
     if (!runner || typeof source !== "string") return { value };
-    const pending = this.#followUps.get(source)?.length ? { pending: true as const } : {};
+    const pending = this.queued(source, params.context?.run).length ? { pending: true as const } : {};
     const handlers = [...supportedEvents].filter(event => runner.hasHandlers(event));
     let tools: ExtensionToolDescription[];
     try { tools = describeTools(runner); }
@@ -278,6 +280,11 @@ export class ExtensionWorker {
     }
     const signature = toolSignature(tools);
     return { value, handlers, toolsSignature: signature, ...(params.toolsSeen !== signature ? { tools } : {}), ...pending };
+  }
+
+  private queued(source: string, run: string | undefined): string[] {
+    const queue = this.#followUps.get(source);
+    return queue && queue.run === run ? queue.texts : [];
   }
 
   private runner(params: Scoped): ExtensionRunner {
@@ -318,10 +325,12 @@ export class ExtensionWorker {
         return undefined;
       },
       followUp: text => {
-        const queued = this.#followUps.get(source) ?? [];
-        if (queued.length >= FOLLOW_UPS_LIMIT) return false;
-        this.#followUps.set(source, [...queued, text.slice(0, FOLLOW_UP_LIMIT)]);
-        return true;
+        const run = runCall.getStore();
+        if (!run || run !== this.#run) return "ended";
+        const queued = this.queued(source, run);
+        if (queued.length >= FOLLOW_UPS_LIMIT) return "full";
+        this.#followUps.set(source, { run, texts: [...queued, text.slice(0, FOLLOW_UP_LIMIT)] });
+        return undefined;
       },
     }), contextActions(() => this.model()));
     const declined = async () => ({ cancelled: true });
@@ -399,9 +408,11 @@ function applyFlags(runner: ExtensionRunner, settings: ExtensionSettings): void 
   }
 }
 
+const OUTSIDE_A_RUN = "sendUserMessage() does nothing outside a command or a message that is running: an extension can't start the agent in Pikibun";
+
 interface SessionActions {
   appendEntry(customType: unknown, data: unknown): string | undefined;
-  followUp(text: string): boolean;
+  followUp(text: string): "ended" | "full" | undefined;
 }
 
 function noActions(runner: ExtensionRunner, warn: (message: string) => void, thinkingLevel: () => string | undefined, session: SessionActions): ExtensionActions {
@@ -417,9 +428,12 @@ function noActions(runner: ExtensionRunner, warn: (message: string) => void, thi
     sendUserMessage: (content: unknown) => {
       const sent = commandCall.getStore()?.messages;
       if (sent) sent.push(textOf(content));
-      else if (!runCall.getStore()) once("sendUserMessage() does nothing outside a command or a message that is running: an extension can't start the agent in Pikibun");
+      else if (!runCall.getStore()) once(OUTSIDE_A_RUN);
       else if (!textOf(content).trim()) once("sendUserMessage() sends text only in Pikibun");
-      else if (!session.followUp(textOf(content))) once(`sendUserMessage() queues at most ${FOLLOW_UPS_LIMIT} messages for one reply`);
+      else {
+        const refused = session.followUp(textOf(content));
+        if (refused) once(refused === "ended" ? OUTSIDE_A_RUN : `sendUserMessage() queues at most ${FOLLOW_UPS_LIMIT} messages for one reply`);
+      }
     },
     setSessionName: noop("setSessionName"), getSessionName: () => undefined, setLabel: noop("setLabel"),
     getActiveTools: () => runner.getAllRegisteredTools().map(tool => tool.definition.name), getAllTools: () => [],

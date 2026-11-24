@@ -39,6 +39,7 @@ export interface ExtensionSkill {
 export interface RequestContext {
   model?: Model<string>;
   thinkingLevel?: string;
+  run?: string;
 }
 
 export interface Scoped {

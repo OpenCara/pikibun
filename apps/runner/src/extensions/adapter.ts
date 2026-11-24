@@ -90,6 +90,7 @@ interface Link {
   channel: ExtensionChannel;
   handlers: Set<string>;
   live: { pending: boolean; restored?: Promise<void> };
+  run: { id?: string };
   toolsSeen?: string;
   onTools?: (tools: ExtensionToolDescription[]) => void;
 }
@@ -97,7 +98,7 @@ interface Link {
 async function request<M extends ExtensionMethod>(host: ExtensionHost, link: Link, method: M, params: ExtensionRequests[M][0], signal?: AbortSignal): Promise<ExtensionRequests[M][1]> {
   const model = modelDescription(host.model());
   const thinkingLevel = host.thinkingLevel?.();
-  const context = { ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
+  const context = { ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}), ...(link.run.id ? { run: link.run.id } : {}) };
   if (method !== "restore") await link.live.restored;
   const answer = await link.channel.call(method, { ...params, context, ...(link.toolsSeen ? { toolsSeen: link.toolsSeen } : {}) } as ExtensionParams<M>, signal);
   link.live.pending = answer.pending === true;
@@ -149,6 +150,8 @@ export class SessionExtensions {
   readonly #guards = new Map<string, ExtensionChannel>();
   readonly #callers = new Map<string, ExtensionChannel>();
   readonly #entries: SessionEntries;
+  readonly #run: { id?: string } = {};
+  #runs = 0;
 
   constructor(private readonly host: ExtensionHost, reserved: Iterable<string> = []) {
     this.#reserved = new Set(reserved);
@@ -245,7 +248,7 @@ export class SessionExtensions {
         const caller = factories === undefined && callers.has(source);
         const modelCalls = !!this.host.complete && (guard || caller);
         const channel = guard ? this.guardChannel(source) : caller ? this.callerChannel(source) : this.channel(factories !== undefined);
-        const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set(), live: { pending: false } };
+        const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set(), live: { pending: false }, run: this.#run };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}),
           ...(modelCalls ? { modelCalls: true as const } : {}), ...(loaded.skills?.length ? { skills: loaded.skills } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
@@ -395,6 +398,7 @@ export class SessionExtensions {
 
   async beforeAgentStart(prompt: string, images: ImageContent[] | undefined, skills: readonly ListedSkill[] = []): Promise<Record<string, string>> {
     const prompts: Record<string, string> = {};
+    this.#run.id ??= String(++this.#runs);
     await this.each({ type: "agent_start" });
     for (const extension of this.#opened) {
       await this.one(extension, "before_agent_start", async settings => {
@@ -408,11 +412,7 @@ export class SessionExtensions {
   }
 
   async agentEnd(messages: Message[], aborted: boolean): Promise<void> {
-    for (const extension of this.#opened) {
-      if (extension.live.pending && !extension.handlers.has("agent_end")) {
-        await this.one(extension, "agent_end", settings => request(this.host, extension, "emit", { source: extension.source, settings, event: { type: "agent_end", messages: [] } }));
-      }
-    }
+    delete this.#run.id;
     await this.each({ type: "agent_end", messages });
     await this.each({ type: "agent_settled", aborted });
   }
