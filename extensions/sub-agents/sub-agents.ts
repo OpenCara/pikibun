@@ -16,7 +16,6 @@ export const subAgentsFlags = Object.freeze({
   delegate: "When the agent hands work to sub-agents: when-useful (independent parts that can run at once, or that need hardware or models this host lacks) or when-asked (only when the person asks)",
 });
 
-/** No limit unless the workspace sets one. */
 export const DEFAULT_MAX_SUB_AGENTS = Number.POSITIVE_INFINITY;
 
 export type Delegate = "when-useful" | "when-asked";
