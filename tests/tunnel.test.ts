@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseHostTunnelConfig, parseHostTunnelStatus, parseSessionTunnelReport, quickTunnelUrl, serviceOutputLimits, tunnelUnavailableReason,
-  tunnelUnavailableText, validTunnelUrl, type SessionTunnelReport } from "../packages/shared/src/tunnel.js";
+  tunnelUnavailableText, validTunnelUrl, tunnelAddress, tunnelLinkHeld, withoutTunnelSecret, withoutTunnelSecrets, type SessionTunnelReport } from "../packages/shared/src/tunnel.js";
+import { gatedLink, TUNNEL_FRAME_COOKIE, tunnelGateToken } from "../apps/runner/src/tunnel-gate.js";
 import { serveCommand, tunnelRequest } from "../apps/runner/src/tunnel-command.js";
 import { pinServiceSocket, SERVICE_MARK, SessionService, serviceLimits, serviceShellCommand, type ServiceExit, type ServiceProcess } from "../apps/runner/src/session-service.js";
 import { SessionTunnel } from "../apps/runner/src/session/tunnel.js";
@@ -80,6 +81,30 @@ test("a session's tunnel report names a quick tunnel's address and why it stoppe
     { sessionId: "s1", event: "stopped", url: started.url, reason: "because" }, { sessionId: "s1", event: "stopped", url: started.url }]) {
     assert.throws(() => parseSessionTunnelReport(invalid), /Invalid tunnel report/, JSON.stringify(invalid));
   }
+});
+
+test("a tunnel's link loses its secret wherever it is written, and its bare address is the tunnel's origin", () => {
+  const token = tunnelGateToken();
+  const address = "https://quiet-river.trycloudflare.com";
+  const link = gatedLink(address, token);
+  assert.equal(tunnelAddress(link), address);
+  assert.equal(tunnelAddress(address), address);
+  assert.ok(!tunnelAddress(`https://evil.example/?pikibun_tunnel=${token}`).includes(token));
+  assert.ok(!tunnelAddress(`not a url ?pikibun_tunnel=${token}`).includes(token));
+  assert.equal(withoutTunnelSecret(`open ${link} now`), `open ${address}/?pikibun_tunnel=[redacted] now`);
+  assert.equal(withoutTunnelSecret(`next=${encodeURIComponent(link)}`), `next=${encodeURIComponent(`${address}/?pikibun_tunnel`)}%3D[redacted]`);
+  assert.equal(withoutTunnelSecret(`Cookie: ${TUNNEL_FRAME_COOKIE}=${token}; a=b`), `Cookie: ${TUNNEL_FRAME_COOKIE}=[redacted]; a=b`);
+  assert.equal(withoutTunnelSecret("the pikibun_tunnel parameter"), "the pikibun_tunnel parameter");
+  const entry = { id: "0:1", text: `see ${link}`, toolCalls: [{ id: "c1", name: "tunnel", args: { note: link } }], kept: { n: 1 } };
+  const shown = withoutTunnelSecrets(entry);
+  assert.ok(!JSON.stringify(shown).includes(token));
+  assert.equal(shown.kept, entry.kept, "What holds no secret is kept as it is");
+  const plain = { id: "0:2", text: "nothing here", list: [{ a: 1 }] };
+  assert.equal(withoutTunnelSecrets(plain), plain);
+  assert.equal(tunnelLinkHeld({ url: link, access: "link" }), true);
+  assert.equal(tunnelLinkHeld({ url: address, access: "link" }), false);
+  assert.equal(tunnelLinkHeld({ url: address, access: "public" }), true);
+  assert.equal(tunnelLinkHeld({ url: address }), true, "A tunnel from before links is open at its address");
 });
 
 test("the tunnel tool takes start with serve, checked as the browser's serve is, or status or stop with nothing else, before any card", () => {

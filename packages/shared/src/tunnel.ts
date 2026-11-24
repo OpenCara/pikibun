@@ -126,6 +126,44 @@ export function validTunnelUrl(url: unknown): url is string {
   return typeof url === "string" && QUICK_URL.test(url) && url !== `https://api.${QUICK_TUNNEL_DOMAIN}`;
 }
 
+export const TUNNEL_LINK_NAME = "pikibun_tunnel";
+export const TUNNEL_SECRET_HIDDEN = "[redacted]";
+const linkSecret = /(pikibun_tunnel(?:_frame)?(?:=|%3[Dd]))[A-Za-z0-9_-]{1,512}/g;
+
+export function withoutTunnelSecret(text: string): string {
+  return typeof text === "string" && text.includes(TUNNEL_LINK_NAME) ? text.replace(linkSecret, `$1${TUNNEL_SECRET_HIDDEN}`) : text;
+}
+
+export function withoutTunnelSecrets<T>(value: T): T {
+  if (typeof value === "string") return withoutTunnelSecret(value) as T;
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    let changed = false;
+    const items = value.map(item => {
+      const shown: unknown = withoutTunnelSecrets(item);
+      if (shown !== item) changed = true;
+      return shown;
+    });
+    return changed ? items as T : value;
+  }
+  let copy: Record<string, unknown> | undefined;
+  for (const [key, item] of Object.entries(value)) {
+    const shown: unknown = withoutTunnelSecrets(item);
+    if (shown !== item) (copy ??= { ...(value as Record<string, unknown>) })[key] = shown;
+  }
+  return copy ? copy as T : value;
+}
+
+export function tunnelAddress(link: string): string {
+  let origin: string | undefined;
+  try { origin = new URL(link).origin; } catch { origin = undefined; }
+  return validTunnelUrl(origin) ? origin : withoutTunnelSecret(String(link)).replace(/[?#].*$/s, "");
+}
+
+export function tunnelLinkHeld(tunnel: Pick<SessionTunnelView, "url" | "access">): boolean {
+  return tunnel.access !== "link" || tunnel.url.includes(`${TUNNEL_LINK_NAME}=`);
+}
+
 export function parseSessionTunnelReport(value: unknown): SessionTunnelReport {
   if (!isObject(value) || Object.keys(value).some(key => !["sessionId", "event", "url", "actorId", "expiresAt", "reason"].includes(key))) throw new Error("Invalid tunnel report");
   if (typeof value.sessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.sessionId)) throw new Error("Invalid tunnel report");

@@ -13,7 +13,8 @@ servers (their own Pikibun and a team's, or `pikibun.com` on a phone and a lapto
 and moved it by hand.
 
 The servers can't share a session as things are. Each pairing on a computer is its own connection process, and a
-session's database and agent belong to the one that has it open (`open.lock`). Its binding names one server, one owner
+session's database and agent belong to the one that has it open (`open.lock`, a lease with a heartbeat:
+[open leases](portable-sessions.md#open-leases-between-connections)). Its binding names one server, one owner
 ID and one policy version, and every permission check goes back to that server.
 
 So private sessions get one home that never moves: **the computer's local server**, the Pikibun that

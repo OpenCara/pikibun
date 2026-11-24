@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { runBuildCacheJanitor } from "../apps/runner/src/build-cache-janitor.js";
 import { BuildCacheStore, BUILD_CACHE_FRESH_MS, BUILD_CACHE_STALE_MS, ownerDirectoryName, sandboxBuildCacheTarget, SessionBuildCacheMounts, type BuildCacheMount } from "../apps/runner/src/build-caches.js";
 import { HelperWorkspace } from "../apps/runner/src/helper-workspace.js";
 import { probeBuildCacheStorage } from "../apps/runner/src/resources.js";
@@ -101,14 +103,118 @@ test("eviction and pruning reclaim a tree nested deeper than a walk goes", { ski
 
   await mkdir(chain, { recursive: true });
   await writeFile(join(chain, "hidden.o"), "x");
-  const later = new Date(Date.now() + 3 * 86_400_000);
-  await utimes(join(chain, "hidden.o"), later, later);
-  const kept = await store.prune(86_400_000, Date.now() + 2 * 86_400_000);
+  const old = new Date(Date.now() - 3 * 86_400_000);
+  for (let depth = 200; depth >= 0; depth -= 1) await utimes(join(shared, ...Array.from({ length: depth }, () => "d")), old, old);
+  const kept = await store.prune(86_400_000);
   assert.equal(kept.removed, 0, "a file written lately past the walk's depth keeps its cache");
   assert.equal(existsSync(join(chain, "hidden.o")), true);
-  const pruned = await store.prune(0, Date.now() + 4 * 86_400_000);
+  await utimes(join(chain, "hidden.o"), old, old);
+  const pruned = await store.prune(86_400_000);
   assert.equal(pruned.removed, 1, "a cache too deep to walk in full still goes once idle");
   assert.equal(existsSync(join(root, "w")), false);
+});
+
+async function fill(directory: string, prefix: string, count: number, when: (index: number) => Date): Promise<string[]> {
+  const paths: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const path = join(directory, `${prefix}${index}.o`);
+    await writeFile(path, Buffer.alloc(4096));
+    await utimes(path, when(index), when(index));
+    paths.push(path);
+  }
+  return paths;
+}
+
+test("a copy filled with future-dated files loses its own files to eviction, never the other copies' and workspaces'", { skip: pythonMissing }, async t => {
+  const store = new BuildCacheStore(join(await scratch(t, "build-cache-hoard-"), "build-caches"));
+  const hour = () => new Date(Date.now() - 3_600_000);
+  const shared = await fill(await store.prepare("a", { name: "ccache", scope: "shared" }, "test:alice"), "shared", 4, hour);
+  const other = await fill(await store.prepare("b", { name: "ccache", scope: "shared" }, "test:bob"), "other", 2, hour);
+  const hoard = await store.prepare("a", { name: "ccache", scope: "owner" }, "test:mallory");
+  await fill(hoard, "hoard", 20, () => new Date("2099-01-01T00:00:00Z"));
+
+  const evicted = await store.evict(64 * 1024);
+  assert.equal(evicted.removed, 14, "only what the hoard holds over its share goes");
+  assert.deepEqual([...shared, ...other].filter(path => !existsSync(path)), [], "copies within their share keep every file");
+  assert.equal((await readdir(hoard)).length, 6, "the hoard keeps its share of the workspace's share, plus what the others left unused");
+  assert.equal((await store.evict(64 * 1024)).removed, 0, "and the next pass has nothing to do");
+});
+
+test("eviction takes the oldest files of the copy furthest over its share, whatever the other copies' age", { skip: pythonMissing }, async t => {
+  const store = new BuildCacheStore(join(await scratch(t, "build-cache-share-"), "build-caches"));
+  const month = Date.now() - 30 * 86_400_000;
+  const small = await fill(await store.prepare("small", { name: "ccache", scope: "shared" }, "o"), "small", 3, () => new Date(month));
+  const big = await fill(await store.prepare("big", { name: "ccache", scope: "shared" }, "o"), "big", 10, index => new Date(Date.now() - (10 - index) * 60_000));
+
+  const evicted = await store.evict(48 * 1024);
+  assert.equal(evicted.removed, 4);
+  assert.deepEqual(small.filter(path => !existsSync(path)), [], "an old copy under its share is left alone");
+  assert.deepEqual(big.filter(path => !existsSync(path)), big.slice(0, 4), "within the copy over its share, the least recently written go first");
+});
+
+test("eviction stops once the root is under its target, though each copy over its share has more to give", { skip: pythonMissing }, async t => {
+  const store = new BuildCacheStore(join(await scratch(t, "build-cache-stop-"), "build-caches"));
+  const first = join(await store.prepare("a", { name: "ccache", scope: "shared" }, "o"), "only.o");
+  const second = join(await store.prepare("b", { name: "ccache", scope: "shared" }, "o"), "only.o");
+  await writeFile(first, Buffer.alloc(8192));
+  await writeFile(second, Buffer.alloc(8192));
+  const evicted = await store.evict(16 * 1024);
+  assert.equal(evicted.removed, 1, "one file larger than both copies' excess is enough");
+  assert.equal([first, second].filter(path => existsSync(path)).length, 1);
+});
+
+test("a file dated ahead of the host's clock counts from when it was really changed", { skip: pythonMissing }, async t => {
+  const store = new BuildCacheStore(join(await scratch(t, "build-cache-clock-"), "build-caches"));
+  const shared = await store.prepare("w", { name: "ccache", scope: "shared" }, "o");
+  const future = new Date("2099-01-01T00:00:00Z");
+  await writeFile(join(shared, "future.o"), Buffer.alloc(4096));
+  await utimes(join(shared, "future.o"), future, future);
+  await delay(100);
+  await writeFile(join(shared, "fresh.o"), Buffer.alloc(4096));
+
+  const listed = await store.list();
+  assert.ok(listed.caches[0]!.newest <= Date.now() + 1000, "a listing never shows a time ahead of the clock");
+  const evicted = await store.evict(8 * 1024);
+  assert.equal(evicted.removed, 1);
+  assert.equal(existsSync(join(shared, "future.o")), false, "the file changed first goes first, whatever date it carries");
+  assert.equal(existsSync(join(shared, "fresh.o")), true);
+
+  await utimes(join(shared, "fresh.o"), future, future);
+  await utimes(shared, future, future);
+  const kept = await store.prune(86_400_000);
+  assert.equal(kept.removed, 0);
+  const pruned = await store.prune(86_400_000, Date.now() + 2 * 86_400_000);
+  assert.equal(pruned.removed, 1, "a future date doesn't keep an idle cache from pruning");
+});
+
+test("a copy with more entries than a walk counts is emptied before any other copy loses a file", { skip: pythonMissing }, async t => {
+  const root = join(await scratch(t, "build-cache-count-"), "build-caches");
+  const store = new BuildCacheStore(root);
+  const hour = () => new Date(Date.now() - 3_600_000);
+  const many = await store.prepare("a", { name: "ccache", scope: "owner" }, "test:mallory");
+  await mkdir(join(many, "sub"));
+  await fill(join(many, "sub"), "many", 12, () => new Date("2099-01-01T00:00:00Z"));
+  const other = await fill(await store.prepare("b", { name: "ccache", scope: "shared" }, "o"), "other", 4, hour);
+
+  const listed = await runBuildCacheJanitor({ root, mode: "list", entries: 8 }) as { caches: { workspace: string; files: number }[]; truncated: boolean };
+  assert.equal(listed.truncated, true);
+  assert.equal(listed.caches.find(item => item.workspace === "b")!.files, 4, "one copy's size doesn't cut short the listing of the next");
+  const evicted = await runBuildCacheJanitor({ root, mode: "evict", capacity: 24 * 1024, evictAt: 0.9, evictTo: 0.8, entries: 8 }) as { truncated: boolean };
+  assert.equal(evicted.truncated, true, "the walk says it stopped short");
+  assert.deepEqual(await readdir(many), [], "the copy that couldn't be counted is emptied, and its directory stays for the sessions that mount it");
+  assert.deepEqual(other.filter(path => !existsSync(path)), [], "the copy that could be counted keeps its files");
+});
+
+test("on a filesystem of its own, a root under its limit isn't walked, and one the filesystem says is full is trimmed", { skip: pythonMissing }, async t => {
+  const root = join(await scratch(t, "build-cache-own-"), "build-caches");
+  const store = new BuildCacheStore(root);
+  const files = await fill(await store.prepare("w", { name: "ccache", scope: "shared" }, "o"), "file", 3, () => new Date());
+  const request = { root, mode: "evict", dedicated: true, evictAt: 0.9, evictTo: 0.8 };
+  const idle = await runBuildCacheJanitor({ ...request, capacity: 2 ** 60, entries: 1 }) as { removed: number; truncated: boolean };
+  assert.deepEqual([idle.removed, idle.truncated], [0, false], "the filesystem's own usage is enough to know there is nothing to do");
+  const full = await runBuildCacheJanitor({ ...request, capacity: 4096 }) as { removed: number };
+  assert.equal(full.removed, 3, "usage the walk can't attribute to a copy leaves less room to share");
+  assert.deepEqual(files.filter(path => existsSync(path)), []);
 });
 
 test("with resource limits, build caches need a filesystem of their own, never an ordinary directory", { skip: process.platform !== "linux" || pythonMissing ? "the resource supervisor runs on Linux with /usr/bin/python3" : undefined }, async t => {

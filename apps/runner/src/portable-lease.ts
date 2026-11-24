@@ -3,54 +3,91 @@ import { constants } from "node:fs";
 import { open, readFile, rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { createFilled, olderThan, STALE_LOCK_MS } from "./identity.js";
+import { createFilled, STALE_LOCK_MS } from "./identity.js";
+import { beatLock, beatOf, LOCK_BEAT, processAlive, readLock, takeAway, type LockTiming, type SeenLock } from "./lock-file.js";
 import { RunnerError } from "./protocol.js";
 
 const LEASE_FILE = "open.lock";
 const RELEASE_FILE = "release";
+const RECHECKS = 3;
 const liveLeases = new Set<string>();
-
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-}
 
 export type LeaseHolder = "none" | "self" | "other";
 
+interface Inspected { holder: LeaseHolder; seen?: SeenLock }
+
 export class PortableLeases {
   readonly #token = randomUUID();
+  readonly #content = `${process.pid} ${this.#token} ${LOCK_BEAT}`;
+  readonly #held = new Set<string>();
+  readonly #lost = new Set<string>();
+  readonly #missing = new Set<string>();
+  #beating?: Promise<void>;
 
-  constructor() { liveLeases.add(this.#token); }
+  constructor(private readonly timing: LockTiming = {}) { liveLeases.add(this.#token); }
 
   close(): void { liveLeases.delete(this.#token); }
 
+  async #inspect(path: string): Promise<Inspected> {
+    for (let check = 0; check < RECHECKS; check++) {
+      const seen = await readLock(path);
+      if (!seen) return { holder: "none" };
+      const [pidText, token, beat] = seen.content.trim().split(" ");
+      const pid = Number.parseInt(pidText ?? "", 10);
+      if (token === this.#token && pid === process.pid) return { holder: "self", seen };
+      if (!Number.isSafeInteger(pid) || pid < 1 || !token) return { holder: Date.now() - seen.mtimeMs > STALE_LOCK_MS ? "none" : "other", seen };
+      if (pid === process.pid) return { holder: liveLeases.has(token) ? "other" : "none", seen };
+      if (!processAlive(pid)) return { holder: "none", seen };
+      if (beat !== LOCK_BEAT) return { holder: "other", seen };
+      const state = await beatOf(path, seen, this.timing);
+      if (state === "beating") return { holder: "other", seen };
+      if (state === "stopped") return { holder: "none", seen };
+    }
+    return { holder: "other" };
+  }
+
   async holder(directory: string): Promise<LeaseHolder> {
-    const path = join(directory, LEASE_FILE);
-    let content: string;
-    try { content = await readFile(path, "utf8"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "none"; throw error; }
-    const [pidText, token] = content.trim().split(" ");
-    const pid = Number.parseInt(pidText ?? "", 10);
-    if (token === this.#token && pid === process.pid) return "self";
-    if (!Number.isSafeInteger(pid) || pid < 1 || !token) return await olderThan(path, STALE_LOCK_MS) ? "none" : "other";
-    const alive = pid === process.pid ? liveLeases.has(token) : processAlive(pid);
-    return alive ? "other" : "none";
+    return (await this.#inspect(join(directory, LEASE_FILE))).holder;
   }
 
   async acquire(directory: string): Promise<void> {
     const path = join(directory, LEASE_FILE);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (await createFilled(path, `${process.pid} ${this.#token}`)) return;
-      const holder = await this.holder(directory);
-      if (holder === "self") return;
+    for (let attempt = 0; attempt < RECHECKS; attempt++) {
+      if (await createFilled(path, this.#content)) { this.#hold(directory); return; }
+      const { holder, seen } = await this.#inspect(path);
+      if (holder === "self") { this.#hold(directory); return; }
       if (holder === "other") break;
-      await unlink(path).catch(() => {});
+      if (seen) await takeAway(path, seen);
     }
     throw new RunnerError(409, "This session is open on another of this computer's connections. Try again shortly");
   }
 
+  #hold(directory: string): void {
+    this.#lost.delete(directory);
+    this.#missing.delete(directory);
+    this.#held.add(directory);
+  }
+
+  lost(directory: string): boolean { return this.#lost.has(directory); }
+
   async release(directory: string): Promise<void> {
+    this.#held.delete(directory);
+    this.#lost.delete(directory);
+    this.#missing.delete(directory);
     if (await this.holder(directory).catch(() => "none") === "self") await unlink(join(directory, LEASE_FILE)).catch(() => {});
+  }
+
+  refresh(): Promise<void> {
+    this.#beating ??= (async () => {
+      for (const directory of [...this.#held]) {
+        const state = await beatLock(join(directory, LEASE_FILE), this.#content);
+        const gone = state === "lost" || (state === "missing" && this.#missing.has(directory));
+        if (state === "missing") this.#missing.add(directory);
+        else this.#missing.delete(directory);
+        if (gone && this.#held.delete(directory)) this.#lost.add(directory);
+      }
+    })().finally(() => { this.#beating = undefined; });
+    return this.#beating;
   }
 
   async releaseRequested(directory: string): Promise<boolean> {

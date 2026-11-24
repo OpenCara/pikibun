@@ -375,6 +375,29 @@ test('no viewer ever receives a secret: not in the view, its events or the share
   assert.equal((JSON.parse(sharedBody) as { view: SharedSessionView }).view.entries[0]!.text, 'Use ghp_[redacted] with DB_PASSWORD=[redacted]');
 });
 
+test('a tunnel link in the transcript keeps its secret from a share link and from a reader\'s earlier entries', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const path = `/api/sessions/${s.session.id}`;
+  const secret = 'abcdefghijklmnopqrstuvwxyz012345';
+  const link = `https://quiet-river.trycloudflare.com/?pikibun_tunnel=${secret}`;
+  const entries: EntryView[] = Array.from({ length: 60 }, (_, index) =>
+    ({ id: `0:${index + 1}`, kind: 'message', role: 'assistant', text: index === 4 ? `Online at ${link}` : `answer ${index + 1}`, conversationId: '0' }));
+  const hostView: SessionView = { ...s.view, entries, conversations: [{ id: '0', mode: 'write' }] };
+  rpcHub(f, s.connector, envelope => {
+    assert.equal(envelope.request.ticket.action, 'view');
+    return Response.json({ view: hostView });
+  });
+  const { link: share } = await json<{ link: SessionLink }>(await s.owner.request('PUT', `${path}/link`), 201);
+  const shared = await (await f.request('GET', '/api/shared/view', undefined, { 'X-Share-Token': share.url.split('/').at(-1)! })).text();
+  assert.ok(!shared.includes(secret) && shared.includes('pikibun_tunnel=[redacted]'), 'A share link shows the address without its secret');
+
+  await json(await s.owner.request('PUT', `/api/workspaces/${s.team.id}/transcripts`, { paging: true }));
+  const earlier = `${path}/entries?conversation=0&before=${encodeURIComponent('0:11')}&limit=10`;
+  const toReader = await (await s.member.request('GET', earlier)).text();
+  assert.ok(!toReader.includes(secret) && toReader.includes('pikibun_tunnel=[redacted]'), 'A reader\'s earlier entries carry no secret');
+  assert.ok((await (await s.owner.request('GET', earlier)).text()).includes(link), 'A writer\'s earlier entries are as the host sent them');
+});
+
 test('brief tool output and paged transcripts change what views carry, not what hosts send', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}`;

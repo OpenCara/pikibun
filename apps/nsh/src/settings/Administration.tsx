@@ -101,7 +101,8 @@ export function Administration(_props: SectionProps) {
             <Each of={shownWorkspaces()} key={item => item.id}>
               {item => (
                 <Row leading={<IdentityBadge name={item().name} id={item().id} />} title={item().name}
-                  hint={`Owner ${usernameWithId({ id: item().ownerId, githubLogin: item().ownerGithubLogin })} · ${count(item().members, "member", "members")} · ${count(item().repositories, "repository", "repositories")} · ${count(item().hosts, "host", "hosts")} · ${count(item().sessions, "session", "sessions")} · Created ${relativeTime(item().createdAt)}`} />
+                  hint={`Owner ${usernameWithId({ id: item().ownerId, githubLogin: item().ownerGithubLogin })} · ${count(item().members, "member", "members")} · ${count(item().repositories, "repository", "repositories")} · ${count(item().hosts, "host", "hosts")} · ${count(item().sessions, "session", "sessions")} · Created ${relativeTime(item().createdAt)}`}
+                  trailing={item().deletedAt ? <Badge tone="danger">{`Deleted ${relativeTime(item().deletedAt!)}`}</Badge> : undefined} />
               )}
             </Each>
           </If>

@@ -259,6 +259,49 @@ describe("a session's panel", () => {
     expect(none.shows("id:app-frame")).toBe(false);
   });
 
+  test("App is the session's collaborators': a viewer sees that the app is online, at its bare address, and neither frames nor opens it", async () => {
+    const address = "https://quiet-river.trycloudflare.com";
+    const tunnel = { url: address, access: "link", startedBy: "u1", startedAt: "2026-11-22T09:00:00.000Z", expiresAt: "2026-11-22T13:00:00.000Z",
+      command: "python3 desktop.py", port: 6080, connected: true };
+    const reader = { [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, ownerId: "u2", permissions: ["read"], viewable: true } } } };
+    const app = await openPanel({ ...reader, [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, tunnel }, revision: "r1" } } });
+    await app.waitFor("text:quiet-river.trycloudflare.com");
+    await app.waitFor("text:Opening it takes its link, which the session's collaborators get. Viewers see that it is online.");
+    expect(app.shows("text:Online")).toBe(true);
+    expect(app.shows("text:Public address")).toBe(false);
+    expect(app.shows("label:Open")).toBe(false);
+    expect(app.shows("label:Stop")).toBe(false);
+    await app.press("text:App");
+    await app.waitFor("text:App unavailable");
+    expect(app.shows("id:app-frame")).toBe(false);
+    expect(app.shows("id:app-open")).toBe(false);
+    expect(app.openedUrls()).toEqual([]);
+    app.dispose();
+
+    const idle = await openPanel(reader);
+    await idle.press("text:App");
+    await idle.waitFor("text:App unavailable");
+    expect(idle.shows("text:Nothing online")).toBe(false);
+    idle.dispose();
+
+    const link = `${address}/?pikibun_tunnel=abcdefghijklmnopqrstuvwxyz012345`;
+    const writer = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, tunnel: { ...tunnel, url: link } }, revision: "r1" } } });
+    await writer.waitFor("text:Public address");
+    expect(writer.shows("label:Open")).toBe(true);
+    expect(writer.shows("label:Stop")).toBe(true);
+    writer.dispose();
+
+    const withheld = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, tunnel }, revision: "r1" } } });
+    await withheld.press("text:App");
+    await withheld.waitFor("text:App unavailable");
+    expect(withheld.shows("id:app-frame")).toBe(false);
+    withheld.dispose();
+
+    const open = await openPanel({ ...reader, [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, tunnel: { ...tunnel, access: "public" } }, revision: "r1" } } });
+    await open.waitFor("text:Public address");
+    expect(open.shows("label:Open")).toBe(true);
+  });
+
   test("Schedules lists the schedules made in the session, which belong to the workspace, and opens the workspace's", async () => {
     const models = [{ id: "m2", name: "Claude Opus", provider: "anthropic", modelId: "claude-opus", thinkingLevels: ["off", "low", "high"] }];
     const schedule = { id: "sc1", workspaceId: "w1", sessionId: null, originSessionId: "s1", ownerId: "u1", name: "Review", cron: "0 9 * * 1", timeZone: "UTC",

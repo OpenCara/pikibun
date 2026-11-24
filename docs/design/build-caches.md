@@ -211,9 +211,50 @@ says why when it starts, and advertises none, so Pikibun shows that the host off
 keeps caches under its state directory.
 
 Inside that bound, the host evicts: once a cache root passes 90% of its capacity (or, without `--build-caches`, a
-host-wide **size limit** in the setting, 20 GiB by default), the connector deletes the least recently modified files
-across the caches until it is under 80%, and removes empty directories. It checks every 10 minutes while the host's
-setting isn't `off`. Tools that keep their own limit (ccache's `max_size`) do so too.
+host-wide **size limit** in the setting, 20 GiB by default), the connector deletes files until it is under 80%. It
+checks every 10 minutes while the host's setting isn't `off`. Tools that keep their own limit (ccache's `max_size`) do
+so too.
+
+### Eviction is by fair share
+
+Every session of every workspace on the host writes under the same root, and a session sets its files' modification
+times as it likes. Deleting the oldest files of the whole root would let one copy filled with files dated 2099 empty
+every other workspace's and owner's caches at each pass while its own stayed (#479, finding 78). So eviction decides
+per **copy** (one `shared` or `owners/<hash>` directory) how much it may keep, and a file's age only orders the files
+within its own copy:
+
+- **A share.** The 80% the root is brought down to is split equally between the workspaces that have caches on the
+  host, and each workspace's part equally between its copies (every cache name's `shared` and `owners/<hash>`
+  directories). What a workspace or a copy doesn't use of its part goes to the others in equal parts, so the shares
+  always add up to the 80%. Shares are worked out again at each pass from what is on disk; nothing is configured.
+- **Who loses files.** Only copies holding more than their share, starting with the one furthest over it, and each
+  only down to its share; files go whole, so the pass stops as soon as the root is under the 80%, even if a later
+  copy is still a little over its share. A copy at or under its share loses nothing, whatever its files' dates and however full
+  another copy is. This is also each workspace's guarantee: other workspaces can't push it below the 80% divided by
+  the number of workspaces with caches. A fixed limit per workspace, which a host's owner would set, isn't built.
+- **Which files.** Within a copy, the least recently changed first. A file's time is its modification time, which
+  tools such as ccache refresh on a hit, unless that lies ahead of the janitor's own clock: then it is the inode's
+  change time (`st_ctime`), which the kernel sets at every write and every `touch` and no session can choose, itself
+  capped at the clock. So dating a file ahead earns nothing a plain `touch` wouldn't, and dating it back only gives
+  up one's own file sooner. The later of the two times for every file was considered and left out: it would ignore
+  the modification times a tool restores on purpose, and it would add nothing against a writer, who can refresh
+  either time by touching the file. Listing and pruning read times the same way, so a future date doesn't keep an
+  idle cache from `pikibun cache prune` either.
+- **What can't be measured goes first.** A walk stops at a depth of 64 and at a million entries per copy (below). A
+  directory past that depth is removed whole, oldest first, and then a copy with more than a million entries is
+  emptied (its own directory stays, for the sessions that have it mounted), the largest first, before any file of a
+  copy that could be counted: their real size is unknown, so they can have no share, and counting only what was
+  seen would let a copy hide its bulk behind a million empty files and have the others pay for it. Each copy has its
+  own count, so one copy's size never cuts another's walk short.
+- **What a pass costs.** On a filesystem of its own (`--build-caches`) the filesystem's usage decides whether there is
+  anything to do, so a pass under 90% is one `fstatvfs` and no walk; usage no copy accounts for (the filesystem's own,
+  or a copy that couldn't be emptied) leaves that much less to share. Elsewhere each pass sizes every copy, holding
+  nothing per file. Only a copy over its share is walked a second time for its files' names and times, one copy at a
+  time, so memory follows the largest copy and not the whole root.
+
+Without `--build-caches` the root is sized by what the walk counts. A copy whose bulk lies past a walk's depth or
+count is under-counted there, so it can keep the root from reaching its limit, as nothing bounded such a host's disk
+between passes before; it can't make another copy lose a file.
 
 Sessions write these directories while the host walks and deletes in them, so a session could swap a directory for a
 link to the host's own files between the host's listing and its deletion. Node has no `openat`, so listing, pruning
@@ -230,9 +271,11 @@ skipped, and a link is only ever removed as a link.
   within a bound), and keeps a cache it couldn't look through in full: one over a million entries, or deeper than that
   bound. It runs without the Pikibun server, so a cache a workspace deleted goes once nothing
   wrote to it for that long.
-- Walks never follow links and stop at a depth of 64 and a million entries, reporting a walk cut short. What lies
-  past that depth can't be sized, so eviction removes such directories whole, oldest first, before any file. Removal goes down and up a tree without recursion, holding at most
+- Walks never follow links and stop at a depth of 64 and a million entries per copy, reporting a walk cut short. What
+  lies past either can't be sized, so eviction removes it before any file a walk counted
+  ([Eviction is by fair share](#eviction-is-by-fair-share)). Removal goes down and up a tree without recursion, holding at most
   128 levels' descriptors and opening the rest again from the top, so no depth stops it.
+- A file dated ahead of the host's clock is read at its inode's change time, in listing, pruning and eviction.
 - Changing the host setting applies to sessions' next commands; a switch from `workspace` to `owner` leaves the shared
   copies on disk until prune collects them.
 
