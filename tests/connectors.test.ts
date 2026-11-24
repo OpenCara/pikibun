@@ -3003,7 +3003,7 @@ test('a host\'s owner and admins turn on Pi\'s built-in extensions for its sessi
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
   const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, builtinExtensions: [] } });
-  for (const invalid of [{ builtinExtensions: null }, { builtinExtensions: 'codemode' }, { builtinExtensions: ['tool-search'] }, { builtinExtensions: ['pi:codemode', 'codemode'] }, { builtinExtensions: ['piki:gh'] }]) {
+  for (const invalid of [{ builtinExtensions: null }, { builtinExtensions: 'codemode' }, { builtinExtensions: ['mcp'] }, { builtinExtensions: ['pi:codemode', 'codemode'] }, { builtinExtensions: ['piki:gh'] }]) {
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
   }
   assert.deepEqual(await json(await host.request('PATCH', path, { builtinExtensions: ['codemode'] })), { config: { ...defaults, builtinExtensions: ['pi:codemode'] } }, 'a bare name is Pi\'s');

@@ -35,6 +35,7 @@ export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.
   memory: "Reads the workspace's memory and instructions and proposes notes for it; owners and admins keep or dismiss the notes and change the memory.",
   publish_artifact: "Publishes a versioned HTML, SVG, Markdown or text artifact beside the session, for its readers to look at.",
   codemode: "Runs JavaScript that calls the session's tools, to batch, chain and filter their calls.",
+  tool_search: "Finds the session's deferred tools by what they do and loads them for the rest of the conversation, where the host turns tool search on.",
 });
 
 export type WorkspaceToolOrigin = "session" | "builtin" | "extension";

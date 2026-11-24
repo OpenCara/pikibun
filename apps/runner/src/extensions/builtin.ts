@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { CODEMODE_OUTPUT_DIRECTORY } from "../tool-output.js";
 import { CodemodeSandbox, type CodemodeResult, type CodemodeRun, type CodemodeRunOptions } from "@earendil-works/pi-codemode";
-import type { Extension, ToolExecutionApi, ToolRegistration } from "@earendil-works/pi-durable";
+import { defineExtension, type Extension, type ToolExecutionApi, type ToolRegistration } from "@earendil-works/pi-durable";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
+import { createToolSearchExtension, TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 import { FileError, type ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { builtinExtensions, type BuiltinExtensionName } from "../../../../packages/shared/src/host-config.js";
 
@@ -122,6 +123,36 @@ function withOutputs(tool: ToolRegistration, outputs: CodemodeOutputs | undefine
   } } as ToolRegistration;
 }
 
+export const TOOL_SEARCH: BuiltinExtensionName = "pi:tool-search";
+export const DEFERRED_TOOLS = "pikibun-deferred-tools";
+export { TOOL_SEARCH_TOOL_NAME };
+
+export const upFrontTools: ReadonlySet<string> = new Set([
+  "identity", "read", "ls", "grep", "find", "write", "edit", "move_file", "copy_file", "delete_file",
+  "git", "git_push", "github_read", "github_comment", "github_merge", "github_issue", "gh",
+  "python", "node", "codemode", TOOL_SEARCH_TOOL_NAME,
+]);
+
+export function deferredToolsExtension(tools: readonly ToolRegistration[]): Extension {
+  const seen = new Set<string>();
+  const deferred = tools.filter(tool => {
+    if (upFrontTools.has(tool.name) || seen.has(tool.name) || (tool.callers !== undefined && !tool.callers.includes("model"))) return false;
+    seen.add(tool.name);
+    return true;
+  }).map(tool => ({ ...tool, deferred: true as const }) as ToolRegistration);
+  return defineExtension({ name: DEFERRED_TOOLS, tools: deferred });
+}
+
+export function loadedToolNames(messages: readonly { role: string; toolName?: string; details?: unknown }[]): string[] {
+  const names = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "toolResult" || message.toolName !== TOOL_SEARCH_TOOL_NAME) continue;
+    const loaded = (message.details as { loaded?: unknown } | undefined)?.loaded;
+    if (Array.isArray(loaded)) for (const name of loaded) if (typeof name === "string") names.add(name);
+  }
+  return [...names];
+}
+
 export class SessionBuiltins {
   readonly #sandbox: LimitedCodemodeSandbox;
   readonly extensions: ReadonlyMap<BuiltinExtensionName, Extension>;
@@ -129,8 +160,9 @@ export class SessionBuiltins {
   constructor(options: { outputs?: CodemodeOutputs; computeLimitMs?: number } = {}) {
     this.#sandbox = new LimitedCodemodeSandbox(options.computeLimitMs);
     const codemode = createCodemodeExtension({ sandbox: this.#sandbox, models: false });
-    this.extensions = new Map([
+    this.extensions = new Map<BuiltinExtensionName, Extension>([
       ["pi:codemode", { ...codemode, tools: (codemode.tools ?? []).map(tool => withOutputs(tool, options.outputs)) }],
+      [TOOL_SEARCH, createToolSearchExtension() as unknown as Extension],
     ]);
   }
 

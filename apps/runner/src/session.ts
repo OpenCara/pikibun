@@ -17,7 +17,7 @@ import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionEntries, ExtensionPrompts, SessionExtensions, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
-import { SessionBuiltins } from "./extensions/builtin.js";
+import { deferredToolsExtension, loadedToolNames, SessionBuiltins, TOOL_SEARCH } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
@@ -215,6 +215,8 @@ export class RunnerSession {
   #currentModel?: { provider: string; modelId: string; thinkingLevel?: string };
   #opening: Promise<void> = Promise.resolve();
   #builtins?: SessionBuiltins;
+  #extensionTools: ToolRegistration[] = [];
+  #deferring = false;
   private tools: ToolRegistration[] = [];
   private lock: Promise<unknown> = Promise.resolve();
   private generation = 0;
@@ -705,18 +707,19 @@ export class RunnerSession {
     this.groupTools();
     if (!this.#packed) {
       this.#builtins = new SessionBuiltins({ outputs: api => this.#calls.outputFiles(api) });
-      for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
+      for (const [name, builtin] of this.#builtins.extensions) if (name !== TOOL_SEARCH) registry.install(builtin);
     }
     if (this.config.extensions && !this.#packed) {
       this.#hostExtensions = new SessionExtensions(this.#piki.host(), this.tools.map(tool => tool.name));
-      await this.chosenExtensions().catch(() => []);
+      const own = new Set(this.tools.map(tool => tool.name));
+      this.#extensionTools = (await this.chosenExtensions().catch(() => [])).flatMap(extension => extension.tools).filter(tool => !own.has(tool.name));
     }
     const resolved = this.config.resolveModels ? await this.config.resolveModels(this.binding.model)
       : { models: runnerModels(this.binding.model, this.config.allowFaux), provider: this.binding.model.provider, modelId: this.binding.model.modelId };
     this.modelRef = { provider: resolved.provider, modelId: resolved.modelId };
     this.models = rememberRequests(resolved.models);
     const models = this.models;
-    await this.hostConfig();
+    if ((await this.hostConfig()).builtinExtensions.includes(TOOL_SEARCH)) this.deferTools();
     const catalog = models.getModels();
     let current: { from: HostCompaction | undefined; settings: { compaction: CompactionSettings } | undefined } | undefined;
     const settings = () => {
@@ -782,6 +785,17 @@ export class RunnerSession {
   private groupTools(): void {
     this.#namespaces = namespaceExtensions(this.tools, toolNamespaces(this.tools, this.#defined.definitions, this.#defined.servers));
     for (const group of this.#namespaces) this.#registry?.install(group);
+    if (this.#deferring) this.deferTools();
+  }
+
+  private deferTools(): Extension | undefined {
+    const search = this.#builtins?.extensions.get(TOOL_SEARCH);
+    if (!search || !this.#registry) return undefined;
+    this.#deferring = true;
+    const deferred = deferredToolsExtension([...this.tools, ...this.#extensionTools]);
+    this.#registry.install(search);
+    this.#registry.install(deferred);
+    return deferred;
   }
 
   private sessionExtensions(enabled: readonly ToolRegistration[]): Extension[] {
@@ -942,9 +956,12 @@ export class RunnerSession {
     if (!this.sandbox.browser) off.add("browser");
     const tunnelUnavailable = run.mode === "write" && !off.has("tunnel") ? this.#availability.tunnelUnavailable() : undefined;
     if (!this.#availability.tunnelOffered()) off.add("tunnel");
-    const builtins = run.mode === "write" && this.#builtins
-      ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
+    const chosenBuiltins = run.mode === "write" && this.#builtins
+      ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name))))
       : [];
+    const builtins = chosenBuiltins.map(item => item.extension);
+    if (run.mode === "write") this.#extensionTools = extensions.flatMap(extension => extension.tools).filter(tool => !own.has(tool.name));
+    const deferred = chosenBuiltins.some(item => item.name === TOOL_SEARCH) ? this.deferTools() : undefined;
     const enabled = this.tools.filter(tool => !off.has(tool.name));
     const change: AgentChange = {
       ...(options.model ? { model: { provider: options.model.provider, modelId: options.model.modelId } } : {}),
@@ -952,7 +969,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...enabled, ...extensions.flatMap(extension => extension.tools).filter(tool => !own.has(tool.name)),
           ...builtins.flatMap(extension => extension.tools ?? [])],
-        extensions: [...this.sessionExtensions(enabled), ...extensions.map(extension => extension.extension), ...builtins, fitImagesExtension],
+        extensions: [...this.sessionExtensions(enabled), ...extensions.map(extension => extension.extension), ...builtins, fitImagesExtension, ...(deferred ? [deferred] : [])],
         instructions: this.agentInstructions(options.access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
           new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name))), skills, memory),
       } : {}),
@@ -1491,6 +1508,8 @@ export class RunnerSession {
       }, context);
       const same = agent.model?.provider === this.modelRef.provider && agent.model.modelId === this.modelRef.modelId;
       if (same && agent.thinkingLevel && thinkingLevels.includes(agent.thinkingLevel)) await shared.configure({ thinkingLevel: agent.thinkingLevel }, context);
+      const loaded = new Set(loadedToolNames(entries.flatMap(entry => entry.model)));
+      if (loaded.size) await shared.configure({ modelTools: { add: [...loaded].map(name => ({ name }) as ToolRegistration) } }, context);
       this.#activity?.changed();
       return { conversationId: String(shared.id), entries: entries.length };
     });
