@@ -95,6 +95,11 @@ export const ghDefinition: CliDefinition = {
       hint: "gh couldn't verify GitHub's TLS certificate: this host's TLS setup (its certificate store, or a proxy that intercepts HTTPS) refused it. "
         + "That is not GitHub being down, nor a failed check, and retrying won't help. github_read (with wait: \"checks\" or \"change\"), github_comment, "
         + "github_issue and github_merge still reach GitHub through the Pikibun server: use them, and tell the person that the host's owner has to fix the host's certificates." },
+    { outputPattern: "Bad credentials|\\bHTTP 401\\b",
+      hint: "GitHub refused the token this request went with (401 Bad credentials). Usually a git_push, in this session or another of the session owner's, "
+        + "just reset the owner's GitHub token and this host still held the old one: that is not a lost sign-in, and it passes within a minute, so run the command again then. "
+        + "Meanwhile git still works (git ls-remote --tags origin confirms pushed tags), and github_read reads a pull request and waits for its checks (wait: \"checks\") "
+        + "through the Pikibun server. If gh still answers 401 after a few minutes, stop retrying and tell the person." },
     ...ghCommentViews.map(({ group, call }) => ({ ...call,
       hint: `gh ${group} view --comments failed or printed nothing: if the number and repository are right, read the comments with --json comments (without --comments), or with gh api repos/<owner>/<name>/issues/<n>/comments.` })),
   ],

@@ -18,6 +18,7 @@ const PATH_LENGTH = 8192;
 const UPSTREAM_TIMEOUT_MS = 60_000;
 const UNAVAILABLE_CACHE_MS = 10_000;
 const EXPIRY_MARGIN_MS = 5 * 60_000;
+const REJECTED_AGAIN_MS = 10_000;
 const REDIRECTS = 3;
 const GITHUB_DOWNLOAD_HOSTS = [/^codeload\.github\.com$/, /\.githubusercontent\.com$/, /\.blob\.core\.windows\.net$/];
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer",
@@ -196,6 +197,7 @@ export class ApiAccess {
   readonly #hosts = new WeakMap<object, string>();
   readonly #credentials = new Map<string, { grant: ApiCredentialGrant; until: number }>();
   readonly #pending = new Map<string, Promise<ApiCredentialGrant>>();
+  readonly #rejected = new Map<string, { authorization: string; at: number }>();
   readonly #leases = new Map<string, { reach: ApiReach }>();
 
   constructor(options: ApiAccessOptions) {
@@ -254,6 +256,25 @@ export class ApiAccess {
     return pending;
   }
 
+  async #fresh(host: string, access: ApiAccessKind, reach: ApiReach, rejected: ApiCredential,
+    pick: (credentials: ApiCredential[]) => ApiCredential | undefined): Promise<ApiCredential | undefined> {
+    const key = `${access} ${reach} ${host}`;
+    const before = this.#rejected.get(key);
+    if (before && before.authorization === rejected.authorization && Date.now() - before.at < REJECTED_AGAIN_MS) return undefined;
+    for (const cachedKey of new Set([key, `${access} workspace ${host}`])) {
+      const cached = this.#credentials.get(cachedKey)?.grant;
+      if (cached?.available && cached.credentials.some(item => item.authorization === rejected.authorization)) this.#credentials.delete(cachedKey);
+    }
+    const grant = await this.#credential(host, access, reach);
+    const fresh = grant.available ? pick(grant.credentials) : undefined;
+    if (!fresh || fresh.authorization === rejected.authorization) {
+      this.#rejected.set(key, { authorization: rejected.authorization, at: Date.now() });
+      return undefined;
+    }
+    this.#rejected.delete(key);
+    return fresh;
+  }
+
   async #request(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const host = this.#hosts.get(request.socket);
     const method = request.method ?? "GET";
@@ -308,6 +329,7 @@ export class ApiAccess {
     let access: ApiAccessKind = "read";
     let ownerInstead: (() => Promise<ApiCredential | undefined>) | undefined;
     let unaided: string | undefined;
+    let pick: ((credentials: ApiCredential[]) => ApiCredential | undefined) | undefined;
     if (!isApi) {
       if (!open) return refuse(403, `This workspace's network policy doesn't allow ${host}; Pikibun answers only its API (${rules.name}'s command-line tool) for this session`);
       if (carried.own) {
@@ -341,7 +363,8 @@ export class ApiAccess {
           return refuse(403, `${write.reason}; ${method} ${pathname.slice(0, 200)} didn't reach ${rules.name}`);
         }
       }
-      credential = available.available ? credentialFor(available.credentials, scope, owner) : undefined;
+      pick = credentials => credentialFor(credentials, scope, owner);
+      credential = available.available ? pick(available.credentials) : undefined;
       if (credential) {
         headers.authorization = credential.authorization;
         reason = access === "write" || rules.provider !== "github" ? `the session owner's token for ${credential.account}` : `read-only token for ${credential.account}`;
@@ -366,6 +389,16 @@ export class ApiAccess {
         reason = `the session owner's token for ${instead.account}, as the read-only token was refused (${upstream.status})`;
         upstream = await this.#upstream({ url: new URL(`https://${host}${path}`), method, headers: { ...headers, authorization: instead.authorization } });
       }
+      if (upstream.status === 401 && credential && pick) {
+        const fresh = await this.#fresh(host, access, access === "write" ? reach : "workspace", credential, pick);
+        if (fresh) {
+          upstream.body.resume();
+          credential = fresh;
+          reason += ", with a fresh token as the cached one was refused (401)";
+          upstream = await this.#upstream({ url: new URL(`https://${host}${path}`), method, headers: { ...headers, authorization: fresh.authorization },
+            ...(payload ? { body: payload } : {}) });
+        }
+      }
       let current = new URL(`https://${host}${path}`);
       for (let hop = 0; isApi && method === "GET" && hop < REDIRECTS && [301, 302, 303, 307, 308].includes(upstream.status); hop++) {
         let location: URL;
@@ -381,7 +414,6 @@ export class ApiAccess {
     } catch (error) {
       return refuse(502, error instanceof RunnerError ? error.message : `${host} could not be reached`);
     }
-    if (upstream.status === 401 && credential) this.#credentials.delete(`${access} ${host}`);
     if (unaided && (upstream.status === 429 || (upstream.status === 403 && upstream.headers["x-ratelimit-remaining"] === "0"))) {
       upstream.body.resume();
       this.#options.record({ target, outcome: "allowed", reason: `${reason} (${upstream.status})` });
