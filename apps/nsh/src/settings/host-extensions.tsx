@@ -166,6 +166,7 @@ const info = (
     <Note>Pikibun's own built-in extensions come with the connector too: piki:gh, piki:glab and piki:azure-cli run the GitHub, GitLab and Azure CLIs where your workspaces use them, as you are signed in to them on this host.</Note>
     <Note>Where an extension runs in the session's sandbox, its tool calls run for anyone who may send the session messages. Elsewhere they run for you and members granted host commands; for everyone else only if you let every session run them here. Nobody approves each call.</Note>
     <Note>Require an extension of every session to run it on this host whatever each workspace chose, yours included, with the settings you give it here. While this host can't run one you require, its sessions take no messages.</Note>
+    <Note>An extension that registers model providers offers its models here only once you tick Provide models on it. Its code then runs in this host's connector, as your OS user and outside any sandbox, and its models join this host's list, where you turn them on or off like the others. Sign in to such a provider with Pi on the host first.</Note>
   </View>
 );
 
@@ -262,7 +263,19 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
     void saveRequired(required().map(item => item.source !== source ? item : on ? { ...item, allowModelCalls: true as const } : { source: item.source, settings: item.settings }),
       on ? `${source} may call this host's models from its next session.` : `${source} no longer calls this host's models.`);
   }
+  const modelExtensions = () => config()?.modelExtensions;
+  const providesModels = (source: string) => modelExtensions()?.includes(source) === true;
+  const takesModelExtensions = () => props.connector.capabilities.extensionModels === true;
+  const saveModelExtensions = (next: string[], message: string) => action.run(async () => { await patchConfig({ modelExtensions: next }); props.refresh(); }, message);
+  async function setProvidesModels(source: string, on: boolean) {
+    if (on && !await confirm({ title: `Let ${source} provide models?`, confirmLabel: "Provide models",
+      message: `${source} will be loaded into ${props.connector.name}'s connector itself, as your OS user and outside any sandbox, with your files, your network and Pi's sign-ins, for as long as the connector runs. Every request a session makes to one of its models passes through it. Its models join this host's list for every workspace the host is shared with. Only do this for a package you would install in Pi on that machine.` })) return;
+    const others = (modelExtensions() ?? []).filter(item => item !== source);
+    void saveModelExtensions(on ? [...others, source] : others,
+      on ? `${source} provides models once the host has loaded it, within a minute: they appear under Models. If none do, the host's log says why.` : `${source} no longer provides models: the host withdraws them within a minute.`);
+  }
   const installedSources = () => new Set(report()?.installed.map(item => item.source) ?? []);
+  const strayModelExtensions = () => (report() ? (modelExtensions() ?? []).filter(source => !installedSources().has(source)) : []);
   const unavailable = () => (report() ? missingRequiredExtensions(required(), report()!.installed).flatMap(source => required().filter(item => item.source === source)) : []);
   const missing = () => (data()?.workspaces ?? []).flatMap(workspace => workspace.extensions.filter(item => item.availability.status !== "installed" && item.availability.status !== "auto-cache").map(item => ({ workspace, ...item })));
   const fetched = () => (data()?.workspaces ?? []).flatMap(workspace => workspace.extensions.filter(item => item.availability.status === "auto-cache").map(item => ({ workspace, ...item })));
@@ -323,6 +336,11 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
                       <Checkbox label={props.connector.capabilities.modelCalls ? "May call models" : "May call models (update the connector)"} checked={callsModels(source())}
                         disabled={action.busy() || revoked() || !props.connector.capabilities.modelCalls} onChange={on => void setModelCalls(source(), on)} />
                     </If>
+                    <If when={owner() && !isPikiExtensionSource(source()) && modelExtensions() !== undefined}>
+                      <Checkbox testID={`provide-models-${source()}`} label={takesModelExtensions() ? "Provide models" : "Provide models (not with this host's connector)"} checked={providesModels(source())}
+                        disabled={action.busy() || revoked() || (!providesModels(source()) && (!takesModelExtensions() || (modelExtensions()?.length ?? 0) >= hostConfigLimits.modelExtensions))}
+                        onChange={on => void setProvidesModels(source(), on)} />
+                    </If>
                     <If when={owner() && isRequired(source()) && extension().modules.some(module => module.flags.length)}>
                       <Button small variant="outline" icon="pencil" label="Settings" disabled={action.busy()}
                         onPress={() => configuring.set({ extension: required().find(item => item.source === source())!, flags: extension().modules.flatMap(module => module.flags) })} />
@@ -341,6 +359,14 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
           <Row leading={<Icon name="alert" size={16} color={palette().muted} />} title="Update the host's connector"
             hint="This host's connector predates required extensions: its sessions run only what their workspace chose, and messages go unaudited, until it is updated (npx pikibun@latest connect)" />
         </If>
+        <Each of={owner() ? strayModelExtensions() : []} key={source => source}>
+          {source => (
+            <Row leading={<Icon name="alert" size={16} color={palette().muted} />} title={source()}
+              hint="Marked to provide models, but not installed here at that version: it provides none. Mark the version that is installed instead"
+              trailing={<Button small variant="ghost" label="Unmark" disabled={action.busy()}
+                onPress={() => void saveModelExtensions((modelExtensions() ?? []).filter(item => item !== source()), `${source()} is no longer marked to provide models.`)} />} />
+          )}
+        </Each>
         <Each of={unavailable()} key={item => item.source}>
           {item => (
             <Row leading={<Icon name="alert" size={16} color={palette().muted} />} title={item().source}

@@ -100,7 +100,8 @@ the session's own, then maps what it registered:
 | `registerCommand` | A [slash command](slash-commands.md#commands-the-host-runs) of the session: the handler runs with Pi's command context, its `ctx.ui.notify` is the command's line in the transcript and its `sendUserMessage` the message sent in its place |
 | `ctx.ui.notify` elsewhere | At `warning` or `error`, a line in the host's log naming the session and the extension, up to 50 per extension process; otherwise nothing |
 | `ctx.ui.*`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage` outside a command, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
-| `registerProvider`, `registerMcpServer`, `registerVirtualModel`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
+| `registerProvider` | Ignored in sessions, and listed on the host's page as unsupported. The host offers the provider's models where its owner marked the extension (**Provide models**): the connector applies the registrations made as the extension loads to its own `ModelRuntime` ([extension models](extension-models.md)) |
+| `registerMcpServer`, `registerVirtualModel`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 
 The host's page shows, per extension, which of its registrations work, are no-ops or are ignored, so a workspace can
 tell what it gets. An installed extension's `ctx.modelRegistry` lists the host's models but calls none
@@ -291,6 +292,6 @@ key, so two directories of one repository are two extensions, and another commit
 - Pikibun's own hook packages (`piki:pr-flow`, `piki:context-files`, `piki:prompt-audit`) installed by the store at a
   version the control plane pins, instead of compiled into the connector: planned in
   [extension-loading.md](extension-loading.md).
-- `registerMcpServer` as tools, `registerProvider` feeding the host's models.
+- `registerMcpServer` as tools; virtual models (`registerVirtualModel`) among the host's models, and provider code in a process of its own ([extension models](extension-models.md), "Left out").
 - `ctx.ui.confirm`/`select` as cards; asking the session owner instead of refusing tools in Read-only messages.
 - `tool-search` as a built-in, once Pikibun defers tools (MCP servers' tools, say).

@@ -54,10 +54,14 @@ picks one of its models. That can't be something a workspace turns on.
    provider without credentials offers nothing, as for Pi's own (`getAvailable`). A connector started with `--model`
    offers exactly the models named, which are checked before any extension loads, so it offers no extension's.
 7. **A failing extension costs its models, not the connector.** Each source is applied on its own: a module that
-   doesn't load, a load that takes more than a minute, a registration `ModelRuntime` refuses, or a result the manifest
-   refuses (over 200 models, a provider or model name outside the manifest's patterns) is rolled back (its providers
-   unregistered) and logged on the host as `Extension models: <source>: <reason>`; the others, and Pi's own models,
-   are offered as before. A provider that fails when called fails that model request, like any provider error.
+   doesn't load, a load that takes more than a minute, a registration `ModelRuntime` refuses, a provider another marked
+   extension already registered, or a result the manifest refuses (over 200 models, a provider, id or name outside what
+   the connector's or the Pikibun server's manifest checks take) is rolled back (its providers unregistered) and logged
+   on the host as `Extension models: <source>: <reason>`; the others, and Pi's own models, are offered as before. It is
+   not tried again until the list or its files change, or the connector restarts. An extension whose description
+   failed as a whole (the process that describes it, sandboxed where the host has a sandbox, crashed, exited or timed
+   out) is never imported: what would end or block a process has already done so to one that isn't the connector. A
+   provider that fails when called fails that model request, like any provider error.
 8. **The host can refuse.** `pikibun connect --no-extension-models` never loads one, whatever Pikibun says, and the
    connector then doesn't advertise the `extensionModels` capability, so the switch is shown as unavailable.
 9. **Sign-in happens in Pi.** A provider with OAuth (`oauth.login`) needs Pi's `/login` UI. The owner installs the
@@ -79,17 +83,19 @@ What bounds it:
   provider code runs, not where sessions, their commands or their extensions run.
 - **The Pikibun server's word, as for the owner's other choices.** The connector learns the list from the Pikibun
   server, as it learns `hostSessions`, `requiredExtensions` and install requests. Whoever controls the owner's Pikibun
-  account, or the Pikibun server, could mark an installed extension, and with remote installs install one first: on a
-  host that already takes sessions on the host (`hostSessions`) that adds nothing; on a sandboxed host that takes
-  none, it is a way to run code outside the sandbox, which is why decision 8's local refusal exists and why
-  `--no-remote-installs` narrows it to what was installed on the machine.
+  account, or the Pikibun server, could mark an installed extension, and with remote installs install one first. They
+  could already run commands as the host's user by starting a session on the host, which the connector takes on the
+  same word, so this adds a path, not an authority. Decision 8's local refusal closes this path on the machine, and
+  `--no-remote-installs` narrows it to what was installed there.
 - **Nothing is taken from the extension but providers.** A provider's models are reported through `modelSummary`,
   which copies the provider, id, name and thinking levels and refuses anything else.
 
 What it doesn't protect against:
 
 - **The code itself.** It runs in the connector's process: it can read what the connector can, block its event loop
-  or end it. A throw is contained (decision 7); `process.exit` or a busy loop is not. The alternative, a host-side
+  or end it. A throw while it loads is contained (decision 7), and so is whatever already broke the process that
+  described it; `process.exit`, a busy loop or a promise left failing later is not: the connector has no handler for
+  those, as it has none for its own code. The alternative, a host-side
   process of its own that streams model events to the connector, would contain those and is left for later: it needs
   pi-ai's whole `Models` surface proxied over a channel, and two processes refreshing one `auth.json`.
 - **A provider can replace one of Pi's.** `pi.registerProvider("anthropic", { baseUrl })` sends that provider's
@@ -108,6 +114,29 @@ What it doesn't protect against:
   Pikibun server is updated before its hosts' connectors.
 - **Client.** The app shows the switch only where the host's configuration carries `modelExtensions` and the host
   advertises the capability, so an app newer than its server doesn't send a key the server would refuse.
+
+## As built
+
+- **Shared**: `HostConfig.modelExtensions`, `parseModelExtensions` and `ownerOnlyHostConfig`
+  (`packages/shared/src/host-config.ts`); the `extensionModels` capability.
+- **Pikibun server**: `connector_configs.model_extensions_json` (sqlite `0087`, postgres `0080`), read and written with
+  the rest of the configuration (`apps/server/src/host-config.ts`); a stored list that no longer parses reads as none.
+- **Connector**: `extensions/providers.ts` loads a source's registrations (`loadProviderRegistrations`, one at a time,
+  with jiti's file cache off for the load, as in the extension process) and picks the sources that qualify
+  (`providerSources`); `LocalModels.provide` in `local-pi.ts` applies, validates and withdraws them on the host's
+  `ModelRuntime`; `LocalConnector.provideModels` calls it with what the Pikibun server last said
+  (`HostConfigSource.modelExtensions`: unknown until it has answered once, and kept through an outage, so a connector
+  that can't read its configuration changes nothing).
+- **Client**: the **Provide models** box and the rows for marked versions the host lacks
+  (`apps/nsh/src/settings/host-extensions.tsx`).
+- **Tests**: `tests/extension-models.test.ts` (a fixture extension whose provider is pi-ai's faux provider: off until
+  marked, a request answered through it, no handler run, `enabledModels`, the 200-model limit, each failure contained,
+  only owner-installed sources), `tests/local-connector.test.ts` (before the manifest, the local refusal, nothing
+  until the configuration is heard), `tests/connectors.test.ts` (owner only, no workspace route), and
+  `apps/nsh/tests/settings.test.tsx`.
+- **Limits that follow from loading after the connection**: the connector still refuses to start without one model of
+  Pi's own, and Pi's start-up warning for an `enabledModels` pattern that matches nothing is printed for a pattern that
+  names an extension's models. `--model` is checked at start, so such a connector offers no extension's models.
 
 ## Left out
 

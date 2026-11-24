@@ -43,6 +43,8 @@ The host's owner and its [admins](#host-admins-and-host-command-grants) can also
 
 The setting stays with the host until someone enables the model again, even if Pi on the host stops offering the model for a while. Disabling a model doesn't change Pi's own configuration on the host.
 
+A host can also offer the models a Pi extension provides (a proxy, a subscription bridge, a provider Pi doesn't ship): its owner installs the extension on the host, signs in to the provider with Pi there if it needs that, and ticks **Provide models** on it under **Settings → Hosts →** the host **→ Extensions**. The extension's code then runs in the connector, as the owner's OS user and outside any sandbox, which is why only the owner decides it and no workspace can; its models are narrowed by `enabledModels`, count in the 200, and are turned off here like the others. `pikibun connect --no-extension-models` refuses it on the machine. See [Models an extension provides](extensions.md#models-an-extension-provides).
+
 Sessions on a host also follow two more of its Pi settings:
 
 - **Compaction**: `compaction` (`enabled`, `reserveTokens`, `keepRecentTokens`) decides when a long conversation is summarized, and `compaction.modelOverrides` sets the token values per exact `provider/modelId`, so a session that switches between a small-window and a large-window model compacts in time for each. Pi's defaults apply where these are unset, with one exception: a reasoning model keeps a tenth of its context window, between 16K and 64K tokens, as `reserveTokens` instead of Pi's 16K. Pi summarizes at the conversation's reasoning level within 80% of `reserveTokens`, so at 16K a model thinking at a high level can spend the whole budget thinking, and once the context is past the threshold every message fails the same compaction. Set `reserveTokens` (overall or for the model) to use another value.
@@ -296,6 +298,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 | `--model PROVIDER/MODEL` | Offer this model (repeatable) instead of `enabledModels` |
 | `--resources PATH` | Operator-provisioned resource limits that let commands run in every session |
 | `--build-caches PATH` | Where the host keeps [build caches](design/build-caches.md) (default `build-caches` in the state directory); with `--resources`, required for them and checked to be a dedicated, private filesystem mount (`rw,nosuid,nodev`) |
+| `--no-extension-models` | Never load an extension's model providers into the connector, whatever its owner ticks as [providing models](extensions.md#models-an-extension-provides) in Pikibun |
 | `--unsafe-no-sandbox` | Run agent work directly on this machine, without isolation; asks for confirmation |
 | `--allow-insecure-loopback` | Allow an `http://` server on localhost (development) |
 | `--help` | Show all options |

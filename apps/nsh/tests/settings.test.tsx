@@ -314,6 +314,56 @@ describe("settings", () => {
     await app.waitFor("text:Add a dark mode");
   });
 
+  test("a host's owner marks an installed extension as providing models once they confirm what it runs as, and unmarks one the host lacks", async () => {
+    const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, modelExtensions: ["npm:pi-gone@1.0.0"] };
+    const installed = { source: "npm:pi-provider@1.0.0", dev: false, description: "Models from a proxy",
+      modules: [{ path: "index.ts", tools: [], events: [], flags: [], noops: [], ignored: ["provider proxy"] }] };
+    const routes = (role: "owner" | "admin", capabilities: Record<string, unknown>) => ({
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role, connectedWorkspaceIds: ["w1"], version: "0.40.0", config, capabilities: { ...host.capabilities, extensions: true, ...capabilities } }] } },
+      [`GET ${ORIGIN}/api/connectors/c1/extensions`]: { body: { role, automaticTools: false, requests: [], workspaces: [], report: { installed: [installed], remoteInstalls: true } } },
+      [`PATCH ${ORIGIN}/api/connectors/c1/config`]: { body: { config } },
+    });
+    const patched = (app: Parameters<typeof bodyOf>[0]) => app.requests().filter(item => item.method === "PATCH" && item.url === `${ORIGIN}/api/connectors/c1/config`).map(item => JSON.parse(item.body ?? "{}"));
+    const app = await openSettings("hosts", routes("owner", { extensionModels: true }));
+    await app.press("id:host-row-c1");
+    await app.waitFor("text:npm:pi-provider@1.0.0");
+    await app.waitFor("text:npm:pi-gone@1.0.0");
+    expect(app.texts().join(" ")).toContain("Marked to provide models, but not installed here at that version");
+    await app.press("text:npm:pi-provider@1.0.0");
+    await app.waitFor("id:provide-models-npm:pi-provider@1.0.0");
+    const asked: string[] = [];
+    app.onDialog(dialog => { asked.push(`${dialog.title}: ${dialog.message}`); return "Cancel"; });
+    await app.press("id:provide-models-npm:pi-provider@1.0.0");
+    await app.waitUntil(() => asked.length === 1);
+    expect(asked[0]).toContain("Let npm:pi-provider@1.0.0 provide models?");
+    expect(asked[0]).toContain("as your OS user and outside any sandbox");
+    expect(patched(app)).toEqual([]);
+    app.onDialog(dialog => (dialog.title === "Let npm:pi-provider@1.0.0 provide models?" ? "Provide models" : null));
+    await app.press("id:provide-models-npm:pi-provider@1.0.0");
+    await app.waitUntil(() => patched(app).length === 1);
+    expect(patched(app)).toEqual([{ modelExtensions: ["npm:pi-gone@1.0.0", "npm:pi-provider@1.0.0"] }]);
+    await app.press("text:Unmark");
+    await app.waitUntil(() => patched(app).length === 2);
+    expect(patched(app)[1]).toEqual({ modelExtensions: [] });
+
+    const refusing = await openSettings("hosts", routes("owner", {}));
+    await refusing.press("id:host-row-c1");
+    await refusing.waitFor("text:npm:pi-provider@1.0.0");
+    await refusing.press("text:npm:pi-provider@1.0.0");
+    await refusing.waitFor("text:Provide models (not with this host's connector)");
+    await expect(refusing.press("id:provide-models-npm:pi-provider@1.0.0")).rejects.toThrow(/is disabled/);
+    expect(patched(refusing)).toEqual([]);
+
+    const admin = await openSettings("hosts", routes("admin", { extensionModels: true }));
+    await admin.press("id:host-row-c1");
+    await admin.waitFor("text:npm:pi-provider@1.0.0");
+    await admin.press("text:npm:pi-provider@1.0.0");
+    await admin.waitFor("text:Not supported: provider proxy");
+    expect(admin.shows("id:provide-models-npm:pi-provider@1.0.0")).toBe(false);
+    expect(admin.shows("text:Unmark")).toBe(false);
+  });
+
   test("a host's browser setup keeps what is being typed while its status refreshes", async () => {
     const app = await open("./harness/tool-setup.tsx", {});
     await app.press("text:This path");

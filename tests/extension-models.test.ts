@@ -183,6 +183,11 @@ test("an extension that throws, registers what Pi refuses, registers nothing or 
 
 test("only an extension the host's owner installed, at the marked version, can provide models", async t => {
   const host = await hostFixture(t, ["pi-fixture-provider"]);
+  const described = (await loadInstalled(host.store, [])).find(item => item.summary.source === "npm:pi-fixture-provider@1.0.0")!;
+  assert.equal(described.summary.error, undefined);
+  assert.deepEqual(described.summary.modules.map(module => [module.error, module.ignored]), [[undefined, ["provider ext-proxy", "provider ext-faux"]]],
+    "the extension process describes it, and still lists its providers as unsupported in sessions");
+  assert.deepEqual(providerSources({ modelExtensions: ["npm:pi-fixture-provider@1.0.0"] }, [described]).sources.map(item => item.source), ["npm:pi-fixture-provider@1.0.0"]);
   await host.store.add({ kind: "local", path: join(host.root, "state", "extensions") });
   const loaded = [...await loadInstalled(host.store, [], [], { describe: async () => [] }),
     { installed: { source: "piki:gh" }, root: "", files: ["/connector/gh.ts"], factories: [], summary: { source: "piki:gh", dev: false, modules: [] } },
