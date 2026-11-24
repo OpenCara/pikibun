@@ -67,6 +67,31 @@ connector's, so it reaches hosts with a `cli-v` release.
   session's own push are what `wait: "checks"` is for. What the session did is read from its own operation records, so
   nothing new is stored.
 
+## The gh tool
+
+A CLI definition (`packages/shared/src/cli-definitions.ts`) carries `hints` beside `refuse`: each names calls as a
+refusal does (`words`, `options`, `short`, `argPattern`), an `outputPattern`, or both, and the text to add. The engine
+(`cliRules().hints`) picks them, and the tool adds each as a `Hint:` line after the output, only for a run that ended on
+its own with a non-zero exit, or printed nothing: a run that succeeded may quote an error (an issue about it), and one
+the tool stopped or a signal ended names its own reason. A result takes at most four hints, so a faulty served
+definition can't crowd out the output.
+
+- **A TLS certificate failure** (#434). Output with `tls: failed to verify certificate` or `x509: ` gets a hint: the
+  host's certificate store or an intercepting proxy refused GitHub's certificate, retrying won't help, the brokered
+  tools (`github_read` with `wait`, `github_comment`, `github_issue`, `github_merge`) still reach GitHub through the
+  Pikibun server, and the host's owner fixes the host. Agents had taken it for GitHub being down or a failed check.
+  It isn't reported in the host's health: that needs a report field and a place in Settings → Hosts, more than a hint.
+- **`view --comments`** (#466). `gh issue view` and `gh pr view` with both `--comments` and `--json` are refused before
+  anything runs, naming `--json comments` alone; a view with `--comments` that fails or prints nothing gets a hint
+  naming `--json comments` and `gh api repos/<owner>/<name>/issues/<n>/comments`.
+
+Served definitions add hints as they add refusals: a connector applies its own and the served ones, each text once.
+A connector's parser passes over a whole definition with a key it doesn't know, silently, so one from before `hints`
+would lose every served `gh` rule. The Pikibun server therefore serves `hints` only to a connector that asks
+(`cliHints: true` in the body of `/api/connectors/self/tools`) and leaves the key out otherwise. The new refusal is an
+ordinary `refuse` rule, so older connectors apply it once the Pikibun server is deployed; the hints need a `cli-v`
+release.
+
 ## What stays text
 
 Lessons that need judgement stay in `docs/LESSONS.md`: how to word things for people, which release lines a fix needs,
