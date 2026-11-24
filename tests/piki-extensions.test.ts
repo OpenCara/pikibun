@@ -96,7 +96,7 @@ test('every connector has its Pikibun extensions: each command-line one offers o
       assert.deepEqual([module!.tools, [...module!.events].sort(), module!.noops, module!.ignored],
         [[], ['before_agent_start', 'resources_discover', 'session_shutdown', 'tool_call', 'tool_result'], [], []]);
       assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['placement', 'string', ''], ['models', 'string', ''], ['balance', 'boolean', true],
-        ['max-sub-agents', 'string', '5'], ['notify', 'boolean', true], ['delegate', 'string', 'when-useful']]);
+        ['max-sub-agents', 'string', ''], ['notify', 'boolean', true], ['delegate', 'string', 'when-useful']]);
       continue;
     }
     assert.deepEqual(module!.tools.map(tool => tool.name), [pikiExtension(item.summary.source)!.tool]);

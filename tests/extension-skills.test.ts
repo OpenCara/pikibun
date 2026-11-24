@@ -278,6 +278,7 @@ test("piki:sub-agents' skill is its policy, and its prompt keeps when, and how m
   const rule = subAgentsRule(settings, state);
   for (const part of [/^## Sub-agents/, /- When: split work/, /at most 3 sub-agents per message/, /read the sub-agents skill/]) assert.match(rule, part);
   assert.doesNotMatch(rule, /gpu=true/);
+  assert.doesNotMatch(subAgentsRule(readSettings(() => undefined), state), /How many/, "with no limit set, there is no limit to tell");
   const none = readSettings(name => (name === "max-sub-agents" ? "0" : undefined));
   assert.equal(subAgentsRule(none, state), subAgentsPrompt(none, state), "with none allowed, the one line says so, and there is no skill to read");
 });
