@@ -29,6 +29,7 @@ import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import type { RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
 import { publicLookup } from '../apps/server/src/authority/remote-mcp/transport.js';
+import { coversResource, discoverOAuth } from '../apps/server/src/authority/remote-mcp/oauth.js';
 import { answersId, eventStreamMessages, RemoteMcpSession } from '../apps/server/src/authority/remote-mcp/client.js';
 
 const origin = 'http://localhost:8787';
@@ -4136,6 +4137,179 @@ test('workspace remote MCP servers: admins register them with vault-held headers
   assert.deepEqual(wrong.tools.map(tool => tool.name), ['search_issues', 'create-issue'], 'a failed listing keeps the tools it had');
   await json(await s.admin.request('DELETE', path + '/' + server.id));
   assert.deepEqual((await json<{ servers: unknown[] }>(await s.creator.request('GET', path))).servers, []);
+});
+
+function oauthMcpFake() {
+  const mcpUrl = 'https://mcp.example.com/mcp';
+  const valid = new Set<string>();
+  const refresh = new Map<string, string>();
+  const codes = new Map<string, { challenge: string; resource: string; redirect: string }>();
+  const calls: { method: string; url: string; headers: Record<string, string>; body: string }[] = [];
+  let minted = 0;
+  let refusing = false;
+  const json = (status: number, value: unknown) => ({ status, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  const transport = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
+    const method = request.method ?? 'POST';
+    calls.push({ method, url: request.url, headers: request.headers, body: request.body });
+    if (request.url === mcpUrl && method === 'POST') {
+      const token = /^Bearer (.+)$/.exec(request.headers.Authorization ?? '')?.[1];
+      if (!token || !valid.has(token)) {
+        return { status: 401, headers: { 'www-authenticate': 'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="openid offline_access"' }, body: '{"error":"Unauthorized"}' };
+      }
+      const body = JSON.parse(request.body) as { id?: number; method: string; params?: { name?: string } };
+      if (body.id === undefined) return { status: 202, headers: {}, body: '' };
+      const result = body.method === 'initialize' ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'gen', version: '1' } }
+        : body.method === 'tools/list' ? { tools: [{ name: 'generate_video', description: 'Make a video.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' } } } }] }
+        : { content: [{ type: 'text', text: `${body.params?.name} as ${token}` }] };
+      return json(200, { jsonrpc: '2.0', id: body.id, result });
+    }
+    if (request.url === 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp' && method === 'GET') {
+      return json(200, { resource: mcpUrl, authorization_servers: ['https://auth.example.com/_clerk'], scopes_supported: ['openid', 'offline_access'] });
+    }
+    if (request.url === 'https://auth.example.com/_clerk/.well-known/oauth-authorization-server' && method === 'GET') {
+      return json(200, { issuer: 'https://auth.example.com/_clerk', authorization_endpoint: 'https://auth.example.com/_clerk/oauth/authorize',
+        token_endpoint: 'https://auth.example.com/_clerk/oauth/token', registration_endpoint: 'https://auth.example.com/_clerk/oauth/register',
+        code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['client_secret_basic', 'none', 'client_secret_post'] });
+    }
+    if (request.url === 'https://auth.example.com/_clerk/oauth/register' && method === 'POST') {
+      const body = JSON.parse(request.body) as { redirect_uris: string[]; token_endpoint_auth_method: string };
+      assert.deepEqual(body.redirect_uris, [`${origin}/api/mcp-servers/oauth/callback`]);
+      assert.equal(body.token_endpoint_auth_method, 'none');
+      return json(201, { client_id: 'client-1', token_endpoint_auth_method: 'none' });
+    }
+    if (request.url === 'https://auth.example.com/_clerk/oauth/token' && method === 'POST') {
+      const form = new URLSearchParams(request.body);
+      assert.equal(form.get('client_id'), 'client-1');
+      assert.equal(form.get('resource'), mcpUrl);
+      const mint = () => { minted++; const access = `access-${minted}`; const next = `refresh-${minted}`; valid.add(access); refresh.set(next, access);
+        return json(200, { access_token: access, refresh_token: next, token_type: 'Bearer', expires_in: 3600 }); };
+      if (form.get('grant_type') === 'authorization_code') {
+        const saved = codes.get(form.get('code') ?? '');
+        codes.delete(form.get('code') ?? '');
+        if (!saved || saved.redirect !== form.get('redirect_uri') || createHash('sha256').update(form.get('code_verifier') ?? '').digest('base64url') !== saved.challenge) {
+          return json(400, { error: 'invalid_grant' });
+        }
+        return mint();
+      }
+      if (form.get('grant_type') === 'refresh_token') {
+        const old = form.get('refresh_token') ?? '';
+        if (refusing || !refresh.has(old)) return json(400, { error: 'invalid_grant' });
+        refresh.delete(old);
+        return mint();
+      }
+    }
+    return { status: 404, headers: {}, body: '' };
+  };
+  return { mcpUrl, valid, codes, calls, transport, refuse: () => { refusing = true; } };
+}
+
+test('a remote MCP server that asks for OAuth is signed in to by an admin; Pikibun keeps, renews and sends the tokens, which nobody sees', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const fake = oauthMcpFake();
+  f.env.REMOTE_MCP_TRANSPORT = fake.transport;
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const { server } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path, { name: 'Gen', prefix: 'gen', url: fake.mcpUrl }), 201);
+  assert.match(server.error ?? '', /needs a sign-in \(HTTP 401\).*Sign in/);
+  assert.equal(server.oauth, undefined);
+
+  const start = path + '/' + server.id + '/oauth/start';
+  await denied(await s.creator.request('GET', start), 403, 'forbidden');
+  const signIn = async () => {
+    const response = await s.admin.request('GET', start);
+    assert.equal(response.status, 302);
+    const location = new URL(response.headers.get('location')!);
+    assert.equal(`${location.origin}${location.pathname}`, 'https://auth.example.com/_clerk/oauth/authorize');
+    assert.deepEqual(['client_id', 'response_type', 'code_challenge_method', 'resource', 'scope', 'redirect_uri'].map(name => location.searchParams.get(name)),
+      ['client-1', 'code', 'S256', fake.mcpUrl, 'openid offline_access', `${origin}/api/mcp-servers/oauth/callback`]);
+    const state = location.searchParams.get('state')!;
+    assert.equal(response.headers.get('set-cookie')!.match(/test-mcp-oauth=([^;]+)/)![1], state);
+    return { state, challenge: location.searchParams.get('code_challenge')!,
+      callback: (query: Record<string, string>, withCookie = true) => s.admin.request('GET', `/api/mcp-servers/oauth/callback?${new URLSearchParams(query)}`,
+        undefined, withCookie ? { Cookie: `${s.admin.cookie}; test-mcp-oauth=${state}` } : {}) };
+  };
+  const settings = (response: Response) => {
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('location'), `${origin}/#/settings/workspaces/${encodeURIComponent(s.team.id)}`);
+  };
+  const listed = async () => (await json<{ servers: WorkspaceMcpServer[] }>(await s.admin.request('GET', path))).servers[0]!;
+
+  const declined = await signIn();
+  settings(await declined.callback({ error: 'access_denied', state: declined.state }));
+  assert.match((await listed()).error ?? '', /Signing in failed: the sign-in was declined/);
+  const forged = await signIn();
+  fake.codes.set('code-0', { challenge: forged.challenge, resource: fake.mcpUrl, redirect: `${origin}/api/mcp-servers/oauth/callback` });
+  settings(await forged.callback({ code: 'code-0', state: forged.state, iss: 'https://evil.example.com' }));
+  assert.match((await listed()).error ?? '', /Signing in failed: the answer came from another authorization server/);
+  assert.ok(fake.codes.has('code-0'), 'a code from another issuer is never exchanged');
+
+  const flow = await signIn();
+  fake.codes.set('code-1', { challenge: flow.challenge, resource: fake.mcpUrl, redirect: `${origin}/api/mcp-servers/oauth/callback` });
+  await denied(await flow.callback({ code: 'code-1', state: flow.state }, false), 400, 'invalid_oauth_state');
+  const again = await signIn();
+  fake.codes.set('code-2', { challenge: again.challenge, resource: fake.mcpUrl, redirect: `${origin}/api/mcp-servers/oauth/callback` });
+  settings(await again.callback({ code: 'code-2', state: again.state, iss: 'https://auth.example.com/_clerk' }));
+  await denied(await again.callback({ code: 'code-2', state: again.state }), 400, 'invalid_oauth_state');
+  const signedIn = await listed();
+  assert.equal(signedIn.error, undefined);
+  assert.ok(signedIn.oauth?.signedInAt);
+  assert.deepEqual(signedIn.tools.map(tool => tool.toolName), ['gen_generate_video']);
+  const stored = () => JSON.stringify(f.sqlite.prepare('SELECT * FROM workspace_mcp_servers').all()) + JSON.stringify(f.sqlite.prepare('SELECT * FROM mcp_oauth_states').all())
+    + JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all());
+  assert.ok(!/access-\d|refresh-\d/.test(stored()), 'tokens are kept only encrypted and never audited');
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM mcp_oauth_states').get()!.n, 0);
+
+  const answer = parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true })));
+  const route = answer.remoteTools![0]!.route;
+  const call = () => self(f, s.connector, route, { sessionId: s.session.id, actorId: s.session.ownerId, admissionId: admit(f, s.session.id, s.session.ownerId), callId: 'call-1', arguments: { prompt: 'cat' } });
+  assert.equal((await json<{ result: string }>(await call())).result, 'generate_video as access-1');
+
+  fake.valid.delete('access-1');
+  assert.equal((await json<{ result: string }>(await call())).result, 'generate_video as access-2', 'a refused token is renewed once and the call sent again');
+  const kept = () => f.sqlite.prepare('SELECT oauth_ciphertext FROM workspace_mcp_servers WHERE id = ?').get(server.id)!.oauth_ciphertext as string;
+  const secret = JSON.parse(await decryptToken(f.env, `remote-mcp-oauth:${server.id}`, kept()));
+  assert.deepEqual([secret.accessToken, secret.refreshToken], ['access-2', 'refresh-2'], 'the rotated refresh token is kept');
+  f.sqlite.prepare('UPDATE workspace_mcp_servers SET oauth_ciphertext = ? WHERE id = ?')
+    .run(await encryptToken(f.env, `remote-mcp-oauth:${server.id}`, JSON.stringify({ ...secret, expiresAt: Date.now() - 1000 })), server.id);
+  assert.equal((await json<{ result: string }>(await call())).result, 'generate_video as access-3', 'a token about to expire is renewed before the call');
+
+  fake.refuse();
+  fake.valid.delete('access-3');
+  const expired = await json<{ code: string; error: string }>(await call(), 502);
+  assert.equal(expired.code, 'mcp_call_failed');
+  assert.match(expired.error, /sign-in expired: an owner or admin signs in to it again/);
+
+  const { server: out } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('DELETE', path + '/' + server.id + '/oauth'));
+  assert.equal(out.oauth, undefined);
+  assert.equal(kept(), null);
+  const audits = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.mcp.sign%'").all().map(row => row.action);
+  assert.deepEqual(audits, ['workspace.mcp.signed_in', 'workspace.mcp.signed_out']);
+
+  const moving = await signIn();
+  fake.codes.set('code-3', { challenge: moving.challenge, resource: fake.mcpUrl, redirect: `${origin}/api/mcp-servers/oauth/callback` });
+  settings(await moving.callback({ code: 'code-3', state: moving.state }));
+  assert.ok((await listed()).oauth);
+  const { server: moved } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { url: 'https://elsewhere.example.net/mcp', headers: {} }));
+  assert.equal(moved.oauth, undefined, 'a sign-in is never sent to another address');
+  assert.equal(kept(), null);
+});
+
+test('a protected resource covers only its own origin and path, and an authorization server\'s metadata must name the issuer it was asked for', async () => {
+  assert.ok(coversResource('https://mcp.example.com/mcp', 'https://mcp.example.com/mcp'));
+  assert.ok(coversResource('https://mcp.example.com', 'https://mcp.example.com/mcp'));
+  assert.ok(coversResource('https://mcp.example.com/api/', 'https://mcp.example.com/api/mcp'));
+  assert.ok(!coversResource('https://mcp.example.com/mcp', 'https://mcp.example.com/mcpevil'));
+  assert.ok(!coversResource('https://mcp.example.com', 'https://mcp.example.com.evil.tld/mcp'));
+  assert.ok(!coversResource('https://other.example.com/mcp', 'https://mcp.example.com/mcp'));
+  const json = (value: unknown) => ({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  const transport = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
+    if (request.url === 'https://mcp.example.com/mcp') return { status: 401, headers: { 'www-authenticate': 'Bearer' }, body: '' };
+    if (request.url === 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp') return json({ resource: 'https://mcp.example.com/mcp', authorization_servers: ['https://auth.example.com'] });
+    if (request.url === 'https://auth.example.com/.well-known/oauth-authorization-server') {
+      return json({ issuer: 'https://evil.example.com', authorization_endpoint: 'https://evil.example.com/authorize', token_endpoint: 'https://evil.example.com/token' });
+    }
+    return { status: 404, headers: {}, body: '' };
+  };
+  await assert.rejects(discoverOAuth(transport, 'https://mcp.example.com/mcp'), /publishes no OAuth metadata/);
 });
 
 test('a remote MCP call has one deadline for all its requests, and an event stream answers as soon as its response arrives', async () => {

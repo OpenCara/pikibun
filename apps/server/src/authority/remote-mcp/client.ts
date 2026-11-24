@@ -1,10 +1,15 @@
 import { remoteMcpLimits, remoteMcpToolList, type RemoteMcpTool, type RemoteMcpTransport } from '../../../../../packages/shared/src/remote-mcp.js';
 
-const PROTOCOL_VERSION = '2025-06-18';
-const CLIENT = { name: 'pikibun', version: '1' };
+export const MCP_PROTOCOL_VERSION = '2025-06-18';
+export const MCP_CLIENT = { name: 'pikibun', version: '1' };
+const PROTOCOL_VERSION = MCP_PROTOCOL_VERSION;
+const CLIENT = MCP_CLIENT;
 const MAX_PAGES = 4;
 
 export class RemoteMcpError extends Error {}
+export class RemoteMcpUnauthorized extends RemoteMcpError {
+  constructor(readonly status: number, readonly challenge: string) { super(`The server refused the credentials (HTTP ${status})`); }
+}
 
 interface JsonRpcAnswer { id?: unknown; result?: unknown; error?: { code?: unknown; message?: unknown } }
 
@@ -84,7 +89,7 @@ export class RemoteMcpSession {
     });
     const session = response.headers['mcp-session-id'];
     if (session && /^[\x21-\x7e]{1,256}$/.test(session)) this.#sessionId = session;
-    if (response.status === 401 || response.status === 403) throw new RemoteMcpError(`The server refused the credentials (HTTP ${response.status})`);
+    if (response.status === 401 || response.status === 403) throw new RemoteMcpUnauthorized(response.status, response.headers['www-authenticate'] ?? '');
     if (response.status < 200 || response.status >= 300) throw new RemoteMcpError(`The server answered HTTP ${response.status}`);
     if (!expectAnswer) return undefined;
     return answerFrom(response.body, response.headers['content-type'] ?? '', payload.id as number);

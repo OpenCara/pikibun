@@ -72,6 +72,11 @@ connector's, so it reaches hosts with a `cli-v` release.
   The proxy now drops a token the API refuses, asks the Pikibun server for the current one and sends the request
   again, so the command never sees that `401` ([its design](egress.md), "A token the API refuses is dropped at
   once"). It is the connector's, so it reaches hosts with a `cli-v` release.
+- **A token reset doesn't sign the owner out.** Anything that met the old token's `401` while a reset was between
+  GitHub's answer and the vault's update forgot the sign-in, and the reset then revoked the new token: owners lost their
+  GitHub sign-in now and then after pushes. Resets of one owner's token now run one at a time, and forgetting or
+  reading the token waits for a running reset ([note 40](piki-extensions.md), "Nothing forgets a token while it is
+  being reset"); `push-broker.test.ts` holds a reset between the two and checks the sign-in survives.
 
 ## The gh tool
 

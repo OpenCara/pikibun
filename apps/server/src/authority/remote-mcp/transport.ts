@@ -103,10 +103,11 @@ export function publicHttpsTransport(resolve?: AddressLookup, options: PublicHtt
   const send = options.request ?? httpsRequest;
   const gate = options.gate ?? new RemoteMcpGate();
   const exchange = (request: RemoteMcpHttpRequest, url: URL, timeoutMs: number) => new Promise<RemoteMcpHttpResponse>((done, reject) => {
-    const body = Buffer.from(request.body);
+    const method = request.method ?? 'POST';
+    const body = Buffer.from(method === 'GET' ? '' : request.body);
     const call = send(url, {
-      method: 'POST', lookup, agent: false,
-      headers: { ...request.headers, 'Content-Length': String(body.byteLength) },
+      method, lookup, agent: false,
+      headers: { ...request.headers, ...(method === 'GET' ? {} : { 'Content-Length': String(body.byteLength) }) },
     }, response => {
       const chunks: Buffer[] = [];
       let total = 0;
