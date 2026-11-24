@@ -4,6 +4,7 @@ import { artifactFrame, type ArtifactKind, type ArtifactRef } from "../../../../
 import { errorMessage, formatBytes, REDACTED, type ArtifactContent, type ArtifactSource } from "../shared";
 import { relativeTime } from "../lib/format";
 import { openMessageLink } from "../lib/links";
+import { inTerminal } from "../lib/terminal";
 import { Icon, type IconName } from "../icons";
 import { palette, radius, text } from "../theme";
 import { Badge, Banner, Button, Small } from "../ui";
@@ -13,7 +14,7 @@ export const artifactKindLabels: Record<ArtifactKind, string> = { html: "HTML", 
 const kindIcons: Record<ArtifactKind, IconName> = { html: "globe", svg: "image", markdown: "file", text: "file" };
 
 function Frame(props: { kind: "html" | "svg"; content: string; height: number }) {
-  const unavailable = signal(false);
+  const unavailable = signal(inTerminal);
   return (
     <If when={!unavailable()} else={
       <View style={{ gap: 8 }}>

@@ -2,6 +2,7 @@ import { signal, Text, View, type ViewStyle } from "nsh";
 import { Progress } from "nsh/base";
 import { appUpdate, formatBytes, isVersion, type AppUpdater, type UpdatePhase } from "../lib/app-update";
 import { openExternal } from "../lib/links";
+import { TUI_UPDATE_COMMAND } from "../lib/terminal";
 import { palette, radius, text } from "../theme";
 import { Banner, Button, CardBody, Feedback, Row, Small } from "../ui";
 
@@ -108,6 +109,9 @@ export function AppUpdateRows() {
   return (
     <>
       <Row title="Version" trailing={version()} testID="app-version" />
+      <If when={updater.fromNpm}>
+        <Row testID="app-update-npm" title="Updates" hint={`Pikibun in the terminal updates from npm: ${TUI_UPDATE_COMMAND}`} />
+      </If>
       <If when={updater.offered}>
         <If when={update()}
           else={

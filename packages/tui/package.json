@@ -1,0 +1,16 @@
+{
+  "name": "@pikibun/tui",
+  "version": "0.0.0",
+  "description": "Pikibun in your terminal: the Pikibun app, drawn in the terminal by Native Shell.",
+  "license": "MIT",
+  "homepage": "https://pikibun.com",
+  "repository": { "type": "git", "url": "git+https://github.com/OpenCara/pikibun.git", "directory": "packages/tui" },
+  "keywords": ["pikibun", "pi", "agent", "tui", "terminal"],
+  "type": "module",
+  "bin": { "pikibun-tui": "bin/pikibun-tui.js" },
+  "files": ["bin", "app", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  }
+}

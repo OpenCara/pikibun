@@ -2,6 +2,7 @@ import { signal, Text, View, WebView } from "nsh";
 import { tunnelLinkHeld, validTunnelUrl, type SessionTunnelView } from "../../../../packages/shared/src/tunnel";
 import type { SessionRecord } from "../../../../packages/shared/src/types";
 import { openExternal } from "../lib/links";
+import { inTerminal } from "../lib/terminal";
 import { Icon } from "../icons";
 import { palette, text } from "../theme";
 import { Badge, Button, EmptyState, IconButton, Small } from "../ui";
@@ -46,7 +47,7 @@ export function App(props: PanelTabProps) {
 function Online(props: PanelTabProps & { tunnel: () => SessionTunnelView }) {
   const loads = signal(0);
   const failure = signal<{ message: string; unshown: boolean } | null>(null);
-  const address = () => tunnelFrameAddress(props.tunnel().url);
+  const address = () => (inTerminal ? undefined : tunnelFrameAddress(props.tunnel().url));
   const host = () => { try { return new URL(props.tunnel().url).host; } catch { return props.tunnel().url; } };
   const expanded = () => props.expanded?.() ?? false;
   const reload = () => { failure.set(null); loads.update(value => value + 1); };

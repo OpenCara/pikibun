@@ -6,7 +6,8 @@ name: Release app
 #   macOS     Pikibun-<version>-macos-arm64.dmg, the .app signed with a Developer ID and both notarized
 #   Linux     Pikibun-<version>-linux-x86_64.tar.gz
 #   Android   Pikibun-<version>-android.apk, signed with the release key
-# and uploads iOS to TestFlight when its signing is configured. The apps' version is the tag's without a prerelease
+# and uploads iOS to TestFlight when its signing is configured, and publishes the terminal app to npm (@pikibun/tui and
+# its hosts, @pikibun/tui-<platform>-<arch>, the `tui` and `npm-tui` jobs). The apps' version is the tag's without a prerelease
 # suffix (Apple's and Windows' version fields take only numbers) and their build number is this run's.
 #
 # Pull requests that change how the app is packaged build every platform too, without releasing; so does a run by
@@ -41,6 +42,7 @@ on:
       - apps/nsh/windows/**
       - scripts/nsh.mjs
       - scripts/app-version.mjs
+      - packages/tui/**
   workflow_dispatch:
 permissions:
   contents: read
@@ -662,6 +664,99 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
           rm -rf "$HOME/.appstoreconnect/private_keys" "$RUNNER_TEMP/profile.mobileprovision"
+
+  # The terminal app's npm packages, at the app's version (docs/design/tui.md): @pikibun/tui, the app's bundle and its
+  # launcher, and @pikibun/tui-<platform>-<arch>, Native Shell's terminal host for each platform it publishes one for,
+  # checked against the SHA-256 scripts/nsh.mjs pins. Packed here, where the hosts keep their executable bit, which an
+  # artifact would lose; npm-tui publishes the tarballs.
+  tui:
+    needs: [check, ci]
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        # The whole history with its tags: scripts/app-version.mjs pins the pikibun command to the latest cli-v tag.
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .cache/nsh
+          key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
+      - name: Version
+        env:
+          TAG_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          version="${TAG_VERSION:-$(node -p 'require("./apps/nsh/nsh.json").version')-dev.$GITHUB_RUN_NUMBER}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
+      - name: Build the packages
+        run: node packages/tui/scripts/build.mjs --version "$VERSION" --hosts all
+      - name: Pack them
+        run: |
+          mkdir -p "$RUNNER_TEMP/npm-tui"
+          for dir in packages/tui/dist/hosts/* packages/tui/dist/tui; do
+            (cd "$dir" && npm pack --pack-destination "$RUNNER_TEMP/npm-tui")
+          done
+          ls -l "$RUNNER_TEMP/npm-tui"
+          [ "$(ls "$RUNNER_TEMP/npm-tui"/*.tgz | wc -l)" = 7 ] || { echo "::error::Expected 7 tarballs: @pikibun/tui and its 6 hosts."; exit 1; }
+      - name: Each host is executable in its tarball
+        run: |
+          for file in "$RUNNER_TEMP"/npm-tui/pikibun-tui-[a-z]*.tgz; do
+            tar -tzvf "$file" | awk '$NF ~ /^package\/bin\/nsh-tui-host(\.exe)?$/ && $1 ~ /^-..x/ { found = 1 } END { exit !found }' \
+              || { echo "::error::$file has no executable package/bin/nsh-tui-host."; exit 1; }
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: npm-tui
+          path: ${{ runner.temp }}/npm-tui/*.tgz
+          if-no-files-found: error
+
+  # The hosts first, then @pikibun/tui, which names them: an install never finds its host missing from the registry.
+  # A re-run skips what the registry already has. npm auth: a trusted publisher on npmjs.com for this workflow file
+  # (release-app.yml) and environment `release` for each of the seven packages, or the NPM_TOKEN secret.
+  npm-tui:
+    if: github.event_name == 'push'
+    needs: [check, tui]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: npm-tui
+          path: npm-tui
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ needs.check.outputs.prerelease == 'true' && 'next' || 'latest' }}
+        run: |
+          shopt -s nullglob
+          main=(npm-tui/pikibun-tui-[0-9]*.tgz)
+          [ ${#main[@]} -eq 1 ] || { echo "::error::Expected one @pikibun/tui tarball, found ${#main[@]}."; exit 1; }
+          hosts=()
+          for file in npm-tui/pikibun-tui-*.tgz; do [ "$file" = "${main[0]}" ] || hosts+=("$file"); done
+          for file in "${hosts[@]}" "${main[0]}"; do
+            id=$(tar -xzOf "$file" package/package.json | node -p 'const m = JSON.parse(require("fs").readFileSync(0, "utf8")); `${m.name}@${m.version}`')
+            if npm view "$id" version > /dev/null 2>&1; then
+              echo "$id is on npm already."
+              continue
+            fi
+            npm publish "$file" --provenance --access public --tag "$DIST_TAG"
+          done
 
   # One release for every platform's files; a re-run replaces them.
   github-release:
