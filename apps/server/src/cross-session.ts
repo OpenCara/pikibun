@@ -348,8 +348,9 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
     if (consent) return c.json(consent);
   }
   const title = options.title ?? cut(`${origin.title} · sub-task`, 190).split('\n')[0]!;
-  const inheritsHost = options.hostEnvironmentLeftOut === true && Number(origin.host_environment ?? 0) === 1 && personSent(call.admission)
-    && !!model.connector_id && model.connector_id === origin.connector_id && model.connector_owner_id === actorId;
+  const inheritsHost = subSessionInheritsHost({ leftOut: options.hostEnvironmentLeftOut === true, personSent: personSent(call.admission), actorId,
+    parent: { hostEnvironment: Number(origin.host_environment ?? 0) === 1, connectorId: origin.connector_id ?? null },
+    host: { connectorId: model.connector_id ?? null, ownerId: model.connector_owner_id ?? null } });
   const start = (hostEnvironment: boolean) => asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, modelId,
     ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}), ...(hostEnvironment ? { hostEnvironment: true } : {}) }, { parentSessionId: origin.id }));
   let onHost = options.hostEnvironment === true || inheritsHost;
@@ -371,6 +372,12 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const message = options.message === undefined ? undefined : await deliver(call, created.row, 'create', options.message, options.access, options.notify, thinkingLevel);
   return c.json({ session: summary(created), model: { id: modelId, provider: model.provider, modelId: model.model_id, ...(thinkingLevel ? { thinkingLevel } : {}) },
     ...(placed ? { placement: placed.result } : {}), ...(onHost ? { hostEnvironment: true as const } : {}), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
+}
+
+export function subSessionInheritsHost(input: { leftOut: boolean; personSent: boolean; actorId: string;
+  parent: { hostEnvironment: boolean; connectorId: string | null }; host: { connectorId: string | null; ownerId: string | null } }): boolean {
+  return input.leftOut && input.personSent && input.parent.hostEnvironment && input.host.connectorId !== null
+    && input.host.connectorId === input.parent.connectorId && input.host.ownerId === input.actorId;
 }
 
 const hostSessionRefusals = ['host_owner_required', 'host_sessions_off', 'connector_update_required', 'host_unsandboxed'];

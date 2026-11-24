@@ -468,7 +468,85 @@ describe("settings", () => {
     app.onDialog(dialog => (dialog.title === "Share build caches between people on this host?" ? "Share caches" : null));
     await app.press("id:host-config-save");
     await app.waitUntil(() => bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`) !== undefined);
-    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`)).toEqual({ buildCaches: "workspace", buildCacheGiB: 50, commandTimeoutUnlimited: false });
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`)).toEqual({ buildCaches: "workspace", buildCacheGiB: 50 });
+  });
+
+  test("Hosts start with an hour's command time limit, and their owner lifts it with No limit or sets a time again", async () => {
+    const app = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0",
+        capabilities: { ...host.capabilities, hostConfig: true } }] } },
+      [`PATCH ${ORIGIN}/api/connectors/c1/config`]: { body: { ok: true } },
+    });
+    await app.press("id:host-row-c1");
+    await app.waitFor("id:host-command-time-limit");
+    expect(app.texts()).toContain("1 hour");
+    await app.press("id:host-command-time-limit");
+    await app.press("text:No limit");
+    await app.press("id:host-config-save");
+    await app.waitUntil(() => bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`) !== undefined);
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`)).toEqual({ commandTimeoutUnlimited: true });
+  });
+
+  test("a new workspace starts as the preset chosen for it, and an existing one takes a preset once confirmed", async () => {
+    const app = await openSettings("workspaces", {
+      [`POST ${ORIGIN}/api/workspaces/w1/preset`]: { body: { preset: "locked" } },
+    });
+    await app.waitFor("id:new-workspace");
+    await app.press("id:new-workspace");
+    await app.type("id:new-workspace-name", "Vault");
+    expect(app.texts().join(" ")).toContain("Ready to work: any public host");
+    await app.press("id:new-workspace-preset");
+    await app.press("text:Locked down");
+    await app.waitUntil(() => app.texts().join(" ").includes("No network beyond the workspace's repositories"));
+    await app.press("id:new-workspace-create");
+    await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/workspaces`) !== undefined);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces`)).toEqual({ name: "Vault", preset: "locked" });
+    app.dispose();
+
+    const existing = await openSettings("workspaces", { [`POST ${ORIGIN}/api/workspaces/w1/preset`]: { body: { preset: "locked" } } });
+    await openWorkspace(existing);
+    await existing.waitFor("id:workspace-presets");
+    const asked: string[] = [];
+    existing.onDialog(dialog => { asked.push(dialog.title ?? ""); return "Cancel"; });
+    await existing.press("id:workspace-preset-locked");
+    await existing.waitUntil(() => asked.length === 1);
+    expect(asked).toEqual(["Apply Locked down to Analytical Engine?"]);
+    expect(bodyOf(existing, "POST", `${ORIGIN}/api/workspaces/w1/preset`)).toBeUndefined();
+    existing.onDialog(() => "Apply preset");
+    await existing.press("id:workspace-preset-locked");
+    await existing.waitUntil(() => bodyOf(existing, "POST", `${ORIGIN}/api/workspaces/w1/preset`) !== undefined);
+    expect(bodyOf(existing, "POST", `${ORIGIN}/api/workspaces/w1/preset`)).toEqual({ preset: "locked" });
+    await existing.waitFor("text:Locked down applied. See Agents for the network access, GitHub reach and extensions it set.");
+  });
+
+  test("Extensions shows each one in a line, opens to its whole description, and filters by name, source or tool", async () => {
+    const on = (source: string) => ({ source, enabled: true, tools: "automatic", settings: {} });
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [],
+        extensions: ["piki:git", "piki:node", "piki:python", "piki:schedule", "piki:sessions", "piki:workspace", "piki:gh", "npm:cc-safety-net@2.7.2"].map(on) } },
+      [`DELETE ${ORIGIN}/api/workspaces/w1/extensions?source=piki%3Anode`]: { body: { extensions: [] } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("id:extensions-filter");
+    await app.waitFor("id:session-tools-node");
+    expect(app.texts().join(" ")).not.toContain("each call checked as a command is");
+    await app.type("id:extensions-filter", "git_push");
+    await app.waitUntil(() => !app.shows("id:session-tools-node"));
+    expect(app.shows("id:session-tools-git")).toBe(true);
+    await app.clear("id:extensions-filter");
+    await app.type("id:extensions-filter", "safety");
+    await app.waitUntil(() => !app.shows("id:session-tools-git"));
+    expect(app.texts()).toContain("npm:cc-safety-net@2.7.2");
+    await app.clear("id:extensions-filter");
+    await app.type("id:extensions-filter", "no such thing");
+    await app.waitFor("id:extensions-filter-empty");
+    await app.clear("id:extensions-filter");
+    await app.type("id:extensions-filter", "node");
+    await app.waitFor("id:session-tools-node");
+    await app.press("text:Node.js · piki:node");
+    await app.waitUntil(() => app.texts().join(" ").includes("each call checked as a command is"));
+    await app.press("id:session-tools-remove-node");
+    await app.waitUntil(() => app.requests().some(item => item.method === "DELETE" && item.url.endsWith("source=piki%3Anode")));
   });
 
   test("Hosts says a connector predates build caches, and shows admins the owner's choice read-only", async () => {

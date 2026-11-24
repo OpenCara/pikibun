@@ -4,9 +4,10 @@ import { assignableWorkspaceRoles, canonicalToolName, retiredToolNames, toolName
 import type { AnyToolName, AssignableWorkspaceRole, Workspace, WorkspaceRole } from '../../../packages/shared/src/types.js';
 import { bundledToolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
+import { defaultWorkspacePreset, workspacePreset, type WorkspacePreset } from '../../../packages/shared/src/workspace-presets.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import {
-  addMemberStatement, auditAfterChange, defaultWorkspaceExtensionStatements, auditStatement, changeMemberRoleStatement, ownHostsOnlySQL, personalWorkspaceName, removeMemberStatements, requireMember,
+  addMemberStatement, auditAfterChange, defaultWorkspaceExtensionStatements, newWorkspacePresetStatements, presetInput, auditStatement, changeMemberRoleStatement, ownHostsOnlySQL, personalWorkspaceName, removeMemberStatements, requireMember,
   requireSharedWorkspace, workspaceDeletionAuditStatements, workspaceOwnerStatement,
 } from './authority/index.js';
 import { modelDefinition } from './db.js';
@@ -206,13 +207,15 @@ export async function migratedAgentVersion(env: Env, ownerId: string, source: Ag
   ], 1);
 }
 
-function newWorkspaceStatements(env: Env, workspace: { id: string; name: string; ownerId: string }, createdAt: string, detail: Record<string, unknown> = {}): Query<never>[] {
+function newWorkspaceStatements(env: Env, workspace: { id: string; name: string; ownerId: string }, createdAt: string, detail: Record<string, unknown> = {},
+  preset: WorkspacePreset = defaultWorkspacePreset): Query<never>[] {
   return [
     env.DB.query<never>('INSERT INTO workspaces (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)')
       .bind(workspace.id, workspace.name, workspace.ownerId, createdAt),
     workspaceOwnerStatement(env.DB, workspace.id, workspace.ownerId, createdAt),
     auditStatement(env, workspace.ownerId, 'workspace.create', workspace.id, null, detail),
-    ...defaultWorkspaceExtensionStatements(env.DB, workspace.id, workspace.ownerId, createdAt),
+    ...defaultWorkspaceExtensionStatements(env.DB, workspace.id, workspace.ownerId, createdAt, workspacePreset(preset).extensions),
+    ...newWorkspacePresetStatements(env.DB, workspace.id, workspace.ownerId, createdAt, preset),
     ...ownerHostStatements(env, workspace.ownerId, workspace.id),
   ];
 }
@@ -249,9 +252,10 @@ export function registerCatalog(app: Hono<AppEnv>): void {
 
   app.post('/api/workspaces', async c => {
     const body = await jsonObject(c);
-    onlyFields(body, ['name']);
+    onlyFields(body, ['name', 'preset']);
+    const preset = presetInput(body.preset);
     const workspace = { id: id(), name: nameInput(body.name), ownerId: c.get('auth').userId, role: 'owner' as const, personal: false };
-    await c.env.DB.batch(newWorkspaceStatements(c.env, workspace, now()));
+    await c.env.DB.batch(newWorkspaceStatements(c.env, workspace, now(), preset === defaultWorkspacePreset ? {} : { preset }, preset));
     return c.json({ workspace }, 201);
   });
 

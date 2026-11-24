@@ -139,7 +139,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const repositoriesReady = () => Boolean(repositories() && !repos.error() && !repos.loading() && (sourceCount() || !repositoriesRequired()));
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
   const hostSessions = () => Boolean(host()?.hostSessions);
-  const runOnHost = () => hostSessions() && (onHost() ?? true);
+  const runOnHost = () => hostSessions() && (onHost() ?? !data.sandboxChosen(host()?.id));
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
   let trustKey: string | undefined;
@@ -240,7 +240,8 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     onLeave: () => setAuto(false),
   } : undefined);
   const environmentPicker = () => (
-    <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} onSelect={value => onHost.set(value === "host")} placement="bottom"
+    <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} placement="bottom"
+      onSelect={value => { onHost.set(value === "host"); const current = host(); if (current) data.rememberEnvironment(current.id, value === "host"); }}
       trigger={<Chip small testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} disabled={action.busy()} />}
       options={[
         { value: "host", label: "On this host", icon: "server", hint: `No sandbox: runs on ${host()?.name ?? "the host"} as its user, with its files, credentials and network` },

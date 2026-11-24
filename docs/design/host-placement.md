@@ -99,6 +99,16 @@ those, the agent's call:
 
 `piki:sub-agents` adds no workspace conditions or balancing to such a call.
 
+**Left out, beside a parent on its host.** A `create` that says nothing of `host_environment` runs on the host too
+where all of these hold (`subSessionInheritsHost`, `cross-session.ts`): the session that starts it itself runs on its
+host, the new one lands on that same host, a person sent the message, and that person is the host's owner. The person
+already chose that machine, without the sandbox, for this work, and the sub-task's commands could as well be the
+parent's own; a sub-task that silently lost the host's files and tools was the surprise. Every other case stays in the
+sandbox as before: another host, a member's message (a granted member names `host_environment` themselves), a chain of
+agents or a schedule, and `host_environment: false`. If the host refuses a session on it now (its owner turned them
+off, an older connector), the sub-session starts in the sandbox rather than failing. The audit entry says
+`inheritedHostEnvironment`.
+
 Whether a person sent the message is read from the run admission's `request_id`: the server's own submissions name
 their source in it, `xs:<message>` for a cross-session message or notification (`cross-session.ts`) and
 `schedule:<id>:<at>` for a scheduled run (`scheduled-prompts.ts`); every other admission comes from a person's request

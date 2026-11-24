@@ -4,7 +4,7 @@ import test, { type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { runCrossSessionNotifications } from '../apps/server/src/cross-session.js';
+import { runCrossSessionNotifications, subSessionInheritsHost } from '../apps/server/src/cross-session.js';
 import {
   audienceTarget, crossSessionHeader, crossSessionLimits, messageOutcome, sessionsToolTarget, type CrossSessionMessage, type CrossSessionSummary, type SessionConnections,
 } from '../packages/shared/src/cross-session.js';
@@ -630,6 +630,14 @@ test('an agent starts a session directly on a host only in a message a person se
   assert.equal(count(), before, 'a refused create starts nothing');
   assert.equal(sessionsToolTarget({ action: 'create', placement: { hosts: ['own-host'] }, hostEnvironment: true }),
     'create · placement hosts own-host · directly on the host, without the sandbox');
+
+  const own = { leftOut: true, personSent: true, actorId: ownerId, parent: { hostEnvironment: true, connectorId: 'own-host' }, host: { connectorId: 'own-host', ownerId } };
+  assert.equal(subSessionInheritsHost(own), true, 'left out, a session started from one on its host, on that host, by its owner\'s own message, runs there too');
+  for (const [why, other] of [
+    ['asked for the sandbox', { ...own, leftOut: false }], ['a chain of agents or a schedule', { ...own, personSent: false }],
+    ['a sandboxed parent', { ...own, parent: { ...own.parent, hostEnvironment: false } }], ['another host', { ...own, host: { connectorId: 'second-host', ownerId } }],
+    ['someone else\'s host', { ...own, host: { connectorId: 'own-host', ownerId: 'test:grace' } }], ['no host', { ...own, parent: { hostEnvironment: true, connectorId: null }, host: { connectorId: null, ownerId } }],
+  ] as const) assert.equal(subSessionInheritsHost(other), false, why);
 });
 
 test('lists nest the sessions an agent started under the session that started them', () => {
