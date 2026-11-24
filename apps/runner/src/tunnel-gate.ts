@@ -2,8 +2,9 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
+import { TUNNEL_LINK_NAME } from "../../../packages/shared/src/tunnel.js";
 
-export const TUNNEL_GATE_NAME = "pikibun_tunnel";
+export const TUNNEL_GATE_NAME = TUNNEL_LINK_NAME;
 export const TUNNEL_FRAME_COOKIE = "pikibun_tunnel_frame";
 const COOKIE_SECONDS = 24 * 3600;
 const DENIED = "This preview is private: open it with the link its Pikibun session gave you.\n";
