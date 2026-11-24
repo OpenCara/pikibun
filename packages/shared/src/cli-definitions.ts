@@ -1,11 +1,14 @@
-export interface CliRefusal {
+export interface CliCall {
   words?: readonly string[];
   wordPrefixes?: true;
   options?: readonly string[];
   short?: string;
   argPattern?: string;
-  reason: string;
 }
+
+export interface CliRefusal extends CliCall { reason: string }
+
+export interface CliHint extends CliCall { outputPattern?: string; hint: string }
 
 export interface CliRequestRule { words: readonly string[]; method: readonly string[]; body: readonly string[] }
 
@@ -37,6 +40,7 @@ export interface CliDefinition {
   lowercase?: true;
   abbreviatedOptions?: true;
   refuse: readonly CliRefusal[];
+  hints?: readonly CliHint[];
   reads: CliReads;
   watch?: CliWatch;
 }
@@ -44,6 +48,8 @@ export interface CliDefinition {
 export const cliDefinitionLimits = Object.freeze({ definitions: 16, rules: 64, words: 64, word: 128, text: 4096, pattern: 256 });
 
 export const GH_WATCH_INTERVAL_SECONDS = 30;
+
+const ghCommentViews = ["issue", "pr"].map(group => ({ group, call: { words: [group, "view"], options: ["--comments"], short: "c" } }));
 
 const ghReads: Record<string, readonly string[] | true> = {
   pr: ["list", "view", "diff", "checks", "status"], issue: ["list", "view", "status"], run: ["list", "view", "watch"], workflow: ["list", "view"],
@@ -81,6 +87,16 @@ export const ghDefinition: CliDefinition = {
     { words: ["auth", "token"], reason: "gh auth token would show its token" },
     { words: ["auth"], options: ["--show-token"], short: "t", reason: "--show-token would show its token" },
     { words: ["config", "get"], argPattern: "token", reason: "gh config get would show its token" },
+    ...ghCommentViews.map(({ group, call }) => ({ ...call, argPattern: "^--json(?:=|$)",
+      reason: `gh ${group} view takes --comments or --json, not both: use --json comments alone, with any other fields beside it (--json title,body,comments)` })),
+  ],
+  hints: [
+    { outputPattern: "tls: failed to verify certificate|\\bx509: ",
+      hint: "gh couldn't verify GitHub's TLS certificate: this host's TLS setup (its certificate store, or a proxy that intercepts HTTPS) refused it. "
+        + "That is not GitHub being down, nor a failed check, and retrying won't help. github_read (with wait: \"checks\" or \"change\"), github_comment, "
+        + "github_issue and github_merge still reach GitHub through the Pikibun server: use them, and tell the person that the host's owner has to fix the host's certificates." },
+    ...ghCommentViews.map(({ group, call }) => ({ ...call,
+      hint: `gh ${group} view --comments failed or printed nothing: read the comments with --json comments (without --comments), or with gh api repos/<owner>/<name>/issues/<n>/comments.` })),
   ],
   reads: { api: "api", browserOptions: ["--web"], groups: ghReads },
   watch: { commands: [{ words: ["run", "watch"] }, { words: ["pr", "checks"], option: "--watch" }], interval: "--interval", short: "i", seconds: GH_WATCH_INTERVAL_SECONDS },
@@ -164,17 +180,41 @@ function keys(value: Record<string, unknown>, allowed: readonly string[], what: 
   if (Object.keys(value).some(key => !allowed.includes(key))) fail(what);
 }
 
+export function withoutCliHints(definition: CliDefinition): CliDefinition {
+  const copy = { ...definition };
+  delete copy.hints;
+  return copy;
+}
+
+const CALL_KEYS = ["words", "wordPrefixes", "options", "short", "argPattern"];
+
+function parseCall(value: Record<string, unknown>, what: string): CliCall {
+  const call: { -readonly [K in keyof CliCall]: CliCall[K] } = {};
+  if (value.words !== undefined) call.words = list(value.words, ARG, `${what} words`, 8);
+  if (value.wordPrefixes !== undefined) { if (value.wordPrefixes !== true) fail(what); call.wordPrefixes = true; }
+  if (value.options !== undefined) call.options = list(value.options, OPTION, `${what} options`, 16);
+  if (value.short !== undefined) { if (typeof value.short !== "string" || !/^[A-Za-z]$/.test(value.short)) fail(`${what} short option`); call.short = value.short; }
+  if (value.argPattern !== undefined) call.argPattern = regex(value.argPattern, `${what} pattern`);
+  return call;
+}
+
+const matchesSomeCalls = (call: CliCall) => !!(call.words?.length || call.options?.length || call.short || call.argPattern);
+
 function parseRefusal(value: unknown): CliRefusal {
   if (!isObject(value)) fail("refusal");
-  keys(value, ["words", "wordPrefixes", "options", "short", "argPattern", "reason"], "refusal");
-  const refusal: { -readonly [K in keyof CliRefusal]: CliRefusal[K] } = { reason: text(value.reason, "refusal reason", 512) };
-  if (value.words !== undefined) refusal.words = list(value.words, ARG, "refusal words", 8);
-  if (value.wordPrefixes !== undefined) { if (value.wordPrefixes !== true) fail("refusal"); refusal.wordPrefixes = true; }
-  if (value.options !== undefined) refusal.options = list(value.options, OPTION, "refusal options", 16);
-  if (value.short !== undefined) { if (typeof value.short !== "string" || !/^[A-Za-z]$/.test(value.short)) fail("refusal short option"); refusal.short = value.short; }
-  if (value.argPattern !== undefined) refusal.argPattern = regex(value.argPattern, "refusal pattern");
-  if (!refusal.words?.length && !refusal.options?.length && !refusal.short && !refusal.argPattern) fail("refusal that matches everything");
+  keys(value, [...CALL_KEYS, "reason"], "refusal");
+  const refusal = { ...parseCall(value, "refusal"), reason: text(value.reason, "refusal reason", 512) };
+  if (!matchesSomeCalls(refusal)) fail("refusal that matches everything");
   return refusal;
+}
+
+function parseHint(value: unknown): CliHint {
+  if (!isObject(value)) fail("hint");
+  keys(value, [...CALL_KEYS, "outputPattern", "hint"], "hint");
+  const hint = { ...parseCall(value, "hint"), ...(value.outputPattern !== undefined ? { outputPattern: regex(value.outputPattern, "hint output pattern") } : {}),
+    hint: text(value.hint, "hint", 1024) };
+  if (!matchesSomeCalls(hint) && !hint.outputPattern) fail("hint that matches everything");
+  return hint;
 }
 
 function parseReads(value: unknown): CliReads {
@@ -217,7 +257,7 @@ function parseReads(value: unknown): CliReads {
 export function parseCliDefinition(value: unknown): CliDefinition {
   if (!isObject(value) || value.kind !== "cli") fail("kind");
   keys(value, ["kind", "name", "extension", "command", "windowsCommand", "description", "passEnv", "passEnvPrefixes", "tokenEnv", "setEnv", "sandboxRoots",
-    "lowercase", "abbreviatedOptions", "refuse", "reads", "watch"], "CLI");
+    "lowercase", "abbreviatedOptions", "refuse", "hints", "reads", "watch"], "CLI");
   if (typeof value.name !== "string" || !NAME.test(value.name)) fail("name");
   if (typeof value.extension !== "string" || value.extension !== `piki:${value.name}`) fail("extension");
   if (typeof value.command !== "string" || !/^[a-z][a-z0-9._-]{0,63}$/.test(value.command)) fail("command");
@@ -234,6 +274,7 @@ export function parseCliDefinition(value: unknown): CliDefinition {
     setEnv[name] = setting;
   }
   if (!Array.isArray(value.refuse) || value.refuse.length > cliDefinitionLimits.rules) fail("refuse");
+  if (value.hints !== undefined && (!Array.isArray(value.hints) || value.hints.length > cliDefinitionLimits.rules)) fail("hints");
   let watch: CliWatch | undefined;
   if (value.watch !== undefined) {
     const given = value.watch;
@@ -253,7 +294,8 @@ export function parseCliDefinition(value: unknown): CliDefinition {
     tokenEnv: list(value.tokenEnv, ENV, "tokenEnv", 8), setEnv,
     ...(value.sandboxRoots !== undefined ? { sandboxRoots: list(value.sandboxRoots, /^\/[A-Za-z0-9._+-]+(?:\/[A-Za-z0-9._+-]+)*$/, "sandboxRoots", 8) } : {}),
     ...(value.lowercase === true ? { lowercase: true as const } : {}), ...(value.abbreviatedOptions === true ? { abbreviatedOptions: true as const } : {}),
-    refuse: value.refuse.map(parseRefusal), reads: parseReads(value.reads), ...(watch ? { watch } : {}),
+    refuse: value.refuse.map(parseRefusal), ...(value.hints !== undefined ? { hints: (value.hints as unknown[]).map(parseHint) } : {}),
+    reads: parseReads(value.reads), ...(watch ? { watch } : {}),
   };
 }
 
