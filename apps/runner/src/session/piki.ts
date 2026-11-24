@@ -44,6 +44,7 @@ export interface SessionPikiOptions {
   mutate(change: (state: Metadata) => void): Promise<void>;
   hostConfig(): Promise<HostConfig>;
   extensionProcess?: ExtensionHost["extensionProcess"];
+  extensionEntries?: ExtensionHost["entries"];
   recordModelUsage?(model: string, usage: Usage): Promise<void>;
   log?(line: string): void;
 }
@@ -98,6 +99,7 @@ export class SessionPiki {
       commandTimeoutMs: 120_000,
       warn: (source, message) => { process.stderr.write(`Session ${binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
       ...(this.options.extensionProcess ? { extensionProcess: this.options.extensionProcess } : {}),
+      ...(this.options.extensionEntries ? { entries: this.options.extensionEntries } : {}),
     };
   }
 

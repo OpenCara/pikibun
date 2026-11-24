@@ -83,7 +83,8 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
 - **`ctx.ui`** keeps its present behaviour: `notify` becomes a notice, the rest does nothing, as `noActions` does now.
 - **Host paths.** An extension that reads host files (`@pikibun/pi-context-files`' `host:` files) gets them only from
   directories the host's owner lists in the extension's settings, mounted read-only.
-- **State in memory** lasts as long as the child: across messages, but not across a connector restart, as now.
+- **State in memory** lasts as long as the child: across messages, but not across a connector restart, as now. What an
+  extension keeps with `pi.appendEntry` outlasts both ([Entries an extension keeps](#entries-an-extension-keeps)).
 
 ## Steps
 
@@ -244,6 +245,38 @@ section. Neither side needs Pi's `ExtensionRunner` itself. So the split is:
 - **Checked on a real Mac.** `tests/native-sandboxes.test.ts` runs both on the CI's macOS machine: an extension reads the
   worktree and its own files, can write the first but not the second, can't read a host file beside them and has no
   network; one that reads a host file as it loads is described with that read refused.
+
+## Entries an extension keeps
+
+Pi extensions keep state across restarts by appending custom entries to the session (`pi.appendEntry(customType, data)`)
+and reading them back from `ctx.sessionManager` on `session_start`. Both were stand-ins: `appendEntry` did nothing, and
+the session manager was an empty one.
+
+- **The worker keeps a session manager per source.** `appendEntry` appends to it (`appendCustomEntry`), so the extension
+  reads its entry back at once, and tells the connector, in a message of its own (`{ entry: { source, value } }`, as
+  warnings are sent), not with an answer: an extension may append from a timer.
+- **The connector keeps them, per session and per package.** `SessionEntries` (`extensions/entries.ts`) holds each
+  source's list and writes it to a session document, `ExtensionEntries`, a family keyed by a digest of the package
+  (`npm:<name>` or `git:<url>` without the version, so an update keeps its state; any other source by its whole name).
+  It is a session document, like artifacts: the session's store carries it through a restart, a backup and a move to
+  another host, going back to an earlier message keeps it, and a fork, which copies entries of the conversation and no
+  documents, starts without it.
+- **Handed back before `session_start`.** When a session's extensions start, and when a process is started again, the
+  source gets a `restore` request with its entries, and its session manager is made again from them
+  (`SessionManager.inMemory` with custom entries chained by `parentId`), so `getEntries()`, `getBranch()` and
+  `getLeafId()` answer as in Pi. Requests for a source wait for its restore. A new process gets them from the
+  connector's list (`ProcessChannel`'s `entries`), not from what the old one last heard.
+- **One source, its own entries.** A source's session manager holds only what that source appended, whatever the
+  entries' `customType`. The connector takes an entry only for a source that runs in the process that sent it, and for a
+  process that runs one source (a guard, an extension that may call models) only for that one. Sources that share the
+  session's process share its memory, as before: the separation there is the API's, not a boundary.
+- **Bounded, by the connector.** The process is the sandbox's, so what it sends is checked again (`storedEntry`): a type
+  of at most 128 characters, data that is JSON of at most 64 KB, an id of the expected form that isn't taken (or the
+  connector's own) and a timestamp that parses. An extension keeps its newest 256 entries and 1 MB; older ones are
+  dropped, which suits state that is rewritten whole. A burst is written at most twice a second per extension, and what
+  waits is written when the session closes.
+- **Not kept:** entries appended while an extension loads, before the connector knows the source is open. The entries
+  aren't in the transcript or the model's context, and other tools don't read them.
 
 ## Describing an extension (review 355, finding 42)
 

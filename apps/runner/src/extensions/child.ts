@@ -84,7 +84,8 @@ const complete = (request: CompleteRequest, signal: AbortSignal) => new Promise<
   send({ ask, complete: request });
   if (signal.aborted) aborted();
 });
-const worker = new ExtensionWorker({ directory, warn: (source, message) => send({ warn: { source, message } }), complete });
+const worker = new ExtensionWorker({ directory, warn: (source, message) => send({ warn: { source, message } }), complete,
+  appended: (source, value) => send({ entry: { source, value } }) });
 const running = new Map<number, AbortController>();
 
 serve(message => {
