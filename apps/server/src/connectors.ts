@@ -14,6 +14,7 @@ import { gpuKinds, type GpuKind } from '../../../packages/shared/src/host-config
 import { sessionActivities, thinkingLevels, type SessionActivity, type ThinkingLevel } from '../../../packages/shared/src/types.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { hardwareLimits, parseHardware, readReportedHardware } from '../../../packages/shared/src/hardware.js';
+import { z } from 'zod';
 import { body, fields, parsed } from './schemas.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { bundledCliDefinitions, withoutCliHints } from '../../../packages/shared/src/cli-definitions.js';
@@ -333,8 +334,8 @@ export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/self/mcp/:prefix/:key', async c => remoteMcpCall(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/tools', async c => {
     await authenticateConnector(c);
-    const input = await jsonObject(c, 4096).catch(() => ({} as Record<string, unknown>));
-    return c.json({ tools: toolDefinitions, clis: input.cliHints === true ? bundledCliDefinitions : bundledCliDefinitions.map(withoutCliHints) });
+    const { cliHints } = await body(c, z.object({ cliHints: z.unknown().optional() }), { maxBytes: 4096 });
+    return c.json({ tools: toolDefinitions, clis: cliHints === true ? bundledCliDefinitions : bundledCliDefinitions.map(withoutCliHints) });
   });
   app.post('/api/connectors/self/schedules', async c => agentSchedules(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sessions', async c => agentSessions(c, (await authenticateConnector(c)).id));

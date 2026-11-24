@@ -3803,7 +3803,7 @@ test('a connector reads the tools this server defines as data, only with its own
   assert.deepEqual(parseToolDefinitions(answer), bundledToolDefinitions, 'an older connector reads the same tools, passing over the CLI definitions beside them');
   assert.deepEqual(parseCliDefinitions(answer.clis), bundledCliDefinitions.map(withoutCliHints));
   assert.ok((answer.clis as Record<string, unknown>[]).every(cli => !('hints' in cli)), 'a connector that doesn\'t ask for hints gets none: an older one passes over a definition with a key it doesn\'t know');
-  const hinted = await json<{ clis: unknown }>(await self(f, s.connector, 'tools', { cliHints: true }));
+  const hinted = await json<{ clis: unknown }>(await self(f, s.connector, 'tools', { cliHints: true, somethingLater: true }));
   assert.deepEqual(parseCliDefinitions(hinted.clis), bundledCliDefinitions);
   assert.ok(bundledCliDefinitions.some(cli => cli.hints?.length), 'and one that asks gets them');
   assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read', 'workspace']);
