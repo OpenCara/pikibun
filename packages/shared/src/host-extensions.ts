@@ -5,6 +5,7 @@ import { parseMemberToolGroups, type MemberToolGroup } from "./tool-groups.js";
 import { parseManagedExtensions, type ManagedExtensionPin } from "./managed-extensions.js";
 import { parseToolDefinition, toolDefinitionLimits, type BrokeredToolDefinition } from "./tool-definitions.js";
 import { parseRemoteMcpServers, type RemoteMcpServerSummary } from "./remote-mcp.js";
+import { parseWorkspaceMemoryPrompt, type WorkspaceMemoryPrompt } from "./workspace-memory.js";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -385,6 +386,7 @@ export interface WorkspaceExtensionsAnswer {
   ownerPrivate?: true;
   remoteTools?: BrokeredToolDefinition[];
   remoteServers?: RemoteMcpServerSummary[];
+  memory?: WorkspaceMemoryPrompt;
 }
 
 function parseRemoteTools(value: unknown): BrokeredToolDefinition[] {
@@ -414,11 +416,13 @@ export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensi
   if (!isPlainObject(value) || typeof value.automaticTools !== "boolean") throw new Error("Invalid workspace extensions");
   if (value.autoCache !== undefined && typeof value.autoCache !== "boolean") throw new Error("Invalid workspace extensions");
   const toolGroups = parseMemberToolGroups(value.toolGroups);
+  const memory = parseWorkspaceMemoryPrompt(value.memory);
   return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools,
     ...(typeof value.autoCache === "boolean" ? { autoCache: value.autoCache } : {}), ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
     ...(value.ownerPrivate === true ? { ownerPrivate: true as const } : {}),
     ...(value.remoteTools !== undefined ? { remoteTools: parseRemoteTools(value.remoteTools) } : {}),
-    ...(value.remoteServers !== undefined ? { remoteServers: parseRemoteMcpServers(value.remoteServers) } : {}) };
+    ...(value.remoteServers !== undefined ? { remoteServers: parseRemoteMcpServers(value.remoteServers) } : {}),
+    ...(memory ? { memory } : {}) };
 }
 
 export function parseExtensionsSync(value: unknown): ExtensionsSync {

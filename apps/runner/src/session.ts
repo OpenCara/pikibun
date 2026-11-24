@@ -31,6 +31,7 @@ import type { BrowserToolchain } from "./browser-toolchain.js";
 import type { BrowserUnavailableReason, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import { serviceLifetimeLimits, type HostTunnelStatus, type SessionTunnelReport, type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
 import { SessionTunnel } from "./session/tunnel.js";
+import type { WorkspaceMemoryPrompt } from "../../../packages/shared/src/workspace-memory.js";
 import { SudoPrompts } from "./sudo-prompts.js";
 import { parseSudoAnswer } from "../../../packages/shared/src/sudo.js";
 import { renamedToolsHook } from "./session/renamed-tools.js";
@@ -620,13 +621,13 @@ export class RunnerSession {
 
   private agentInstructions(mode: InstructionsMode, off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason,
     tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set(),
-    skills: readonly Skill[] = []): string {
+    skills: readonly Skill[] = [], memory?: WorkspaceMemoryPrompt): string {
     return agentInstructions({ base: this.binding.agent.instructions, agentTools: sessionToolNames(this.binding.agent.tools), mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
       extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
       linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser,
-      sudo: mode !== "ask" && this.#sudoOffered, skills });
+      sudo: mode !== "ask" && this.#sudoOffered, skills, ...(memory ? { memory } : {}) });
   }
 
   private async listedSkills(acts: boolean): Promise<Skill[]> {
@@ -932,6 +933,7 @@ export class RunnerSession {
     const skills = run.mode === "write" ? await this.listedSkills(options.access !== "read") : [];
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();
+    const memory = run.mode === "write" ? await this.#availability.workspaceMemory() : undefined;
     const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.#availability.browserUnavailable() : undefined;
     if (!this.sandbox.browser) off.add("browser");
     const tunnelUnavailable = run.mode === "write" && !off.has("tunnel") ? this.#availability.tunnelUnavailable() : undefined;
@@ -948,7 +950,7 @@ export class RunnerSession {
           ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [...this.sessionExtensions(enabled), ...extensions.map(extension => extension.extension), ...builtins, fitImagesExtension],
         instructions: this.agentInstructions(options.access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable, kindsOff,
-          new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name))), skills),
+          new Set(extensions.flatMap(extension => extension.tools.map(tool => tool.name)).filter(name => !own.has(name))), skills, memory),
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
@@ -1290,7 +1292,8 @@ export class RunnerSession {
         const head = transcript.entries.at(-1);
         const fork = { ownership: { kind: "ownerless" as const }, agent: {
           model: (await shared.agent(context)).model ?? this.modelRef,
-          instructions: this.agentInstructions("ask", new Set(), undefined, undefined, new Set(), new Set(), await this.listedSkills(false)),
+          instructions: this.agentInstructions("ask", new Set(), undefined, undefined, new Set(), new Set(), await this.listedSkills(false),
+            await this.#availability.workspaceMemory()),
           tools: this.tools.filter(tool => readOnlyTools.includes(tool.name) && sessionToolNames(this.binding.agent.tools).includes(tool.name)),
         } };
         conversation = head ? await shared.fork(head.id, fork, context) : await this.harness.createConversation(fork, context);

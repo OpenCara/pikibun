@@ -4,8 +4,9 @@ import { accessModes, thinkingLevels, type AccessMode, type ChatOptions, type Se
 import { parseCapabilities, type LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
 import {
-  audienceTarget, crossSessionHeader, crossSessionLimits, cut, messageOutcome, sessionsBrokerActions, sessionsToolTarget, sessionsWriteActions,
-  type CrossSessionMessage, type CrossSessionOutcome, type CrossSessionSummary, type SessionConnections, type SessionsBrokerAction, type SessionsToolResult,
+  audienceTarget, crossSessionHeader, crossSessionLimits, cut, matchesTerms, messageOutcome, searchSnippet, searchTerms, sessionsBrokerActions, sessionsToolTarget,
+  sessionsWriteActions, type CrossSessionMessage, type CrossSessionOutcome, type CrossSessionSummary, type SessionConnections, type SessionsBrokerAction,
+  type SessionSearchResult, type SessionSearchSkipped, type SessionsToolResult,
 } from '../../../packages/shared/src/cross-session.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
@@ -82,9 +83,9 @@ async function audienceCovered(env: Env, self: Party, other: Party, direction: '
 }
 
 const inputFields = ['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'targetSessionId', 'message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'placement',
-  'hostEnvironment', 'visibility', 'messageId', 'limit'];
+  'hostEnvironment', 'visibility', 'messageId', 'limit', 'query'];
 const actionFields: Record<SessionsBrokerAction, readonly string[]> = {
-  list: [], read: ['targetSessionId', 'messageId', 'limit'], ask: ['targetSessionId', 'message', 'notify'], send: ['targetSessionId', 'message', 'access', 'notify'],
+  list: [], read: ['targetSessionId', 'messageId', 'limit'], search: ['query', 'limit'], ask: ['targetSessionId', 'message', 'notify'], send: ['targetSessionId', 'message', 'access', 'notify'],
   create: ['message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'placement', 'hostEnvironment', 'visibility'], stop: ['targetSessionId'], archive: ['targetSessionId'],
 };
 
@@ -137,8 +138,10 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > crossSessionLimits.readEntries)) {
     fail(400, 'invalid_input', `The limit is 1 to ${crossSessionLimits.readEntries}.`);
   }
-  const limit = (input.limit as number | undefined) ?? crossSessionLimits.defaultEntries;
-  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, placement, hostEnvironment, messageId });
+  const limit = (input.limit as number | undefined) ?? (action === 'search' ? crossSessionLimits.defaultMatches : crossSessionLimits.defaultEntries);
+  const query = input.query === undefined ? undefined : text(input.query, 'query', crossSessionLimits.queryChars);
+  if (action === 'search' && (query === undefined || !searchTerms(query).length)) fail(400, 'invalid_input', 'A search takes a query: the words to look for.');
+  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, placement, hostEnvironment, messageId, query });
 
   const originAccess = await sessionAccess(c.env, sessionId, actorId);
   if (!originAccess || originAccess.row.status === 'archived' || !hasPermission(originAccess.permissions, 'write')) {
@@ -157,6 +160,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
 
   if (action === 'list') return c.json(await list(call));
   if (action === 'read') return c.json(await read(call, targetSessionId!, messageId, limit));
+  if (action === 'search') return c.json(await search(call, query!, limit));
   if (action === 'ask' || action === 'send') {
     const other = await requireOther(call, targetSessionId!, action === 'ask' ? 'ask' : 'write');
     const consent = await audienceConsent(call, other, notify ? ['out', 'in'] : ['out']);
@@ -235,6 +239,72 @@ async function read(call: Call, targetId: string, messageId: string | undefined,
       ...(entry.error ? { error: entryError(entry.error) } : {}) }));
   const record = message ? messageRecord(message) : undefined;
   return { session: summary(fresh), busy: view.busy, entries, ...(record ? { message: record, outcome: messageOutcome(view, record) } : {}) };
+}
+
+async function searchedSession(call: Call, access: SessionAccess, terms: readonly string[], granted: boolean): Promise<SessionSearchResult | SessionSearchSkipped | null> {
+  const { c, origin, actorId } = call;
+  const other = access.row;
+  const titleMatch = matchesTerms(other.title, terms);
+  if (!granted && !await audienceCovered(c.env, origin, other, 'in')) {
+    return titleMatch ? { session: summary(access), titleMatch: true, matches: [] } : { id: other.id, title: other.title, reason: 'audience' };
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const views = await Promise.race([
+      asActor(c.env, actorId, async inner => sessionView(inner, other, { display: await transcriptDisplay(inner, other) })),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), crossSessionLimits.searchSeconds * 1000); }),
+    ]);
+    const { view } = views.for(access.permissions);
+    const shared = new Set(view.conversations.filter(conversation => conversation.mode === 'write').map(conversation => conversation.id));
+    const matches = view.entries
+      .filter(entry => (entry.conversationId === undefined || shared.has(entry.conversationId)) && (entry.role === 'user' || entry.role === 'assistant')
+        && matchesTerms(entry.text, terms))
+      .slice(-crossSessionLimits.matchesPerSession)
+      .map(entry => ({ entryId: entry.id, role: entry.role, text: searchSnippet(entry.text, terms) }));
+    if (!matches.length && !titleMatch) return null;
+    return { session: summary(access), ...(titleMatch ? { titleMatch: true as const } : {}), matches };
+  } catch {
+    return titleMatch ? { session: summary(access), titleMatch: true, matches: [] } : { id: other.id, title: other.title, reason: 'unavailable' };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function search(call: Call, query: string, limit: number): Promise<SessionsToolResult> {
+  const { c, origin, actorId } = call;
+  const terms = searchTerms(query);
+  const readable = (await workspaceSessionAccess(c.env, origin.workspace_id, actorId))
+    .filter(access => access.row.id !== origin.id && hasPermission(access.permissions, 'read'));
+  const titled = readable.slice(crossSessionLimits.searchedSessions).filter(access => matchesTerms(access.row.title, terms))
+    .map(access => ({ session: summary(access), titleMatch: true as const, matches: [] }));
+  const candidates = readable.slice(0, crossSessionLimits.searchedSessions);
+  const granted = await sessionsNeedGranted(c.env, origin, 'audience');
+  const found: (SessionSearchResult | SessionSearchSkipped | null)[] = new Array(candidates.length).fill(null);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(crossSessionLimits.searchParallel, candidates.length) }, async () => {
+    while (next < candidates.length) {
+      const index = next++;
+      found[index] = await searchedSession(call, candidates[index]!, terms, granted);
+    }
+  }));
+  const results: SessionSearchResult[] = [];
+  const skipped: SessionSearchSkipped[] = [];
+  for (const item of found) {
+    if (!item) continue;
+    if ('reason' in item) skipped.push(item);
+    else results.push(item);
+  }
+  results.push(...titled);
+  let left = limit;
+  const shown: SessionSearchResult[] = [];
+  for (const result of results) {
+    if (left <= 0) break;
+    const matches = result.matches.slice(-left);
+    left -= Math.max(1, matches.length);
+    shown.push({ ...result, matches });
+  }
+  const more = results.length - shown.length;
+  return { query, searched: candidates.length, results: shown, ...(skipped.length ? { skipped } : {}), ...(more > 0 ? { more } : {}) };
 }
 
 async function requireSendable(call: Call, targetId: string | null): Promise<void> {
