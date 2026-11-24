@@ -283,8 +283,8 @@ export function repositoryPath(repository: { provider?: GitProvider; host?: stri
   return parts.join("/");
 }
 
+// A workspace binds any number of repositories; only the provider picker's listing is bounded.
 export const repositoryLimits = {
-  repositories: 5,
   pickerRepositories: 3000,
 } as const;
 

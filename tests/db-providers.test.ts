@@ -257,13 +257,12 @@ for (const provider of providers) {
       assert.deepEqual(JSON.parse((await db.query<{ config_json: string }>('SELECT config_json FROM push_identities WHERE id = ?').bind('p1').first('config_json'))!),
         { clientId: 'abc', login: 'octo' });
       assert.deepEqual(await db.query('SELECT user_id AS userId, role AS memberRole FROM workspace_members').all(), [{ userId: 'u1', memberRole: 'owner' }]);
-      for (const n of [5, 6, 7]) {
+      // A workspace has no repository cap: well past the former limit of five, bindings still go in.
+      for (const n of [5, 6, 7, 8, 9, 10, 11, 12]) {
         await db.query(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(`r${n}`, 'w1', 'github', 'github.com', String(n), `Acme/${n}`, 'main', 0, at).run();
       }
-      const limit = await constraintError(db.query(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind('r8', 'w1', 'github', 'github.com', '8', 'Acme/8', 'main', 0, at).run());
-      assert.equal(limit.constraint, 'workspace repository limit reached');
+      assert.equal(Number(await db.query('SELECT COUNT(*) AS n FROM workspace_repositories WHERE workspace_id = ?').bind('w1').first('n')), 10);
     });
 
     await t.test('concurrent transactions and outside statements do not interleave', async t => {
