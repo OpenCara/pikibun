@@ -17,7 +17,7 @@ import { collectRepositories, gitProviderAdapters, listBytes, listPageSize } fro
 import { workspaceGitAccess } from './workspace-connections.js';
 import { addPikiExtensions } from './extension-policy.js';
 import { conditionalHeaders, forgetRead, githubRateLimited, rateLimitedUntil, rateLimitText, recallRead, rememberRateLimit, rememberRead } from './github-reads.js';
-import { failGitHubSignInExpired, forgetDeadGitHubToken } from './github-sign-in.js';
+import { failGitHubSignInExpired, forgetDeadGitHubToken, gitHubTokenSettled } from './github-sign-in.js';
 
 export interface GitHubAccess { token: string; ciphertext: string; userId: string; githubId: string; expired?: (reason: string) => Promise<void> }
 export type RepositoryAccess = { provider: 'github'; github: GitHubAccess } | { provider: TokenGitProvider; account: LoadedCredential };
@@ -102,6 +102,7 @@ async function githubAccess(env: Env, userId: string): Promise<GitHubAccess> {
       : 'github.com repositories need an account that signs in with GitHub, which this one doesn\'t; its Git accounts reach other providers.');
   }
   if (!user || !user.github_id) fail(409, 'github_not_connected', 'The acting user must connect GitHub. Workspace sharing does not grant repository access.');
+  await gitHubTokenSettled(userId);
   const vault = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM github_tokens WHERE user_id = ?').bind(userId).first();
   if (!vault) fail(409, 'github_not_connected', 'The acting user must connect GitHub.');
   return { token: await decryptToken(env, userId, vault.ciphertext), ciphertext: vault.ciphertext, userId, githubId: user.github_id,
