@@ -5,8 +5,8 @@ import test from 'node:test';
 type Provider = 'sqlite' | 'postgres';
 
 const prefixesAlreadyShared: Record<Provider, readonly string[]> = {
-  sqlite: ['0013', '0024', '0036', '0047', '0078'],
-  postgres: ['0006', '0017', '0029', '0040', '0071'],
+  sqlite: ['0013', '0024', '0036', '0047', '0078', '0088'],
+  postgres: ['0006', '0017', '0029', '0040', '0071', '0081'],
 };
 const firstMigrationInBothProviders = 'chat_agents';
 
