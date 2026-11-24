@@ -62,10 +62,36 @@ function GitAccountsGroup() {
   const pastingGitHub = signal(false);
   const signingInToGitHub = signal(false);
   const local = () => Boolean(user().localOwner);
+  const waitingForBrowser = signal(false);
+  let browserCheck: ReturnType<typeof setTimeout> | undefined;
   async function gitHubConnected() {
     updateUser((await session().api<{ user: UserProfile }>("/api/me")).user);
     accounts.refresh();
   }
+  function stopWaitingForBrowser() {
+    if (browserCheck) clearTimeout(browserCheck);
+    browserCheck = undefined;
+    waitingForBrowser.set(false);
+  }
+  function signInInBrowser() {
+    stopWaitingForBrowser();
+    void openUrl(`${session().origin}/api/auth/github`).catch(() => undefined);
+    waitingForBrowser.set(true);
+    const until = Date.now() + 10 * 60_000;
+    const check = () => {
+      browserCheck = setTimeout(() => {
+        void session().api<{ user: UserProfile }>("/api/me").then(result => {
+          if (!browserCheck) return;
+          if (!result.user.githubConnected) return Date.now() < until ? check() : stopWaitingForBrowser();
+          stopWaitingForBrowser();
+          updateUser(result.user);
+          accounts.refresh();
+        }, () => (browserCheck && Date.now() < until ? check() : stopWaitingForBrowser()));
+      }, 3000);
+    };
+    check();
+  }
+  cleanup(stopWaitingForBrowser);
   async function remove(account: GitAccount) {
     if (action.busy()) return;
     if (!await confirm({ title: "Remove Git account", destructive: true, confirmLabel: "Remove",
@@ -110,12 +136,15 @@ function GitAccountsGroup() {
         </If>
         <If when={!local() && (!user().passwordSignIn || user().githubConnected)}>
           <Row leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
-            hint={user().githubConnected ? `${gitProviderHosts.github.default} · ${user().githubLogin ? `@${user().githubLogin} · ` : ""}signed in` : `${gitProviderHosts.github.default} · Not connected`}
+            hint={user().githubConnected ? `${gitProviderHosts.github.default} · ${user().githubLogin ? `@${user().githubLogin} · ` : ""}signed in`
+              : waitingForBrowser() ? `${gitProviderHosts.github.default} · Finish signing in with GitHub${user().githubLogin ? ` as @${user().githubLogin}` : ""} in your browser; this updates by itself`
+              : `${gitProviderHosts.github.default} · Not connected`}
             trailing={user().githubConnected ? <>
                 <Badge tone="success">Connected</Badge>
                 <Button small variant="ghost" label="Disconnect" testID="disconnect-github" disabled={action.busy()} onPress={() => void disconnectGitHub()} />
               </>
-              : opensServerPages ? <Button small variant="outline" label="Sign in" onPress={() => openServerLink("/api/auth/github")} /> : "Sign in on the web"} />
+              : <Button small variant="outline" label={waitingForBrowser() ? "Open again" : "Sign in"} testID="connect-github" disabled={action.busy()}
+                onPress={() => (opensServerPages ? openServerLink("/api/auth/github") : signInInBrowser())} />} />
         </If>
         <ResourceState inline loading={accounts.loading() && !accounts.data()} error={accounts.error()} retry={accounts.refresh}>
           <Each of={tokenProviders} key={provider => provider}>
