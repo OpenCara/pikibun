@@ -172,6 +172,13 @@ test("an extension that throws, registers what Pi refuses, registers nothing or 
   assert.deepEqual(ids(await local.manifest()), ["ext-faux/one", "ext-faux/two", "ext-proxy/relay", "pi-own/base"],
     "the provider registered before the refused one is withdrawn with it, and the working extension is offered");
 
+  const loads = scope.fixtureProviderLoads;
+  assert.deepEqual((await local.provide!(chosen.sources)).map(result => result.providers.length), [0, 0, 0, 2, 0]);
+  assert.equal(scope.fixtureProviderLoads, loads, "the same list tries nothing again");
+  assert.deepEqual(await local.provide!(host.marked("npm:pi-same@1.0.0").sources), [{ source: "npm:pi-same@1.0.0", providers: ["ext-proxy"] }],
+    "once the list changes, an extension that failed is tried again: the one that held its provider is gone");
+  assert.deepEqual(ids(await local.manifest()), ["ext-proxy/other", "pi-own/base"]);
+
   await assert.rejects(loadProviderRegistrations(host.loaded.find(item => item.summary.source === "npm:pi-throws@1.0.0")!.files), /the factory failed on purpose/);
   const slow = await loadLocalPiModels({ agentDir: host.agentDir, loadProviders: () => new Promise((_, reject) => { setTimeout(() => reject(new Error("It didn't load within 60 seconds")), 5); }) });
   assert.match((await slow.provide!(host.marked("npm:pi-fixture-provider@1.0.0").sources))[0]!.error!, /didn't load within/);

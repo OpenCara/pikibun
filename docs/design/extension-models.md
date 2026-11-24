@@ -58,7 +58,8 @@ picks one of its models. That can't be something a workspace turns on.
    extension already registered, or a result the manifest refuses (over 200 models, a provider, id or name outside what
    the connector's or the Pikibun server's manifest checks take) is rolled back (its providers unregistered) and logged
    on the host as `Extension models: <source>: <reason>`; the others, and Pi's own models, are offered as before. It is
-   not tried again until the list or its files change, or the connector restarts. An extension whose description
+   not tried again until the marked list or any marked extension's files change (unmarking the extension that held
+   its provider, or that filled the 200, lets it in), or the connector restarts. An extension whose description
    failed as a whole (the process that describes it, sandboxed where the host has a sandbox, crashed, exited or timed
    out) is never imported: what would end or block a process has already done so to one that isn't the connector. A
    provider that fails when called fails that model request, like any provider error.

@@ -180,6 +180,7 @@ export async function loadLocalPiModels(options: LocalPiOptions = {}): Promise<L
   await manifest();
   const applied = new Map<string, { key: string; providers: string[] }>();
   const failed = new Map<string, { key: string; error: string }>();
+  let asked = "[]";
   const fault = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/[\x00-\x1f\x7f]+/g, " ").slice(0, 500);
   const registrar = () => {
     const value = runtime as Partial<Pick<ModelRuntime, "registerProvider" | "registerNativeProvider" | "unregisterProvider" | "refresh">>;
@@ -197,7 +198,9 @@ export async function loadLocalPiModels(options: LocalPiOptions = {}): Promise<L
   };
   const apply = async (wanted: readonly ProviderSource[]): Promise<ProvidedModels[]> => {
     const keys = new Map(wanted.map(item => [item.source, JSON.stringify(item.files)]));
-    for (const [source, entry] of failed) if (keys.get(source) !== entry.key) failed.delete(source);
+    const list = JSON.stringify([...keys]);
+    if (list !== asked) failed.clear();
+    asked = list;
     const stale = [...applied].filter(([source, entry]) => keys.get(source) !== entry.key);
     if (!stale.length && wanted.every(item => applied.has(item.source) || failed.has(item.source))) {
       return wanted.map(item => ({ source: item.source, providers: applied.get(item.source)?.providers ?? [], ...(failed.has(item.source) ? { error: failed.get(item.source)!.error } : {}) }));
