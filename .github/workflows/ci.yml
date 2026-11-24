@@ -161,7 +161,8 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: tui-screens
-          path: apps/nsh/.nsh/screenshots/tui
+          path: apps/nsh/.nsh/tui-*.json
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
       # @pikibun/tui for this runner (the app's bundle, the launcher and the linux-x64 host), then the packaged app in a

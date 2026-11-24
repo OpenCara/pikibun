@@ -4,11 +4,11 @@ import { server, signedIn } from "./fixtures";
 
 type Cells = { format: string; width: number; height: number; rows: { symbol: string }[][] };
 
-const out = ".nsh/screenshots/tui";
+const out = ".nsh";
 
 async function cells(app: App, name?: string): Promise<Cells | null> {
   try {
-    return JSON.parse(new TextDecoder().decode(await app.screenshot(name ? `${out}/${name}.json` : undefined))) as Cells;
+    return JSON.parse(new TextDecoder().decode(await app.screenshot(name ? `${out}/tui-${name}.json` : undefined))) as Cells;
   } catch (error) {
     if (String((error as Error)?.message ?? error).includes("needs a real platform")) return null;
     throw error;
