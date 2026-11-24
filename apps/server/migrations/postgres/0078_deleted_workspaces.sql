@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0084_deleted_workspaces.sql.
+-- Postgres translation of sqlite/0085_deleted_workspaces.sql.
 
 -- Soft-deleted workspaces (apps/server/src/authority/deleted-workspaces.ts, docs/workspaces.md#deleting-a-workspace).
 -- Deleting a workspace moves its memberships here, out of workspace_members, which every access decision joins: no one

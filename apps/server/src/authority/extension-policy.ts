@@ -1,5 +1,5 @@
 import { documentSourceExtensionOf, neededExtensions, pikiExtensionsFor, pikiSessionToolExtensions } from '../../../../packages/shared/src/piki-extensions.js';
-import { defaultWorkspaceExtensions, extensionLimits, extensionPackageKey, isExtensionIntegrity, withSessionToolsListed, type ExtensionToolMode, type WorkspaceExtension } from '../../../../packages/shared/src/host-extensions.js';
+import { defaultWorkspaceExtensions, starterWorkspaceExtensions, extensionLimits, extensionPackageKey, isExtensionIntegrity, withSessionToolsListed, type ExtensionToolMode, type WorkspaceExtension } from '../../../../packages/shared/src/host-extensions.js';
 import type { DocumentKind } from '../../../../packages/shared/src/sources.js';
 import type { Env } from '../types.js';
 import { now } from '../http.js';
@@ -94,8 +94,8 @@ export async function addDocumentSourceExtension(env: Env, workspaceId: string, 
 export function defaultWorkspaceExtensionStatements(db: Pick<Database, 'query'>, workspaceId: string, ownerId: string, at: string): Query<never>[] {
   return defaultWorkspaceExtensions.map((source, index) => db.query<never>(`INSERT INTO workspace_extensions
       (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
-      VALUES (?, ?, ?, ?, 0, 'automatic', '{}', ?, ?)`)
-    .bind(workspaceId, extensionPackageKey(source), source, index + 1, ownerId, at));
+      VALUES (?, ?, ?, ?, ?, 'automatic', '{}', ?, ?)`)
+    .bind(workspaceId, extensionPackageKey(source), source, index + 1, starterWorkspaceExtensions.includes(source) ? 1 : 0, ownerId, at));
 }
 
 export function saveWorkspaceExtensionStatement(db: Pick<Database, 'query'>, save: { workspaceId: string; extension: WorkspaceExtension; actor: string; at: string }): Query<{ package_key: string }> {
