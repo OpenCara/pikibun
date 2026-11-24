@@ -11,6 +11,8 @@ const WAIT_POLL_MS = 3000;
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
   + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers and the host each runs on, the hosts (online, whether you may start sessions there, GPU, CPUs, memory, disk, active sessions, load), and whether this workspace lets create choose models (childModels). "
   + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells); with message_id, also the outcome of a message this session sent it (status, done, reply). "
+  + "search {query, limit?}: look through the workspace's earlier sessions they can read for what one did or decided: the words of query (all of them; \"quoted phrases\" kept whole) in titles and shared messages, "
+  + "newest sessions first, with the matching messages' entry ids and an excerpt; read a session for the whole conversation. Sessions whose host is offline, or whose readers aren't this session's, are listed as skipped. "
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access read: inspect only; left out, it acts as that session's tools allow); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
@@ -53,12 +55,14 @@ export function sessionsTool(context: ToolContext): ToolRegistration {
     })),
     host_environment: opt(bool()),
     limit: opt(int({ minimum: 1, maximum: crossSessionLimits.readEntries })),
+    query: opt(str({ maxLength: crossSessionLimits.queryChars })),
     timeout_seconds: opt(int({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
   }, { open: true }), execute: async (args, api) => {
     await context.requireSessionTool("sessions");
     const attribution = await calls.actor(api, true);
     const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-      modelId: args.model, thinkingLevel: args.thinking, placement: placementRequest(args.placement), hostEnvironment: args.host_environment, messageId: args.message_id, limit: args.limit })
+      modelId: args.model, thinkingLevel: args.thinking, placement: placementRequest(args.placement), hostEnvironment: args.host_environment, messageId: args.message_id, limit: args.limit,
+      query: args.query })
       .filter(([, value]) => value !== undefined)) as
       Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
     if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");

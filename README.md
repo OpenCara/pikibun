@@ -79,6 +79,7 @@ The [quick start](docs/quick-start.md) walks through it step by step.
 - [Running Pikibun on your own computer](docs/local.md)
 - [Running the server](docs/self-hosting.md): Docker, configuration, administration and storage
 - [Development](docs/development.md): building, testing, releasing and the repository layout
+  - [The task-completion eval](docs/task-eval.md): measuring a change to what sessions are told
 - [Design notes](docs/design)
 
 ## Development

@@ -149,6 +149,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "memory", source: "piki:memory", title: "Workspace memory", sessionTools: ["memory"], optIn: true,
+    description: "A memory and instructions for the whole workspace, as Claude Projects keep a project's knowledge: every session's agent starts with them in its instructions, proposes notes with the memory tool (decisions, conventions, lessons, what a finished sub-task found), and owners and admins keep the notes worth keeping, here or from a session. Agents also search the workspace's earlier sessions. Off until added here.",
+    providers: [],
+  },
+  {
     name: "artifacts", source: "piki:artifacts", title: "Artifacts", sessionTools: ["publish_artifact"], optIn: true,
     description: "The publish_artifact tool: the agent publishes something people should look at (a report, a chart, a UI mock, a diagram) as a versioned HTML, SVG, Markdown or text artifact kept with the session, shown as a card in the transcript and in the session panel's Artifacts tab to whoever may read the session. HTML and SVG run sandboxed, with no network. New workspaces start with it; older ones add it here.",
     providers: [],
@@ -175,7 +180,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "sub-agents", source: "piki:sub-agents", title: "Sub-agents", workflow: true, needs: ["piki:sessions"],
-    description: "Has the agent hand sub-tasks to sub-agents, sessions it starts with the sessions tool (adding it adds Other sessions too): independent parts that can run at once, or parts that need hardware or a model its host lacks. Pikibun places each on the least loaded host that meets its conditions (a GPU, CPUs, memory, disk, platform, models), with the workspace's placement and models settings added where the agent sets none; max-sub-agents bounds each message, and each reports back when it finishes.",
+    description: "Has the agent hand sub-tasks to sub-agents, sessions it starts with the sessions tool (adding it adds Other sessions too): independent parts that can run at once, or parts that need hardware or a model its host lacks. Pikibun places each on the least loaded host that meets its conditions (a GPU, CPUs, memory, disk, platform, models), with the workspace's placement and models settings added where the agent sets none; max-sub-agents can bound each message (no limit by default), and each reports back when it finishes.",
     providers: [],
   },
   {

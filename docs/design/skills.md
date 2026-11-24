@@ -134,15 +134,16 @@ sub-agent defaults and limits.
 - **The short rule.** `pull-request-flow`: what the flow is for and when it applies, its steps in one sentence with
   the workspace's window and merge rule, the pre-push check, and the session's own pull requests; it says to read the
   skill before the first change in a clone, and that each step's note says what comes next. `sub-agents`: when to
-  hand work over, how many per message, and to read the skill before `sessions create`. With `max-sub-agents` 0 there
+  hand work over, how many per message where the workspace sets a limit, and to read the skill before `sessions create`. With `max-sub-agents` 0 there
   is no skill, only the line that says none may start.
 - **Only where the skill is listed.** An extension gives the short rule only when its own skill is among
   `systemPromptOptions.skills` of its `before_agent_start` event, which is where Pi puts the skills it lists. The
   session fills it with the extension skills its prompt lists, so a skill whose copy failed, or a look that ran out of
   time, leaves the whole procedure in the prompt. A connector from before phase 2 passes none, so it gets the whole
   procedure too; Pi itself lists the skill once `resources_discover` gave it.
-- **Why it is safe enough without #343's eval.** The procedure the model needs at each step of `pr-flow` is also in
+- **Why it was safe enough without #343's eval.** The procedure the model needs at each step of `pr-flow` is also in
   the note added to the step's tool result (open the draft, make it ready, wait until, merge or hand over), which
-  this change leaves as it was, and the short rule names every step. #343's eval would still tell whether the
-  shorter prompt changes how often sessions follow the flow; it isn't built yet, so this was checked by tests of the
-  prompts and of a session, not by a model.
+  this change leaves as it was, and the short rule names every step. The eval didn't exist then, so this was checked
+  by tests of the prompts and of a session, not by a model. It exists now ([a task-completion eval](task-eval.md),
+  [how to run it](../task-eval.md)): its pull request flow tasks tell whether sessions follow the flow with the short
+  rule and the skill, on a host without `git_push`. No run with a model has been recorded for this change yet.

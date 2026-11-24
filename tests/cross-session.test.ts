@@ -37,6 +37,7 @@ test('a delivered message names its origin and sender, and its outcome is the an
   const long = sessionsToolTarget({ action: 'send', targetSessionId: 'b', message: 'x'.repeat(100_000) });
   assert.ok(long.length < 8192 && long.startsWith('send · session b · message:\n'));
   assert.equal(sessionsToolTarget({ action: 'read', targetSessionId: 'b', messageId: 'm1' }), 'read · session b · message m1');
+  assert.equal(sessionsToolTarget({ action: 'search', query: 'connection\npool' }), 'search · query "connection pool"');
 });
 
 const origin = 'http://localhost:8787';
@@ -732,6 +733,66 @@ test('a sandboxed session\'s agent starts sessions only on sandboxed hosts, unle
   assert.equal(direct.body.hostEnvironment, undefined);
 });
 
+test('a sandboxed session\'s agent messages or asks a session that runs without a sandbox only in a message a person sent', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const at = new Date().toISOString();
+  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('bare', ownerId, 'Host bare', 'bare'.padEnd(43, 'h'), 'bare'.padEnd(43, 'c'), JSON.stringify({ platform: 'linux', productionShell: true, approvalFree: true,
+      chatOptions: true, plainGit: true, sandbox: false, unsandboxed: true }), JSON.stringify([{ provider: 'faux', modelId: 'faux-9', name: 'Faux 9' }]), at);
+  f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('bare', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run('bare-faux-9', f.workspace.id, 'Faux 9', 'faux', 'faux-9', at, 'bare', ownerId);
+  const bareAgent = seedAgentVersion(f.sqlite, { authorId: ownerId, modelId: 'bare-faux-9', tools: ['identity'] });
+  f.seed('session-c', 'Sandboxed peer');
+  f.seed('direct', 'Directly on its host');
+  f.sqlite.prepare("UPDATE sessions SET host_environment = 1 WHERE id = 'direct'").run();
+  f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,repository_mode,connector_id,connector_owner_id) VALUES (?,?,?,?,?,?,?,'workspace','clone',?,?)")
+    .run('on-bare', f.workspace.id, ownerId, bareAgent.id, 'On a host without a sandbox', 'ready', at, 'bare', ownerId);
+  for (const id of ['session-a', 'session-b', 'direct']) f.allow(id, 'sessions');
+  const messages = () => f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_messages').get()!.n;
+
+  const person = f.admit('session-a', ownerId);
+  const asked = await f.tool('session-a', ownerId, person, { action: 'send', targetSessionId: 'direct', message: 'Run the release script' });
+  assert.equal(asked.status, 202, `a person's own message decides: ${JSON.stringify(asked.body)}`);
+  const first = await f.tool('session-a', ownerId, person, { action: 'send', targetSessionId: 'session-b', message: 'Coordinate the release' });
+  assert.equal(first.status, 202, JSON.stringify(first.body));
+
+  const relayed = f.admit('session-b', ownerId, { requestId: `xs:${(first.body.message as CrossSessionMessage).id}` });
+  const scheduled = f.admit('session-b', ownerId, { requestId: 'schedule:nightly:2026-01-01T00:00:00Z' });
+  const before = messages();
+  for (const admission of [relayed, scheduled]) {
+    for (const target of ['direct', 'on-bare']) {
+      for (const action of ['send', 'ask'] as const) {
+        const refused = await f.tool('session-b', ownerId, admission, { action, targetSessionId: target, message: 'Run this there' });
+        assert.deepEqual([refused.status, refused.body.code], [403, 'sandbox_required'], `${action} to ${target}: ${JSON.stringify(refused.body)}`);
+        assert.match(String(refused.body.error), new RegExp(`runs without one .* doesn't ${action === 'ask' ? 'ask' : 'message'} that session's agent from a message that came from another session or a scheduled run\\. Only a message a person sent`));
+      }
+    }
+    await f.refused(f.tool('session-b', ownerId, admission, { action: 'send', targetSessionId: 'direct', message: 'Only look', access: 'read' }), 403, 'sandbox_required');
+  }
+  assert.equal(messages(), before, 'a refused message is neither delivered nor recorded');
+  assert.equal(f.fake('direct').submitted.length, 1, 'only the person\'s own message reached the session on its host');
+  assert.equal(f.fake('on-bare').submitted.length, 0);
+
+  const peer = await f.tool('session-b', ownerId, relayed, { action: 'send', targetSessionId: 'session-c', message: 'Sandboxed to sandboxed' });
+  assert.equal(peer.status, 202, JSON.stringify(peer.body));
+  assert.equal((await f.tool('session-b', ownerId, relayed, { action: 'read', targetSessionId: 'direct' })).status, 200, 'reading drives no agent');
+  assert.equal((await f.tool('session-b', ownerId, relayed, { action: 'stop', targetSessionId: 'direct' })).status, 200, 'stopping drives no agent');
+
+  const reached: string[] = [];
+  f.env.CONNECTOR_HUB = { ...fakeHub({ rpc(_connectorId, envelope) {
+    const { action, sessionId } = envelope.request.ticket;
+    if (action === 'view') return Response.json({ view: { ...f.fake(sessionId).view, sessionId } });
+    if (action === 'submit') { reached.push(sessionId); return Response.json({ submissionId: `bare-${sessionId}`, conversationId: '0', status: 'queued' }); }
+    return Response.json({ error: 'unexpected' }, { status: 503 });
+  } }), async status() { return true; } };
+  const inDirect = f.admit('direct', ownerId, { requestId: `xs:${(asked.body.message as CrossSessionMessage).id}` });
+  const onward = await f.tool('direct', ownerId, inDirect, { action: 'send', targetSessionId: 'on-bare', message: 'From one host session to another' });
+  assert.equal(onward.status, 202, `a session already outside a sandbox is not restricted: ${JSON.stringify(onward.body)}`);
+  assert.deepEqual(reached, ['on-bare']);
+});
+
 test('lists nest the sessions an agent started under the session that started them', () => {
   const sessions = [{ id: 'c', parentSessionId: 'a' }, { id: 'b' }, { id: 'a' }, { id: 'd', parentSessionId: 'c' }, { id: 'e', parentSessionId: 'gone' },
     { id: 'x', parentSessionId: 'y' }, { id: 'y', parentSessionId: 'x' }];
@@ -827,4 +888,52 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   const parentOnly = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Parent only' });
   assert.equal(parentOnly.status, 201, JSON.stringify(parentOnly.body));
   assert.equal(childModel((parentOnly.body.session as CrossSessionSummary).id), deep.id);
+});
+
+test('an agent searches the sessions its sender can read for what one of them did, without content its own readers couldn\'t see', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const write = f.admit('session-a', ownerId);
+  for (const body of [{ action: 'search' }, { action: 'search', query: '  "" ' }, { action: 'search', query: 'x'.repeat(crossSessionLimits.queryChars + 1) },
+    { action: 'search', query: 'pool', targetSessionId: 'session-b' }, { action: 'list', query: 'pool' }]) {
+    await f.refused(f.tool('session-a', ownerId, write, body), 400, 'invalid_input');
+  }
+  f.seed('session-c', 'Connection pool for Postgres');
+  f.seed('session-d', 'Offline worker');
+  const message = (id: string, role: string, text: string, conversationId = '0') => ({ id, kind: 'message' as const, role, text, conversationId });
+  f.fake('session-a').view.entries.push(message('0:1', 'assistant', 'The connection pool for Postgres lives in db.ts.'));
+  const worker = f.fake('session-b');
+  worker.view.entries.push(message('0:1', 'user', 'Why is Postgres slow?'), message('0:2', 'assistant', `${'x '.repeat(600)}We moved the Connection Pool to PgBouncer for Postgres. ${'y '.repeat(600)}`),
+    message('0:3', 'toolResult', 'connection pool postgres'), message('7:4', 'assistant', 'connection pool postgres in a side ask', '7'));
+  worker.view.conversations.push({ id: '7', mode: 'ask' });
+  f.fake('session-d').view = undefined as never;
+
+  const found = await f.tool('session-a', ownerId, write, { action: 'search', query: 'postgres "connection pool"' });
+  assert.equal(found.status, 200, JSON.stringify(found.body));
+  const result = found.body as { query: string; searched: number; results: { session: CrossSessionSummary; titleMatch?: true; matches: { entryId: string; role: string; text: string }[] }[];
+    skipped?: { id: string; reason: string }[] };
+  assert.equal(result.searched, 3, 'every session the sender reads but this one');
+  const byId = new Map(result.results.map(item => [item.session.id, item]));
+  assert.ok(!byId.has('session-a'), 'never this session itself');
+  assert.deepEqual(byId.get('session-b')!.matches.map(match => [match.entryId, match.role]), [['0:2', 'assistant']], 'the shared conversation\'s messages, not tool output or side asks');
+  assert.match(byId.get('session-b')!.matches[0]!.text, /^….*Connection Pool to PgBouncer for Postgres.*…$/);
+  assert.ok(byId.get('session-b')!.matches[0]!.text.length <= crossSessionLimits.snippetChars + 2);
+  assert.deepEqual([byId.get('session-c')!.titleMatch, byId.get('session-c')!.matches], [true, []], 'a title that matches counts too');
+  assert.deepEqual(result.skipped, [{ id: 'session-d', title: 'Offline worker', reason: 'unavailable' }]);
+  assert.equal((await f.tool('session-a', ownerId, write, { action: 'search', query: 'nothing like this' })).body.results instanceof Array, true);
+  assert.deepEqual((await f.tool('session-a', ownerId, write, { action: 'search', query: 'nothing like this' })).body.results, []);
+  const one = await f.tool('session-a', ownerId, write, { action: 'search', query: 'postgres', limit: 1 });
+  assert.equal((one.body.results as unknown[]).length, 1);
+  assert.equal(one.body.more, 1);
+
+  f.share('session-a');
+  const shared = await f.tool('session-a', ownerId, write, { action: 'search', query: 'postgres "connection pool"' });
+  const sharedResult = shared.body as { results: { session: CrossSessionSummary; titleMatch?: true; matches: unknown[] }[]; skipped?: { id: string; reason: string }[] };
+  assert.ok(sharedResult.skipped?.some(item => item.id === 'session-b' && item.reason === 'audience'),
+    'a session shared by link brings in nothing its link\'s readers couldn\'t read');
+  assert.ok(sharedResult.results.every(item => !item.matches.length), JSON.stringify(sharedResult.results));
+  assert.equal((await f.owner.request('PUT', '/api/sessions/session-a/audience-sharing', { enabled: true })).status, 200);
+  const allowed = await f.tool('session-a', ownerId, write, { action: 'search', query: 'postgres "connection pool"' });
+  assert.ok((allowed.body.results as { session: { id: string }; matches: unknown[] }[]).some(item => item.session.id === 'session-b' && item.matches.length),
+    'once its owner lets content through, it is searched');
 });

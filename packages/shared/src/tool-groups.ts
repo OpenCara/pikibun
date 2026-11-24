@@ -3,7 +3,7 @@ import { canonicalToolName, canonicalToolNames, groupedToolNames, legacyToolName
 export const groupTools = [
   "identity", "ls", "read", "grep", "write", "edit", "move_file", "copy_file", "delete_file",
   "git", "git_push", "node", "python", "rust", "go", "dotnet", "make", "browser", "tunnel",
-  "github_read", "github_comment", "github_issue", "github_merge", "source_read", "schedule", "sessions", "workspace",
+  "github_read", "github_comment", "github_issue", "github_merge", "source_read", "schedule", "sessions", "workspace", "memory",
 ] as const;
 export type GroupTool = (typeof groupTools)[number];
 
@@ -37,11 +37,12 @@ export const groupToolInfo: Record<GroupTool, { label: string; kind: "files" | "
   schedule: { label: "Scheduled prompts", kind: "workspace" },
   sessions: { label: "Work with other sessions", kind: "workspace" },
   workspace: { label: "Manage the workspace (with the sender's role)", kind: "workspace" },
+  memory: { label: "Workspace memory (notes; owners and admins keep them)", kind: "workspace" },
 };
 
 const readTools: readonly GroupTool[] = ["identity", "ls", "read", "grep"];
 const sandboxTools: readonly GroupTool[] = [...readTools, "write", "edit", "move_file", "copy_file", "delete_file",
-  "git", "node", "python", "rust", "go", "dotnet", "make", "browser", "github_read", "source_read"];
+  "git", "node", "python", "rust", "go", "dotnet", "make", "browser", "github_read", "source_read", "memory"];
 
 export const roleTools: Readonly<Record<WorkspaceRole, readonly GroupTool[]>> = {
   owner: groupTools,

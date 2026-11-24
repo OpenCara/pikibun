@@ -75,7 +75,7 @@ Workspace repositories can come from GitHub, GitHub Enterprise Server, GitLab (g
 
 Model credentials stay in Pi on your host. Pairing keeps the host private to you; sharing it with a workspace is a separate, explicit action in the web app.
 
-The connector offers the models matched by `enabledModels` in Pi's `settings.json` (the same patterns Pi uses for model cycling, e.g. `"anthropic/*"`, `"*/claude-opus-5-5*"`), or every authenticated Pi model when that list is unset. `--model PROVIDER/MODEL` (repeatable) overrides both. In the web app, you and the host's admins can also disable any of these models, for everyone who uses the host, without restarting the connector (**Settings → Hosts →** the host **→ Models**).
+The connector offers the models matched by `enabledModels` in Pi's `settings.json` (the same patterns Pi uses for model cycling, e.g. `"anthropic/*"`, `"*/claude-opus-5-5*"`), or every authenticated Pi model when that list is unset. `--model PROVIDER/MODEL` (repeatable) overrides both. In the web app, you and the host's admins can also disable any of these models, for everyone who uses the host, without restarting the connector (**Settings → Hosts →** the host **→ Models**). The host can offer the models an installed Pi extension provides too, once you tick **Provide models** on it on the host's page: its code then runs in this connector, as your user and outside any sandbox. Sign in to such a provider with Pi on this machine first; `pikibun connect --no-extension-models` refuses it. See [Models an extension provides](https://github.com/OpenCara/pikibun/blob/main/docs/extensions.md#models-an-extension-provides).
 
 ## Host commands
 

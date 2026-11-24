@@ -57,6 +57,7 @@ export interface ConnectorCapabilities {
   artifacts?: boolean;
   sessionResources?: boolean;
   buildCaches?: boolean;
+  extensionModels?: boolean;
   gpu?: GpuKind;
 }
 

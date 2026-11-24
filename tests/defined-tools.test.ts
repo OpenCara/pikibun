@@ -50,14 +50,14 @@ async function records(session: RunnerSession): Promise<OperationRecord[]> {
 test("the bundled definitions are data: they round-trip through the parser a connector reads them with", () => {
   const sent = JSON.parse(JSON.stringify({ tools: bundledToolDefinitions }));
   assert.deepEqual(parseToolDefinitions(sent), bundledToolDefinitions);
-  assert.deepEqual(bundledToolDefinitions.map(item => item.name), ["node", "rust", "go", "dotnet", "make", "source_read", "workspace"]);
+  assert.deepEqual(bundledToolDefinitions.map(item => item.name), ["node", "rust", "go", "dotnet", "make", "source_read", "workspace", "memory"]);
   for (const definition of [jvm, notes]) assert.deepEqual(parseToolDefinition(JSON.parse(JSON.stringify(definition))), definition);
 });
 
 test("every definition is switched by Pikibun extensions the workspace page lists, and described for people", () => {
   for (const definition of bundledToolDefinitions) {
     assert.ok(!reservedToolNames.includes(definition.name), definition.name);
-    if (definition.name === "workspace") assert.ok(!(toolNames as readonly string[]).includes(definition.name), "a tool new with definitions is named outside toolNames, so older connectors pass over it");
+    if (definition.name === "workspace" || definition.name === "memory") assert.ok(!(toolNames as readonly string[]).includes(definition.name), "a tool new with definitions is named outside toolNames, so older connectors pass over it");
     else assert.ok((toolNames as readonly string[]).includes(definition.name), `${definition.name}: older connectors' tool, the same name`);
     assert.ok(pikibunToolDescriptions[definition.name], definition.name);
     for (const source of definition.extensions) {

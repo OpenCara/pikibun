@@ -65,7 +65,7 @@ The desktop app starts `pikibun` through the owner's login shell (`$SHELL -ilc '
 
 - **Only the host's owner, and members they grant host commands.** Everyone else's calls to anything that runs on the host's own machine are refused, on the host (`HOST_COMMANDS_RULE` in `apps/runner/src/session/host-commands.ts`) and by the server.
 - **It is shown, changeable and recorded.** The new-session screen's **Where it runs** chip says **On host** before the session starts, with **Sandbox** as its other choice; the session's details say **On host** afterwards, and the choice is audited with the session (`hostEnvironment`). There is no warning banner any more, on the new-session screen or in the session: it showed on every session of people who had already decided, so it was read by nobody. A session on someone else's host that has no sandbox at all still says so (**Unsandboxed host**), as that isn't the reader's own choice.
-- **Only where a person starts it.** The server still starts a session in the sandbox unless the request says `hostEnvironment`, so sessions that agents start (the sessions tool) and that schedules start run sandboxed: only the new-session screen asks for the host by default. A host that runs every session without a sandbox is the other way out of one, and an agent working in a sandbox doesn't take it on its own either: its `sessions create`, placement and `schedule` tool leave such hosts out or refuse them (`sandbox_required`), because what steers an agent inside a sandbox (a page, a repository, another session's reply) would otherwise choose where its work continues, and load balancing would often choose the idle unsandboxed host for it (finding 61 of #479). The one way there is the explicit one a person's message can ask for, `host_environment: true` naming that host; there is deliberately no workspace setting that turns the rule off, since a setting applies to the unattended runs too. A session that already runs without a sandbox is not restricted, as it has nothing left to protect ([Sandboxed work stays sandboxed](host-placement.md#sandboxed-work-stays-sandboxed)).
+- **Only where a person starts it.** The server still starts a session in the sandbox unless the request says `hostEnvironment`, so sessions that agents start (the sessions tool) and that schedules start run sandboxed: only the new-session screen asks for the host by default. A host that runs every session without a sandbox is the other way out of one, and an agent working in a sandbox doesn't take it on its own either: its `sessions create`, placement and `schedule` tool leave such hosts out or refuse them (`sandbox_required`), and its `sessions send` and `ask` reach a session that runs without a sandbox only in a message a person sent, never in one relayed from another session or a scheduled run, because what steers an agent inside a sandbox (a page, a repository, another session's reply) would otherwise choose where its work continues, and load balancing would often choose the idle unsandboxed host for it (finding 61 of #479). The one way there is the explicit one a person's message can ask for, `host_environment: true` naming that host; there is deliberately no workspace setting that turns the rule off, since a setting applies to the unattended runs too. A session that already runs without a sandbox is not restricted, as it has nothing left to protect ([Sandboxed work stays sandboxed](host-placement.md#sandboxed-work-stays-sandboxed)).
 - **Read only** changes nothing on the host either.
 - **The owner's own environment, only in the owner's own sessions.** A session on its host whose owner is the host's owner (`hostOwnersSession` in `apps/runner/src/host-workspace.ts`) runs commands with the connector's environment (`ownerHostEnvironment`): the owner's `HOME`, `SSH_AUTH_SOCK`, global and system Git configuration. A rebuilt environment protected nothing there: the commands already run as that user and can read `~/.ssh`, and the agent socket is reachable by the same uid. It only broke ssh with agent keys, `gh` sign-ins and the macOS keychain helper. What is left out, and why:
   - **Always: Pikibun's own variables and Git's repository-local ones** (`CONNECTOR_ENVIRONMENT`). `GIT_DIR` and its kin, inherited from a hook that started the connector, would point every command's Git at another repository.
@@ -386,6 +386,80 @@ an extension"). A plain extension process starts without the connector's own env
 Because the process is confined like the session's commands, a tool of such an extension runs for any message that may
 act, without a host command grant: it reaches nothing a shell command of that message couldn't. Where shell commands
 themselves count as host commands (no resource limits, someone else's session), so do these calls.
+
+## Models a host's extensions provide
+
+`apps/runner/src/extensions/providers.ts`, `local-pi.ts` (`provide`), `connector.ts` (`provideModels`),
+`packages/shared/src/host-config.ts` (`modelExtensions`); the design is [extension models](extension-models.md) (#147).
+Everything above moves installed extensions away from the host's authority. A model provider can't follow: it is the
+code that makes the model request, with the host owner's credentials, for a list of models that belongs to the host and
+not to a session, so it runs in the connector, as the host's user, outside any sandbox. What bounds that:
+
+- **The host's owner marks each extension, per exact version.** `HostConfig.modelExtensions` is owner-only host
+  configuration (`ownerOnlyHostConfig`), changed through `PATCH /api/connectors/:id/config` alone, audited, and
+  confirmed in the UI with what it runs as. A host admin is refused; a workspace's extension list, its settings, the
+  `workspace` tool and sessions have no route to it. A new version is a new source, so it provides nothing until marked.
+- **Only what the owner installed.** The connector takes a marked source only from `ExtensionStore`, at that exact
+  source: never from the sandboxed auto-cache (which a workspace fills), a managed package, a `piki:` extension or a dev
+  extension.
+- **Providers only.** The extension is loaded with an extension runtime that is never bound, so nothing emits an event
+  to it: its handlers and tools never run from this copy, and its action methods throw. The connector applies the
+  registrations made while it loaded to its `ModelRuntime`, and reports their models through `modelSummary`, which
+  copies names and thinking levels only. A session's own copy of the same extension still runs in the session's
+  extension process, with descriptions and no keys.
+- **Models like any other.** They pass `enabledModels`, the 200-model limit, the manifest's checks and the host's
+  per-model switches; a source that would break the manifest is withdrawn alone, so one extension can't take the
+  host offline.
+- **The machine can refuse.** `pikibun connect --no-extension-models` never loads one and doesn't advertise the
+  capability. The connector applies only a list it has heard from the Pikibun server, and keeps the last one through an
+  outage.
+
+What it doesn't protect against: the marked package's code runs in the connector's process with the host user's
+files, network and Pi credentials, sees every request to its models, may replace one of Pi's own providers (as in Pi),
+and can block or end the connector once loaded; that is the trust the owner gives it, the same as installing it in Pi
+on that machine. The list comes from the Pikibun server, like `hostSessions` and install requests: whoever controls
+the owner's account or the Pikibun server could mark an installed extension, and with remote installs install one
+first. That is no more than they could already do there, since the same word starts a session on the host, as its
+user ([Sessions on the host](#sessions-on-the-host)); it is one more path that runs code outside the sandbox on that
+word, which the local refusal closes and `--no-remote-installs` narrows to what was installed on the machine.
+
+## What an extension keeps and sends
+
+`apps/runner/src/extensions/entries.ts`, `worker.ts` (`noActions`, `runCall`), `adapter.ts` (`kept`, `onYield`); the
+design is [extension isolation](extension-isolation.md#entries-an-extension-keeps). An installed extension's process
+runs in the session's sandbox where there is one, and what the agent reads can steer its code, so what it asks the
+connector to keep or to send is untrusted.
+
+- **Entries are data for the extension alone.** `pi.appendEntry` stores JSON that only the same package's process in the
+  same session gets back. Nothing else reads it: not the model, not the transcript, not another extension, not the
+  Pikibun server. The connector checks each entry's shape and size, replaces an id it can't use, and bounds the list
+  (64 KB an entry, 256 entries and 1 MB per extension, at most two writes a second), so a process can't grow the
+  session's store without limit. It takes an entry only from the process that runs that source, so the session's shared
+  process can't write the entries of a guard that runs outside the sandbox.
+- **An extension never starts a run.** In Pi, `pi.sendUserMessage` while the agent is idle starts it. In Pikibun every
+  run is a person's message: it acts with its sender's permissions and tool group and the owner's accounts, under an
+  admission the Pikibun server gave for that message, and a Read-only message stays read-only. A run an extension
+  started would have no sender, and lending it the last sender's or the owner's would let code in the sandbox act as that
+  person at a time of its choosing, with nobody having asked for anything. So outside a running message (and outside a
+  command's handler, where a person typed the command) the call does nothing but log.
+- **Inside a running message it adds a turn to that message.** Text queued from a tool or a handler of the message goes
+  to the agent when the message would settle, through the same hook as `agent_before_settle`'s `continue`
+  (`GenerationHooks.onYield`), which extensions already had. The turn is part of that run, so it has that message's
+  sender, access mode, admission and tools, no more; a side ask runs no extensions, so it gets none. The worker queues at
+  most 8 texts of 16,000 characters for one settle, and the connector asks for them only where a run yields.
+- **A text belongs to the run it was queued in.** Every request carries the connector's number for the run going on
+  (`RequestContext.run`, set as a message starts and cleared as it ends). The worker takes a text only from code that
+  began in a request of that run, while that run is still the one the connector names, and hands texts only to the
+  run they were queued in; the rest is dropped at the next request. So a timer or a promise a tool left behind queues
+  nothing once its message has ended, whether it fires before the next message or during it: what one sender's
+  message started never becomes a turn of another's.
+
+What it doesn't protect against: an extension can keep a run going by sending again at each settle, as it could with
+`agent_before_settle`, until someone stops it. The run check is made in the extension's process, so it holds for an
+extension's own mistakes, not against one written to get around it: such an extension can keep a text itself and
+answer `continue` with it in a later message's run, as it could before this, and the text then enters with that later
+sender's authority, as any text an extension puts before the agent (a prompt section, a changed tool result) does. And the conversation is shared: what one message's extension turn wrote is context
+for the next message, whoever sends it.
 
 ## Slash commands the host runs
 
