@@ -295,16 +295,15 @@ export function registerRepositories(app: Hono<AppEnv>): void {
       c.env.DB.query(`INSERT INTO workspace_repositories (id,workspace_id,provider,host,repository_id,full_name,ref,private,created_at)
       SELECT ?,?,?,?,?,?,?,?,? WHERE ${workspaceAdminSQL}
       AND ${authority.sql}
-      AND (SELECT COUNT(*) FROM workspace_repositories WHERE workspace_id = ?) < 5
       AND NOT EXISTS (SELECT 1 FROM workspace_repositories WHERE workspace_id = ? AND provider = ? AND host = ?
         AND (repository_id = ? OR full_name = ? COLLATE NOCASE)) RETURNING id`)
         .bind(row.id, workspaceId, row.provider, row.host, row.repository_id, row.full_name, row.ref, row.private, row.created_at, workspaceId, actor,
-          ...authority.values, workspaceId, workspaceId, row.provider, row.host, row.repository_id, row.full_name),
+          ...authority.values, workspaceId, row.provider, row.host, row.repository_id, row.full_name),
       c.env.DB.query(`INSERT INTO source_read_settings (source_id, workspace_id, read_as, updated_by, updated_at)
         SELECT ?, ?, 'workspace', ?, ? WHERE ? = 1 AND EXISTS (SELECT 1 FROM workspace_sources WHERE id = ?)`)
         .bind(row.id, workspaceId, actor, row.created_at, readsAsWorkspace ? 1 : 0, row.id),
     ]);
-    if (!results[0]!.results[0]) fail(409, 'repository_binding_conflict', 'Repository already configured, limit reached, or workspace authority changed.');
+    if (!results[0]!.results[0]) fail(409, 'repository_binding_conflict', 'Repository already configured or workspace authority changed.');
     const extensions = await addPikiExtensions(c.env, workspaceId, provider, actor);
     return c.json({ repository: publicRepository({ ...row, read_as: readsAsWorkspace ? 'workspace' : null }), ...(extensions.length ? { extensions } : {}) }, 201);
   });

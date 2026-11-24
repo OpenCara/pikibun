@@ -133,7 +133,7 @@ export function GitHubReachSettings(props: { workspace: Workspace }) {
   const action = createAction();
   return (
     <Section title="Your GitHub reach" testID="workspace-github-reach" info={<View style={{ gap: 8 }}>
-      <Note>Your own choice, in this workspace; each member makes theirs. Sessions act on GitHub as their owner. It is on until you turn it off.</Note>
+      <Note>Your own choice, in this workspace; each member makes theirs. Sessions act on GitHub as their owner. A member starts with it on, except in a shared workspace they belonged to before that became the start.</Note>
       <Note>With this on, messages you send yourself, in sessions you own, may read, open issues in, merge in and, with gh on your own hosts, write to any GitHub repository your account can access, as you. Messages anyone else sends in your sessions still reach only this workspace's repositories, and so do yours with this off.</Note>
       <Note>An agent follows what it reads, such as issues and web pages, so text written to mislead it could have it act as you anywhere your account reaches. Turn this off where you don't watch what your sessions do. Pushes still go only to this workspace's repositories.</Note>
     </View>}>
@@ -211,7 +211,7 @@ const modeLabel: Record<NetworkMode, string> = { off: "Off", allowlist: "Allowli
 const modeHint: Record<NetworkMode, string> = {
   off: "Sandboxed commands reach only this workspace's repositories",
   allowlist: "The workspace's repositories, plus the domains below",
-  open: "The workspace's repositories, plus any public host. How a workspace starts",
+  open: "The workspace's repositories, plus any public host",
 };
 
 export function NetworkAccess(props: { workspace: Workspace; admin: boolean }) {
@@ -239,7 +239,7 @@ export function NetworkAccess(props: { workspace: Workspace; admin: boolean }) {
     <Section title="Network access" testID="workspace-network" info={<View style={{ gap: 8 }}>
       <If when={!props.admin}>{adminOnly}</If>
       <Note>Sandboxed commands have no direct network. Everything goes through the host's egress proxy: Git reads of this workspace's repositories always work, with the session owner's own account, which never leaves Pikibun.</Note>
-      <Note>This setting decides what else is reachable over HTTPS: any public host (Open, how a workspace starts), the domains you list (Allowlist), or nothing (Off). Addresses inside the host's own networks are never reachable. Sessions that run on their host, and hosts without the sandbox, aren't confined by it.</Note>
+      <Note>This setting decides what else is reachable over HTTPS: any public host (Open, what a new workspace starts with), the domains you list (Allowlist), or nothing (Off). Addresses inside the host's own networks are never reachable. Sessions that run on their host, and hosts without the sandbox, aren't confined by it.</Note>
       <Note>Web search and page reading come from the workspace's extensions, which run on the host outside the sandbox: this setting doesn't confine them.</Note>
     </View>}>
       <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>

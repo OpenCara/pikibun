@@ -9,8 +9,23 @@ export const workspaceTabs: readonly { value: WorkspaceTab; label: string; hint:
   { value: "sessions", label: "Sessions", hint: "How sessions run and are kept: schedules, transcripts, caches and storage" },
 ];
 
-export const wantedWorkspaceTab = signal<{ workspaceId: string; tab: WorkspaceTab } | null>(null);
+const WANTED_FOR_MS = 10_000;
+
+const wanted = signal<{ workspaceId: string; tab: WorkspaceTab; at: number } | null>(null);
 
 export function showWorkspaceTab(workspaceId: string, tab: WorkspaceTab): void {
-  wantedWorkspaceTab.set({ workspaceId, tab });
+  wanted.set({ workspaceId, tab, at: Date.now() });
+}
+
+export function forgetWorkspaceTab(): void {
+  wanted.set(null);
+}
+
+export function takeWorkspaceTab(workspaceId: string): WorkspaceTab | null {
+  const request = wanted();
+  if (!request) return null;
+  const fresh = Date.now() - request.at <= WANTED_FOR_MS;
+  if (fresh && request.workspaceId !== workspaceId) return null;
+  wanted.set(null);
+  return fresh ? request.tab : null;
 }

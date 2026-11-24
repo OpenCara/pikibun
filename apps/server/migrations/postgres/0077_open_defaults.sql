@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0083_open_defaults.sql.
+-- Postgres translation of sqlite/0084_open_defaults.sql.
 
 -- New defaults for what nobody has chosen yet (docs/design/security-rationale.md, "Open defaults"): a workspace without a
 -- network policy row now has network access Open (defaultNetworkPolicy in packages/shared/src/network.ts), and a member

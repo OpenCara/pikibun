@@ -349,8 +349,10 @@ test('internal broker rejects wrong operations and posts once per tool call of a
   f.sqlite.prepare('INSERT INTO agents (id,author_id,created_at) VALUES (?,?,?)').run('agent', ownerId, createdAt);
   f.sqlite.prepare('INSERT INTO agent_versions (id,agent_id,author_id,version,name,description,instructions,tools_json,model_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
     .run('version', 'agent', ownerId, 1, 'agent', '', '', '["github_comment"]', 'model', createdAt);
-  f.sqlite.prepare('INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at) VALUES (?,?,?,?,?,?,?)')
-    .run('session', 'workspace', ownerId, 'version', 'session', 'ready', createdAt);
+  f.sqlite.prepare('INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,repository_mode) VALUES (?,?,?,?,?,?,?,?)')
+    .run('session', 'workspace', ownerId, 'version', 'session', 'ready', createdAt, 'clone');
+  f.sqlite.prepare('INSERT INTO workspace_repositories (id, workspace_id, repository_id, full_name, ref, private, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run('repository', 'workspace', '7', 'owner/repo', 'main', 1, createdAt);
   assert.ok(await sessionAccess(f.env, 'session', ownerId));
   f.env.TEST_AUTH_ENABLED = 'false';
   assert.equal(await sessionAccess(f.env, 'session', ownerId), null, 'Real users cannot retain faux sessions when test mode is disabled');
@@ -387,13 +389,17 @@ test('internal broker rejects wrong operations and posts once per tool call of a
   const previousFetch = globalThis.fetch;
   let writes = 0;
   globalThis.fetch = async (input, init) => {
-    writes++;
-    assert.equal(String(input), 'https://api.github.com/repos/owner/repo/issues/3/comments');
     assert.equal(init?.redirect, 'manual');
     assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer vault-only-token');
+    if (String(input) === 'https://api.github.com/repos/owner/repo') return Response.json({ id: 7, full_name: 'owner/repo', default_branch: 'main', private: true });
+    writes++;
+    assert.equal(String(input), 'https://api.github.com/repos/owner/repo/issues/3/comments');
     return Response.json({ id: 99, html_url: 'https://github.com/owner/repo/issues/3#issuecomment-99', sensitive: 'must-not-return' });
   };
   t.after(() => { globalThis.fetch = previousFetch; });
+  f.sqlite.prepare("INSERT INTO member_github_reach (workspace_id, user_id, any_repository, updated_at) SELECT workspace_id, owner_id, 0, ? FROM sessions WHERE id = 'session'").run(createdAt);
+  assert.equal((await request({ ...payload, approvalId: 'tool-call-0', repository: 'owner/other' })).status, 403, 'a comment keeps to the workspace\'s repositories once its owner turned their reach off');
+  assert.equal(writes, 0);
   const first = await request(payload);
   assert.equal(first.status, 200);
   assert.deepEqual(await first.json(), { id: 99, url: 'https://github.com/owner/repo/issues/3#issuecomment-99' });

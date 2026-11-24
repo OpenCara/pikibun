@@ -48,7 +48,7 @@ export function githubTools(context: ToolContext): ToolRegistration[] {
       if (turn.kind === "done") return text({ ...attribution, ...view, waited: turn.waited });
       return { sleep: { checkpoint: turn.state as never, until: turn.at } };
     } }),
-    defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker. Use this where the gh tool can't write (gh pr comment, gh issue comment). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, _call) => {
+    defineTool({ name: "github_comment", description: "Post an exact GitHub comment on an issue or pull request of one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker. Use this where the gh tool can't write (gh pr comment, gh issue comment). " + ownerReach + " The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, _call) => {
       await context.requireSessionTool("github_comment");
       const attribution = await calls.actor(api, true);
       await calls.check(api, "github_comment", { write: true });

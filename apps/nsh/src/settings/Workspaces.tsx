@@ -13,7 +13,7 @@ import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { relativeTime } from "../lib/format";
 import { openServerLink, opensServerPages } from "../lib/links";
-import { wantedWorkspaceTab, workspaceTabs, type WorkspaceTab } from "../lib/workspace-tabs";
+import { forgetWorkspaceTab, takeWorkspaceTab, workspaceTabs, type WorkspaceTab } from "../lib/workspace-tabs";
 import { createAction, createResource } from "../lib/resource";
 import { createConnections } from "../hosts";
 import { Icon } from "../icons";
@@ -50,6 +50,7 @@ export function Workspaces(props: SectionProps) {
   const data = useAppData();
   const creating = signal(false);
   const workspace = () => data.workspaces().find(item => item.id === props.id);
+  effect(() => { if (!props.id) forgetWorkspaceTab(); });
   const sheet = <NewWorkspaceSheet open={creating()} onClose={() => creating.set(false)} created={created => props.go({ name: "new", workspaceId: created.id })} />;
   const error = <Banner tone="danger" title="Unable to load workspaces" actions={<Button small variant="outline" label="Try again" onPress={data.refreshWorkspaces} />}>{data.workspacesError()}</Banner>;
   const back = () => (
@@ -100,10 +101,8 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   const admin = () => role() === "owner" || role() === "admin";
   const tab = signal<WorkspaceTab>("overview");
   effect(() => {
-    const wanted = wantedWorkspaceTab();
-    if (wanted?.workspaceId !== untracked(workspace).id) return;
-    tab.set(wanted.tab);
-    wantedWorkspaceTab.set(null);
+    const wanted = takeWorkspaceTab(untracked(workspace).id);
+    if (wanted) tab.set(wanted);
   });
   const repositories = createResource<WorkspaceRepositoryList>(() => `/api/workspaces/${segment(workspace().id)}/repositories`);
   const sources = createResource<WorkspaceSourceList>(() => `/api/workspaces/${segment(workspace().id)}/sources`);
@@ -268,9 +267,8 @@ function Repositories(props: {
   const action = createAction();
   const accounts = createResource<{ accounts: GitAccount[] }>(() => (props.admin ? "/api/git/accounts" : null));
   const picking = signal(false);
-  const full = () => (props.repositories?.length ?? 0) >= repositoryLimits.repositories;
   const gitConnections = () => props.connections?.filter(item => item.family === "git") ?? [];
-  const canAdd = () => props.admin && Boolean(accounts.data()?.accounts.length || gitConnections().length) && !full();
+  const canAdd = () => props.admin && Boolean(accounts.data()?.accounts.length || gitConnections().length);
   async function remove(repository: WorkspaceRepository) {
     if (action.busy() || !props.admin) return;
     const last = props.sourceCount === 1;
@@ -294,7 +292,7 @@ function Repositories(props: {
       <If when={!props.admin}><Note>Only workspace owners and admins can add or remove sources.</Note></If>
       <Note>Changes apply at once, in running sessions too: a removed source can no longer be read, nor a removed repository pushed. To change a ref, remove and re-add the repository.</Note>
       <Note>Git LFS is off by default, and clones check out LFS pointer files. Turned on, sessions download the repository's LFS files with their owner's own account, where the host has git-lfs installed.</Note>
-      <Note>{`Each session starts with an empty worktree, and its agent clones the workspace repositories it needs with Git, through the session's egress proxy: reads use the session owner's access and pushes go only to the session's own branches. Limit: ${repositoryLimits.repositories} repositories per workspace.`}</Note>
+      <Note>{`Each session starts with an empty worktree, and its agent clones the workspace repositories it needs with Git, through the session's egress proxy: reads use the session owner's access and pushes go only to the session's own branches.`}</Note>
     </View>}>
       <View style={{ gap: 8 }}>
         <GroupTitle action={canAdd() ? <Button small variant="outline" icon="plus" label="Add repository" testID="add-repository"
@@ -330,9 +328,6 @@ function Repositories(props: {
           <Banner tone="warning" title="No Git accounts connected" actions={<Button small variant="outline" label="Open profile" onPress={() => props.go({ name: "settings", section: "profile" })} />}>
             Connect GitHub or add a Git account in Settings → Profile before choosing repositories.
           </Banner>
-        </If>
-        <If when={props.admin && accounts.data()?.accounts.length && full()}>
-          <Banner tone="info" title="Repository limit reached">{`The workspace has reached its ${repositoryLimits.repositories}-repository limit. Remove a binding to choose another.`}</Banner>
         </If>
       </View>
       <If when={canAdd()}>
@@ -380,7 +375,7 @@ function RepositoryPicker(props: { open: boolean; workspace: Workspace; accounts
   const alreadyBound = (repository: ProviderRepository) => props.repositories.some(binding => binding.provider === account()?.provider && binding.host === account()?.host
     && (binding.repositoryId === repository.id || binding.fullName.toLowerCase() === repository.fullName.toLowerCase()));
   const blocked = () => props.disabled || action.busy() || lookup.busy() || (listed() && (resource.loading() || Boolean(resource.error()))) || !account() || !selected()
-    || alreadyBound(selected()!) || props.repositories.length >= repositoryLimits.repositories;
+    || alreadyBound(selected()!);
   const providerName = () => (account() ? gitProviderNames[account()!.provider] : "Git");
   const example = () => (account() ? urlExamples[account()!.provider](account()!.host) : "https://github.com/owner/name");
   const choose = (id: string) => { selectedId.set(id); ref.set(""); };

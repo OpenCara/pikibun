@@ -208,7 +208,7 @@ A sandbox's only way out is its session's **egress proxy**, which the connector 
   | **Allowlist** | The listed domains (`*.example.com` for subdomains), and, with **Allow package registries**, npm, PyPI, crates.io, Go modules, RubyGems, Maven, NuGet and Packagist |
   | **Off** | Nothing besides the workspace's repositories |
 
-  A shared workspace made before **Open** became the start (server releases up to the one that added migration `0083_open_defaults`) stays **Off** until an owner or admin changes it.
+  A shared workspace made before **Open** became the start (server releases up to the one that added migration `0084_open_defaults`) stays **Off** until an owner or admin changes it.
 
   Other repositories on an allowed host are fetched without credentials, only to read. The proxy reads public repositories on GitHub, GitLab, Bitbucket and Codeberg itself, so a session can clone one to inspect its code even on a host whose DNS answers with a local proxy's fake-IP addresses; elsewhere Git fetches them through a tunnel. Only HTTPS on port 443 is tunnelled, the proxy never looks inside it, and addresses in the host's own networks (loopback, private, link-local, such as cloud metadata services) are never reachable. Running sessions pick up a change within a minute.
 
