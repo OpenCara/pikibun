@@ -36,6 +36,7 @@ import { defaultExtensionCacheDir, ExtensionCache, helperExtensionInstaller, ref
 import { helperDescribe, sandboxDescribe } from "./extensions/describe.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { ExtensionStore } from "./extensions/store.js";
+import { providerSources, type ProvidedModels } from "./extensions/providers.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 import { buildVersion } from "../../../packages/shared/src/version.js";
 import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
@@ -221,6 +222,7 @@ export interface ConnectorOptions {
   remoteExtensionInstalls?: boolean;
   managedExtensions?: boolean;
   autoCacheExtensions?: boolean;
+  extensionModels?: boolean;
   privateHome?: PrivateHome;
   privateReportMs?: number;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
@@ -258,6 +260,9 @@ export class LocalConnector {
   private identity?: IdentityStore;
   private hardwareProbe?: HardwareProbe;
   private buildCaches?: BuildCacheStore;
+  private provided = "[]";
+  private manifestDue = false;
+  private advertised?: ConnectorCapabilities;
 
   constructor(private readonly options: ConnectorOptions) {
     this.ready = this.readiness.promise;
@@ -448,6 +453,8 @@ export class LocalConnector {
       clearTimeout(timeout);
       const { config: configured, answered } = await this.hostConfig.refresh();
       this.requireGeneration(generation);
+      await this.provideModels();
+      this.requireGeneration(generation);
       await this.browser?.apply(configured.browser).catch(() => {});
       await this.tunnel?.apply(configured.tunnel).catch(() => {});
       const runtime = await this.ensureRuntime(generation, answered || !this.runtime ? configured.repositoryCache : this.runtime.repositoryCache);
@@ -455,9 +462,11 @@ export class LocalConnector {
       const advertised = { ...capabilities(this.options.capabilities, { unsandboxed: this.options.unsandboxed, repositoryCache: runtime.repositoryCache !== "off", gpu: this.gpu }),
         ...(this.buildCaches ? { buildCaches: true } : {}),
         ...(this.identity && runtime.value.portable ? { portableSessions: true } : {}),
-        ...(this.options.privateHome ? { privateSessions: PRIVATE_SESSIONS_VERSION } : {}) };
-      await this.calls.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
-        capabilities: withHostToolCapabilities(advertised) });
+        ...(this.options.privateHome ? { privateSessions: PRIVATE_SESSIONS_VERSION } : {}),
+        ...(this.providesModels ? { extensionModels: true } : {}) };
+      this.advertised = advertised;
+      await this.reportManifest(generation, advertised);
+      this.manifestDue = false;
       this.requireGeneration(generation);
       generation.runtimeReady.resolve();
       void this.syncExtensions(generation);
@@ -484,6 +493,35 @@ export class LocalConnector {
     }
   }
 
+  private get providesModels(): boolean {
+    return this.options.extensionModels !== false && typeof this.options.localModels.provide === "function" && this.hostExtensions !== undefined;
+  }
+
+  private async reportManifest(generation: Generation, advertised: ConnectorCapabilities): Promise<void> {
+    await this.calls.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
+      capabilities: withHostToolCapabilities(advertised) });
+  }
+
+  private async provideModels(): Promise<boolean> {
+    const extensions = this.hostExtensions;
+    if (!this.providesModels || !extensions) return false;
+    const marked = await this.hostConfig.modelExtensions();
+    if (!marked) return false;
+    const { sources, missing } = providerSources({ modelExtensions: marked }, extensions.loaded);
+    let results: ProvidedModels[];
+    try { results = [...await this.options.localModels.provide!(sources), ...missing]; }
+    catch (error) { results = [{ source: "every marked extension", providers: [], error: error instanceof Error ? error.message : String(error) }]; }
+    const signature = JSON.stringify(results);
+    if (signature === this.provided) return false;
+    this.provided = signature;
+    for (const result of results) {
+      const line = result.error !== undefined ? `${result.source}: it provides no models: ${result.error}` : `${result.source}: provides ${result.providers.join(", ")}`;
+      process.stderr.write(`Extension models: ${line.replace(/[\x00-\x1f\x7f]+/g, " ").slice(0, 1000)}\n`);
+    }
+    if (!results.length) process.stderr.write("Extension models: no extension provides models any more\n");
+    return true;
+  }
+
   private async syncExtensions(generation: Generation): Promise<void> {
     const extensions = this.hostExtensions;
     if (!extensions) return;
@@ -496,6 +534,11 @@ export class LocalConnector {
       try {
         await extensions.refreshIfChanged();
         const current = await this.hostConfig.current();
+        if (await this.provideModels()) this.manifestDue = true;
+        if (this.manifestDue && this.advertised) {
+          await this.reportManifest(generation, this.advertised);
+          this.manifestDue = false;
+        }
         if (this.browser) await this.browser.apply(current.browser).catch(() => {});
         if (this.tunnel) await this.tunnel.apply(current.tunnel).catch(() => {});
         const browser = this.browser?.status();

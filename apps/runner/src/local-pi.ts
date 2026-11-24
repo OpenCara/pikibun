@@ -8,6 +8,7 @@ import type { LocalModelSummary } from "../../../packages/shared/src/connector.j
 import { connectorLimits } from "../../../packages/shared/src/connector.js";
 import { thinkingLevels, type ModelDefinition, type ThinkingLevel } from "../../../packages/shared/src/types.js";
 import { runnerModels } from "./provider.js";
+import type { LoadProviders, ProvidedModels, ProviderSource } from "./extensions/providers.js";
 
 export interface ResolvedLocalModel {
   models: Models;
@@ -22,6 +23,7 @@ export interface LocalModels {
   readonly compaction?: CompactionSettings;
   readonly identity?: ClientIdentity;
   readonly modelRegistry?: ModelRegistry;
+  provide?(sources: readonly ProviderSource[]): Promise<ProvidedModels[]>;
 }
 
 export function modelSummary(value: LocalModelSummary): LocalModelSummary {
@@ -47,6 +49,7 @@ export interface LocalPiOptions {
   modelThinkingLevels?: ReadonlyMap<string, ThinkingLevel>;
   compaction?: CompactionSettings;
   attribution?: false;
+  loadProviders?: LoadProviders;
   runtimeFactory?: (options: { authPath?: string; modelsPath?: string; refreshOnCreate: false; allowModelNetwork: false }) => Promise<LocalPiRuntime>;
 }
 
@@ -59,6 +62,7 @@ export interface PiSettings {
 }
 
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
+const MANIFEST_TEXT = Object.freeze({ provider: 80, modelId: 200, name: 120 });
 
 const isThinkingLevel = (value: unknown): value is ThinkingLevel => typeof value === "string" && thinkingLevels.includes(value as ThinkingLevel);
 
@@ -174,10 +178,80 @@ export async function loadLocalPiModels(options: LocalPiOptions = {}): Promise<L
     return result.sort((a, b) => a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId));
   };
   await manifest();
+  const applied = new Map<string, { key: string; providers: string[] }>();
+  const failed = new Map<string, { key: string; error: string }>();
+  const fault = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/[\x00-\x1f\x7f]+/g, " ").slice(0, 500);
+  const registrar = () => {
+    const value = runtime as Partial<Pick<ModelRuntime, "registerProvider" | "registerNativeProvider" | "unregisterProvider" | "refresh">>;
+    if (typeof value.registerProvider !== "function" || typeof value.registerNativeProvider !== "function" || typeof value.unregisterProvider !== "function") {
+      throw new Error("This host's models take no extension's providers");
+    }
+    return value as Pick<ModelRuntime, "registerProvider" | "registerNativeProvider" | "unregisterProvider"> & Partial<Pick<ModelRuntime, "refresh">>;
+  };
+  const settle = async (target: ReturnType<typeof registrar>) => {
+    try { await target.refresh?.({ allowNetwork: false, signal: AbortSignal.timeout(15_000) }); } catch { }
+  };
+  const withdraw = async (target: ReturnType<typeof registrar>, providers: readonly string[]) => {
+    for (const provider of providers) { try { target.unregisterProvider(provider); } catch { } }
+    if (providers.length) await settle(target);
+  };
+  const apply = async (wanted: readonly ProviderSource[]): Promise<ProvidedModels[]> => {
+    const keys = new Map(wanted.map(item => [item.source, JSON.stringify(item.files)]));
+    for (const [source, entry] of failed) if (keys.get(source) !== entry.key) failed.delete(source);
+    const stale = [...applied].filter(([source, entry]) => keys.get(source) !== entry.key);
+    if (!stale.length && wanted.every(item => applied.has(item.source) || failed.has(item.source))) {
+      return wanted.map(item => ({ source: item.source, providers: applied.get(item.source)?.providers ?? [], ...(failed.has(item.source) ? { error: failed.get(item.source)!.error } : {}) }));
+    }
+    if (selected) return wanted.map(item => ({ source: item.source, providers: [], error: "This connector was started with --model, so it offers exactly those models" }));
+    let target: ReturnType<typeof registrar>;
+    try { target = registrar(); }
+    catch (error) { return wanted.map(item => ({ source: item.source, providers: [], error: fault(error) })); }
+    for (const [source, entry] of stale) {
+      applied.delete(source);
+      await withdraw(target, entry.providers);
+    }
+    for (const item of wanted) {
+      const key = keys.get(item.source)!;
+      if (applied.has(item.source) || failed.has(item.source)) continue;
+      const providers: string[] = [];
+      try {
+        const load = options.loadProviders ?? (await import("./extensions/providers.js")).loadProviderRegistrations;
+        const registrations = await load(item.files);
+        const names = [...registrations.configured.map(entry => entry.name), ...registrations.native.map(entry => entry.id)];
+        if (!names.length) throw new Error("It registers no provider as it loads");
+        const taken = names.find(name => [...applied.values()].some(entry => entry.providers.includes(name)));
+        if (taken) throw new Error(`Another extension already provides ${taken}`);
+        for (const { name, config } of registrations.configured) {
+          target.registerProvider(name, config);
+          if (!providers.includes(name)) providers.push(name);
+        }
+        for (const provider of registrations.native) {
+          target.registerNativeProvider(provider);
+          if (!providers.includes(provider.id)) providers.push(provider.id);
+        }
+        await settle(target);
+        const offered = (await manifest()).find(model => providers.includes(model.provider)
+          && (model.provider.length > MANIFEST_TEXT.provider || model.modelId.length > MANIFEST_TEXT.modelId || model.name.length > MANIFEST_TEXT.name));
+        if (offered) throw new Error(`Its model ${offered.provider}/${offered.modelId} has a provider, id or name longer than Pikibun takes`);
+        applied.set(item.source, { key, providers });
+      } catch (error) {
+        await withdraw(target, providers);
+        failed.set(item.source, { key, error: fault(error) });
+      }
+    }
+    return wanted.map(item => ({ source: item.source, providers: applied.get(item.source)?.providers ?? [], ...(failed.has(item.source) ? { error: failed.get(item.source)!.error } : {}) }));
+  };
+  let providing: Promise<unknown> = Promise.resolve();
+  const provide = (wanted: readonly ProviderSource[]): Promise<ProvidedModels[]> => {
+    const next = providing.then(() => apply(wanted));
+    providing = next.catch(() => {});
+    return next;
+  };
   let modelRegistry: ModelRegistry | undefined;
   try { modelRegistry = new ModelRegistry(runtime as ModelRuntime); } catch { }
   return {
     manifest,
+    provide,
     ...(modelRegistry ? { modelRegistry } : {}),
     ...(options.compaction ? { compaction: options.compaction } : {}),
     ...(options.attribution === false ? { identity: { attribution: null } } : {}),

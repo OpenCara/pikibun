@@ -294,7 +294,7 @@ describe("settings", () => {
 
   test("a host without Chromium offers its owner a chat on it, in their private workspace, that installs one", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20 };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, modelExtensions: [] };
     const browser = { source: "piki:browser", dev: false, description: "A headless Chromium", modules: [] };
     const app = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },
@@ -473,7 +473,7 @@ describe("settings", () => {
 
   test("Hosts says a connector predates build caches, and shows admins the owner's choice read-only", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64 };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64, modelExtensions: [] };
     const older = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0", capabilities: { ...host.capabilities, hostConfig: true } }] } },
     });

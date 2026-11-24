@@ -390,6 +390,8 @@ type FixtureOptions = {
   hostConfig?: () => Response | Promise<Response>;
   gpu?: 'dxg' | 'render';
   piSettings?: Pick<LocalModels, 'compaction' | 'identity'>;
+  provide?: NonNullable<LocalModels['provide']>;
+  extensionModels?: false;
   extensions?: HostExtensions;
   extensionsSync?: (body: unknown) => Response | Promise<Response>;
   browser?: NonNullable<Parameters<typeof createConnector>[0]['browser']>;
@@ -423,7 +425,8 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
   const leases = { acquired: 0, released: 0 };
   let manifests = 0;
   const connector = createConnector({
-    dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
+    dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings, ...(options.provide ? { provide: options.provide } : {}) },
+    ...(options.extensionModels === false ? { extensionModels: false } : {}),
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
     hardware: { report: options.hardwareReport ?? (() => Promise.resolve(fixtureHardware)) }, hardwareReportMs: 20,
     ...(options.privateHome ? { privateHome: options.privateHome, privateReportMs: 20 } : {}),
@@ -588,7 +591,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.equal(config.dataDir, join(fixture.dataDir, 'runner'));
   assert.equal(config.connectorId, credentials.connectorId);
   await assert.rejects(config.hostGitCredential!('https://github.com/acme/alpha.git'), /hasn't turned on its Git credentials/);
-  assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20 });
+  assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, modelExtensions: [] });
   assert.equal(config.allowFaux, false);
   assert.equal(config.allowTestShell, false);
   assert.equal(config.compaction, undefined, 'without Pi settings, sessions compact by pi-durable\'s defaults');
@@ -608,7 +611,7 @@ const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree:
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
-  const configured = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 40_000 }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20 };
+  const configured = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 40_000 }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, modelExtensions: [] };
   const fixture = await connectorFixture(t, { gpu: 'dxg', hostConfig: () => Response.json({ config: configured }), pushCredential: () => Response.json(issued) });
   await startFixture(fixture);
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
@@ -626,6 +629,46 @@ test('a host configured in Pikibun uses its Git credentials for pushes only whil
   assert.deepEqual(await config.pushCredential!(request), host);
   issued = { ...host, authorization: 'Basic eDp5' };
   await assert.rejects(config.pushCredential!(request));
+});
+
+test('a host applies the extensions its owner marked as providing models before it sends its manifest, unless it was started to refuse them', { timeout: 10000 }, async t => {
+  const marked = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', modelExtensions: ['npm:pi-absent@1.0.0'] };
+  const manifestOf = (fixture: Awaited<ReturnType<typeof connectorFixture>>) => fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`);
+  const calls: { sources: unknown; manifestSent: boolean }[] = [];
+  const willing: { fixture?: Awaited<ReturnType<typeof connectorFixture>> } = {};
+  const provide: NonNullable<LocalModels['provide']> = sources => {
+    calls.push({ sources, manifestSent: manifestOf(willing.fixture!) !== undefined });
+    return Promise.resolve([]);
+  };
+  const logged: string[] = [];
+  const stderr = t.mock.method(process.stderr, 'write', (chunk: unknown) => { logged.push(String(chunk)); return true; });
+  willing.fixture = await connectorFixture(t, { hostConfig: () => Response.json({ config: marked }), provide });
+  await startFixture(willing.fixture);
+  stderr.mock.restore();
+  assert.deepEqual(calls, [{ sources: [], manifestSent: false }], 'an extension the host lacks is asked of nothing, and the list is applied before the manifest');
+  assert.deepEqual(JSON.parse(manifestOf(willing.fixture)!.body).capabilities, { ...advertisedBase, extensionModels: true });
+  assert.ok(logged.includes("Extension models: npm:pi-absent@1.0.0: it provides no models: It isn't installed on this host at that version\n"), logged.join(''));
+
+  const refusedCalls: unknown[] = [];
+  const refusing = await connectorFixture(t, { hostConfig: () => Response.json({ config: marked }), extensionModels: false,
+    provide: sources => { refusedCalls.push(sources); return Promise.resolve([]); } });
+  await startFixture(refusing);
+  assert.deepEqual(refusedCalls, [], '--no-extension-models loads nothing, whatever Pikibun says');
+  assert.deepEqual(JSON.parse(manifestOf(refusing)!.body).capabilities, advertisedBase);
+
+  const unheardCalls: unknown[] = [];
+  const unheard = await connectorFixture(t, { hostConfig: () => Response.json({ error: 'unavailable' }, { status: 503 }),
+    provide: sources => { unheardCalls.push(sources); return Promise.resolve([]); } });
+  await startFixture(unheard);
+  assert.deepEqual(unheardCalls, [], "until Pikibun has said which extensions are marked, the host changes nothing");
+
+  const failing = await connectorFixture(t, { hostConfig: () => Response.json({ config: marked }), provide: () => Promise.reject(new Error('the loader broke')) });
+  await startFixture(failing);
+  assert.ok(manifestOf(failing), 'a failure applying them never keeps the host from connecting');
+
+  const plain = await connectorFixture(t, { hostConfig: () => Response.json({ config: marked }) });
+  await startFixture(plain);
+  assert.deepEqual(JSON.parse(manifestOf(plain)!.body).capabilities, advertisedBase, 'models that take no providers, such as the fixture ones, advertise nothing');
 });
 
 test('a host names its version in its manifest, and a development build names itself dev, which the minimum version never refuses', { timeout: 10000 }, async t => {
@@ -679,7 +722,7 @@ test('the macOS and Windows sandboxes keep the repository cache too', { timeout:
 test('a host reads the largest configuration the control plane saves: compaction counts for every model, with the longest names', { timeout: 10000 }, async t => {
   const modelOverrides = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`${String(index).padStart(80, 'p')}/${'m'.repeat(200)}`,
     { reserveTokens: 10_000_000, keepRecentTokens: 10_000_000 }]));
-  const configured = { commandTimeoutSeconds: 600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 10_000_000, modelOverrides }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20 };
+  const configured = { commandTimeoutSeconds: 600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 10_000_000, modelOverrides }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, modelExtensions: [] };
   const body = JSON.stringify({ config: configured });
   assert.ok(body.length > 64 * 1024, 'more than other callbacks take');
   const fixture = await connectorFixture(t, { hostConfig: () => new Response(body, { headers: { 'content-type': 'application/json' } }) });
@@ -694,7 +737,7 @@ test('without a configuration from the control plane, a host runs with the defau
       await startFixture(fixture);
       const config = fixture.runtimes[0]!.config;
       assert.equal(config.repositoryCache, undefined);
-      assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20 });
+      assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, modelExtensions: [] });
       const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
       assert.deepEqual(JSON.parse(manifest.body).capabilities, advertisedBase);
     });
