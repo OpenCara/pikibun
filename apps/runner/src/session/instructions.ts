@@ -3,6 +3,7 @@ import { programsMissingText } from "../../../../packages/shared/src/program-ins
 import { documentKindNames, type DocumentKind, type GrantSource } from "../../../../packages/shared/src/sources.js";
 import type { ToolDefinition } from "../../../../packages/shared/src/tool-definitions.js";
 import { tunnelUnavailableText, type TunnelUnavailableReason } from "../../../../packages/shared/src/tunnel.js";
+import { workspaceMemoryPrompt, type WorkspaceMemoryPrompt } from "../../../../packages/shared/src/workspace-memory.js";
 import { programToolsInstructions } from "../defined-tools.js";
 import { githubInstructions } from "../github-wait.js";
 import { hostGitLfs } from "../sandbox.js";
@@ -36,6 +37,7 @@ export interface InstructionsInput {
   browser: boolean;
   sudo?: boolean;
   skills?: readonly Skill[];
+  memory?: WorkspaceMemoryPrompt;
 }
 
 export const sudoInstructions = "This session runs on its host itself, as its owner, in their private workspace. To run a command as root, "
@@ -91,6 +93,14 @@ export function agentInstructions(input: InstructionsInput): string {
         + "To tag a commit that is already on a branch (a release tag on main, say), check it out in the clone and call "
         + "git_push {directory, branch, tag}: it creates that tag at the commit and moves no branch. Tags are never moved; "
         + "plain git push of tags is refused.";
+  }
+  if (input.memory) {
+    const offered = (name: string) => mode !== "ask" && input.agentTools.includes(name) && !off.has(name);
+    const memory = workspaceMemoryPrompt(input.memory, {
+      tool: offered("memory") && input.definitions.some(definition => definition.name === "memory"),
+      sessions: offered("sessions") && input.tools.includes("sessions"),
+    });
+    if (memory) instructions += `\n\n${memory}`;
   }
   const defined = input.definitions.filter(definition => !off.has(definition.name));
   const sources = input.sources.filter(source => !kindsOff.has(source.kind));

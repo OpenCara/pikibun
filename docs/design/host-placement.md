@@ -104,7 +104,10 @@ its host, and its host's connector doesn't run unsandboxed), the Pikibun server 
   not it has a `placement`, so the rule doesn't depend on which parameters the agent used. It comes after the trust
   check, so another member's host is refused as that (`connector_trust_required`), not with a path that can't work;
 - the `schedule` tool neither makes nor changes (but for pausing, and deleting) a schedule whose runs start, or can
-  fall back, on an unsandboxed host, whoever chose that host ([workspace schedules](workspace-schedules.md)).
+  fall back, on an unsandboxed host, whoever chose that host ([workspace schedules](workspace-schedules.md));
+- a `send` or `ask` to an existing session that runs without a sandbox (directly on its host, or on an unsandboxed
+  host) is refused (`sandbox_required`) in a message that came from another session (`xs:`) or a scheduled run
+  (`schedule:`), below.
 
 The explicit path is the one a session directly on a host already has: `host_environment: true` with exactly one host
 in `placement.hosts`, in a message a person sent. On an unsandboxed host there is no sandbox to leave, so the new
@@ -121,8 +124,30 @@ unsandboxed hosts by load, and an agent that named a model there is refused with
 hosts are all unsandboxed, or all sandboxed, see no change.
 
 Auto mode (`POST /api/workspaces/:id/auto-mode`) is not on this path: it answers a person's client, which then starts
-the session or sends the message itself, and it already scores unsandboxed hosts down. A `send` to an existing session
-that runs without a sandbox is not placement either and is unchanged.
+the session or sends the message itself, and it already scores unsandboxed hosts down.
+
+#### Messages to sessions outside a sandbox
+
+Starting a session is not the only way to have an agent outside a sandbox work: a `send` drives an existing one, and
+an `ask` runs its agent too, with the machine readable to it, and brings its answer back. So the check in
+`requireSandboxedTarget` (`cross-session.ts`) refuses both, `access: read` included, where the calling session runs in a
+sandbox, the other session doesn't (`sessionSandboxed` of each), and the message the agent is working on didn't come
+from a person: its request is a message from another session or a scheduled run. The refusal says that only a
+message a person sent in this session reaches it, and to tell the person, or to work with a sandboxed session. Nothing
+is delivered or recorded.
+
+In a message a person sent, `send` and `ask` reach such a session with no further flag. Unlike `create`, there is no
+host to choose: the agent names the one session, as the person can see in its call, and no load balancing picks it,
+so the person's message is the decision `host_environment: true` stands for in `create`. A flag would add nothing a
+hostile page couldn't also ask for in that same message. That keeps the rule where it matters: what reaches a
+sandboxed session from elsewhere, including through a chain of sessions (a sandboxed session relaying to another
+sandboxed one, whose agent then works on an `xs:` message), can't continue outside a sandbox unattended.
+
+The other actions are left as they are, deliberately. `read` and `list` show what a person could read, and run no
+agent. `stop` only halts work, and `archive` only ends a session; neither has the other agent do anything. A
+notification brings a finished message's outcome back to the session that sent it: a session outside a sandbox gets
+one only for a message it sent itself, and takes in that reply as it would with a `read` or `wait`. A session that already runs without a sandbox sends and asks as
+before.
 
 ### Sessions directly on a host
 
@@ -162,11 +187,11 @@ Placement is a parameter the agent may or may not use. `piki:sub-agents` (`exten
 policy, without a tool of its own:
 
 - `before_agent_start` adds when to delegate (`delegate`), how to state conditions per task, the workspace's defaults,
-  the per-message limit and how to collect results.
+  the per-message limit where the workspace sets one, and how to collect results.
 - `tool_call` on `sessions` `create` fills the workspace's `placement` conditions in where the call leaves them out
   (the agent's own win), adds its `models` patterns where the call names no model, adds an empty placement with
   `balance` on so even an unconditioned sub-agent goes to the least loaded host offering its model, sets `notify` for a
-  call with a message, and blocks a create past `max-sub-agents` for the message (counting successful creates and
+  call with a message, and, where the workspace sets `max-sub-agents` (by default there is no limit), blocks a create past it for the message (counting successful creates and
   those still under way, so creates the runtime started together can't pass it; reset by each message's
   `before_agent_start`). A refusal that no host offers the model, of a placement only the extension added, stops it
   adding one for the session. Pikibun's adapter applies changes to `event.input`

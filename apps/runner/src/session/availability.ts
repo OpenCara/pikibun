@@ -13,6 +13,7 @@ import { pythonPrograms } from "../python-command.js";
 import type { SandboxBackendConfig } from "../sandbox-backend.js";
 import { Sandbox } from "../sandbox.js";
 import type { SessionWorkspace } from "../workspace.js";
+import type { WorkspaceMemoryPrompt } from "../../../../packages/shared/src/workspace-memory.js";
 
 function ownerGroupRefusal(tool: string, group: string): string {
   return `${tool} isn't among the tools of this session's owner (${group}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`;
@@ -145,6 +146,13 @@ export class ToolAvailability {
     if (!config) return false;
     const answer = await config.workspace(this.options.binding.session.workspaceId).catch(() => undefined);
     return !!answer && extensionSwitchOn("piki:skills", answer.extensions);
+  }
+
+  async workspaceMemory(): Promise<WorkspaceMemoryPrompt | undefined> {
+    const config = this.options.config.extensions;
+    if (!config) return undefined;
+    const answer = await config.workspace(this.options.binding.session.workspaceId).catch(() => undefined);
+    return answer?.memory && extensionSwitchOn("piki:memory", answer.extensions) ? answer.memory : undefined;
   }
 
   async documentKindsOff(): Promise<Set<DocumentKind>> {

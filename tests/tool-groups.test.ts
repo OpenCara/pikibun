@@ -15,7 +15,8 @@ test('each role\'s sessions get their tools, and a group\'s own tools replace th
   assert.deepEqual(roleTools.admin, groupTools);
   assert.deepEqual(toolsLeftOut(roleTools.collaborator), ['tunnel', 'github_merge', 'workspace'], 'collaborators neither merge, put apps online nor manage the workspace');
   assert.deepEqual(toolsLeftOut(roleTools.member), ['git_push', 'tunnel', 'github_comment', 'github_issue', 'github_merge', 'schedule', 'sessions', 'workspace'],
-    'members work in the sandbox: files, commands, the session branch and reading GitHub');
+    'members work in the sandbox: files, commands, the session branch, reading GitHub and proposing notes for the workspace memory');
+  assert.ok(roleTools.member.includes('memory') && roleTools.collaborator.includes('memory'), 'every role that starts sessions proposes memory notes');
   assert.deepEqual(roleTools.viewer, ['identity', 'ls', 'read', 'grep']);
   assert.deepEqual(memberTools('member', { tools: ['github_merge', 'read_file', 'unknown'] }), ['read', 'github_merge'], 'a group replaces the role\'s tools, and a saved read_file is read');
   assert.deepEqual(memberTools('owner', null), [...groupTools]);
@@ -122,9 +123,9 @@ test('workspace owners and admins create tool groups and put members in them; th
     'the answer keeps the spellings apps from before the rename know');
   const before = ['identity', 'list_files', 'read_file', 'search', 'write_file', 'edit_file', 'move_file', 'copy_file', 'delete_file', 'git', 'git_push', 'node', 'python', 'rust',
     'go', 'dotnet', 'make', 'browser', 'tunnel', 'github_read', 'github_comment', 'github_issue', 'github_merge', 'source_read', 'schedule', 'sessions'];
-  assert.deepEqual(initial.tools.filter(tool => !before.includes(tool)), ['workspace'], 'an app from before the rename knows every name the answer holds, but tools added since');
+  assert.deepEqual(initial.tools.filter(tool => !before.includes(tool)), ['workspace', 'memory'], 'an app from before the rename knows every name the answer holds, but tools added since');
   assert.deepEqual(canonicalGroupTools(['workspace', 'read_file']), ['read', 'workspace'], 'and an app passes over a tool it doesn\'t know, as its own catalogue lists them');
-  assert.ok(Object.values(initial.roles).flat().every(tool => before.includes(tool) || tool === 'workspace'));
+  assert.ok(Object.values(initial.roles).flat().every(tool => before.includes(tool) || tool === 'workspace' || tool === 'memory'));
   assert.deepEqual(initial.members.map(item => [item.userId, item.role, item.groupId]),
     [[f.owner.user.id, 'owner', null], [f.admin.user.id, 'admin', null], [f.member.user.id, 'member', null], [f.other.user.id, 'member', null]]);
   await requireSessionTool(f.env, row(f.owner.user.id), f.owner.user.id, 'github_merge');

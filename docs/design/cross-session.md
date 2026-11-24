@@ -14,6 +14,7 @@ call as if the person behind it had made it themselves. Shared types, limits and
 |---|---|---|---|
 | `list` | Sessions of this workspace the actor can see, and the models `create` can use | read (only those) | any |
 | `read` | Latest shared-conversation entries (cut to 2000 characters each, up to 50; a failed model turn with its provider, model, HTTP status and fixed failure codes, never provider text), pending approvals, busy; with `message_id`, that message's outcome | read | any |
+| `search` | The sessions the actor can read whose title, or whose shared conversation's user and assistant messages, hold every word of `query` (quoted phrases whole): the newest 30 by their views, four at a time, ten seconds each, older ones by title; up to 5 matches a session, each an entry id and a 400-character excerpt; `limit` matches in all (20 by default). Sessions whose view fails, or whose content `read` would need consent for, are listed as `skipped` (`unavailable`, `audience`) and never ask for consent: a search spans many sessions, and this session's audience sharing (**Content from sessions other people read**) is what lets them in | read | any |
 | `ask` | A side ask (read-only thread) | ask | any |
 | `send` | A shared message, access `approval`, `read` or `auto` (left out: `auto` where the owner's Auto-approve message sends it to their own sandboxed session, else `approval`) | write; refused while the target is working or waiting on a card | Read only needs the owner's permission |
 | `wait` | The runner reads one message's outcome every 3 seconds until it is done (default 300 s, at most 1800 s) | read | any |
@@ -43,6 +44,9 @@ session's owner on someone else's behalf. The control plane checks, on each call
    ask's) inherits the access, never `auto_merge`, from the same admission, delivered into the origin under the same
    conditions: the reply it carries may be steered by others writing in the target. Anything else stays `approval`, so no
    message runs with more than its sender's.
+7. An `ask` or `send` from a sandboxed origin to a session that runs without a sandbox goes only in a message a person
+   sent; one relayed from another session or a scheduled run is refused (`sandbox_required`):
+   [Messages to sessions outside a sandbox](host-placement.md#messages-to-sessions-outside-a-sandbox).
 
 Work in the other session then runs through `asActor` (a request context of the actor's own), through the same
 functions as the apps' routes: `submitMessage`, `createSession`, `stopSession`, `archiveSession`, `sessionView`. Each
@@ -90,6 +94,10 @@ each sub-task on what suits it. `list` returns, with the models, the reasoning l
   `thinking_unsupported`, `child_models_disabled`) and the `workspace.schedule.session_started` audit's `fallback`.
   Only those refusals fall back; any other failure fails the run as before. A portable session's schedules are restored
   with their choice where this server can honour it, else without its level, else without it.
+
+## Search
+
+`search` is what Claude Projects' search of past chats is for a workspace: an agent finds what an earlier session did, rather than the person telling it again, and reads that one. Transcripts live on the hosts, so there is no index on the control plane to keep in step with redaction, brief mode, moves and restores: the search reads each session's view as `read` does, through `sessionView` as the actor, and matches words in it. That bounds it (30 sessions, four views at a time, ten seconds each, so at most about 80 seconds against hosts that hang) and makes a session whose host is offline unsearchable but for its title, which the control plane has. Both are said in the result, so the agent knows what it didn't see. The audience rule is `read`'s, decided per session without a consent card: one card per session found would be noise, and a share link on this session would turn every search into cards. A session whose readers differ is skipped unless this session's owner turned on its audience sharing (`sessionsNeedGranted`).
 
 ## Who can see what
 

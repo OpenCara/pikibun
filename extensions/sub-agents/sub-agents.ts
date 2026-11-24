@@ -11,13 +11,12 @@ export const subAgentsFlags = Object.freeze({
     + "Any of them may run a sub-agent, and load decides among them (their order only breaks ties). Empty runs them on the session's own model, on whichever host offers it",
   balance: "Let Pikibun place every sub-agent on the least loaded host that meets its conditions, even when neither the agent nor the placement setting names any. "
     + "Off, a sub-agent with no conditions runs on the host of the model it names",
-  "max-sub-agents": "How many sub-agents one message may start, 0 to 10. 0 lets the agent start none",
+  "max-sub-agents": "How many sub-agents one message may start. Empty sets no limit; 0 lets the agent start none",
   notify: "Have each sub-agent's outcome sent back to the session that started it once it finishes",
   delegate: "When the agent hands work to sub-agents: when-useful (independent parts that can run at once, or that need hardware or models this host lacks) or when-asked (only when the person asks)",
 });
 
-export const DEFAULT_MAX_SUB_AGENTS = 5;
-export const MAX_SUB_AGENTS = 10;
+export const DEFAULT_MAX_SUB_AGENTS = Number.POSITIVE_INFINITY;
 
 export type Delegate = "when-useful" | "when-asked";
 export type Placement = Record<string, string | number | boolean | string[]>;
@@ -75,8 +74,14 @@ export function parsePlacementSetting(setting: unknown): { placement: Placement;
 
 export function maxSubAgents(setting: unknown): number {
   const text = typeof setting === "number" ? String(setting) : typeof setting === "string" ? setting.trim() : "";
-  if (!/^\d+$/.test(text)) return DEFAULT_MAX_SUB_AGENTS;
-  return Math.min(Number(text), MAX_SUB_AGENTS);
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(Number(text))) return DEFAULT_MAX_SUB_AGENTS;
+  return Number(text);
+}
+
+function howManyLine(settings: SubAgentsSettings): string[] {
+  return Number.isFinite(settings.maxSubAgents)
+    ? [`- How many: at most ${settings.maxSubAgents} sub-agent${settings.maxSubAgents === 1 ? "" : "s"} per message.`]
+    : [];
 }
 
 export function readSettings(flag: (name: string) => unknown): SubAgentsSettings {
@@ -176,8 +181,8 @@ export class SubAgentsState {
       ? (call.input.notify === true ? `It reports back when it finishes; meanwhile carry on, and before you answer, collect its result with sessions wait {session: "${String(session.id ?? "")}", message_id: "${String(message.id ?? "")}"}.`
         : `Collect its result with sessions wait {session: "${String(session.id ?? "")}", message_id: "${String(message.id ?? "")}"} before you answer.`)
       : "It has no task yet: send it one with sessions send.";
-    return `[sub-agents] Sub-agent ${String(session.id ?? "")} started${where}. ${collect} `
-      + (left > 0 ? `${left} more may start in this message.` : "No more may start in this message.");
+    return `[sub-agents] Sub-agent ${String(session.id ?? "")} started${where}. ${collect}`
+      + (!Number.isFinite(left) ? "" : left > 0 ? ` ${left} more may start in this message.` : " No more may start in this message.");
   }
 }
 
@@ -198,7 +203,7 @@ export function subAgentsPrompt(settings: SubAgentsSettings, state: Pick<SubAgen
       defaults ? `conditions ${defaults}` : "", models ? `models ${models} for sub-agents that name no model` : "",
       settings.balance && !state.placementUnsupported && !state.balanceRefused ? "placement on the least loaded qualifying host for every sub-agent" : "",
     ].filter(Boolean).join("; ")}.`] : []),
-    `- How many: at most ${settings.maxSubAgents} sub-agent${settings.maxSubAgents === 1 ? "" : "s"} per message.`,
+    ...howManyLine(settings),
     "- Each sub-agent starts knowing nothing of this conversation: its message carries the whole task: the goal, the repository and branch to work on, the files concerned, the constraints, what to report back and when it is done. Have each work on a branch of its own where several change one repository.",
     settings.notify
       ? "- Collecting: each reports back to this session when it finishes (notify). Carry on with your own part meanwhile; before you answer, collect every result with sessions wait {session, message_id} (or read), check it, and bring the results together. Stop sub-agents no longer needed."
@@ -232,7 +237,7 @@ export function subAgentsRule(settings: SubAgentsSettings, state: PromptState): 
     "With the sessions tool you can hand sub-tasks to sub-agents: new sessions you start with sessions create. "
       + "Without the sessions tool (the workspace adds it as Other sessions), none of this applies.",
     whenLine(settings),
-    `- How many: at most ${settings.maxSubAgents} sub-agent${settings.maxSubAgents === 1 ? "" : "s"} per message.`,
+    ...howManyLine(settings),
     `- How: before you call sessions create, read the ${SUB_AGENTS_SKILL} skill (listed with the skills) for where each one runs, what its message must hold `
       + "and how to collect the results.",
   ].join("\n");
@@ -264,7 +269,7 @@ export const subAgentsExtension: ExtensionFactory = pi => {
   pi.registerFlag("placement", { type: "string", default: "", description: subAgentsFlags.placement });
   pi.registerFlag("models", { type: "string", default: "", description: subAgentsFlags.models });
   pi.registerFlag("balance", { type: "boolean", default: true, description: subAgentsFlags.balance });
-  pi.registerFlag("max-sub-agents", { type: "string", default: String(DEFAULT_MAX_SUB_AGENTS), description: subAgentsFlags["max-sub-agents"] });
+  pi.registerFlag("max-sub-agents", { type: "string", default: "", description: subAgentsFlags["max-sub-agents"] });
   pi.registerFlag("notify", { type: "boolean", default: true, description: subAgentsFlags.notify });
   pi.registerFlag("delegate", { type: "string", default: "when-useful", description: subAgentsFlags.delegate });
   const settings = () => readSettings(name => pi.getFlag(name));
