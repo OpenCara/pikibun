@@ -9,6 +9,12 @@ export const workspaceTabs: readonly { value: WorkspaceTab; label: string; hint:
   { value: "sessions", label: "Sessions", hint: "How sessions run and are kept: schedules, transcripts, caches and storage" },
 ];
 
+export function isWorkspaceTab(value: unknown): value is WorkspaceTab {
+  return workspaceTabs.some(item => item.value === value);
+}
+
+export const shownWorkspaceTab = signal<{ workspaceId: string; tab: WorkspaceTab } | null>(null);
+
 const WANTED_FOR_MS = 10_000;
 
 const wanted = signal<{ workspaceId: string; tab: WorkspaceTab; at: number } | null>(null);

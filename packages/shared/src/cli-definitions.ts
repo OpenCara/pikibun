@@ -45,7 +45,8 @@ export interface CliDefinition {
   watch?: CliWatch;
 }
 
-export const cliDefinitionLimits = Object.freeze({ definitions: 16, rules: 64, words: 64, word: 128, text: 4096, pattern: 256 });
+export const cliDefinitionLimits = Object.freeze({ definitions: 16, rules: 64, words: 64, word: 128, text: 4096, pattern: 256, patterns: 32,
+  patternInput: 4096, patternOutput: 128 * 1024, matchMs: 100 });
 
 export const GH_WATCH_INTERVAL_SECONDS = 30;
 
@@ -182,7 +183,14 @@ function regex(value: unknown, what: string): string {
   return source;
 }
 function keys(value: Record<string, unknown>, allowed: readonly string[], what: string): void {
-  if (Object.keys(value).some(key => !allowed.includes(key))) fail(what);
+  const unknown = Object.keys(value).find(key => !allowed.includes(key));
+  if (unknown !== undefined) fail(`${what} has a key this version doesn't know (${unknown.slice(0, 64)})`);
+}
+
+export function cliPatternCount(definition: Pick<CliDefinition, "refuse" | "hints" | "reads">): number {
+  return definition.refuse.filter(rule => rule.argPattern !== undefined).length
+    + (definition.hints ?? []).reduce((count, rule) => count + (rule.argPattern !== undefined ? 1 : 0) + (rule.outputPattern !== undefined ? 1 : 0), 0)
+    + (definition.reads.secretWords !== undefined ? 1 : 0) + (definition.reads.verb !== undefined ? 1 : 0);
 }
 
 export function withoutCliHints(definition: CliDefinition): CliDefinition {
@@ -292,6 +300,10 @@ export function parseCliDefinition(value: unknown): CliDefinition {
       return { words: list(item.words, ARG, "watch words", 4), ...(item.option !== undefined ? { option: item.option as string } : {}) };
     }), interval: given.interval, ...(given.short !== undefined ? { short: given.short as string } : {}), seconds: given.seconds as number };
   }
+  const refuse = value.refuse.map(parseRefusal);
+  const hints = value.hints !== undefined ? (value.hints as unknown[]).map(parseHint) : undefined;
+  const reads = parseReads(value.reads);
+  if (cliPatternCount({ refuse, ...(hints ? { hints } : {}), reads }) > cliDefinitionLimits.patterns) fail(`more than ${cliDefinitionLimits.patterns} patterns`);
   return {
     kind: "cli", name: value.name, extension: value.extension, command: value.command, ...(windowsCommand ? { windowsCommand } : {}),
     description: text(value.description, "description"),
@@ -299,18 +311,29 @@ export function parseCliDefinition(value: unknown): CliDefinition {
     tokenEnv: list(value.tokenEnv, ENV, "tokenEnv", 8), setEnv,
     ...(value.sandboxRoots !== undefined ? { sandboxRoots: list(value.sandboxRoots, /^\/[A-Za-z0-9._+-]+(?:\/[A-Za-z0-9._+-]+)*$/, "sandboxRoots", 8) } : {}),
     ...(value.lowercase === true ? { lowercase: true as const } : {}), ...(value.abbreviatedOptions === true ? { abbreviatedOptions: true as const } : {}),
-    refuse: value.refuse.map(parseRefusal), ...(value.hints !== undefined ? { hints: (value.hints as unknown[]).map(parseHint) } : {}),
-    reads: parseReads(value.reads), ...(watch ? { watch } : {}),
+    refuse, ...(hints ? { hints } : {}), reads, ...(watch ? { watch } : {}),
   };
 }
 
-export function parseCliDefinitions(value: unknown): CliDefinition[] {
-  if (!Array.isArray(value) || value.length > cliDefinitionLimits.definitions) return [];
+export type SkippedDefinition = (name: string, reason: string) => void;
+
+export function parseCliDefinitions(value: unknown, skipped: SkippedDefinition = () => {}): CliDefinition[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > cliDefinitionLimits.definitions) {
+    skipped("", Array.isArray(value) ? `more than ${cliDefinitionLimits.definitions} CLI definitions` : "the CLI definitions aren't a list");
+    return [];
+  }
   const found: CliDefinition[] = [];
   for (const item of value) {
+    const name = isObject(item) && typeof item.name === "string" && NAME.test(item.name) ? item.name : "";
     let definition: CliDefinition;
-    try { definition = parseCliDefinition(item); } catch { continue; }
-    if (!found.some(other => other.name === definition.name)) found.push(definition);
+    try { definition = parseCliDefinition(item); }
+    catch (error) {
+      skipped(name, error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    if (found.some(other => other.name === definition.name)) skipped(name, "a second definition of that name");
+    else found.push(definition);
   }
   return found;
 }

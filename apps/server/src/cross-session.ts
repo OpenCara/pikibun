@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { accessModes, thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type SubmitResult, type ThinkingLevel } from '../../../packages/shared/src/types.js';
 import { parseCapabilities, type LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
@@ -162,7 +163,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
     if (consent) return c.json(consent);
     return c.json({ message: await deliver(call, other, action, message!, access, notify) } satisfies SessionsToolResult, 202);
   }
-  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel, placement, hostEnvironment });
+  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel, placement, hostEnvironment, hostEnvironmentLeftOut: input.hostEnvironment === undefined });
   const other = await requireOther(call, targetSessionId!, action === 'stop' ? 'write' : 'manage');
   const audit = { crossSession: true, originSessionId: origin.id, callId };
   if (action === 'stop') {
@@ -304,7 +305,7 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
 }
 
 async function createChild(call: Call, options: { message?: string; access?: AccessMode; notify: boolean; title?: string; modelId?: string; thinkingLevel?: ThinkingLevel;
-  placement?: PlacementRequirements; hostEnvironment?: boolean }): Promise<Response> {
+  placement?: PlacementRequirements; hostEnvironment?: boolean; hostEnvironmentLeftOut?: boolean }): Promise<Response> {
   const { c, origin, actorId } = call;
   await requireSessionCreator(c.env, origin.workspace_id, actorId);
   if (options.hostEnvironment && !personSent(call.admission)) {
@@ -335,7 +336,6 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const model = placed?.model ?? named;
   if (!model) fail(404, 'not_found', 'Model not found.');
   const unsandboxedHost = placed ? placed.host.sandbox === 'unsandboxed' : await hostUnsandboxed(c.env, model.connector_id);
-  const onHost = options.hostEnvironment === true && !unsandboxedHost;
   const modelId = model.id;
   const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
   if (model.connector_id && !agentMayStartOn(origin, actorId, model)) {
@@ -352,10 +352,23 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
     if (consent) return c.json(consent);
   }
   const title = options.title ?? cut(`${origin.title} · sub-task`, 190).split('\n')[0]!;
-  const { row } = await asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, modelId,
-    ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}), ...(onHost ? { hostEnvironment: true } : {}) }, { parentSessionId: origin.id }));
+  const inheritsHost = !unsandboxedHost && subSessionInheritsHost({ leftOut: options.hostEnvironmentLeftOut === true, personSent: personSent(call.admission), actorId,
+    parent: { hostEnvironment: Number(origin.host_environment ?? 0) === 1, connectorId: origin.connector_id ?? null },
+    host: { connectorId: model.connector_id ?? null, ownerId: model.connector_owner_id ?? null } });
+  const start = (hostEnvironment: boolean) => asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, modelId,
+    ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}), ...(hostEnvironment ? { hostEnvironment: true } : {}) }, { parentSessionId: origin.id }));
+  let onHost = (options.hostEnvironment === true && !unsandboxedHost) || inheritsHost;
+  let started: Awaited<ReturnType<typeof start>>;
+  try { started = await start(onHost); }
+  catch (error) {
+    if (!inheritsHost || !await hostSessionRefusal(error)) throw error;
+    onHost = false;
+    started = await start(false);
+  }
+  const { row } = started;
   await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId, modelId,
-    ...(options.hostEnvironment ? { hostEnvironment: true } : {}), ...(unsandboxedHost ? { unsandboxedHost: true } : {}),
+    ...(options.hostEnvironment || onHost ? { hostEnvironment: true } : {}), ...(onHost && inheritsHost ? { inheritedHostEnvironment: true } : {}),
+    ...(unsandboxedHost ? { unsandboxedHost: true } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}), ...(inheritsModel ? { inheritedModel: true } : {}),
     ...(inheritsThinking && thinkingLevel ? { inheritedThinking: true } : {}),
     ...(placed ? { placement: { hostId: placed.result.host.id, conditions: placed.result.conditions, load: placed.result.load, qualified: placed.result.qualified } } : {}) }).run();
@@ -363,7 +376,21 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   if (!created) fail(409, 'policy_changed', 'The new session is no longer available.');
   const message = options.message === undefined ? undefined : await deliver(call, created.row, 'create', options.message, options.access, options.notify, thinkingLevel);
   return c.json({ session: summary(created), model: { id: modelId, provider: model.provider, modelId: model.model_id, ...(thinkingLevel ? { thinkingLevel } : {}) },
-    ...(placed ? { placement: placed.result } : {}), ...(options.hostEnvironment ? { hostEnvironment: true as const } : {}), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
+    ...(placed ? { placement: placed.result } : {}), ...(options.hostEnvironment || onHost ? { hostEnvironment: true as const } : {}), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
+}
+
+export function subSessionInheritsHost(input: { leftOut: boolean; personSent: boolean; actorId: string;
+  parent: { hostEnvironment: boolean; connectorId: string | null }; host: { connectorId: string | null; ownerId: string | null } }): boolean {
+  return input.leftOut && input.personSent && input.parent.hostEnvironment && input.host.connectorId !== null
+    && input.host.connectorId === input.parent.connectorId && input.host.ownerId === input.actorId;
+}
+
+const hostSessionRefusals = ['host_owner_required', 'host_sessions_off', 'connector_update_required', 'host_unsandboxed'];
+
+async function hostSessionRefusal(error: unknown): Promise<boolean> {
+  if (!(error instanceof HTTPException) || !error.res) return false;
+  const body = await error.res.clone().json().catch(() => null) as { code?: unknown } | null;
+  return typeof body?.code === 'string' && hostSessionRefusals.includes(body.code);
 }
 
 function personSent(admission: AdmissionRow): boolean {

@@ -1,8 +1,8 @@
-import type { Api, Model, TextContent } from "@earendil-works/pi-ai";
+import type { Api, Model, TextContent, Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { CompleteAnswer, CompleteRequest } from "./protocol.js";
 
-export const completeLimits = Object.freeze({ timeoutMs: 60_000, maxTokens: 4096, messages: 32, parts: 32, text: 256 * 1024, systemPrompt: 64 * 1024, answerText: 256 * 1024,
+export const completeLimits = Object.freeze({ timeoutMs: 60_000, maxTokens: 4096, atOnce: 4, perHour: 120, auditPerHour: 600, messages: 32, parts: 32, text: 256 * 1024, systemPrompt: 64 * 1024, answerText: 256 * 1024,
   requestBytes: 20 * 1024 * 1024 });
 
 export const modelCallSources: ReadonlySet<string> = new Set(["piki:prompt-audit"]);
@@ -55,7 +55,35 @@ export interface CompletionSource {
   model(): Model<string> | undefined;
 }
 
-export async function completeWith(host: CompletionSource, request: CompleteRequest, signal: AbortSignal): Promise<CompleteAnswer> {
+export const modelCallsPerHour = (source: string): number => modelCallSources.has(source) ? completeLimits.auditPerHour : completeLimits.perHour;
+
+export interface ModelCallRecord { model: string; stopReason: string; usage?: Usage }
+
+const HOUR_MS = 60 * 60 * 1000;
+
+export class ModelCallBudget {
+  readonly #calls = new Map<string, number[]>();
+
+  constructor(private readonly perHour: (source: string) => number = modelCallsPerHour, private readonly now: () => number = Date.now) {}
+
+  limit(source: string): number { return this.perHour(source); }
+
+  take(source: string): boolean {
+    const since = this.now() - HOUR_MS;
+    const calls = (this.#calls.get(source) ?? []).filter(at => at > since);
+    const taken = calls.length < this.perHour(source);
+    if (taken) calls.push(this.now());
+    this.#calls.set(source, calls);
+    return taken;
+  }
+
+  count(source: string): number {
+    const since = this.now() - HOUR_MS;
+    return (this.#calls.get(source) ?? []).filter(at => at > since).length;
+  }
+}
+
+export async function completeWith(host: CompletionSource, request: CompleteRequest, signal: AbortSignal, record?: (call: ModelCallRecord) => void | Promise<void>): Promise<CompleteAnswer> {
   const registry = host.modelRegistry;
   if (!registry) throw new Error("This host has no models an extension may call");
   const model = (request.model ? registry.find(request.model.provider, request.model.id) : host.model()) as Model<Api> | undefined;
@@ -65,6 +93,7 @@ export async function completeWith(host: CompletionSource, request: CompleteRequ
     ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
     messages: request.messages.map(message => ({ role: "user" as const, content: message.content, timestamp: message.timestamp ?? Date.now() })),
   }, { signal: deadline, maxTokens: Math.min(request.maxTokens ?? completeLimits.maxTokens, completeLimits.maxTokens) }).result();
+  await record?.({ model: `${reply.provider ?? model.provider}/${reply.model ?? model.id}`, stopReason: reply.stopReason, ...(reply.usage ? { usage: reply.usage } : {}) });
   let left = completeLimits.answerText;
   const content = reply.content.flatMap(part => {
     if (part.type !== "text" || left <= 0) return [];

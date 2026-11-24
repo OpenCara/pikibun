@@ -88,7 +88,7 @@ How a host runs its sessions is set on its page, under **Configuration**, rather
 
 | Setting | Effect | Changed by |
 |---|---|---|
-| **Command time limit** | How long a command (what `git`, `node`, `python` and the other program tools run) may run before it is stopped, from 30 seconds (the default) to an hour. A longer limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB per file, 256 open files) so builds fit: each process may use every CPU for the whole limit, write files of up to 16 GiB and open 8192 files | Owner and admins |
+| **Command time limit** | How long a command (what `git`, `node`, `python` and the other program tools run) may run before it is stopped: from 30 seconds to an hour (the default), or **No limit**. Any limit above 30 seconds also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB per file, 256 open files) so builds fit: each process may use every CPU for the whole limit, write files of up to 16 GiB and open 8192 files. With **No limit** a command runs until it ends, the agent's own `timeout_seconds` for the call passes, or someone stops the session's work (the runtime's own ceiling is about 23 days); a host on a connector from before **No limit** applies the time last chosen instead. A host whose saved limit was the earlier default of 30 seconds was moved to an hour | Owner and admins |
 | **GPU** | Sandboxed commands get the host's GPU render device for rendering and compute: `/dev/dxg` on WSL2, or Linux DRM render nodes with their sysfs entries, and NVIDIA's own devices (`/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia<N>`, ...) where the host has them, which CUDA needs (its libraries and `nvidia-smi` come from the host's `/usr`). Never the screen, windows, input or display (`card`) nodes, so the agent renders offscreen, for example to image files it reads back, or on a [desktop](extensions.md#the-tunnel-pikitunnel) of the session's own. With render nodes (not `/dev/dxg`), the agent's [browser](extensions.md#the-browser-pikibrowser) renders with the GPU too, for WebGL and WebGPU pages, and says so in its answer. Offered only where the connector found such a device. On WSL2, Mesa's `vulkan-dzn` on the host gives Vulkan over the Windows driver | Owner and admins |
 | **Git credentials** | Pushes in the owner's own sessions may use the credentials Git on the host would use (see [push access](pushes.md#push-access)) | Owner |
 | **Repository cache** | Off, or a full mirror of each repository on the host for every session (**Shared**) or one per session owner (**Per owner**), filled with the host's own Git credentials; see [Repository cache](#repository-cache-preview) | Owner |
@@ -142,7 +142,7 @@ Such a session runs like one on an [unsandboxed host](#running-without-the-sandb
 
 ## The sandbox
 
-With bubblewrap, every session runs in its own sandbox: no direct network (see [Network access](#network-access)), read-only system directories, and only the session's own worktree writable. Commands in it stop after the host's [command time limit](#host-configuration), 30 seconds unless its owner or an admin sets a longer one. Git there runs without hooks, stored credentials or SSH: each push gets a credential for that push alone (see [Commits, pushes and pull requests](pushes.md)), and GitHub actions go through Pikibun.
+With bubblewrap, every session runs in its own sandbox: no direct network (see [Network access](#network-access)), read-only system directories, and only the session's own worktree writable. Commands in it stop after the host's [command time limit](#host-configuration), an hour unless its owner or an admin sets another or lifts it. Git there runs without hooks, stored credentials or SSH: each push gets a credential for that push alone (see [Commits, pushes and pull requests](pushes.md)), and GitHub actions go through Pikibun.
 
 Commands (`git`, `node`, `python`) also need resource limits. A connector started with `--resources PATH` (an operator-provisioned cgroup v2 configuration: CPU, memory, process and disk limits, described in [`apps/runner/src/resources.ts`](../apps/runner/src/resources.ts)) runs them in every session. Without it, commands run without limits only in sessions of the host's owner and of members they [granted host commands](#host-admins-and-host-command-grants), for messages of theirs, since that grant already lets them run any command on the host itself (see [What a session may do](approvals.md#the-rules)). They still run in the sandbox, as the session's owner, and once the grant ends, the next command is refused. In every other member's session on that host, commands are refused.
 
@@ -252,6 +252,16 @@ The connector prints the risks and asks you to type `unsandboxed` before it star
 
 Pikibun labels such a host **Unsandboxed** to everyone who can see it.
 
+### Sessions that ran in a sandbox before
+
+A host remembers, for each session, whether it last ran in a sandbox. If you start the host without one (the same state directory with `--unsafe-no-sandbox`, or another of this computer's hosts taking over your private sessions), it doesn't open the sessions that last ran sandboxed: opening one says "This session last ran in the sandbox, and this host now runs without one". Start the host with its sandbox again to carry on there, or allow it:
+
+```sh
+npx pikibun@latest connect --unsafe-no-sandbox --sessions-leave-sandbox
+```
+
+Those sessions then run directly on the machine, like every other session of an unsandboxed host, and stay that way. `pikibun serve` takes the same option. The desktop app asks in the dialog that confirms running unsandboxed: confirming it allows these sessions too. Sessions made before the connector kept this record are opened as before. Update the connector (`npx pikibun@latest connect`) to get it.
+
 ### The owner's own environment
 
 A session that runs on its host, directly or on an unsandboxed one, and whose owner is the host's owner runs its commands with the environment the connector started with, as a terminal of yours would: your `HOME`, so `~/.ssh/config`, `~/.config` (the `gh` and `glab` sign-ins, cloud CLIs) and tool caches are yours; `SSH_AUTH_SOCK`, so `ssh` and Git over SSH use your ssh agent (the macOS keychain, 1Password, `ssh-agent`); your global and system Git configuration (`url.insteadOf`, credential helpers such as `osxkeychain`, signing); and your `LANG`, `TMPDIR` and `DISPLAY`. Your personal environment values (**Settings → Profile**) are set on top, and commits keep your Pikibun Git identity. Commands still run without a terminal: nothing can prompt for a passphrase, so keys need the agent or no passphrase.
@@ -297,6 +307,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 | `--resources PATH` | Operator-provisioned resource limits that let commands run in every session |
 | `--build-caches PATH` | Where the host keeps [build caches](design/build-caches.md) (default `build-caches` in the state directory); with `--resources`, required for them and checked to be a dedicated, private filesystem mount (`rw,nosuid,nodev`) |
 | `--unsafe-no-sandbox` | Run agent work directly on this machine, without isolation; asks for confirmation |
+| `--sessions-leave-sandbox` | With `--unsafe-no-sandbox`, also open [sessions that last ran in a sandbox](#sessions-that-ran-in-a-sandbox-before), which then run directly on this machine |
 | `--allow-insecure-loopback` | Allow an `http://` server on localhost (development) |
 | `--help` | Show all options |
 

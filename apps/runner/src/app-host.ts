@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { createConnector, controlPlaneOrigin, LocalViewUnavailable, type LocalConnector } from "./connector.js";
-import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, unsandboxedWarning, verifySandboxIsolation, isolationMessage, type HostIsolation } from "./connect-setup.js";
+import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, appUnsandboxedWarning, verifySandboxIsolation, isolationMessage, type HostIsolation } from "./connect-setup.js";
 import { stdioTransport, type Transport } from "./app-host-transport.js";
 import { pairingCodePattern, pairingIdPattern, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "../../../packages/shared/src/app-host-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
@@ -88,7 +88,7 @@ async function inspect(allowFaux = false, allowInsecureLoopback = false, experim
   const inspection: HostInspection = { platform: process.platform, stateDir, mode, prerequisites: [...prerequisites, npmPrerequisite(), ...[pythonVenvPrerequisite()].filter(item => item !== undefined)], models: [] };
   if (sandbox) inspection.sandbox = sandbox;
   if (sandboxPrerequisites) inspection.sandboxPrerequisites = sandboxPrerequisites;
-  if (mode === "unsandboxed") inspection.unsandboxedWarning = unsandboxedWarning();
+  if (mode === "unsandboxed") inspection.unsandboxedWarning = appUnsandboxedWarning();
   try { assertPrerequisites(prerequisites, mode === "unsandboxed", ""); }
   catch (error) { inspection.prerequisitesError = hostError(error, "Prerequisites could not be checked.").message; }
   try { inspection.pairedServer = await savedPairing(stateDir, allowInsecureLoopback); }
@@ -122,9 +122,9 @@ async function start(request: StartRequest): Promise<void> {
   const pairing = request.pairing && { id: request.pairing.id, code: request.pairing.code };
   const verified = !unsandboxed && !backend ? await verifySandboxIsolation() : undefined;
   const capabilities = { platform: process.platform, sandbox: verified?.ok === true, productionShell: false };
-  privateHome ??= startPrivateHome({ localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}), identityDir, allowFaux: request.allowFaux, capabilities });
+  privateHome ??= startPrivateHome({ localModels, unsandboxed, sessionsLeaveSandbox: unsandboxed, ...(backend ? { sandboxBackend: backend } : {}), identityDir, allowFaux: request.allowFaux, capabilities });
   const connector = createConnector({
-    dataDir: stateDir, identityDir, server, pairing, replacePairing: replace, localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}),
+    dataDir: stateDir, identityDir, server, pairing, replacePairing: replace, localModels, unsandboxed, sessionsLeaveSandbox: unsandboxed, ...(backend ? { sandboxBackend: backend } : {}),
     allowInsecureLoopback: request.allowInsecureLoopback, allowFaux: request.allowFaux, ...(privateHome ? { privateHome } : {}),
     capabilities,
     onStatus: state => {

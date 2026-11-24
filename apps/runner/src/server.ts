@@ -17,6 +17,7 @@ import { LocalViews } from "./local-view.js";
 import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
 import { FailureLog, type LogLine } from "./failure-log.js";
 import { PortableLeases } from "./portable-lease.js";
+import { assertSandboxKept, lastRan, recordRan, runsSandboxed } from "./sandbox-record.js";
 
 export const MOVED_SESSION = "This session was moved to another server this computer is paired with";
 const KEPT_FILE = "portable.json";
@@ -229,11 +230,21 @@ export class RunnerService {
     }
     const binding = this.binding(raw, id);
     if (await realpath(directory) !== directory) throw new RunnerError(403, "Invalid session storage");
+    const sandboxed = runsSandboxed(binding, this.config);
+    const ran = await lastRan(directory);
+    try { assertSandboxKept(ran, sandboxed, this.config.sessionsLeaveSandbox === true); }
+    catch (error) {
+      this.failures.report(`Session ${id} wasn't opened`, error instanceof Error ? error.message : error);
+      throw error;
+    }
     if (portable) await this.leases.acquire(directory);
     await settlePack(directory);
     const session = new RunnerSession(immutable(binding), directory, this.config);
-    try { await session.open(); }
-    catch (error) {
+    try {
+      await session.open();
+      const { leftSandbox } = await recordRan(directory, sandboxed, ran);
+      if (leftSandbox) this.failures.report(`Session ${id}`, "it last ran in the sandbox and now runs directly on this computer, as this host was started to allow");
+    } catch (error) {
       await session.close().catch(() => {});
       await session.sandbox.close().catch(() => {});
       if (portable) await this.leases.release(directory);
@@ -419,6 +430,7 @@ export class RunnerService {
     if (current?.session?.id !== source && !(source !== id && current?.session?.id === id)) throw new RunnerError(403, "Invalid session storage");
     if (await realpath(directory) !== directory) throw new RunnerError(403, "Invalid session storage");
     if (await exists(join(directory, PACK_FILE))) throw new RunnerError(409, "This session's files are packed. Unarchive it where it is attached now first");
+    assertSandboxKept(await lastRan(directory), runsSandboxed(binding, this.config), this.config.sessionsLeaveSandbox === true);
     const here = current.session.connectorId === this.config.connectorId;
     if (!entry && !here) throw new RunnerError(404, "Session not found");
     if (here && (current.owner?.id !== binding.owner.id || current.session.id !== id)) throw new RunnerError(403, "A portable session keeps its owner and ID on the same server");

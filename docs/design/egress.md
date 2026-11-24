@@ -120,7 +120,7 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
 - Pushes through the proxy (phase 4: only the session branch, in clone sessions); `git_push` keeps working as before.
 - Hosts without the sandbox: their commands use the host's network directly, and the policy doesn't apply.
 - Persisting the proxy's decisions: they live in memory for the open session.
-- Shell commands still stop after the host's command time limit (30 seconds by default), which limits large clones
+- Shell commands still stop after the host's command time limit (an hour by default; 30 seconds at first), which limits large clones
   until the host cache (phase 3) or a longer limit in the host's configuration.
 
 ## Phase 2: clone sessions
@@ -249,7 +249,7 @@ which pinned sessions were checked out of until phase 5. Clone sessions borrow f
 
 ### Not in phase 3
 
-- Shell commands still stop after the host's command time limit (30 seconds by default). A first clone of a big
+- Shell commands still stop after the host's command time limit (an hour by default; 30 seconds at first). A first clone of a big
   repository can outlast that; its mirror keeps filling in the runner, so the clone run again borrows from it.
 - Pre-filling a mirror without a session: which repositories to fill, and when, needs a session to say.
 

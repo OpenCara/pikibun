@@ -6,12 +6,13 @@ import { join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ProcessChannel, type LaunchHandlers, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
-import { completeAnswerOf, completeLimits, completeRequestOf, completeWith, modelCallSources } from "../apps/runner/src/extensions/complete.js";
+import { completeAnswerOf, completeLimits, completeRequestOf, completeWith, ModelCallBudget, modelCallSources, type ModelCallRecord } from "../apps/runner/src/extensions/complete.js";
 import { bundledOnlySources, managedSource } from "../apps/runner/src/extensions/piki/index.js";
 import type { CompleteAnswer, CompleteRequest } from "../apps/runner/src/extensions/protocol.js";
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import type { LoadedSource } from "../apps/runner/src/extensions/load.js";
 import { refusedChannel } from "../apps/runner/src/extensions/process.js";
+import { withHostToolCapabilities } from "../apps/runner/src/host-capabilities.js";
 
 async function directory(t: TestContext): Promise<string> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "extension-model-calls-")));
@@ -192,6 +193,68 @@ test("an extension the host doesn't let call models can't: its process's registr
   assert.deepEqual(asked.map(item => item.source), ["piki:prompt-audit"]);
   assert.ok(warned.some(line => /^local:other: it asked for a model call/.test(line)));
   await forged.close();
+});
+
+test("an ask whose id is still running is refused, so at most four model calls run at once and each can still be cancelled", async () => {
+  const sent: unknown[] = [];
+  let handlers: LaunchHandlers | undefined;
+  const launch: WorkerLaunch = async given => {
+    handlers = given;
+    return { send: message => { sent.push(message); const request = message as { id?: number; method?: string };
+      if (request.id !== undefined) queueMicrotask(() => handlers!.reply({ id: request.id!, value: request.method === "open" ? { errors: [], tools: [] } : null })); },
+    hold: () => {}, kill: () => {}, exited: new Promise(() => {}) };
+  };
+  const running: { signal: AbortSignal; finish(): void }[] = [];
+  const warned: string[] = [];
+  const channel = new ProcessChannel({ directory: process.cwd(), log: () => {}, warn: (source, message) => { warned.push(`${source}: ${message}`); }, launch,
+    complete: (_request, signal) => new Promise<CompleteAnswer>(resolve => { running.push({ signal, finish: () => resolve({ content: [{ type: "text", text: "done" }], stopReason: "stop" }) }); }) });
+  await channel.call("open", { source: "piki:prompt-audit", files: [promptAudit], models: [], modelCalls: true });
+  const ask = (id: number) => handlers!.reply({ ask: id, complete: { source: "piki:prompt-audit", messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] } });
+  const answers = () => sent.filter((message): message is { answered: number; value?: CompleteAnswer; error?: string } => typeof (message as { answered?: unknown }).answered === "number");
+  for (let again = 0; again < 10; again++) ask(1);
+  handlers!.reply({ ask: 1, invalid: true });
+  assert.equal(running.length, 1, "one id is one call, however often it is asked");
+  assert.deepEqual(answers(), [], "a repeated id gets no answer of its own, which the extension would take for the running call's");
+  assert.equal(warned.filter(line => /under the id of one that is still running; the second was dropped/.test(line)).length, 9);
+  for (let id = 2; id <= 10; id++) ask(id);
+  assert.equal(running.length, completeLimits.atOnce);
+  assert.equal(answers().filter(item => item.error === "Too many model calls at once").length, 6);
+  handlers!.reply({ cancelAsk: 1 });
+  assert.equal(running[0]!.signal.aborted, true, "the first call under a repeated id can still be cancelled");
+  for (const call of running) call.finish();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(answers().filter(item => item.value).map(item => item.answered).sort(), [1, 2, 3, 4]);
+  ask(1);
+  assert.equal(running.length, 5, "an id is free again once its call ended");
+  running[4]!.finish();
+  await channel.close();
+});
+
+test("an extension's model calls are budgeted per source over an hour, and each call reports what it used", async () => {
+  let now = 1_000_000;
+  const budget = new ModelCallBudget(() => 3, () => now);
+  assert.deepEqual([budget.take("a"), budget.take("a"), budget.take("a"), budget.take("a")], [true, true, true, false]);
+  assert.equal(budget.take("b"), true, "each source has its own budget");
+  now += 59 * 60 * 1000;
+  assert.equal(budget.take("a"), false);
+  assert.equal(budget.count("a"), 3);
+  now += 61 * 1000;
+  assert.equal(budget.take("a"), true, "calls older than an hour no longer count");
+  assert.equal(budget.count("a"), 1);
+  assert.deepEqual([completeLimits.atOnce, completeLimits.perHour, completeLimits.auditPerHour], [4, 120, 600]);
+  assert.deepEqual([new ModelCallBudget().limit("npm:guard@1.0.0"), new ModelCallBudget().limit("piki:prompt-audit")], [120, 600],
+    "Pikibun's own prompt audit, which refuses a message it can't check, has a budget no person's messages reach");
+  const base = { platform: "linux", sandbox: true, productionShell: false };
+  assert.equal(withHostToolCapabilities(base).modelCalls, true);
+  assert.equal("modelCalls" in withHostToolCapabilities(base, { extensionModelCalls: false }), false, "a connector started with --no-extension-model-calls doesn't announce them");
+  assert.equal(withHostToolCapabilities(base, { extensionModelCalls: false }).requiredExtensions, true);
+
+  const usage = { input: 10, output: 5, cacheRead: 1, cacheWrite: 2, totalTokens: 18, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 } };
+  const registry = { find: () => undefined, streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "ok" }], stopReason: "stop", provider: "fixture", model: "auditor-2", usage }) }) } as unknown as ModelRegistry;
+  const records: ModelCallRecord[] = [];
+  await completeWith({ modelRegistry: registry, model: () => model }, { source: "x", messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] }, new AbortController().signal,
+    call => { records.push(call); });
+  assert.deepEqual(records, [{ model: "fixture/auditor-2", stopReason: "stop", usage }]);
 });
 
 test("a model call is bounded: its shape is checked, its tokens and time are capped, and only the host's registry makes it", async () => {

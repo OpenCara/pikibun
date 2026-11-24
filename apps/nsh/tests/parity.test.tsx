@@ -208,6 +208,25 @@ describe("a new session", () => {
     }
   });
 
+  test("remembers the sandbox for a host it was chosen on, until the host is chosen again", async () => {
+    const hosts = { [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } } };
+    const first = await open("../App.tsx", { storage: signedIn, network: server(hosts) });
+    await first.press("id:new-session");
+    await first.waitFor("id:new-environment");
+    await first.press("id:new-environment");
+    await first.press("text:Sandbox");
+    await first.waitUntil(() => first.storage()["pikibun.sandboxedHosts"] === JSON.stringify(["c1"]));
+    first.dispose();
+    const next = await open("../App.tsx", { storage: { ...signedIn, "pikibun.sandboxedHosts": JSON.stringify(["c1", "another-host"]) }, network: server(hosts) });
+    await next.press("id:new-session");
+    await next.waitFor("id:new-environment");
+    await next.waitUntil(() => environment(next) === "sandbox");
+    await next.press("id:new-environment");
+    await next.press("text:On this host");
+    await next.waitUntil(() => environment(next) === "host");
+    await next.waitUntil(() => next.storage()["pikibun.sandboxedHosts"] === JSON.stringify(["another-host"]));
+  });
+
   test("keeps the sandbox chosen while the host listing refreshes", async () => {
     const app = await open("../App.tsx", { storage: signedIn, clock: {}, network: server({
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },

@@ -20,7 +20,6 @@ import { formatCost, formatRate, formatTokens, relativeTime, timestamp } from ".
 import { openExternal, openServerLink, opensServerPages } from "../lib/links";
 import { createUsername, createWorkspacePeople } from "../lib/people";
 import { createAction, createResource } from "../lib/resource";
-import { showWorkspaceTab } from "../lib/workspace-tabs";
 import { InstallChatButton, type MissingPrograms } from "../lib/install-chat";
 import { backupDatabaseLabel, type Backup, type SessionActions } from "../lib/session-actions";
 import { ConnectionStatus, HostCapabilities } from "../hosts";
@@ -267,10 +266,7 @@ function ExtensionsSection(props: { extensions: NonNullable<SessionView["extensi
 
 function RepositoriesSection(props: Part) {
   const repositories = () => props.current.repositories ?? [];
-  const openSources = () => {
-    showWorkspaceTab(props.current.workspaceId, "sources");
-    props.go({ name: "settings", section: "workspaces", id: props.current.workspaceId });
-  };
+  const openSources = () => props.go({ name: "settings", section: "workspaces", id: props.current.workspaceId, tab: "sources" });
   const manage = <Row title="Manage repositories for future sessions" chevron onPress={openSources} />;
   return (
     <If when={props.current.repositoryMode !== "clone"}

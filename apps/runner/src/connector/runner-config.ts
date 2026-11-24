@@ -38,9 +38,9 @@ export interface RunnerConfigSource {
   directory: string;
   secret: string;
   options: {
-    allowFaux?: boolean; allowTestShell?: boolean; resources?: RunnerConfig["resources"]; unsandboxed?: boolean; sandboxBackend?: SandboxBackendConfig;
+    allowFaux?: boolean; allowTestShell?: boolean; resources?: RunnerConfig["resources"]; unsandboxed?: boolean; sessionsLeaveSandbox?: boolean; sandboxBackend?: SandboxBackendConfig;
     privateEnvironment?: readonly string[];
-    localModels: LocalModels; fetch?: typeof fetch;
+    localModels: LocalModels; fetch?: typeof fetch; extensionModelCalls?: boolean;
   };
   lifetime: AbortSignal;
   identity?: IdentityStore;
@@ -65,6 +65,7 @@ function runnerExtensions(source: RunnerConfigSource, extensions: HostExtensions
         { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true }, WORKSPACE_EXTENSIONS_LIMIT)),
     lastKnown: workspaceId => extensions.lastKnown(workspaceId),
     ...(source.options.localModels.modelRegistry ? { modelRegistry: source.options.localModels.modelRegistry } : {}),
+    ...(source.options.extensionModelCalls === false ? { modelCallsRefused: true as const } : {}),
   };
 }
 
@@ -77,6 +78,7 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
     sharedSecret: source.secret, connectorId: state.connectorId,
     allowFaux: options.allowFaux === true, allowTestShell: options.allowTestShell === true,
     resources: options.resources, unsandboxed: options.unsandboxed === true,
+    ...(options.unsandboxed === true && options.sessionsLeaveSandbox === true ? { sessionsLeaveSandbox: true } : {}),
     ...(options.privateEnvironment?.length ? { privateEnvironment: options.privateEnvironment } : {}),
     pikiHostSignIn: process.env.PIKIBUN_PIKI_HOST_SIGN_IN === "1",
     ...(options.sandboxBackend && !options.unsandboxed ? { sandboxBackend: options.sandboxBackend } : {}),
