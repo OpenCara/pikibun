@@ -54,7 +54,9 @@ with approve permission there decide. A read shows pending cards (their kind and
 
 New sessions run as the actor, with their Git accounts, on a model's host: the actor's own host, or the origin's host
 when the actor owns the origin (they trusted that host when they started it). Any other host they must acknowledge
-themselves, in the apps.
+themselves, in the apps. An agent working in a sandbox starts sessions only on hosts that have one (`sandbox_required`,
+or left out of placement), unless a person's message names the unsandboxed host with `host_environment: true`:
+[Sandboxed work stays sandboxed](host-placement.md#sandboxed-work-stays-sandboxed).
 
 ## Models and reasoning of new sessions
 
@@ -80,7 +82,9 @@ each sub-task on what suits it. `list` returns, with the models, the reasoning l
   [workspace-schedules.md](workspace-schedules.md)) choose the same way when the agent or the session's panel saves them,
   with the same checks as a `create` naming a model without placement (`childModel`, built from the same
   `childThinkingLevel`, `sessionCurrentModel` and `agentMayStartOn`, plus `requireModel`), as the schedule's owner;
-  they don't take placement. A run whose choice
+  they don't take placement. The `schedule` tool of a sandboxed session refuses a schedule whose runs start on a host
+  without a sandbox (`sandbox_required`), on create and on any change but pausing; a person's own choice of such a
+  model, in the panel or the workspace's Schedules, stands. A run whose choice
   no longer holds is not skipped: it starts on the session's current model and level, or on its chosen model without a
   level that model no longer offers, and records why as the schedule's `last_error` (`model_unavailable`,
   `thinking_unsupported`, `child_models_disabled`) and the `workspace.schedule.session_started` audit's `fallback`.

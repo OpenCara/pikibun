@@ -14,7 +14,7 @@ import {
 import { requireModel, usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
 import { childModel, childModelChoices, childThinkingLevel, sessionCurrentModel, type ChildModel } from './cross-session.js';
-import { agentMayStartOn } from './placement.js';
+import { agentMayStartOn, hostUnsandboxed, sandboxRequired, sessionSandboxed } from './placement.js';
 import { requireUnfrozen } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
 import { archiveSession, createSession, submitMessage } from './sessions.js';
@@ -424,7 +424,14 @@ async function workspaceInput(c: AppContext): Promise<{ fields: ScheduleInput; t
   return { fields: Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)), ...(trustedConnectorId ? { trusted: trustedConnectorId } : {}) };
 }
 
-type ScheduleChange = { actorId: string; callId?: string; gated: boolean; trusted?: string };
+type ScheduleChange = { actorId: string; callId?: string; gated: boolean; trusted?: string; agentSession?: SessionRow };
+
+async function requireSandboxKept(env: Env, change: ScheduleChange, schedule: Pick<ScheduleRow, 'session_id' | 'origin_session_id' | 'model_id'>): Promise<void> {
+  if (!change.agentSession || schedule.session_id !== null) return;
+  if (!await hostUnsandboxed(env, await scheduleHost(env, schedule)) || !await sessionSandboxed(env, change.agentSession)) return;
+  sandboxRequired('make or change a schedule whose runs start there', 'the host this schedule\'s runs start on',
+    'Choose a model on a sandboxed host (sessions list shows each host\'s sandbox), or ask the person to make or change it themselves, in this session\'s Schedules tab or the workspace\'s Schedules.');
+}
 const changedBy = (change: ScheduleChange) => change.callId === undefined ? {} : { agent: true, callId: change.callId };
 type Target = { workspaceId: string; session: SessionRow | null; origin: SessionRow | null };
 
@@ -463,6 +470,7 @@ async function createSchedule(env: Env, target: Target, change: ScheduleChange, 
     last_run_at: null, last_submission_id: null, last_session_id: null, last_error: null, created_at: timestamp, updated_at: timestamp };
   if (session && (modelId !== null || thinkingLevel !== null)) noModelForSession();
   if (!session) await validModelChoice(env, { workspaceId: target.workspaceId, ownerId: change.actorId, origin: target.origin, gated: change.gated, trusted: change.trusted }, schedule);
+  await requireSandboxKept(env, change, schedule);
   await requireAccessSupported(env, await scheduleHost(env, schedule), access);
   if (enabled && schedule.next_run_at === null) fail(400, 'invalid_cron', 'This schedule never comes round.');
   if (session) {
@@ -523,6 +531,7 @@ async function updateSchedule(env: Env, context: { session: SessionRow | null },
     await validModelChoice(env, { workspaceId: next.workspace_id, ownerId: next.owner_id, origin, gated: change.gated, trusted: change.trusted,
       trustKept: next.model_id === current.model_id && next.owner_id === current.owner_id && current.session_id === null }, next);
   }
+  if (next.enabled === 1 || Object.keys(input).some(key => key !== 'enabled')) await requireSandboxKept(env, change, next);
   if (next.access === 'read' && (next.access !== current.access || next.model_id !== current.model_id || next.session_id !== current.session_id)) {
     await requireAccessSupported(env, await scheduleHost(env, next), next.access);
   }
@@ -661,7 +670,7 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
   if (admission.access === 'read') {
     fail(403, 'read_only_message', 'A Read-only message changes nothing, schedules included: ask in a message that may act.');
   }
-  const change: ScheduleChange = { actorId, callId, gated: true };
+  const change: ScheduleChange = { actorId, callId, gated: true, agentSession: row };
   if (action === 'create') {
     const created = await createSchedule(c.env, fields.runIn === 'child' ? { workspaceId: row.workspace_id, session: null, origin: row }
       : { workspaceId: row.workspace_id, session: row, origin: null }, change, fields);

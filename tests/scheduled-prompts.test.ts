@@ -890,3 +890,55 @@ test('the owner\'s agent lists the owner\'s workspace schedules beside the sessi
   assert.equal((renamed.body.schedule as Schedule).name, 'Morning');
   assert.deepEqual((await tool({ action: 'delete', scheduleId: mine.id })).body, { deleted: mine.id });
 });
+
+test('a sandboxed session\'s agent neither makes nor changes a schedule whose runs start on a host without a sandbox; a person does', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const at = new Date().toISOString();
+  for (const [id, capabilities] of [['box', { sandbox: true }], ['bare', { sandbox: false, unsandboxed: true }]] as const) {
+    f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(`${id}-host`, ownerId, id, id.padEnd(43, 'h'), id.padEnd(43, 'c'), JSON.stringify({ platform: 'linux', productionShell: true, approvalFree: true, chatOptions: true,
+        plainGit: true, ...capabilities }), JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3' }]), at);
+    f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run(`${id}-host`, f.workspace.id, at);
+    f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+      .run(`${id}-model`, f.workspace.id, 'Faux 3', 'faux', 'faux-3', at, `${id}-host`, ownerId);
+  }
+  const admission = randomBytes(32).toString('base64url');
+  f.sqlite.prepare('INSERT INTO run_admissions (id,session_id,actor_id,mode,access,request_id,content_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(admission, 'scheduled-session', ownerId, 'write', null, `request-${admission}`, 'h'.repeat(43), Math.floor(Date.now() / 1000) + 3600, new Date().toISOString());
+  const tool = async (body: Record<string, unknown>) => {
+    const response = await app.request('/api/internal/schedules', { method: 'POST',
+      headers: { Authorization: `Bearer ${f.env.RUNNER_SHARED_SECRET}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'scheduled-session', actorId: ownerId, admissionId: admission, callId: 'call-1', ...body }) }, f.env);
+    return { status: response.status, body: await response.json() as Record<string, unknown> & { code?: string; error?: string } };
+  };
+  const kept = async (body: Record<string, unknown>) => {
+    const refused = await tool(body);
+    assert.deepEqual([refused.status, refused.body.code], [403, 'sandbox_required'], JSON.stringify(refused.body));
+    assert.match(String(refused.body.error), /runs sessions without one.*ask the person to make or change it themselves/);
+  };
+  const fields = { cron: '0 9 * * *', content: 'Review the architecture', runIn: 'child' };
+
+  await kept({ action: 'create', ...fields, modelId: 'bare-model' });
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM schedules').get()!.n, 0);
+  const sandboxed = await tool({ action: 'create', ...fields, modelId: 'box-model' });
+  assert.equal(sandboxed.status, 201, JSON.stringify(sandboxed.body));
+  await kept({ action: 'update', scheduleId: (sandboxed.body.schedule as Schedule).id, modelId: 'bare-model' });
+
+  const chosen = await f.owner.request('POST', base, { ...fields, modelId: 'bare-model' });
+  assert.equal(chosen.status, 201, 'a person chooses where their schedule runs');
+  const { schedule } = await chosen.json() as { schedule: SessionSchedule };
+  await kept({ action: 'update', scheduleId: schedule.id, content: 'Run something else there' });
+  assert.equal(f.sqlite.prepare('SELECT content FROM schedules WHERE id = ?').get(schedule.id)!.content, 'Review the architecture');
+  const paused = await tool({ action: 'update', scheduleId: schedule.id, enabled: false });
+  assert.equal(paused.status, 200, `the agent may still pause it: ${JSON.stringify(paused.body)}`);
+  await kept({ action: 'update', scheduleId: schedule.id, enabled: true });
+  await kept({ action: 'update', scheduleId: schedule.id, enabled: false, content: 'Rewritten while paused' });
+  const workspace = (await (await f.owner.request('POST', workspacePath(f), { cron: '0 9 * * *', content: 'Nightly', modelId: 'bare-model' })).json() as { schedule: Schedule }).schedule;
+  await kept({ action: 'update', scheduleId: workspace.id, content: 'Something else' });
+  assert.deepEqual((await tool({ action: 'delete', scheduleId: schedule.id })).body, { deleted: schedule.id });
+
+  f.sqlite.prepare("UPDATE sessions SET host_environment = 1 WHERE id = 'scheduled-session'").run();
+  const onHost = await tool({ action: 'create', ...fields, modelId: 'bare-model' });
+  assert.equal(onHost.status, 201, `a session that already runs without a sandbox schedules as before: ${JSON.stringify(onHost.body)}`);
+});
