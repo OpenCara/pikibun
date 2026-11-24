@@ -631,16 +631,23 @@ describe("settings", () => {
     await app.waitFor("text:ccache deleted.");
   });
 
-  test("Workspaces lets the owner delete a shared workspace, says why the server refused, and offers it on no private workspace", async () => {
+  test("Workspaces lets the owner delete a workspace, sessions and all, and restore it from Deleted workspaces", async () => {
     let deletes = 0;
+    let deleted = false;
     const team = { id: "w2", name: "Difference Engine", ownerId: "u1", role: "owner" };
+    const gone = { id: "w2", name: "Difference Engine", deletedAt: "2026-11-24T05:00:00.000Z", deletedBy: "u1", members: 3, sessions: 4 };
     const app = await openSettings("workspaces", {
-      [`GET ${ORIGIN}/api/workspaces`]: () => ({ body: { workspaces: deletes > 1 ? [workspace] : [workspace, team] } }),
-      [`DELETE ${ORIGIN}/api/workspaces/w2`]: () => (++deletes === 1
-        ? { status: 409, body: { code: "workspace_in_use", error: "This workspace has sessions, archived ones included, which are kept with their backups and history, so it can't be deleted." } }
-        : { status: 204 }),
+      [`GET ${ORIGIN}/api/workspaces`]: () => ({ body: { workspaces: deleted ? [workspace] : [workspace, team] } }),
+      [`GET ${ORIGIN}/api/deleted-workspaces`]: () => ({ body: { workspaces: deleted ? [gone] : [] } }),
+      [`DELETE ${ORIGIN}/api/workspaces/w2`]: () => {
+        if (++deletes === 1) return { status: 409, body: { code: "workspace_changed", error: "The workspace changed. Refresh and try again." } };
+        deleted = true;
+        return { body: { workspace: gone } };
+      },
+      [`POST ${ORIGIN}/api/deleted-workspaces/w2/restore`]: () => { deleted = false; return { body: { workspace: team } }; },
     });
     await app.waitFor("id:workspace-w2");
+    expect(app.shows("id:deleted-workspaces")).toBe(false);
     await app.press("id:workspace-w2");
     await app.waitFor("id:workspace-delete");
 
@@ -650,13 +657,36 @@ describe("settings", () => {
 
     app.onDialog(dialog => (dialog.title === "Delete Difference Engine?" ? "Delete workspace" : null));
     await app.press("id:workspace-delete");
-    await app.waitFor("text:This workspace has sessions, archived ones included, which are kept with their backups and history, so it can't be deleted.");
+    await app.waitFor("text:The workspace changed. Refresh and try again.");
     expect(app.shows("id:workspace-delete")).toBe(true);
 
     await app.press("id:workspace-delete");
     await app.waitUntil(() => deletes === 2);
+    await app.waitFor("id:deleted-workspace-w2");
     await app.waitUntil(() => !app.shows("id:workspace-w2") && app.shows("id:workspace-w1"));
-    expect(app.shows("id:workspace-delete")).toBe(false);
+    expect(app.texts().join(" ")).toContain("3 members · 4 sessions");
+    expect(app.shows("id:deleted-workspace-purge-w2")).toBe(false);
+
+    await app.press("id:deleted-workspace-restore-w2");
+    await app.waitFor("text:Difference Engine restored, with its members and sessions.");
+    await app.waitUntil(() => app.shows("id:workspace-w2") && !app.shows("id:deleted-workspace-w2"));
+  });
+
+  test("Deleted workspaces deletes one without sessions for good, once confirmed", async () => {
+    let purged = false;
+    const empty = { id: "w4", name: "Scratch", deletedAt: "2026-11-24T05:00:00.000Z", deletedBy: "u1", members: 1, sessions: 0 };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/deleted-workspaces`]: () => ({ body: { workspaces: purged ? [] : [empty] } }),
+      [`DELETE ${ORIGIN}/api/deleted-workspaces/w4`]: () => { purged = true; return { status: 204 }; },
+    });
+    await app.waitFor("id:deleted-workspace-purge-w4");
+    app.onDialog(dialog => (dialog.title === "Delete Scratch for good?" ? "Cancel" : null));
+    await app.press("id:deleted-workspace-purge-w4");
+    expect(purged).toBe(false);
+    app.onDialog(dialog => (dialog.title === "Delete Scratch for good?" ? "Delete for good" : null));
+    await app.press("id:deleted-workspace-purge-w4");
+    await app.waitFor("text:Scratch deleted for good.");
+    await app.waitUntil(() => !app.shows("id:deleted-workspace-w4"));
   });
 
   test("Workspaces offers no delete to admins, nor on a private workspace", async () => {

@@ -6,11 +6,12 @@ import json, os, stat, sys, time
 DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 NAME_CHARS = set('abcdefghijklmnopqrstuvwxyz0123456789-')
 DEPTH = 64
-ENTRIES = 1000000
 STEPS = 10000000
 SCAN_COST = 50000000
 WINDOW = 128
 request = json.loads(sys.argv[1])
+ENTRIES = request.get('entries', 1000000)
+NOW = request['now'] / 1000 if 'now' in request else time.time()
 seen = [0]
 truncated = [False]
 counted_out = [False]
@@ -18,6 +19,20 @@ counted_out = [False]
 
 def cache_name(name):
     return 0 < len(name) <= 40 and name[0] != '-' and set(name) <= NAME_CHARS
+
+
+def changed(info):
+    return info.st_mtime if info.st_mtime <= NOW else min(info.st_ctime, NOW)
+
+
+def fair(amount, demands):
+    shares = [0] * len(demands)
+    left = amount
+    order = sorted(range(len(demands)), key=lambda index: demands[index])
+    for position, index in enumerate(order):
+        shares[index] = min(demands[index], left / (len(order) - position))
+        left -= shares[index]
+    return shares
 
 
 def open_dir(name, parent):
@@ -98,12 +113,12 @@ def walk(fd, prefix, depth, visit, deep=None):
             truncated[0] = True
             counted_out[0] = True
             return total
-        total[2] = max(total[2], info.st_mtime)
+        total[2] = max(total[2], changed(info))
         if stat.S_ISDIR(info.st_mode):
             if depth + 1 >= DEPTH:
                 truncated[0] = True
                 if deep is not None:
-                    deep(prefix + [name], info.st_mtime)
+                    deep(prefix + [name], changed(info))
                 continue
             try:
                 child = open_dir(name, fd)
@@ -121,7 +136,7 @@ def walk(fd, prefix, depth, visit, deep=None):
             total[0] += size
             total[1] += 1
             if visit is not None:
-                visit(prefix + [name], size, info.st_mtime)
+                visit(prefix + [name], size, changed(info))
     return total
 
 
@@ -140,12 +155,12 @@ def deep_newest(leaf_fd, path):
         except OSError:
             continue
         try:
-            newest = max(newest, os.fstat(fd).st_mtime)
+            newest = max(newest, changed(os.fstat(fd)))
             for name, info in children(fd):
                 entries += 1
                 if entries > ENTRIES:
                     return None
-                newest = max(newest, info.st_mtime)
+                newest = max(newest, changed(info))
                 if stat.S_ISDIR(info.st_mode):
                     stack.append(parts + [name])
         finally:
@@ -276,9 +291,10 @@ try:
                 fd = open_path(root, leaf_parts(leaf))
             except OSError:
                 continue
+            seen[0] = 0
             try:
                 usage = walk(fd, [], 0, None)
-                mtime = os.fstat(fd).st_mtime
+                mtime = changed(os.fstat(fd))
             finally:
                 os.close(fd)
             workspace, name, scope, owner = leaf
@@ -302,7 +318,7 @@ try:
             deep = []
             try:
                 usage = walk(fd, [], 0, None, lambda path, mtime: deep.append(path))
-                mtime = os.fstat(fd).st_mtime
+                mtime = changed(os.fstat(fd))
                 newest = max(usage[2], mtime)
                 for path in deep:
                     if newest > cutoff:
@@ -327,32 +343,35 @@ try:
     elif mode == 'evict':
         capacity = request['capacity']
         dedicated = request.get('dedicated')
-        files = []
-        deep = []
-        total = 0
-        for leaf in leaves(root):
-            parts = leaf_parts(leaf)
-            try:
-                fd = open_path(root, parts)
-            except OSError:
-                continue
-            try:
-                usage = walk(fd, [], 0, lambda path, size, mtime, parts=parts: files.append((mtime, size, parts, path)),
-                             lambda path, mtime, parts=parts: deep.append((mtime, parts, path)))
-            finally:
-                os.close(fd)
-            total += usage[0]
+        limit = capacity * request['evictAt']
+        goal = capacity * request['evictTo']
 
         def used():
             fs = os.fstatvfs(root)
             return (fs.f_blocks - fs.f_bfree) * fs.f_frsize
 
-        if dedicated:
-            total = max(total, used())
+        copies = []
+        deep = []
+        total = used() if dedicated else 0
+        if not dedicated or total > limit:
+            for leaf in leaves(root):
+                parts = leaf_parts(leaf)
+                try:
+                    fd = open_path(root, parts)
+                except OSError:
+                    continue
+                seen[0] = 0
+                counted_out[0] = False
+                try:
+                    usage = walk(fd, [], 0, None, lambda path, mtime, parts=parts: deep.append((mtime, parts, path)))
+                finally:
+                    os.close(fd)
+                copies.append({'parts': parts, 'bytes': usage[0], 'whole': counted_out[0], 'over': 0})
+            if not dedicated:
+                total = sum(copy['bytes'] for copy in copies)
         removed = 0
         freed = 0
-        if total > capacity * request['evictAt']:
-            goal = capacity * request['evictTo']
+        if total > limit:
             deep.sort(key=lambda item: item[0])
             for mtime, parts, path in deep:
                 if dedicated and total <= goal:
@@ -373,24 +392,63 @@ try:
                     gone = max(0, before - used())
                     total -= gone
                     freed += gone
-            files.sort(key=lambda item: item[0])
-            for mtime, size, parts, path in files:
+            for copy in sorted((copy for copy in copies if copy['whole']), key=lambda copy: -copy['bytes']):
                 if total <= goal:
                     break
+                before = used() if dedicated else 0
                 try:
-                    leaf_fd = open_path(root, parts)
+                    fd = open_path(root, copy['parts'])
                 except OSError:
                     continue
                 try:
-                    if not unlink_at(leaf_fd, path):
-                        continue
+                    for name, _ in children(fd):
+                        remove_tree(fd, name)
                 except OSError:
                     continue
                 finally:
-                    os.close(leaf_fd)
-                total -= size
-                freed += size
+                    os.close(fd)
+                gone = max(0, before - used()) if dedicated else copy['bytes']
+                total -= gone
+                freed += gone
                 removed += 1
+            sized = [copy for copy in copies if not copy['whole']]
+            if total > goal:
+                room = max(0, goal - max(0, total - sum(copy['bytes'] for copy in sized)))
+                groups = {}
+                for copy in sized:
+                    groups.setdefault(copy['parts'][0], []).append(copy)
+                names = sorted(groups)
+                rooms = fair(room, [sum(copy['bytes'] for copy in groups[name]) for name in names])
+                for name, share in zip(names, rooms):
+                    for copy, part in zip(groups[name], fair(share, [copy['bytes'] for copy in groups[name]])):
+                        copy['over'] = copy['bytes'] - part
+                for copy in sorted(sized, key=lambda copy: -copy['over']):
+                    over = copy['over']
+                    if over < 1 or total <= goal:
+                        break
+                    try:
+                        fd = open_path(root, copy['parts'])
+                    except OSError:
+                        continue
+                    files = []
+                    seen[0] = 0
+                    try:
+                        walk(fd, [], 0, lambda path, size, mtime: files.append((mtime, path, size)))
+                        files.sort()
+                        for mtime, path, size in files:
+                            if over < 1 or total <= goal:
+                                break
+                            try:
+                                if not unlink_at(fd, path):
+                                    continue
+                            except OSError:
+                                continue
+                            over -= size
+                            total -= size
+                            freed += size
+                            removed += 1
+                    finally:
+                        os.close(fd)
         print(json.dumps({'removed': removed, 'bytes': freed, 'truncated': truncated[0]}))
     else:
         raise RuntimeError('unknown janitor mode')

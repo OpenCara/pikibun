@@ -61,6 +61,7 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/me`]: { body: { user } },
     [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [sessionRecord, archived] } },
     [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [workspace] } },
+    [`GET ${ORIGIN}/api/deleted-workspaces`]: { body: { workspaces: [] } },
     [`GET ${ORIGIN}/api/workspaces/w1/members`]: { body: { members: [{ userId: "u1", githubLogin: "ada", role: "owner" }] } },
     [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [host] } },
     [`GET ${ORIGIN}/api/workspaces/w1/models`]: { body: { models: [{ id: "m1", workspaceId: "w1", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" }] } },

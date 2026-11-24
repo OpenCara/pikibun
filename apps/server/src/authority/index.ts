@@ -53,5 +53,6 @@ export { registerSources, sourceRead } from './sources/sources.js';
 export { registerSourceOAuth } from './sources/source-oauth.js';
 export { registerRemoteMcp, remoteMcpCall, workspaceRemoteTools } from './remote-mcp/index.js';
 
-export { auditAfterChange, auditStatement, workspaceDeletionAuditStatements } from './audit.js';
+export { auditAfterChange, auditStatement } from './audit.js';
+export { deletedWorkspaceSQL, isDeletedWorkspace, registerDeletedWorkspaces } from './deleted-workspaces.js';
 export { onSessionChange } from './changes.js';

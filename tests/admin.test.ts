@@ -140,7 +140,7 @@ test('the admin lists every account, workspace and host, without what anyone wor
 
   const workspaces = await json<AdminList<AdminWorkspace>>(await operator.request('GET', '/api/admin/workspaces'));
   assert.deepEqual(workspaces.items.map(item => ({ ...item, createdAt: '' })), [{ id: workspaceId, name: 'Team', ownerId: alice.user.id, ownerName: 'alice',
-    ownerGithubLogin: null, createdAt: '', members: 2, repositories: 0, hosts: 1, sessions: 2 }]);
+    ownerGithubLogin: null, createdAt: '', deletedAt: null, members: 2, repositories: 0, hosts: 1, sessions: 2 }]);
 
   const hostsResponse = await operator.request('GET', '/api/admin/hosts');
   const hosts = await json<AdminList<AdminHost>>(hostsResponse.clone());

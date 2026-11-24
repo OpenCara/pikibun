@@ -228,9 +228,10 @@ async function read(call: Call, targetId: string, messageId: string | undefined,
   const message = messageId === undefined ? undefined : await c.env.DB.query<MessageRow>(
     "SELECT * FROM session_messages WHERE id = ? AND origin_session_id = ? AND target_session_id = ? AND submission_id <> ''").bind(messageId, origin.id, other.id).first();
   if (messageId !== undefined && !message) fail(404, 'not_found', 'This session sent that session no such message.');
-  const view = await asActor(c.env, actorId, async inner => (await sessionView(inner, other, { display: await transcriptDisplay(inner, other) })).view);
+  const views = await asActor(c.env, actorId, async inner => sessionView(inner, other, { display: await transcriptDisplay(inner, other) }));
   const fresh = await sessionAccess(c.env, other.id, actorId);
   if (!fresh || !hasPermission(fresh.permissions, 'read')) fail(403, 'permission_revoked', 'Session access is no longer authorized.');
+  const { view } = views.for(fresh.permissions);
   const shared = new Set(view.conversations.filter(conversation => conversation.mode === 'write').map(conversation => conversation.id));
   const entries = view.entries.filter(entry => entry.conversationId === undefined || shared.has(entry.conversationId)).slice(-limit)
     .map(entry => ({ id: entry.id, role: entry.role, kind: entry.kind, ...(entry.actorId ? { actorId: entry.actorId } : {}), text: cut(entry.text, crossSessionLimits.entryChars),
@@ -451,7 +452,7 @@ export async function childModel(env: Env, origin: SessionRow, actorId: string, 
 export async function sessionCurrentModel(env: Env, origin: SessionRow, actorId: string): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
   let agent: SessionView['agent'];
   try {
-    agent = (await asActor(env, actorId, inner => sessionView(inner, origin))).view.agent;
+    agent = (await asActor(env, actorId, inner => sessionView(inner, origin))).for([]).view.agent;
   } catch {
     agent = undefined;
   }
@@ -508,8 +509,8 @@ export async function runCrossSessionNotifications(env: Env, at = Date.now()): P
 async function notify(env: Env, message: MessageRow): Promise<{ delivered: string } | { waiting: string }> {
   const record = messageRecord(message);
   return asActor(env, message.actor_id, async c => {
-    const { row: target } = await requireSession(c, message.target_session_id, 'read');
-    const outcome: CrossSessionOutcome = messageOutcome((await sessionView(c, target, { display: await transcriptDisplay(c, target) })).view as SessionView, record);
+    const { row: target, permissions: held } = await requireSession(c, message.target_session_id, 'read');
+    const outcome: CrossSessionOutcome = messageOutcome((await sessionView(c, target, { display: await transcriptDisplay(c, target) })).for(held).view as SessionView, record);
     if (!outcome.done) return { waiting: outcome.waiting ? 'target_waiting' : 'target_working' };
     const { row: origin } = await requireSession(c, message.origin_session_id, 'write');
     if (busyActivities.includes(origin.activity ?? '')) return { waiting: 'session_busy' };

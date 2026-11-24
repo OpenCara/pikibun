@@ -36,7 +36,7 @@ These are defaults for what nobody has chosen. Shared workspaces made before the
 
 Owners and admins rename a workspace with **General → Rename** (`PATCH /api/workspaces/:id` with `{"name": "…"}`); everyone in it sees the new name. The audit log records who renamed it, not the names.
 
-The owner deletes a workspace with **General → Delete…** (`DELETE /api/workspaces/:id`), after confirming: it goes for everyone, with its members, sources, models, settings and schedules, and can't be undone. Only a workspace that has never had a session can be deleted: sessions, archived ones included, are kept with their backups and history, so a workspace with any is refused (`409 workspace_in_use`), as is one whose models an agent still uses. Your [private workspace](#your-private-workspace) can't be deleted. The audit log keeps the workspace's earlier entries, no longer tied to it, and records who deleted it, with its ID and name.
+The owner deletes a workspace with **General → Delete…**, and can restore it later (see [Deleting a workspace](#deleting-a-workspace)).
 
 Owners and admins add people with **Members → Add member**, entering the person's **User ID** and a role; saving an existing member changes their role, which takes effect at once. Or they share an invite link instead (see [Invite links and pending members](#invite-links-and-pending-members)). Below the owner there are four tiers:
 
@@ -54,7 +54,7 @@ Every session is visible to every member of its workspace; there are no private 
 | Send messages to any session and stop its work | ✓ | ✓ | ✓ | | |
 | Rename, archive or unarchive any session, change its tool output, give it session roles, turn off its share link | ✓ | ✓ | | | |
 | Rename the workspace | ✓ | ✓ | | | |
-| Delete the workspace, if it has no sessions | ✓ | | | | |
+| Delete and restore the workspace | ✓ | | | | |
 | Add and remove sources (repositories, documents), set repositories' push policy and Git LFS | ✓ | ✓ | | | |
 | Manage push identities | ✓ | ✓ | | | |
 | Set network access | ✓ | ✓ | | | |
@@ -108,6 +108,19 @@ A workspace schedule starts a new session on a schedule, as its owner, with its 
 - **Owners who can't run them**: a run whose owner has left the workspace, become a viewer or been suspended starts nothing; the schedule pauses and says why (`owner_unavailable`). An owner or admin can take it over and resume it.
 - **Made from a session**: a schedule a session's agent made with its `schedule` tool (`run_in: child`), or one made in a session's panel before schedules moved here, remembers that session. Its runs start under it in lists, and while it names no model it starts them on that session's current model and reasoning level. It falls back on those when its own model is gone (`model_unavailable`, with the run going ahead) or where the workspace no longer lets agents choose (`child_models_disabled`). It shows in that session's **Schedules** tab too, and keeps running once the session is archived. Schedules made from a session before this change whose session was already archived were paused, as they had been running nothing.
 - Each run is audited as the owner's `session.submit` in the new session, with `workspace.schedule.session_started` (on the session it was made from, if any); making, changing and deleting them as `workspace.schedule.created`, `.updated` (with `takenOverFrom` when someone took it over) and `.deleted`. The server checks for due ones every 30 seconds. See [docs/design/workspace-schedules.md](design/workspace-schedules.md).
+
+## Deleting a workspace
+
+The owner deletes a workspace with **General → Delete…** (`DELETE /api/workspaces/:id`), after confirming, whatever it holds. It goes at once for everyone in it, the owner included: it leaves their workspace lists and settings, and its sessions, archived ones too, can no longer be opened, messaged, shared or run, nor its hosts and schedules used. Nothing in it is erased: sessions, backups, sources, models, settings, tool groups and session roles are all kept. Its invite link is turned off and its pending members are declined. Your [private workspace](#your-private-workspace) can't be deleted, and only the owner deletes a workspace (`403` for anyone else).
+
+The owner finds it under **Settings → Workspaces → Deleted workspaces** (`GET /api/deleted-workspaces`), with when it was deleted and how many members and sessions it had:
+
+- **Restore** (`POST /api/deleted-workspaces/:id/restore`) brings it back as it was, for everyone who was in it, with the same roles, sessions and settings. It has no invite link until one is created again.
+- **Delete for good** (`DELETE /api/deleted-workspaces/:id`) erases a deleted workspace with its members, sources, models, settings and schedules, and can't be undone. It is offered only for a workspace that has never had a session: Pikibun never erases sessions, their backups or their history, so one with any can only stay deleted (`409 workspace_in_use`), as can one whose models an agent still uses.
+
+While it is deleted, its schedules are skipped without being paused, recording `workspace_deleted` as their last error, and run again on their next time once it is restored. A deleted workspace's running sessions lose their access as a removed member's do. Server administrators see it under **Administration → Workspaces**, marked **Deleted**.
+
+The audit log records `workspace.deleted` and `workspace.restored` on the workspace. Deleting it for good records `workspace.purged`, with its ID and name, and keeps its earlier entries, no longer tied to it. See `apps/server/src/authority/deleted-workspaces.ts`: a deleted workspace's memberships are set aside in `deleted_workspace_members`, so every access check, which goes through workspace membership, refuses it.
 
 ## Managing the workspace from a session
 

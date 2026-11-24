@@ -75,7 +75,7 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
       let evaluation = ruleEvaluation(content, { followUpAllowed: true });
       let current: Parameters<typeof dispatchModel>[2];
       if (evaluation.kind === 'follow-up') {
-        const { view } = await sessionView(c, row, { latest: true });
+        const { view } = (await sessionView(c, row, { latest: true })).for([]);
         if (view.agent && view.entries.some(entry => entry.role === 'user')) {
           current = { provider: view.agent.provider, modelId: view.agent.modelId,
             ...(thinkingLevels.includes(view.agent.thinkingLevel as never) ? { thinkingLevel: view.agent.thinkingLevel as ChatOptions['thinkingLevel'] } : {}) };
@@ -153,7 +153,7 @@ export async function submitMessage(c: AppContext, row: SessionRow, mode: 'submi
 
 async function withCurrentModel(c: AppContext, row: SessionRow, options: Record<string, unknown> | undefined): Promise<Record<string, unknown> | undefined> {
   if (options?.model !== undefined || options?.auto !== undefined || !await messageNeedsModel(c.env, row)) return options;
-  const { agent } = (await sessionView(c, row, { latest: true })).view;
+  const { agent } = (await sessionView(c, row, { latest: true })).for([]).view;
   if (agent) {
     return { ...options, model: { provider: agent.provider, modelId: agent.modelId }, ...(options?.thinkingLevel === undefined && agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) };
   }
@@ -366,7 +366,7 @@ export async function forkSession(c: AppContext, source: SessionRow, entryId: st
   const actorId = c.get('auth').userId;
   requireUnfrozen(source);
   if (!source.connector_id) fail(409, 'connector_required', 'Only a session on a connected host can be forked.');
-  const { agent, memberForks, askForks, conversations } = (await sessionView(c, source, { latest: true })).view;
+  const { agent, memberForks, askForks, conversations } = (await sessionView(c, source, { latest: true })).for([]).view;
   if (source.owner_id !== actorId && memberForks !== true) {
     fail(409, 'connector_update_required', 'Only the session owner can fork it on this host until its connector is updated (npx pikibun@latest connect).');
   }
@@ -447,12 +447,13 @@ function pollingEvents(c: AppContext, row: SessionRow): Response {
       for (let snapshot = 0; snapshot < snapshots && !stream.aborted; snapshot++) {
         const display = await Promise.race([transcriptDisplay(c, row), stopped]);
         if (!display || stream.aborted) break;
-        const shown = await Promise.race([sessionView(c, row, { display }), stopped]);
-        if (!shown || stream.aborted) break;
+        const views = await Promise.race([sessionView(c, row, { display }), stopped]);
+        if (!views || stream.aborted) break;
         const access = await Promise.race([requireSession(c, row.id, 'read'), stopped]);
         if (!access || stream.aborted) break;
         if (access.row.connector_id) await requireConnectorSession(c.env, access.row.connector_id, access.row);
         if (stream.aborted) break;
+        const shown = views.for(access.permissions);
         const patch = since === undefined ? null : viewChanges(c, row, held, shown, display);
         held = shown.revision;
         await Promise.race([stream.writeSSE(patch ? { event: 'patch', data: JSON.stringify({ patch }) }
@@ -588,9 +589,10 @@ export function registerSessions(app: Hono<AppEnv>): void {
   });
   app.get('/api/sessions/:id/view', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');
-    const shown = await sessionView(c, row, { latest: true, display: await transcriptDisplay(c, row) });
+    const views = await sessionView(c, row, { latest: true, display: await transcriptDisplay(c, row) });
     const fresh = await requireSession(c, row.id, 'read');
     if (fresh.row.connector_id) await requireConnectorSession(c.env, fresh.row.connector_id, fresh.row);
+    const shown = views.for(fresh.permissions);
     return c.json({ view: shown.view, revision: shown.revision });
   });
   app.get('/api/sessions/:id/entries', async c => {
@@ -606,7 +608,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     const fresh = await requireSession(c, row.id, 'read');
     if (fresh.row.connector_id) await requireConnectorSession(c.env, fresh.row.connector_id, fresh.row);
     if (!page) fail(409, 'entries_changed', 'The transcript changed. Scroll up again to load earlier messages.');
-    return c.json(page, 200, { 'Cache-Control': 'private, no-store' });
+    return c.json(page(fresh.permissions), 200, { 'Cache-Control': 'private, no-store' });
   });
   app.get('/api/sessions/:id/events', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');

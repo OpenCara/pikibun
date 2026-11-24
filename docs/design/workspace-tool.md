@@ -50,7 +50,7 @@ button is. The `workspace` tool lets the agent make the change, within the same 
 7. **Changes keep what they don't name.** `set_extension` reads the extension first and keeps whether it is on, its
    `tools` mode and its settings unless the call names them, because the extensions route replaces the whole entry:
    changing an extension's settings from a session must not turn it on, and turning it off must not wipe what an admin
-   configured. An extension the workspace doesn't have yet is added on. The network actions read the policy and change
+   configured. A `piki:` extension the workspace doesn't have yet is added on (decision 12 covers the others). The network actions read the policy and change
    one thing (the mode, or one domain), then save the whole policy as the settings page does, so two saves at the same
    moment keep the later one, as two saves from the page would.
 
@@ -78,6 +78,34 @@ button is. The `workspace` tool lets the agent make the change, within the same 
     only by default), the sender's role limits every change through the routes, a Read-only message changes nothing, and
     the most sensitive settings aren't reachable at all (decision 10). Workspaces that turn it on should keep it to the
     people they would trust to make those changes by hand, and every change is in the workspace's activity.
+
+12. **No new third-party code from a session.** The settings page's rule (an owner or admin may add any `npm:` or
+    `git:` source) is not enough for an agent: on sandboxed hosts a listed `npm:` extension is fetched and run in every
+    session without the host owner installing it ([extension-planes.md](extension-planes.md), phase 2), so a
+    prompt-injected agent in an admin's session could otherwise run a package of its choosing in everyone's sessions.
+    This is the one place the tool is narrower than its sender's role. `set_extension` normalizes the source and
+    compares it with the workspace's list before it calls the route (`requireListedSource`):
+    - a `piki:` source is always taken: built-ins are Pikibun's own code, already on the host or the Pikibun server;
+    - an `npm:` or `git:` source is taken only when the workspace lists exactly that source, so the call can only
+      turn it on or off or change its settings;
+    - anything else is refused with `403 extension_source_not_listed`: a source the workspace doesn't list, and
+      another version or commit of one it lists. A new version is new code, and the workspace's integrity lock belongs
+      to the version a person chose, so an update is a person's decision too. Allowing "the same integrity" would
+      allow nothing more than the exact-source rule does, since a different version never has the same digest.
+
+    The refusal names the page (**Settings → Workspaces →** the workspace **→ Extensions**) so the agent tells the
+    person rather than looks for another way. `remove_extension` is unchanged: removing runs no new code.
+
+    The other actions were read for the same hole when this was added. None adds code or a remote MCP server: the
+    tool has no remote MCP action, and `sources` only reads. What a steered agent can still reach, all of it built-in
+    behaviour that decision 11 already leaves to the gates:
+    - `piki:context-files`' `context-files` setting takes `https://` pages, so a settings change can put a page's
+      text into every session's system prompt;
+    - it can add `piki:skills` (repositories' skills are then listed for the model), `piki:tunnel` and
+      `piki:artifacts`;
+    - it can remove or turn off a guard (`piki:prompt-audit`, `npm:cc-safety-net`);
+    - it can open the network (`set_network_mode`, `allow_domain`), add a repository its sender can read, and move a
+      member to a tool group with more tools.
 
 ## Where things are
 
