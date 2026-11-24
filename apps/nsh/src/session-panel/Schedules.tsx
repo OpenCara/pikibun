@@ -4,6 +4,7 @@ import { segment } from "../shared";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { createAction, createResource } from "../lib/resource";
+import { showWorkspaceTab } from "../lib/workspace-tabs";
 import { Button, confirm, EmptyState, Feedback, IconButton, Note, ResourceState, Section } from "../ui";
 import { ScheduleCard, ScheduleForm } from "../components/Schedules";
 import { TabPage, type PanelTabProps } from "./parts";
@@ -53,7 +54,9 @@ export function Schedules(props: PanelTabProps) {
   const madeHere = () => (listing.data()?.schedules ?? []).filter(schedule => schedule.runIn === "child");
   const workspaceSchedules = () => {
     const workspaceId = props.session()?.workspaceId;
-    if (workspaceId) props.go({ name: "settings", section: "workspaces", id: workspaceId });
+    if (!workspaceId) return;
+    showWorkspaceTab(workspaceId, "sessions");
+    props.go({ name: "settings", section: "workspaces", id: workspaceId });
   };
   const card = (schedule: () => Schedule) => (
     <ScheduleCard schedule={schedule()} models={listing.data()?.models} manage={manages(schedule())} busy={action.busy()} showOwner={schedule().ownerId !== props.session()?.ownerId}

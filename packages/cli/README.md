@@ -135,7 +135,7 @@ The sandbox has no network, so `gh` and `curl` inside it can't reach GitHub. Age
 - `github_merge` merges a pull request of one of those repositories at the exact head commit the agent read, with a merge commit, squash or rebase. It runs at once, never in a **Read only** message; leave `github_merge` out of a member's tool group, or protect branches on GitHub, where merges need a person. If the head moved or GitHub refuses (failing checks, missing reviews, conflicts, a method the repository doesn't allow), nothing is merged and the agent gets GitHub's reason.
 - `github_comment` posts a comment, never in a **Read only** message.
 - `github_issue` opens an issue with exactly the agent's title and body in one of those repositories, and gives the agent its number and URL (connector newer than 0.9.0). It runs at once, never in a **Read only** message. If GitHub refuses (issues turned off, no access), no issue is opened and the agent gets GitHub's reason.
-- In messages the session owner sends themselves, `github_read`, `github_merge` and `github_issue` may also name any repository the owner's GitHub account can access, once the owner turned that on for themselves under **Settings → Workspaces → Your GitHub reach**. Anyone else's messages keep to the workspace's repositories.
+- In messages the session owner sends themselves, `github_read`, `github_merge` and `github_issue` may also name any repository the owner's GitHub account can access, unless the owner turned that off for themselves under **Settings → Workspaces →** the workspace **→ Agents → Your GitHub reach**. Anyone else's messages keep to the workspace's repositories.
 
 ## Extensions
 
