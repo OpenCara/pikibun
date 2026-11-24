@@ -138,7 +138,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const repositoriesReady = () => Boolean(repositories() && !repos.error() && !repos.loading() && (sourceCount() || !repositoriesRequired()));
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
   const hostSessions = () => Boolean(host()?.hostSessions);
-  const runOnHost = () => hostSessions() && (onHost() ?? personal());
+  const runOnHost = () => hostSessions() && (onHost() ?? true);
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
   let trustKey: string | undefined;
@@ -239,10 +239,10 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   } : undefined);
   const environmentPicker = () => (
     <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} onSelect={value => onHost.set(value === "host")} placement="bottom"
-      trigger={<Chip small testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} tone={runOnHost() ? "danger" : undefined} disabled={action.busy()} />}
+      trigger={<Chip small testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} disabled={action.busy()} />}
       options={[
-        { value: "sandbox", label: "Sandbox", icon: "shield", hint: "Isolated, with the workspace's network access" },
-        { value: "host", label: "On this host", icon: "server", hint: "No sandbox: runs as the host's user" },
+        { value: "host", label: "On this host", icon: "server", hint: `No sandbox: runs on ${host()?.name ?? "the host"} as its user, with its files, credentials and network` },
+        { value: "sandbox", label: "Sandbox", icon: "shield", hint: "Isolated, with the workspace's network access. For code or pages you don't trust" },
       ]} />
   );
 
@@ -303,16 +303,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
             </Banner>
           )}
         </If>
-        <If when={runOnHost() ? host() : undefined}>
-          {current => (
-            <Banner testID="new-on-host" collapsible tone="warning" title={foreign() ? `Runs on ${current().ownerName}'s host, without the sandbox` : "Runs on your host, without the sandbox"}>
-              {`${foreign() ? `${current().ownerName} granted you sessions on ${current().name}. ` : ""}Its commands run on ${current().name} as its user, with its files, credentials, network and GPU, and no resource limits; the workspace's network access doesn't apply. Approve them as you would commands you run yourself: ${foreign()
-                ? `people you share the session with can decide them only if they also hold host commands on ${current().name}.`
-                : "people you share the session with can't decide them unless you granted them host commands."}`}
-            </Banner>
-          )}
-        </If>
-        <If when={host() && !action.busy() ? host() : undefined}>{current => <UnsandboxedHost connector={current()} />}</If>
+        <If when={foreign() && !action.busy() ? host() : undefined}>{current => <UnsandboxedHost connector={current()} />}</If>
         <Feedback error={action.error()} />
         <If when={action.busy()}>
           <Small>Resolving repository commits and downloading snapshots to the Pi host's private session cache. The agent starts once every repository is ready.</Small>

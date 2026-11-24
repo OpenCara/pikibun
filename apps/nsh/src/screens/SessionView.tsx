@@ -238,11 +238,8 @@ export function SessionView(props: { id: string; page: boolean; front?: () => bo
           </Banner>
         )}
       </If>
-      <If when={live.session()?.hostUnsandboxed && permissions().includes("write")}>
-        <If when={live.session()?.hostEnvironment}
-          else={<Banner collapsible tone="danger" title="Unsandboxed host">This session's host runs without a sandbox. Its commands and commits run directly on the host owner's machine with their full user permissions, network access and no resource limits.</Banner>}>
-          <Banner collapsible tone="danger" title="Runs on the host">This session runs directly on its host, without the sandbox. Its commands and commits run on the host owner's machine with their full user permissions, network access and no resource limits, for the host owner and members they granted host commands only.</Banner>
-        </If>
+      <If when={live.session()?.hostUnsandboxed && !live.session()?.hostEnvironment && live.session()?.connectorOwnerId !== user.id && permissions().includes("write")}>
+        <Banner testID="session-unsandboxed-host" collapsible tone="warning" title="Unsandboxed host">This session's host runs without a sandbox. Its commands and commits run directly on the host owner's machine with their full user permissions, network access and no resource limits.</Banner>
       </If>
     </View>
   );

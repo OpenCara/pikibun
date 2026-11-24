@@ -201,7 +201,7 @@ function HostSection(props: Part) {
           trailing={props.hostsLoading() && !props.hosts() ? "Checking…" : host() ? <ConnectionStatus connector={host()!} />
             : props.current.hostUnsandboxed ? <Badge tone="danger">Unsandboxed</Badge> : undefined} />
         <If when={props.current.hostEnvironment}>
-          <Row leading={icon("server")} title="Runs on the host" hint="No sandbox: its commands run on the host owner's machine, as its user" trailing={<Badge tone="danger">On host</Badge>} />
+          <Row leading={icon("server")} title="Runs on the host" hint="No sandbox: its commands run on the host owner's machine, as its user" trailing={<Badge>On host</Badge>} />
         </If>
         <If when={host()}>{current => <CardBody><HostCapabilities connector={current()} /></CardBody>}</If>
         <If when={props.hosts() && !host()}>
