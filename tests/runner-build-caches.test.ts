@@ -151,6 +151,17 @@ test("eviction takes the oldest files of the copy furthest over its share, whate
   assert.deepEqual(big.filter(path => !existsSync(path)), big.slice(0, 4), "within the copy over its share, the least recently written go first");
 });
 
+test("eviction stops once the root is under its target, though each copy over its share has more to give", { skip: pythonMissing }, async t => {
+  const store = new BuildCacheStore(join(await scratch(t, "build-cache-stop-"), "build-caches"));
+  const first = join(await store.prepare("a", { name: "ccache", scope: "shared" }, "o"), "only.o");
+  const second = join(await store.prepare("b", { name: "ccache", scope: "shared" }, "o"), "only.o");
+  await writeFile(first, Buffer.alloc(8192));
+  await writeFile(second, Buffer.alloc(8192));
+  const evicted = await store.evict(16 * 1024);
+  assert.equal(evicted.removed, 1, "one file larger than both copies' excess is enough");
+  assert.equal([first, second].filter(path => existsSync(path)).length, 1);
+});
+
 test("a file dated ahead of the host's clock counts from when it was really changed", { skip: pythonMissing }, async t => {
   const store = new BuildCacheStore(join(await scratch(t, "build-cache-clock-"), "build-caches"));
   const shared = await store.prepare("w", { name: "ccache", scope: "shared" }, "o");
@@ -184,6 +195,9 @@ test("a copy with more entries than a walk counts is emptied before any other co
   await fill(join(many, "sub"), "many", 12, () => new Date("2099-01-01T00:00:00Z"));
   const other = await fill(await store.prepare("b", { name: "ccache", scope: "shared" }, "o"), "other", 4, hour);
 
+  const listed = await runBuildCacheJanitor({ root, mode: "list", entries: 8 }) as { caches: { workspace: string; files: number }[]; truncated: boolean };
+  assert.equal(listed.truncated, true);
+  assert.equal(listed.caches.find(item => item.workspace === "b")!.files, 4, "one copy's size doesn't cut short the listing of the next");
   const evicted = await runBuildCacheJanitor({ root, mode: "evict", capacity: 24 * 1024, evictAt: 0.9, evictTo: 0.8, entries: 8 }) as { truncated: boolean };
   assert.equal(evicted.truncated, true, "the walk says it stopped short");
   assert.deepEqual(await readdir(many), [], "the copy that couldn't be counted is emptied, and its directory stays for the sessions that mount it");

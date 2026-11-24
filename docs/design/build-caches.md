@@ -148,7 +148,8 @@ within its own copy:
   directories). What a workspace or a copy doesn't use of its part goes to the others in equal parts, so the shares
   always add up to the 80%. Shares are worked out again at each pass from what is on disk; nothing is configured.
 - **Who loses files.** Only copies holding more than their share, starting with the one furthest over it, and each
-  only down to its share. A copy at or under its share loses nothing, whatever its files' dates and however full
+  only down to its share; files go whole, so the pass stops as soon as the root is under the 80%, even if a later
+  copy is still a little over its share. A copy at or under its share loses nothing, whatever its files' dates and however full
   another copy is. This is also each workspace's guarantee: other workspaces can't push it below the 80% divided by
   the number of workspaces with caches. A fixed limit per workspace, which a host's owner would set, isn't built.
 - **Which files.** Within a copy, the least recently changed first. A file's time is its modification time, which

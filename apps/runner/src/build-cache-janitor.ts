@@ -291,6 +291,7 @@ try:
                 fd = open_path(root, leaf_parts(leaf))
             except OSError:
                 continue
+            seen[0] = 0
             try:
                 usage = walk(fd, [], 0, None)
                 mtime = changed(os.fstat(fd))
@@ -423,7 +424,7 @@ try:
                         copy['over'] = copy['bytes'] - part
                 for copy in sorted(sized, key=lambda copy: -copy['over']):
                     over = copy['over']
-                    if over < 1:
+                    if over < 1 or total <= goal:
                         break
                     try:
                         fd = open_path(root, copy['parts'])
@@ -435,7 +436,7 @@ try:
                         walk(fd, [], 0, lambda path, size, mtime: files.append((mtime, path, size)))
                         files.sort()
                         for mtime, path, size in files:
-                            if over < 1:
+                            if over < 1 or total <= goal:
                                 break
                             try:
                                 if not unlink_at(fd, path):
@@ -443,6 +444,7 @@ try:
                             except OSError:
                                 continue
                             over -= size
+                            total -= size
                             freed += size
                             removed += 1
                     finally:
