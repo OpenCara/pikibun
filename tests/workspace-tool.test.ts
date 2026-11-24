@@ -253,6 +253,58 @@ test('an agent reads and manages its workspace as its message\'s sender, through
   assert.equal((await f.ok<{ members: unknown[] }>(f.tool('owner-session', ownerId, write, { action: 'members' }))).members.length, 2);
 });
 
+test('the workspace tool adds only Pikibun\'s own extensions: a third-party source, or another version of a listed one, is a person\'s to add on the settings page', async t => {
+  const f = await fixture(t);
+  await f.turnOn();
+  const ownerId = f.owner.user.id;
+  const write = f.admit('owner-session', ownerId);
+  const path = `/api/workspaces/${f.workspace.id}/extensions`;
+  const sources = async () => (await (await f.owner.request('GET', path)).json() as { extensions: { source: string; enabled: boolean }[] }).extensions;
+  const before = (await sources()).map(item => item.source);
+  const commit = 'a'.repeat(40);
+  const audits = () => (f.sqlite.prepare("SELECT COUNT(*) AS count FROM audit WHERE action IN ('session.workspace_tool.changed', 'workspace.extension.updated')").get() as { count: number }).count;
+  const audited = audits();
+
+  for (const extension of ['npm:left-pad@1.3.0', `git:https://github.com/acme/extension@${commit}`, `git:github.com/acme/extension@${commit}#extensions/one`]) {
+    for (const more of [{}, { enabled: false }, { settings: '{"flag":true}' }]) {
+      const { status, body } = await f.tool('owner-session', ownerId, write, { action: 'set_extension', extension, ...more });
+      assert.deepEqual([status, body.code], [403, 'extension_source_not_listed'], JSON.stringify(body));
+      assert.match(body.error!, /isn't in this workspace's extensions.*piki:<name>.*a person adds it under Settings → Workspaces → the workspace → Extensions/);
+    }
+  }
+  assert.deepEqual((await sources()).map(item => item.source), before, 'nothing was added');
+  assert.equal(audits(), audited, 'a refused call changed nothing to record');
+
+  assert.equal((await f.owner.request('PUT', path, { source: 'npm:left-pad@1.3.0', enabled: false, settings: { flag: 'a' } })).status, 200);
+  assert.equal((await f.owner.request('PUT', path, { source: `git:https://github.com/acme/extension@${commit}`, enabled: false })).status, 200);
+  const on = await f.ok<{ extension: { source: string; enabled: boolean; settings: Record<string, unknown> }; added?: boolean }>(
+    f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'npm:left-pad@1.3.0', enabled: true }));
+  assert.deepEqual([on.extension.source, on.extension.enabled, on.extension.settings, on.added], ['npm:left-pad@1.3.0', true, { flag: 'a' }, undefined],
+    'a source a person listed is turned on with its settings kept');
+  const changed = await f.ok<{ extension: { enabled: boolean; settings: Record<string, unknown> } }>(
+    f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'npm:left-pad@1.3.0', enabled: false, settings: '{"flag":"b"}' }));
+  assert.deepEqual([changed.extension.enabled, changed.extension.settings], [false, { flag: 'b' }]);
+  assert.equal((await f.ok<{ extension: { source: string; enabled: boolean } }>(
+    f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: `git:github.com/acme/extension.git@${commit}`, enabled: true }))).extension.enabled, true,
+  'the same source written another way is the listed one');
+
+  for (const extension of ['npm:left-pad@1.3.1', 'npm:left-pad@1.2.0', `git:https://github.com/acme/extension@${'b'.repeat(40)}`]) {
+    const { status, body } = await f.tool('owner-session', ownerId, write, { action: 'set_extension', extension, enabled: true });
+    assert.deepEqual([status, body.code], [403, 'extension_source_not_listed'], JSON.stringify(body));
+    assert.match(body.error!, /This workspace lists (npm:left-pad@1\.3\.0|git:https:\/\/github\.com\/acme\/extension@a{40})\..*another version of it.*A person changes it under Settings → Workspaces → the workspace → Extensions/);
+  }
+  const after = await sources();
+  assert.ok(after.some(item => item.source === 'npm:left-pad@1.3.0' && !item.enabled), 'the listed version stays');
+  assert.ok(!after.some(item => item.source.startsWith('npm:left-pad@') && item.source !== 'npm:left-pad@1.3.0'));
+  assert.ok(after.some(item => item.source === `git:https://github.com/acme/extension@${commit}`));
+
+  const added = await f.ok<{ extension: { source: string; enabled: boolean }; added?: boolean }>(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:pr-flow' }));
+  assert.deepEqual([added.extension.source, added.extension.enabled, added.added], ['piki:pr-flow', true, true], 'a built-in is still added from a session');
+  assert.equal((await f.ok<{ removed: string }>(f.tool('owner-session', ownerId, write, { action: 'remove_extension', extension: 'npm:left-pad@1.3.0' }))).removed, 'npm:left-pad');
+  await f.refused(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'npm:left-pad@1.3.0' }), 403, 'extension_source_not_listed');
+  assert.match(workspaceToolDefinition.description, /An npm: or git: source the workspace doesn't list yet, or another version or commit of one it lists, is refused/);
+});
+
 test('the workspace tool never does more than its sender may: their role, their tool group, a Read-only message and the request\'s own fields decide', async t => {
   const f = await fixture(t);
   await f.turnOn();

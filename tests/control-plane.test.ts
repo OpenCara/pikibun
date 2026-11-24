@@ -689,6 +689,81 @@ test('a client holding a revision gets patches: nothing while nothing changed, t
   }
 });
 
+const tunnelSecret = 'abcdefghijklmnopqrstuvwxyz012345';
+const tunnelOrigin = 'https://quiet-river.trycloudflare.com';
+const tunnelLink = `${tunnelOrigin}/?pikibun_tunnel=${tunnelSecret}`;
+const onlineTunnel = { url: tunnelLink, access: 'link' as const, startedBy: 'poll-owner', startedAt: '2026-11-22T09:00:00.000Z', expiresAt: '2026-11-22T13:00:00.000Z',
+  command: 'python3 desktop.py', port: 6080, connected: true };
+const linkEntries = [
+  { id: '0:1', kind: 'message', role: 'toolResult', text: JSON.stringify({ online: true, url: tunnelLink }), toolResult: { tool: 'tunnel', callId: 'c1' }, conversationId: '0' },
+  { id: '0:2', kind: 'message', role: 'assistant', text: `Your app is online at ${tunnelLink} for a day.`, conversationId: '0' },
+];
+
+test('a tunnel\'s secret link goes to the session\'s writers only: readers get its bare address, in the view and in the transcript', async t => {
+  const f = await pollingFixture(t);
+  const previousFetch = globalThis.fetch; t.after(() => { globalThis.fetch = previousFetch; });
+  const hostView = { ...f.view, tunnel: onlineTunnel, entries: linkEntries, conversations: [{ id: '0', title: 'Main', mode: 'write' }] };
+  globalThis.fetch = async () => Response.json({ view: hostView });
+  const read = async (client: typeof f.owner) => (await client.request('GET', '/api/sessions/poll-session/view')).json() as Promise<{ view: SessionView; revision: string }>;
+  const reader = await read(f.reader);
+  assert.ok(!JSON.stringify(reader).includes(tunnelSecret), 'A reader\'s view carries the secret nowhere');
+  assert.deepEqual(reader.view.tunnel, { ...onlineTunnel, url: tunnelOrigin }, 'A reader still sees that the app is online, and where');
+  assert.equal(reader.view.entries[1]!.text, `Your app is online at ${tunnelOrigin}/?pikibun_tunnel=[redacted] for a day.`);
+  const writer = await read(f.owner);
+  assert.deepEqual(writer.view.tunnel, onlineTunnel, 'A writer gets the link');
+  assert.equal(writer.view.entries[1]!.text, linkEntries[1]!.text);
+  assert.notEqual(writer.revision, reader.revision, 'The two views are revisions of their own');
+  const again = await read(f.reader);
+  assert.ok(!JSON.stringify(again).includes(tunnelSecret), 'A reader after a writer gets the reader\'s view, not the cached writer\'s');
+  assert.equal(again.revision, reader.revision);
+
+  f.sqlite.prepare('INSERT INTO session_grants (session_id,user_id,permissions_json,created_at) VALUES (?,?,?,?)')
+    .run('poll-session', f.reader.user.id, JSON.stringify(['read', 'ask']), new Date().toISOString());
+  assert.ok(!JSON.stringify(await read(f.reader)).includes(tunnelSecret), 'Asking side questions is not writing');
+  f.sqlite.prepare('UPDATE session_grants SET permissions_json = ? WHERE session_id = ? AND user_id = ?').run(JSON.stringify(['read', 'write']), 'poll-session', f.reader.user.id);
+  assert.deepEqual((await read(f.reader)).view.tunnel, onlineTunnel, 'A reader granted write gets the link');
+});
+
+test('a reader and a writer watching one session share a host read and each get their own view and patches', async t => {
+  const f = await pollingFixture(t);
+  const previousFetch = globalThis.fetch; t.after(() => { globalThis.fetch = previousFetch; });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let polls = 0;
+  let current: SessionView = { ...f.view, conversations: [{ id: '0', title: 'Main', mode: 'write' }] } as unknown as SessionView;
+  globalThis.fetch = async () => { polls++; return Response.json({ view: current }); };
+  const held = { owner: await (await f.owner.request('GET', '/api/sessions/poll-session/view')).json() as { view: SessionView; revision: string },
+    reader: await (await f.reader.request('GET', '/api/sessions/poll-session/view')).json() as { view: SessionView; revision: string } };
+  current = { ...current, tunnel: onlineTunnel, entries: linkEntries } as unknown as SessionView;
+  t.mock.timers.tick(1000);
+  polls = 0;
+  const [owner, reader] = await Promise.all([
+    f.owner.request('GET', `/api/sessions/poll-session/events?since=${held.owner.revision}`),
+    f.reader.request('GET', `/api/sessions/poll-session/events?since=${held.reader.revision}`),
+  ]);
+  const ownerReader = owner.body!.getReader();
+  const readerReader = reader.body!.getReader();
+  t.after(() => { void ownerReader.cancel(); void readerReader.cancel(); });
+  const [a, b] = (await Promise.all([ownerReader.read(), readerReader.read()])).map(chunk => new TextDecoder().decode(chunk.value));
+  assert.equal(polls, 1, 'The two watchers cost one host read');
+  const [toOwner] = events(a!);
+  const [toReader] = events(b!);
+  assert.equal(toOwner!.event, 'patch');
+  assert.equal(toReader!.event, 'patch');
+  assert.ok(a!.includes(tunnelSecret), 'The writer\'s patch brings the link');
+  assert.ok(!b!.includes(tunnelSecret), 'The reader\'s patch brings no secret');
+  assert.deepEqual(applyViewPatch(held.owner.view, toOwner!.data.patch as SessionViewPatch).tunnel, onlineTunnel);
+  const seen = applyViewPatch(held.reader.view, toReader!.data.patch as SessionViewPatch);
+  assert.deepEqual(seen.tunnel, { ...onlineTunnel, url: tunnelOrigin });
+  assert.deepEqual(seen.entries.map(entry => entry.id), ['0:1', '0:2']);
+  await Promise.all([ownerReader.cancel(), readerReader.cancel()]);
+
+  const writerRevision = (toOwner!.data.patch as SessionViewPatch).revision;
+  const stolen = await f.reader.request('GET', `/api/sessions/poll-session/events?since=${writerRevision}`);
+  const first = new TextDecoder().decode((await stolen.body!.getReader().read()).value);
+  assert.equal(events(first)[0]!.event, 'view', 'A writer\'s revision is no base for a reader\'s patch');
+  assert.ok(!first.includes(tunnelSecret));
+});
+
 test('workspace roles: viewers read and create nothing, members read, collaborators message every session, owners and admins manage every session', async t => {
   const f = await fixture(t);
   const owner = await f.client('roles-owner');
