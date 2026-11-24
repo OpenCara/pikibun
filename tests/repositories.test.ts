@@ -13,7 +13,7 @@ import { encryptToken } from '../apps/server/src/authority/vault.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
-import { defaultWorkspaceExtensions, starterWorkspaceExtensions, withSessionToolsListed } from '../packages/shared/src/host-extensions.js';
+import { defaultExtensionIntegrity, defaultWorkspaceExtensions, starterWorkspaceExtensions, withSessionToolsListed } from '../packages/shared/src/host-extensions.js';
 import type { LfsBatchResult } from '../packages/shared/src/network.js';
 import { type GitAccount, type ProviderRepository, type ProviderRepositoryList, type SessionRepository, type WorkspaceRepository, type WorkspaceRepositoryList } from '../packages/shared/src/repositories.js';
 import type { ModelDefinition, RunnerBinding, SessionRecord } from '../packages/shared/src/types.js';
@@ -231,7 +231,7 @@ test('repository API separates cookie/CSRF authentication, administrator writes,
   assert.equal(remote.calls.length, 1);
 });
 
-test('a workspace\'s first GitHub repository adds piki:gh and piki:github to its extensions beside the piki:git it started with, once: owners and admins remove them like any other', async t => {
+test('a workspace starts with piki:git, piki:gh and piki:github, so its first GitHub repository adds none; one its owners removed comes back with a later first repository', async t => {
   const f = await fixture(t); github(t);
   const owner = await f.client('owner');
   const team = await workspace(owner); const path = `/api/workspaces/${team.id}/repositories`;
@@ -239,12 +239,10 @@ test('a workspace\'s first GitHub repository adds piki:gh and piki:github to its
     await owner.request('GET', `/api/workspaces/${team.id}/extensions`))).extensions;
   const bind = async () => json<{ repository: WorkspaceRepository; extensions?: string[] }>(await owner.request('POST', path, repositoryInput), 201);
   const first = await bind();
-  assert.deepEqual(first.extensions, ['piki:gh', 'piki:github']);
-  const on = (source: string) => ({ source, enabled: true, tools: 'automatic' as const, settings: {} });
-  assert.deepEqual(await extensions(), withSessionToolsListed([
-    ...defaultWorkspaceExtensions.map(source => ({ source, enabled: starterWorkspaceExtensions.includes(source), tools: 'automatic' as const, settings: {} })),
-    on('piki:gh'), on('piki:github')]));
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.extension.updated'").get()!.n, 2);
+  assert.equal(first.extensions, undefined);
+  assert.deepEqual(await extensions(), withSessionToolsListed(defaultWorkspaceExtensions.map(source => ({ source, enabled: starterWorkspaceExtensions.includes(source),
+    tools: 'automatic' as const, settings: {}, ...(defaultExtensionIntegrity[source] ? { integrity: defaultExtensionIntegrity[source] } : {}) }))));
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.extension.updated'").get()!.n, 0);
   await json(await owner.request('PUT', `/api/workspaces/${team.id}/extensions`, { source: 'piki:gh', enabled: false }));
   assert.equal((await owner.request('DELETE', `${path}/${first.repository.id}`)).status, 204);
   assert.equal((await bind()).extensions, undefined);

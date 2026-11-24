@@ -11,6 +11,7 @@ import { addServer, auth, restore, servers, session, switchServer } from "./lib/
 import { createAction, type Action } from "./lib/resource";
 import { createNotificationDelivery } from "./lib/notifications";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
+import { isWorkspaceTab, shownWorkspaceTab, showWorkspaceTab } from "./lib/workspace-tabs";
 import { displayOrigin, usesBrowserSession } from "./lib/server";
 import { takeRememberedInvite, takeReturn } from "./lib/sign-in-memory";
 import { computerName, hostsHere, resumeThisComputer } from "./lib/this-computer";
@@ -134,7 +135,9 @@ function Shell() {
       case "sessions": nav.popToRoot(); nav.push({ name: "all-sessions" }); break;
       case "session": nav.popToRoot(); openSession(route.sessionId); break;
       case "new": nav.popToRoot(); startNew(route.workspaceId); break;
-      case "settings": nav.popToRoot(); openSettings(route.section, route.id); break;
+      case "settings":
+        if (route.section === "workspaces" && route.id) showWorkspaceTab(route.id, isWorkspaceTab(route.tab) ? route.tab : "overview");
+        nav.popToRoot(); openSettings(route.section, route.id); break;
       case "join": nav.popToRoot(); nav.push({ name: "join", token: route.token }); break;
       case "shared": break;
     }
@@ -154,14 +157,16 @@ function Shell() {
     const top = nav.routes().at(-1);
     const beside = selected();
     const at = settingsAt();
+    const shownTab = shownWorkspaceTab();
+    const tabOf = (section?: string, id?: string) => (section === "workspaces" && id && shownTab?.workspaceId === id && shownTab.tab !== "overview" ? { tab: shownTab.tab } : {});
     untracked(() => {
       if (!top) return;
       switch (top.name) {
         case "session": return showRoute({ name: "session", sessionId: top.id });
         case "sessions": return showRoute(beside && wide() ? { name: "session", sessionId: beside } : { name: "home" });
         case "new": return showRoute(top.workspaceId ? { name: "new", workspaceId: top.workspaceId } : { name: "home" });
-        case "settings": return showRoute(wide() ? { name: "settings", ...at } : { name: "settings" });
-        case "settings-section": return showRoute({ name: "settings", section: top.section, ...(top.id ? { id: top.id } : {}) });
+        case "settings": return showRoute(wide() ? { name: "settings", ...at, ...tabOf(at.section, at.id) } : { name: "settings" });
+        case "settings-section": return showRoute({ name: "settings", section: top.section, ...(top.id ? { id: top.id } : {}), ...tabOf(top.section, top.id) });
         case "join": return showRoute({ name: "join", token: top.token });
         case "all-sessions": return showRoute({ name: "sessions" });
         default: return showRoute({ name: "home" });

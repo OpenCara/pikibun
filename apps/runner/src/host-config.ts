@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join, relative, sep } from "node:path";
-import { defaultHostConfig, hostConfigLimits, readHostConfig, type GpuKind, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
+import { commandSeconds, defaultHostConfig, hostConfigLimits, readHostConfig, unlimitedCommandSeconds, type GpuKind, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
 
 const CONFIG_TTL_MS = 30_000;
 const CONFIG_STALE_MS = 5 * 60_000;
@@ -56,10 +56,15 @@ export interface CommandLimits {
 const MiB = 1024 * 1024;
 
 export function commandLimits(seconds: number, cpus = availableParallelism()): CommandLimits {
-  const { min, max } = hostConfigLimits.commandTimeoutSeconds;
+  const { min } = hostConfigLimits.commandTimeoutSeconds;
+  const max = seconds === unlimitedCommandSeconds ? unlimitedCommandSeconds : hostConfigLimits.commandTimeoutSeconds.max;
   const bounded = Math.min(Math.max(Math.trunc(Number.isFinite(seconds) ? seconds : min), min), max);
   if (bounded <= min) return { seconds: min, cpuSeconds: 25, fileBytes: 64 * MiB, openFiles: 256 };
   return { seconds: bounded, cpuSeconds: bounded * Math.max(1, Math.trunc(cpus)), fileBytes: 16 * 1024 * MiB, openFiles: 8192 };
+}
+
+export function configuredLimits(config: Pick<HostConfig, "commandTimeoutSeconds" | "commandTimeoutUnlimited">, cpus?: number): CommandLimits {
+  return commandLimits(commandSeconds(config), cpus);
 }
 
 export const CALL_TIMEOUT_MAX_SECONDS = hostConfigLimits.commandTimeoutSeconds.max;

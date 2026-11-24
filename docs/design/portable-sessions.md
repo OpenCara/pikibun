@@ -53,6 +53,11 @@ its pairing itself, and sends it, with its sessions, each time it connects and e
 connector calling, and records it (`identity_delegations`). Nobody signs anything in a browser or on a phone: the apps
 hold no key.
 
+A report the server already applied is not checked or written again: it keeps a digest of the last report it applied
+for each connector, with every session in it taken, and one that matches skips the signature checks and the writes
+for up to an hour ([reports by digest](local-private-sessions.md#reports-by-digest)). Its answer is worked out each
+time.
+
 ## What made a session portable
 
 No session is made portable now: `createSession` sets no `portable_key`, so a new session's binding carries no
@@ -81,7 +86,9 @@ attached to:
    follow a rotated key, and answers it with the reported sessions attached to it that it has archived (`archived`,
    sent only to a host whose report gives each session an `archived` field, so an older connector, which reads its
    answer strictly, never gets it). The host keeps that in the session's folder (`portable-archived.json`).
-2. The host still attaches a session (`attach`) only for its owner, and only one marked by its identity's current key.
+2. The host still attaches a session (`attach`) only on a ticket its paired server signed, in which that server names
+   the session's owner as the one asking, and only one marked by its identity's current key (who the owner is, is the
+   server's word: see [Trust](#trust)).
    Under a lock in the identity (one attach of a session at a time on the computer), it refuses a session that is
    working or packed; asks the connection that has it open to let go (below); takes the session's open lease; replaces
    the pinned Git identity (`sandbox/owner.gitconfig`) and rewrites the binding kept in the session's own database, as
@@ -240,8 +247,12 @@ still travel between servers, now that private sessions have one home, is its ow
 ## Trust
 
 - The server a session is attached to still signs its users in, so it can act as the owner's account there, as for any
-  session. It can't attach a portable session to another account, or one of another identity: the host attaches only
-  for its pairing's owner and only sessions marked by its key.
+  session. It can't attach a session of another identity: the host attaches only sessions marked by its own key, and a
+  session already attached to that pairing only for the owner its binding names. Which account that is, the host
+  can't tell: it keeps no record of the account that paired it, so it checks that the request's ticket is signed by
+  its paired server and that the ticket's actor is the owner the new binding names, both of which are that server's
+  claim. What keeps a session to its account is the server: a current one never asks for an attach, an older one
+  asked only for the signed-in owner, and each records a delegation only for the account whose connector sent it.
 - A server can't take a session away from the host or keep it: detaching is the host's decision, made when another of
   its connections attaches it, and the server it left only learns of it.
 - Server administrators see that a portable session's record exists, as for any private session. Deleting a user on a

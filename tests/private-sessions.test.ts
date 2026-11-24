@@ -157,6 +157,65 @@ test('another server lists the private sessions a computer reports, forwards the
   assert.equal((await json<{ code: string }>(await f.alice.request('GET', `/api/sessions/${sessionId}/view`), 503)).code, 'computer_offline');
 });
 
+test('a report the server already holds is answered from its digest, and a changed one writes only the rows that changed', async t => {
+  const [one, two, three] = [randomUUID(), randomUUID(), randomUUID()];
+  let title = 'On my computer';
+  const f = await remote(t, request => forwardAnswer(200, { session: record(request.path.split('/')[3]!, { title }) }));
+  const first = await json<{ ok: boolean; digest?: string }>(await f.host('/api/connectors/self/private-sessions',
+    { sessions: [record(one, { activity: 'working' }), record(two)] }));
+  assert.equal(typeof first.digest, 'string', 'the answer names the report it holds');
+  const digest = first.digest!;
+
+  f.sqlite.exec(`CREATE TEMP TABLE written (what TEXT);
+    CREATE TEMP TRIGGER forwarded_inserted AFTER INSERT ON forwarded_sessions BEGIN INSERT INTO written VALUES ('insert ' || NEW.session_id); END;
+    CREATE TEMP TRIGGER forwarded_updated AFTER UPDATE ON forwarded_sessions BEGIN INSERT INTO written VALUES ('update ' || NEW.session_id); END;
+    CREATE TEMP TRIGGER forwarded_deleted AFTER DELETE ON forwarded_sessions BEGIN INSERT INTO written VALUES ('delete ' || OLD.session_id); END;`);
+  const written = () => {
+    const rows = (f.sqlite.prepare('SELECT what FROM written ORDER BY what').all() as { what: string }[]).map(row => row.what);
+    f.sqlite.exec('DELETE FROM written');
+    return rows;
+  };
+
+  assert.deepEqual(await json(await f.host('/api/connectors/self/private-sessions', { sessions: [record(one, { activity: 'working' }), record(two)] })),
+    { ok: true, digest }, 'an older connector sends the whole report each time');
+  assert.deepEqual(written(), [], 'and the same report writes nothing');
+  assert.deepEqual(await json(await f.host('/api/connectors/self/private-sessions', { digest })), { ok: true, digest });
+  assert.deepEqual(written(), [], 'a digest the server holds needs no report');
+  f.sqlite.prepare('UPDATE forwarded_sessions SET reported_at = ?').run(new Date(Date.now() - 10 * 60_000).toISOString());
+  written();
+  await json(await f.host('/api/connectors/self/private-sessions', { digest }));
+  const listed = (await json<{ sessions: SessionRecord[] }>(await f.alice.request('GET', '/api/sessions'))).sessions.filter(item => item.forwarded);
+  assert.deepEqual(listed.map(item => item.forwarded?.online), [true, true], 'a host heard from by digest alone stays online');
+  assert.deepEqual(await json(await f.host('/api/connectors/self/private-sessions', { digest: 'x'.repeat(43) })), { ok: true, resend: true },
+    'a digest the server doesn\'t hold asks for the report');
+  await json(await f.host('/api/connectors/self/private-sessions', {}), 400);
+  await json(await f.host('/api/connectors/self/private-sessions', { digest: 5 }), 400);
+  await json(await f.host('/api/connectors/self/private-sessions', { sessions: 'all' }), 400);
+  assert.deepEqual(written(), []);
+
+  const second = await json<{ digest: string }>(await f.host('/api/connectors/self/private-sessions',
+    { sessions: [record(one, { activity: 'done' }), record(two), record(three)] }));
+  assert.notEqual(second.digest, digest);
+  assert.deepEqual(written(), [`insert ${three}`, `update ${one}`].sort(), 'only the new and the changed row are written');
+  const notified = f.sqlite.prepare('SELECT kind, forwarded_session_id AS session_id FROM notifications WHERE user_id = ?').all(f.alice.user.id) as { kind: string; session_id: string }[];
+  assert.deepEqual(notified.map(row => [row.kind, row.session_id]), [['finished', one]]);
+  assert.deepEqual(await json(await f.host('/api/connectors/self/private-sessions', { digest })), { ok: true, resend: true }, 'the earlier report is no longer held');
+
+  const third = await json<{ digest: string }>(await f.host('/api/connectors/self/private-sessions', { sessions: [record(two)] }));
+  assert.deepEqual(written(), [`delete ${one}`, `delete ${three}`].sort(), 'sessions no longer reported go, and the rest stays as it is');
+
+  await json(await f.alice.request('GET', `/api/sessions/${two}`));
+  assert.deepEqual(written(), [], 'an answer with the record already kept writes nothing');
+  assert.deepEqual(await json(await f.host('/api/connectors/self/private-sessions', { digest: third.digest })), { ok: true, digest: third.digest });
+  title = 'Renamed there';
+  await json(await f.alice.request('GET', `/api/sessions/${two}`));
+  assert.deepEqual(written(), [`update ${two}`]);
+  assert.deepEqual(await json(await f.host('/api/connectors/self/private-sessions', { digest: third.digest })), { ok: true, resend: true },
+    'a record changed by a forwarded answer ends what the digest stood for');
+  await json(await f.host('/api/connectors/self/private-sessions', { sessions: [record(two)] }));
+  assert.deepEqual(written(), [`update ${two}`], 'so the next report is applied again');
+});
+
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

@@ -1,16 +1,17 @@
 import { createHash } from "node:crypto";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
+import type { Usage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { HostConfig } from "../../../../packages/shared/src/host-config.js";
 import type { ChosenExtension } from "../../../../packages/shared/src/host-extensions.js";
 import type { ApiReach } from "../../../../packages/shared/src/network.js";
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation, type RunnerBinding } from "../../../../packages/shared/src/types.js";
 import type { ExtensionHost } from "../extensions/adapter.js";
-import { completeWith, modelCallSources } from "../extensions/complete.js";
+import { completeWith, ModelCallBudget, modelCallSources, type ModelCallRecord } from "../extensions/complete.js";
 import { cliRules } from "../extensions/piki/cli-engine.js";
 import type { CliDefinition } from "../../../../packages/shared/src/cli-definitions.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "../extensions/piki/command.js";
-import { commandLimits } from "../host-config.js";
+import { configuredLimits } from "../host-config.js";
 import { RunnerError } from "../protocol.js";
 import { SandboxProcessError } from "../sandbox.js";
 import { inScriptCall } from "../script-output.js";
@@ -26,7 +27,7 @@ type PikiCall = { write: boolean; forgeWrites: boolean; attribution: { initiated
 
 export interface SessionPikiOptions {
   binding: RunnerBinding;
-  config: { pikiHostSignIn?: boolean; extensions?: { modelRegistry?: ModelRegistry }; cliDefinitions?: () => Promise<readonly CliDefinition[]> };
+  config: { pikiHostSignIn?: boolean; extensions?: { modelRegistry?: ModelRegistry; modelCallsRefused?: true }; cliDefinitions?: () => Promise<readonly CliDefinition[]> };
   sandbox: SessionWorkspace;
   onHost: boolean;
   sandboxed: boolean;
@@ -43,10 +44,15 @@ export interface SessionPikiOptions {
   mutate(change: (state: Metadata) => void): Promise<void>;
   hostConfig(): Promise<HostConfig>;
   extensionProcess?: ExtensionHost["extensionProcess"];
+  recordModelUsage?(model: string, usage: Usage): Promise<void>;
+  log?(line: string): void;
 }
+
+const MODEL_CALLS_REFUSED_HERE = "This host's connector runs with --no-extension-model-calls, so the extensions its owner requires call no models here.";
 
 export class SessionPiki {
   readonly #pikiCalls = new Map<string, PikiCall>();
+  readonly #modelCalls = new ModelCallBudget();
 
   constructor(private readonly options: SessionPikiOptions) {}
 
@@ -57,16 +63,26 @@ export class SessionPiki {
       return current && config.extensions?.modelRegistry?.find(current.provider, current.modelId) as never;
     };
     const registry = config.extensions?.modelRegistry;
+    const refused = config.extensions?.modelCallsRefused === true;
     const modelCallsAllowed = async (source: string) => modelCallSources.has(source)
-      || (await this.options.extensionChoice()).chosen.some(item => item.source === source && item.required?.allowModelCalls === true);
+      || (!refused && (await this.options.extensionChoice()).chosen.some(item => item.source === source && item.required?.allowModelCalls === true));
     return {
       directory: this.options.sandbox.hostWorktree,
       ...(registry ? {
         modelRegistry: registry,
         modelCallsAllowed,
         complete: async (request, signal) => {
-          if (!await modelCallsAllowed(request.source)) throw new Error("This host's owner no longer lets this extension call models.");
-          return completeWith({ modelRegistry: registry, model }, request, signal);
+          if (!await modelCallsAllowed(request.source)) throw new Error(refused ? MODEL_CALLS_REFUSED_HERE : "This host's owner no longer lets this extension call models.");
+          if (!this.#modelCalls.take(request.source)) {
+            const most = this.#modelCalls.limit(request.source);
+            this.#log(request.source, `a model call was refused: it made ${most} within an hour in this session, the most a host lets it make`);
+            throw new Error(`This extension made ${most} model calls within an hour in this session, the most a host lets it make: it can call again later.`);
+          }
+          try { return await completeWith({ modelRegistry: registry, model }, request, signal, call => this.#recordModelCall(request.source, call)); }
+          catch (error) {
+            this.#log(request.source, `a model call failed: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
+          }
         },
       } : {}),
       model,
@@ -85,6 +101,21 @@ export class SessionPiki {
     };
   }
 
+  #log(source: string, message: string): void {
+    const line = `Session ${this.options.binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 500)}`;
+    if (this.options.log) this.options.log(line);
+    else process.stderr.write(`${line}\n`);
+  }
+
+  async #recordModelCall(source: string, call: ModelCallRecord): Promise<void> {
+    const used = call.usage;
+    this.#log(source, `called the model ${call.model} (${call.stopReason})${used ? `: ${used.input + used.cacheRead + used.cacheWrite} prompt and ${used.output} output tokens` : ""}; `
+      + `${this.#modelCalls.count(source)} of the ${this.#modelCalls.limit(source)} calls it may make within an hour`);
+    if (!used || !this.options.recordModelUsage) return;
+    try { await this.options.recordModelUsage(call.model, used); }
+    catch (error) { this.#log(source, `its model call's usage couldn't be added to the session's: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
   #session(): PikiSession {
     const { binding, config, onHost } = this.options;
     const hostOwner = binding.session.connectorOwnerId;
@@ -96,7 +127,7 @@ export class SessionPiki {
       fromScript: callId => this.#pikiCalls.get(callId)?.script === true,
       ...(config.cliDefinitions ? { servedRules: async (name: string) => {
         const served = (await config.cliDefinitions!().catch(() => [])).find(item => item.name === name);
-        return served ? cliRules(served) : undefined;
+        return served ? cliRules(served, message => this.#log(served.extension, `a rule Pikibun serves for ${name}: ${message}`)) : undefined;
       } } : {}),
       forgeWrites: callId => this.#pikiCalls.get(callId)?.forgeWrites === true,
     };
@@ -170,7 +201,7 @@ export class SessionPiki {
     if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
     const id = approval.id;
     await calls.recheck(attribution);
-    const limits = commandLimits((await this.options.hostConfig()).commandTimeoutSeconds);
+    const limits = configuredLimits(await this.options.hostConfig());
     const callId = String(call.api.callId);
     const forgeWrites = await this.options.forgeWrites(attribution.initiatedBy);
     this.#pikiCalls.set(callId, { write: trusted && forgeWrites, forgeWrites, attribution, script: inScriptCall() });
