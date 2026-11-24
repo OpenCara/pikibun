@@ -13,7 +13,7 @@ import {
   type WorkspaceToolAction, type WorkspaceToolParameter,
 } from '../../../packages/shared/src/workspace-management.js';
 import {
-  admissionExpired, auditStatement, gitHost, lookupRepository, registerNetworkPolicies, registerRepositories, registerSources, requireCallbackScope,
+  auditStatement, gitHost, lookupRepository, registerNetworkPolicies, registerRepositories, registerSources, requireAdmission, requireCallbackScope,
   requireToolCall, sessionAccess, workspaceExtensions,
 } from './authority/index.js';
 import { registerCatalog } from './catalog.js';
@@ -24,8 +24,6 @@ import { fail, identifier } from './http.js';
 import { errorText, serverLog } from './log.js';
 import { body, fields as requestShape, identifier as identifierField, text, userIdentifier as userField } from './schemas.js';
 import type { AppContext, AppEnv, Env, SessionRow } from './types.js';
-
-type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number };
 
 type Fields = Partial<Record<Exclude<WorkspaceToolParameter, 'action' | 'enabled'>, string>> & { enabled?: boolean };
 
@@ -218,12 +216,8 @@ export async function agentWorkspace(c: AppContext, connectorId: string | null):
       fail(403, 'permission_revoked', 'The requester can no longer write to this session.');
     }
     await requireCallbackScope(c, access.row, connectorId);
-    const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?')
-      .bind(admissionId).first();
-    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-      || await admissionExpired(c.env, admissionId, admission)) {
-      fail(403, 'workspace_not_admitted', 'The workspace tool needs a write message from the requester sent within the last hour, or whose run is still going.');
-    }
+    const admission = await requireAdmission(c.env, { admissionId, sessionId, actorId }, { code: 'workspace_not_admitted',
+      message: 'The workspace tool needs a write message from the requester sent within the last hour, or whose run is still going.' });
     await requireToolCall(c.env, access.row, actorId, 'workspace');
     if (!sessionToolExtensionOn(await workspaceExtensions(c.env, access.row.workspace_id), 'piki:workspace')) {
       fail(403, 'workspace_tool_off', 'The workspace tool is turned off in this workspace (piki:workspace). Its owners and admins add it under Settings → Workspaces → Extensions.');

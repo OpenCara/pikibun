@@ -63,7 +63,12 @@ async function fixture(t: TestContext) {
   sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   const start = async (workspaceId: string) => {
     const { models } = await json<{ models: ModelDefinition[] }>(await alice.request('GET', `/api/workspaces/${workspaceId}/models`));
-    return (await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId, modelId: models[0]!.id, title: 'Install', visibility: 'private' }), 201)).session;
+    const input = { workspaceId, modelId: models[0]!.id, title: 'Install' };
+    if (workspaceId !== personal.id) {
+      const refused = await alice.request('POST', '/api/sessions', { ...input, visibility: 'private' });
+      assert.equal(((await json<{ code: string }>(refused, 400))).code, 'private_session_unavailable', 'a private session is asked for in the private workspace only');
+    }
+    return (await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { ...input, ...(workspaceId === personal.id ? { visibility: 'private' } : {}) }), 201)).session;
   };
   const own = await start(personal.id);
   const shared = await start(team.id);
