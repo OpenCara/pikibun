@@ -260,12 +260,19 @@ function reviewNote(flow: PullRequestFlow, settings: PrFlowSettings, again: bool
   const pull = flow.pull ? `#${flow.pull.number}` : "The pull request";
   if (settings.reviewMinutes === 0) {
     if (again) return "";
+    if (approvalOnly(settings)) {
+      return `[pr-flow] ${pull} is ready for review. This workspace's review window is 0 minutes and it merges only approved pull requests (require-approval): `
+        + `don't wait for reviews; if it is already approved with nothing left to address, merge it now with ${mergeCall(flow, settings)}, otherwise ${handOver}.${checksStep(settings)}`;
+    }
     return settings.autoMerge
       ? `[pr-flow] ${pull} is ready for review. This workspace's review window is 0 minutes: merge it now, without waiting for reviews, with ${mergeCall(flow, settings)}.${checksStep(settings)}`
       : `[pr-flow] ${pull} is ready for review. This workspace's review window is 0 minutes and it leaves merges to people (auto-merge is off): ${handOver}.${checksStep(settings)}`;
   }
   const until = clock(flow.windowStart! + settings.reviewMinutes * 60_000);
-  const finish = settings.autoMerge
+  const finish = approvalOnly(settings)
+    ? `Merge, with ${mergeCall(flow, settings)}, once it is approved with nothing left to address. This workspace merges only approved pull requests `
+      + `(require-approval): if the window ends without an approval, ${handOver}.`
+    : settings.autoMerge
     ? `Merge, with ${mergeCall(flow, settings)}, once it is approved with nothing left to address, or once the window ends with nothing new to address.`
     : "This workspace leaves merges to people (auto-merge is off): once it is approved with nothing left to address, or once the window ends with nothing new "
       + `to address, ${handOver}.`;
@@ -290,7 +297,7 @@ export class PrFlowState {
     const changing = changingTools[call.toolName];
     if (changing) {
       const clones = new Set(changing.flatMap(key => { const clone = cloneOf(call.input[key], worktree, isClone); return clone ? [clone] : []; }));
-      return this.#changed([...clones]);
+      return this.#changed([...clones], settings);
     }
     if (call.toolName === "git") return this.#git(call, settings, now);
     if (call.toolName === "git_push") return this.#pushed(call, settings, now);
@@ -300,13 +307,20 @@ export class PrFlowState {
     return undefined;
   }
 
-  #changed(clones: readonly string[]): string | undefined {
+  #changed(clones: readonly string[], settings: PrFlowSettings): string | undefined {
     for (const directory of clones) if (done(this.#flows.get(directory))) this.#flows.delete(directory);
     const due = clones.map(directory => this.#flow(directory)).filter(flow => !flow.pull && !flow.told);
     for (const flow of due) flow.told = true;
     if (!due.length) return undefined;
     const names = due.map(flow => flow.directory).join(", ");
-    const opens = due.map(flow => `git_push {directory: "${flow.directory}", branch: <the session branch>, pull_request: {title, body, draft: true}}`).join(", and ");
+    const draft = draftFirst(settings);
+    const opens = due.map(flow => `git_push {directory: "${flow.directory}", branch: <the session branch>, pull_request: {title, body, draft: ${draft}}}`).join(", and ");
+    if (!draft) {
+      return `[pr-flow] This is the session's first change in ${names}, which has no pull request yet. This workspace opens pull requests once the change is done, `
+        + "not as drafts (draft-first is off): commit with git and push to the session's own branch (git push origin HEAD:<the session branch>) as you work, "
+        + `then, once the change is done (its tests pass, its last commit pushed), open ${due.length === 1 ? "it" : "each"} ready for review: ${opens}, `
+        + "with a title and body for the finished change. Leave this out only if the person asked for no pull request.";
+    }
     return `[pr-flow] This is the session's first change in ${names}, which has no pull request yet. Before going further, open ${due.length === 1 ? "it" : "each"} `
       + "as a draft: commit what you have with git, push it to the session's own branch (git push origin HEAD:<the session branch>), then "
       + `${opens}. Leave this out only if the person asked for no pull request.`;
@@ -317,7 +331,7 @@ export class PrFlowState {
     const directory = directoryOf(call.input.directory);
     if (!directory || operationOutcome(call.content).status !== "executed") return undefined;
     const subcommand = typeof args[0] === "string" ? args[0] : "";
-    if (changingGit.has(subcommand)) return this.#changed([directory]);
+    if (changingGit.has(subcommand)) return this.#changed([directory], settings);
     if (subcommand !== "push") return undefined;
     const flow = this.#flows.get(directory);
     const branches = pushedBranches(args);
@@ -487,14 +501,19 @@ export class PushGate {
 }
 
 function flowLine(flow: PullRequestFlow, settings: PrFlowSettings, now: number): string {
-  if (!flow.pull) return `- ${flow.directory}: changed, no pull request yet: open its draft now.`;
+  if (!flow.pull) {
+    return draftFirst(settings) ? `- ${flow.directory}: changed, no pull request yet: open its draft now.`
+      : `- ${flow.directory}: changed, no pull request yet: open it ready for review once the change is done.`;
+  }
   const pull = `#${flow.pull.number} (${flow.pull.url})`;
   if (flow.merged) return `- ${flow.directory}: ${pull} is merged.`;
   if (flow.closed) return `- ${flow.directory}: ${pull} was closed without merging.`;
   if (flow.draft === true) return `- ${flow.directory}: draft ${pull}: make it ready for review once the change is done.`;
   if (flow.draft === undefined) return `- ${flow.directory}: ${pull} is open; if it is still a draft, make it ready for review once the change is done.`;
   if (flow.windowStart === undefined) return `- ${flow.directory}: ${pull} is open.`;
+  const conditional = "merge it if it is approved, otherwise tell the person it is ready for them to merge";
   if (settings.reviewMinutes === 0) {
+    if (approvalOnly(settings)) return `- ${flow.directory}: ${pull} is ready for review: ${conditional}.`;
     return settings.autoMerge ? `- ${flow.directory}: ${pull} is ready for review: merge it.`
       : `- ${flow.directory}: ${pull} is ready for review: tell the person it is ready for them to merge; don't merge it.`;
   }
@@ -502,7 +521,7 @@ function flowLine(flow: PullRequestFlow, settings: PrFlowSettings, now: number):
   return end > now
     ? `- ${flow.directory}: ${pull} is ready for review; its review window ends at ${clock(end)}.`
     : `- ${flow.directory}: ${pull} is ready for review; its review window ended at ${clock(end)}: address what reviews came in, or `
-      + `${settings.autoMerge ? "merge" : "tell the person it is ready for them to merge; don't merge it"}.`;
+      + `${approvalOnly(settings) ? conditional : settings.autoMerge ? "merge" : "tell the person it is ready for them to merge; don't merge it"}.`;
 }
 
 export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullRequestFlow[] = [], now = Date.now()): string {
@@ -511,8 +530,12 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
     ? `merge it: on GitHub with github_merge {repository, pull, sha: its head commit as github_read reports it, method: "${settings.mergeMethod}"}; `
       + "elsewhere with the forge's tool (glab mr merge, az repos pr update --status completed)."
     : `${handOver}.`;
+  const approval = approvalOnly(settings);
   const review = settings.reviewMinutes === 0
-    ? [settings.autoMerge
+    ? [approval
+      ? "4. Merge at once if approved. This workspace's review window is 0 minutes and it merges only approved pull requests (require-approval): as soon as "
+        + `the pull request is ready, if it is approved with nothing left to address, ${merge} Otherwise, ${handOver}.${checksStep(settings)} Don't wait for reviews.`
+      : settings.autoMerge
       ? `4. Merge at once. This workspace's review window is 0 minutes: as soon as the pull request is ready, ${merge}${checksStep(settings)} Don't wait for reviews.`
       : `4. Hand it over at once. This workspace's review window is 0 minutes: as soon as the pull request is ready, ${merge}${checksStep(settings)} Don't wait for reviews.`]
     : [
@@ -522,8 +545,11 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
       "   - Judge each review point and comment on its merits. Fix the valid ones (a real bug, a reasonable request within the task), commit, push to the session "
         + "branch and answer the point with what you changed; answer one you judge invalid with why, briefly, and leave the code as it is. On GitHub, answer "
         + `with github_comment. A pushed fix starts a new ${minuteWindow(settings.reviewMinutes)} window, for re-review.`,
-      `   - Approved with nothing left to address: ${merge} Don't wait out the window. The window ends with nothing new to address: `
-        + `${settings.autoMerge ? "merge it" : "hand it over"} the same way.`,
+      approval
+        ? `   - Approved with nothing left to address: ${merge} Don't wait out the window. This workspace merges only approved pull requests (require-approval): `
+          + `the window ends without an approval: ${handOver}.`
+        : `   - Approved with nothing left to address: ${merge} Don't wait out the window. The window ends with nothing new to address: `
+          + `${settings.autoMerge ? "merge it" : "hand it over"} the same way.`,
       "   - Never merge over a request for changes you didn't make: if a reviewer's latest review still requests changes once the re-review window ends, "
         + "leave the pull request open and tell the person why.",
       ...(settings.waitForChecks ? [`   -${checksStep(settings)}`] : []),
@@ -536,12 +562,20 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
       + "you change files in a clone of one of the workspace's repositories, unless the person asks for something else (no pull request, no merge, another branch). "
       + "Questions, reviews and explorations that change nothing need none of it.",
     "",
-    "1. A draft at the first change. As soon as you start changing a clone, before going further: commit with git, push to the session's own branch "
-      + "(git push origin HEAD:<the session branch>), and open a draft with git_push {directory, branch: <the session branch>, pull_request: {title, body, draft: true}}. "
-      + "One pull request per clone; later pushes to the session branch update it.",
-    "2. Keep it current: commit and push to the session branch as the work goes on.",
-    "3. Ready for review when done. Once the change is complete, its tests pass and its last commit is pushed, make it ready: git_push {directory, branch: "
-      + "<the session branch>, pull_request: {title, body, draft: false}}, with a title and body for the finished change.",
+    ...(draftFirst(settings) ? [
+      "1. A draft at the first change. As soon as you start changing a clone, before going further: commit with git, push to the session's own branch "
+        + "(git push origin HEAD:<the session branch>), and open a draft with git_push {directory, branch: <the session branch>, pull_request: {title, body, draft: true}}. "
+        + "One pull request per clone; later pushes to the session branch update it.",
+      "2. Keep it current: commit and push to the session branch as the work goes on.",
+      "3. Ready for review when done. Once the change is complete, its tests pass and its last commit is pushed, make it ready: git_push {directory, branch: "
+        + "<the session branch>, pull_request: {title, body, draft: false}}, with a title and body for the finished change.",
+    ] : [
+      "1. Commit and push as you go. As soon as you start changing a clone, commit with git and push to the session's own branch "
+        + "(git push origin HEAD:<the session branch>). This workspace opens no drafts (draft-first is off). One pull request per clone; later pushes to the session branch update it.",
+      "2. Keep it current: commit and push to the session branch as the work goes on.",
+      "3. Open it ready for review when done. Once the change is complete, its tests pass and its last commit is pushed, open the pull request: git_push {directory, "
+        + "branch: <the session branch>, pull_request: {title, body, draft: false}}, with a title and body for the finished change.",
+    ]),
     ...review,
     settings.autoMerge
       ? "5. If the forge refuses the merge (branch protection, required reviews or checks), say so and stop rather than work around it."
@@ -551,11 +585,9 @@ export function prFlowPrompt(settings: PrFlowSettings, flows: readonly PullReque
     ...(settings.prePushCheck ? [`7. Before each push of a clone you changed, run \`${settings.prePushCheck}\` there (directory: the clone) with the program tool it needs, and fix what it finds: `
       + "a push before it passed is refused."] : []),
     "",
-    settings.autoMerge
-      ? "Where there is no git_push (a host whose sessions push with git itself), do the same with the forge's tool: gh pr create --draft, gh pr ready and "
-        + "gh pr merge; glab mr create --draft, glab mr update --ready and glab mr merge."
-      : "Where there is no git_push (a host whose sessions push with git itself), do the same with the forge's tool: gh pr create --draft and gh pr ready; "
-        + "glab mr create --draft and glab mr update --ready.",
+    "Where there is no git_push (a host whose sessions push with git itself), do the same with the forge's tool: "
+      + `${list([...(draftFirst(settings) ? ["gh pr create --draft", "gh pr ready"] : ["gh pr create"]), ...(settings.autoMerge ? ["gh pr merge"] : [])])}; `
+      + `${list([...(draftFirst(settings) ? ["glab mr create --draft", "glab mr update --ready"] : ["glab mr create"]), ...(settings.autoMerge ? ["glab mr merge"] : [])])}.`,
   ];
   const known = flows.filter(flow => flow.pull || flow.told);
   if (known.length) lines.push("", `This session's pull requests, as of ${clock(now)}:`, ...known.map(flow => flowLine(flow, settings, now)));
@@ -575,10 +607,18 @@ export function prFlowRule(settings: PrFlowSettings, flows: readonly PullRequest
   const checks = settings.waitForChecks ? " once its checks pass" : "";
   const handOver = "tell the person it is ready for them to merge: this workspace leaves merges to people (auto-merge is off), so never merge it yourself, "
     + "nor queue an automatic merge";
+  const unapproved = "; one that isn't approved, tell the person it is ready for them to merge, as this workspace merges only approved pull requests (require-approval)";
   const after = settings.reviewMinutes === 0
-    ? (settings.autoMerge ? `merge it (${settings.mergeMethod}) as soon as it is ready${checks}, without waiting for reviews` : `as soon as it is ready, ${handOver}`)
+    ? (approvalOnly(settings) ? `as soon as it is ready, without waiting for reviews, merge it (${settings.mergeMethod})${checks} if it is approved${unapproved}`
+      : settings.autoMerge ? `merge it (${settings.mergeMethod}) as soon as it is ready${checks}, without waiting for reviews` : `as soon as it is ready, ${handOver}`)
     : `then a ${minuteWindow(settings.reviewMinutes)} review window, in which you fix the review points you judge valid, answer each one, and wait again after `
-      + `each pushed fix; then ${settings.autoMerge ? `merge it (${settings.mergeMethod})${checks}, but never over a request for changes you didn't make` : handOver}`;
+      + `each pushed fix; then ${settings.autoMerge ? `merge it (${settings.mergeMethod})${checks}${approvalOnly(settings) ? " once it is approved" : ""}, `
+        + `but never over a request for changes you didn't make${approvalOnly(settings) ? unapproved : ""}` : handOver}`;
+  const start = draftFirst(settings)
+    ? "a draft pull request at your first change in a clone (commit, push to the session's own branch, open it as a draft); keep pushing as you work; "
+      + "ready for review once the change is done and its tests pass"
+    : "from your first change in a clone, commit and push to the session's own branch as you work (no draft); open the pull request, ready for review, "
+      + "once the change is done and its tests pass";
   const lines = [
     "## Pull request flow",
     "",
@@ -586,8 +626,7 @@ export function prFlowRule(settings: PrFlowSettings, flows: readonly PullRequest
       + "whenever you change files in a clone of one of the workspace's repositories, unless the person asks for something else (no pull request, no merge, "
       + "another branch). Questions, reviews and explorations that change nothing need none of it.",
     "",
-    `In short: a draft pull request at your first change in a clone (commit, push to the session's own branch, open it as a draft); keep pushing as you work; `
-      + `ready for review once the change is done and its tests pass; ${after}. Tell the person its link when it opens, `
+    `In short: ${start}; ${after}. Tell the person its link when it opens, `
       + `when it is ready, and when it is merged or left open. Before your first change in a clone, read the ${PR_FLOW_SKILL} skill (listed with the skills) `
       + "for each step's calls and its rules; after each step, the note added to the tool's result says what comes next.",
     ...(settings.prePushCheck ? ["", `Before each push of a clone you changed, run \`${settings.prePushCheck}\` there (directory: the clone) with the program tool it needs, `
@@ -628,12 +667,17 @@ export const prFlowExtension: ExtensionFactory = pi => {
   pi.registerFlag("wait-for-checks", { type: "boolean", default: true, description: prFlowFlags["wait-for-checks"] });
   pi.registerFlag("auto-merge", { type: "boolean", default: true, description: prFlowFlags["auto-merge"] });
   pi.registerFlag("pre-push-check", { type: "string", default: "", description: prFlowFlags["pre-push-check"] });
+  pi.registerFlag("wait-for-review", { type: "boolean", default: true, description: prFlowFlags["wait-for-review"] });
+  pi.registerFlag("draft-first", { type: "boolean", default: true, description: prFlowFlags["draft-first"] });
+  pi.registerFlag("require-approval", { type: "boolean", default: false, description: prFlowFlags["require-approval"] });
   const settings = (): PrFlowSettings => ({
-    reviewMinutes: reviewMinutes(pi.getFlag("review-minutes")),
+    reviewMinutes: switchSetting(pi.getFlag("wait-for-review"), true) ? reviewMinutes(pi.getFlag("review-minutes")) : 0,
     mergeMethod: mergeMethod(pi.getFlag("merge-method")),
-    waitForChecks: pi.getFlag("wait-for-checks") !== false,
+    waitForChecks: switchSetting(pi.getFlag("wait-for-checks"), true),
     autoMerge: autoMerge(pi.getFlag("auto-merge")),
     prePushCheck: prePushCheck(pi.getFlag("pre-push-check")),
+    draftFirst: switchSetting(pi.getFlag("draft-first"), true),
+    requireApproval: switchSetting(pi.getFlag("require-approval"), false),
   });
   const state = new PrFlowState();
   const gate = new PushGate();

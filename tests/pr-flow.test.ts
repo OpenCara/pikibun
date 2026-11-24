@@ -11,7 +11,7 @@ import { pullRequestLine } from "../apps/runner/src/push.js";
 import { pikiExtension, pikiWorkflowExtensions } from "../packages/shared/src/piki-extensions.js";
 import {
   asksDraft, autoMerge, cloneOf, createdBranch, DEFAULT_REVIEW_MINUTES, forgeOwns, forgeStep, githubRepository, MAX_REVIEW_MINUTES, mergeMethod, operationOutcome, prFlowExtension, prFlowPrompt, PrFlowState,
-  prePushCheck, pullRequestAddress, pushedBranches, pushedPullRequest, PushGate, reviewMinutes, type ObservedCall, type PrFlowSettings,
+  prePushCheck, prFlowRule, pullRequestAddress, pushedBranches, pushedPullRequest, PushGate, reviewMinutes, switchSetting, type ObservedCall, type PrFlowSettings,
 } from "../extensions/pr-flow/pr-flow.js";
 
 async function directory(t: test.TestContext): Promise<string> {
@@ -43,6 +43,72 @@ test("its settings: whole minutes from 0 to a week, squash unless another method
   assert.equal(mergeMethod(undefined), "squash");
   for (const on of [true, undefined, "true", "on", ""]) assert.equal(autoMerge(on), true, String(on));
   for (const off of [false, 0, "false", " Off ", "no", "0"]) assert.equal(autoMerge(off), false, String(off));
+  for (const on of [true, 1, "true", " On ", "yes", "1"]) assert.equal(switchSetting(on, false), true, String(on));
+  for (const unknown of [undefined, "", "maybe", null]) assert.equal(switchSetting(unknown, false), false, String(unknown));
+});
+
+test("wait-for-review off skips the review window whatever review-minutes says", async () => {
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+  const flags = new Map<string, unknown>([["review-minutes", "45"], ["wait-for-review", false]]);
+  prFlowExtension({
+    registerFlag: () => {}, getFlag: (name: string) => flags.get(name),
+    on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => { handlers.set(event, handler); },
+  } as never);
+  const start = handlers.get("before_agent_start")!;
+  const skipped = (await start({ systemPrompt: "Base." }, {}) as { systemPrompt: string }).systemPrompt;
+  assert.match(skipped, /4\. Merge at once\. This workspace's review window is 0 minutes/);
+  assert.doesNotMatch(skipped, /45/);
+  flags.set("wait-for-review", "on");
+  assert.match((await start({ systemPrompt: "Base." }, {}) as { systemPrompt: string }).systemPrompt, /4\. Wait for review: 45 minutes/);
+});
+
+test("draft-first off: commit and push as the work goes, and open the pull request ready for review once done", () => {
+  const noDraft = settings(30, { draftFirst: false });
+  const state = new PrFlowState();
+  const first = state.observe(call("write", { path: "app/x.ts" }), noDraft, "/w", isClone, 0)!;
+  assert.match(first, /first change in app.*not as drafts \(draft-first is off\)/);
+  assert.match(first, /pull_request: \{title, body, draft: false\}\}/);
+  assert.doesNotMatch(first, /draft: true/);
+  assert.match(prFlowPrompt(noDraft, state.flows, 0), /- app: changed, no pull request yet: open it ready for review once the change is done\./);
+  const ready = state.observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: true, draft: false })),
+    noDraft, "/w", isClone, 0)!;
+  assert.match(ready, /#12 is ready for review: wait for reviews/);
+
+  const prompt = prFlowPrompt(noDraft);
+  assert.match(prompt, /1\. Commit and push as you go/);
+  assert.match(prompt, /3\. Open it ready for review when done/);
+  assert.match(prompt, /gh pr create and gh pr merge; glab mr create and glab mr merge\./);
+  assert.doesNotMatch(prompt, /draft: true|--draft/);
+  assert.match(prFlowRule(noDraft), /commit and push to the session's own branch as you work \(no draft\)/);
+  assert.match(prFlowPrompt(settings(30, { draftFirst: false, autoMerge: false })), /gh pr create; glab mr create\./);
+});
+
+test("require-approval: merge only once approved, and hand over a pull request whose window ends without an approval", () => {
+  const approved = (minutes: number, more: Partial<PrFlowSettings> = {}) => settings(minutes, { requireApproval: true, ...more });
+  const at = Date.parse("2026-11-09T19:00:00Z");
+  const state = new PrFlowState();
+  state.observe(call("write", { path: "app/x.ts" }), approved(30), "/w", isClone, at);
+  const ready = state.observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: true, draft: false })),
+    approved(30), "/w", isClone, at)!;
+  assert.match(ready, /once it is approved with nothing left to address\. This workspace merges only approved pull requests \(require-approval\): if the window ends without an approval, tell the person/);
+  assert.doesNotMatch(ready, /once the window ends with nothing new to address/);
+  assert.match(prFlowPrompt(approved(30), state.flows, at + 40 * 60_000), /window ended at .*: address what reviews came in, or merge it if it is approved, otherwise tell the person/);
+
+  const prompt = prFlowPrompt(approved(30));
+  assert.match(prompt, /the window ends without an approval: tell the person, with its link, that it is ready for them to merge/);
+  assert.doesNotMatch(prompt, /The window ends with nothing new to address/);
+  assert.match(prFlowRule(approved(30)), /once it is approved, but never over a request for changes you didn't make; one that isn't approved, tell the person/);
+
+  const zero = new PrFlowState();
+  zero.observe(call("write", { path: "app/x.ts" }), approved(0), "/w", isClone, 0);
+  const instant = zero.observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: true, draft: false })),
+    approved(0), "/w", isClone, 0)!;
+  assert.match(instant, /don't wait for reviews; if it is already approved with nothing left to address, merge it now with github_merge .*, otherwise tell the person/);
+  assert.match(prFlowPrompt(approved(0), zero.flows, 0), /4\. Merge at once if approved/);
+  assert.match(prFlowPrompt(approved(0), zero.flows, 0), /- app: #12 .* is ready for review: merge it if it is approved, otherwise tell the person/);
+
+  const handOver = prFlowPrompt(approved(30, { autoMerge: false }));
+  assert.doesNotMatch(handOver, /require-approval|github_merge/, "with auto-merge off, people merge anyway");
 });
 
 test("a file tool's path is in the clone that holds it; the worktree's own files, paths outside it and .git are in none", () => {

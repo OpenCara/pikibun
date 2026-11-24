@@ -640,6 +640,17 @@ fixes the review points it judges valid, then the merge.
     guidance, like the rest of the flow: the workspace's tool groups, not the extension, decide whether a session can
     merge at all. A merge it still sees (the person asked, say) ends the flow as before.
 
+    **Three more switches** (boolean flags, each defaulting to the flow as it was). `wait-for-review` off makes the
+    window 0 whatever `review-minutes` says: a separate switch, so a workspace can skip reviews for a while without
+    losing its minutes, and so "don't wait" reads as a choice in the settings rather than a magic number. `draft-first`
+    off drops the draft: the first-change note, the prompt's steps 1 and 3, the status line and the forge commands ask
+    for commits pushed as the work goes and one `draft: false` pull request once it is done; everything after is the
+    same. `require-approval` on, with `auto-merge` on, narrows the merge to approved pull requests: a window that ends
+    with nothing new but no approval, or a window of 0 on one not yet approved, ends in the hand-over instead. Like
+    `auto-merge`, it is guidance: branch protection, not the extension, is what makes approvals binding. Booleans are
+    read by `switchSetting` (`true`/`on`/`yes`/`1`, `false`/`off`/`no`/`0`, else the default), so a string from a
+    workspace's settings counts as one from Pi's flags.
+
     **A check before each push.** `pre-push-check` (a string flag, empty by default) turns the lesson "run the check CI
     most often fails on before pushing" into a refusal (`tool_call` with `block`): once the session changed files in a
     clone, a `git_push` or `git push` of it (never a tag, `--tags`, `--delete` or `--dry-run`) is refused until a
