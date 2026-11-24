@@ -47,6 +47,7 @@ export interface HostConfig {
   fakeIpTunnels: boolean;
   buildCaches: BuildCacheMode;
   buildCacheGiB: number;
+  cacheWarming: boolean;
 }
 
 export interface RequiredExtension {
@@ -80,6 +81,7 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   fakeIpTunnels: false,
   buildCaches: "off",
   buildCacheGiB: buildCacheLimits.gib.default,
+  cacheWarming: true,
 });
 
 export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
@@ -152,7 +154,7 @@ export function parseHostCompaction(value: unknown): HostCompaction {
   return Object.keys(overrides).length ? { ...compaction, modelOverrides: overrides } : compaction;
 }
 
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB", "cacheWarming"]);
 
 export function parseHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
@@ -172,6 +174,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
   if (typeof input.fakeIpTunnels !== "boolean") throw new Error("Invalid fake-IP tunnels setting");
+  if (typeof input.cacheWarming !== "boolean") throw new Error("Invalid prompt cache warming setting");
   if (!buildCacheModes.includes(input.buildCaches as BuildCacheMode)) throw new Error("Invalid build caches setting");
   const gib = input.buildCacheGiB;
   if (typeof gib !== "number" || !Number.isSafeInteger(gib) || gib < buildCacheLimits.gib.min || gib > buildCacheLimits.gib.max) {
@@ -186,7 +189,7 @@ export function parseHostConfig(value: unknown): HostConfig {
     hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
     requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser),
     serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel), fakeIpTunnels: input.fakeIpTunnels,
-    buildCaches: input.buildCaches as BuildCacheMode, buildCacheGiB: gib };
+    buildCaches: input.buildCaches as BuildCacheMode, buildCacheGiB: gib, cacheWarming: input.cacheWarming };
 }
 
 export function parseHostConfigChange(value: unknown): Partial<HostConfig> {
