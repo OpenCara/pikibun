@@ -637,16 +637,18 @@ test('a sandboxed session\'s agent starts sessions only on sandboxed hosts, unle
   const f = await fixture(t);
   const ownerId = f.owner.user.id;
   const at = new Date().toISOString();
-  const host = (id: string, capabilities: Record<string, unknown>) => {
+  const host = (id: string, capabilities: Record<string, unknown>, owner = ownerId) => {
     f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
-      .run(id, ownerId, `Host ${id}`, id.padEnd(43, 'h'), id.padEnd(43, 'c'), JSON.stringify({ platform: 'linux', productionShell: true, approvalFree: true,
+      .run(id, owner, `Host ${id}`, id.padEnd(43, 'h'), id.padEnd(43, 'c'), JSON.stringify({ platform: 'linux', productionShell: true, approvalFree: true,
         chatOptions: true, plainGit: true, ...capabilities }), JSON.stringify([{ provider: 'faux', modelId: 'faux-9', name: 'Faux 9' }]), at);
     f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run(id, f.workspace.id, at);
     f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
-      .run(`${id}-faux-9`, f.workspace.id, 'Faux 9', 'faux', 'faux-9', at, id, ownerId);
+      .run(`${id}-faux-9`, f.workspace.id, 'Faux 9', 'faux', 'faux-9', at, id, owner);
   };
   host('box', { sandbox: true });
   host('bare', { sandbox: false, unsandboxed: true });
+  host('theirs', { sandbox: false, unsandboxed: true }, f.collaborator.user.id);
+  f.sqlite.prepare('INSERT INTO connector_shares (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('theirs', f.workspace.id, at);
   for (const id of ['busy-1', 'busy-2']) {
     f.sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,repository_mode,connector_id,connector_owner_id,activity) VALUES (?,?,?,?,?,?,?,'workspace','clone',?,?,?)")
       .run(id, f.workspace.id, ownerId, f.agent.id, id, 'ready', at, 'box', ownerId, 'working');
@@ -673,12 +675,12 @@ test('a sandboxed session\'s agent starts sessions only on sandboxed hosts, unle
 
   const person = f.admit('session-s', ownerId);
   const hosts = (await f.tool('session-s', ownerId, person, { action: 'list' })).body.hosts as { id: string; sandbox: string; agentMayStart: boolean }[];
-  assert.deepEqual(hosts.map(item => [item.id, item.sandbox, item.agentMayStart]).sort(), [['bare', 'unsandboxed', true], ['box', 'sandbox', true]]);
+  assert.deepEqual(hosts.map(item => [item.id, item.sandbox, item.agentMayStart]).sort(), [['bare', 'unsandboxed', true], ['box', 'sandbox', true], ['theirs', 'unsandboxed', false]]);
 
   const balanced = await f.tool('session-s', ownerId, person, { action: 'create', title: 'Balanced', message: 'Go', placement: {} });
   assert.equal(balanced.status, 201, JSON.stringify(balanced.body));
   assert.deepEqual(where(balanced.body), { connector_id: 'box', host_environment: 0 }, 'the idle host without a sandbox is passed over for the busier sandboxed one');
-  assert.deepEqual([(balanced.body.placement as { qualified: number; considered: number }).qualified, (balanced.body.placement as { considered: number }).considered], [1, 2]);
+  assert.deepEqual([(balanced.body.placement as { qualified: number; considered: number }).qualified, (balanced.body.placement as { considered: number }).considered], [1, 3]);
 
   const moved = await f.tool('session-s', ownerId, person, { action: 'create', title: 'Moved', modelId: 'bare-faux-9', placement: {} });
   assert.equal(moved.status, 201, JSON.stringify(moved.body));
@@ -690,7 +692,7 @@ test('a sandboxed session\'s agent starts sessions only on sandboxed hosts, unle
   assert.match(String(named.body.error), /runs sessions without one.*host_environment: true and placement \{hosts: \[its id\]\}/);
   const placedThere = await f.tool('session-s', ownerId, person, { action: 'create', title: 'Placed', placement: { hosts: ['bare'] } });
   assert.deepEqual([placedThere.status, placedThere.body.code], [409, 'placement_unsatisfied'], JSON.stringify(placedThere.body));
-  assert.match(String(placedThere.body.error), /1 not among placement hosts; 1 running sessions without a sandbox, where this sandboxed session's agent starts none on its own\..*host_environment: true/);
+  assert.match(String(placedThere.body.error), /2 not among placement hosts; 1 running sessions without a sandbox, where this sandboxed session's agent starts none on its own\..*host_environment: true/);
   await f.refused(f.tool('session-s', ownerId, person, { action: 'create', placement: { models: ['bare-faux-9'] } }), 409, 'placement_unsatisfied');
   const explicit = { action: 'create', title: 'Chosen', message: 'Go', placement: { hosts: ['bare'] }, hostEnvironment: true };
   for (const requestId of ['xs:from-another-session', 'schedule:nightly:2026-01-01T00:00:00Z']) {
@@ -698,6 +700,7 @@ test('a sandboxed session\'s agent starts sessions only on sandboxed hosts, unle
     await f.refused(f.tool('session-s', ownerId, admission, explicit), 403, 'host_session_person_required');
     await f.refused(f.tool('session-s', ownerId, admission, { action: 'create', modelId: 'bare-faux-9' }), 403, 'sandbox_required');
   }
+  await f.refused(f.tool('session-s', ownerId, person, { action: 'create', modelId: 'theirs-faux-9' }), 403, 'connector_trust_required');
   assert.equal(count(), before, 'a refused create starts nothing');
 
   const chosen = await f.tool('session-s', ownerId, person, explicit);

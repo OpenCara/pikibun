@@ -5,7 +5,7 @@ import {
 } from '../../../packages/shared/src/hardware.js';
 import type { PlacementHostSummary, PlacementResult } from '../../../packages/shared/src/cross-session.js';
 import type { ThinkingLevel } from '../../../packages/shared/src/types.js';
-import { hostCapabilities } from './authority/hosts.js';
+import { hostCapabilities } from './authority/index.js';
 import { fail } from './http.js';
 import { connectorHostConfig } from './host-config.js';
 import type { Env, ModelRow, SessionRow } from './types.js';

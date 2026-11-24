@@ -428,8 +428,12 @@ type ScheduleChange = { actorId: string; callId?: string; gated: boolean; truste
 
 async function requireSandboxKept(env: Env, change: ScheduleChange, schedule: Pick<ScheduleRow, 'session_id' | 'origin_session_id' | 'model_id'>): Promise<void> {
   if (!change.agentSession || schedule.session_id !== null) return;
-  if (!await hostUnsandboxed(env, await scheduleHost(env, schedule)) || !await sessionSandboxed(env, change.agentSession)) return;
-  sandboxRequired('make or change a schedule whose runs start there', 'the host this schedule\'s runs start on',
+  const hosts = await env.DB.query<{ model: string | null; origin: string | null }>(
+    'SELECT (SELECT connector_id FROM models WHERE id = ?) AS model, (SELECT connector_id FROM sessions WHERE id = ?) AS origin')
+    .bind(schedule.model_id, schedule.origin_session_id).first();
+  if (!await hostUnsandboxed(env, hosts?.model) && !await hostUnsandboxed(env, hosts?.origin)) return;
+  if (!await sessionSandboxed(env, change.agentSession)) return;
+  sandboxRequired('make or change a schedule whose runs start there', 'a host this schedule\'s runs can start on',
     'Choose a model on a sandboxed host (sessions list shows each host\'s sandbox), or ask the person to make or change it themselves, in this session\'s Schedules tab or the workspace\'s Schedules.');
 }
 const changedBy = (change: ScheduleChange) => change.callId === undefined ? {} : { agent: true, callId: change.callId };

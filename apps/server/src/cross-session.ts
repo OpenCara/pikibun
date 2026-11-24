@@ -338,14 +338,14 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const model = placed?.model ?? named;
   if (!model) fail(404, 'not_found', 'Model not found.');
   const unsandboxedHost = placed ? placed.host.sandbox === 'unsandboxed' : await hostUnsandboxed(c.env, model.connector_id);
-  if (keepSandboxed && unsandboxedHost) {
-    sandboxRequired('start a session there', 'that model\'s host', `Choose a model on a sandboxed host (list shows each host's sandbox). ${unsandboxedPath}`);
-  }
   const onHost = options.hostEnvironment === true && !unsandboxedHost;
   const modelId = model.id;
   const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
   if (model.connector_id && !agentMayStartOn(origin, actorId, model)) {
     fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
+  }
+  if (keepSandboxed && unsandboxedHost) {
+    sandboxRequired('start a session there', 'that model\'s host', `Choose a model on a sandboxed host (list shows each host's sandbox). ${unsandboxedPath}`);
   }
   if (options.message !== undefined && options.notify) {
     const members = await c.env.DB.query<{ user_id: string }>(`SELECT member.user_id FROM workspace_members member

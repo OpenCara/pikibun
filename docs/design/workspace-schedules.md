@@ -45,7 +45,9 @@ that may start sessions, the model, its host, the person's Git accounts.
   text the agent can write. So the `schedule` tool of a session that runs in a sandbox refuses (`sandbox_required`) to
   make a schedule whose runs start on a host that runs sessions without one, and to change one a person pointed there:
   its prompt, its model, its timing, or turning it back on. It may still pause or delete it. A person who wants such a
-  schedule makes and edits it themselves; that choice is theirs and stays. The check is made when the tool saves, not
+  schedule makes and edits it themselves; that choice is theirs and stays. Both hosts a run can start on count: its
+  model's, and the host of the session it was made from, where a run falls back when its model is gone or the
+  workspace turned agents' model choice off (`runModel`). The check is made when the tool saves, not
   at each run: a run can't tell an agent's choice from a person's, and a host that later drops its sandbox was changed
   by its owner ([Sandboxed work stays sandboxed](host-placement.md#sandboxed-work-stays-sandboxed)).
 - **The workspace's sub-task setting applies to agents.** **Sub-task sessions** decides whether agents choose the

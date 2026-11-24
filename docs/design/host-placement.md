@@ -101,9 +101,10 @@ its host, and its host's connector doesn't run unsandboxed), the Pikibun server 
 - `placeChild` leaves unsandboxed hosts out (`sandboxedOnly`), and a `placement_unsatisfied` refusal counts them
   ("running sessions without a sandbox") and names the explicit path below;
 - a `create` whose model, named or inherited, sits on an unsandboxed host is refused (`sandbox_required`) whether or
-  not it has a `placement`, so the rule doesn't depend on which parameters the agent used;
-- the `schedule` tool neither makes nor changes (but for pausing, and deleting) a schedule whose runs start on an
-  unsandboxed host, whoever chose that host ([workspace schedules](workspace-schedules.md)).
+  not it has a `placement`, so the rule doesn't depend on which parameters the agent used. It comes after the trust
+  check, so another member's host is refused as that (`connector_trust_required`), not with a path that can't work;
+- the `schedule` tool neither makes nor changes (but for pausing, and deleting) a schedule whose runs start, or can
+  fall back, on an unsandboxed host, whoever chose that host ([workspace schedules](workspace-schedules.md)).
 
 The explicit path is the one a session directly on a host already has: `host_environment: true` with exactly one host
 in `placement.hosts`, in a message a person sent. On an unsandboxed host there is no sandbox to leave, so the new

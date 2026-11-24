@@ -938,6 +938,15 @@ test('a sandboxed session\'s agent neither makes nor changes a schedule whose ru
   await kept({ action: 'update', scheduleId: workspace.id, content: 'Something else' });
   assert.deepEqual((await tool({ action: 'delete', scheduleId: schedule.id })).body, { deleted: schedule.id });
 
+  f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,connector_id,connector_owner_id)
+    SELECT 'bare-origin', workspace_id, owner_id, agent_version_id, 'On the bare host', 'ready', created_at, 'workspace', 'bare-host', owner_id FROM sessions WHERE id = 'scheduled-session'`).run();
+  const fallback = (await (await f.owner.request('POST', workspacePath(f), { cron: '0 9 * * *', content: 'Weekly', modelId: 'box-model' })).json() as { schedule: Schedule }).schedule;
+  assert.equal((await tool({ action: 'update', scheduleId: fallback.id, name: 'Weekly review' })).status, 200, 'a schedule that can only run sandboxed is the agent\'s to change');
+  f.sqlite.prepare("UPDATE schedules SET origin_session_id = 'bare-origin' WHERE id = ?").run(fallback.id);
+  await kept({ action: 'update', scheduleId: fallback.id, content: 'Runs where the model falls back' });
+  assert.equal(f.sqlite.prepare('SELECT content FROM schedules WHERE id = ?').get(fallback.id)!.content, 'Weekly',
+    'its model is on a sandboxed host, but a run that falls back on its origin session\'s model starts on that session\'s unsandboxed host');
+
   f.sqlite.prepare("UPDATE sessions SET host_environment = 1 WHERE id = 'scheduled-session'").run();
   const onHost = await tool({ action: 'create', ...fields, modelId: 'bare-model' });
   assert.equal(onHost.status, 201, `a session that already runs without a sandbox schedules as before: ${JSON.stringify(onHost.body)}`);
