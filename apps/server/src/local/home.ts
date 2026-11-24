@@ -83,6 +83,7 @@ export function createPrivateHome(host: PrivateHomeHost, options: PrivateHomeOpt
     const localHost = startLocalHost(server, stateDir, {
       localModels: host.localModels, unsandboxed: host.unsandboxed, resources: host.resources, allowFaux: host.allowFaux, allowTestShell: host.allowTestShell,
       identityDir: host.identityDir, ...(host.sandboxBackend ? { sandboxBackend: host.sandboxBackend } : {}), ...(host.capabilities ? { capabilities: host.capabilities } : {}),
+      extensionModels: false,
     });
     running = { server, host: localHost };
     lastProblem = '';

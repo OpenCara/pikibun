@@ -127,6 +127,10 @@ What it doesn't protect against:
   `ModelRuntime`; `LocalConnector.provideModels` calls it with what the Pikibun server last said
   (`HostConfigSource.modelExtensions`: unknown until it has answered once, and kept through an outage, so a connector
   that can't read its configuration changes nothing).
+- **One connector applies the list.** A computer that also holds its owner's private sessions runs a second connector
+  in the same process, for the Pikibun on that computer, over the same models (`apps/server/src/local/home.ts`). It is
+  started with `extensionModels: false`: two connectors applying two lists to one `ModelRuntime` would withdraw each
+  other's providers. Since the runtime is shared, its manifest lists what the first connector had applied when it connected.
 - **Client**: the **Provide models** box and the rows for marked versions the host lacks
   (`apps/nsh/src/settings/host-extensions.tsx`).
 - **Tests**: `tests/extension-models.test.ts` (a fixture extension whose provider is pi-ai's faux provider: off until
