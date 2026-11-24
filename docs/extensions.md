@@ -214,6 +214,8 @@ A workspace's owners and admins add remote MCP servers under **Settings → Work
 
 - **Read-only only where you say so.** Each tool may change things until an owner or admin ticks **Read-only** for it; only those run in Read-only messages. What the server says about its own tools (`readOnlyHint`) counts for nothing.
 - **Public addresses only.** Pikibun refuses an address that is, or resolves to, a private, loopback, link-local or tailnet address, and follows no redirect.
+- **A header stays with its address.** Pikibun never sends the header it keeps to another address: a change of a server's address through the API must give its headers again (or none), and is refused otherwise. To move a server in the settings page, remove it and add it again.
+- **Off for the whole workspace with one switch.** A workspace that turns `piki:remote-mcp` off stops every remote MCP tool: hosts stop offering them, and Pikibun refuses a call a host makes anyway.
 - **Bounded.** A tool whose input schema Pikibun can't bound (one using `$ref`, say) is left out. Arguments are checked against the schema in the session and again by Pikibun; an answer is cut at 1 MB, and what the model reads at 64 KB of its text. Every call is in the workspace's audit log.
 - **Its answers are someone else's words.** Treat what a server returns as information, not as instructions.
 

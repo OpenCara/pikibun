@@ -92,13 +92,14 @@ What it doesn't protect against: the conversation is shared. A sender can leave 
 
 ## GitHub repositories outside the workspace
 
-The workspace's repositories bound what a session does on GitHub as its owner: `github_read`, `github_issue` and `github_merge` refuse another (`repository_not_pinned`), and `gh`'s credentials cover only them, except in a call that may write (below). That bound is Pikibun's, not GitHub's: the owner's sign-in token reaches every repository their account does, and can't be limited to some. It is there because the one acting isn't the owner: it is an agent that follows what it reads, prompted by whoever may message the session. A member who wants their sessions to file issues upstream, or merge in a repository the workspace doesn't bind, can lift it for themselves (`member_github_reach`, `apps/server/src/authority/github-reach.ts`, [GitHub](../github.md#repositories-outside-the-workspace)):
+The workspace's repositories bound what a session does on GitHub as its owner: `github_read`, `github_comment`, `github_issue` and `github_merge` refuse another (`repository_not_pinned`), and `gh`'s credentials cover only them, except in a call that may write (below). That bound is Pikibun's, not GitHub's: the owner's sign-in token reaches every repository their account does, and can't be limited to some. It is there because the one acting isn't the owner: it is an agent that follows what it reads, prompted by whoever may message the session. A member who wants their sessions to file issues upstream, or merge in a repository the workspace doesn't bind, can lift it for themselves (`member_github_reach`, `apps/server/src/authority/github-reach.ts`, [GitHub](../github.md#repositories-outside-the-workspace)):
 
 - **Their own choice, for their own identity.** Each member sets it for themselves, per workspace, off by default; a workspace admin can't turn it on for someone else, since it spends that person's account. Turning it off applies to the next call.
 - **Only their own messages.** The brokered tools check the message's sender is the session's owner (`senderReachesAnyGitHubRepository`, called by `githubTarget` in `apps/server/src/authority/github-broker.ts`). A collaborator, an admin or another member writing in the owner's session keeps to the workspace's repositories, so nobody borrows the owner's reach, as nobody borrows their tools ([Whose tools a message runs](#whose-tools-a-message-runs)). The tool groups still apply on top.
 - **For `gh`, the host vouches for the sender.** The Pikibun server doesn't know who sent the message a credential request serves. The host asks for a write credential that reaches beyond the workspace (`reach: "any"`) only for a lease of a call whose sender is the owner (`SessionPiki#runCommand`); the Pikibun server marks the owner's write credential `anyRepository` only if the owner turned their reach on. Write credentials go only to the owner's own hosts, so the host vouching is the owner's own connector, which could already use their token as it liked. The proxy keeps a credential per reach, so a lease of another sender's call never gets the wider one (`ApiAccess`).
 - **GitHub's canonical identity, read with the owner's sign-in.** Outside the workspace there is no pinned repository identity to compare against, so each call asks GitHub for the repository as the owner (`githubRepositoryMetadata`) and acts on the name GitHub answers with: a repository the owner can't see is refused before anything is written, and a renamed one is acted on under its new name. Audits record `outsideWorkspace`.
-- **Reads and writes, not pushes.** Pushes go through the push broker, which pins a workspace binding and the session's branch; this doesn't change that. `github_comment` names no repository check today: it posts where its call says, as before.
+- **Reads and writes, not pushes.** Pushes go through the push broker, which pins a workspace binding and the session's branch; this doesn't change that.
+- **Comments too.** `github_comment` goes through the same `githubTarget` as issues and merges, before its tool call is spent: it used to post wherever its call said, for any sender, which let a collaborator's message, or text the agent read, comment as the owner in any repository their account reaches. Its audit entries (`github.comment.completed`, `.failed`, `.ambiguous`) now record `repository`, `issue` and `outsideWorkspace`. Connectors need no change: an older one gets `repository_not_pinned` for a repository outside the workspace, and reports the comment as refused.
 
 What it doesn't protect against: with it on, a prompt injection in something the owner's agent reads, during a message the owner sent, can act as the owner on any repository they can access. That is the trade the member makes, and the settings page says so.
 
@@ -222,10 +223,17 @@ tools. What bounds that:
   addresses are refused, and redirects aren't followed. So a workspace admin can't use the Pikibun server to reach its own
   network, a cloud metadata address or a tailnet.
 - **A call needs what a write message gives.** The connector route checks the requester's live write permission, the
-  session's host, an unexpired run admission of the requester's message, and that the server and tool are still there
+  session's host, an unexpired run admission of the requester's message, that the workspace hasn't turned `piki:remote-mcp` off, and that the server and tool are still there
   and enabled in the session's workspace, before and again after the call. Tool groups name Pikibun's own tools, so they
   don't list remote MCP tools one by one; a workspace turns all of them off with `piki:remote-mcp`, or a server with its
-  **Enabled** switch.
+  **Enabled** switch. The `piki:remote-mcp` switch is checked on the Pikibun server (`mcp_tools_off`, with the host's own
+  `extensionSwitchOn`: on unless a row turns it off), not only where the host builds a session's tools, so a connector
+  that calls the route anyway reaches no server for a workspace that turned it off.
+- **Headers belong to the address they were given for.** A change of a server's `url` must come with `headers` (an empty
+  set, or `null`, sends none and deletes the stored ones); without them it is refused (`mcp_headers_required`) before
+  anything is sent. Otherwise an admin, or whoever holds an admin's session, could point a server at an address of their
+  own and have Pikibun send it the stored key, which nobody can read back any other way. A `url` equal to the stored
+  one is no change. The rule holds for servers without stored headers too, so it is one rule.
 - **Read-only is decided by the workspace, not the server.** `readOnlyHint` is ignored; a tool is read-only only if an
   owner or admin listed it, and any other tool is refused for a Read-only message's admission.
 - **Untrusted schemas and answers are bounded.** Input schemas are sanitized to a small keyword set with size, depth and

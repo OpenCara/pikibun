@@ -2,8 +2,9 @@ import type { Hono } from 'hono';
 import { compile } from '@earendil-works/pi-schema';
 import { z } from 'zod';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
+import { extensionSwitchOn } from '../../../../../packages/shared/src/piki-extensions.js';
 import {
-  remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl, validRemoteMcpPrefix,
+  REMOTE_MCP_EXTENSION, remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl, validRemoteMcpPrefix,
   type RemoteMcpServerSummary, type RemoteMcpTool, type RemoteMcpTransport, type WorkspaceMcpServer,
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
@@ -12,6 +13,7 @@ import { fail, id, identifier, now, text, userIdentifier } from '../../http.js';
 import { body, fields } from '../../schemas.js';
 import { requireMember, sessionAccess, workspaceAdminSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
+import { workspaceExtensions } from '../extension-policy.js';
 import { requireCallbackScope } from '../hosts.js';
 import { admissionExpired } from '../run-admissions.js';
 import { requireToolCall } from '../tool-checks.js';
@@ -130,6 +132,9 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
       || await admissionExpired(c.env, admissionId, admission)) {
       fail(403, 'mcp_call_not_admitted', 'Remote MCP tools need a message from the requester sent within the last hour, or whose run is still going.');
     }
+    if (!extensionSwitchOn(REMOTE_MCP_EXTENSION, await workspaceExtensions(c.env, access.row.workspace_id))) {
+      fail(403, 'mcp_tools_off', `Remote MCP tools are turned off in this workspace (${REMOTE_MCP_EXTENSION}). Nothing ran.`);
+    }
     const server = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE workspace_id = ? AND prefix = ? AND enabled = 1')
       .bind(access.row.workspace_id, prefix).first();
     const readOnlyTools = server ? parsedList(server.read_only_tools_json) : [];
@@ -214,6 +219,9 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const row = await serverRow(c.env, workspaceId, serverId);
     const name = input.name === undefined ? row.name : nameOf(input.name);
     const url = input.url === undefined ? row.url : checked(() => remoteMcpUrl(input.url));
+    if (url !== row.url && input.headers === undefined) {
+      fail(400, 'mcp_headers_required', 'Give this server\'s headers again with its new address, or an empty set to send none: Pikibun never sends the headers it keeps for one address to another.');
+    }
     const headers = input.headers === undefined ? await headersOf(c.env, row) : input.headers === null ? {} : checked(() => remoteMcpHeaders(input.headers));
     const readOnlyTools = input.readOnlyTools === undefined ? parsedList(row.read_only_tools_json) : readOnlyList(input.readOnlyTools);
     const enabled = input.enabled === undefined ? Number(row.enabled) === 1 : input.enabled as boolean;
