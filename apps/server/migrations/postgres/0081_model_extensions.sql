@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0087_model_extensions.sql.
+-- Postgres translation of sqlite/0088_model_extensions.sql.
 
 -- Models a host's extensions provide (docs/design/extension-models.md, #147). connector_configs.model_extensions_json is
 -- the host owner's list (HostConfig.modelExtensions): the installed npm: and git: sources whose provider registrations

@@ -65,7 +65,7 @@ export function HostDetails(props: { connector: ConnectorInfo }) {
       </If>
       <If when={config()?.fakeIpTunnels && capabilities().fakeIpTunnels && !capabilities().unsandboxed}><Note>Fake-IP proxy: its owner trusts a local proxy's fake-IP addresses for every host a workspace's network policy allows, where Pikibun can't check where that proxy connects.</Note></If>
       <If when={config() && capabilities().hostConfig}>
-        <Note>{`Commands: stopped after ${config()?.commandTimeoutSeconds} seconds${config()?.gpu && capabilities().gpu ? `, with the host's GPU (${capabilities().gpu === "dxg" ? "WSL /dev/dxg" : "render nodes"})` : ""}.`}</Note>
+        <Note>{`Commands: ${config()?.commandTimeoutUnlimited ? "no time limit" : `stopped after ${config()?.commandTimeoutSeconds} seconds`}${config()?.gpu && capabilities().gpu ? `, with the host's GPU (${capabilities().gpu === "dxg" ? "WSL /dev/dxg" : "render nodes"})` : ""}.`}</Note>
       </If>
       <If when={capabilities().hostMigration}><Note>Moves: this host accepts sessions moved to it from another connected host.</Note></If>
       <Note>The runner verifies prerequisites for every session and stops work that fails. Commands (what git, node, python and the other program tools run) need verified CPU, memory, process and storage limits in everyone's sessions. Without them, commands run unlimited, still inside the sandbox, only in the host owner's own sessions and those of members they grant host commands.</Note>

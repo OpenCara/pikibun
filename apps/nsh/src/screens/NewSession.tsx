@@ -17,7 +17,7 @@ import { randomId } from "../lib/format";
 import type { PageRoute } from "../lib/page";
 import { createAction, createResource } from "../lib/resource";
 import { thisComputerHostIds } from "../lib/this-computer";
-import { showWorkspaceTab, type WorkspaceTab } from "../lib/workspace-tabs";
+import type { WorkspaceTab } from "../lib/workspace-tabs";
 import { OwnJoinRequests } from "../settings/join-requests";
 import { control, palette, radius, text } from "../theme";
 import { Logo } from "../logo";
@@ -139,7 +139,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const repositoriesReady = () => Boolean(repositories() && !repos.error() && !repos.loading() && (sourceCount() || !repositoriesRequired()));
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
   const hostSessions = () => Boolean(host()?.hostSessions);
-  const runOnHost = () => hostSessions() && (onHost() ?? true);
+  const runOnHost = () => hostSessions() && (onHost() ?? !data.sandboxChosen(host()?.id));
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
   let trustKey: string | undefined;
@@ -197,7 +197,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const loading = () => models.loading() || connections.loading();
   const refreshHost = () => <Button small variant="outline" label="Refresh host status" onPress={connections.refresh} />;
   const settings = (route: PageRoute, label: string, testID: string, tab?: WorkspaceTab) => (props.go ? <Button testID={testID} small variant="outline" label={label}
-    onPress={() => { if (tab) showWorkspaceTab(props.workspace.id, tab); props.go!(route); }} /> : undefined);
+    onPress={() => props.go!(tab && route.name === "settings" ? { ...route, tab } : route)} /> : undefined);
   const workspaceSettings: PageRoute = { name: "settings", section: "workspaces", id: props.workspace.id };
   const hostState = (item: ConnectorInfo) => item.revokedAt ? "Revoked" : !item.online ? "Offline" : item.capabilities.unsandboxed ? "Unsandboxed"
     : !item.capabilities.sandbox ? "Sandbox unverified" : "Online";
@@ -240,7 +240,8 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     onLeave: () => setAuto(false),
   } : undefined);
   const environmentPicker = () => (
-    <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} onSelect={value => onHost.set(value === "host")} placement="bottom"
+    <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} placement="bottom"
+      onSelect={value => { onHost.set(value === "host"); const current = host(); if (current) data.rememberEnvironment(current.id, value === "host"); }}
       trigger={<Chip small testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} disabled={action.busy()} />}
       options={[
         { value: "host", label: "On this host", icon: "server", hint: `No sandbox: runs on ${host()?.name ?? "the host"} as its user, with its files, credentials and network` },

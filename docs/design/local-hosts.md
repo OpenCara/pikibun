@@ -68,6 +68,9 @@ a restart.
 - **Sandbox per host.** It is chosen when the host is added. On macOS it can change while the host is stopped
   (`none` and `seatbelt` share an environment and a state directory); on Windows `windows` and `wsl` are different
   environments, whose state directories are on different file systems, so changing one means adding another host.
+  A host changed from `seatbelt` to `none` keeps its sessions' folders, and each session's record of how it last ran
+  ([a session that would leave its sandbox](local-private-sessions.md#a-session-that-would-leave-its-sandbox)): the
+  consent dialog for running unsandboxed says that those sessions run on the Mac too from then on.
 - **Removal.** **Remove** stops a host and forgets its entry; its pairing and sessions stay in its folder, and the
   host stays on its server, offline, until removed there. The host in the command line's state directory can't be
   removed here: its pairing is the terminal's too.

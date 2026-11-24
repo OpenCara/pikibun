@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
 import { assertConnectorPlatform, assertPrerequisites, checkPrerequisites, loadConnectorModels } from '../../../runner/src/connect-setup.js';
-import { confirmUnsandboxed, promptHidden, resourceConfig } from '../../../runner/src/connect-cli.js';
+import { confirmUnsandboxed, KEPT_IN_SANDBOX, LEAVING_SANDBOX, promptHidden, resourceConfig } from '../../../runner/src/connect-cli.js';
 import { ConnectorSetupError } from '../../../runner/src/protocol.js';
 import { identityDirectory } from '../../../runner/src/identity.js';
 import { ConfigurationError } from '../config.js';
@@ -28,6 +28,9 @@ Options:
   --unsafe-no-sandbox      Run agent work directly on this computer without
                            isolation (macOS or Linux without bubblewrap); asks
                            for confirmation
+  --sessions-leave-sandbox With --unsafe-no-sandbox, also open the sessions here
+                           that last ran in a sandbox: they then run directly on
+                           this computer too. Without it they are refused
   --state-dir PATH         Private state (default ~/.local/share/pikibun/server)
   --stdio                  Run for the Pikibun app, which starts this command
                            itself and talks to it over stdin and stdout (JSON
@@ -88,6 +91,8 @@ async function hostOptions(values: Record<string, string | boolean | string[] | 
   if (process.platform === 'darwin' && !unsandboxed) {
     throw new ConnectorSetupError('macOS has no isolated sandbox for agent work. Re-run with --unsafe-no-sandbox and read its warning, or with --no-host to serve only.');
   }
+  const sessionsLeaveSandbox = values['sessions-leave-sandbox'] === true;
+  if (sessionsLeaveSandbox && !unsandboxed) throw new ConnectorSetupError('--sessions-leave-sandbox goes with --unsafe-no-sandbox: it lets sessions that last ran in a sandbox run without one.');
   if (unsandboxed && values.resources) throw new ConnectorSetupError('--resources configures Linux sandbox limits and cannot be combined with --unsafe-no-sandbox.');
   if (values['allow-test-shell'] && !values['allow-faux']) throw new ConnectorSetupError('--allow-test-shell requires --allow-faux.');
   assertPrerequisites(await checkPrerequisites(unsandboxed), unsandboxed, ' Without bubblewrap you can run --unsafe-no-sandbox instead (read its warning first), or --no-host to serve only.');
@@ -99,8 +104,9 @@ async function hostOptions(values: Record<string, string | boolean | string[] | 
   const localModels = await loadConnectorModels({ allowFaux: values['allow-faux'] === true, piAgentDir: values['pi-agent-dir'] as string | undefined, models });
   const resources = typeof values.resources === 'string' ? await resourceConfig(values.resources) : undefined;
   if (unsandboxed) await confirmUnsandboxed();
+  if (unsandboxed) process.stderr.write(`${sessionsLeaveSandbox ? LEAVING_SANDBOX : KEPT_IN_SANDBOX}\n`);
   return {
-    localModels, unsandboxed, resources, allowFaux: values['allow-faux'] === true, allowTestShell: values['allow-test-shell'] === true, identityDir: identityDirectory(),
+    localModels, unsandboxed, sessionsLeaveSandbox, resources, allowFaux: values['allow-faux'] === true, allowTestShell: values['allow-test-shell'] === true, identityDir: identityDirectory(),
     onStatus: (status, reason) => { process.stderr.write(`This computer: ${status}${reason ? ` (${reason})` : ''}\n`); },
     onWarning: (warning, detail) => { process.stderr.write(warning === 'identity-unavailable' ? `Your identity couldn't be read or made (${detail}), so this host's private sessions aren't portable until it can.\n` : 'Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.\n'); },
   };
@@ -132,7 +138,7 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
   }
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
     help: { type: 'boolean' }, port: { type: 'string' }, 'github-client-id': { type: 'string' }, 'no-host': { type: 'boolean' },
-    'unsafe-no-sandbox': { type: 'boolean' }, 'state-dir': { type: 'string' }, 'pi-agent-dir': { type: 'string' },
+    'unsafe-no-sandbox': { type: 'boolean' }, 'sessions-leave-sandbox': { type: 'boolean' }, 'state-dir': { type: 'string' }, 'pi-agent-dir': { type: 'string' },
     model: { type: 'string', multiple: true }, resources: { type: 'string' },
     'allow-faux': { type: 'boolean' }, 'allow-test-shell': { type: 'boolean' }, 'test-mode': { type: 'boolean' },
     share: { type: 'boolean' }, 'public-origin': { type: 'string' }, admin: { type: 'string', multiple: true }, listen: { type: 'string' },

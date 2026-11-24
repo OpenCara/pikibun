@@ -43,6 +43,7 @@ import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./
 import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
 import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
 import { PRIVATE_REPORT_LIMIT, PRIVATE_SESSIONS_VERSION } from "../../../packages/shared/src/private-sessions.js";
+import { ReportDigest } from "./connector/report-digest.js";
 import type { PrivateHome } from "./private-home.js";
 
 const STATE_FILE = "connector.json";
@@ -154,6 +155,7 @@ function capabilities(value?: ConnectorCapabilities, mode: { unsandboxed?: boole
 export async function claimConnectorPairing(options: {
   server: string; pairing: { id: string; code: string }; localModels: LocalModels;
   capabilities?: ConnectorCapabilities; unsandboxed?: boolean; gpu?: GpuKind; allowFaux?: boolean; allowInsecureLoopback?: boolean; fetch?: typeof fetch; signal?: AbortSignal;
+  extensionModelCalls?: boolean;
 }): Promise<ConnectorCredentials> {
   const origin = controlPlaneOrigin(options.server, options.allowInsecureLoopback);
   const { id, code } = options.pairing;
@@ -162,7 +164,7 @@ export async function claimConnectorPairing(options: {
   const response = await (options.fetch ?? fetch)(`${origin}/api/connectors/pairings/${id}/claim`, {
     method: "POST", redirect: "error", credentials: "omit",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code, models: await connectorManifest(options.localModels, options.allowFaux), capabilities: withHostToolCapabilities(capabilities(options.capabilities, options)) }),
+    body: JSON.stringify({ code, models: await connectorManifest(options.localModels, options.allowFaux), capabilities: withHostToolCapabilities(capabilities(options.capabilities, options), options) }),
     signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(options.signal ? [options.signal] : [])]),
   });
   if (!response.ok) { await response.body?.cancel(); throw new ConnectorSetupError("Pairing rejected or unavailable: the code may be wrong, expired (codes last 10 minutes) or already used. Create a new pairing code and try again."); }
@@ -205,6 +207,7 @@ export interface ConnectorOptions {
   buildCaches?: boolean;
   buildCacheEvictMs?: number;
   unsandboxed?: boolean;
+  sessionsLeaveSandbox?: boolean;
   privateEnvironment?: readonly string[];
   sandboxBackend?: SandboxBackendConfig;
   gpu?: GpuKind | null;
@@ -223,6 +226,7 @@ export interface ConnectorOptions {
   managedExtensions?: boolean;
   autoCacheExtensions?: boolean;
   extensionModels?: boolean;
+  extensionModelCalls?: boolean;
   privateHome?: PrivateHome;
   privateReportMs?: number;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
@@ -499,7 +503,7 @@ export class LocalConnector {
 
   private async reportManifest(generation: Generation, advertised: ConnectorCapabilities): Promise<void> {
     await this.calls.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
-      capabilities: withHostToolCapabilities(advertised) });
+      capabilities: withHostToolCapabilities(advertised, this.options) });
   }
 
   private async provideModels(): Promise<boolean> {
@@ -615,17 +619,12 @@ export class LocalConnector {
     const home = this.options.privateHome;
     if (!home) return;
     const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
-    let last = "";
-    let sent = 0;
+    const reports = new ReportDigest();
     while (!signal.aborted) {
       try {
         const sessions = await home.sessions(signal);
         const report = sessions ? JSON.stringify(sessions.slice(0, PRIVATE_REPORT_LIMIT)) : "";
-        if (sessions && (report !== last || Date.now() - sent > 60_000)) {
-          await this.calls.callback(generation, "/api/connectors/self/private-sessions", { sessions: JSON.parse(report) as unknown[] });
-          last = report;
-          sent = Date.now();
-        }
+        if (sessions && reports.due(report)) await reports.send(report, body => this.calls.callback(generation, "/api/connectors/self/private-sessions", body));
       } catch (error) {
         if (error instanceof CallbackRefused && error.status < 500 && error.status !== 408 && error.status !== 429) return;
       }

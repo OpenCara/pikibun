@@ -119,7 +119,7 @@ What it doesn't protect against:
 
 - **Shared**: `HostConfig.modelExtensions`, `parseModelExtensions` and `ownerOnlyHostConfig`
   (`packages/shared/src/host-config.ts`); the `extensionModels` capability.
-- **Pikibun server**: `connector_configs.model_extensions_json` (sqlite `0087`, postgres `0080`), read and written with
+- **Pikibun server**: `connector_configs.model_extensions_json` (sqlite `0088`, postgres `0081`), read and written with
   the rest of the configuration (`apps/server/src/host-config.ts`); a stored list that no longer parses reads as none.
 - **Connector**: `extensions/providers.ts` loads a source's registrations (`loadProviderRegistrations`, one at a time,
   with jiti's file cache off for the load, as in the extension process) and picks the sources that qualify

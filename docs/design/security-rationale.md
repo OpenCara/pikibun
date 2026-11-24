@@ -77,6 +77,8 @@ The desktop app starts `pikibun` through the owner's login shell (`$SHELL -ilc '
 
 In the private workspace's sessions of the host's owner, `sudo -A` asks the owner for their password in Pikibun, per use, in a box of its own, and nothing keeps it; see [sudo's password](sudo-prompts.md) for why per use and not once, and what that does and doesn't protect.
 
+**A session doesn't leave its sandbox unnoticed.** How a session runs follows the process that opens it: a connector started with `--unsafe-no-sandbox`, or the one of a computer's host processes that holds its local Pikibun's lease ([private sessions](local-private-sessions.md)), runs every session it opens on the machine. A session someone started in the sandbox, perhaps because its work wasn't trusted, could so be opened later without one, by a process started differently. Each host now keeps how a session last ran beside its binding (`ran.json`, outside the sandbox's reach), and a host without a sandbox refuses a session that last ran in one, with a reason the session's page shows, unless the host's user allowed it when starting the host: `--sessions-leave-sandbox` on the command line, or the desktop app's consent dialog for running unsandboxed, which says so. A session opened that way is logged by the host and its record says when it left. What this doesn't do: it asks the host's user, once per start, not the session's owner per session (for a private session they are one person; on a shared host without a sandbox, only the owner and members granted host commands run commands at all); the app's consent is remembered for the hosts it starts again at launch; and a session from before the record has none, so its first open isn't refused.
+
 What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. A session on the host runs its extensions on the host too, in a process of their own as the owner's user (`apps/runner/src/extensions/`), so there a workspace's extensions are trusted code; in a sandboxed session on Linux or macOS they run in its sandbox ([extension isolation](extension-isolation.md)).
 
 ## Open defaults
@@ -85,14 +87,18 @@ A new workspace used to start closed: network access **Off**, each member's GitH
 
 - **Network access starts Open** (`defaultNetworkPolicy`, `packages/shared/src/network.ts`): a sandboxed command reaches any public host over HTTPS. Addresses in the host's own networks stay unreachable, and credentials stay out of the sandbox, as before ([egress](egress.md)). What Open gives up is the bound on where a sandboxed command can send what it can read (the worktree, and what the session's proxy reads for it): a workspace with code that mustn't leave chooses **Allowlist** or **Off**.
 - **GitHub reach starts on**, per member ([GitHub repositories outside the workspace](#github-repositories-outside-the-workspace)).
-- **Starter extensions are on** (`starterWorkspaceExtensions`, `packages/shared/src/host-extensions.ts`): Git, Node.js, Python, scheduled prompts, other sessions, workspace management, artifacts, skills and context files. All are Pikibun's own, built into the connector, so turning them on makes no host install or run anything new, and each stays within the tool groups: `workspace` is in the owners' and admins' groups alone, `schedule` and `sessions` not in members'. Two of them put repository text in the system prompt (`AGENTS.md` through context files, skill descriptions through skills); a workspace that clones repositories it doesn't trust turns those off. Third-party packages (`pi-web-access` and the like) and the prompt audit stay listed and off: a package is code a host fetches and runs, which stays an explicit choice. The tunnel and the browser stay opt-in too: one publishes an address, the other needs a program on the host.
+- **Starter extensions are on** (`starterWorkspaceExtensions`, `packages/shared/src/host-extensions.ts`): Git, the GitHub tools and CLI, Node.js, Python, scheduled prompts, other sessions, workspace management, artifacts, skills and context files. These are Pikibun's own, built into the connector, so turning them on makes no host install or run anything new, and each stays within the tool groups: `workspace` is in the owners' and admins' groups alone, `schedule` and `sessions` not in members'. Two of them put repository text in the system prompt (`AGENTS.md` through context files, skill descriptions through skills); a workspace that clones repositories it doesn't trust turns those off. The tunnel and the browser stay opt-in: one publishes an address, the other needs a program on the host.
+- **One third-party package starts on: `pi-web-access`.** A session without web search sends its owner to the settings before its first real question, so the starter set has it. It is the one exception to "a package is code a host fetches and runs, which stays an explicit choice", and it is bounded as a package added by hand is: pinned to an exact version and locked to the `sha512` digest npm publishes for it (`defaultExtensionIntegrity`, written with the row at creation, where an added package's is read from the registry), so a sandboxed Linux or macOS host fetches exactly that tarball and runs it only in the session's sandbox ([extension isolation](extension-isolation.md)); a host without the sandbox runs it only once its owner installs it. The other listed packages (`pi-web-search`, `cc-safety-net`) and the prompt audit stay off. A workspace that wants no third-party code starts as **Balanced** or **Locked down**, or turns it off.
+- **Presets say it in one choice** (`packages/shared/src/workspace-presets.ts`, `apps/server/src/authority/workspace-presets.ts`): **Open** is the above; **Balanced** allows package registries only and no third-party package; **Locked down** starts with no network, the creator's reach off and Git alone. Applying one later is an owner's or admin's request, sets only their own reach (a member's reach is theirs), turns extensions off but removes none, and is audited (`workspace.preset.applied`).
+- **A host's commands get an hour, or no limit** (`defaultHostConfig`, `commandTimeoutUnlimited`). The limit bounds how long a runaway or hostile command holds a host's CPU; the per-call `timeout_seconds`, the 20-minute default for test suites and servers, stopping the session's work, and the cgroup limits where a host has them, still bound it. No limit is the host owner's or an admin's choice, as the limit was, and is sent beside the seconds rather than as a number, so a connector from before it keeps the limit it knows instead of failing to read its configuration.
 - **New sessions start on the host** where the host takes them ([Sessions on the host](#sessions-on-the-host)).
 
 What keeps this from changing anything behind someone's back:
 
 - **Defaults are for what nobody chose.** A workspace's network policy and a member's reach are rows; no row means the default. Migration `0084_open_defaults` (postgres `0077`) writes the old defaults as rows for every shared workspace and every member it had, before the code that reads no row as Open and on first runs: a workspace an admin left **Off** because Off was what they wanted stays Off, and nobody's account starts reaching further in a workspace they already shared with others. A member who joins such a workspace later has no row, and so the new default.
 - **Private workspaces get no rows**, so they follow the new defaults: one person, on their own hosts, whose sessions there already ran on the host with their own sign-ins.
-- **Extensions change only at creation.** Existing workspaces keep the extensions they have; nothing is turned on in them.
+- **Extensions change only at creation, or when an owner or admin applies a preset.** Existing workspaces keep the extensions they have; nothing is turned on in them otherwise.
+- **A saved 30-second command limit becomes an hour** (migration `0087_command_time_limit`, postgres `0080`). A host's row holds every setting and is written whenever any is saved, so a 30 there is the old default far more often than a choice, and the two can't be told apart; an owner who did choose 30 seconds chooses it again. Nothing becomes unlimited without being chosen.
 - **Every one of them is a setting**, on the workspace's **Agents** tab or the new-session screen, and each is audited when changed, as before.
 
 ## Whose tools a message runs
@@ -223,8 +229,17 @@ keep Read-only messages and members without the forge's writing tools from writi
   the Pikibun server serves is applied on top: refused if either refuses, a write if either says so. A served
   definition can't drop a refusal or count a write as a read.
 - **Bounded data.** Served definitions are parsed with fixed keys, sizes and patterns (option names, variable names,
-  plain values, absolute roots, compiling regular expressions); one that fails, or would refuse every call, is passed
-  over. Only the rules are taken from them: the command, its environment and its sandbox roots stay the connector's.
+  plain values, absolute roots, compiling regular expressions); one that fails any of these checks, has a key the
+  connector doesn't know, or has a refusal or hint with no condition at all (which would match every call), is passed
+  over whole, and the connector logs it with the reason, so a tightening that didn't apply on a host leaves a trace
+  there. Only the rules are taken from them: the command, its environment and its sandbox roots stay the connector's.
+- **Patterns can't stall the connector.** These rules run in the connector's own process, for every session on the
+  host, so a served regular expression that backtracks badly, by mistake or from a Pikibun server that was taken over,
+  would stall them all. A definition carries at most 32 patterns of at most 256 characters; a pattern sees arguments
+  of at most 4,096 characters and at most 128 KB of output (its start and end); and the patterns of one check share
+  100 ms, after which V8 is interrupted (`BoundedMatcher`, `node:vm`'s timeout). What couldn't be checked fails
+  closed: the call is refused or counted as a write, and a hint is left out. So the worst a bad served pattern does is
+  refuse calls its rule's words match, a few hundred milliseconds late, with a line in the host's log.
 
 ## Workspace remote MCP servers
 
@@ -257,6 +272,11 @@ tools. What bounds that:
 - **Untrusted schemas and answers are bounded.** Input schemas are sanitized to a small keyword set with size, depth and
   property limits and no references; arguments are validated in the session and on the Pikibun server; answers are capped
   at 1 MB and results at 64 KB of text; non-text content is left out.
+- **A server's answers cost what they weigh.** A streamed answer is parsed event by event, each event once, so a
+  server can't make the Pikibun server parse a megabyte again for every chunk it sends. At most 8 requests run at once
+  to one remote server and 64 in all; more wait within their own time limit, up to 32 per server and 256 in all, and
+  are refused beyond that. So a slow or hostile server, or a session calling it in a loop, holds a bounded share of the
+  Pikibun server's memory and connections, and other workspaces' servers still answer.
 
 What it doesn't protect against: a server the workspace chose can return misleading text (the model is told to treat it
 as information), and it sees the arguments the model sends it.
@@ -337,7 +357,16 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
 - **A required extension calls models only where the host's owner said so.** `allowModelCalls` is owner-only host
   configuration, confirmed in the UI with what it costs; the connector re-reads it on every call, and such an extension
   still runs where installed extensions run (the session's sandbox where there is one), so it gets model answers, never
-  keys or the host's files.
+  keys or the host's files. The setting lives on the Pikibun server, so the host has a word of its own too:
+  `pikibun connect --no-extension-model-calls` refuses every required extension's model calls whatever the server
+  says, and stops announcing the capability, so the server leaves the setting out for that host.
+- **Model calls are counted, capped and shown.** An extension that may call models is someone else's code spending
+  the host owner's account, so the connector bounds it by more than the size of one call: 4 calls at once per source
+  and session (an ask that reuses the id of a running call is dropped; it used to slip past the count), and 120 calls
+  per source within any hour in a session (600 for Pikibun's own prompt audit, which refuses the message when it can't call), kept by the session so that restarting the extension's process buys no new
+  budget. Each call's tokens and cost are added to the session's usage, where its people see them, and logged on the
+  host with the source and model, as are refused and failed calls. What it doesn't bound: the budget is per session,
+  so an extension required of every session can spend it in each, and a session that opens again starts a new hour.
 - **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
   through Pi's API now is what they will reach from their own process.
 
@@ -492,11 +521,12 @@ A private session made portable could be attached to whichever server its owner'
 
 - **The key never leaves the computer.** It is kept `0600` in a `0700` directory, and only its public half and the statements it signs reach a server. An exported copy is encrypted with the owner's passphrase (scrypt, AES-256-GCM).
 - **Delegation rides on pairing.** A host signs a delegation only for its own pairing, which its machine's user made with a code from that account. A server accepts one only for its own origin and from the connector it names, authenticated.
-- **The host decides.** It attaches only for its pairing's owner, and only sessions marked by its current key; a server can't attach a session to another account, or take one away.
+- **The host decides what it can.** It attaches only sessions marked by its current key, only on a ticket signed by the server it is paired with, and a session already attached to that pairing only for the owner its binding names; a server can't attach a session of another identity, or take one away. It does not check whose account asks: a host keeps no record of the account that paired it, so the ticket's actor and the binding's owner are both that server's claim (`attach` in `apps/runner/src/server.ts` compares one with the other, and asks the same server to authorize). The server is what ties a session to an account: it records a delegation only for the account whose connector sent it, and a current server never asks for an attach.
 - **One writer at a time.** An open lease per session keeps two connections of the computer out of one session's database, and attaching rewrites its pinned Git identity and stored binding only while it holds the lease and the session is idle.
 - **A lease ends with its holder, not with its process ID.** A lease names its process, and after a crash that ID can belong to an unrelated process, so the ID alone would keep the session closed for as long as that process runs. The holder refreshes its leases every second, and a lease is free once its process is gone or its heartbeat stopped: more than 15 seconds old and still not refreshed while the taker watches for 3 more. The watch, not the age, is what protects a live holder after the computer slept or its clock changed. A stale lease is renamed away rather than deleted by path, so of several takers one gets it, and a taker that moved a lease other than the one it judged puts it back. A holder that lost its lease all the same sees it at its next refresh and closes the session. A lease an older connector wrote has no heartbeat and is held while its process lives, so a new connection never breaks it. The lock around an attach works the same way.
 - **A replaced key stops being used at once.** A connection compares `key.json` with the copy it loaded before each use, so after `identity rotate`, `reset` or `import --replace` no running connection signs with the key that was rotated away or leaked. It carries on under the new key, and its server learns it at the next report, within a minute; it doesn't stop, since a restart would do the same and stopping would end working sessions.
 - **Settings can't be forged.** A server applies the private workspace's settings only signed by the identity, at a newer version than it applied.
+- **A report it already applied is skipped whole, never in part.** The server keeps a digest of each connector's last identity report, and one that matches skips the signature checks and the writes ([reports by digest](local-private-sessions.md#reports-by-digest)). The digest is the server's own, of the whole request and the connector's owner, made after authenticating the connector; it is held only when every reported session was taken, in memory, for an hour at most. So nothing gets in by a digest that wasn't verified under it, and a report that differs in one byte is verified in full.
 - **Not covered:** the server a session is attached to signs its users in, so it can still act as their account there.
 
 ## Private sessions forwarded to their computer
@@ -507,6 +537,7 @@ New private sessions live on their computer's own Pikibun, and other servers for
 - **A named list, checked twice.** Only the routes `privateRoute` lists, with a plain query, are forwarded: the connector checks the request, and the computer's Pikibun checks it again. Share links, session roles, backups, moves and every account or workspace route are refused before they reach the computer.
 - **The computer's Pikibun takes it only with its secret.** The secret is made at each start and written only to `local.json` in its `0700` state directory (`0600`), so only its OS user reads it, as with the identity key. With it, a request acts as the local server's owner, and only on a session of its private workspace (`forwardedOwner`).
 - **The other server holds no credential of the session's**, nor any of its conversation: only the records it lists, checked field by field. Revoking the computer there ends its access.
+- **A digest stands only for a report the server checked.** A connector may send the digest of its last report instead of the report; the server takes it only if it is the one it made itself for that connector's last applied report, still held in memory, under an hour old and with no row changed since. Anything else is answered with a request for the report, which is checked as before.
 - **Not covered:** the other server signs its users in, so while the computer is connected to it, it can act as the owner on these sessions, as any server can for sessions attached to it.
 
 ## Single instance

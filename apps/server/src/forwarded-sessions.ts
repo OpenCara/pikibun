@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { fail, now } from './http.js';
 import { body as requestBody, fields } from './schemas.js';
 import { notifySessionActivity } from './notifications.js';
+import { dropReport, holdReport, reportDigest, reportHeardAt, reportHeld } from './report-digests.js';
 import type { AppContext, AppEnv, Env } from './types.js';
 
 const IDENT = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -15,8 +16,11 @@ const STATUSES = ['provisioning', 'ready', 'error', 'archived'];
 const ONLINE_WITHIN_MS = 3 * 60_000;
 const RECORD_BYTES = 16 * 1024;
 const CREATE_FIELDS = ['title', 'hostEnvironment', 'generateTitle'];
-const reportBody = fields({ sessions: z.array(z.unknown(), { error: 'Invalid private session report.' }).max(PRIVATE_REPORT_LIMIT, 'Invalid private session report.') },
-  'Invalid private session report.', { required: ['sessions'], code: 'invalid_report' });
+const reportBody = fields({
+  sessions: z.array(z.unknown(), { error: 'Invalid private session report.' }).max(PRIVATE_REPORT_LIMIT, 'Invalid private session report.').optional(),
+  digest: z.string({ error: 'Invalid private session report.' }).min(1, 'Invalid private session report.').max(128, 'Invalid private session report.').optional(),
+}, 'Invalid private session report.', { some: true, code: 'invalid_report' });
+const reportKey = (connectorId: string) => `private:${connectorId}`;
 
 interface ForwardedRow {
   connector_id: string; session_id: string; user_id: string; record_json: string; activity: string | null; reported_at: string;
@@ -65,8 +69,9 @@ async function privateWorkspaceOf(env: Env, userId: string): Promise<string | nu
   return await env.DB.query<{ workspace_id: string }>('SELECT workspace_id FROM personal_workspaces WHERE user_id = ?').bind(userId).first('workspace_id') ?? null;
 }
 
-function online(row: Pick<ForwardedRow, 'connection_hash' | 'reported_at'>): boolean {
-  return !!row.connection_hash && Date.now() - Date.parse(row.reported_at) < ONLINE_WITHIN_MS;
+function onlineIn(env: Env): (row: Pick<ForwardedRow, 'connector_id' | 'connection_hash' | 'reported_at'>) => boolean {
+  return row => !!row.connection_hash
+    && Date.now() - Math.max(Date.parse(row.reported_at), reportHeardAt(env.DB, reportKey(row.connector_id)) ?? 0) < ONLINE_WITHIN_MS;
 }
 
 function shown(record: SessionRecord, userId: string, workspaceId: string, connectorId: string, hostName: string, isOnline: boolean): SessionRecord {
@@ -87,6 +92,7 @@ export async function forwardedRecords(env: Env, userId: string): Promise<Sessio
   const seen = new Set<string>();
   const records: SessionRecord[] = [];
   const rows = await forwardedRows(env, userId);
+  const online = onlineIn(env);
   for (const row of [...rows.filter(online), ...rows.filter(row => !online(row))]) {
     if (seen.has(row.session_id)) continue;
     const record = reportedRecord(JSON.parse(row.record_json));
@@ -100,9 +106,15 @@ export async function forwardedRecords(env: Env, userId: string): Promise<Sessio
 async function remember(env: Env, connectorId: string, userId: string, record: SessionRecord): Promise<void> {
   const json = JSON.stringify(record);
   if (json.length > RECORD_BYTES) return;
-  await env.DB.query(`INSERT INTO forwarded_sessions (connector_id, session_id, user_id, record_json, activity, reported_at) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT (connector_id, session_id) DO UPDATE SET record_json = excluded.record_json, activity = COALESCE(excluded.activity, forwarded_sessions.activity)`)
-    .bind(connectorId, record.id, userId, json, record.activity ?? null, now()).run();
+  const kept = await env.DB.query<{ record_json: string }>('SELECT record_json FROM forwarded_sessions WHERE connector_id = ? AND session_id = ?')
+    .bind(connectorId, record.id).first();
+  if (kept?.record_json === json) return;
+  dropReport(env.DB, reportKey(connectorId));
+  try {
+    await env.DB.query(`INSERT INTO forwarded_sessions (connector_id, session_id, user_id, record_json, activity, reported_at) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (connector_id, session_id) DO UPDATE SET record_json = excluded.record_json, activity = COALESCE(excluded.activity, forwarded_sessions.activity)`)
+      .bind(connectorId, record.id, userId, json, record.activity ?? null, now()).run();
+  } finally { dropReport(env.DB, reportKey(connectorId)); }
 }
 
 async function report(c: AppContext): Promise<Response> {
@@ -111,29 +123,42 @@ async function report(c: AppContext): Promise<Response> {
     fail(409, 'private_sessions_unsupported', 'This host doesn\'t say it forwards private sessions.');
   }
   const input = await requestBody(c, reportBody, { maxBytes: 4 * 1024 * 1024 });
-  const records = new Map<string, SessionRecord>();
+  const key = reportKey(connector.id);
+  if (!input.sessions) return c.json(reportHeld(c.env.DB, key, input.digest ?? '') ? { ok: true, digest: input.digest } : { ok: true, resend: true });
+  const digest = await reportDigest([connector.owner_id, input.sessions]);
+  if (reportHeld(c.env.DB, key, digest)) return c.json({ ok: true, digest });
+  const applying = dropReport(c.env.DB, key);
+  const records = new Map<string, { record: SessionRecord; json: string }>();
   for (const value of input.sessions) {
     const record = reportedRecord(value);
-    if (record && !records.has(record.id) && JSON.stringify(record).length <= RECORD_BYTES) records.set(record.id, record);
+    const json = record ? JSON.stringify(record) : '';
+    if (record && !records.has(record.id) && json.length <= RECORD_BYTES) records.set(record.id, { record, json });
   }
-  const previous = new Map((await c.env.DB.query<{ session_id: string; activity: string | null }>('SELECT session_id, activity FROM forwarded_sessions WHERE connector_id = ?')
-    .bind(connector.id).all()).map(row => [row.session_id, row.activity]));
+  const previous = new Map((await c.env.DB.query<{ session_id: string; activity: string | null; record_json: string; user_id: string }>(
+    'SELECT session_id, activity, record_json, user_id FROM forwarded_sessions WHERE connector_id = ?').bind(connector.id).all()).map(row => [row.session_id, row]));
   const at = now();
-  await c.env.DB.batch([
-    c.env.DB.query<never>('DELETE FROM forwarded_sessions WHERE connector_id = ?').bind(connector.id),
-    ...[...records.values()].map(record => c.env.DB.query<never>(`INSERT INTO forwarded_sessions (connector_id, session_id, user_id, record_json, activity, reported_at)
-      VALUES (?, ?, ?, ?, ?, ?)`).bind(connector.id, record.id, connector.owner_id, JSON.stringify(record), record.activity ?? null, at)),
-  ]);
+  const changes = [
+    ...[...previous.keys()].filter(sessionId => !records.has(sessionId))
+      .map(sessionId => c.env.DB.query<never>('DELETE FROM forwarded_sessions WHERE connector_id = ? AND session_id = ?').bind(connector.id, sessionId)),
+    ...[...records.values()].filter(({ record, json }) => {
+      const before = previous.get(record.id);
+      return !before || before.record_json !== json || before.activity !== (record.activity ?? null) || before.user_id !== connector.owner_id;
+    }).map(({ record, json }) => c.env.DB.query<never>(`INSERT INTO forwarded_sessions (connector_id, session_id, user_id, record_json, activity, reported_at)
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (connector_id, session_id) DO UPDATE SET user_id = excluded.user_id, record_json = excluded.record_json,
+        activity = excluded.activity, reported_at = excluded.reported_at`).bind(connector.id, record.id, connector.owner_id, json, record.activity ?? null, at)),
+  ];
+  if (changes.length) await c.env.DB.batch(changes);
+  holdReport(c.env.DB, key, digest, applying);
   const workspaceId = await privateWorkspaceOf(c.env, connector.owner_id);
   if (workspaceId) {
-    for (const record of records.values()) {
+    for (const { record } of records.values()) {
       const before = previous.get(record.id);
-      if (before === undefined || !record.activity || before === record.activity) continue;
+      if (before === undefined || !record.activity || before.activity === record.activity) continue;
       await notifySessionActivity(c.env, { id: record.id, title: record.title, owner_id: connector.owner_id, workspace_id: workspaceId },
-        before as SessionActivity | null, record.activity, true).catch(() => {});
+        before.activity as SessionActivity | null, record.activity, true).catch(() => {});
     }
   }
-  return c.json({ ok: true });
+  return c.json({ ok: true, digest });
 }
 
 export function registerForwardedConnectorRoutes(app: Hono<AppEnv>): void {
@@ -196,6 +221,7 @@ export const forwardedSessionRoutes: MiddlewareHandler<AppEnv> = async (c, next)
   if (!sessionId || !IDENT.test(sessionId)) return next();
   if (await c.env.DB.query('SELECT 1 AS present FROM sessions WHERE id = ?').bind(sessionId).first()) return next();
   const rows = await forwardedRows(c.env, c.get('auth').userId, sessionId);
+  const online = onlineIn(c.env);
   const row = rows.find(online) ?? rows[0];
   if (!row) return next();
   const url = new URL(c.req.url);

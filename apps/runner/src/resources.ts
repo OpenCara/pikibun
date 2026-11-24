@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { isAbsolute, resolve } from "node:path";
+import { unlimitedCommandSeconds } from "../../../packages/shared/src/host-config.js";
 
 export interface ResourceConfig {
   cgroupRoot: string;
@@ -280,7 +281,7 @@ def recover(cg, control):
 def run(cg, control, entries):
     name = PREFIX + sys.argv[3]
     require(KEY.fullmatch(name), 'invalid resource session key')
-    require(re.fullmatch(r'[1-9][0-9]{0,4}', sys.argv[4]) is not None and int(sys.argv[4]) <= 86400, 'invalid resource deadline')
+    require(re.fullmatch(r'[1-9][0-9]{0,6}', sys.argv[4]) is not None and int(sys.argv[4]) <= 2000000, 'invalid resource deadline')
     seconds = int(sys.argv[4])
     verify_storage(8, entries)
     for fd in (3, 4, 5):
@@ -400,7 +401,7 @@ except Exception as error:
 
 export function resourceLaunch(config: ResourceConfig, sessionKey: string, args: string[], deadlineSeconds = 30): { command: string; args: string[] } {
   if (!/^[0-9a-f]{64}$/.test(sessionKey)) throw new Error("Invalid resource session key");
-  if (!Number.isSafeInteger(deadlineSeconds) || deadlineSeconds < 1 || deadlineSeconds > 86_400) throw new Error("Invalid resource deadline");
+  if (!Number.isSafeInteger(deadlineSeconds) || deadlineSeconds < 1 || deadlineSeconds > unlimitedCommandSeconds) throw new Error("Invalid resource deadline");
   return { command: "/usr/bin/python3", args: ["-I", "-c", SUPERVISOR, JSON.stringify(validateResourceConfig(config)), "run", sessionKey, String(deadlineSeconds), ...args] };
 }
 

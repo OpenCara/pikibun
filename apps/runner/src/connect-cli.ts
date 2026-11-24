@@ -38,6 +38,9 @@ Options:
                            old host stays in Pikibun, offline, until you remove it there
   --unsafe-no-sandbox      Run agent work directly on this machine without isolation
                            (macOS, Windows, or Linux without bubblewrap); asks for confirmation
+  --sessions-leave-sandbox With --unsafe-no-sandbox, also open the sessions here that last
+                           ran in a sandbox: they then run directly on this machine too.
+                           Without it they are refused
   --experimental-sandbox   macOS and native Windows: run sessions in this platform's own
                            sandbox (macOS Seatbelt; Windows 11 process containers through
                            Microsoft's MXC SDK). Experimental and not yet verified; see
@@ -75,6 +78,10 @@ This machine's own setup, when the defaults don't fit:
                            owner can also turn this off in Pikibun. Both need remote installs
   --no-extension-models    Never load an extension's model providers into this connector,
                            whatever the host's owner marks as providing models in Pikibun
+  --no-extension-model-calls
+                           Never let an extension you require on this host call your models,
+                           whatever "May call models" says for it in Pikibun: this machine's
+                           word wins. Pikibun's own prompt audit still audits with a model
 
 Development:
   --allow-insecure-loopback  Permit HTTP/WS only on localhost/127.0.0.1/[::1]
@@ -204,6 +211,9 @@ export async function confirmUnsandboxed(): Promise<void> {
   }
 }
 
+export const LEAVING_SANDBOX = "Sessions here that last ran in a sandbox are opened too, and run directly on this machine from then on (--sessions-leave-sandbox).";
+export const KEPT_IN_SANDBOX = "Sessions here that last ran in a sandbox are not opened: add --sessions-leave-sandbox to run them directly on this machine too.";
+
 const MOVED_OPTIONS = ["git-credentials", "repo-cache", "repo-cache-scope"] as const;
 
 export function movedOptionsNotice(given: readonly string[]): string {
@@ -217,9 +227,9 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     help: { type: "boolean" }, server: { type: "string" }, "pairing-id": { type: "string" }, force: { type: "boolean" },
     "state-dir": { type: "string" }, "identity-dir": { type: "string" }, "pi-agent-dir": { type: "string" }, model: { type: "string", multiple: true },
     resources: { type: "string" }, "build-caches": { type: "string" }, "allow-insecure-loopback": { type: "boolean" },
-    "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" }, "no-remote-installs": { type: "boolean" },
+    "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" }, "sessions-leave-sandbox": { type: "boolean" }, "no-remote-installs": { type: "boolean" },
     "managed-extensions": { type: "boolean" }, "auto-cache-extensions": { type: "boolean" },
-    "no-managed-extensions": { type: "boolean" }, "no-auto-cache-extensions": { type: "boolean" }, "no-extension-models": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
+    "no-managed-extensions": { type: "boolean" }, "no-auto-cache-extensions": { type: "boolean" }, "no-extension-models": { type: "boolean" }, "no-extension-model-calls": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
     "experimental-sandbox": { type: "boolean" }, "memory-limit": { type: "string" }, "process-limit": { type: "string" }, "cpu-limit": { type: "string" },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
@@ -229,6 +239,8 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   if (values["managed-extensions"] && values["no-remote-installs"]) process.stderr.write("--managed-extensions is ignored with --no-remote-installs: Pikibun's own extensions run from the copies built into this connector.\n");
   if (values["auto-cache-extensions"] && values["no-remote-installs"]) process.stderr.write("--auto-cache-extensions is ignored with --no-remote-installs: install extensions on this host with pikibun extensions.\n");
   const unsandboxed = values["unsafe-no-sandbox"] === true;
+  const sessionsLeaveSandbox = values["sessions-leave-sandbox"] === true;
+  if (sessionsLeaveSandbox && !unsandboxed) throw new ConnectorSetupError("--sessions-leave-sandbox goes with --unsafe-no-sandbox: it lets sessions that last ran in a sandbox run without one.");
   const experimental = values["experimental-sandbox"] === true;
   if (unsandboxed && experimental) throw new ConnectorSetupError("Choose one: --experimental-sandbox runs sessions in this platform's sandbox, --unsafe-no-sandbox runs them without one.");
   assertConnectorPlatform({ unsandboxed, experimentalSandbox: experimental });
@@ -279,16 +291,17 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const isolation = !unsandboxed && !sandboxBackend ? await verifySandboxIsolation() : undefined;
   const identityDir = identityDirectory(values["identity-dir"]);
   const hostCapabilities = { platform: process.platform, sandbox: isolation?.ok === true, productionShell: false };
-  const privateHome = startPrivateHome({ localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}), identityDir,
+  const privateHome = startPrivateHome({ localModels, resources, unsandboxed, sessionsLeaveSandbox, ...(sandboxBackend ? { sandboxBackend } : {}), identityDir,
     allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"], capabilities: hostCapabilities });
   const connector = createConnector({
     dataDir, identityDir, ...(privateHome ? { privateHome } : {}),
-    server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
+    server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, sessionsLeaveSandbox, ...(sandboxBackend ? { sandboxBackend } : {}),
     ...(values["build-caches"] ? { buildCacheRoot: resolve(values["build-caches"]) } : {}),
     remoteExtensionInstalls: values["no-remote-installs"] !== true,
     ...(values["managed-extensions"] || values["no-managed-extensions"] ? { managedExtensions: values["managed-extensions"] === true } : {}),
     ...(values["auto-cache-extensions"] || values["no-auto-cache-extensions"] ? { autoCacheExtensions: values["auto-cache-extensions"] === true } : {}),
     ...(values["no-extension-models"] ? { extensionModels: false } : {}),
+    ...(values["no-extension-model-calls"] ? { extensionModelCalls: false } : {}),
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
     capabilities: hostCapabilities,
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },
@@ -297,7 +310,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
       : "Some resource domains are unavailable; commands stay limited to the sessions that may run them without limits.\n"); },
   });
   process.stderr.write(unsandboxed
-    ? "Running unsandboxed: commands execute directly on this machine.\n"
+    ? `Running unsandboxed: commands execute directly on this machine.\n${sessionsLeaveSandbox ? LEAVING_SANDBOX : KEPT_IN_SANDBOX}\n`
     : sandboxBackend ? `Experimental ${sandboxBackend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.\n`
     : `${isolationMessage(isolation)}\n`);
   process.stderr.write("Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings > Hosts > this host.\n");

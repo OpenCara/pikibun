@@ -10,14 +10,14 @@ import type { Env, AppEnv } from './types.js';
 import { auditStatement, managedConnector } from './authority/index.js';
 import { fail, jsonObject, now } from './http.js';
 
-interface ConfigRow { command_timeout_seconds: number; gpu: number; git_credentials: number; repository_cache: RepositoryCacheMode; host_sessions: number; compaction_json: string;
+interface ConfigRow { command_timeout_seconds: number; command_timeout_unlimited: number; gpu: number; git_credentials: number; repository_cache: RepositoryCacheMode; host_sessions: number; compaction_json: string;
   builtin_extensions_json: string; required_extensions_json: string; browser_json: string; service_lifetime_seconds: number; tunnel_json: string; fake_ip_tunnels: number; build_caches: string; build_cache_gib: number | string; model_extensions_json: string }
 
 export async function connectorHostConfig(env: Env, connectorId: string): Promise<HostConfig> {
-  const row = await env.DB.query<ConfigRow>(`SELECT command_timeout_seconds, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
+  const row = await env.DB.query<ConfigRow>(`SELECT command_timeout_seconds, command_timeout_unlimited, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
     builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json, fake_ip_tunnels, build_caches, build_cache_gib, model_extensions_json FROM connector_configs WHERE connector_id = ?`).bind(connectorId).first();
   if (!row) return { ...defaultHostConfig, builtinExtensions: [], requiredExtensions: [], browser: { ...defaultHostBrowserConfig }, tunnel: { ...defaultHostTunnelConfig }, modelExtensions: [] };
-  return { commandTimeoutSeconds: Number(row.command_timeout_seconds), gpu: Number(row.gpu) === 1,
+  return { commandTimeoutSeconds: Number(row.command_timeout_seconds), commandTimeoutUnlimited: Number(row.command_timeout_unlimited) === 1, gpu: Number(row.gpu) === 1,
     gitCredentials: Number(row.git_credentials) === 1, repositoryCache: row.repository_cache, hostSessions: Number(row.host_sessions) === 1,
     compaction: storedCompaction(row.compaction_json), builtinExtensions: storedBuiltinExtensions(row.builtin_extensions_json),
     requiredExtensions: storedRequiredExtensions(row.required_extensions_json), browser: storedBrowser(row.browser_json),
@@ -76,16 +76,16 @@ function storedCompaction(json: string): HostConfig['compaction'] {
   catch { return {}; }
 }
 
-const columns: Readonly<Record<keyof HostConfig, string>> = Object.freeze({ commandTimeoutSeconds: 'command_timeout_seconds', gpu: 'gpu',
+const columns: Readonly<Record<keyof HostConfig, string>> = Object.freeze({ commandTimeoutSeconds: 'command_timeout_seconds', commandTimeoutUnlimited: 'command_timeout_unlimited', gpu: 'gpu',
   gitCredentials: 'git_credentials', repositoryCache: 'repository_cache', hostSessions: 'host_sessions', compaction: 'compaction_json',
   builtinExtensions: 'builtin_extensions_json', requiredExtensions: 'required_extensions_json', browser: 'browser_json',
   serviceLifetimeSeconds: 'service_lifetime_seconds', tunnel: 'tunnel_json', fakeIpTunnels: 'fake_ip_tunnels',
   buildCaches: 'build_caches', buildCacheGiB: 'build_cache_gib', modelExtensions: 'model_extensions_json' });
 
 function upsert(settings: readonly (keyof HostConfig)[]): string {
-  return `INSERT INTO connector_configs (connector_id, command_timeout_seconds, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
+  return `INSERT INTO connector_configs (connector_id, command_timeout_seconds, command_timeout_unlimited, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
     builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json, fake_ip_tunnels, build_caches, build_cache_gib, model_extensions_json, updated_by, updated_at)
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM connectors WHERE id = ? AND revoked_at IS NULL AND removed_at IS NULL)
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM connectors WHERE id = ? AND revoked_at IS NULL AND removed_at IS NULL)
   ON CONFLICT (connector_id) DO UPDATE SET ${settings.map(key => `${columns[key]} = excluded.${columns[key]}, `).join('')}
     updated_by = excluded.updated_by, updated_at = excluded.updated_at
   RETURNING connector_id`;
@@ -116,7 +116,7 @@ export function registerHostConfig(app: Hono<AppEnv>): void {
     }
     const config: HostConfig = { ...current, ...Object.fromEntries(settings.map(key => [key, change[key]])) };
     const saved = await c.env.DB.query(upsert(settings))
-      .bind(row.id, config.commandTimeoutSeconds, config.gpu ? 1 : 0, config.gitCredentials ? 1 : 0, config.repositoryCache, config.hostSessions ? 1 : 0,
+      .bind(row.id, config.commandTimeoutSeconds, config.commandTimeoutUnlimited ? 1 : 0, config.gpu ? 1 : 0, config.gitCredentials ? 1 : 0, config.repositoryCache, config.hostSessions ? 1 : 0,
         JSON.stringify(config.compaction), JSON.stringify(config.builtinExtensions), JSON.stringify(config.requiredExtensions), JSON.stringify(config.browser),
         config.serviceLifetimeSeconds, JSON.stringify(config.tunnel), config.fakeIpTunnels ? 1 : 0, config.buildCaches, config.buildCacheGiB, JSON.stringify(config.modelExtensions), actorId, now(), row.id).first();
     if (!saved) fail(409, 'connector_revoked', 'Connector is revoked.');

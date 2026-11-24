@@ -8,7 +8,7 @@ import { serverEnvironment } from '../config.js';
 import { createPairing } from '../connectors.js';
 import type { LocalServer } from './launch.js';
 
-export type LocalHostOptions = Pick<ConnectorOptions, 'localModels' | 'unsandboxed' | 'resources' | 'allowFaux' | 'allowTestShell' | 'onStatus' | 'onWarning' | 'capabilities'
+export type LocalHostOptions = Pick<ConnectorOptions, 'localModels' | 'unsandboxed' | 'sessionsLeaveSandbox' | 'resources' | 'allowFaux' | 'allowTestShell' | 'onStatus' | 'onWarning' | 'capabilities'
   | 'acquireLease' | 'runtimeFactory' | 'identityDir' | 'sandboxBackend' | 'extensionModels'>;
 
 export interface LocalHost {
