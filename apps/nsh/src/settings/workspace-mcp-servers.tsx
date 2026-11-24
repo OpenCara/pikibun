@@ -1,5 +1,7 @@
 import { signal, Text, untracked, View } from "nsh";
-import { remoteMcpLimits, type WorkspaceMcpServer } from "../../../../packages/shared/src/remote-mcp";
+import {
+  remoteMcpLimits, remoteMcpSignInHeaders, remoteMcpSignInMethods, remoteMcpSignInOf, type RemoteMcpSignInMethod, type WorkspaceMcpServer,
+} from "../../../../packages/shared/src/remote-mcp";
 import { descriptionSummary } from "../../../../packages/shared/src/workspace-tools";
 import { segment, type Workspace } from "../shared";
 import { session } from "../lib/auth";
@@ -7,7 +9,7 @@ import { openServerLink, opensServerPages } from "../lib/links";
 import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { monospace, palette, text } from "../theme";
-import { Checkbox, Field, TextField } from "../form";
+import { Checkbox, Field, RadioGroup, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Section, Small } from "../ui";
 
 interface McpServersResponse { servers: WorkspaceMcpServer[]; admin: boolean }
@@ -17,6 +19,7 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
   const resource = createResource<McpServersResponse>(path);
   const action = createAction();
   const adding = signal(false);
+  const changing = signal<WorkspaceMcpServer | undefined>(undefined);
   const data = () => resource.data();
   const admin = () => data()?.admin === true;
   async function patch(server: WorkspaceMcpServer, body: Record<string, unknown>, notice: string) {
@@ -33,10 +36,24 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
     if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}/oauth`, { method: "DELETE" }); }, "Signed out.")) resource.refresh();
   }
   const signIn = (server: WorkspaceMcpServer) => openServerLink(`${path()}/${segment(server.id)}/oauth/start`);
+  async function changeSignIn(server: WorkspaceMcpServer, method: RemoteMcpSignInMethod, headers: Record<string, string>) {
+    const notice = method === "oauth" ? (server.oauth ? "It signs in with OAuth." : "Now sign in to it with Sign in.")
+      : method === "none" ? "It now sends no sign-in." : "Its new sign-in is kept encrypted.";
+    const done = await action.run(async () => {
+      if (method !== "oauth" || server.headerNames.length) {
+        await session().api(`${path()}/${segment(server.id)}`, { method: "PATCH", body: { headers: Object.keys(headers).length ? headers : null } });
+      }
+      if (method !== "oauth" && server.oauth) await session().api(`${path()}/${segment(server.id)}/oauth`, { method: "DELETE" });
+    }, notice);
+    if (done) {
+      changing.set(undefined);
+      resource.refresh();
+    }
+  }
   return (
     <Section title="Remote MCP servers" testID="workspace-mcp-servers" info={<View style={{ gap: 8 }}>
       <Note>Remote MCP servers add tools to this workspace's sessions without anything installed on hosts: Pikibun itself calls each server's https:// address, with headers (an API key, say) it keeps encrypted, which no session or host ever sees.</Note>
-      <Note>A server that asks for an OAuth sign-in instead gets one with Sign in: an owner or admin signs in to it once, as the account the workspace's sessions use, and Pikibun keeps and renews the sign-in.</Note>
+      <Note>Each server signs in one way, chosen when it's added and changed with Change sign-in: OAuth, a token, a username and password, a custom header, or none. With OAuth, an owner or admin signs in to it once with Sign in, as the account the workspace's sessions use, and Pikibun keeps and renews the sign-in. A server whose OAuth sign-in fails takes a token or a password instead.</Note>
       <Note>Each tool's name starts with its server's prefix. Tools may change things unless an owner or admin marks them read-only here: only those run in Read-only messages. A server's own claim that a tool only reads counts for nothing.</Note>
       <Note>A server's answers were written by whoever runs it: sessions treat them as information, not as instructions.</Note>
     </View>} action={admin() && (data()?.servers.length ?? 0) < remoteMcpLimits.servers ? <Button small variant="outline" icon="plus" label="Add server" onPress={() => adding.set(true)} /> : undefined}>
@@ -83,6 +100,7 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
                         <If when={server().oauth}>
                           <Button small variant="ghost" label="Sign out" disabled={action.busy()} onPress={() => void signOut(server())} />
                         </If>
+                        <Button small variant="outline" label="Change sign-in" disabled={action.busy()} onPress={() => changing.set(server())} />
                         <Button small variant="outline" icon="refresh" label="List tools again" disabled={action.busy()} onPress={() => void patch(server(), { refresh: true }, "Listed its tools again.")} />
                         <Button small variant="ghost" icon="trash" label="Remove" disabled={action.busy()} onPress={() => void remove(server())} />
                       </View>
@@ -104,7 +122,88 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
             }
           }} />
       </If>
+      <If when={changing()}>
+        {server => (
+          <SignInSheet server={server()} busy={action.busy()} error={action.error()} close={() => changing.set(undefined)}
+            save={(method, headers) => changeSignIn(server(), method, headers)} />
+        )}
+      </If>
     </Section>
+  );
+}
+
+function signInForm(initial: RemoteMcpSignInMethod) {
+  const method = signal(untracked(() => initial));
+  const token = signal("");
+  const username = signal("");
+  const password = signal("");
+  const headerName = signal("");
+  const headerValue = signal("");
+  const touched = () => !!(token() || username() || password() || headerName() || headerValue());
+  const result = (): { headers: Record<string, string> } | { error: string } => {
+    try {
+      const chosen = method();
+      return { headers: remoteMcpSignInHeaders(chosen === "token" ? { method: chosen, token: token() }
+        : chosen === "basic" ? { method: chosen, username: username(), password: password() }
+        : chosen === "header" ? { method: chosen, name: headerName(), value: headerValue() }
+        : { method: chosen }) };
+    } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
+  };
+  const headers = () => { const found = result(); return "headers" in found ? found.headers : undefined; };
+  const problem = () => { const found = result(); return "error" in found && touched() ? found.error : undefined; };
+  function fields(busy: () => boolean) {
+    return (
+      <View style={{ gap: 12 }}>
+        <Field label="Sign-in" hint="Kept encrypted: nobody sees a token or password again, and no session or host ever gets it">
+          <RadioGroup<RemoteMcpSignInMethod> value={method()} disabled={busy()} onChange={next => method.set(next)}
+            options={remoteMcpSignInMethods.map(option => ({ value: option.value, label: option.label, hint: option.hint }))} />
+        </Field>
+        <If when={method() === "token"}>
+          <Field label="Token" error={problem()}>
+            <TextField masked value={token()} onChange={next => token.set(next)} disabled={busy()} maxLength={remoteMcpLimits.headerValue} placeholder="Token or API key" />
+          </Field>
+        </If>
+        <If when={method() === "basic"}>
+          <View style={{ gap: 12 }}>
+            <Field label="Username">
+              <TextField value={username()} onChange={next => username.set(next)} disabled={busy()} maxLength={256} autoCapitalize="none" autoCorrect={false} />
+            </Field>
+            <Field label="Password" error={problem()}>
+              <TextField masked value={password()} onChange={next => password.set(next)} disabled={busy()} maxLength={1024} />
+            </Field>
+          </View>
+        </If>
+        <If when={method() === "header"}>
+          <Field label="Header" error={problem()}>
+            <View style={{ gap: 8 }}>
+              <TextField monospace value={headerName()} onChange={next => headerName.set(next)} disabled={busy()} maxLength={remoteMcpLimits.headerName} placeholder="X-API-Key" />
+              <TextField masked value={headerValue()} onChange={next => headerValue.set(next)} disabled={busy()} maxLength={remoteMcpLimits.headerValue} placeholder="Value" />
+            </View>
+          </Field>
+        </If>
+      </View>
+    );
+  }
+  return { method, headers, fields };
+}
+
+function SignInSheet(props: { server: WorkspaceMcpServer; busy: boolean; error: string; close: () => void; save: (method: RemoteMcpSignInMethod, headers: Record<string, string>) => Promise<void> }) {
+  const form = signInForm(untracked(() => remoteMcpSignInOf(props.server)));
+  const ready = () => !!form.headers();
+  function submit() {
+    const headers = form.headers();
+    if (headers) void props.save(form.method(), headers);
+  }
+  return (
+    <FormSheet open title={`Sign-in for ${props.server.name}`} onClose={() => { if (!props.busy) props.close(); }}
+      footer={<>
+        <Button label="Cancel" disabled={props.busy} onPress={props.close} />
+        <Button variant="primary" label={props.busy ? "Saving…" : "Save"} disabled={props.busy || !ready()} onPress={submit} />
+      </>}>
+      {form.fields(() => props.busy)}
+      <Note>Saving replaces the sign-in Pikibun keeps for it: a token, password or header it kept before, and an OAuth sign-in unless you keep OAuth. Pikibun then lists its tools again.</Note>
+      <Feedback error={props.error} />
+    </FormSheet>
   );
 }
 
@@ -112,12 +211,12 @@ function AddServerSheet(props: { busy: boolean; error: string; close: () => void
   const name = signal("");
   const prefix = signal("");
   const url = signal("");
-  const header = signal(untracked(() => "Authorization"));
-  const value = signal("");
-  const ready = () => name().trim() && /^[a-z][a-z0-9]{0,15}$/.test(prefix()) && url().startsWith("https://");
+  const form = signInForm("oauth");
+  const ready = () => name().trim() && /^[a-z][a-z0-9]{0,15}$/.test(prefix()) && url().startsWith("https://") && !!form.headers();
   function submit() {
-    if (!ready()) return;
-    void props.save({ name: name().trim(), prefix: prefix(), url: url().trim(), ...(header().trim() && value() ? { headers: { [header().trim()]: value() } } : {}) });
+    const headers = form.headers();
+    if (!ready() || !headers) return;
+    void props.save({ name: name().trim(), prefix: prefix(), url: url().trim(), ...(Object.keys(headers).length ? { headers } : {}) });
   }
   return (
     <FormSheet open title="Add remote MCP server" onClose={() => { if (!props.busy) props.close(); }}
@@ -132,12 +231,7 @@ function AddServerSheet(props: { busy: boolean; error: string; close: () => void
       <Field label="Address" hint="The server's Streamable HTTP endpoint. Pikibun reaches public https:// addresses only">
         <TextField monospace value={url()} onChange={value => url.set(value)} disabled={props.busy} maxLength={remoteMcpLimits.url} placeholder="https://mcp.example.com/mcp" keyboardType="url" autoCapitalize="none" autoCorrect={false} />
       </Field>
-      <Field label="Header" hint="Optional: a header Pikibun sends with every request, such as Authorization: Bearer <key>. Kept encrypted; nobody sees it again. Leave it empty for a server that signs in with OAuth, then use Sign in once it's added">
-        <View style={{ gap: 8 }}>
-          <TextField monospace value={header()} onChange={value => header.set(value)} disabled={props.busy} maxLength={remoteMcpLimits.headerName} autoCapitalize="none" autoCorrect={false} />
-          <TextField masked value={value()} onChange={next => value.set(next)} disabled={props.busy} maxLength={remoteMcpLimits.headerValue} placeholder="Bearer …" autoCapitalize="none" autoCorrect={false} />
-        </View>
-      </Field>
+      {form.fields(() => props.busy)}
       <Note>Its tools may change things until you mark them read-only once they are listed.</Note>
       <Feedback error={props.error} />
     </FormSheet>

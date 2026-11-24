@@ -352,6 +352,13 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   loses the race uses the winner's). A refused refresh says to sign in again. A `PATCH` that moves the address drops the
   sign-in, as it does the headers; the bearer token replaces any `Authorization` header the server also has. A failed
   sign-in is shown as the server's error (`Signing in failed: ...`) on the settings page it returns to.
+- **Sign-in methods**: the settings page asks how a server signs in, when it's added and later with **Change sign-in**:
+  OAuth (the flow above), a token (`Authorization: Bearer`), a username and password (`Authorization: Basic`, UTF-8,
+  RFC 7617), a custom header, or none. All but OAuth are only headers, built on the client by `remoteMcpSignInHeaders`
+  (`packages/shared/src/remote-mcp.ts`) and kept as any header is, so the server knows no method and stores nothing new.
+  Many servers offer no OAuth Pikibun can use (no dynamic client registration, say), and their errors now point there.
+  A `PATCH` whose new headers hold an `Authorization` drops the OAuth sign-in, which would otherwise replace it, and
+  audits `signedOut`; choosing another method without one signs out with `DELETE .../oauth`.
 
 ## Phase 4 as built
 
