@@ -6,6 +6,7 @@ dist/
 .data/
 .tunnel/
 .cache/
+eval-results/
 coverage/
 lcov.info
 *.sqlite

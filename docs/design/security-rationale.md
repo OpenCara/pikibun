@@ -387,6 +387,44 @@ Because the process is confined like the session's commands, a tool of such an e
 act, without a host command grant: it reaches nothing a shell command of that message couldn't. Where shell commands
 themselves count as host commands (no resource limits, someone else's session), so do these calls.
 
+## What an extension keeps and sends
+
+`apps/runner/src/extensions/entries.ts`, `worker.ts` (`noActions`, `runCall`), `adapter.ts` (`kept`, `onYield`); the
+design is [extension isolation](extension-isolation.md#entries-an-extension-keeps). An installed extension's process
+runs in the session's sandbox where there is one, and what the agent reads can steer its code, so what it asks the
+connector to keep or to send is untrusted.
+
+- **Entries are data for the extension alone.** `pi.appendEntry` stores JSON that only the same package's process in the
+  same session gets back. Nothing else reads it: not the model, not the transcript, not another extension, not the
+  Pikibun server. The connector checks each entry's shape and size, replaces an id it can't use, and bounds the list
+  (64 KB an entry, 256 entries and 1 MB per extension, at most two writes a second), so a process can't grow the
+  session's store without limit. It takes an entry only from the process that runs that source, so the session's shared
+  process can't write the entries of a guard that runs outside the sandbox.
+- **An extension never starts a run.** In Pi, `pi.sendUserMessage` while the agent is idle starts it. In Pikibun every
+  run is a person's message: it acts with its sender's permissions and tool group and the owner's accounts, under an
+  admission the Pikibun server gave for that message, and a Read-only message stays read-only. A run an extension
+  started would have no sender, and lending it the last sender's or the owner's would let code in the sandbox act as that
+  person at a time of its choosing, with nobody having asked for anything. So outside a running message (and outside a
+  command's handler, where a person typed the command) the call does nothing but log.
+- **Inside a running message it adds a turn to that message.** Text queued from a tool or a handler of the message goes
+  to the agent when the message would settle, through the same hook as `agent_before_settle`'s `continue`
+  (`GenerationHooks.onYield`), which extensions already had. The turn is part of that run, so it has that message's
+  sender, access mode, admission and tools, no more; a side ask runs no extensions, so it gets none. The worker queues at
+  most 8 texts of 16,000 characters for one settle, and the connector asks for them only where a run yields.
+- **A text belongs to the run it was queued in.** Every request carries the connector's number for the run going on
+  (`RequestContext.run`, set as a message starts and cleared as it ends). The worker takes a text only from code that
+  began in a request of that run, while that run is still the one the connector names, and hands texts only to the
+  run they were queued in; the rest is dropped at the next request. So a timer or a promise a tool left behind queues
+  nothing once its message has ended, whether it fires before the next message or during it: what one sender's
+  message started never becomes a turn of another's.
+
+What it doesn't protect against: an extension can keep a run going by sending again at each settle, as it could with
+`agent_before_settle`, until someone stops it. The run check is made in the extension's process, so it holds for an
+extension's own mistakes, not against one written to get around it: such an extension can keep a text itself and
+answer `continue` with it in a later message's run, as it could before this, and the text then enters with that later
+sender's authority, as any text an extension puts before the agent (a prompt section, a changed tool result) does. And the conversation is shared: what one message's extension turn wrote is context
+for the next message, whoever sends it.
+
 ## Slash commands the host runs
 
 `apps/runner/src/session/commands.ts`, `RunQueue.screen`, `SessionPiki.requireCommand`; the design is
