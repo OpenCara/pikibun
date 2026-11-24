@@ -668,6 +668,42 @@ function pikiFixture(state: Metadata, options: Partial<SessionPikiOptions> = {},
 const pikiRun = (callId: string, readOnly = false, binds: readonly string[] = []): PikiSandboxRun => ({ callId, command: "gh", args: ["pr", "view"], env: {}, tokenEnv: ["GH_TOKEN"],
   binds, readOnly, signal: new AbortController().signal, timeoutSeconds: 30 });
 
+test("piki: an extension's model calls are budgeted per source, recorded in the session's usage and the host's log, and a host can refuse them", async () => {
+  const usage = { input: 10, output: 5, cacheRead: 1, cacheWrite: 2, totalTokens: 18, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 } };
+  let called = 0;
+  const modelRegistry = { find: () => undefined, streamSimple: () => { called++; return { result: async () => ({ content: [{ type: "text", text: "ok" }], stopReason: "stop", provider: "fixture", model: "auditor", usage }) }; } };
+  const current = { provider: "fixture", id: "auditor" };
+  const registry = { ...modelRegistry, find: () => current } as never;
+  const chosen = [{ source: "npm:ext", dev: false, required: { source: "npm:ext", settings: {}, allowModelCalls: true } }, { source: "npm:plain", dev: false }] as never;
+  const recorded: string[] = [];
+  const lines: string[] = [];
+  const options: Partial<SessionPikiOptions> = { config: { extensions: { modelRegistry: registry } }, model: () => ({ provider: "fixture", modelId: "auditor" }),
+    extensionChoice: async () => ({ chosen, automaticTools: false }),
+    recordModelUsage: async (key, used) => { recorded.push(`${key} ${used.totalTokens}`); }, log: line => { lines.push(line); } };
+  const { host } = pikiFixture(toolState(), options);
+  const request = (source: string) => ({ source, messages: [{ role: "user" as const, content: [{ type: "text" as const, text: "judge" }] }] });
+  const signal = new AbortController().signal;
+  assert.deepEqual([await host.modelCallsAllowed!("npm:ext"), await host.modelCallsAllowed!("npm:plain"), await host.modelCallsAllowed!("piki:prompt-audit")], [true, false, true]);
+  assert.deepEqual(await host.complete!(request("npm:ext"), signal), { content: [{ type: "text", text: "ok" }], stopReason: "stop" });
+  assert.deepEqual(recorded, ["fixture/auditor 18"]);
+  assert.deepEqual(lines, ["Session s1, extension npm:ext: called the model fixture/auditor (stop): 13 prompt and 5 output tokens; 1 of the 120 calls it may make within an hour"]);
+  await assert.rejects(host.complete!(request("npm:plain"), signal), /no longer lets this extension call models/);
+  for (let index = 1; index < 120; index++) await host.complete!(request("npm:ext"), signal);
+  assert.equal(called, 120);
+  await assert.rejects(host.complete!(request("npm:ext"), signal), /made 120 model calls within an hour in this session/);
+  assert.equal(called, 120, "a call over the budget reaches no model");
+  assert.match(lines.at(-1)!, /^Session s1, extension npm:ext: a model call was refused/);
+  await host.complete!(request("piki:prompt-audit"), signal);
+  assert.equal(called, 121, "another source has its own budget");
+  assert.equal(recorded.length, 121);
+
+  const refusing = pikiFixture(toolState(), { ...options, config: { extensions: { modelRegistry: registry, modelCallsRefused: true } } }).host;
+  assert.deepEqual([await refusing.modelCallsAllowed!("npm:ext"), await refusing.modelCallsAllowed!("piki:prompt-audit")], [false, true]);
+  await assert.rejects(refusing.complete!(request("npm:ext"), signal), /--no-extension-model-calls/);
+  await refusing.complete!(request("piki:prompt-audit"), signal);
+  assert.equal(called, 122, "Pikibun's own prompt audit still audits");
+});
+
 test("piki: an extension's tool runs for a message that may act, while its extension applies, for someone with host commands, and its record says how it ended", async () => {
   const state = toolState();
   state.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;

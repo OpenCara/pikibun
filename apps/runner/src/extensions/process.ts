@@ -481,6 +481,11 @@ export class ProcessChannel implements ExtensionChannel {
   }
 
   #answerAsk(run: Run, ask: number, request: CompleteRequest | undefined): void {
+    if (run.asks.has(ask)) {
+      if (request) this.options.warn(request.source, "it asked for a model call under the id of one that is still running; the second was refused");
+      if (this.#live === run) run.link?.send({ answered: ask, error: "A model call with this id is still running" }, () => {});
+      return;
+    }
     const answer = (message: Record<string, unknown>) => {
       run.asks.delete(ask);
       if (this.#live === run) run.link?.send({ answered: ask, ...message }, () => {});
@@ -491,7 +496,7 @@ export class ProcessChannel implements ExtensionChannel {
       this.options.warn(request.source, "it asked for a model call, which only the extensions the host lets call models may make; it was refused");
       return answer({ error: "Installed extensions can't call models in Pikibun: the host's credentials stay with its connector." });
     }
-    if (run.asks.size >= 4) return answer({ error: "Too many model calls at once" });
+    if (run.asks.size >= completeLimits.atOnce) return answer({ error: "Too many model calls at once" });
     const controller = new AbortController();
     run.asks.set(ask, controller);
     const timer = setTimeout(() => controller.abort(), completeLimits.timeoutMs + 5000);

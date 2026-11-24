@@ -179,6 +179,7 @@ export type RunnerConfig = {
     workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>;
     lastKnown?(workspaceId: string): WorkspaceExtensionsAnswer | undefined;
     modelRegistry?: ModelRegistry;
+    modelCallsRefused?: true;
   };
 };
 
@@ -396,6 +397,10 @@ export class RunnerSession {
       wholeResults: this.#wholeResults, operations: this.#operations, apiLease: options => this.#egress?.apiLease(options), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
       mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(), extensionProcess: this.extensionProcess(),
+      recordModelUsage: async (model, usage) => {
+        const shared = this.#shared;
+        await shared.commit(async tx => { addTitleUsage((await tx.doc(UsageDoc, shared.id)).models, model, usage); }, context);
+      },
     });
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),

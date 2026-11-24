@@ -321,6 +321,18 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   the connector waits 30 s longer than that for `mcp/` routes, so it never reports a call as failed that the Pikibun server
   still completes. An event-stream answer is taken as soon as the response with the request's id arrives, without
   waiting for the server to close the stream. A failed re-listing keeps the tools last listed and shows the error.
+- **A stream is parsed once**: the transport reads an event-stream answer event by event (`EventStreamReader`,
+  `remote-mcp/client.ts`). It keeps only the text after the last complete event and looks for the next blank line from
+  where it stopped, so each event is parsed once and a 1 MB answer costs its size, not its size times its number of
+  chunks, which is what parsing the whole answer again on every chunk cost. An event counts once its blank line has
+  arrived, as the event-stream format has it; when the stream ends, the whole body is read as before.
+- **Concurrency is capped per remote server**, in the transport (`RemoteMcpGate`): at most 8 requests at once to one
+  server (its origin) and 64 in all on a Pikibun server, so answers of up to 1 MB each hold at most 64 MB. A request
+  over either cap waits its turn, at most 32 per server and 256 in all, and the wait counts against the request's own
+  time limit, so a call's one deadline still holds; one that finds the queue full is refused at once. Per server
+  rather than per workspace: the transport is where every request for remote MCP servers passes, listing and calls
+  alike, and it knows the address, not the workspace. A workspace has at most 8 servers, so it holds at most all 64;
+  workspaces that registered the same address share its 8.
 
 ## Phase 4 as built
 
@@ -329,10 +341,21 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   an abort in the extension sends `{ cancelAsk }`, and a process that stops aborts its calls. `ExtensionWorker` gives a
   source opened with `modelCalls: true` a described registry whose `streamSimple` makes that request (`streamOver`); every
   other source's still throws `MODEL_CALLS_REFUSED`.
-- **Only `piki:prompt-audit` for now** (`modelCallSources`, `apps/runner/src/extensions/complete.ts`). The connector
-  checks it again on every request (the source was opened with `modelCalls` in the process that asks), validates the
-  request (user messages only, at most 32, text and `image/*` parts, bounded sizes), and calls the session's model or
-  the one named with its own registry (`completeWith`): at most 4,096 tokens, 60 seconds, 4 at once, text-only answers.
+- **`piki:prompt-audit` by its name** (`modelCallSources`, `apps/runner/src/extensions/complete.ts`), **and the
+  required extensions a host's owner allows** (`allowModelCalls`, below). The connector checks it again on every
+  request (the source was opened with `modelCalls` in the process that asks), validates the request (user messages
+  only, at most 32, text and `image/*` parts, bounded sizes), and calls the session's model or the one named with its
+  own registry (`completeWith`): at most 4,096 tokens, 60 seconds, text-only answers.
+- **Model calls are bounded and recorded** (`completeLimits`). At most 4 run at once per extension process, which is
+  per source and session, since each source that may call models has a process of its own. An ask whose id is still
+  running is refused: it used to replace the running call in the map the bound counts, so one id passed any number of
+  calls, none of which could be cancelled any more. Each source may make 120 calls within any hour in a session
+  (`ModelCallBudget`, kept by the session, so a restarted extension process doesn't get a new budget; a session that
+  opens again does): the prompt audit makes one call a message, which leaves it far below, and an extension that loops
+  is stopped at 120 calls of at most 4,096 output tokens an hour. A call over the budget reaches no model and is refused with the reason. Every call adds
+  its tokens and cost to the session's usage under the model it called (`UsageDoc`, as session titles do), so the
+  session's **Usage** shows them, and writes a line to the host's log with the source, the model, its tokens and how
+  much of the hour's budget is used; a refused or failed call is logged too.
 - **The guard runs outside the session's sandbox.** A managed prompt audit opens in a third channel of
   `SessionExtensions` (`guardChannel`): a `ProcessChannel` the connector starts as the host's user, not
   `extensionProcess` (the session's sandbox), so the agent whose messages it audits can't touch the process. Its code is
@@ -350,6 +373,13 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   shared extension process answers none, so no other extension can spend the owner's accounts under its name. The
   connector checks the setting again on every call (`SessionPiki.host().complete`), so turning it off refuses the next
   call without waiting for the session to reopen.
+- **The host can refuse them itself**: `pikibun connect --no-extension-model-calls`. `allowModelCalls` is kept on the
+  Pikibun server, so without the flag a host had only the server's word for it. With it the connector lets no required
+  extension call models whatever the server sends, and doesn't announce the `modelCalls` capability, so the Pikibun
+  server leaves `allowModelCalls` out and the host's page shows **May call models** as unavailable. Like
+  `--no-auto-cache-extensions`, the machine's own flag wins. It doesn't stop Pikibun's own prompt audit, which is the
+  connector's code (or a pinned, digest-checked copy of it) and refuses every message it can't check: a host that
+  doesn't want its models used for auditing doesn't require the audit.
 - **`gh`, `glab` and `az` are data** (`kind: "cli"`, `packages/shared/src/cli-definitions.ts`), not
   `ProgramToolDefinition`s: those run a program in the sandbox under the session's grants, while these tools run on the
   host's sign-in or with a leased forge token, refuse what would show a token, and tell reads from writes per subcommand
@@ -362,8 +392,27 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   only `tools`). A connector that reads them applies a served definition on top of its own: a call is refused if either
   refuses it, and counts as a write if either says so (`PikiSession.servedRules`). So Pikibun can refuse more, or count
   more commands as writes, without a connector release, but neither a compromised Pikibun server nor a mistaken release
-  can loosen what the connector holds, such as the refusals that keep its tokens hidden. A definition that would refuse
-  nothing, names another extension, or sets variables or roots outside bounded patterns is passed over. A definition's
+  can loosen what the connector holds, such as the refusals that keep its tokens hidden. A definition is passed over
+  whole when it fails any check of the parser (`parseCliDefinition`): a key the connector doesn't know, a name that
+  isn't its extension's, a variable, value or root outside the bounded patterns, a pattern that doesn't compile or is
+  longer than 256 characters, more than 32 patterns, or a refusal or hint with no condition at all, which would match
+  every call. An empty `refuse` list is taken: such a definition adds no refusal, and its read rules still apply. The
+  connector logs each definition it passes over, with the parser's reason, once until it changes
+  (`ToolDefinitionsSource`), and the same for a tool definition, so the host's owner can see why a rule doesn't apply
+  or a tool is missing. A definition's
   `hints` (text added to a failed run's result, [Lessons enforced in code](enforced-lessons.md)) are served only to a
   connector that asks with `cliHints: true`: an older one would pass over the whole definition for the unknown key.
+- **Patterns run bounded.** A definition's regular expressions (`argPattern`, a hint's `outputPattern`, `secretWords`,
+  `verb`) run in the connector's own process, on arguments the agent chose and output a program printed, and a served
+  one was only checked to compile. Three bounds now hold (`cliDefinitionLimits`, `BoundedMatcher` in `cli-engine.ts`).
+  Size: at most 32 patterns a definition, 256 characters each. Input: a pattern sees arguments and command words of at
+  most 4,096 characters, and of longer output its first and last 64 KB. Time: the patterns of one check (`refused`,
+  `writes` or `hints`) share 100 ms, enforced by running each in `node:vm` with a timeout, which interrupts V8's
+  regular-expression engine where a check before or after the match couldn't. A time limit was chosen over refusing
+  constructs that backtrack: without nested quantifiers a pattern can still take time polynomial in its input, a
+  checker for that would itself be a parser to get wrong, and the limit holds for the connector's own patterns as well.
+  What a pattern couldn't check counts against the call, never for it: a refusal whose words and options match refuses
+  (the reason says an argument couldn't be checked), a command word that couldn't be checked counts as one that may
+  show secrets or doesn't only read, and a hint isn't given. A rule's pattern runs only once its words and options
+  match, so a long argument elsewhere (an issue's body) refuses nothing. A pattern that ran out of time is logged.
 

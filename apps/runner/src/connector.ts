@@ -153,6 +153,7 @@ function capabilities(value?: ConnectorCapabilities, mode: { unsandboxed?: boole
 export async function claimConnectorPairing(options: {
   server: string; pairing: { id: string; code: string }; localModels: LocalModels;
   capabilities?: ConnectorCapabilities; unsandboxed?: boolean; gpu?: GpuKind; allowFaux?: boolean; allowInsecureLoopback?: boolean; fetch?: typeof fetch; signal?: AbortSignal;
+  extensionModelCalls?: boolean;
 }): Promise<ConnectorCredentials> {
   const origin = controlPlaneOrigin(options.server, options.allowInsecureLoopback);
   const { id, code } = options.pairing;
@@ -161,7 +162,7 @@ export async function claimConnectorPairing(options: {
   const response = await (options.fetch ?? fetch)(`${origin}/api/connectors/pairings/${id}/claim`, {
     method: "POST", redirect: "error", credentials: "omit",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code, models: await connectorManifest(options.localModels, options.allowFaux), capabilities: withHostToolCapabilities(capabilities(options.capabilities, options)) }),
+    body: JSON.stringify({ code, models: await connectorManifest(options.localModels, options.allowFaux), capabilities: withHostToolCapabilities(capabilities(options.capabilities, options), options) }),
     signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(options.signal ? [options.signal] : [])]),
   });
   if (!response.ok) { await response.body?.cancel(); throw new ConnectorSetupError("Pairing rejected or unavailable: the code may be wrong, expired (codes last 10 minutes) or already used. Create a new pairing code and try again."); }
@@ -221,6 +222,7 @@ export interface ConnectorOptions {
   remoteExtensionInstalls?: boolean;
   managedExtensions?: boolean;
   autoCacheExtensions?: boolean;
+  extensionModelCalls?: boolean;
   privateHome?: PrivateHome;
   privateReportMs?: number;
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
@@ -457,7 +459,7 @@ export class LocalConnector {
         ...(this.identity && runtime.value.portable ? { portableSessions: true } : {}),
         ...(this.options.privateHome ? { privateSessions: PRIVATE_SESSIONS_VERSION } : {}) };
       await this.calls.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
-        capabilities: withHostToolCapabilities(advertised) });
+        capabilities: withHostToolCapabilities(advertised, this.options) });
       this.requireGeneration(generation);
       generation.runtimeReady.resolve();
       void this.syncExtensions(generation);

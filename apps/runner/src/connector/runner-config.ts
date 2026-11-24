@@ -40,7 +40,7 @@ export interface RunnerConfigSource {
   options: {
     allowFaux?: boolean; allowTestShell?: boolean; resources?: RunnerConfig["resources"]; unsandboxed?: boolean; sandboxBackend?: SandboxBackendConfig;
     privateEnvironment?: readonly string[];
-    localModels: LocalModels; fetch?: typeof fetch;
+    localModels: LocalModels; fetch?: typeof fetch; extensionModelCalls?: boolean;
   };
   lifetime: AbortSignal;
   identity?: IdentityStore;
@@ -65,6 +65,7 @@ function runnerExtensions(source: RunnerConfigSource, extensions: HostExtensions
         { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true }, WORKSPACE_EXTENSIONS_LIMIT)),
     lastKnown: workspaceId => extensions.lastKnown(workspaceId),
     ...(source.options.localModels.modelRegistry ? { modelRegistry: source.options.localModels.modelRegistry } : {}),
+    ...(source.options.extensionModelCalls === false ? { modelCallsRefused: true as const } : {}),
   };
 }
 

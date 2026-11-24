@@ -80,7 +80,9 @@ refusal does (`words`, `options`, `short`, `argPattern`), an `outputPattern`, or
 (`cliRules().hints`) picks them, and the tool adds each as a `Hint:` line after the output, only for a run that ended on
 its own with a non-zero exit, or printed nothing: a run that succeeded may quote an error (an issue about it), and one
 the tool stopped or a signal ended names its own reason. A result takes at most four hints, so a faulty served
-definition can't crowd out the output.
+definition can't crowd out the output, and a hint's patterns are bounded like a refusal's (their number, their length,
+the output they read and the time they take: [extension planes](extension-planes.md#phase-4-as-built), "Patterns run
+bounded"), so one can't stall the connector either.
 
 - **A TLS certificate failure** (#434). Output with `tls: failed to verify certificate` or `x509: ` gets a hint: the
   host's certificate store or an intercepting proxy refused GitHub's certificate, retrying won't help, the brokered
@@ -98,8 +100,9 @@ definition can't crowd out the output.
   giving though GitHub refuses it.
 
 Served definitions add hints as they add refusals: a connector applies its own and the served ones, each text once.
-A connector's parser passes over a whole definition with a key it doesn't know, silently, so one from before `hints`
-would lose every served `gh` rule. The Pikibun server therefore serves `hints` only to a connector that asks
+A connector's parser passes over a whole definition with a key it doesn't know (silently before the review's finding 72
+was fixed; since then the host's log names the definition and the key), so one from before `hints` would lose every
+served `gh` rule. The Pikibun server therefore serves `hints` only to a connector that asks
 (`cliHints: true` in the body of `/api/connectors/self/tools`) and leaves the key out otherwise. The new refusal is an
 ordinary `refuse` rule, so older connectors apply it once the Pikibun server is deployed; the hints need a `cli-v`
 release.

@@ -223,8 +223,17 @@ keep Read-only messages and members without the forge's writing tools from writi
   the Pikibun server serves is applied on top: refused if either refuses, a write if either says so. A served
   definition can't drop a refusal or count a write as a read.
 - **Bounded data.** Served definitions are parsed with fixed keys, sizes and patterns (option names, variable names,
-  plain values, absolute roots, compiling regular expressions); one that fails, or would refuse every call, is passed
-  over. Only the rules are taken from them: the command, its environment and its sandbox roots stay the connector's.
+  plain values, absolute roots, compiling regular expressions); one that fails any of these checks, has a key the
+  connector doesn't know, or has a refusal or hint with no condition at all (which would match every call), is passed
+  over whole, and the connector logs it with the reason, so a tightening that didn't apply on a host leaves a trace
+  there. Only the rules are taken from them: the command, its environment and its sandbox roots stay the connector's.
+- **Patterns can't stall the connector.** These rules run in the connector's own process, for every session on the
+  host, so a served regular expression that backtracks badly, by mistake or from a Pikibun server that was taken over,
+  would stall them all. A definition carries at most 32 patterns of at most 256 characters; a pattern sees arguments
+  of at most 4,096 characters and at most 128 KB of output (its start and end); and the patterns of one check share
+  100 ms, after which V8 is interrupted (`BoundedMatcher`, `node:vm`'s timeout). What couldn't be checked fails
+  closed: the call is refused or counted as a write, and a hint is left out. So the worst a bad served pattern does is
+  refuse calls its rule's words match, a few hundred milliseconds late, with a line in the host's log.
 
 ## Workspace remote MCP servers
 
@@ -257,6 +266,11 @@ tools. What bounds that:
 - **Untrusted schemas and answers are bounded.** Input schemas are sanitized to a small keyword set with size, depth and
   property limits and no references; arguments are validated in the session and on the Pikibun server; answers are capped
   at 1 MB and results at 64 KB of text; non-text content is left out.
+- **A server's answers cost what they weigh.** A streamed answer is parsed event by event, each event once, so a
+  server can't make the Pikibun server parse a megabyte again for every chunk it sends. At most 8 requests run at once
+  to one remote server and 64 in all; more wait within their own time limit, up to 32 per server and 256 in all, and
+  are refused beyond that. So a slow or hostile server, or a session calling it in a loop, holds a bounded share of the
+  Pikibun server's memory and connections, and other workspaces' servers still answer.
 
 What it doesn't protect against: a server the workspace chose can return misleading text (the model is told to treat it
 as information), and it sees the arguments the model sends it.
@@ -337,7 +351,16 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
 - **A required extension calls models only where the host's owner said so.** `allowModelCalls` is owner-only host
   configuration, confirmed in the UI with what it costs; the connector re-reads it on every call, and such an extension
   still runs where installed extensions run (the session's sandbox where there is one), so it gets model answers, never
-  keys or the host's files.
+  keys or the host's files. The setting lives on the Pikibun server, so the host has a word of its own too:
+  `pikibun connect --no-extension-model-calls` refuses every required extension's model calls whatever the server
+  says, and stops announcing the capability, so the server leaves the setting out for that host.
+- **Model calls are counted, capped and shown.** An extension that may call models is someone else's code spending
+  the host owner's account, so the connector bounds it by more than the size of one call: 4 calls at once per source
+  and session (an ask that reuses the id of a running call is refused; it used to slip past the count), and 120 calls
+  per source within any hour in a session, kept by the session so that restarting the extension's process buys no new
+  budget. Each call's tokens and cost are added to the session's usage, where its people see them, and logged on the
+  host with the source and model, as are refused and failed calls. What it doesn't bound: the budget is per session,
+  so an extension required of every session can spend it in each, and a session that opens again starts a new hour.
 - **The boundary is the child process's.** Requests to those sources cross as JSON already, so what they can reach
   through Pi's API now is what they will reach from their own process.
 
