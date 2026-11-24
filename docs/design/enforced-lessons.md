@@ -27,8 +27,9 @@ the old file tool names (`tests/pi-tool-names.test.ts`).
 
 ## The program tools
 
-See [Tool definitions](tool-definitions.md), notes 11 to 13: a default time limit for test suites and servers, `env`,
-and the hint to give `directory` when a call failed at the worktree's top for want of a clone's manifest. Each is the
+See [Tool definitions](tool-definitions.md), notes 11 to 14: a default time limit for test suites and servers, `env`,
+the hint to give `directory` when a call failed at the worktree's top for want of a clone's manifest, and the hint that
+a process ending with exit 137 was killed, most likely for want of memory. Each is the
 connector's, so it reaches hosts with a `cli-v` release.
 
 ## GitHub

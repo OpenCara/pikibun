@@ -116,6 +116,19 @@ So the connector is now an engine for both kinds, and the control plane describe
     `Makefile` is missing, which the top lacks and a clone has, gets a `hint` naming the clones that have one. Nothing
     picks the directory for it: a call that meant the top (`npm init`) must still run there.
 
+14. **A killed process.** A full `tsc --noEmit` on a host with little memory ends with exit 137, and the result said
+    only `Sandbox process failed (exit 137)`, which reads like a failure of the code. A failed call whose result begins
+    with exit 137 or SIGKILL (`killedHint`: the sandbox's `Sandbox process failed (exit 137)` or `(SIGKILL)`, a session
+    on the host's `Command failed (exit 137)` or `Command killed by SIGKILL`) gets a `hint`: the process was killed,
+    most likely for want of memory, so run a smaller part or rely on CI for the full run and say so. When the tool
+    itself kills the process (its time limit, a stop, the output limit, the sandbox closing), the result begins with
+    that reason instead of the exit status, so those never get the hint; the match is on the beginning only, so output
+    that merely prints `exit 137` doesn't either. It says "most likely" because nothing tells the tool who sent the
+    signal: the kernel's memory killer is the usual sender, but a process past its CPU-time limit (the helper's
+    `RLIMIT_CPU`, which only a host with the shortest command time limit sets low) or one killed by another process
+    ends the same way. Windows has no such exit status, so nothing matches there. The `git` tool doesn't give it:
+    the advice (fewer files, CI) is about builds and test runs.
+
 ## Adding a tool
 
 - A program tool or brokered tool the engine can express: add its definition to `bundledToolDefinitions`, its switch

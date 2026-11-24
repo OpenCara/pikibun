@@ -572,6 +572,66 @@ test('placement starts a sub-task on the least loaded host that meets its condit
   assert.equal(childHost(parentModel.body), 'gpu-host');
 });
 
+test('an agent starts a session directly on a host only in a message a person sent, naming that one host, and the host\'s own checks still apply', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const at = new Date().toISOString();
+  const host = (id: string, capabilities: Record<string, unknown>) => {
+    f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(id, ownerId, `Host ${id}`, id.padEnd(43, 'h'), id.padEnd(43, 'c'), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, approvalFree: true,
+        chatOptions: true, plainGit: true, ...capabilities }), JSON.stringify([{ provider: 'faux', modelId: 'faux-9', name: 'Faux 9' }]), at);
+    f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run(id, f.workspace.id, at);
+    f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+      .run(`${id}-faux-9`, f.workspace.id, 'Faux 9', 'faux', 'faux-9', at, id, ownerId);
+  };
+  host('own-host', { hostConfig: true, ownerHostSessions: true });
+  host('second-host', { hostConfig: true, ownerHostSessions: true });
+  host('old-host', {});
+  const bindings: { connectorId: string; binding: { session: { id: string; hostEnvironment?: boolean } } }[] = [];
+  f.env.CONNECTOR_HUB = { ...fakeHub({ rpc(connectorId, envelope) {
+    const { action, sessionId } = envelope.request.ticket;
+    if (action === 'create') { bindings.push({ connectorId, binding: JSON.parse(envelope.request.body) }); return Response.json({ ok: true }, { status: 201 }); }
+    if (action === 'view') return Response.json({ view: { ...f.fake(sessionId).view, sessionId } });
+    if (action === 'submit') return Response.json({ submissionId: `on-host-${sessionId}`, conversationId: '0', status: 'queued' });
+    return Response.json({ error: 'unexpected' }, { status: 503 });
+  } }), async status() { return true; } };
+  f.allow('session-a', 'sessions');
+  const onHost = (sessionId: string) => f.sqlite.prepare('SELECT host_environment, connector_id FROM sessions WHERE id = ?').get(sessionId)!;
+  const count = () => f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
+  const create = { action: 'create', title: 'On the host', modelId: 'own-host-faux-9', message: 'Render it', placement: { hosts: ['own-host'] }, hostEnvironment: true };
+
+  const person = f.admit('session-a', ownerId);
+  const started = await f.tool('session-a', ownerId, person, create);
+  assert.equal(started.status, 201, JSON.stringify(started.body));
+  const child = (started.body.session as CrossSessionSummary).id;
+  assert.equal(started.body.hostEnvironment, true);
+  assert.deepEqual({ ...onHost(child) }, { host_environment: 1, connector_id: 'own-host' });
+  assert.equal(bindings.at(-1)!.binding.session.hostEnvironment, true, 'the host learns it from the binding, as for a person\'s');
+  const audit = JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.cross_session.created' AND detail_json LIKE ?").get(`%${child}%`)!.detail_json));
+  assert.equal(audit.hostEnvironment, true);
+  assert.equal(JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.created' AND session_id = ?").get(child)!.detail_json)).hostEnvironment, true);
+
+  const sandboxed = await f.tool('session-a', ownerId, person, { ...create, hostEnvironment: undefined, title: 'Sandboxed' });
+  assert.equal(sandboxed.status, 201, JSON.stringify(sandboxed.body));
+  assert.equal(sandboxed.body.hostEnvironment, undefined);
+  assert.equal(onHost((sandboxed.body.session as CrossSessionSummary).id).host_environment, 0, 'left out, the session runs in the sandbox as before');
+
+  const before = count();
+  for (const requestId of ['xs:from-another-session', 'schedule:nightly:2026-01-01T00:00:00Z']) {
+    await f.refused(f.tool('session-a', ownerId, f.admit('session-a', ownerId, { requestId }), create), 403, 'host_session_person_required');
+  }
+  await f.refused(f.tool('session-a', ownerId, person, { ...create, placement: undefined }), 400, 'invalid_input');
+  await f.refused(f.tool('session-a', ownerId, person, { ...create, placement: {} }), 400, 'invalid_input');
+  await f.refused(f.tool('session-a', ownerId, person, { ...create, placement: { hosts: ['own-host', 'second-host'] } }), 400, 'invalid_input');
+  await f.refused(f.tool('session-a', ownerId, person, { ...create, hostEnvironment: 'yes' }), 400, 'invalid_input');
+  await f.refused(f.tool('session-a', ownerId, person, { action: 'list', hostEnvironment: true }), 400, 'invalid_input');
+  await f.refused(f.tool('session-a', ownerId, person, { ...create, modelId: 'old-host-faux-9', placement: { hosts: ['old-host'] } }), 409, 'connector_update_required');
+  await f.refused(f.tool('session-a', ownerId, f.admit('session-a', ownerId, { access: 'read' }), create), 403, 'write_not_allowed');
+  assert.equal(count(), before, 'a refused create starts nothing');
+  assert.equal(sessionsToolTarget({ action: 'create', placement: { hosts: ['own-host'] }, hostEnvironment: true }),
+    'create · placement hosts own-host · directly on the host, without the sandbox');
+});
+
 test('lists nest the sessions an agent started under the session that started them', () => {
   const sessions = [{ id: 'c', parentSessionId: 'a' }, { id: 'b' }, { id: 'a' }, { id: 'd', parentSessionId: 'c' }, { id: 'e', parentSessionId: 'gone' },
     { id: 'x', parentSessionId: 'y' }, { id: 'y', parentSessionId: 'x' }];
