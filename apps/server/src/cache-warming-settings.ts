@@ -1,8 +1,9 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
-import { cacheWarmingModes, defaultCacheWarmingMode, isCacheWarmingMode, type CacheWarmingMode, type CacheWarmingSettings, type SessionCacheWarming } from '../../../packages/shared/src/cache-warming.js';
+import { cacheWarmingModes, defaultCacheWarmingMode, isCacheWarmingMode, sessionCacheWarmingMode, type CacheWarmingMode, type CacheWarmingSettings, type SessionCacheWarming } from '../../../packages/shared/src/cache-warming.js';
 import type { Database } from './db/types.js';
 import type { AppEnv, SessionRow } from './types.js';
+import { connectorHostConfig } from './host-config.js';
 import { auditStatement, authenticateConnector, requireCallbackScope, requireMember, workspaceAdminSQL } from './authority/index.js';
 import { fail, identifier, now } from './http.js';
 import { body } from './schemas.js';
@@ -19,8 +20,8 @@ export function registerConnectorCacheWarming(app: Hono<AppEnv>): void {
     const row = await c.env.DB.query<SessionRow>('SELECT * FROM sessions WHERE id = ?').bind(identifier(sessionId, 'sessionId')).first();
     if (!row) fail(404, 'not_found', 'Session not found.');
     await requireCallbackScope(c, row, connector.id);
-    const { mode } = await workspaceCacheWarming(c.env.DB, row.workspace_id);
-    return c.json({ mode, child: !!row.parent_session_id } satisfies SessionCacheWarming);
+    const [{ mode }, host] = await Promise.all([workspaceCacheWarming(c.env.DB, row.workspace_id), connectorHostConfig(c.env, connector.id)]);
+    return c.json({ mode: sessionCacheWarmingMode(mode, host), child: !!row.parent_session_id } satisfies SessionCacheWarming);
   });
 }
 
