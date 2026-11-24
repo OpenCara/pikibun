@@ -16,7 +16,7 @@ export interface SkillFilesIo {
   write(path: string, text: string): Promise<void>;
   remove(path: string): Promise<void>;
   read?(path: string): Promise<string>;
-  list?(): Promise<string[]>;
+  list?(): Promise<{ paths: string[]; truncated: boolean }>;
 }
 
 export function extensionOwner(source: string): string {
@@ -113,6 +113,19 @@ export class ExtensionSkillFiles {
       await this.io.remove(EXTENSION_SKILLS_DIRECTORY).catch(() => {});
       this.#cleared = true;
     }
+    const listing = await this.io.list?.().catch(() => undefined);
+    if (listing?.truncated) {
+      this.#restored++;
+      await this.io.remove(EXTENSION_SKILLS_DIRECTORY).catch(() => {});
+      this.#written.clear();
+      this.#directories.clear();
+    } else {
+      for (const path of listing?.paths ?? []) {
+        if (!path.startsWith(`${EXTENSION_SKILLS_DIRECTORY}/`) || path.endsWith("/") || plan.files.has(path) || this.#written.has(path)) continue;
+        this.#restored++;
+        await this.io.remove(path).catch(() => {});
+      }
+    }
     const failed = new Set<string>();
     for (const [path, text] of plan.files) {
       const hash = digest(text);
@@ -141,11 +154,6 @@ export class ExtensionSkillFiles {
       this.#written.delete(path);
     }
     for (const directory of directories) this.#directories.add(directory);
-    for (const path of await this.io.list?.().catch(() => []) ?? []) {
-      if (!path.startsWith(`${EXTENSION_SKILLS_DIRECTORY}/`) || path.endsWith("/") || plan.files.has(path)) continue;
-      this.#restored++;
-      await this.io.remove(path).catch(() => {});
-    }
     return plan.items.filter(item => !failed.has(item.path));
   }
 }

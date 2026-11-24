@@ -188,10 +188,11 @@ export class SessionSkills {
   async current(waitMs = PROMPT_WAIT_MS, repository = true, acts = true): Promise<Skill[]> {
     let timer: NodeJS.Timeout | undefined;
     const late = new Promise<undefined>(resolve => { timer = setTimeout(resolve, waitMs, undefined); timer.unref?.(); });
-    const looks = Promise.all([acts ? this.provide().catch(() => undefined) : undefined, repository ? this.scan().catch(() => undefined) : undefined]);
+    let checked = !acts;
+    const looks = Promise.all([acts ? this.provide().then(() => { checked = true; }, () => undefined) : undefined, repository ? this.scan().catch(() => undefined) : undefined]);
     try {
       await Promise.race([looks, late]);
-      return this.#combined(repository);
+      return this.#combined(repository).filter(skill => checked || skill.origin === undefined);
     } finally { clearTimeout(timer); }
   }
 

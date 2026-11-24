@@ -98,7 +98,11 @@ anyway: they are on the host (or in the extension's process), outside the worktr
   - Before each message that may act, every copy is read back and compared with the extension's text. One that
     differs, is missing or can't be read is removed and written again, and a file under `.pikibun/skills` that no
     extension sent is removed. That is one read per copied file and one listing per message, through the session's
-    file access; with the two workflow skills it is two reads.
+    file access; with the two workflow skills it is two reads. A listing cut short (over 2,000 entries, which
+    planted directories can reach) can't show what was added, so the whole of `.pikibun/skills` is then cleared and
+    every copy written again. A prompt waits a few seconds for this, as it does for the repositories' skills; when
+    the check is later than that, the message's prompt lists no extension skill rather than one it didn't check,
+    and a workflow extension keeps its whole procedure (phase 3).
   - What remains: between that check and the agent's own `read`, code in the sandbox can change a copy again, and
     the agent then reads the changed text under a path the prompt says is an extension's. Only a mount the sandbox
     can't write would close that, on every sandbox backend, and nothing could for sessions on the host; it isn't

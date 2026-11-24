@@ -143,8 +143,9 @@ test("a copy the sandbox changed is written again from the extension's text, and
     write: async (path, text) => { ops.push(`write ${path}`); disk.set(path, text); },
     remove: async path => { ops.push(`remove ${path}`); for (const key of [...disk.keys()]) if (key === path || key.startsWith(`${path}/`)) disk.delete(key); },
     read: async path => { if (!disk.has(path)) throw new Error("gone"); return disk.get(path)!; },
-    list: async () => [...disk.keys(), `${EXTENSION_SKILLS_DIRECTORY}/pr-flow/`, "elsewhere/kept.md"],
+    list: async () => ({ paths: [...disk.keys(), `${EXTENSION_SKILLS_DIRECTORY}/pr-flow/`, "elsewhere/kept.md"], truncated }),
   });
+  let truncated = false;
   const text = skillText("a", "Use a");
   const provided = [{ source: "piki:pr-flow", skills: [{ name: "a", description: "Use a", disableModelInvocation: false, file: "SKILL.md",
     files: [{ path: "SKILL.md", text }, { path: "scripts/run.py", text: "print(1)" }] }] }];
@@ -166,6 +167,14 @@ test("a copy the sandbox changed is written again from the extension's text, and
   assert.deepEqual([...disk].sort(), [[at("SKILL.md"), text], [at("scripts/run.py"), "print(1)"]], "changed and deleted copies are written again, added files removed");
   assert.equal(files.restored, 4);
   assert.equal(files.text(at("SKILL.md")), text);
+
+  truncated = true;
+  disk.set(at("scripts/hidden.sh"), "past the listing's end");
+  ops.length = 0;
+  await files.sync(provided);
+  assert.equal(ops[0], `remove ${EXTENSION_SKILLS_DIRECTORY}`, "a listing cut short can't show what was added, so everything is cleared");
+  assert.deepEqual([...disk].sort(), [[at("SKILL.md"), text], [at("scripts/run.py"), "print(1)"]], "and every copy written again");
+  truncated = false;
   await files.sync([]);
   assert.equal(files.text(at("SKILL.md")), undefined, "a skill that went away has no text left");
 });
@@ -207,6 +216,19 @@ test("an extension's skill is listed and expanded from the host's text, and only
     "<skill name=\"flow\" location=\".pikibun/skills/pr-flow/flow/SKILL.md\">\nReferences are relative to .pikibun/skills/pr-flow/flow.\n\nOpen a draft.\n</skill>\n\nnow");
   assert.equal(asked, 1);
   assert.deepEqual(reads, [], "the copy in the worktree is never read back");
+  let release!: () => void;
+  const slow = new SessionSkills({ find: async () => [], read: async () => "", text: piText,
+    provided: async () => { await new Promise<void>(resolve => { release = resolve; }); return [item]; } });
+  const first = slow.current(20);
+  await delay(40);
+  release();
+  assert.deepEqual(await first, []);
+  await delay(5);
+  assert.deepEqual(slow.known().map(skill => skill.name), ["flow"]);
+  const late = slow.current(20);
+  assert.deepEqual(await late, [], "an acting message whose check of the copies is late lists no extension skill, rather than one it didn't check");
+  release();
+  assert.deepEqual((await slow.current(20, true, false)).map(skill => skill.name), ["flow"]);
   hostText = undefined;
   assert.equal(await skills.expand("flow", ""), undefined, "without the host's text it stays as typed, rather than take the copy's");
   assert.deepEqual(reads, []);

@@ -357,8 +357,11 @@ export class RunnerSession {
       write: (path, text) => this.sandbox.writeFile(path, text, alreadyAllowed),
       remove: async path => { await this.sandbox.fileOperation({ kind: "delete", path, recursive: true }, alreadyAllowed); },
       read,
-      list: async () => (await this.sandbox.find({ kind: "find", path: EXTENSION_SKILLS_DIRECTORY, pattern: "*", byPath: false, ignoreCase: false,
-        maxResults: EXTENSION_SKILL_COPIES, all: true }, alreadyAllowed)).paths.map(path => `${EXTENSION_SKILLS_DIRECTORY}/${path}`),
+      list: async () => {
+        const found = await this.sandbox.find({ kind: "find", path: EXTENSION_SKILLS_DIRECTORY, pattern: "*", byPath: false, ignoreCase: false,
+          maxResults: EXTENSION_SKILL_COPIES, all: true }, alreadyAllowed);
+        return { paths: found.paths.map(path => `${EXTENSION_SKILLS_DIRECTORY}/${path}`), truncated: found.truncated };
+      },
     });
     this.#skills = new SessionSkills({ find, read, text: piText, providedText: path => skillFiles.text(path), provided: async () => {
       const host = this.#hostExtensions;
