@@ -2867,7 +2867,7 @@ test('host owners add admins who manage sharing and host command grants, and gra
 test('host owners and admins configure how the host runs sessions, and only the owner decides whose credentials it uses', async t => {
   const f = await fixture(t); const s = await sharedHost(f); const outsider = await f.client('outsider');
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, cacheWarming: true };
+  const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
   const listed = async (client: Client) => (await json<{ connectors: ConnectorInfo[] }>(await client.request('GET', '/api/connectors'))).connectors
     .find(item => item.id === id)?.config;
   assert.deepEqual(await listed(host), defaults);
@@ -2883,7 +2883,7 @@ test('host owners and admins configure how the host runs sessions, and only the 
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
   }
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_configs').get()!.n, 0);
-  const owned = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: 'owner', hostSessions: true, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, cacheWarming: true };
+  const owned = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: 'owner', hostSessions: true, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
   assert.deepEqual(await json(await host.request('PATCH', path, owned)), { config: owned });
   assert.deepEqual(await listed(host), owned);
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: owned });
@@ -2918,7 +2918,7 @@ test('a save changes only the settings it names, so what someone else saved mean
   const audits = () => f.sqlite.prepare(`SELECT COUNT(*) AS n FROM audit WHERE action = 'host.config.updated'`).get()!.n;
   await json(await host.request('PUT', `/api/connectors/${id}/admins/${creator.user.id}`));
   await json(await host.request('PATCH', path, { gitCredentials: true, repositoryCache: 'host' }));
-  const both = { commandTimeoutSeconds: 120, gpu: false, gitCredentials: true, repositoryCache: 'host', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, cacheWarming: true };
+  const both = { commandTimeoutSeconds: 120, gpu: false, gitCredentials: true, repositoryCache: 'host', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
   assert.deepEqual(await json(await creator.request('PATCH', path, { commandTimeoutSeconds: 120 })), { config: both });
   assert.deepEqual(await json(await host.request('PATCH', path, { gpu: true })), { config: { ...both, gpu: true } });
   const saved = audits();
@@ -2968,7 +2968,7 @@ test('an admin\'s first configuration of a host leaves the owner\'s settings at 
   const f = await fixture(t); const s = await sharedHost(f);
   const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
   await json(await s.host.request('PUT', `/api/connectors/${id}/admins/${s.creator.user.id}`));
-  const config = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, cacheWarming: true };
+  const config = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
   assert.deepEqual(await json(await s.creator.request('PATCH', path, config)), { config });
   assert.deepEqual({ ...f.sqlite.prepare('SELECT git_credentials, repository_cache, host_sessions, updated_by FROM connector_configs WHERE connector_id = ?').get(id) },
     { git_credentials: 0, repository_cache: 'off', host_sessions: 0, updated_by: s.creator.user.id });
@@ -2977,7 +2977,7 @@ test('an admin\'s first configuration of a host leaves the owner\'s settings at 
 test('a host\'s owner and admins set its compaction token counts, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, cacheWarming: true };
+  const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
   for (const invalid of [{ compaction: null }, { compaction: [] }, { compaction: { reserveTokens: -1 } }, { compaction: { reserveTokens: 1.5 } },
     { compaction: { reserveTokens: 10_000_001 } }, { compaction: { enabled: false } }, { compaction: { modelOverrides: { model: { reserveTokens: 1 } } } },
     { compaction: { modelOverrides: { 'anthropic/opus': { keepRecentTokens: '1' } } } }]) {
@@ -3001,7 +3001,7 @@ test('a host\'s owner and admins set its compaction token counts, which its conn
 test('a host\'s owner and admins turn on Pi\'s built-in extensions for its sessions, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, cacheWarming: true };
+  const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, builtinExtensions: [] } });
   for (const invalid of [{ builtinExtensions: null }, { builtinExtensions: 'codemode' }, { builtinExtensions: ['tool-search'] }, { builtinExtensions: ['pi:codemode', 'codemode'] }, { builtinExtensions: ['piki:gh'] }]) {
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
@@ -3023,7 +3023,7 @@ test('a host\'s owner and admins turn on Pi\'s built-in extensions for its sessi
 test('only a host\'s owner requires extensions of every session on it, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, cacheWarming: true };
+  const defaults = { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, requiredExtensions: [] } });
   for (const invalid of [{ requiredExtensions: null }, { requiredExtensions: ['piki:prompt-audit'] }, { requiredExtensions: [{ source: 'npm:cc-safety-net' }] },
     { requiredExtensions: [{ source: './guard.ts' }] }, { requiredExtensions: [{ source: 'piki:prompt-audit', settings: { policy: 5 } }] },
@@ -3048,6 +3048,41 @@ test('only a host\'s owner requires extensions of every session on it, which its
     [required[0], { source: 'npm:cc-safety-net@2.7.2', settings: {} }], 'a connector that predates model calls never sees the key it would refuse');
   f.sqlite.prepare("UPDATE connectors SET capabilities_json = json_set(capabilities_json, '$.modelCalls', json('true')) WHERE id = ?").run(id);
   assert.deepEqual((await json<{ config: { requiredExtensions: unknown[] } }>(await self(f, s.connector, 'config', {}))).config.requiredExtensions, calling);
+});
+
+test('only a host\'s owner marks the extensions that provide its models, which no workspace setting reaches', async t => {
+  const f = await fixture(t); const s = await sharedHost(f);
+  const { host, creator, admin } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
+  const marked = async () => (await json<{ config: { modelExtensions: string[] } }>(await self(f, s.connector, 'config', {}))).config.modelExtensions;
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  assert.deepEqual(await marked(), []);
+  for (const invalid of [{ modelExtensions: null }, { modelExtensions: ['piki:gh'] }, { modelExtensions: ['npm:pi-provider'] }, { modelExtensions: ['local:/home/owner/provider.ts'] },
+    { modelExtensions: [{ source: 'npm:pi-provider@1.0.0' }] }, { modelExtensions: ['npm:pi-provider@1.0.0', 'npm:pi-provider@1.1.0'] },
+    { modelExtensions: Array.from({ length: 17 }, (_, index) => `npm:pi-provider-${index}@1.0.0`) }]) {
+    await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
+  }
+  await denied(await admin.request('PATCH', path, { modelExtensions: ['npm:pi-provider@1.0.0'] }), 404, 'not_found');
+  await json(await host.request('PUT', `/api/connectors/${id}/admins/${creator.user.id}`));
+  await denied(await creator.request('PATCH', path, { modelExtensions: ['npm:pi-provider@1.0.0'] }), 403, 'host_owner_required');
+  await denied(await admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'npm:pi-provider@1.0.0', modelExtensions: true }), 400, 'invalid_extension');
+  await denied(await admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'npm:pi-provider@1.0.0', provideModels: true }), 400, 'invalid_extension');
+  await json(await admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'npm:pi-provider@1.0.0', settings: { modelExtensions: 'true', 'provide-models': true } }));
+  assert.deepEqual(await marked(), [], 'a workspace that uses the extension, with any settings, marks nothing');
+
+  const chosen = ['npm:pi-provider@1.0.0', `git:https://github.com/acme/provider@${commit}`];
+  assert.deepEqual((await json<{ config: { modelExtensions: string[] } }>(await host.request('PATCH', path, { modelExtensions: ['npm:pi-provider@1.0.0', `git:github.com/acme/provider.git@${commit}`] }))).config.modelExtensions, chosen);
+  assert.deepEqual(await marked(), chosen);
+  assert.deepEqual(JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'host.config.updated' ORDER BY created_at DESC, rowid DESC LIMIT 1").get()!.detail_json)).modelExtensions, chosen);
+  assert.deepEqual((await json<{ config: { modelExtensions: string[]; commandTimeoutSeconds: number } }>(await creator.request('PATCH', path, { modelExtensions: chosen, commandTimeoutSeconds: 90 }))).config,
+    { ...(await json<{ config: Record<string, unknown> }>(await self(f, s.connector, 'config', {}))).config, commandTimeoutSeconds: 90, modelExtensions: chosen }, 'an admin may send the list back unchanged with what they may set');
+  f.sqlite.prepare('UPDATE connector_configs SET model_extensions_json = ? WHERE connector_id = ?').run(JSON.stringify(['piki:gh']), id);
+  assert.deepEqual(await marked(), [], 'a stored list that is no longer valid marks nothing');
+
+  const capable = { ...manifest, capabilities: { ...manifest.capabilities, extensionModels: true } };
+  await json(await self(f, s.connector, 'manifest', capable));
+  const listed = await json<{ connectors: { id: string; capabilities: { extensionModels?: boolean } }[] }>(await host.request('GET', '/api/connectors'));
+  assert.equal(listed.connectors.find(item => item.id === id)?.capabilities.extensionModels, true);
+  await denied(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, extensionModels: 'yes' } }), 400, 'invalid_manifest');
 });
 
 test('a host\'s owner and admins disable its models for everyone: a disabled model is neither listed, started from nor chosen', async t => {

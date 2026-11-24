@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0088_host_cache_warming.sql.
+-- Postgres translation of sqlite/0089_host_cache_warming.sql.
 
 -- Prompt cache warming's host switch (docs/design/cache-warming.md, finding 65 of #479). connector_configs.cache_warming is
 -- the host owner's setting (HostConfig.cacheWarming): 0 keeps every session on the host from warming its prompt cache,

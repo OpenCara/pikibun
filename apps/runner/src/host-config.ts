@@ -12,6 +12,7 @@ export class HostConfigSource {
   #expired = false;
   #answers = 0;
   #required?: RequiredExtension[];
+  #modelExtensions?: string[];
 
   constructor(private readonly load: () => Promise<unknown>, private readonly options: { ttlMs?: number; staleMs?: number; now?: () => number } = {}) {}
 
@@ -24,6 +25,7 @@ export class HostConfigSource {
       this.#cached = { value: config, at: now() };
       this.#answers++;
       this.#required = config.requiredExtensions;
+      this.#modelExtensions = config.modelExtensions;
       return config;
     }).finally(() => { this.#refresh = undefined; this.#expired = false; });
     try { return await this.#refresh; }
@@ -36,6 +38,11 @@ export class HostConfigSource {
   async required(): Promise<RequiredExtension[] | undefined> {
     await this.current();
     return this.#required;
+  }
+
+  async modelExtensions(): Promise<string[] | undefined> {
+    await this.current();
+    return this.#modelExtensions;
   }
 
   async refresh(): Promise<{ config: HostConfig; answered: boolean }> {

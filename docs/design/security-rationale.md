@@ -387,6 +387,42 @@ Because the process is confined like the session's commands, a tool of such an e
 act, without a host command grant: it reaches nothing a shell command of that message couldn't. Where shell commands
 themselves count as host commands (no resource limits, someone else's session), so do these calls.
 
+## Models a host's extensions provide
+
+`apps/runner/src/extensions/providers.ts`, `local-pi.ts` (`provide`), `connector.ts` (`provideModels`),
+`packages/shared/src/host-config.ts` (`modelExtensions`); the design is [extension models](extension-models.md) (#147).
+Everything above moves installed extensions away from the host's authority. A model provider can't follow: it is the
+code that makes the model request, with the host owner's credentials, for a list of models that belongs to the host and
+not to a session, so it runs in the connector, as the host's user, outside any sandbox. What bounds that:
+
+- **The host's owner marks each extension, per exact version.** `HostConfig.modelExtensions` is owner-only host
+  configuration (`ownerOnlyHostConfig`), changed through `PATCH /api/connectors/:id/config` alone, audited, and
+  confirmed in the UI with what it runs as. A host admin is refused; a workspace's extension list, its settings, the
+  `workspace` tool and sessions have no route to it. A new version is a new source, so it provides nothing until marked.
+- **Only what the owner installed.** The connector takes a marked source only from `ExtensionStore`, at that exact
+  source: never from the sandboxed auto-cache (which a workspace fills), a managed package, a `piki:` extension or a dev
+  extension.
+- **Providers only.** The extension is loaded with an extension runtime that is never bound, so nothing emits an event
+  to it: its handlers and tools never run from this copy, and its action methods throw. The connector applies the
+  registrations made while it loaded to its `ModelRuntime`, and reports their models through `modelSummary`, which
+  copies names and thinking levels only. A session's own copy of the same extension still runs in the session's
+  extension process, with descriptions and no keys.
+- **Models like any other.** They pass `enabledModels`, the 200-model limit, the manifest's checks and the host's
+  per-model switches; a source that would break the manifest is withdrawn alone, so one extension can't take the
+  host offline.
+- **The machine can refuse.** `pikibun connect --no-extension-models` never loads one and doesn't advertise the
+  capability. The connector applies only a list it has heard from the Pikibun server, and keeps the last one through an
+  outage.
+
+What it doesn't protect against: the marked package's code runs in the connector's process with the host user's
+files, network and Pi credentials, sees every request to its models, may replace one of Pi's own providers (as in Pi),
+and can block or end the connector once loaded; that is the trust the owner gives it, the same as installing it in Pi
+on that machine. The list comes from the Pikibun server, like `hostSessions` and install requests: whoever controls
+the owner's account or the Pikibun server could mark an installed extension, and with remote installs install one
+first. That is no more than they could already do there, since the same word starts a session on the host, as its
+user ([Sessions on the host](#sessions-on-the-host)); it is one more path that runs code outside the sandbox on that
+word, which the local refusal closes and `--no-remote-installs` narrows to what was installed on the machine.
+
 ## What an extension keeps and sends
 
 `apps/runner/src/extensions/entries.ts`, `worker.ts` (`noActions`, `runCall`), `adapter.ts` (`kept`, `onYield`); the
