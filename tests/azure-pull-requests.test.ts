@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lineOperations, unifiedPatch } from "../apps/server/src/authority/line-diff.js";
+import { lineOperations, maxPatchLines, unifiedPatch } from "../apps/server/src/authority/line-diff.js";
 import { findAzureBranchPullRequest, readAzurePullRequestReview, readAzurePullRequestState, type AzureRepositoryApi } from "../apps/server/src/authority/azure-pull-requests.js";
 import { azurePullRequest, azurePullRequestUrl } from "../packages/shared/src/pull-requests.js";
 import { pullRequestCommitUrl, pullRequestFilesUrl, reviewForge } from "../packages/shared/src/pull-request-review.js";
@@ -42,6 +42,30 @@ test("a unified patch has hunks with three lines of context, as Git writes them"
   assert.deepEqual(unifiedPatch("a\n", ""), { patch: "@@ -1 +0,0 @@\n-a", additions: 0, deletions: 1 });
   assert.deepEqual(unifiedPatch("a\nb", "a\nb\n"), { patch: "@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+b", additions: 1, deletions: 1 });
   assert.deepEqual(unifiedPatch("same\n", "same\n"), { patch: "", additions: 0, deletions: 0 });
+});
+
+test("a full rewrite of a very large file is diffed without overflowing the stack, and a patch past its line limit is cut", () => {
+  for (const count of [100_000, 125_000]) {
+    const started = performance.now();
+    const whole = unifiedPatch("a\n".repeat(count), "b\n".repeat(count), Infinity);
+    assert.deepEqual([whole.additions, whole.deletions, whole.truncated], [count, count, undefined]);
+    assert.ok(whole.patch.startsWith(`@@ -1,${count} +1,${count} @@\n-a\n`) && whole.patch.endsWith("\n+b"));
+    assert.equal(whole.patch.length, 6 * count + `@@ -1,${count} +1,${count} @@`.length);
+    assert.deepEqual(unifiedPatch("a\n".repeat(count), "b\n".repeat(count)), { patch: "", additions: count, deletions: count, truncated: true });
+    assert.ok(performance.now() - started < 10_000, `${count} lines took ${Math.round(performance.now() - started)} ms`);
+  }
+  assert.equal(unifiedPatch("a\nb\n", "c\nd\n", 5).patch, "@@ -1,2 +1,2 @@\n-a\n-b\n+c\n+d");
+  assert.deepEqual(unifiedPatch("a\nb\n", "c\nd\n", 4), { patch: "", additions: 2, deletions: 2, truncated: true });
+  assert.deepEqual(unifiedPatch("a\nb", "a\nc", 5), { patch: "", additions: 1, deletions: 1, truncated: true }, "the lines that say a file ends without a newline count");
+  const half = Math.floor(maxPatchLines / 2);
+  const fits = unifiedPatch("a\n".repeat(half - 1), "b\n".repeat(half));
+  assert.deepEqual([fits.patch.split("\n").length, fits.truncated], [maxPatchLines, undefined]);
+  assert.deepEqual(unifiedPatch("a\n".repeat(half), "b\n".repeat(half)), { patch: "", additions: half, deletions: half, truncated: true });
+  const scattered = Array.from({ length: 4000 }, (_, index) => `line ${index}`);
+  const edited = scattered.map((line, index) => index % 40 ? line : `changed ${index}`);
+  assert.equal(unifiedPatch(scattered.join("\n"), edited.join("\n"), 897).patch.split("\n").length, 897);
+  assert.deepEqual(unifiedPatch(scattered.join("\n"), edited.join("\n"), 896), { patch: "", additions: 100, deletions: 100, truncated: true },
+    "context and hunk headers count towards the limit");
 });
 
 test("an Azure DevOps pull request URL names its repository and number, and the Review tab links back to it", () => {
@@ -198,6 +222,42 @@ test("the Review tab reads an Azure DevOps pull request: files with diffs Pikibu
   assert.equal(review.files[0]!.patch, "@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;");
   assert.equal(review.files[1]!.redacted, true);
   assert.deepEqual([review.additions, review.deletions, review.changedFiles, review.omitted], [2, 1, 5, undefined]);
+});
+
+test("the Review tab still loads an Azure DevOps pull request when one file's diff is too long or fails", async t => {
+  const blob = (id: string) => `${base}/blobs/${id}?$format=octetstream&api-version=7.1`;
+  const [hugeOld, hugeNew, brokenNew] = ["6".repeat(40), "7".repeat(40), "8".repeat(40)];
+  mock(t, {
+    [`${base}/pullrequests/7?api-version=7.1`]: () => Response.json(pullRequest()),
+    [`${base}/pullRequests/7/statuses?api-version=7.1`]: () => Response.json({ value: [] }),
+    [`https://dev.azure.com/contoso/My%20Project/_apis/policy/evaluations?artifactId=${encodeURIComponent(`vstfs:///CodeReview/CodeReviewId/${projectId}/7`)}&api-version=7.1-preview.1`]:
+      () => Response.json({ value: [] }),
+    [`${base}/pullRequests/7/commits?$top=100&api-version=7.1`]: () => Response.json({ value: [] }),
+    [`${base}/pullRequests/7/iterations?api-version=7.1`]: () => Response.json({ value: [{ id: 1 }] }),
+    [`${base}/pullRequests/7/threads?api-version=7.1`]: () => Response.json({ value: [] }),
+    [`${base}/pullRequests/7/iterations/1/changes?$top=1000&api-version=7.1`]: () => Response.json({ changeEntries: [
+      { changeType: "edit", item: { path: "/generated.txt", objectId: hugeNew, originalObjectId: hugeOld } },
+      { changeType: "add", item: { path: "/broken.txt", objectId: brokenNew } },
+      { changeType: "edit", item: { path: "/src/a.ts", objectId: newBlob, originalObjectId: oldBlob } },
+    ] }),
+    [blob(hugeOld)]: () => new Response("a\n".repeat(100_000)),
+    [blob(hugeNew)]: () => new Response("b\n".repeat(100_000)),
+    [blob(brokenNew)]: () => new Response("broken\n"),
+    [blob(oldBlob)]: () => new Response("const a = 1;\nconst b = 2;\n"),
+    [blob(newBlob)]: () => new Response("const a = 1;\nconst b = 3;\n"),
+  });
+  const started = performance.now();
+  const review = await readAzurePullRequestReview(api, 7, (before, after) => {
+    if (after === "broken\n") throw new RangeError("Maximum call stack size exceeded");
+    return unifiedPatch(before, after);
+  });
+  assert.ok(performance.now() - started < 10_000);
+  assert.deepEqual(review.files, [
+    { path: "generated.txt", status: "modified", additions: 100_000, deletions: 100_000, truncated: true },
+    { path: "broken.txt", status: "added", additions: 0, deletions: 0, truncated: true },
+    { path: "src/a.ts", status: "modified", additions: 1, deletions: 1, patch: "@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;" },
+  ]);
+  assert.deepEqual([review.additions, review.deletions, review.changedFiles], [100_001, 100_001, 3]);
 });
 
 test("the Review tab counts every commit of a long Azure DevOps pull request, page by page, and shows the newest", async t => {

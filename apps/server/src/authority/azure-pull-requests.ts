@@ -8,7 +8,7 @@ import {
 import { fail } from '../http.js';
 import { basic } from './git/providers.js';
 import type { GitCredential } from './git/types.js';
-import { unifiedPatch } from './line-diff.js';
+import { unifiedPatch, type UnifiedPatch } from './line-diff.js';
 
 export interface AzureRepositoryApi { credential: GitCredential; fullName: string; repositoryId: string }
 
@@ -221,7 +221,9 @@ function changes(entries: Record<string, unknown>[]): Change[] {
   });
 }
 
-async function fileViews(api: AzureRepositoryApi, found: Change[]): Promise<PullRequestFileView[]> {
+export type AzureFileDiff = (before: string, after: string) => UnifiedPatch;
+
+async function fileViews(api: AzureRepositoryApi, found: Change[], difference: AzureFileDiff): Promise<PullRequestFileView[]> {
   let fetched = 0;
   const blob = async (id: string | undefined): Promise<string | null | undefined> => {
     if (!id) return '';
@@ -252,8 +254,10 @@ async function fileViews(api: AzureRepositoryApi, found: Change[]): Promise<Pull
     const content = contents[index]!;
     if (content === 'unread') return { ...view, truncated: true };
     if (typeof content === 'string') return view;
-    const diff = unifiedPatch(content.before, content.after);
+    let diff: UnifiedPatch;
+    try { diff = difference(content.before, content.after); } catch { return { ...view, truncated: true }; }
     const counted = { ...view, additions: diff.additions, deletions: diff.deletions };
+    if (diff.truncated) return { ...counted, truncated: true };
     if (!diff.patch) return counted;
     const size = encoder.encode(diff.patch).length;
     if (size > pullRequestReviewLimits.patchBytes || held + size > pullRequestReviewLimits.totalPatchBytes) return { ...counted, truncated: true };
@@ -284,7 +288,7 @@ function newest<T extends { createdAt: string }>(items: T[]): { items: T[]; omit
   return { items: sorted.slice(-listItems), omitted: Math.max(sorted.length - listItems, 0) };
 }
 
-export async function readAzurePullRequestReview(api: AzureRepositoryApi, number: number): Promise<PullRequestReview> {
+export async function readAzurePullRequestReview(api: AzureRepositoryApi, number: number, difference: AzureFileDiff = unifiedPatch): Promise<PullRequestReview> {
   const where = locate(api);
   const url = azurePullRequestUrl(api.fullName, number);
   const pull = await pullRequestDetails(api, number);
@@ -300,7 +304,7 @@ export async function readAzurePullRequestReview(api: AzureRepositoryApi, number
     : { changeEntries: [] };
   const allChanges = changes(list(changed.changeEntries));
   const more = integer(changed.nextTop) ?? 0;
-  const files = await fileViews(api, allChanges.slice(0, pullRequestReviewLimits.files));
+  const files = await fileViews(api, allChanges.slice(0, pullRequestReviewLimits.files), difference);
   const commits = commitList.items.flatMap((item): PullRequestCommitView[] => {
     const sha = string(item.commitId);
     if (!sha1.test(sha)) return [];
