@@ -336,7 +336,13 @@ while True:
             result = {'result': {'value': described if 'describe(' in message['params']['expression'] else 'about:blank'}}
         elif method == 'Page.captureScreenshot':
             result = {'data': ''}
+        deaf = lent and mode == 'deaf' and method == 'Target.getTargets'
+        if deaf:
+            os.close(3)
         os.write(4, json.dumps({'id': message['id'], 'result': result}).encode() + b'\\0')
+        if deaf:
+            time.sleep(2)
+            sys.exit(1)
         if method == 'Browser.close':
             sys.exit(0)
 `;
@@ -386,7 +392,7 @@ test("with the host's GPU lent, the driver starts Chromium on ANGLE's Vulkan and
   assert.deepEqual(lent.report.gpu, { in_use: true, renderer: "ANGLE (Intel, Vulkan 1.3.255 (Intel(R) Xe Graphics (TGL GT2) (0x00009A49)), Intel open-source Mesa driver)" });
 
   const reasons: [string, RegExp, number?][] = [["none", /its GPU process did not start/], ["software", /it found no driver for the GPU, only ANGLE \(Mesa.*llvmpipe/],
-    ["blocked", /WebGL was unavailable_software on ANGLE \(Intel/], ["exits", /the browser closed: vulkan: no device/], ["silent", /Chromium did not answer within \d+ seconds of starting|it did not answer within 3 seconds/, 14]];
+    ["blocked", /WebGL was unavailable_software on ANGLE \(Intel/], ["exits", /the browser closed: vulkan: no device/], ["deaf", /it stopped taking commands \(Broken pipe\)/], ["silent", /Chromium did not answer within \d+ seconds of starting|it did not answer within 3 seconds/, 14]];
   for (const [mode, reason, seconds] of reasons) {
     const fallen = await call(mode, true, seconds);
     assert.equal(fallen.starts.length, 2, mode);

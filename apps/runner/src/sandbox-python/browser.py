@@ -518,8 +518,11 @@ def open_browser(executable: str, profile: str, viewport: Tuple[int, int], tempo
             renderer = gpu_renderer(chrome)
             chrome.deadline = deadline
             return chrome, {'in_use': True, 'renderer': renderer}
-        except BrowserError as error:
-            reason = 'it did not answer within %d seconds' % round(seconds) if str(error) == OUT_OF_TIME else bounded(str(error), 300)
+        except (BrowserError, OSError) as error:
+            if isinstance(error, OSError):
+                reason = 'it stopped taking commands (%s): %s' % (error.strerror or type(error).__name__, bounded(chrome.tail(), 200))
+            else:
+                reason = 'it did not answer within %d seconds' % round(seconds) if str(error) == OUT_OF_TIME else bounded(str(error), 300)
             chrome.close(1)
             state = {'in_use': False, 'note': 'Chromium could not render with the GPU the host lends (' + reason
                      + '), so this call rendered in software, as on a host that lends none. Its output from that start is in ' + log + '.'}
