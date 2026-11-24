@@ -50,7 +50,7 @@ function gibOf(value: string): number | undefined {
 
 const configInfo = (
   <View style={{ gap: 8 }}>
-    <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache or build caches, runs their sessions without the sandbox or trusts a fake-IP proxy on it.</Note>
+    <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache or build caches, lets workspaces warm prompt caches with its model accounts, runs their sessions without the sandbox or trusts a fake-IP proxy on it.</Note>
     <Note>Running sessions pick up a change within a minute. A repository cache change applies when the host's connector next connects.</Note>
     <Note>Build caches are directories this host keeps for each workspace's declared caches (Settings → Workspaces → Build caches), which commands find through an environment variable, so tools such as ccache, Gradle or Bazel reuse earlier builds. Past the size limit, the caches holding more than their fair share lose their least recently changed files first. They never enter backups, packs or moves.</Note>
     <Note>The service lifetime bounds a session service: a server a session keeps running after the call that started it, such as the one the tunnel tool puts online. It stops then, and goes offline.</Note>
@@ -154,6 +154,11 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
               disabled={!editable()} onChange={setGiB} /></View>
             : <Badge>{`${saved().buildCacheGiB} GiB`}</Badge>} />
       </If>
+      <Row title="Prompt cache warming" testID="host-cache-warming" hint={owner()
+        ? "Sessions' workspaces may keep their prompt caches warm on this host, re-sending a request with this host's model accounts shortly before its cache expires. Off stops it on this host whatever a workspace chooses. Applies within a minute"
+        : "Only the host's owner changes this"}
+        trailing={owner() ? <Checkbox label="Allow" testID="host-cache-warming-allow" checked={config().cacheWarming} disabled={!editable()} onChange={cacheWarming => set({ cacheWarming })} />
+          : <Badge tone={saved().cacheWarming ? "success" : "neutral"}>{saved().cacheWarming ? "Allowed" : "Off"}</Badge>} />
       <Row title="Sessions on the host" hint={capabilities().unsandboxed ? "This host runs every session without the sandbox"
         : !owner() ? "Only the host's owner changes this"
         : capabilities().ownerHostSessions ? "You may always start sessions that run directly on this machine, without the sandbox, as its user. Members you grant it under Host command access may too while this is on. Turning it off stops their commands within half a minute"
