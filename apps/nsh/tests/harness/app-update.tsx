@@ -3,7 +3,7 @@ import { AppUpdateRows, HomeUpdate } from "../../src/components/AppUpdate";
 import { configureAppUpdate, type CleanUp, type UpdateRunner } from "../../src/lib/app-update";
 import { Button, Section } from "../../src/ui";
 
-const params = embedder.params as { current?: unknown; os?: unknown; arch?: unknown; outcome?: unknown; cleanUp?: unknown };
+const params = embedder.params as { current?: unknown; os?: unknown; arch?: unknown; outcome?: unknown; cleanUp?: unknown; terminal?: unknown };
 const outcome = String(params.outcome ?? "ok");
 const sent = signal<string[]>([]);
 const say = (line: string) => sent.update(list => [...list, line]);
@@ -41,6 +41,7 @@ const updater = configureAppUpdate({
   os: typeof params.os === "string" ? params.os : "macos",
   arch: typeof params.arch === "string" ? params.arch : "aarch64",
   runner,
+  terminal: params.terminal === true,
 });
 updater.start(1);
 

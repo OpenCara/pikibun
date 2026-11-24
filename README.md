@@ -4,7 +4,7 @@
 
 Run [Pi](https://github.com/earendil-works/pi) coding agents on your own machines and work on them together with your team. Pikibun is a self-hosted control plane: a web app (with iPhone, iPad, Mac and Windows apps), a Node.js server, and the `pikibun` connector that each host runs to offer its local Pi to a workspace.
 
-Its client is written once on [Native Shell](https://nsh.dev) (`apps/nsh`): `pikibun.com`, the Docker image and `pikibun serve` serve its web build, and `app-v` releases package it for each platform. The earlier React web client and Electron desktop app are removed.
+Its client is written once on [Native Shell](https://nsh.dev) (`apps/nsh`): `pikibun.com`, the Docker image and `pikibun serve` serve its web build, `app-v` releases package it for each platform, and [`@pikibun/tui`](docs/tui.md) runs it in a terminal. The earlier React web client and Electron desktop app are removed.
 
 Two things set it apart:
 
@@ -74,6 +74,7 @@ The [quick start](docs/quick-start.md) walks through it step by step.
   - [Host commands](docs/host-commands.md)
   - [Backups, restores and moving sessions](docs/backups.md)
   - [iPhone, iPad, Mac and Windows apps](docs/apps.md)
+  - [Pikibun in a terminal](docs/tui.md): `npm install -g @pikibun/tui`, or `pikibun tui`
   - [Desktop app user guide](docs/desktop/README.md): choose a mode for the Mac, Windows or Linux app: [client](docs/desktop/client.md), [host](docs/desktop/host.md) or [self host](docs/desktop/self-host.md)
 - [Running Pikibun on your own computer](docs/local.md)
 - [Running the server](docs/self-hosting.md): Docker, configuration, administration and storage

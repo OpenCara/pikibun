@@ -99,6 +99,7 @@ pnpm typecheck                # the repository's types, then `nsh check`
 pnpm test:client              # the headless tests: NSH's own engine against a stubbed server
 pnpm test:client-live         # against a real test-mode server: serving, sign-in, the session list, sign-out
 pnpm test:client-web          # the web build in headless Chrome (CHROME_BIN, or the first on PATH) against one
+pnpm test:client-tui          # tests/terminal.test.tsx in an in-memory terminal (docs/design/tui.md)
 pnpm test:client-macos        # on macOS: the app tests and screenshots in real AppKit windows (apps/nsh/.nsh/screenshots)
 pnpm test:client-macos --live --display 1  # also a live sign-in with a code, which you complete yourself
 ```

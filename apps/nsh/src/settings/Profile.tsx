@@ -5,6 +5,7 @@ import { addServer, servers, session, signOut, switchServer, updateUser } from "
 import { timestamp } from "../lib/format";
 import { createAction, createResource } from "../lib/resource";
 import { displayOrigin, usesBrowserSession } from "../lib/server";
+import { inTerminal } from "../lib/terminal";
 import { palette } from "../theme";
 import { Field, TextField } from "../form";
 import { Badge, Button, CardBody, confirm, CopyButton, Feedback, IconButton, ResourceState, Row, Section } from "../ui";
@@ -155,7 +156,7 @@ export function Profile(_props: SectionProps) {
       </Section>
       <Section title="This app">
         <AppUpdateRows />
-        <Row title="Platform" trailing={`${platform.os} ${platform.version} · ${platform.desktop ? "desktop" : platform.idiom}`} />
+        <Row testID="app-platform" title="Platform" trailing={`${platform.os} ${platform.version} · ${inTerminal ? "terminal" : platform.desktop ? "desktop" : platform.idiom}`} />
         <If when={serverVersion()}>{version => <Row title="Server" trailing={`Pikibun server ${version()}`} />}</If>
       </Section>
     </SectionPage>

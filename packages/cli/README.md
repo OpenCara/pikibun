@@ -56,6 +56,10 @@ npm install -g pikibun@latest
 
 The app starts `pikibun host --stdio` itself, through your login shell (cmd.exe on Windows), and talks to it over stdin and stdout; pairing codes go only there. It uses `connect`'s state directory, so a machine paired with `connect` carries over, and only one of the two runs at a time. Hosting lasts while the app is open, and starts again when it opens if it was running when it quit.
 
+### In a terminal
+
+`pikibun tui` starts Pikibun's app in this terminal: sign in, your sessions and their chats, as in the desktop app. It is its own npm package, [`@pikibun/tui`](https://github.com/OpenCara/pikibun/blob/main/docs/tui.md), released with the app: `pikibun tui` runs the `pikibun-tui` that is installed (`npm install -g @pikibun/tui`), or runs it from npm when none is. Its options are `pikibun-tui`'s (`pikibun tui --no-mouse`).
+
 ## Host configuration
 
 Everything else about how the host runs sessions is set in the web app, on the host's page under **Settings → Hosts → the host → Configuration**, and reaches running sessions within a minute:

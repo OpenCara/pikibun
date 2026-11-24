@@ -154,6 +154,21 @@ jobs:
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
       # The client's tests, headless on Native Shell's own engine against a stubbed server.
       - run: pnpm test:client
+      # The client in a terminal: Native Shell's terminal backend on an in-memory terminal, as @pikibun/tui runs it.
+      - run: pnpm test:client-tui
+      # @pikibun/tui for this runner (the app's bundle, the launcher and the linux-x64 host), then the packaged app in a
+      # pseudo-terminal: a bundle the host can't load ends the run at once, where a working one keeps drawing until
+      # timeout stops it (124). Its input stays open and silent (sleep), as a terminal nobody types in.
+      - run: pnpm build:tui
+      - name: The terminal app starts in a terminal and keeps running
+        env:
+          TERM: xterm-256color
+        run: |
+          export PIKIBUN_TUI_HOST="$PWD/packages/tui/dist/hosts/linux-x64/bin/nsh-tui-host"
+          status=0
+          sleep 20 | timeout 10 script -qefc "node packages/tui/dist/tui/bin/pikibun-tui.js --log-file $RUNNER_TEMP/tui.log --data-dir $RUNNER_TEMP/tui-data" /dev/null > "$RUNNER_TEMP/tui.out" || status=$?
+          cat "$RUNNER_TEMP/tui.log" || true
+          [ "$status" = 124 ] || { echo "::error::pikibun-tui ended ($status) within 10 seconds: the packaged app didn't keep running in a terminal."; exit 1; }
       # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
       # lacks `lifecycle`, and the page's Content-Security-Policy applies), and only a browser shows it.
       - run: pnpm test:client-web

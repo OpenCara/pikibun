@@ -4,6 +4,7 @@ import { Application } from "nsh/desktop";
 import nshProcess from "process";
 import { APP_VERSION } from "../app-version";
 import { loginShell } from "./pikibun-command";
+import { inTerminal } from "./terminal";
 import { localHosts } from "./this-computer";
 import { thisServer } from "./this-server";
 import {
@@ -414,6 +415,7 @@ export interface UpdaterOptions {
   os: string;
   arch: string;
   runner: UpdateRunner;
+  terminal?: boolean;
 }
 
 const desktopOs = (os: string) => os === "macos" || os === "windows" || os === "linux";
@@ -432,7 +434,8 @@ export class AppUpdater {
   constructor(readonly options: UpdaterOptions) {}
 
   get current(): string { return this.options.current; }
-  get offered(): boolean { return desktopOs(this.options.os) && isVersion(this.options.current); }
+  get offered(): boolean { return !this.options.terminal && desktopOs(this.options.os) && isVersion(this.options.current); }
+  get fromNpm(): boolean { return Boolean(this.options.terminal); }
   get busy(): boolean {
     const name = untracked(this.phase).name;
     return name === "downloading" || name === "installing" || name === "restarting";
@@ -505,7 +508,7 @@ export class AppUpdater {
   }
 }
 
-const defaults = (): UpdaterOptions => ({ current: APP_VERSION, os: platform.os, arch: nshProcess.arch, runner: nativeRunner });
+const defaults = (): UpdaterOptions => ({ current: APP_VERSION, os: platform.os, arch: nshProcess.arch, runner: nativeRunner, terminal: inTerminal });
 let configured: Partial<UpdaterOptions> = {};
 let shared: AppUpdater | undefined;
 

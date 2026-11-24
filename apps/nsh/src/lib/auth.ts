@@ -2,13 +2,14 @@ import { platform, signal, Storage, untracked, type Accessor } from "nsh";
 import { ApiError, createApi, errorMessage, type Api, type RequestOptions, type UserProfile } from "../shared";
 import { clearDrafts } from "./drafts";
 import { currentOrigin, DEFAULT_ORIGIN, displayOrigin, parseOrigin, usesBrowserSession } from "./server";
+import { inTerminal } from "./terminal";
 
 const TOKEN_KEY = "pikibun.token";
 const EXPIRES_KEY = "pikibun.tokenExpires";
 const ORIGIN_KEY = "pikibun.origin";
 const SERVERS_KEY = "pikibun.servers";
 export const SIGN_IN_SCHEME = "pikibun";
-const deviceName = () => `Pikibun (${platform.os})`;
+const deviceName = () => `Pikibun${inTerminal ? " in a terminal" : ""} (${platform.os})`;
 
 export type SignupMode = "open" | "invite" | "off";
 

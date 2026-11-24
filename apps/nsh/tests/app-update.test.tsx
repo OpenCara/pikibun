@@ -342,6 +342,15 @@ describe("updating the app", () => {
     expect(sent()).toEqual([]);
   });
 
+  test("in a terminal the app never replaces itself: npm updates it, and Settings says how", async () => {
+    const { app, sent, showsText } = await openUpdater({ terminal: true, os: "linux", arch: "x86_64" });
+    await app.waitFor("id:app-update-npm");
+    expect(showsText("npm install -g @pikibun/tui@latest")).toBe(true);
+    expect(app.shows("id:app-update-check")).toBe(false);
+    expect(app.shows("id:home-update")).toBe(false);
+    expect(sent()).toEqual([]);
+  });
+
   test("phones and the web offer none either", async () => {
     const { app, sent } = await openUpdater({ os: "ios" });
     await app.waitFor("id:app-version");

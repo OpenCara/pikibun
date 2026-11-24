@@ -6,6 +6,7 @@ import { identityMain } from "../../../apps/runner/src/identity-cli.js";
 import { ConnectorSetupError } from "../../../apps/runner/src/protocol.js";
 import { lazyPrivateHome, providePrivateHomes } from "../../../apps/runner/src/private-home.js";
 import packageJson from "../package.json" with { type: "json" };
+import { tuiMain } from "./tui.js";
 
 const USAGE = `Usage: pikibun <command> [options]
 
@@ -19,6 +20,8 @@ Commands:
               workspace's settings: show, export, import, rotate or reset it
   host        This computer's host for the Pikibun app, which runs it itself
               (host --stdio)
+  tui         Pikibun in this terminal: sign in, sessions and their chats
+              (@pikibun/tui, which it runs from npm when it isn't installed)
 
 Options:
   --help      Show this help
@@ -33,12 +36,13 @@ providePrivateHomes(host => lazyPrivateHome(import("../../../apps/server/src/loc
 }))));
 const serveMain = async (args: string[]) => (await import("../../../apps/server/src/local/cli.js")).serveMain(args);
 const run = command === "connect" ? connectMain : command === "cache" ? cacheMain : command === "extensions" ? extensionsMain : command === "identity" ? identityMain : command === "serve" ? serveMain
-  : command === "host" ? hostMain : undefined;
+  : command === "host" ? hostMain : command === "tui" ? tuiMain : undefined;
 if (run) {
   run(args).catch((error: unknown) => {
     process.stderr.write(error instanceof ConnectorSetupError
       ? `${error.message}\n`
       : command === "serve" ? "Pikibun failed. Check --help, the state directory's permissions, the port, local Pi configuration and sandbox prerequisites.\n"
+      : command === "tui" ? "Pikibun's terminal app didn't start. Check pikibun tui --help, and that npm can install @pikibun/tui.\n"
       : "Connector failed. Check --help, private state permissions, pairing, local Pi configuration and sandbox prerequisites.\n");
     process.exitCode = 1;
   });
