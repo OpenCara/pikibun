@@ -331,7 +331,7 @@ describe("settings", () => {
     const tabs: Record<string, string[]> = {
       overview: ["workspace-members", "workspace-invite"],
       sources: ["workspace-sources", "workspace-connections", "workspace-push-access"],
-      agents: ["workspace-extensions", "workspace-tool-groups", "workspace-network", "workspace-github-reach"],
+      agents: ["workspace-extensions", "workspace-tool-groups", "workspace-network", "workspace-github-reach", "workspace-memory"],
       sessions: ["workspace-schedules", "workspace-cache-warming", "workspace-database"],
     };
     const everyPart = Object.values(tabs).flat();
@@ -424,6 +424,27 @@ describe("settings", () => {
     await app.press("id:github-reach-any");
     await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`) !== undefined);
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`)).toEqual({ anyRepository: false });
+  });
+
+  test("Workspaces shows the workspace's memory and the notes agents proposed, and an admin adds one to the memory as they save it", async () => {
+    const app = await openSettings("workspaces", {
+      [`PUT ${ORIGIN}/api/workspaces/w1/memory`]: { body: { memory: { instructions: "Use pnpm.", memory: "- The login test races the cookie.\n- Retry the login test once before failing it.\n",
+        revision: 3, updatedBy: "u1", updatedAt: "2026-11-06T09:00:00.000Z" }, notes: [], pendingNotes: 0, enabled: true, admin: true } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("id:workspace-memory-text");
+    expect(app.value("id:workspace-memory-instructions")).toBe("Use pnpm.");
+    expect(app.value("id:workspace-memory-text")).toBe("- The login test races the cookie.");
+    expect(app.texts().join(" ")).toContain("Retry the login test once before failing it.");
+    expect(app.shows("id:workspace-memory-save")).toBe(false);
+    await app.press("text:Add to memory");
+    await app.waitFor("id:workspace-memory-save");
+    expect(app.value("id:workspace-memory-text")).toBe("- The login test races the cookie.\n- Retry the login test once before failing it.\n");
+    expect(app.texts().join(" ")).toContain("Save, adding 1 note");
+    await app.press("id:workspace-memory-save");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/memory`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/memory`)).toEqual({ revision: 2,
+      memory: "- The login test races the cookie.\n- Retry the login test once before failing it.\n", accept: ["n1"] });
   });
 
   test("Workspaces shows each role's tools and creates a tool group with the tools an admin picks", async () => {
