@@ -159,6 +159,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   if (action === 'read') return c.json(await read(call, targetSessionId!, messageId, limit));
   if (action === 'ask' || action === 'send') {
     const other = await requireOther(call, targetSessionId!, action === 'ask' ? 'ask' : 'write');
+    await requireSandboxedTarget(call, other, action);
     const consent = await audienceConsent(call, other, notify ? ['out', 'in'] : ['out']);
     if (consent) return c.json(consent);
     return c.json({ message: await deliver(call, other, action, message!, access, notify) } satisfies SessionsToolResult, 202);
@@ -182,6 +183,14 @@ async function requireOther(call: Call, sessionId: string, permission: 'read' | 
   if (!access || access.row.workspace_id !== call.origin.workspace_id) fail(404, 'not_found', 'Session not found.');
   if (!hasPermission(access.permissions, permission)) fail(403, 'forbidden', `Session ${permission} permission is required there.`);
   return access.row;
+}
+
+async function requireSandboxedTarget(call: Call, other: SessionRow, action: 'ask' | 'send'): Promise<void> {
+  if (personSent(call.admission) || await sessionSandboxed(call.c.env, other) || !await sessionSandboxed(call.c.env, call.origin)) return;
+  fail(403, 'sandbox_required', `This session runs in a sandbox, and that session runs without one (directly on its host, or on a host that runs sessions without one), `
+    + `so its agent doesn't ${action === 'ask' ? 'ask' : 'message'} that session's agent from a message that came from another session or a scheduled run. `
+    + 'Only a message a person sent in this session reaches it: tell the person what you would send, so they ask for it in a message of their own or send it themselves, '
+    + 'or work with a session that runs in a sandbox.');
 }
 
 async function audienceConsent(call: Call, other: (SessionRow & Party) | { id: null; title: string; readers: Set<string> }, directions: ('in' | 'out')[]): Promise<SessionsToolResult | undefined> {
