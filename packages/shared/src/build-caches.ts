@@ -7,6 +7,9 @@ export type BuildCacheMode = (typeof buildCacheModes)[number];
 export const buildCacheScopes = ["shared", "owner"] as const;
 export type BuildCacheScope = (typeof buildCacheScopes)[number];
 
+export const buildCacheAccesses = ["write", "read"] as const;
+export type BuildCacheAccess = (typeof buildCacheAccesses)[number];
+
 export const buildCacheLimits = Object.freeze({
   caches: 16,
   writerGroups: 16,
@@ -32,6 +35,7 @@ export interface SessionBuildCache {
   name: string;
   env: string;
   scope: BuildCacheScope;
+  access: BuildCacheAccess;
 }
 
 export interface SessionBuildCaches {
@@ -85,9 +89,36 @@ export function buildCacheScope(owner: BuildCacheWriter, cache: Pick<BuildCache,
   return owner.groupId !== null && cache.writerGroups.includes(owner.groupId) ? "shared" : "owner";
 }
 
-export function sessionBuildCaches(owner: BuildCacheWriter, caches: readonly BuildCache[], mode: BuildCacheMode = "workspace"): SessionBuildCaches {
+export interface BuildCacheSender extends BuildCacheWriter {
+  owns: boolean;
+}
+
+export function buildCacheWrites(sender: BuildCacheSender, cache: Pick<BuildCache, "writerGroups">, scope: BuildCacheScope): boolean {
+  if (sender.role === null) return false;
+  if (scope === "shared") return buildCacheScope(sender, cache, "workspace") === "shared";
+  if (sender.owns) return true;
+  return (sender.role === "owner" || sender.role === "admin" || sender.role === "collaborator") && sender.tools.includes("write");
+}
+
+export type BuildCacheSenders =
+  | { kind: "message"; sender: BuildCacheSender; granted: readonly BuildCacheSender[] }
+  | { kind: "none" }
+  | { kind: "unknown"; possible: readonly BuildCacheSender[] };
+
+export function sessionBuildCaches(owner: BuildCacheWriter, caches: readonly BuildCache[], mode: BuildCacheMode, senders: BuildCacheSenders): SessionBuildCaches {
   if (mode === "off" || owner.role === null) return { caches: [] };
-  return { caches: caches.map(cache => ({ name: cache.name, env: cache.env, scope: buildCacheScope(owner, cache, mode) })) };
+  const answer: SessionBuildCache[] = [];
+  for (const cache of caches) {
+    const scope = buildCacheScope(owner, cache, mode);
+    const writes = (people: readonly BuildCacheSender[]) => people.every(person => buildCacheWrites(person, cache, scope));
+    if (senders.kind === "unknown") {
+      if (writes(senders.possible)) answer.push({ name: cache.name, env: cache.env, scope, access: "write" });
+      continue;
+    }
+    const access = senders.kind === "message" && writes([senders.sender, ...senders.granted]) ? "write" : "read";
+    answer.push({ name: cache.name, env: cache.env, scope, access });
+  }
+  return { caches: answer };
 }
 
 export function parseSessionBuildCaches(value: unknown): SessionBuildCaches {
@@ -99,12 +130,12 @@ export function parseSessionBuildCaches(value: unknown): SessionBuildCaches {
   return {
     caches: caches.map(item => {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid build caches");
-      const { name, env, scope } = item as Record<string, unknown>;
+      const { name, env, scope, access } = item as Record<string, unknown>;
       if (typeof name !== "string" || !BUILD_CACHE_NAME.test(name) || typeof env !== "string" || !buildCacheEnvAllowed(env)
         || !(buildCacheScopes as readonly unknown[]).includes(scope) || names.has(name) || envs.has(env)) throw new Error("Invalid build caches");
       names.add(name);
       envs.add(env);
-      return { name, env, scope: scope as BuildCacheScope };
+      return { name, env, scope: scope as BuildCacheScope, access: access === "write" ? "write" : "read" };
     }),
   };
 }

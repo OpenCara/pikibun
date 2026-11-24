@@ -10,6 +10,7 @@ export const BUILD_CACHE_FRESH_MS = 30_000;
 export const BUILD_CACHE_STALE_MS = 5 * 60_000;
 export const BUILD_CACHE_EVICT_AT = 0.9;
 export const BUILD_CACHE_EVICT_TO = 0.8;
+const SENDER_ANSWERS = 32;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 export interface BuildCacheMount {
@@ -18,6 +19,7 @@ export interface BuildCacheMount {
   scope: BuildCacheScope;
   source: string;
   target: string;
+  readOnly: boolean;
 }
 
 export interface BuildCacheDirectory {
@@ -40,7 +42,7 @@ export function buildCacheMount(value: unknown): value is BuildCacheMount {
   if (!value || typeof value !== "object") return false;
   const mount = value as Partial<BuildCacheMount>;
   return typeof mount.name === "string" && BUILD_CACHE_NAME.test(mount.name) && typeof mount.env === "string" && buildCacheEnvAllowed(mount.env)
-    && (mount.scope === "shared" || mount.scope === "owner") && typeof mount.source === "string" && isAbsolute(mount.source) && safePath(mount.source)
+    && (mount.scope === "shared" || mount.scope === "owner") && typeof mount.readOnly === "boolean" && typeof mount.source === "string" && isAbsolute(mount.source) && safePath(mount.source)
     && typeof mount.target === "string" && isAbsolute(mount.target) && safePath(mount.target);
 }
 
@@ -145,7 +147,7 @@ export class BuildCacheStore {
 }
 
 export interface SessionBuildCacheOptions {
-  fetch: () => Promise<SessionBuildCaches>;
+  fetch: (sender: string | null) => Promise<SessionBuildCaches>;
   store: BuildCacheStore;
   workspaceId: string;
   ownerId: string;
@@ -155,36 +157,50 @@ export interface SessionBuildCacheOptions {
 
 export class SessionBuildCacheMounts {
   readonly #options: SessionBuildCacheOptions;
-  #answer: { caches: SessionBuildCache[]; at: number } | undefined;
-  #pending: Promise<SessionBuildCache[]> | undefined;
+  readonly #answers = new Map<string | null, { caches: SessionBuildCache[]; at: number }>();
+  readonly #pending = new Map<string | null, Promise<SessionBuildCache[]>>();
 
   constructor(options: SessionBuildCacheOptions) {
     this.#options = options;
   }
 
-  get known(): readonly SessionBuildCache[] { return this.#answer?.caches ?? []; }
+  #keep(sender: string | null, caches: SessionBuildCache[], at: number): void {
+    this.#answers.delete(sender);
+    this.#answers.set(sender, { caches, at });
+    for (const [key, answer] of this.#answers) {
+      if (this.#answers.size <= SENDER_ANSWERS && at - answer.at < BUILD_CACHE_STALE_MS) break;
+      this.#answers.delete(key);
+    }
+  }
 
-  async #caches(): Promise<SessionBuildCache[]> {
+  async #caches(sender: string | null): Promise<SessionBuildCache[]> {
     const now = (this.#options.now ?? Date.now)();
-    if (this.#answer && now - this.#answer.at < BUILD_CACHE_FRESH_MS) return this.#answer.caches;
-    this.#pending ??= this.#options.fetch().then(answer => {
-      this.#answer = { caches: answer.caches, at: (this.#options.now ?? Date.now)() };
-      return answer.caches;
-    }).finally(() => { this.#pending = undefined; });
-    try { return await this.#pending; }
+    const known = this.#answers.get(sender);
+    if (known && now - known.at < BUILD_CACHE_FRESH_MS) return known.caches;
+    let pending = this.#pending.get(sender);
+    if (!pending) {
+      pending = this.#options.fetch(sender).then(answer => {
+        this.#keep(sender, answer.caches, (this.#options.now ?? Date.now)());
+        return answer.caches;
+      }).finally(() => { this.#pending.delete(sender); });
+      this.#pending.set(sender, pending);
+    }
+    try { return await pending; }
     catch {
-      if (this.#answer && now - this.#answer.at < BUILD_CACHE_STALE_MS) return this.#answer.caches;
-      this.#answer = undefined;
+      const last = this.#answers.get(sender);
+      if (last && now - last.at < BUILD_CACHE_STALE_MS) return last.caches;
+      this.#answers.delete(sender);
       return [];
     }
   }
 
-  async mounts(): Promise<BuildCacheMount[]> {
+  async mounts(sender: string | null): Promise<BuildCacheMount[]> {
     const mounts: BuildCacheMount[] = [];
-    for (const cache of await this.#caches()) {
+    for (const cache of await this.#caches(sender)) {
       try {
         const source = await this.#options.store.prepare(this.#options.workspaceId, cache, this.#options.ownerId);
-        const mount = { name: cache.name, env: cache.env, scope: cache.scope, source, target: this.#options.target(cache.name, source) };
+        const mount = { name: cache.name, env: cache.env, scope: cache.scope, source, target: this.#options.target(cache.name, source),
+          readOnly: sender === null || cache.access !== "write" };
         if (buildCacheMount(mount)) mounts.push(mount);
       } catch { continue; }
     }

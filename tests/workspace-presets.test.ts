@@ -155,7 +155,7 @@ test('a preset locks web access to its digest in a workspace from before, and ad
 
   const full = await create('Full');
   f.sqlite.prepare("DELETE FROM workspace_extensions WHERE workspace_id = ? AND package_key = 'piki:gh'").run(full);
-  const sessionTools = new Set(pikiSessionToolExtensions().map(item => item.source));
+  const sessionTools = new Set<string>(pikiSessionToolExtensions().map(item => item.source));
   const taken = (f.sqlite.prepare('SELECT package_key FROM workspace_extensions WHERE workspace_id = ?').all(full) as { package_key: string }[])
     .filter(row => !sessionTools.has(row.package_key)).length;
   for (let index = taken; index < 32; index++) {
