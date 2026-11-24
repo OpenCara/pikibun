@@ -321,6 +321,24 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   the connector waits 30 s longer than that for `mcp/` routes, so it never reports a call as failed that the Pikibun server
   still completes. An event-stream answer is taken as soon as the response with the request's id arrives, without
   waiting for the server to close the stream. A failed re-listing keeps the tools last listed and shows the error.
+- **Remote MCP OAuth**: a server that answers 401 with a `Bearer` challenge (Higgsfield, for one) gets a **Sign in**
+  (`GET /api/workspaces/:id/mcp-servers/:serverId/oauth/start`, owners and admins, on the web only, as the callback needs
+  the browser's session). Pikibun follows the MCP authorization spec as a client (`remote-mcp/oauth.ts`): an
+  unauthenticated `initialize` for the `WWW-Authenticate` challenge (`resource_metadata`, `scope`), the protected resource
+  metadata (RFC 9728: the challenge's address, then `/.well-known/oauth-protected-resource` with and without the path),
+  the authorization server metadata (RFC 8414 and OpenID path insertion, then the issuer's own `/.well-known/...`, which
+  Clerk serves; a server without protected resource metadata falls back to its origin's `/authorize`, `/token` and
+  `/register`), dynamic client registration (RFC 7591, a public client with `token_endpoint_auth_method: none` where the
+  server allows it), and an authorization code with PKCE S256 and `resource` (RFC 8707). Every request goes through the
+  same public-only transport. The state is single-use, 10 minutes, bound to the member and to a `SameSite=Lax` cookie
+  (`mcp_oauth_states`, with the registered client encrypted), and to the server's address: a callback for an address
+  that changed meanwhile is refused, and so is an `iss` that isn't the issuer's. The tokens and client are kept in
+  `workspace_mcp_servers.oauth_ciphertext` (`VAULT_KEY`, context `remote-mcp-oauth:<id>`), never shown or audited
+  (`workspace.mcp.signed_in` / `signed_out` record who). Before a request with a token due within 60 s, and once after a
+  401, Pikibun refreshes it, keeping a rotated refresh token with a compare-and-set on the ciphertext (a renewal that
+  loses the race uses the winner's). A refused refresh says to sign in again. A `PATCH` that moves the address drops the
+  sign-in, as it does the headers; the bearer token replaces any `Authorization` header the server also has. A failed
+  sign-in is shown as the server's error (`Signing in failed: ...`) on the settings page it returns to.
 
 ## Phase 4 as built
 
