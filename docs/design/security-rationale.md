@@ -356,8 +356,8 @@ extension, chosen by a workspace, spend the owner's accounts or read their keys 
   says, and stops announcing the capability, so the server leaves the setting out for that host.
 - **Model calls are counted, capped and shown.** An extension that may call models is someone else's code spending
   the host owner's account, so the connector bounds it by more than the size of one call: 4 calls at once per source
-  and session (an ask that reuses the id of a running call is refused; it used to slip past the count), and 120 calls
-  per source within any hour in a session, kept by the session so that restarting the extension's process buys no new
+  and session (an ask that reuses the id of a running call is dropped; it used to slip past the count), and 120 calls
+  per source within any hour in a session (600 for Pikibun's own prompt audit, which refuses the message when it can't call), kept by the session so that restarting the extension's process buys no new
   budget. Each call's tokens and cost are added to the session's usage, where its people see them, and logged on the
   host with the source and model, as are refused and failed calls. What it doesn't bound: the budget is per session,
   so an extension required of every session can spend it in each, and a session that opens again starts a new hour.

@@ -214,8 +214,8 @@ test("an ask whose id is still running is refused, so at most four model calls r
   for (let again = 0; again < 10; again++) ask(1);
   handlers!.reply({ ask: 1, invalid: true });
   assert.equal(running.length, 1, "one id is one call, however often it is asked");
-  assert.equal(answers().filter(item => item.answered === 1 && /still running/.test(item.error ?? "")).length, 10);
-  assert.ok(warned.some(line => /under the id of one that is still running/.test(line)));
+  assert.deepEqual(answers(), [], "a repeated id gets no answer of its own, which the extension would take for the running call's");
+  assert.equal(warned.filter(line => /under the id of one that is still running; the second was dropped/.test(line)).length, 9);
   for (let id = 2; id <= 10; id++) ask(id);
   assert.equal(running.length, completeLimits.atOnce);
   assert.equal(answers().filter(item => item.error === "Too many model calls at once").length, 6);
@@ -232,7 +232,7 @@ test("an ask whose id is still running is refused, so at most four model calls r
 
 test("an extension's model calls are budgeted per source over an hour, and each call reports what it used", async () => {
   let now = 1_000_000;
-  const budget = new ModelCallBudget(3, () => now);
+  const budget = new ModelCallBudget(() => 3, () => now);
   assert.deepEqual([budget.take("a"), budget.take("a"), budget.take("a"), budget.take("a")], [true, true, true, false]);
   assert.equal(budget.take("b"), true, "each source has its own budget");
   now += 59 * 60 * 1000;
@@ -241,7 +241,9 @@ test("an extension's model calls are budgeted per source over an hour, and each 
   now += 61 * 1000;
   assert.equal(budget.take("a"), true, "calls older than an hour no longer count");
   assert.equal(budget.count("a"), 1);
-  assert.deepEqual([completeLimits.atOnce, completeLimits.perHour], [4, 120]);
+  assert.deepEqual([completeLimits.atOnce, completeLimits.perHour, completeLimits.auditPerHour], [4, 120, 600]);
+  assert.deepEqual([new ModelCallBudget().limit("npm:guard@1.0.0"), new ModelCallBudget().limit("piki:prompt-audit")], [120, 600],
+    "Pikibun's own prompt audit, which refuses a message it can't check, has a budget no person's messages reach");
   const base = { platform: "linux", sandbox: true, productionShell: false };
   assert.equal(withHostToolCapabilities(base).modelCalls, true);
   assert.equal("modelCalls" in withHostToolCapabilities(base, { extensionModelCalls: false }), false, "a connector started with --no-extension-model-calls doesn't announce them");

@@ -367,10 +367,11 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   own registry (`completeWith`): at most 4,096 tokens, 60 seconds, text-only answers.
 - **Model calls are bounded and recorded** (`completeLimits`). At most 4 run at once per extension process, which is
   per source and session, since each source that may call models has a process of its own. An ask whose id is still
-  running is refused: it used to replace the running call in the map the bound counts, so one id passed any number of
+  running is dropped with a warning in the host's log (an answer under that id would be taken for the running call's): it used to replace the running call in the map the bound counts, so one id passed any number of
   calls, none of which could be cancelled any more. Each source may make 120 calls within any hour in a session
   (`ModelCallBudget`, kept by the session, so a restarted extension process doesn't get a new budget; a session that
-  opens again does): the prompt audit makes one call a message, which leaves it far below, and an extension that loops
+  opens again does). Pikibun's own prompt audit, which makes one call a message and refuses a message it can't check, has 600, more
+  than people's messages reach, so the budget stops a loop and never an audit. An extension that loops
   is stopped at 120 calls of at most 4,096 output tokens an hour. A call over the budget reaches no model and is refused with the reason. Every call adds
   its tokens and cost to the session's usage under the model it called (`UsageDoc`, as session titles do), so the
   session's **Usage** shows them, and writes a line to the host's log with the source, the model, its tokens and how

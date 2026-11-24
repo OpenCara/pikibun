@@ -693,6 +693,10 @@ test("piki: an extension's model calls are budgeted per source, recorded in the 
   await assert.rejects(host.complete!(request("npm:ext"), signal), /made 120 model calls within an hour in this session/);
   assert.equal(called, 120, "a call over the budget reaches no model");
   assert.match(lines.at(-1)!, /^Session s1, extension npm:ext: a model call was refused/);
+  for (let index = 0; index < 121; index++) await host.complete!(request("piki:prompt-audit"), signal);
+  assert.match(lines.at(-1)!, /121 of the 600 calls it may make within an hour$/, "the prompt audit's own budget is higher");
+  called -= 121;
+  recorded.length = 120;
   await host.complete!(request("piki:prompt-audit"), signal);
   assert.equal(called, 121, "another source has its own budget");
   assert.equal(recorded.length, 121);

@@ -482,8 +482,7 @@ export class ProcessChannel implements ExtensionChannel {
 
   #answerAsk(run: Run, ask: number, request: CompleteRequest | undefined): void {
     if (run.asks.has(ask)) {
-      if (request) this.options.warn(request.source, "it asked for a model call under the id of one that is still running; the second was refused");
-      if (this.#live === run) run.link?.send({ answered: ask, error: "A model call with this id is still running" }, () => {});
+      if (request) this.options.warn(request.source, "it asked for a model call under the id of one that is still running; the second was dropped");
       return;
     }
     const answer = (message: Record<string, unknown>) => {

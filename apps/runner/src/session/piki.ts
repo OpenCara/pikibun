@@ -7,7 +7,7 @@ import type { ChosenExtension } from "../../../../packages/shared/src/host-exten
 import type { ApiReach } from "../../../../packages/shared/src/network.js";
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation, type RunnerBinding } from "../../../../packages/shared/src/types.js";
 import type { ExtensionHost } from "../extensions/adapter.js";
-import { completeLimits, completeWith, ModelCallBudget, modelCallSources, type ModelCallRecord } from "../extensions/complete.js";
+import { completeWith, ModelCallBudget, modelCallSources, type ModelCallRecord } from "../extensions/complete.js";
 import { cliRules } from "../extensions/piki/cli-engine.js";
 import type { CliDefinition } from "../../../../packages/shared/src/cli-definitions.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "../extensions/piki/command.js";
@@ -74,8 +74,9 @@ export class SessionPiki {
         complete: async (request, signal) => {
           if (!await modelCallsAllowed(request.source)) throw new Error(refused ? MODEL_CALLS_REFUSED_HERE : "This host's owner no longer lets this extension call models.");
           if (!this.#modelCalls.take(request.source)) {
-            this.#log(request.source, `a model call was refused: it made ${completeLimits.perHour} within an hour in this session, the most a host lets an extension make`);
-            throw new Error(`This extension made ${completeLimits.perHour} model calls within an hour in this session, the most a host lets one make: it can call again later.`);
+            const most = this.#modelCalls.limit(request.source);
+            this.#log(request.source, `a model call was refused: it made ${most} within an hour in this session, the most a host lets it make`);
+            throw new Error(`This extension made ${most} model calls within an hour in this session, the most a host lets it make: it can call again later.`);
           }
           try { return await completeWith({ modelRegistry: registry, model }, request, signal, call => this.#recordModelCall(request.source, call)); }
           catch (error) {
@@ -109,7 +110,7 @@ export class SessionPiki {
   async #recordModelCall(source: string, call: ModelCallRecord): Promise<void> {
     const used = call.usage;
     this.#log(source, `called the model ${call.model} (${call.stopReason})${used ? `: ${used.input + used.cacheRead + used.cacheWrite} prompt and ${used.output} output tokens` : ""}; `
-      + `${this.#modelCalls.count(source)} of the ${completeLimits.perHour} calls it may make within an hour`);
+      + `${this.#modelCalls.count(source)} of the ${this.#modelCalls.limit(source)} calls it may make within an hour`);
     if (!used || !this.options.recordModelUsage) return;
     try { await this.options.recordModelUsage(call.model, used); }
     catch (error) { this.#log(source, `its model call's usage couldn't be added to the session's: ${error instanceof Error ? error.message : String(error)}`); }
