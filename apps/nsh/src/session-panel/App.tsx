@@ -1,5 +1,6 @@
 import { signal, Text, View, WebView } from "nsh";
-import { validTunnelUrl, type SessionTunnelView } from "../../../../packages/shared/src/tunnel";
+import { tunnelLinkHeld, validTunnelUrl, type SessionTunnelView } from "../../../../packages/shared/src/tunnel";
+import type { SessionRecord } from "../../../../packages/shared/src/types";
 import { openExternal } from "../lib/links";
 import { Icon } from "../icons";
 import { palette, text } from "../theme";
@@ -14,17 +15,30 @@ export function tunnelFrameAddress(link: string): string | undefined {
 
 const unshown = new Set(["ERR_FEATURE_UNAVAILABLE_ON_PLATFORM", "ERR_ACCESS_DENIED"]);
 
+export function appUnavailable(current: SessionRecord, tunnel?: SessionTunnelView): string | null {
+  if ((current.permissions ?? []).includes("write") && (!tunnel || tunnelLinkHeld(tunnel))) return null;
+  return "Using the session's app takes the session collaborator role: your clicks and typing would go to it in the session's sandbox, as a collaborator's messages do. "
+    + `Viewers follow the conversation${tunnel ? ", and see in Details that the app is online" : ""}.`;
+}
+
 export function App(props: PanelTabProps) {
   return (
-    <If when={props.view()?.tunnel} else={
-      <TabPage testID="panel-app">
-        <EmptyState title="Nothing online">
-          When the agent puts the session's web app online with its tunnel, the app shows here, and you use it as it runs: your clicks and typing go
-          to it in the session's sandbox. An app without a web page shows as a desktop, served with serve's desktop option.
-        </EmptyState>
-      </TabPage>
-    }>
-      {tunnel => <Online {...props} tunnel={tunnel} />}
+    <If when={props.session()} else={<TabPage testID="panel-app"><Small>Loading…</Small></TabPage>}>
+      {current => (
+        <If when={!appUnavailable(current(), props.view()?.tunnel)}
+          else={<TabPage testID="panel-app"><EmptyState title="App unavailable">{appUnavailable(current(), props.view()?.tunnel) ?? ""}</EmptyState></TabPage>}>
+          <If when={props.view()?.tunnel} else={
+            <TabPage testID="panel-app">
+              <EmptyState title="Nothing online">
+                When the agent puts the session's web app online with its tunnel, the app shows here, and you use it as it runs: your clicks and typing go
+                to it in the session's sandbox. An app without a web page shows as a desktop, served with serve's desktop option.
+              </EmptyState>
+            </TabPage>
+          }>
+            {tunnel => <Online {...props} tunnel={tunnel} />}
+          </If>
+        </If>
+      )}
     </If>
   );
 }

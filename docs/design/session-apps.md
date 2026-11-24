@@ -11,13 +11,21 @@ panel's **App** tab, what lets the web client frame the app, desktops in the san
 
 1. **The App tab shows the tunnel's app itself.** While the session has a tunnel online, the panel's **App** tab is a
    web view of the tunnel's link (`SessionTunnelView.url`, the address with its secret, which the panel already shows
-   in **Online**): the person's clicks, typing and scrolling go to the app in the sandbox and its answers come back, so
+   its writers in **Online**): the person's clicks, typing and scrolling go to the app in the sandbox and its answers come back, so
    it works as a remote control of the app rather than a picture of it. Its toolbar names the address, says whether
    cloudflared is connected, and has **Reload** (the link again, with its secret, so a page that lost its cookie gets
    in), **Open** (in the system's browser) and the panel's full width. Without a tunnel it says how to get one. Nothing
    new is asked of hosts or the Pikibun server: the tab reads the view the panel already has.
-2. **Who sees it.** Whoever reads the session's view, as for the **Online** section, which already shows them the link.
-   Narrowing who gets the link is a change to the view (decision 12 of [the tunnel](tunnel.md)), not to this tab.
+2. **Who uses it: whoever may write to the session.** The tab first showed the app to whoever read the session's view,
+   which carried the link for every reader. That made reading a session operating its app, a desktop included, and so
+   running code in its sandbox through an app's console, while browsing its files, starting a tunnel and sending it a
+   message all take `write` (finding 76 of the architecture review, issue 479). The Pikibun server now sends the link
+   only in views for people who hold `write` (decision 13 of [the tunnel](tunnel.md)), and the tab is theirs: a reader
+   is told that using the app takes the session collaborator role (`appUnavailable`), as the Files, Changes and Browser
+   tabs say of theirs, and a view without the link frames nothing whatever the session record says. The tab stays in
+   the panel's list for everyone, as those tabs do. A reader still sees in **Details** that the app is online, where
+   and until when. A tunnel started with `access: "public"` is open to anyone at its address, which readers see, so
+   **Details** lets them open it; the tab stays the writers' all the same, so that one rule decides it.
 3. **A web view of its own.** The web view is `incognito`, so the app's cookies and storage live as long as the tab
    and never mix with another app's or the client's, and it has no `onMessage`, so the page can't talk to the client.
    In the apps it is the platform's web view, where the app's page is the top-level page; on the web it is Native
@@ -82,7 +90,7 @@ panel's **App** tab, what lets the web client frame the app, desktops in the san
 
 | Part | Where |
 |---|---|
-| The App tab | `apps/nsh/src/session-panel/App.tsx`; `index.tsx` (the tab, its width) |
+| The App tab | `apps/nsh/src/session-panel/App.tsx` (`appUnavailable`); `index.tsx` (the tab, its width) |
 | The page's policy | `apps/server/src/static.ts` (`pageContentSecurityPolicy`); `tests/static.test.ts` |
 | The gate's cookies | `apps/runner/src/tunnel-gate.ts`; `tests/tunnel.test.ts` |
 | `serve.desktop` | `packages/shared/src/browser.ts` (`BrowserServe`, `desktopLimits`); `apps/runner/src/browser-command.ts` (`serveRequest`); `session/tools/browser.ts` |
@@ -93,6 +101,4 @@ panel's **App** tab, what lets the web client frame the app, desktops in the san
 ## Later
 
 - **GPU-drawn desktops**: VirtualGL in front of `Xvnc`, or a streamer that encodes on the GPU (WebRTC), for 3D apps.
-- **Who may drive the app**: the view gives the link to every reader; a view that shows it to writers alone would make
-  the App tab theirs too.
 - **Named tunnels** ([the tunnel's Later](tunnel.md#later)) would let the client frame one address per session.

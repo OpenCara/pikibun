@@ -149,7 +149,7 @@ export function withoutTunnelSecrets<T>(value: T): T {
   let copy: Record<string, unknown> | undefined;
   for (const [key, item] of Object.entries(value)) {
     const shown: unknown = withoutTunnelSecrets(item);
-    if (shown !== item) (copy ??= { ...value })[key] = shown;
+    if (shown !== item) (copy ??= { ...(value as Record<string, unknown>) })[key] = shown;
   }
   return copy ? copy as T : value;
 }
