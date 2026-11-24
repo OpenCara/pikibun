@@ -5,6 +5,7 @@ import type { SessionLink, SharedSession, SharedSessionView } from '../../../pac
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
 import { briefEntry, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
+import { withoutTunnelSecret } from '../../../packages/shared/src/tunnel.js';
 import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import {
   auditStatement, decryptToken, encryptToken, requireConnectorSession, requireSession, requireSessionManager, sessionAccess,
@@ -86,7 +87,7 @@ function sharedToolFields({ toolCalls, toolResult }: EntryView): Pick<EntryView,
 
 function sharedEntry(entry: EntryView): EntryView {
   const { id, kind, role, text, error, durationMs } = entry;
-  return { id, kind, role, text: redactSecrets(text), ...sharedToolFields(entry),
+  return { id, kind, role, text: withoutTunnelSecret(redactSecrets(text)), ...sharedToolFields(entry),
     ...(error ? { error: entryError(error) } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}) };
 }

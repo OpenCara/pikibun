@@ -91,6 +91,14 @@ export interface Workspace {
   role?: WorkspaceRole;
   personal?: boolean;
 }
+export interface DeletedWorkspace {
+  id: string;
+  name: string;
+  deletedAt: string;
+  deletedBy: string;
+  members: number;
+  sessions: number;
+}
 export interface ModelDefinition {
   id: string;
   workspaceId: string;

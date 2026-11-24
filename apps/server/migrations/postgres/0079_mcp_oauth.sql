@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0085_mcp_oauth.sql.
+-- Postgres translation of sqlite/0086_mcp_oauth.sql.
 
 -- OAuth sign-ins for workspace remote MCP servers (docs/design/extension-planes.md, "Remote MCP OAuth"): an owner or admin
 -- signs in to a server that asks for it (MCP authorization: protected resource metadata, authorization server metadata,

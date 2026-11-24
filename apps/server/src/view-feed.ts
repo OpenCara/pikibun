@@ -1,6 +1,8 @@
 import { HTTPException } from 'hono/http-exception';
-import type { EntryView, SessionView } from '../../../packages/shared/src/types.js';
+import type { EntryView, Permission, SessionView } from '../../../packages/shared/src/types.js';
+import { hasPermission } from '../../../packages/shared/src/policy.js';
 import { redactEntry } from '../../../packages/shared/src/redaction.js';
+import { tunnelAddress, withoutTunnelSecrets } from '../../../packages/shared/src/tunnel.js';
 import {
   applyViewPatch, isPatchableView, isRevision, isViewPatch, reuseUnchanged, ViewRevisions, type SessionViewPatch,
 } from '../../../packages/shared/src/view-patch.js';
@@ -18,6 +20,16 @@ const maxFeeds = 256;
 export interface ShownView {
   revision: string;
   view: SessionView;
+  tunnelLink: boolean;
+}
+
+export interface SessionViews {
+  for(permissions: readonly Permission[]): ShownView;
+}
+
+interface Recorded {
+  revision: string;
+  view: SessionView;
 }
 
 interface Snapshot {
@@ -25,7 +37,8 @@ interface Snapshot {
   generation: string | null;
   raw: SessionView;
   full: SessionView;
-  shown: ShownView;
+  shown: Recorded;
+  reader?: Recorded;
 }
 
 interface Feed {
@@ -38,12 +51,43 @@ interface Feed {
   applied: number;
   inflight?: { epoch: number; promise: Promise<Snapshot> };
   revisions: ViewRevisions;
+  readerRevisions: ViewRevisions;
   usedAt: number;
 }
 
 const registries = new WeakMap<object, Map<string, Feed>>();
 const redacted = new WeakMap<object, EntryView>();
 const briefed = new WeakMap<object, EntryView>();
+const linkless = new WeakMap<object, EntryView>();
+
+export function holdsTunnelLink(permissions: readonly Permission[]): boolean {
+  return hasPermission(permissions, 'write');
+}
+
+function linklessEntry(entry: EntryView): EntryView {
+  if (!entry || typeof entry !== 'object') return entry;
+  let shown = linkless.get(entry);
+  if (!shown) linkless.set(entry, shown = withoutTunnelSecrets(entry));
+  return shown;
+}
+
+export function withoutTunnelLink(view: SessionView): SessionView {
+  const { entries, ...fields } = view;
+  const rest = withoutTunnelSecrets(fields);
+  const tunnel = view.tunnel && typeof view.tunnel === 'object' ? { ...rest.tunnel!, url: tunnelAddress(view.tunnel.url) } : undefined;
+  return { ...rest, ...(tunnel ? { tunnel } : {}), entries: entries.map(linklessEntry) };
+}
+
+function views(feed: Feed, taken: Snapshot): SessionViews {
+  return {
+    for(permissions) {
+      if (holdsTunnelLink(permissions)) return { ...taken.shown, tunnelLink: true };
+      const snapshot = taken.reader || feed.snapshot === undefined ? taken : feed.snapshot;
+      snapshot.reader ??= feed.readerRevisions.record(withoutTunnelLink(snapshot.shown.view));
+      return { ...snapshot.reader, tunnelLink: false };
+    },
+  };
+}
 
 function registry(env: object): Map<string, Feed> {
   let feeds = registries.get(env);
@@ -64,7 +108,7 @@ function feedFor(c: AppContext, row: SessionRow, display: TranscriptDisplay): Fe
   const key = JSON.stringify([row.owner_id, row.connector_id ?? null, display.toolOutput, display.paging]);
   let feed = feeds.get(row.id);
   if (!feed || feed.key !== key) {
-    feed = { key, display: { ...display }, fresh: false, epoch: 0, started: 0, applied: 0, revisions: new ViewRevisions(8), usedAt: now };
+    feed = { key, display: { ...display }, fresh: false, epoch: 0, started: 0, applied: 0, revisions: new ViewRevisions(8), readerRevisions: new ViewRevisions(8), usedAt: now };
   }
   feeds.delete(row.id);
   feeds.set(row.id, feed);
@@ -84,8 +128,9 @@ export function invalidateSessionView(c: AppContext, sessionId: string): void {
 }
 onSessionChange(invalidateSessionView);
 
-export async function sessionView(c: AppContext, row: SessionRow, { latest = false, display = fullTranscript }: { latest?: boolean; display?: TranscriptDisplay } = {}): Promise<ShownView> {
-  return (await currentSnapshot(c, row, feedFor(c, row, display), latest)).shown;
+export async function sessionView(c: AppContext, row: SessionRow, { latest = false, display = fullTranscript }: { latest?: boolean; display?: TranscriptDisplay } = {}): Promise<SessionViews> {
+  const feed = feedFor(c, row, display);
+  return views(feed, await currentSnapshot(c, row, feed, latest));
 }
 
 async function currentSnapshot(c: AppContext, row: SessionRow, feed: Feed, latest: boolean): Promise<Snapshot> {
@@ -105,15 +150,17 @@ async function currentSnapshot(c: AppContext, row: SessionRow, feed: Feed, lates
 }
 
 export async function earlierEntries(c: AppContext, row: SessionRow, display: TranscriptDisplay, conversationId: string, before: string,
-  limit: number): Promise<{ entries: EntryView[]; older: number } | null> {
+  limit: number): Promise<((permissions: readonly Permission[]) => { entries: EntryView[]; older: number }) | null> {
   const feed = feedFor(c, row, display);
-  const page = entriesBefore((await currentSnapshot(c, row, feed, false)).full, conversationId, before, limit);
-  return page ?? entriesBefore((await currentSnapshot(c, row, feed, true)).full, conversationId, before, limit);
+  const page = entriesBefore((await currentSnapshot(c, row, feed, false)).full, conversationId, before, limit)
+    ?? entriesBefore((await currentSnapshot(c, row, feed, true)).full, conversationId, before, limit);
+  return page && (permissions => holdsTunnelLink(permissions) ? page : { ...page, entries: page.entries.map(linklessEntry) });
 }
 
 export function viewChanges(c: AppContext, row: SessionRow, since: string | undefined, current: ShownView,
   display: TranscriptDisplay = fullTranscript): SessionViewPatch | null {
-  return feedFor(c, row, display).revisions.since(since, current);
+  const feed = feedFor(c, row, display);
+  return (current.tunnelLink ? feed.revisions : feed.readerRevisions).since(since, current);
 }
 
 function refresh(c: AppContext, row: SessionRow, feed: Feed): Promise<Snapshot> {

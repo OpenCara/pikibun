@@ -80,7 +80,7 @@ export function tunnelTool(context: ToolContext): ToolRegistration {
     + "A start replaces the one online. status gives the address, whether cloudflared is connected, the uptime and the server's last lines of output; stop takes it offline. "
     + "It stays online until stopped, until someone stops the session's work, until the session closes or is archived, or for the host's service lifetime at most. "
     + "It starts only for the host's owner or a member they granted host commands, and isn't taken in a read-only request. "
-    + "Only the declared port is reachable through it. By default (access: link) only its link opens it: the address the call answers with carries a secret, which a browser that opens it keeps as a cookie for a day, and the bare address answers 401; anyone the link is given to, and everyone who can read this session, can open it. "
+    + "Only the declared port is reachable through it. By default (access: link) only its link opens it: the address the call answers with carries a secret, which a browser that opens it keeps as a cookie for a day, and the bare address answers 401; anyone the link is given to, and everyone who can write to this session, can open it (its readers see the bare address, and the link's secret hidden in the transcript). "
     + "access: public makes it open to anyone with the address, for clients that can't follow a link, such as webhooks.",
     executionMode: "sequential",
     parameters: obj({
