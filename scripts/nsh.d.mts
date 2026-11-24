@@ -1,10 +1,14 @@
+export type NshComponent = { asset?: string; assets?: Readonly<Record<string, string>>; paths: string[]; host?: string };
 export const NSH_VERSION: string;
 export const NSH_COMMIT: string;
 export const NSH_ASSET_SHA256: Readonly<Record<string, string>>;
-export const NSH_COMPONENTS: Readonly<Record<string, { asset: string; paths: string[]; host?: string }>>;
+export const NSH_TUI_HOSTS: Readonly<Record<string, string>>;
+export const NSH_COMPONENTS: Readonly<Record<string, NshComponent>>;
+export function componentAsset(component: NshComponent, host?: string): string | null;
 export function nshBinary(): Promise<string>;
 export function nshComponent(name: string, options?: { required?: boolean }): Promise<void>;
 export function targetComponent(args: string[]): string | null;
 export function releaseAsset(url: string, options?: { attempts?: number; delayMs?: number }): Promise<Buffer>;
 export function checkAsset(asset: string, bytes: Uint8Array): void;
+export function unpackPinned(asset: string, partial: string, what: string): Promise<void>;
 export function buildWeb(out?: string): Promise<void>;

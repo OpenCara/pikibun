@@ -7,15 +7,30 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fixWebSite } from "./nsh-web-fixes.mjs";
 
-export const NSH_VERSION = "v0.6.0";
-export const NSH_COMMIT = "554163758e30d2f62f814096a6327937dcb4fe49";
+export const NSH_VERSION = "v0.6.1";
+export const NSH_COMMIT = "2f51d8611677c8a6bbad937b39756e8d0cc45350";
 export const NSH_ASSET_SHA256 = Object.freeze({
-  "nsh-linux-x86_64.tar.gz": "19d360eb8dd1ba8847a3b3ad06082f6f3705eb04ae8178357a8cdad31880f0d9",
-  "nsh-macos-arm64.tar.gz": "b2a8370c8b44ca6059d2d8665b48b08472a4fee3956813b99223f4e3ce5491d9",
-  "nsh-windows-x86_64.zip": "6ae2e430d84cfe5fcb1d2ab25e56c2685eaaa4abc963c93b52263f435791ebb1",
-  "nsh-web.tar.gz": "a1a972cf20c0d2a2d9cc54fab2d7fd6075041b26929886bfb8d78e2992c3b324",
-  "nsh-android.tar.gz": "6e923bf856e976a4197b1c02d38bc7ce0b4875719b3346e80ec5ebe00a3961a7",
-  "nsh-ios-macos-arm64.tar.gz": "bd985e53b3405d105c4b804038c1681e27d91eb3d7c2facb3227cf98ffacd221",
+  "nsh-linux-x86_64.tar.gz": "9a7ac692f1c229df476be8ff83a3c5912d271453b644e313f02cb19d18696070",
+  "nsh-macos-arm64.tar.gz": "ee1aed2a4d111fe90e6cceca4b9d5f834c9e11cfda525f8be984261a329c06de",
+  "nsh-windows-x86_64.zip": "7952c84b165e13515bd2ad2787ef22622e49ce88cb8d877825e40b40f3aff4be",
+  "nsh-web.tar.gz": "e509e35fbad261a4a5e27a9225c364ff0d9ddd202a638b02bbfd13fb5cd1b9f1",
+  "nsh-android.tar.gz": "aff949eaa53ec7a6d6b717dfa2c60cefc810e598913d33d2421976b8a474c21e",
+  "nsh-ios-macos-arm64.tar.gz": "168f7e71167556c5fa1ffd56bdf49db22add6d32cbba5b061ee8324d0cd8d88a",
+  "nsh-tui-linux-x86_64.tar.gz": "8bde6cf9c63a6ee7ce8f6f1bba5432bc556659bd747ad615c4beeffdf9a8877c",
+  "nsh-tui-linux-arm64.tar.gz": "b3f085c06b6f9fddef3adfeccf655500c35fac9c46a0390b34547506a8e8effc",
+  "nsh-tui-macos-arm64.tar.gz": "729a132b6ac72d7b69be24b02e3739b77454948df43e0961c4b07a399311b5e4",
+  "nsh-tui-macos-x86_64.tar.gz": "c8a1a703a80a8a1e0a2a794c42a9ebbff2b1f8ae4d4beed9834560a9de747d7d",
+  "nsh-tui-windows-x86_64.tar.gz": "c0fd1ce2246561f5c5c4a22922ec2961188224bb77786008f0d841ed8db90411",
+  "nsh-tui-windows-arm64.tar.gz": "f3a4b5058bf8b436ba4f87298031b1cd874c4e0b3508a4a471fcf45be6a2f1b4",
+});
+
+export const NSH_TUI_HOSTS = Object.freeze({
+  "linux-x64": "nsh-tui-linux-x86_64.tar.gz",
+  "linux-arm64": "nsh-tui-linux-arm64.tar.gz",
+  "darwin-arm64": "nsh-tui-macos-arm64.tar.gz",
+  "darwin-x64": "nsh-tui-macos-x86_64.tar.gz",
+  "win32-x64": "nsh-tui-windows-x86_64.tar.gz",
+  "win32-arm64": "nsh-tui-windows-arm64.tar.gz",
 });
 
 export const NSH_COMPONENTS = Object.freeze({
@@ -25,8 +40,13 @@ export const NSH_COMPONENTS = Object.freeze({
     paths: ["runtime/android/release/classes.dex", "runtime/android/release/lib", "runtime/android/dev/classes.dex", "runtime/android/dev/lib"],
   },
   ios: { asset: "nsh-ios-macos-arm64.tar.gz", paths: ["runtime/ios"], host: "darwin-arm64" },
+  tui: { assets: NSH_TUI_HOSTS, paths: ["runtime/tui"] },
 });
-const TARGET_COMPONENTS = { web: "web", android: "android", ios: "ios", catalyst: "ios" };
+const TARGET_COMPONENTS = { web: "web", android: "android", ios: "ios", catalyst: "ios", tui: "tui" };
+
+export function componentAsset(component, host = `${platform()}-${arch()}`) {
+  return component.asset ?? component.assets?.[host] ?? null;
+}
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const app = path.join(repository, "apps", "nsh");
@@ -89,7 +109,7 @@ export function checkAsset(asset, bytes) {
   if (actual !== expected) throw new Error(`${asset} does not match the SHA-256 pinned for Native Shell ${NSH_VERSION} (${actual} != ${expected})`);
 }
 
-async function unpackPinned(asset, partial, what) {
+export async function unpackPinned(asset, partial, what) {
   pinnedDigest(asset);
   console.error(`Downloading Native Shell ${NSH_VERSION} (${asset}, ${what}, once)…`);
   const bytes = await releaseAsset(`https://github.com/longbridge/nsh/releases/download/${NSH_VERSION}/${asset}`);
@@ -118,6 +138,7 @@ export async function nshComponent(name, { required = false } = {}) {
   const skipped = process.env.NSH_BIN ? "NSH_BIN names another nsh, which adds its own components"
     : !release() ? `no Native Shell CLI is pinned for ${platform()}-${arch()}`
     : component.host && component.host !== `${platform()}-${arch()}` ? `it is published for ${component.host} only`
+    : !componentAsset(component) ? `it is published for ${Object.keys(component.assets).join(", ")} only`
     : "";
   if (skipped) {
     if (required) throw new Error(`The pinned ${name} component can't be added here: ${skipped}.`);
@@ -128,10 +149,11 @@ export async function nshComponent(name, { required = false } = {}) {
   if ([record, ...component.paths].every(item => existsSync(path.join(root, item)))) return;
   const partial = path.join(root, `.component-${name}.partial`);
   try {
-    await unpackPinned(component.asset, partial, `its ${name} runtime`);
+    const asset = componentAsset(component);
+    await unpackPinned(asset, partial, `its ${name} runtime`);
     for (const item of [...component.paths, record]) {
       const from = path.join(partial, "nsh", item);
-      if (!existsSync(from)) throw new Error(`${component.asset} holds no nsh/${item.split(path.sep).join("/")}`);
+      if (!existsSync(from)) throw new Error(`${asset} holds no nsh/${item.split(path.sep).join("/")}`);
       const to = path.join(root, item);
       rmSync(to, { recursive: true, force: true });
       mkdirSync(path.dirname(to), { recursive: true });
