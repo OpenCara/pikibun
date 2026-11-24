@@ -25,7 +25,7 @@ export {
 
 export { parseOperation } from './operations.js';
 export { audienceSharing, registerAudienceSharing, requireOperationTool, requireToolCall, sessionsNeedGranted, setAudienceSharing } from './tool-checks.js';
-export { admissionExpired, issueRunAdmission } from './run-admissions.js';
+export { admissionExpired, issueRunAdmission, requireAdmission, type AdmittedRun } from './run-admissions.js';
 export {
   addNeededExtensions, automaticTools, connectorExtensionSettings, defaultWorkspaceExtensionStatements, removeWorkspaceExtensionStatement, saveWorkspaceExtensionStatement,
   sessionToolSources, workspaceExtensionLock, workspaceExtensions, type AutoCacheChoice,

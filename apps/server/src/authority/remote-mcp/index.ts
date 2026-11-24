@@ -15,7 +15,7 @@ import { requireMember, sessionAccess, workspaceAdminSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
 import { workspaceExtensions } from '../extension-policy.js';
 import { requireCallbackScope } from '../hosts.js';
-import { admissionExpired } from '../run-admissions.js';
+import { requireAdmission } from '../run-admissions.js';
 import { requireToolCall } from '../tool-checks.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { callRemoteMcpTool, discoverRemoteMcpTools, RemoteMcpError } from './client.js';
@@ -126,12 +126,8 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
       fail(403, 'permission_revoked', 'The requester can no longer write to this session.');
     }
     await requireCallbackScope(c, access.row, connectorId);
-    const admission = await c.env.DB.query<{ id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>(
-      'SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?').bind(admissionId).first();
-    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-      || await admissionExpired(c.env, admissionId, admission)) {
-      fail(403, 'mcp_call_not_admitted', 'Remote MCP tools need a message from the requester sent within the last hour, or whose run is still going.');
-    }
+    const admission = await requireAdmission(c.env, { admissionId, sessionId, actorId }, { code: 'mcp_call_not_admitted',
+      message: 'Remote MCP tools need a message from the requester sent within the last hour, or whose run is still going.' });
     if (!extensionSwitchOn(REMOTE_MCP_EXTENSION, await workspaceExtensions(c.env, access.row.workspace_id))) {
       fail(403, 'mcp_tools_off', `Remote MCP tools are turned off in this workspace (${REMOTE_MCP_EXTENSION}). Nothing ran.`);
     }

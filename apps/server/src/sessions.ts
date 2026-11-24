@@ -1,4 +1,4 @@
-import { hostCapabilities, sessionPullRequestReview } from './authority/index.js';
+import { hostCapabilities, isPersonalWorkspace, sessionPullRequestReview } from './authority/index.js';
 import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -34,7 +34,7 @@ import { packSession, reopenUnpacked, unpackSession } from './session-packing.js
 import { packDueAfterArchiving } from './automatic-packing.js';
 import { autoModeSettings } from './auto-mode.js';
 import { autoModelAllowed, autoModelsText } from '../../../packages/shared/src/auto-mode.js';
-import { keepPortable, portableKeyFor } from './portable-sessions.js';
+import { keepPortable } from './portable-sessions.js';
 import { createForwardedSession, forwardedRecords } from './forwarded-sessions.js';
 import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
 import { nameSessionLater } from './session-titles.js';
@@ -162,6 +162,11 @@ async function withCurrentModel(c: AppContext, row: SessionRow, options: Record<
   return own ? { ...options, model: { provider: own.provider, modelId: own.model_id } } : options;
 }
 
+export async function requirePrivateWorkspaceFor(env: Env, workspaceId: string, userId: string, visibility: unknown): Promise<void> {
+  if (visibility !== 'private' || await isPersonalWorkspace(env, workspaceId, userId)) return;
+  fail(400, 'private_session_unavailable', 'Every session of a shared workspace is visible to its members, so this one can\'t be private. Leave visibility out, or start the session in your private workspace.');
+}
+
 export async function createSession(c: AppContext, input: Record<string, unknown>,
   link: { parentSessionId?: string; scheduleId?: string; inserted?: (sessionId: string) => void } = {}): Promise<{ row: SessionRow; notice?: string }> {
   if (['ownerId', 'permissions', 'githubId', 'repositories', 'repositories_json', 'pins'].some(key => key in input)) fail(400, 'server_owned_identity', 'Session identity, repository pins, and permissions are assigned by the server.');
@@ -171,6 +176,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'workspace') fail(400, 'invalid_visibility', 'Sessions are visible to the workspace\'s members; leave visibility out.');
   const ownerId = c.get('auth').userId;
   await requireSessionCreator(c.env, workspaceId, ownerId);
+  await requirePrivateWorkspaceFor(c.env, workspaceId, ownerId, input.visibility);
   const model = await requireModel(c.env, identifier(input.modelId, 'modelId'), ownerId);
   if (model.workspace_id !== workspaceId) fail(404, 'not_found', 'Model not found.');
   if (model.provider === 'faux' && !testMode(c.env)) fail(403, 'test_mode_disabled', 'Faux models are disabled.');
@@ -256,17 +262,12 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     await c.env.DB.query('UPDATE sessions SET title_fallback = title WHERE id = ?').bind(row.id).run();
     row.title_fallback = row.title;
   }
-  const portableKey = await portableKeyFor(c.env, row, resolved.sourceIds === '[]');
-  if (portableKey) {
-    await c.env.DB.query('UPDATE sessions SET portable_key = ? WHERE id = ?').bind(portableKey, row.id).run();
-    row.portable_key = portableKey;
-  }
   if (link.parentSessionId || link.scheduleId) {
     await c.env.DB.query('UPDATE sessions SET parent_session_id = ?, schedule_id = ? WHERE id = ?').bind(link.parentSessionId ?? null, link.scheduleId ?? null, row.id).run();
     row.parent_session_id = link.parentSessionId ?? null;
     row.schedule_id = link.scheduleId ?? null;
   }
-  await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}), ...(portableKey ? { portable: true } : {}),
+  await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}),
     ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}), ...(link.scheduleId ? { scheduleId: link.scheduleId } : {}) }).run();
   try {
     const binding = await bindingForSession(c, row);

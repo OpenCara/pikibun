@@ -8,12 +8,12 @@ import {
 } from '../../../packages/shared/src/cross-session.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  admissionExpired, auditStatement, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
-  sessionsNeedGranted, workspaceSessionAccess,
+  auditStatement, requireAdmission, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
+  sessionsNeedGranted, workspaceSessionAccess, type AdmittedRun,
 } from './authority/index.js';
 import { getUser } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
-import { archiveSession, createSession, stopSession, submitMessage } from './sessions.js';
+import { archiveSession, createSession, requirePrivateWorkspaceFor, stopSession, submitMessage } from './sessions.js';
 import { entryError, isLinkShared } from './session-links.js';
 import { sessionView, transcriptDisplay } from './view-feed.js';
 import { usableModels } from './catalog.js';
@@ -29,7 +29,7 @@ interface MessageRow {
   notify_message_id: string | null; reply_to: string | null; created_at: string; updated_at: string;
 }
 
-type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; request_id: string; expires_at: number };
+type AdmissionRow = AdmittedRun;
 
 interface Chain { hops: number; sessions: string[] }
 
@@ -145,16 +145,13 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   }
   const origin = originAccess.row;
   await requireCallbackScope(c, origin, connectorId);
-  const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, request_id, expires_at FROM run_admissions WHERE id = ?')
-    .bind(admissionId).first();
-  if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-    || await admissionExpired(c.env, admissionId, admission)) {
-    fail(403, 'sessions_not_admitted', 'The sessions tool needs a write message sent within the last hour, or whose run is still going.');
-  }
+  const admission = await requireAdmission(c.env, { admissionId, sessionId, actorId }, { code: 'sessions_not_admitted',
+    message: 'The sessions tool needs a write message sent within the last hour, or whose run is still going.' });
   await requireToolCall(c.env, origin, actorId, 'sessions');
   if (sessionsWriteActions.includes(action) && admission.access === 'read') {
     fail(403, 'write_not_allowed', 'A Read-only message changes no other session: ask in a message that may act.');
   }
+  if (action === 'create') await requirePrivateWorkspaceFor(c.env, origin.workspace_id, actorId, input.visibility);
   const call: Call = { c, origin, actorId, admission, callId, chain: await messageChain(c.env, admission), target };
 
   if (action === 'list') return c.json(await list(call));

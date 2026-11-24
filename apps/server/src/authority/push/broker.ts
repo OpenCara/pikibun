@@ -7,7 +7,7 @@ import type { AppContext, Env, PushCredentialRow, SessionAccess, SessionRow } fr
 import { auditStatement } from '../audit.js';
 import { requireNoMigration, requireUnfrozen } from '../../db.js';
 import { sessionAccess } from '../access.js';
-import { admissionExpired } from '../run-admissions.js';
+import { requireAdmission } from '../run-admissions.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../../http.js';
 import { parseOperation } from '../operations.js';
 import { decryptToken, encryptToken } from '../vault.js';
@@ -96,12 +96,8 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
     if (!owner || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write')) {
       fail(403, 'permission_revoked', 'Pushes need someone who may still write to the session.');
     }
-    const admission = await c.env.DB.query<{ session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>('SELECT session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?')
-      .bind(admissionId).first();
-    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || admission.access === 'read' ||
-        await admissionExpired(c.env, admissionId, admission)) {
-      fail(403, 'automatic_push_not_admitted', 'Pushes run only for a message that may act, from the person who sent it, within an hour of it or while its run is still going.');
-    }
+    await requireAdmission(c.env, { admissionId, sessionId, actorId }, { code: 'automatic_push_not_admitted',
+      message: 'Pushes run only for a message that may act, from the person who sent it, within an hour of it or while its run is still going.' }, { acting: true });
     await requireCallbackScope(c, owner.row, connectorId);
     await requireOperationTool(c.env, owner.row, actorId, operation);
     const used = await c.env.DB.query<{ count: number }>('SELECT COUNT(*) AS count FROM push_credentials WHERE admission_id = ? AND id <> ?')
