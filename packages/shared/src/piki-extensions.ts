@@ -58,7 +58,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "schedule", source: "piki:schedule", title: "Scheduled prompts", sessionTools: ["schedule"],
-    description: "The schedule tool: the agent lists, creates, changes and deletes scheduled prompts when its owner asks, such as a nightly check: ones that wake the session, and the workspace's that start a new session each run. Off until added here.",
+    description: "The schedule tool: the agent lists, creates, changes and deletes scheduled prompts when its owner asks, such as a nightly check: ones that wake the session, and the workspace's that start a new session each run. New workspaces start with it; older ones add it here.",
     providers: [],
   },
   {
@@ -73,17 +73,17 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "git", source: "piki:git", title: "Git", sessionTools: ["git", "git_push"],
-    description: "The git and git_push tools: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, and pushes a clone's commit to another branch. Added with the workspace's first repository.",
+    description: "The git and git_push tools: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, and pushes a clone's commit to another branch. New workspaces start with it; older ones get it with their first repository.",
     providers: gitProviders,
   },
   {
     name: "node", source: "piki:node", title: "Node.js", sessionTools: ["node"],
-    description: "The node tool: the agent runs Node.js and its package managers (node, npm, npx, pnpm, yarn, corepack) with their arguments as a list, without a shell, each call checked as a command is. Off until added here.",
+    description: "The node tool: the agent runs Node.js and its package managers (node, npm, npx, pnpm, yarn, corepack) with their arguments as a list, without a shell, each call checked as a command is. New workspaces start with it; older ones add it here.",
     providers: [],
   },
   {
     name: "python", source: "piki:python", title: "Python", sessionTools: ["python"],
-    description: "The python tool: the agent runs Python and its package and test tools (python3, pip, pip3, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call checked as a command is. Off until added here.",
+    description: "The python tool: the agent runs Python and its package and test tools (python3, pip, pip3, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call checked as a command is. New workspaces start with it; older ones add it here.",
     providers: [],
   },
   {
@@ -140,17 +140,17 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   documentSourceExtension("tencent-docs", "tencent-docs", "Tencent Docs"),
   {
     name: "sessions", source: "piki:sessions", title: "Other sessions", sessionTools: ["sessions"],
-    description: "The sessions tool: the agent lists, reads, messages, starts, stops and archives the workspace's other sessions, as the message's sender, with their permissions. Off until added here.",
+    description: "The sessions tool: the agent lists, reads, messages, starts, stops and archives the workspace's other sessions, as the message's sender, with their permissions. New workspaces start with it; older ones add it here.",
     providers: [],
   },
   {
     name: "workspace", source: "piki:workspace", title: "Workspace management", sessionTools: ["workspace"], optIn: true,
-    description: "The workspace tool: the agent reads the session's workspace (members, join requests, repositories, document sources, extensions, tool groups, network access) and, when asked, changes it (renames it, adds, removes and changes members, accepts join requests, adds and removes repositories and extensions, sets tool groups and network access), as the message's sender, with exactly their workspace role. Off until added here.",
+    description: "The workspace tool: the agent reads the session's workspace (members, join requests, repositories, document sources, extensions, tool groups, network access) and, when asked, changes it (renames it, adds, removes and changes members, accepts join requests, adds and removes repositories and extensions, sets tool groups and network access), as the message's sender, with exactly their workspace role. New workspaces start with it; older ones add it here.",
     providers: [],
   },
   {
     name: "artifacts", source: "piki:artifacts", title: "Artifacts", sessionTools: ["publish_artifact"], optIn: true,
-    description: "The publish_artifact tool: the agent publishes something people should look at (a report, a chart, a UI mock, a diagram) as a versioned HTML, SVG, Markdown or text artifact kept with the session, shown as a card in the transcript and in the session panel's Artifacts tab to whoever may read the session. HTML and SVG run sandboxed, with no network. Off until added here.",
+    description: "The publish_artifact tool: the agent publishes something people should look at (a report, a chart, a UI mock, a diagram) as a versioned HTML, SVG, Markdown or text artifact kept with the session, shown as a card in the transcript and in the session panel's Artifacts tab to whoever may read the session. HTML and SVG run sandboxed, with no network. New workspaces start with it; older ones add it here.",
     providers: [],
   },
   {
@@ -170,7 +170,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "skills", source: "piki:skills", title: "Skills", sessionTools: [], optIn: true,
-    description: "Lists the skills of the repositories in each session's worktree (Agent Skills: SKILL.md files under .pi/skills, .agents/skills or .claude/skills) in each message's system prompt, by name and description, so the agent reads one when a task matches it, as Pi does. A skill is its repository's text, so this reaches the model whatever repository was cloned. The session does it itself, with no package and no tools. Off, skills still answer to /skill:name. Off until added here.",
+    description: "Lists the skills of the repositories in each session's worktree (Agent Skills: SKILL.md files under .pi/skills, .agents/skills or .claude/skills) in each message's system prompt, by name and description, so the agent reads one when a task matches it, as Pi does. A skill is its repository's text, so this reaches the model whatever repository was cloned. The session does it itself, with no package and no tools. Off, skills still answer to /skill:name. New workspaces start with it; older ones add it here.",
     providers: [],
   },
   {

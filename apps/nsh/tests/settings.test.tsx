@@ -15,6 +15,15 @@ async function openSettings(section: string, overrides: Record<string, unknown> 
   return app;
 }
 
+async function openWorkspace(app: { waitFor(target: string): Promise<unknown>; press(target: string): Promise<unknown> }, tab?: "sources" | "agents" | "sessions") {
+  await app.waitFor("id:workspace-w1");
+  await app.press("id:workspace-w1");
+  await app.waitFor("id:workspace-tab-overview");
+  if (!tab) return;
+  await app.press(`id:workspace-tabs-${tab}`);
+  await app.waitFor(`id:workspace-tab-${tab}`);
+}
+
 describe("settings", () => {
   test("Profile saves the identity and lists the signed-in apps and connected accounts", async () => {
     const app = await openSettings("profile");
@@ -315,16 +324,35 @@ describe("settings", () => {
     expect(app.value("id:browser-path")).toBe("/opt/chromium/chrome");
   });
 
-  test("Workspaces opens a workspace's page with its sources, settings and members", async () => {
+  test("Workspaces opens a workspace's page on its overview, with its other settings a tab away", async () => {
     const app = await openSettings("workspaces");
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
-    for (const part of ["workspace-sources", "workspace-connections", "workspace-schedules", "workspace-push-access", "workspace-network", "workspace-extensions", "workspace-github-reach", "workspace-cache-warming", "workspace-database", "workspace-members", "workspace-invite"]) {
-      await app.waitFor(`id:${part}`);
+    await openWorkspace(app);
+    expect(app.shows("id:workspace-title")).toBe(true);
+    const tabs: Record<string, string[]> = {
+      overview: ["workspace-members", "workspace-invite"],
+      sources: ["workspace-sources", "workspace-connections", "workspace-push-access"],
+      agents: ["workspace-extensions", "workspace-tool-groups", "workspace-network", "workspace-github-reach"],
+      sessions: ["workspace-schedules", "workspace-cache-warming", "workspace-database"],
+    };
+    const everyPart = Object.values(tabs).flat();
+    for (const [tab, parts] of Object.entries(tabs)) {
+      await app.press(`id:workspace-tabs-${tab}`);
+      await app.waitFor(`id:workspace-tab-${tab}`);
+      for (const part of parts) await app.waitFor(`id:${part}`);
+      for (const part of everyPart.filter(item => !parts.includes(item))) expect(app.shows(`id:${part}`)).toBe(false);
     }
+    await app.press("id:workspace-tabs-sources");
     await app.waitFor("text:OpenCara/pikibun");
+    await app.press("id:workspace-new-session");
+    await app.waitFor("text:What should we work on?");
+  });
+
+  test("Workspaces goes back from a workspace's page to the list, and opens the next workspace on its overview", async () => {
+    const app = await openSettings("workspaces");
+    await openWorkspace(app, "agents");
     await app.press("id:workspaces-back");
-    await app.waitFor("id:workspace-w1");
+    await openWorkspace(app);
+    expect(app.shows("id:workspace-members")).toBe(true);
   });
 
   test("Workspaces adds a repository by any URL, switching to the account of its host, without listing the account's repositories", async () => {
@@ -339,8 +367,7 @@ describe("settings", () => {
       [`POST ${ORIGIN}/api/workspaces/w1/repositories`]: { status: 201, body: { repository: { id: "r2", workspaceId: "w1", provider: "gitlab", host: "gitlab.com",
         repositoryId: "42", fullName: "group/project", ref: "main", private: false, createdAt: "2026-01-01T00:00:00.000Z", forbidDefaultBranchPush: false, lfs: false, readAs: "members" } } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "sources");
     await app.waitFor("id:add-repository");
     await app.press("id:add-repository");
     await app.waitFor("id:repository-url");
@@ -364,8 +391,7 @@ describe("settings", () => {
       ] } },
       [`GET ${lookup}`]: { body: { repositories: [{ id: "7", fullName: "octo/tools", defaultBranch: "main", private: true }], truncated: false } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "sources");
     await app.waitFor("id:add-repository");
     await app.press("id:add-repository");
     await app.waitFor("id:repository-url");
@@ -379,8 +405,7 @@ describe("settings", () => {
     const app = await openSettings("workspaces", {
       [`PUT ${ORIGIN}/api/workspaces/w1/cache-warming`]: { body: { settings: { mode: "streaming" } } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "sessions");
     await app.waitFor("id:cache-warming-mode");
     expect(app.texts().join(" ")).toContain("Working and waiting");
     await app.press("id:cache-warming-mode");
@@ -389,23 +414,21 @@ describe("settings", () => {
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/cache-warming`)).toEqual({ mode: "streaming" });
   });
 
-  test("Workspaces lets each member turn on their own GitHub reach beyond the workspace's repositories", async () => {
+  test("Workspaces lets each member turn off their own GitHub reach beyond the workspace's repositories, which starts on", async () => {
     const app = await openSettings("workspaces", {
-      [`PUT ${ORIGIN}/api/workspaces/w1/github-reach`]: { body: { settings: { anyRepository: true } } },
+      [`PUT ${ORIGIN}/api/workspaces/w1/github-reach`]: { body: { settings: { anyRepository: false } } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("id:github-reach-any");
-    expect(app.texts().join(" ")).toContain("Your sessions act only on this workspace's repositories");
+    expect(app.texts().join(" ")).toContain("Your own messages in your sessions reach every repository your GitHub account can");
     await app.press("id:github-reach-any");
     await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`) !== undefined);
-    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`)).toEqual({ anyRepository: true });
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`)).toEqual({ anyRepository: false });
   });
 
   test("Workspaces shows each role's tools and creates a tool group with the tools an admin picks", async () => {
     const app = await openSettings("workspaces");
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("id:workspace-tool-groups");
     await app.waitFor("id:workspace-member-tools");
     expect(app.texts().join(" ")).toContain("Members (role)");
@@ -481,8 +504,7 @@ describe("settings", () => {
       [`PUT ${ORIGIN}/api/workspaces/w1/build-caches/ccache`]: { body: list },
       [`DELETE ${ORIGIN}/api/workspaces/w1/build-caches/ccache`]: { body: { ...list, caches: [] } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "sessions");
     await app.waitFor("id:build-cache-ccache");
     await app.waitUntil(() => app.texts().join(" ").includes("CCACHE_DIR · Shared by the workspace's owner and: deleted group"));
 
@@ -537,8 +559,7 @@ describe("settings", () => {
       [`GET ${ORIGIN}/api/workspaces/w1/build-caches`]: { body: { caches: [{ name: "turbo", env: "TURBO_CACHE_DIR", writerGroups: [], createdAt: stamp, updatedAt: stamp }],
         admin: false, limits: { caches: 16, writerGroups: 16 } } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "sessions");
     await app.waitFor("id:build-cache-turbo");
     expect(app.texts().join(" ")).toContain("TURBO_CACHE_DIR · Shared by owners, admins and collaborators who can write files");
     expect(app.shows("id:new-build-cache")).toBe(false);
@@ -550,8 +571,7 @@ describe("settings", () => {
     const app = await openSettings("workspaces", {
       [`PUT ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [autoMode] } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("id:workspace-extensions");
     await app.press("text:Add extension");
     await app.waitFor("text:Pikibun features");
@@ -567,8 +587,7 @@ describe("settings", () => {
       [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, extensions: [{ source: "piki:auto-mode", enabled: true, tools: "automatic", settings: {} }],
         hosts: [{ id: "c1", name: "ada-mac", ownerId: "u1", ownerName: "ada" }] } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("text:Auto mode · piki:auto-mode");
     expect(app.texts().join(" ")).toContain("Runs in Pikibun itself: hosts install nothing");
     expect(app.texts().join(" ")).not.toContain("0 of 1 host");
@@ -580,8 +599,7 @@ describe("settings", () => {
       [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, extensions: [autoMode], hosts: [] } },
       [`PUT ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [{ ...autoMode, settings: { models: "anthropic/claude-sonnet-*" } }] } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("text:Auto mode · piki:auto-mode");
     await app.press("text:Auto mode · piki:auto-mode");
     await app.waitFor("id:auto-mode-models");
@@ -599,8 +617,7 @@ describe("settings", () => {
       [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [],
         extensions: [{ source: "piki:auto-mode", enabled: true, tools: "automatic", settings: { models: "x".repeat(201) } }] } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("text:Auto mode · piki:auto-mode");
     await app.press("text:Auto mode · piki:auto-mode");
     await app.waitFor("id:auto-mode-models");
@@ -613,8 +630,7 @@ describe("settings", () => {
         { source: "piki:sub-agents", enabled: true, tools: "automatic", settings: {} }, { source: "piki:sessions", enabled: false, tools: "automatic", settings: {} }] } },
       [`PUT ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [] } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("text:Sub-agents · piki:sub-agents");
     expect(app.texts().join(" ")).toContain("Does nothing without Other sessions, which is off here");
     await app.press("text:Sub-agents · piki:sub-agents");
@@ -632,8 +648,7 @@ describe("settings", () => {
       [`PUT ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { extensions: [] } },
       [`DELETE ${ORIGIN}/api/workspaces/w1/extensions?source=piki%3Anode`]: { body: { extensions: [] } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("id:manage-extensions");
     await app.press("id:manage-extensions");
     await app.waitFor("id:extensions-manager");
@@ -650,8 +665,7 @@ describe("settings", () => {
     const app = await openSettings("workspaces", {
       [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [], extensions: [{ source: "piki:sessions", enabled: false, tools: "automatic", settings: {} }] } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "agents");
     await app.waitFor("id:workspace-extensions");
     await app.press("text:Add extension");
     await app.waitFor("text:Workflows");
@@ -676,8 +690,7 @@ describe("settings", () => {
       [`GET ${ORIGIN}/api/workspaces/w1/schedules`]: { body: { schedules: [], canCreate: true, admin: false, models } },
       [`POST ${ORIGIN}/api/workspaces/w1/schedules`]: { status: 201, body: { schedule: { id: "sc1" } } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "sessions");
     await app.waitFor("id:workspace-schedules");
     await app.waitFor("text:No schedules");
     await app.press("id:workspace-schedule-new");
@@ -704,8 +717,7 @@ describe("settings", () => {
         models: [{ id: "m1", name: "Claude Sonnet", provider: "anthropic", modelId: "claude-sonnet", host: "c1" }] } },
       [`PATCH ${ORIGIN}/api/workspaces/w1/schedules/sc2`]: { body: { schedule: { ...schedule, ownerId: "u1" } } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "sessions");
     await app.waitFor("id:schedule-sc2");
     expect(app.texts().join(" ")).toContain("runs as Grace Hopper");
     expect(app.texts().join(" ")).not.toContain("Run the nightly checks");
@@ -730,8 +742,7 @@ describe("settings", () => {
         models: [{ id: "m1", name: "Claude Sonnet", provider: "anthropic", modelId: "claude-sonnet", host: "c1" }] } },
       [`PATCH ${ORIGIN}/api/workspaces/w1/schedules/sc3`]: { body: { schedule: mine } },
     });
-    await app.waitFor("id:workspace-w1");
-    await app.press("id:workspace-w1");
+    await openWorkspace(app, "sessions");
     await app.waitFor("id:schedule-sc3");
     expect(app.texts().join(" ")).toContain("on its session's model");
     await app.press("text:Edit >> nth=0");

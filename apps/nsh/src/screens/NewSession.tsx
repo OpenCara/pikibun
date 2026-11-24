@@ -17,6 +17,7 @@ import { randomId } from "../lib/format";
 import type { PageRoute } from "../lib/page";
 import { createAction, createResource } from "../lib/resource";
 import { thisComputerHostIds } from "../lib/this-computer";
+import { showWorkspaceTab, type WorkspaceTab } from "../lib/workspace-tabs";
 import { OwnJoinRequests } from "../settings/join-requests";
 import { control, palette, radius, text } from "../theme";
 import { Logo } from "../logo";
@@ -195,7 +196,8 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
 
   const loading = () => models.loading() || connections.loading();
   const refreshHost = () => <Button small variant="outline" label="Refresh host status" onPress={connections.refresh} />;
-  const settings = (route: PageRoute, label: string, testID: string) => (props.go ? <Button testID={testID} small variant="outline" label={label} onPress={() => props.go!(route)} /> : undefined);
+  const settings = (route: PageRoute, label: string, testID: string, tab?: WorkspaceTab) => (props.go ? <Button testID={testID} small variant="outline" label={label}
+    onPress={() => { if (tab) showWorkspaceTab(props.workspace.id, tab); props.go!(route); }} /> : undefined);
   const workspaceSettings: PageRoute = { name: "settings", section: "workspaces", id: props.workspace.id };
   const hostState = (item: ConnectorInfo) => item.revokedAt ? "Revoked" : !item.online ? "Offline" : item.capabilities.unsandboxed ? "Unsandboxed"
     : !item.capabilities.sandbox ? "Sandbox unverified" : "Online";
@@ -203,7 +205,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     if (repos.error()) return { tone: "warning", title: "Unable to load sources", text: repos.error(), retry: repos.refresh };
     if (repositories() && !sourceCount() && repositoriesRequired()) {
       return { tone: "warning", title: "No sources in this workspace", text: "Sessions need at least one source, such as a repository or a Notion page. Workspace owners and admins add them in workspace settings.",
-        action: settings(workspaceSettings, "Add a source", "new-add-source") };
+        action: settings(workspaceSettings, "Add a source", "new-add-source", "sources") };
     }
     if (models.error()) return { tone: "danger", title: "Unable to load models", text: models.error(), retry: models.refresh };
     if (connections.error()) return { tone: "warning", title: "Unable to check host", text: connections.error(), refresh: true };

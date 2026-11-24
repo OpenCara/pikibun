@@ -55,7 +55,11 @@ its host has.
     workspaces after their own, except where a workspace already used the package or was at its limit. It starts with
     Pikibun's `piki:prompt-audit` and `piki:context-files` too, turned off; migration sqlite/0064 (postgres/0057) added
     them to existing workspaces the same way, counting, like the extensions page, none of Pikibun's session-tool
-    extensions against the limit.
+    extensions against the limit. Since [open defaults](security-rationale.md#open-defaults) a new workspace also
+    starts with Pikibun's starter set, turned on (`starterWorkspaceExtensions`: `piki:context-files` and the session
+    tools `piki:git`, `piki:node`, `piki:python`, `piki:schedule`, `piki:sessions`, `piki:workspace`,
+    `piki:artifacts` and `piki:skills`), listed after the ones above; the third-party packages and the prompt audit
+    stay off. Existing workspaces keep what they have.
 
 11. **The host's owner requires extensions.** A host's owner can require any extension the host has, Pikibun's own
    (`piki:<name>`) or an installed one, of every session on it, with settings of their own

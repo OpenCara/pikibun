@@ -1166,6 +1166,7 @@ test('github merges need a pinned repository, run once per tool call, and tell G
   const consumed = (approvalId: string) => f.sqlite.prepare('SELECT created_at FROM automatic_github_effects WHERE approval_id = ?').get(approvalId)?.created_at ?? null;
   const audits = (action: string) => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM audit WHERE action = ?').get(action)!.n);
 
+  await json(await s.creator.request('PUT', `/api/workspaces/${s.team.id}/github-reach`, { anyRepository: false }));
   const unpinned = await mergePayload(f, s.session, 'owner/other');
   await denied(await self(f, s.connector, 'github/merge', unpinned), 403, 'repository_not_pinned');
   assert.deepEqual(calls, []);
@@ -1226,6 +1227,7 @@ test('github issues need a workspace repository, run once per tool call, and tel
   const consumed = (approvalId: string) => f.sqlite.prepare('SELECT created_at FROM automatic_github_effects WHERE approval_id = ?').get(approvalId)?.created_at ?? null;
   const audits = (action: string) => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM audit WHERE action = ?').get(action)!.n);
 
+  await json(await s.creator.request('PUT', `/api/workspaces/${s.team.id}/github-reach`, { anyRepository: false }));
   const outside = await issuePayload(f, s.session, 'owner/other');
   await denied(await self(f, s.connector, 'github/issue', outside), 403, 'repository_not_pinned');
   assert.deepEqual(calls, []);
@@ -1291,6 +1293,7 @@ test('a github issue whose outcome was unclear is found by its title, and one th
 
 test('github reads need the requester\'s live write admission, github_read among the owner\'s tools, and a pinned repository before any GitHub call', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  await json(await s.creator.request('PUT', `/api/workspaces/${s.team.id}/github-reach`, { anyRepository: false }));
   const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('GitHub must not be called'); });
   await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.admin.user.id, permissions: ['write'] }));
   const owner = s.session.ownerId;
@@ -1313,7 +1316,7 @@ test('github reads need the requester\'s live write admission, github_read among
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'github.read'").get()!.n, 0);
 });
 
-test('with their GitHub reach turned on, the session owner\'s own messages open issues, merge and read in any repository they can access; nobody else\'s do', async t => {
+test('with their GitHub reach on, as it is until they turn it off, the session owner\'s own messages open issues, merge and read in any repository they can access; nobody else\'s do', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_issue', 'github_merge', 'github_read']);
   const outside = 'https://api.github.com/repos/other/place';
   const calls: string[] = [];
@@ -1332,19 +1335,21 @@ test('with their GitHub reach turned on, the session owner\'s own messages open 
     return Response.json({ message: `unexpected ${method} ${url}` }, { status: 500 });
   });
   const reach = `/api/workspaces/${s.team.id}/github-reach`;
-  assert.deepEqual(await json(await s.creator.request('GET', reach)), { settings: { anyRepository: false } });
+  assert.deepEqual(await json(await s.creator.request('GET', reach)), { settings: { anyRepository: true } }, 'on until a member turns theirs off');
+  assert.deepEqual(await json(await s.creator.request('PUT', reach, { anyRepository: false })), { settings: { anyRepository: false } });
   const owner = s.session.ownerId;
   const read = (actorId = owner) => self(f, s.connector, 'github/read', { sessionId: s.session.id, actorId, admissionId: admit(f, s.session.id, actorId),
     callId: 'call-outside', repository: 'Other/Place', issue: 7 });
 
   const off = await json<{ code: string; error: string }>(await self(f, s.connector, 'github/issue', await issuePayload(f, s.session, 'Other/Place')), 403);
   assert.equal(off.code, 'repository_not_pinned');
-  assert.match(off.error, /act on any GitHub repository they can access \(Settings → Workspaces → Your GitHub reach\), or add it to the workspace\.$/);
+  assert.match(off.error, /Only the session owner's own messages act on other GitHub repositories they can access, and only while they leave that on \(Settings → Workspaces → Agents → Your GitHub reach\); otherwise add it to the workspace\.$/);
   await denied(await read(), 403, 'repository_not_pinned');
   assert.equal(calls.length, 0, 'refused before GitHub is asked anything');
 
   assert.deepEqual(await json(await s.creator.request('PUT', reach, { anyRepository: true })), { settings: { anyRepository: true } });
-  assert.deepEqual(await json(await s.host.request('GET', reach)), { settings: { anyRepository: false } }, 'each member\'s reach is their own');
+  assert.deepEqual(await json(await s.host.request('PUT', reach, { anyRepository: false })), { settings: { anyRepository: false } });
+  assert.deepEqual(await json(await s.creator.request('GET', reach)), { settings: { anyRepository: true } }, 'each member\'s reach is their own');
   await denied(await s.creator.request('PUT', reach, { anyRepository: 'yes' }), 400, 'invalid_input');
   await denied(await (await f.client('outsider')).request('PUT', reach, { anyRepository: true }), 404, 'not_found');
 

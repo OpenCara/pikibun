@@ -20,6 +20,7 @@ import { formatCost, formatRate, formatTokens, relativeTime, timestamp } from ".
 import { openExternal, openServerLink, opensServerPages } from "../lib/links";
 import { createUsername, createWorkspacePeople } from "../lib/people";
 import { createAction, createResource } from "../lib/resource";
+import { showWorkspaceTab } from "../lib/workspace-tabs";
 import { InstallChatButton, type MissingPrograms } from "../lib/install-chat";
 import { backupDatabaseLabel, type Backup, type SessionActions } from "../lib/session-actions";
 import { ConnectionStatus, HostCapabilities } from "../hosts";
@@ -263,13 +264,17 @@ function ExtensionsSection(props: { extensions: NonNullable<SessionView["extensi
 
 function RepositoriesSection(props: Part) {
   const repositories = () => props.current.repositories ?? [];
-  const manage = <Row title="Manage repositories for future sessions" chevron onPress={() => props.go({ name: "settings", section: "workspaces", id: props.current.workspaceId })} />;
+  const openSources = () => {
+    showWorkspaceTab(props.current.workspaceId, "sources");
+    props.go({ name: "settings", section: "workspaces", id: props.current.workspaceId });
+  };
+  const manage = <Row title="Manage repositories for future sessions" chevron onPress={openSources} />;
   return (
     <If when={props.current.repositoryMode !== "clone"}
       else={
         <Section title="Repositories" info="Each session starts with an empty worktree, and its agent clones the workspace repositories it needs with Git, through the session's egress proxy: reads use the session owner's access and pushes go only to the session's own branches.">
           <Row leading={icon("branch")} title="Cloned on demand" hint="Nothing is pinned: the agent clones and switches branches as it works" />
-          <Row title="Manage repositories and network access" chevron onPress={() => props.go({ name: "settings", section: "workspaces", id: props.current.workspaceId })} />
+          <Row title="Manage repositories" chevron onPress={openSources} />
         </Section>
       }>
       <Section title={`Repositories ${repositories().length}`} info="This session was created before sessions cloned their repositories: it holds snapshots of these commits, pinned when it started, and is read-only."

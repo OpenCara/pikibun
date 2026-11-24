@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
-import type { GitHubReachSettings } from '../../../../packages/shared/src/github-reach.js';
+import { defaultGitHubReach, type GitHubReachSettings } from '../../../../packages/shared/src/github-reach.js';
 import type { Database } from '../db/types.js';
 import type { AppEnv, SessionRow } from '../types.js';
 import { requireMember } from './access.js';
@@ -11,7 +11,7 @@ import { body } from '../schemas.js';
 export async function memberGitHubReach(db: Database, workspaceId: string, userId: string): Promise<GitHubReachSettings> {
   const row = await db.query<{ any_repository: number }>('SELECT any_repository FROM member_github_reach WHERE workspace_id = ? AND user_id = ?')
     .bind(workspaceId, userId).first();
-  return { anyRepository: Number(row?.any_repository ?? 0) === 1 };
+  return row ? { anyRepository: Number(row.any_repository) === 1 } : { ...defaultGitHubReach };
 }
 
 export async function ownerReachesAnyGitHubRepository(db: Database, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>): Promise<boolean> {

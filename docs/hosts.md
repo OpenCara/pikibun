@@ -128,7 +128,7 @@ A session runs in the host's sandbox (bubblewrap on Linux; Seatbelt on macOS and
 
 ## Sessions on the host
 
-A sandboxed host can also run some sessions directly on the machine, for work the sandbox doesn't allow: an app or game that opens windows or uses the GPU and the machine's drivers as installed, or tools and SDKs the sandbox can't see. The host's owner chooses **Where it runs → On this host** when they start a session on it (in their [private workspace](workspaces.md#your-private-workspace) it is the default). To let another member do the same, turn on **Sessions on the host** in the host's [configuration](#host-configuration) (owner only; it asks first) and include **Sessions on the host** in their [host command grant](#host-admins-and-host-command-grants). A connector that predates `ownerHostSessions` runs the owner's sessions there too only while that setting is on. Each session keeps the choice it started with; restored and moved copies start in the sandbox.
+A sandboxed host can also run some sessions directly on the machine, for work the sandbox doesn't allow: an app or game that opens windows or uses the GPU and the machine's drivers as installed, or tools and SDKs the sandbox can't see. A session the host's owner starts on it runs there by default, in every workspace: **Where it runs** starts at **On this host**, and **Sandbox** is the other choice, for work on code or pages they don't trust. To let another member do the same, turn on **Sessions on the host** in the host's [configuration](#host-configuration) (owner only; it asks first) and include **Sessions on the host** in their [host command grant](#host-admins-and-host-command-grants). A connector that predates `ownerHostSessions` runs the owner's sessions there too only while that setting is on. Each session keeps the choice it started with; restored and moved copies start in the sandbox.
 
 Such a session runs like one on an [unsandboxed host](#running-without-the-sandbox): commands run as the connector's OS user, in the session's own folder, with the host owner's files, credentials and network and no resource limits, and the workspace's network access doesn't apply. In the host owner's own sessions they start with the [owner's own environment](#the-owners-own-environment): your `HOME`, ssh agent and Git configuration, as in a terminal. A member's session starts with the connector's `PATH`, the session's own `HOME` and no display. Set `DISPLAY` to open windows where the connector has none (for example `DISPLAY=:0` under WSLg). The host's command time limit still applies. Clones use the host's own Git and credentials, so push with `git` itself rather than `git_push`; on a host with a [repository cache](#repository-cache-preview), clones of the workspace's repositories borrow it. In addition:
 
@@ -200,13 +200,15 @@ A sandbox's only way out is its session's **egress proxy**, which the connector 
   - **How the proxy can see these requests:** the connector makes a certificate authority in memory when it starts, and adds it to each session's certificates. It can vouch only for `api.github.com`, `gitlab.com` and `dev.azure.com`, by a name constraint that OpenSSL, Go, Node.js and Python check; HTTPS to every other host stays a tunnel the proxy never looks inside. In the [experimental macOS and Windows sandboxes](#experimental-sandboxes-on-macos-and-windows), Go programs such as `gh` check certificates only against the system's own store, so they can't verify it there yet; curl, Node.js and Python can.
 
   The server's operator chooses with `SANDBOX_GITHUB_API`: `own-hosts` gives these tokens only to session owners' own hosts, and `off` gives none, so sessions reach `api.github.com` (and `gitlab.com`, `dev.azure.com`) only as the network access allows, without a credential. Pinned sessions get none.
-- **Everything else follows the workspace's network access**, under **Settings → Workspaces →** the workspace **→ Network access** (owners and admins):
+- **Everything else follows the workspace's network access**, under **Settings → Workspaces →** the workspace **→ Agents → Network access** (owners and admins):
 
   | Access | HTTPS reaches |
   |---|---|
-  | **Off** (default) | Nothing besides the workspace's repositories |
+  | **Open** (how a workspace starts) | Any public host |
   | **Allowlist** | The listed domains (`*.example.com` for subdomains), and, with **Allow package registries**, npm, PyPI, crates.io, Go modules, RubyGems, Maven, NuGet and Packagist |
-  | **Open** | Any public host |
+  | **Off** | Nothing besides the workspace's repositories |
+
+  A shared workspace made before **Open** became the start (server releases up to the one that added migration `0083_open_defaults`) stays **Off** until an owner or admin changes it.
 
   Other repositories on an allowed host are fetched without credentials, only to read. The proxy reads public repositories on GitHub, GitLab, Bitbucket and Codeberg itself, so a session can clone one to inspect its code even on a host whose DNS answers with a local proxy's fake-IP addresses; elsewhere Git fetches them through a tunnel. Only HTTPS on port 443 is tunnelled, the proxy never looks inside it, and addresses in the host's own networks (loopback, private, link-local, such as cloud metadata services) are never reachable. Running sessions pick up a change within a minute.
 

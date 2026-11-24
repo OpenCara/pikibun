@@ -7,7 +7,7 @@ import { cacheWarmingModes, type CacheWarmingMode, type CacheWarmingSettings as 
 import type { GitHubReachSettings as GitHubReach } from "../../../../packages/shared/src/github-reach";
 import { automaticPackingDays, type PackingSettings as Packing } from "../../../../packages/shared/src/packing";
 import { fileUploadLimits, formatBytes } from "../../../../packages/shared/src/file-uploads";
-import { networkLimits, type NetworkMode, type NetworkPolicy } from "../../../../packages/shared/src/network";
+import { defaultNetworkPolicy, networkLimits, type NetworkMode, type NetworkPolicy } from "../../../../packages/shared/src/network";
 import { session } from "../lib/auth";
 import { createAction, createResource, type Action } from "../lib/resource";
 import { Checkbox, CheckControl, Field, Select, TextField } from "../form";
@@ -133,9 +133,9 @@ export function GitHubReachSettings(props: { workspace: Workspace }) {
   const action = createAction();
   return (
     <Section title="Your GitHub reach" testID="workspace-github-reach" info={<View style={{ gap: 8 }}>
-      <Note>Your own choice, in this workspace; each member makes theirs. Sessions act on GitHub as their owner, and by default only on this workspace's repositories.</Note>
-      <Note>With this on, messages you send yourself, in sessions you own, may also read, open issues in, merge in and, with gh on your own hosts, write to any GitHub repository your account can access, as you. Messages anyone else sends in your sessions still reach only this workspace's repositories.</Note>
-      <Note>An agent follows what it reads, such as issues and web pages, so text written to mislead it could have it act as you anywhere your account reaches. Turn this on only where you watch what your sessions do. Pushes still go only to this workspace's repositories.</Note>
+      <Note>Your own choice, in this workspace; each member makes theirs. Sessions act on GitHub as their owner. It is on until you turn it off.</Note>
+      <Note>With this on, messages you send yourself, in sessions you own, may read, open issues in, merge in and, with gh on your own hosts, write to any GitHub repository your account can access, as you. Messages anyone else sends in your sessions still reach only this workspace's repositories, and so do yours with this off.</Note>
+      <Note>An agent follows what it reads, such as issues and web pages, so text written to mislead it could have it act as you anywhere your account reaches. Turn this off where you don't watch what your sessions do. Pushes still go only to this workspace's repositories.</Note>
     </View>}>
       <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>
         <If when={resource.data()}>
@@ -211,14 +211,14 @@ const modeLabel: Record<NetworkMode, string> = { off: "Off", allowlist: "Allowli
 const modeHint: Record<NetworkMode, string> = {
   off: "Sandboxed commands reach only this workspace's repositories",
   allowlist: "The workspace's repositories, plus the domains below",
-  open: "The workspace's repositories, plus any public host",
+  open: "The workspace's repositories, plus any public host. How a workspace starts",
 };
 
 export function NetworkAccess(props: { workspace: Workspace; admin: boolean }) {
   const path = () => `/api/workspaces/${segment(props.workspace.id)}/network-policy`;
   const resource = createResource<{ policy: NetworkPolicy; packageRegistryDomains: string[] }>(path);
   const action = createAction();
-  const mode = signal<NetworkMode>("off");
+  const mode = signal<NetworkMode>(defaultNetworkPolicy.mode);
   const domains = signal("");
   const registries = signal(true);
   const saved = () => resource.data()?.policy;
@@ -239,13 +239,13 @@ export function NetworkAccess(props: { workspace: Workspace; admin: boolean }) {
     <Section title="Network access" testID="workspace-network" info={<View style={{ gap: 8 }}>
       <If when={!props.admin}>{adminOnly}</If>
       <Note>Sandboxed commands have no direct network. Everything goes through the host's egress proxy: Git reads of this workspace's repositories always work, with the session owner's own account, which never leaves Pikibun.</Note>
-      <Note>This setting decides what else is reachable over HTTPS. Addresses inside the host's own networks are never reachable. Hosts running without the sandbox aren't confined by it.</Note>
+      <Note>This setting decides what else is reachable over HTTPS: any public host (Open, how a workspace starts), the domains you list (Allowlist), or nothing (Off). Addresses inside the host's own networks are never reachable. Sessions that run on their host, and hosts without the sandbox, aren't confined by it.</Note>
       <Note>Web search and page reading come from the workspace's extensions, which run on the host outside the sandbox: this setting doesn't confine them.</Note>
     </View>}>
       <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>
         <If when={saved()}>
           <Row title="Access" hint={modeHint[mode()]} trailing={props.admin
-            ? <Segmented small value={mode()} onChange={value => mode.set(value)} options={(["off", "allowlist", "open"] as const).map(value => ({ value, label: modeLabel[value] }))} />
+            ? <Segmented small value={mode()} onChange={value => mode.set(value)} options={(["open", "allowlist", "off"] as const).map(value => ({ value, label: modeLabel[value] }))} />
             : <Badge tone={saved()!.mode === "off" ? "neutral" : "success"}>{modeLabel[saved()!.mode]}</Badge>} />
           <If when={mode() === "allowlist"}>
             <CardBody>

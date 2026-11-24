@@ -115,16 +115,17 @@ describe("a session's view", () => {
 });
 
 describe("a new session", () => {
-  test("runs on its host where the host takes sessions on it", async () => {
+  const environment = (app: { texts(): string[] }) => (app.texts().includes("On host") ? "host" : app.texts().includes("Sandbox") ? "sandbox" : "none");
+
+  test("runs on its host by default where the host takes sessions on it, in any workspace, with no warning", async () => {
     const app = await open("../App.tsx", { storage: signedIn, network: server({
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
     }) });
     await app.press("id:new-session");
     await app.waitFor("id:new-environment");
+    expect(environment(app)).toBe("host");
     expect(app.shows("id:new-on-host")).toBe(false);
-    await app.press("id:new-environment");
-    await app.press("text:On this host");
-    await app.waitFor("id:new-on-host");
+    expect(app.texts().join(" ")).not.toContain("without the sandbox");
     await app.type("id:new-message", "Profile the GPU build");
     await app.waitUntil(() => app.enabled("id:new-start"));
     await app.press("id:new-start");
@@ -132,13 +133,14 @@ describe("a new session", () => {
     expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ workspaceId: "w1", hostEnvironment: true });
   });
 
-  test("in a private workspace runs on its host by default", async () => {
+  test("in a private workspace runs on its host by default too", async () => {
     const app = await open("../App.tsx", { storage: signedIn, network: server({
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, name: "Private", personal: true }] } },
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
     }) });
     await app.press("id:new-session");
-    await app.waitFor("id:new-on-host");
+    await app.waitFor("id:new-environment");
+    expect(environment(app)).toBe("host");
     await app.type("id:new-message", "Profile the GPU build");
     await app.waitUntil(() => app.enabled("id:new-start"));
     await app.press("id:new-start");
@@ -146,49 +148,80 @@ describe("a new session", () => {
     expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ workspaceId: "w1", hostEnvironment: true });
   });
 
-  test("on a phone, its warning about running on the host is one line until its details are opened; wider, it shows them", async () => {
-    const details = (app: { texts(): string[] }) => app.texts().some(item => item.includes("as its user, with its files, credentials, network and GPU"));
-    const phone = await open("../App.tsx", { storage: signedIn, network: server({
+  test("runs in the sandbox once that is chosen, and where the host takes no sessions on it", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, network: server({
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
     }) });
-    await phone.press("id:new-session");
-    await phone.waitFor("id:new-environment");
-    await phone.press("id:new-environment");
-    await phone.press("text:On this host");
-    await phone.waitFor("id:new-on-host");
-    expect(phone.texts()).toContain("Runs on your host, without the sandbox");
-    expect(details(phone)).toBe(false);
-    await phone.press("id:new-on-host-toggle");
-    await phone.waitUntil(() => details(phone));
-    await phone.press("id:new-on-host-toggle");
-    await phone.waitUntil(() => !details(phone));
-    phone.dispose();
-    const desktop = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server({
-      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
-    }) });
-    await desktop.press("id:new-session");
-    await desktop.waitFor("id:new-environment");
-    await desktop.press("id:new-environment");
-    await desktop.press("text:On this host");
-    await desktop.waitFor("id:new-on-host");
-    expect(details(desktop)).toBe(true);
-    expect(desktop.shows("id:new-on-host-toggle")).toBe(false);
+    await app.press("id:new-session");
+    await app.waitFor("id:new-environment");
+    await app.press("id:new-environment");
+    await app.press("text:Sandbox");
+    await app.waitUntil(() => environment(app) === "sandbox");
+    await app.type("id:new-message", "Try this pull request from a stranger");
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.press("id:new-start");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions") !== undefined);
+    expect(bodyOf(app, "POST", "/api/sessions").hostEnvironment).toBeUndefined();
+    app.dispose();
+    const sandboxed = await open("../App.tsx", { storage: signedIn, network: server() });
+    await sandboxed.press("id:new-session");
+    await sandboxed.waitFor("id:new-message");
+    await sandboxed.type("id:new-message", "Profile the GPU build");
+    await sandboxed.waitUntil(() => sandboxed.enabled("id:new-start"));
+    expect(sandboxed.shows("id:new-environment")).toBe(false);
+    await sandboxed.press("id:new-start");
+    await sandboxed.waitUntil(() => bodyOf(sandboxed, "POST", "/api/sessions") !== undefined);
+    expect(bodyOf(sandboxed, "POST", "/api/sessions").hostEnvironment).toBeUndefined();
   });
 
-  test("keeps running on its host while the host listing refreshes", async () => {
+  test("a session on someone else's unsandboxed host says so, on a phone in one line until its details are opened; on your own host it says nothing", async () => {
+    const details = (app: { texts(): string[] }) => app.texts().some(item => item.includes("directly on the host owner's machine"));
+    const theirs = { ...sessionRecord, connectorOwnerId: "u2", hostUnsandboxed: true, viewable: true };
+    const phone = await open("../App.tsx", { storage: signedIn, network: server({ [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: theirs } } }) });
+    await phone.press("id:session-row-s1");
+    await phone.waitFor("id:session-unsandboxed-host");
+    expect(phone.texts()).toContain("Unsandboxed host");
+    expect(details(phone)).toBe(false);
+    await phone.press("id:session-unsandboxed-host-toggle");
+    await phone.waitUntil(() => details(phone));
+    await phone.press("id:session-unsandboxed-host-toggle");
+    await phone.waitUntil(() => !details(phone));
+    phone.dispose();
+    const desktop = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800,
+      network: server({ [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: theirs } } }) });
+    await desktop.press("id:session-row-s1");
+    await desktop.waitFor("id:session-unsandboxed-host");
+    expect(details(desktop)).toBe(true);
+    expect(desktop.shows("id:session-unsandboxed-host-toggle")).toBe(false);
+    desktop.dispose();
+    for (const own of [{ ...sessionRecord, hostUnsandboxed: true, viewable: true }, { ...sessionRecord, hostUnsandboxed: true, hostEnvironment: true, viewable: true },
+      { ...theirs, hostEnvironment: true }]) {
+      const quiet = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800,
+        network: server({ [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: own } } }) });
+      await quiet.press("id:session-row-s1");
+      await quiet.waitFor("id:composer-input");
+      await quiet.waitUntil(() => quiet.requests().some(request => request.url === `${ORIGIN}/api/sessions/s1`));
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(quiet.shows("id:session-unsandboxed-host")).toBe(false);
+      expect(quiet.texts().join(" ")).not.toContain("Runs on the host");
+      quiet.dispose();
+    }
+  });
+
+  test("keeps the sandbox chosen while the host listing refreshes", async () => {
     const app = await open("../App.tsx", { storage: signedIn, clock: {}, network: server({
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
     }) });
     await app.press("id:new-session");
     await app.waitFor("id:new-environment");
     await app.press("id:new-environment");
-    await app.press("text:On this host");
-    await app.waitFor("id:new-on-host");
+    await app.press("text:Sandbox");
+    await app.waitUntil(() => environment(app) === "sandbox");
     const polls = () => app.requests().filter(request => request.url === `${ORIGIN}/api/workspaces/w1/connectors`).length;
     const before = polls();
     await app.clock!.runFor(25_000);
     expect(polls()).toBeGreaterThan(before);
-    expect(app.shows("id:new-on-host")).toBe(true);
+    expect(environment(app)).toBe("sandbox");
   });
 
   test("keeps trusting another member's host while the host listing refreshes", async () => {

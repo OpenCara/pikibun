@@ -1,4 +1,4 @@
-import { signal, Text, untracked, View } from "nsh";
+import { effect, Scroll, signal, Text, untracked, View, type JSX } from "nsh";
 import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type UserProfile, type WorkspaceRole } from "../../../../packages/shared/src/types";
 import { adminManagedRoles } from "../../../../packages/shared/src/policy";
 import {
@@ -13,10 +13,11 @@ import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { relativeTime } from "../lib/format";
 import { openServerLink, opensServerPages } from "../lib/links";
+import { wantedWorkspaceTab, workspaceTabs, type WorkspaceTab } from "../lib/workspace-tabs";
 import { createAction, createResource } from "../lib/resource";
 import { createConnections } from "../hosts";
 import { Icon } from "../icons";
-import { palette, text } from "../theme";
+import { control, layout, palette, text, weight } from "../theme";
 import { Checkbox, Field, Select, TextField } from "../form";
 import {
   Badge, Banner, Button, CardBody, confirm, CopyField, DropdownMenu, EmptyState, Feedback, FormSheet, IconButton, IdentityBadge, Note, ResourceState, Row, Section, Segmented, Small, StatusDot,
@@ -51,20 +52,25 @@ export function Workspaces(props: SectionProps) {
   const workspace = () => data.workspaces().find(item => item.id === props.id);
   const sheet = <NewWorkspaceSheet open={creating()} onClose={() => creating.set(false)} created={created => props.go({ name: "new", workspaceId: created.id })} />;
   const error = <Banner tone="danger" title="Unable to load workspaces" actions={<Button small variant="outline" label="Try again" onPress={data.refreshWorkspaces} />}>{data.workspacesError()}</Banner>;
+  const back = () => (
+    <View style={{ flexDirection: "row", marginLeft: -8 }}>
+      <Button small variant="ghost" icon="chevron-left" label="Workspaces" testID="workspaces-back" onPress={() => props.go({ name: "settings", section: "workspaces" })} />
+    </View>
+  );
   return (
-    <SectionPage testID="settings-workspaces">
-      <If when={!props.id}
-        else={
-          <>
-            <View style={{ flexDirection: "row", marginLeft: -8, marginBottom: -16 }}>
-              <Button small variant="ghost" icon="chevron-left" label="Workspaces" testID="workspaces-back" onPress={() => props.go({ name: "settings", section: "workspaces" })} />
-            </View>
-            <If when={workspace()}
-              else={<If when={!data.workspacesLoading()} else={<Small>Loading…</Small>}><If when={data.workspacesError()} else={<EmptyState title="Workspace not found" />}>{error}</If></If>}>
-              <Each of={[props.id!]} key={id => id}>{() => <WorkspaceDetail workspace={workspace()!} workspaceOf={workspace} go={props.go} />}</Each>
-            </If>
-          </>
-        }>
+    <If when={!props.id}
+      else={
+        <If when={workspace()}
+          else={
+            <SectionPage testID="settings-workspaces">
+              {back()}
+              <If when={!data.workspacesLoading()} else={<Small>Loading…</Small>}><If when={data.workspacesError()} else={<EmptyState title="Workspace not found" />}>{error}</If></If>
+            </SectionPage>
+          }>
+          <Each of={[props.id!]} key={id => id}>{() => <WorkspaceDetail workspace={workspace()!} workspaceOf={workspace} go={props.go} back={back()} />}</Each>
+        </If>
+      }>
+      <SectionPage testID="settings-workspaces">
         <If when={!(data.workspacesLoading() && !data.workspaces().length)} else={<Small>Loading…</Small>}>
           <If when={!(data.workspacesError() && !data.workspaces().length)} else={error}>
             <If when={data.workspaces().length > 0}
@@ -81,48 +87,33 @@ export function Workspaces(props: SectionProps) {
             </If>
           </If>
         </If>
-      </If>
-      {sheet}
-    </SectionPage>
+        {sheet}
+      </SectionPage>
+    </If>
   );
 }
 
-function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Workspace | undefined; go: SectionProps["go"] }) {
+function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Workspace | undefined; go: SectionProps["go"]; back: JSX.Element }) {
   const workspace = () => props.workspaceOf() ?? props.workspace;
   const user = () => session().user;
   const role = () => workspaceRole(workspace(), user());
   const admin = () => role() === "owner" || role() === "admin";
+  const tab = signal<WorkspaceTab>("overview");
+  effect(() => {
+    const wanted = wantedWorkspaceTab();
+    if (wanted?.workspaceId !== untracked(workspace).id) return;
+    tab.set(wanted.tab);
+    wantedWorkspaceTab.set(null);
+  });
   const repositories = createResource<WorkspaceRepositoryList>(() => `/api/workspaces/${segment(workspace().id)}/repositories`);
   const sources = createResource<WorkspaceSourceList>(() => `/api/workspaces/${segment(workspace().id)}/sources`);
   const connections = createWorkspaceConnections(() => workspace().id);
   const sourcesChanged = () => { repositories.refresh(); sources.refresh(); connections.refresh(); };
   const sourceCount = () => (repositories.data() ? repositories.data()!.sources ?? repositories.data()!.repositories.length : null);
-  return (
+  const overview = () => (
     <>
       <General workspace={workspace()} admin={admin()} role={role()} />
-      <If when={canCreateSessions(role())}><Setup workspace={workspace()} admin={admin()} sourceCount={sourceCount()} go={props.go} /></If>
-      <Repositories workspace={workspace()} admin={admin()} repositories={repositories.data()?.repositories ?? null} sourceCount={sourceCount()}
-        loading={repositories.loading() && !repositories.data()} error={repositories.error()} refresh={repositories.refresh}
-        connections={connections.data()?.connections ?? null} changed={sourcesChanged} go={props.go} />
-      <DocumentSources workspaceId={workspace().id} workspaceName={workspace().name} admin={admin()} sources={sources.data()?.sources ?? null}
-        loading={sources.loading() && !sources.data()} error={sources.error()} refresh={sources.refresh} connections={connections.data()?.connections ?? null}
-        changed={sourcesChanged} go={props.go} />
-      <WorkspaceConnections workspaceId={workspace().id} admin={admin()} connections={connections.data()?.connections ?? null}
-        loading={connections.loading()} error={connections.error()} refresh={connections.refresh} changed={sourcesChanged} />
-      <WorkspaceSchedules workspace={workspace()} go={props.go} />
-      <PushAccess workspace={workspace()} admin={admin()} />
-      <NetworkAccess workspace={workspace()} admin={admin()} />
-      <WorkspaceExtensions workspace={workspace()} />
-      <WorkspaceMcpServers workspace={workspace()} />
-      <ToolGroups workspace={workspace()} owner={role() === "owner"} />
-      <GitHubReachSettings workspace={workspace()} />
-      <TranscriptSettings workspace={workspace()} admin={admin()} />
-      <ChildSessionSettings workspace={workspace()} admin={admin()} />
-      <CacheWarmingSettings workspace={workspace()} admin={admin()} />
-      <BuildCaches workspace={workspace()} />
-      <AttachmentSettings workspace={workspace()} admin={admin()} />
-      <PackingSettings workspace={workspace()} admin={admin()} />
-      <WorkspaceDatabaseSection workspace={workspace()} owner={role() === "owner"} />
+      <If when={canCreateSessions(role())}><Setup workspace={workspace()} admin={admin()} sourceCount={sourceCount()} go={props.go} addSource={() => tab.set("sources")} /></If>
       <Members workspace={workspace()} admin={admin()} owner={role() === "owner"} />
       <If when={admin()}>
         <Section title="Data export" info={<View style={{ gap: 8 }}>
@@ -134,6 +125,67 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
         </Section>
       </If>
     </>
+  );
+  const sourcesTab = () => (
+    <>
+      <Repositories workspace={workspace()} admin={admin()} repositories={repositories.data()?.repositories ?? null} sourceCount={sourceCount()}
+        loading={repositories.loading() && !repositories.data()} error={repositories.error()} refresh={repositories.refresh}
+        connections={connections.data()?.connections ?? null} changed={sourcesChanged} go={props.go} />
+      <DocumentSources workspaceId={workspace().id} workspaceName={workspace().name} admin={admin()} sources={sources.data()?.sources ?? null}
+        loading={sources.loading() && !sources.data()} error={sources.error()} refresh={sources.refresh} connections={connections.data()?.connections ?? null}
+        changed={sourcesChanged} go={props.go} />
+      <WorkspaceConnections workspaceId={workspace().id} admin={admin()} connections={connections.data()?.connections ?? null}
+        loading={connections.loading()} error={connections.error()} refresh={connections.refresh} changed={sourcesChanged} />
+      <PushAccess workspace={workspace()} admin={admin()} />
+    </>
+  );
+  const agents = () => (
+    <>
+      <NetworkAccess workspace={workspace()} admin={admin()} />
+      <GitHubReachSettings workspace={workspace()} />
+      <ChildSessionSettings workspace={workspace()} admin={admin()} />
+      <WorkspaceExtensions workspace={workspace()} />
+      <WorkspaceMcpServers workspace={workspace()} />
+      <ToolGroups workspace={workspace()} owner={role() === "owner"} />
+    </>
+  );
+  const sessions = () => (
+    <>
+      <WorkspaceSchedules workspace={workspace()} go={props.go} />
+      <TranscriptSettings workspace={workspace()} admin={admin()} />
+      <AttachmentSettings workspace={workspace()} admin={admin()} />
+      <CacheWarmingSettings workspace={workspace()} admin={admin()} />
+      <BuildCaches workspace={workspace()} />
+      <PackingSettings workspace={workspace()} admin={admin()} />
+      <WorkspaceDatabaseSection workspace={workspace()} owner={role() === "owner"} />
+    </>
+  );
+  const pages: Record<WorkspaceTab, () => JSX.Element> = { overview, sources: sourcesTab, agents, sessions };
+  return (
+    <View testID="settings-workspaces" style={{ flex: 1 }}>
+      <View style={{ paddingTop: 16, borderBottomWidth: 1, borderColor: palette().border }}>
+        <View style={{ width: "100%", maxWidth: layout.content, alignSelf: "center", gap: 10, paddingHorizontal: 24, paddingBottom: 12 }}>
+          {props.back}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <IdentityBadge name={workspace().name} id={workspace().id} />
+            <Text role="header" testID="workspace-title" style={{ flex: 1, minWidth: 0, numberOfLines: 1, fontSize: text.reading, fontWeight: weight.medium, color: palette().text }}>{workspace().name}</Text>
+            <If when={canCreateSessions(role())}>
+              <Button small variant="outline" icon="plus" label="New session" testID="workspace-new-session" onPress={() => props.go({ name: "new", workspaceId: workspace().id })} />
+            </If>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", minHeight: control.small }}>
+            <Scroll horizontal scrollbar={false} style={{ flex: 1 }}>
+              <Segmented<WorkspaceTab> small testID="workspace-tabs" value={tab()} onChange={value => tab.set(value)}
+                options={workspaceTabs.map(item => ({ value: item.value, label: item.label }))} />
+            </Scroll>
+          </View>
+          <Small testID="workspace-tab-hint">{workspaceTabs.find(item => item.value === tab())!.hint}</Small>
+        </View>
+      </View>
+      <Each of={[tab()]} key={value => value}>
+        {current => <SectionPage testID={`workspace-tab-${current()}`}>{pages[current()]()}</SectionPage>}
+      </Each>
+    </View>
   );
 }
 
@@ -178,12 +230,12 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
   );
 }
 
-function Setup(props: { workspace: Workspace; admin: boolean; sourceCount: number | null; go: SectionProps["go"] }) {
+function Setup(props: { workspace: Workspace; admin: boolean; sourceCount: number | null; go: SectionProps["go"]; addSource: () => void }) {
   const data = useAppData();
   const { user } = untracked(session);
   const connectors = createConnections(() => `/api/workspaces/${segment(props.workspace.id)}/connectors`);
   const steps = () => [
-    { label: "Add a source", done: (props.sourceCount ?? 0) > 0, hint: props.admin ? undefined : "An owner or admin does this", go: undefined },
+    { label: "Add a source", done: (props.sourceCount ?? 0) > 0, hint: props.admin ? undefined : "An owner or admin does this", go: props.admin ? props.addSource : undefined },
     { label: "Pair a host", done: (connectors.data()?.connectors ?? []).some(connector => !connector.revokedAt && connector.online && (connector.ownerId === user.id || connector.workspaceIds.includes(props.workspace.id))),
       go: () => props.go({ name: "settings", section: "hosts" }) },
     { label: "Start a session", done: data.sessions().some(item => item.workspaceId === props.workspace.id), go: () => props.go({ name: "new", workspaceId: props.workspace.id }) },
