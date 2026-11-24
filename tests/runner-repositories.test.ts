@@ -55,7 +55,6 @@ function runnerError(status: number, message: RegExp) {
 test("repository protocol accepts only exact immutable pins and returns detached values", () => {
   assert.deepEqual(validateRepositories(undefined), []);
   assert.deepEqual(validateRepositories([]), []);
-  // A workspace has no repository cap: more pins than the former limit of five pass.
   const pins = Array.from({ length: 9 }, (_, index) => repository(index + 1));
   const validated = validateRepositories(pins);
   assert.deepEqual(validated, pins);
