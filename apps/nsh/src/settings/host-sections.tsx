@@ -51,7 +51,7 @@ const configInfo = (
   <View style={{ gap: 8 }}>
     <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache or build caches, runs their sessions without the sandbox or trusts a fake-IP proxy on it.</Note>
     <Note>Running sessions pick up a change within a minute. A repository cache change applies when the host's connector next connects.</Note>
-    <Note>Build caches are directories this host keeps for each workspace's declared caches (Settings → Workspaces → Build caches), which commands find through an environment variable, so tools such as ccache, Gradle or Bazel reuse earlier builds. Past the size limit, the least recently changed files go first. They never enter backups, packs or moves.</Note>
+    <Note>Build caches are directories this host keeps for each workspace's declared caches (Settings → Workspaces → Build caches), which commands find through an environment variable, so tools such as ccache, Gradle or Bazel reuse earlier builds. Past the size limit, the caches holding more than their fair share lose their least recently changed files first. They never enter backups, packs or moves.</Note>
     <Note>The service lifetime bounds a session service: a server a session keeps running after the call that started it, such as the one the tunnel tool puts online. It stops then, and goes offline.</Note>
     <Note>A longer time limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB files, 256 open files) so builds fit. Without provisioned resource limits on the host (connect --resources), a command can use the whole machine for that long.</Note>
   </View>
