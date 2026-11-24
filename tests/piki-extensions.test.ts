@@ -83,7 +83,8 @@ test('every connector has its Pikibun extensions: each command-line one offers o
       assert.deepEqual([module!.tools, [...module!.events].sort(), module!.noops, module!.ignored],
         [[], ['before_agent_start', 'resources_discover', 'session_shutdown', 'tool_call', 'tool_result'], [], []], 'its skill comes through resources_discover');
       assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['review-minutes', 'string', '30'], ['merge-method', 'string', 'squash'],
-        ['wait-for-checks', 'boolean', true], ['auto-merge', 'boolean', true], ['pre-push-check', 'string', '']]);
+        ['wait-for-checks', 'boolean', true], ['auto-merge', 'boolean', true], ['pre-push-check', 'string', ''], ['wait-for-review', 'boolean', true],
+        ['draft-first', 'boolean', true], ['require-approval', 'boolean', false]]);
       continue;
     }
     if (item.summary.source === 'piki:context-files') {
