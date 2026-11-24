@@ -121,7 +121,7 @@ export function workspaceMemoryPrompt(prompt: WorkspaceMemoryPrompt, options: { 
   if (memory) parts.push(`Workspace memory (revision ${prompt.revision}), what earlier sessions here learned and this workspace's owners and admins kept. `
     + `It may be out of date: where it disagrees with the files, trust the files and say so.\n${memory}`);
   else if (options.tool) parts.push("Workspace memory: this workspace's memory is empty so far.");
-  if (options.tool && prompt.pendingNotes > 0) parts.push(`${prompt.pendingNotes} proposed note${prompt.pendingNotes === 1 ? "" : "s"} wait for this workspace's owners and admins `
+  if (options.tool && prompt.pendingNotes > 0) parts.push(`${prompt.pendingNotes} proposed ${prompt.pendingNotes === 1 ? "note waits" : "notes wait"} for this workspace's owners and admins `
     + "(memory {action: \"notes\"}); they are not part of the memory yet.");
   if (options.sessions && (instructions || memory || options.tool)) parts.push("This workspace's earlier sessions are its history: to find what one of them did or decided, "
     + "search them with sessions {action: \"search\", query} and read the one that matches, rather than asking the person again.");

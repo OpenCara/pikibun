@@ -189,7 +189,7 @@ export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]
 export const extensionLimits = Object.freeze({
   workspace: 32,
   installed: 64,
-  connector: 32,
+  connector: 48,
   modulesPerSource: 16,
   toolsPerModule: 64,
   flagsPerModule: 64,
