@@ -132,7 +132,8 @@ test('a deleted workspace without sessions can be deleted for good; its history 
   for (const table of ['workspaces WHERE id', 'deleted_workspaces WHERE workspace_id', 'workspace_members WHERE workspace_id', 'audit WHERE workspace_id']) {
     assert.equal(count(f.sqlite, `SELECT COUNT(*) AS n FROM ${table} = ?`, empty.id), 0, table);
   }
-  assert.equal(count(f.sqlite, "SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.deleted'"), 1);
+  const detached = f.sqlite.prepare("SELECT detail_json AS detail FROM audit WHERE action = 'workspace.deleted' AND workspace_id IS NULL").all() as { detail: string }[];
+  assert.deepEqual(detached.map(row => JSON.parse(row.detail)), [{ workspaceId: empty.id, name: 'Empty' }]);
   const purged = f.sqlite.prepare("SELECT actor_id AS actorId, detail_json AS detail FROM audit WHERE action = 'workspace.purged'").all() as { actorId: string; detail: string }[];
   assert.deepEqual(purged.map(row => [row.actorId, JSON.parse(row.detail)]), [[alice.user.id, { workspaceId: empty.id, name: 'Empty' }]]);
 
@@ -146,6 +147,8 @@ test('a deleted workspace without sessions can be deleted for good; its history 
   assert.deepEqual((await deletedList(alice)).map(item => item.id), [used.id]);
   await json(await alice.request('POST', `/api/deleted-workspaces/${used.id}/restore`));
   assert.ok((await workspaces(alice)).some(item => item.id === used.id));
+  const restored = f.sqlite.prepare("SELECT detail_json AS detail FROM audit WHERE action = 'workspace.restored' AND workspace_id = ?").all(used.id) as { detail: string }[];
+  assert.deepEqual(restored.map(row => JSON.parse(row.detail)), [{ workspaceId: used.id, name: 'Used' }]);
 });
 
 test('a deleted workspace\'s schedules are skipped, not paused, and run again once it is restored', async t => {

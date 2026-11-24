@@ -47,7 +47,7 @@ export function registerDeletedWorkspaces(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actorId);
-    const row = await c.env.DB.query<{ ownerId: string; personal: number }>(`SELECT w.owner_id AS ownerId,
+    const row = await c.env.DB.query<{ name: string; ownerId: string; personal: number }>(`SELECT w.name, w.owner_id AS ownerId,
         CASE WHEN ${personalWorkspaceSQL('w.id')} THEN 1 ELSE 0 END AS personal FROM workspaces w WHERE w.id = ?`).bind(workspaceId).first();
     if (!row) fail(404, 'not_found', 'Workspace not found.');
     if (row.ownerId !== actorId) fail(403, 'forbidden', 'Only the workspace owner can delete it.');
@@ -61,7 +61,7 @@ export function registerDeletedWorkspaces(app: Hono<AppEnv>): void {
         WHERE w.id = ? AND w.owner_id = ? AND NOT ${personalWorkspaceSQL('w.id')} AND NOT ${deletedWorkspaceSQL('w.id')}
           AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = w.owner_id AND m.role = 'owner')`)
         .bind(actorId, at, workspaceId, actorId),
-      auditAfterChange(c.env, actorId, 'workspace.deleted', workspaceId, {}, auditId),
+      auditAfterChange(c.env, actorId, 'workspace.deleted', workspaceId, { workspaceId, name: row.name }, auditId),
       c.env.DB.query<never>(`INSERT INTO deleted_workspace_members (workspace_id, user_id, role, created_at)
         SELECT workspace_id, user_id, role, created_at FROM workspace_members WHERE workspace_id = ? AND ${audited}`).bind(workspaceId, auditId),
       c.env.DB.query<never>(`DELETE FROM workspace_members WHERE workspace_id = ? AND ${audited}`).bind(workspaceId, auditId),
@@ -81,12 +81,13 @@ export function registerDeletedWorkspaces(app: Hono<AppEnv>): void {
   app.post('/api/deleted-workspaces/:id/restore', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;
-    await requireOwnDeleted(c.env, workspaceId, actorId);
+    const deleted = await requireOwnDeleted(c.env, workspaceId, actorId);
     const auditId = id();
     const result = await c.env.DB.batch<never>([
       lockWorkspace(c.env, workspaceId, actorId),
       c.env.DB.query<never>(`INSERT INTO audit (id, workspace_id, session_id, actor_id, action, detail_json, created_at)
-        SELECT ?, ?, NULL, ?, 'workspace.restored', '{}', ? WHERE ${ownedDeleted}`).bind(auditId, workspaceId, actorId, now(), workspaceId, actorId),
+        SELECT ?, ?, NULL, ?, 'workspace.restored', ?, ? WHERE ${ownedDeleted}`)
+        .bind(auditId, workspaceId, actorId, JSON.stringify({ workspaceId, name: deleted.name }), now(), workspaceId, actorId),
       c.env.DB.query<never>(`INSERT INTO workspace_members (workspace_id, user_id, role, created_at)
         SELECT workspace_id, user_id, role, created_at FROM deleted_workspace_members WHERE workspace_id = ? AND ${audited}
         ON CONFLICT (workspace_id, user_id) DO NOTHING`).bind(workspaceId, auditId),
