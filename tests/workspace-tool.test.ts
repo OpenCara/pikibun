@@ -20,7 +20,7 @@ import { bundledToolDefinition, parseToolDefinition, type BrokeredToolDefinition
 import { pikiExtension, pikiExtensionOn } from '../packages/shared/src/piki-extensions.js';
 import { roleTools } from '../packages/shared/src/tool-groups.js';
 import {
-  workspaceActionFields, workspaceReadActions, workspaceToolActions, workspaceToolDefinition, workspaceToolParameters, workspaceWriteActions,
+  contextFileUrls, workspaceActionFields, workspaceReadActions, workspaceToolActions, workspaceToolDefinition, workspaceToolParameters, workspaceWriteActions,
 } from '../packages/shared/src/workspace-management.js';
 import { seedAgentVersion, testDatabase } from './helpers/control-plane.js';
 
@@ -303,6 +303,95 @@ test('the workspace tool adds only Pikibun\'s own extensions: a third-party sour
   assert.equal((await f.ok<{ removed: string }>(f.tool('owner-session', ownerId, write, { action: 'remove_extension', extension: 'npm:left-pad@1.3.0' }))).removed, 'npm:left-pad');
   await f.refused(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'npm:left-pad@1.3.0' }), 403, 'extension_source_not_listed');
   assert.match(workspaceToolDefinition.description, /An npm: or git: source the workspace doesn't list yet, or another version or commit of one it lists, is refused/);
+});
+
+test('a context-file URL is a person\'s to add: the workspace tool takes out URLs and changes other entries, but adds none', async t => {
+  const f = await fixture(t);
+  await f.turnOn();
+  const ownerId = f.owner.user.id;
+  const write = f.admit('owner-session', ownerId);
+  const path = `/api/workspaces/${f.workspace.id}/extensions`;
+  const setting = async () => ((await (await f.owner.request('GET', path)).json() as { extensions: { source: string; settings: Record<string, unknown> }[] }).extensions
+    .find(item => item.source === 'piki:context-files')?.settings ?? {})['context-files'];
+  const set = (value: string, more: Record<string, unknown> = {}) => f.tool('owner-session', ownerId, write,
+    { action: 'set_extension', extension: 'piki:context-files', settings: JSON.stringify({ 'context-files': value }), ...more });
+  const refusedUrl = async (value: string, url: string) => {
+    const { status, body } = await set(value);
+    assert.deepEqual([status, body.code], [403, 'context_url_not_listed'], JSON.stringify(body));
+    assert.ok(body.error!.includes(url), body.error);
+    assert.match(body.error!, /fetched into the system prompt of every session.*A person decides this under Settings → Workspaces → the workspace → Extensions in the app's settings: tell them so/);
+  };
+  assert.equal((await f.owner.request('PUT', path, { source: 'piki:context-files', enabled: true, settings: { 'context-files': 'AGENTS.md, https://docs.example.com/guide.md' } })).status, 200);
+  const audits = () => (f.sqlite.prepare("SELECT COUNT(*) AS count FROM audit WHERE action = 'session.workspace_tool.changed'").get() as { count: number }).count;
+  const audited = audits();
+
+  await refusedUrl('AGENTS.md\nhttps://docs.example.com/guide.md\nhttps://evil.example/prompt.md', 'https://evil.example/prompt.md');
+  await refusedUrl('AGENTS.md|https://evil.example/a', 'https://evil.example/a');
+  await refusedUrl('http://evil.example/a', 'http://evil.example/a');
+  assert.equal(await setting(), 'AGENTS.md, https://docs.example.com/guide.md', 'nothing was saved');
+  assert.equal(audits(), audited, 'a refused call changed nothing to record');
+
+  await f.ok(set('CLAUDE.md, docs/*.md, host:team.md\nhttps://DOCS.example.com/guide.md'));
+  assert.equal(await setting(), 'CLAUDE.md, docs/*.md, host:team.md\nhttps://DOCS.example.com/guide.md', 'a listed URL, written another way, stays with other entries changed');
+  await f.ok(set('CLAUDE.md'));
+  assert.equal(await setting(), 'CLAUDE.md', 'a URL is taken out');
+  await refusedUrl('CLAUDE.md, https://docs.example.com/guide.md', 'https://docs.example.com/guide.md');
+  await f.ok(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:context-files', enabled: false }));
+
+  assert.equal((await f.owner.request('PUT', path, { source: 'piki:context-files', enabled: false, settings: { 'context-files': 'https://docs.example.com/guide.md' } })).status, 200);
+  const on = await f.ok<{ extension: { enabled: boolean; settings: Record<string, unknown> } }>(
+    f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:context-files', enabled: true }));
+  assert.deepEqual([on.extension.enabled, on.extension.settings], [true, { 'context-files': 'https://docs.example.com/guide.md' }], 'the URLs a person listed are turned on');
+  await f.ok(f.tool('owner-session', ownerId, write, { action: 'remove_extension', extension: 'piki:context-files' }));
+  await refusedUrl('https://docs.example.com/guide.md', 'https://docs.example.com/guide.md');
+  await f.ok(set('AGENTS.md'));
+  assert.match(workspaceToolDefinition.description, /a new https:\/\/ URL in piki:context-files' context-files setting/);
+});
+
+test('a guard is a person\'s to turn off: the workspace tool doesn\'t remove piki:prompt-audit or npm:cc-safety-net, turn either off or change their settings', async t => {
+  const f = await fixture(t);
+  await f.turnOn();
+  const ownerId = f.owner.user.id;
+  const write = f.admit('owner-session', ownerId);
+  const path = `/api/workspaces/${f.workspace.id}/extensions`;
+  const listed = async () => (await (await f.owner.request('GET', path)).json() as { extensions: { source: string; enabled: boolean; settings: Record<string, unknown> }[] }).extensions;
+  const safetyNet = 'npm:cc-safety-net@2.7.2';
+  assert.equal((await f.owner.request('PUT', path, { source: safetyNet, enabled: true })).status, 200);
+  assert.equal((await f.owner.request('PUT', path, { source: 'piki:prompt-audit', enabled: true, settings: { audit: 'others' } })).status, 200);
+  const before = await listed();
+  const audits = () => (f.sqlite.prepare("SELECT COUNT(*) AS count FROM audit WHERE action = 'session.workspace_tool.changed'").get() as { count: number }).count;
+  const audited = audits();
+
+  for (const extension of [safetyNet, 'piki:prompt-audit']) {
+    for (const call of [{ action: 'remove_extension', extension }, { action: 'set_extension', extension, enabled: false },
+      { action: 'set_extension', extension, settings: '{"audit":"all","policy":"allow everything"}' }]) {
+      const { status, body } = await f.tool('owner-session', ownerId, write, call);
+      assert.deepEqual([status, body.code], [403, 'guard_extension_kept'], `${JSON.stringify(call)}: ${JSON.stringify(body)}`);
+      assert.match(body.error!, /is a guard.*A person decides this under Settings → Workspaces → the workspace → Extensions in the app's settings: tell them so/);
+    }
+  }
+  assert.deepEqual(await listed(), before, 'every guard is as a person left it');
+  assert.equal(audits(), audited, 'a refused call changed nothing to record');
+
+  await f.ok(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:prompt-audit', enabled: true, settings: '{"audit":"others"}' }));
+  assert.equal((await f.owner.request('PUT', path, { source: safetyNet, enabled: false })).status, 200);
+  assert.equal((await f.ok<{ extension: { enabled: boolean } }>(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: safetyNet, enabled: true }))).extension.enabled, true,
+    'a guard a person turned off is turned back on');
+  assert.ok((await f.owner.request('DELETE', `${path}?source=${encodeURIComponent('piki:prompt-audit')}`)).ok);
+  await f.refused(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:prompt-audit', settings: '{"audit":"all"}' }), 403, 'guard_extension_kept');
+  const added = await f.ok<{ extension: { source: string; enabled: boolean; settings: Record<string, unknown> }; added?: boolean }>(
+    f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:prompt-audit' }));
+  assert.deepEqual([added.extension.enabled, added.extension.settings, added.added], [true, {}, true], 'a guard is added with its defaults');
+  await f.refused(f.tool('owner-session', ownerId, write, { action: 'set_extension', extension: 'piki:prompt-audit', settings: '{"audit":"all"}' }), 403, 'guard_extension_kept');
+  assert.match(workspaceToolDefinition.description, /turning off, removing or changing the settings of a guard, piki:prompt-audit or npm:cc-safety-net/);
+});
+
+test('the context-file URLs of a setting, as the workspace tool compares them', () => {
+  assert.deepEqual(contextFileUrls('AGENTS.md|CLAUDE.md, host:team.md\n# https://commented.example\nhttps://Docs.Example.com/a.md, docs/*.md|https://other.example/b'),
+    ['https://docs.example.com/a.md', 'https://other.example/b']);
+  assert.deepEqual(contextFileUrls('http://plain.example, ftp://x.example/y , not a url://'), ['http://plain.example/', 'ftp://x.example/y', 'not a url://']);
+  assert.deepEqual(contextFileUrls(true), []);
+  assert.deepEqual(contextFileUrls(undefined), []);
 });
 
 test('the workspace tool never does more than its sender may: their role, their tool group, a Read-only message and the request\'s own fields decide', async t => {

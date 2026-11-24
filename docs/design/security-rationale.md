@@ -321,12 +321,14 @@ per-connector install request. What bounds that:
   `403 extension_source_not_listed` an `npm:` or `git:` source the workspace doesn't list yet. Another version or commit
   of a listed package is refused the same way: it is new code, and the integrity lock is per source, so the lock of the
   version a person chose says nothing about it. What the tool can still do to a third-party source is what leaves its
-  code as it is: turn the listed source on or off, change its settings, and remove it. An agent steered by something it
+  code as it is: turn the listed source on or off, change its settings, and remove it, except for a guard
+  (`npm:cc-safety-net`, like `piki:prompt-audit`), which it only turns on ([workspace-tool.md](workspace-tool.md),
+  decision 13). An agent steered by something it
   read in an admin's session thus can't put a package of its choosing into every session; an owner or admin adds and
   updates third-party sources under **Settings → Workspaces → Extensions**.
 
 What it doesn't protect against: the `workspace` tool can turn on a third-party source that a person listed and left
-off, and it can remove one, including a guard such as `npm:cc-safety-net`; workspaces that turn the tool on accept
+off, and it can remove one that isn't a guard; workspaces that turn the tool on accept
 that ([workspace-tool.md](workspace-tool.md), decision 11). A third-party `npm:` extension's transitive npm dependencies, if specified as version
 ranges, resolve from `registry.npmjs.org` when the cache entry is populated and run inside the session's sandboxed
 `ProcessChannel` (`MODEL_CALLS_REFUSED`, behind the workspace's egress proxy), with the same confinement as `pnpm

@@ -94,18 +94,43 @@ button is. The `workspace` tool lets the agent make the change, within the same 
       allow nothing more than the exact-source rule does, since a different version never has the same digest.
 
     The refusal names the page (**Settings → Workspaces →** the workspace **→ Extensions**) so the agent tells the
-    person rather than looks for another way. `remove_extension` is unchanged: removing runs no new code.
+    person rather than looks for another way. `remove_extension` runs no new code, so this rule doesn't apply to it (decision 13 refuses removing a guard).
 
     The other actions were read for the same hole when this was added. None adds code or a remote MCP server: the
-    tool has no remote MCP action, and `sources` only reads. What a steered agent can still reach, all of it built-in
-    behaviour that decision 11 already leaves to the gates:
-    - `piki:context-files`' `context-files` setting takes `https://` pages, so a settings change can put a page's
-      text into every session's system prompt;
+    tool has no remote MCP action, and `sources` only reads. Two of the reachable built-in behaviours are now a
+    person's too (decision 13): adding a remote context page, and turning off a guard. What a steered agent can still
+    reach, which decision 11 leaves to the gates:
     - it can add `piki:skills` (repositories' skills are then listed for the model), `piki:tunnel` and
       `piki:artifacts`;
-    - it can remove or turn off a guard (`piki:prompt-audit`, `npm:cc-safety-net`);
     - it can open the network (`set_network_mode`, `allow_domain`), add a repository its sender can read, and move a
       member to a tool group with more tools.
+
+13. **Remote context and guards are a person's.** Two settings changes reach every session as surely as new code
+    does, so `set_extension` and `remove_extension` refuse them before calling the route, with the same pointer to
+    **Settings → Workspaces →** the workspace **→ Extensions** ("A person decides this ... in the app's settings: tell
+    them so, and don't try another way"):
+    - **A new remote context page** (`403 context_url_not_listed`, `requireListedContextUrls`). `piki:context-files`
+      fetches each `https://` entry of its `context-files` setting into the system prompt of every session, so a URL
+      the agent names would put text of an attacker's choosing in front of every model there. Each entry of the new
+      value that holds `://` (split on commas, new lines and `|`, comments skipped, compared as `new URL().href`, so
+      `https://Docs.Example.com/a` is the listed `https://docs.example.com/a`; `contextFileUrls` in
+      `packages/shared/src/workspace-management.ts`) must already be in the current value. Any scheme counts, not
+      only `https://`, so a URL the extension skips today can't be planted for a later version that reads it. Adding
+      `piki:context-files` anew, or after `remove_extension`, compares against nothing, so it takes no URL.
+    - **A guard turned off, removed or reconfigured** (`403 guard_extension_kept`, `requireGuardKept`). The guards
+      are `workspaceGuardExtensions`: `piki:prompt-audit` (checks each message before it reaches the agent) and
+      `npm:cc-safety-net` in any version (checks the commands the agent runs). `remove_extension` refuses them;
+      `set_extension` refuses `enabled: false` on one that is on, and any settings other than the current ones,
+      because a guard's settings (prompt audit's `audit`, `policy` and `model`) can let through as much as turning it
+      off would.
+
+    What stays allowed, because it narrows or keeps what a person chose: removing URLs from `context-files` and
+    changing its other entries (files in a clone, `host:<name>` files the host's owner placed) and `context-max-chars`;
+    turning `piki:context-files` on or off with the URLs a person listed; turning a guard on, adding
+    `piki:prompt-audit` with its default settings, and saving a guard with its settings unchanged. A guard that is
+    already off stays off when the call leaves `enabled` out. Other extensions that shape the prompt (`piki:skills`,
+    `piki:pr-flow`, `piki:sub-agents`) are Pikibun's own text or the workspace's repositories, not pages anyone on the
+    web can change, so they stay with decision 11's gates.
 
 ## Where things are
 
