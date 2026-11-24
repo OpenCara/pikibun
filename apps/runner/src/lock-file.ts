@@ -42,10 +42,11 @@ export async function beatOf(path: string, seen: SeenLock, timing: LockTiming = 
   }
 }
 
-export async function beatLock(path: string, content: string): Promise<"kept" | "lost" | "unknown"> {
+export async function beatLock(path: string, content: string): Promise<"kept" | "lost" | "missing" | "unknown"> {
   let seen: SeenLock | undefined;
   try { seen = await readLock(path); } catch { return "unknown"; }
-  if (!seen || seen.content !== content) return "lost";
+  if (!seen) return "missing";
+  if (seen.content !== content) return "lost";
   const now = new Date();
   try { await utimes(path, now, now); } catch { return "unknown"; }
   return "kept";
@@ -56,6 +57,6 @@ export async function takeAway(path: string, seen: SeenLock): Promise<void> {
   try { await rename(path, aside); } catch { return; }
   let moved: SeenLock | undefined;
   try { moved = await readLock(aside); } catch { }
-  if (moved && !same(moved, seen)) await link(aside, path).catch(() => {});
+  if (!moved || !same(moved, seen)) await link(aside, path).catch(() => {});
   await unlink(aside).catch(() => {});
 }

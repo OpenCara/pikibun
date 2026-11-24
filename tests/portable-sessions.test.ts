@@ -209,6 +209,14 @@ test('a live holder keeps its lease: one that refreshes it, one that resumes, an
   assert.equal(holder.lost(root), true, 'a holder whose lease was taken learns it at its next refresh');
   await holder.release(root);
   assert.equal(await readFile(path, 'utf8'), content, 'and leaves the taker\'s lease alone');
+
+  await rm(path);
+  await holder.acquire(root);
+  await rm(path);
+  await holder.refresh();
+  assert.equal(holder.lost(root), false, 'a lease missing for a moment, as while a taker looks at it, is not lost yet');
+  await holder.refresh();
+  assert.equal(holder.lost(root), true, 'one still missing at the next refresh is');
 });
 
 test('an attach lock left by a crash is taken over once its heartbeat stopped, though another process has its ID', async t => {
@@ -229,6 +237,13 @@ test('an attach lock left by a crash is taken over once its heartbeat stopped, t
   assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1, 'one of the takers gets it');
   for (const outcome of outcomes) if (outcome.status === 'rejected') assert.ok(outcome.reason instanceof IdentityBusy);
   assert.deepEqual((await readdir(join(root, 'sessions'))).filter(name => name.startsWith('session-1')), [], 'and removes it when done');
+  const taken = `${process.ppid} beat ${randomUUID()}`;
+  assert.deepEqual(await store.withLock('session-1', async held => {
+    const before = await held();
+    await writeFile(path, taken);
+    return [before, await held()];
+  }), [true, false], 'an attach can ask whether its lock is still its own');
+  assert.equal(await readFile(path, 'utf8'), taken, 'and leaves a lock that isn\'t its own alone');
 });
 
 test('a running connection uses the key that replaced its own: rotated, reset or imported', async t => {

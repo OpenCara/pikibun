@@ -123,11 +123,14 @@ the ID to some other process, and a lease read by its ID would then never end. S
   nothing to move; all then create their own lease, which only one can (it is linked into place). Deleting by path
   instead let a slower taker remove the lease the faster one had just made. A taker that finds it moved something
   other than the lease it judged (the content or the time differs: another taker's new lease, or the holder's
-  refreshed one) links it back, which never replaces a file.
+  refreshed one), or that can't read what it moved, links it back, which never replaces a file. A holder that finds
+  its lease missing at one refresh waits for the next before it takes it as lost, since it may be in a taker's hands
+  for that moment.
 
 The identity's attach lock (`<identity>/sessions/<id>.lock`: the process ID, `beat` and a random value) works the
 same way, refreshed by a timer of its own while the attach runs, and removed afterwards only if it is still the
-attach's own.
+attach's own. The attach reads it once more just before it rewrites the binding, and stops if the lock is no longer
+its own.
 
 **Why not `flock`.** The connector's state and the local server's use a `flock` (or `lockf`) guardian, a child
 process per lock, and a named pipe on Windows (`apps/runner/src/lease.ts`), which the kernel releases when the holder

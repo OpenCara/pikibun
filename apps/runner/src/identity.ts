@@ -225,7 +225,7 @@ export class IdentityStore {
     await rm(join(this.root, "sessions", `${sessionId}.json`), { force: true });
   }
 
-  async withLock<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+  async withLock<T>(sessionId: string, work: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
     assertId(sessionId);
     if (this.#held.has(sessionId)) throw new IdentityBusy("This session is being attached already");
     this.#held.add(sessionId);
@@ -253,10 +253,11 @@ export class IdentityStore {
       }
       const beating = setInterval(() => { void beatLock(path, content); }, LOCK_BEAT_MS);
       beating.unref();
-      try { return await work(); }
+      const held = async () => (await readLock(path).catch(() => undefined))?.content === content;
+      try { return await work(held); }
       finally {
         clearInterval(beating);
-        if ((await readLock(path).catch(() => undefined))?.content === content) await unlink(path).catch(() => {});
+        if (await held()) await unlink(path).catch(() => {});
       }
     } finally { this.#held.delete(sessionId); }
   }

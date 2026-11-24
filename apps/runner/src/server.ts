@@ -428,7 +428,7 @@ export class RunnerService {
     }
     const authority = new RunnerSession(binding, directory, this.config);
     await authority.authorize(ticket.actorId, "manage", ticket.policyVersion);
-    await portable.store.withLock(source, async () => {
+    await portable.store.withLock(source, async held => {
       const marker = join(directory, WORK_MARKER);
       if (await exists(marker)) throw new RunnerError(409, "This session is working. Stop it, or wait for it to finish, where it is attached now");
       if (await this.leases.holder(directory) === "other" && !await this.leases.requestRelease(directory, RELEASE_WAIT_MS)) {
@@ -444,6 +444,7 @@ export class RunnerService {
       await this.leases.acquire(directory);
       try {
         if (await exists(marker)) throw new RunnerError(409, "This session started working where it is attached now. Try again once it finishes");
+        if (!await held()) throw new RunnerError(409, "Another Pikibun on this computer took over attaching this session. Try again shortly");
         if (source !== id && !target) await portable.store.mark(id, directory);
         try { await this.rebind(binding, directory, [source, id]); }
         catch (error) {

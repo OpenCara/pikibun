@@ -21,6 +21,7 @@ export class PortableLeases {
   readonly #content = `${process.pid} ${this.#token} ${LOCK_BEAT}`;
   readonly #held = new Set<string>();
   readonly #lost = new Set<string>();
+  readonly #missing = new Set<string>();
   #beating?: Promise<void>;
 
   constructor(private readonly timing: LockTiming = {}) { liveLeases.add(this.#token); }
@@ -63,6 +64,7 @@ export class PortableLeases {
 
   #hold(directory: string): void {
     this.#lost.delete(directory);
+    this.#missing.delete(directory);
     this.#held.add(directory);
   }
 
@@ -71,13 +73,18 @@ export class PortableLeases {
   async release(directory: string): Promise<void> {
     this.#held.delete(directory);
     this.#lost.delete(directory);
+    this.#missing.delete(directory);
     if (await this.holder(directory).catch(() => "none") === "self") await unlink(join(directory, LEASE_FILE)).catch(() => {});
   }
 
   refresh(): Promise<void> {
     this.#beating ??= (async () => {
       for (const directory of [...this.#held]) {
-        if (await beatLock(join(directory, LEASE_FILE), this.#content) === "lost" && this.#held.delete(directory)) this.#lost.add(directory);
+        const state = await beatLock(join(directory, LEASE_FILE), this.#content);
+        const gone = state === "lost" || (state === "missing" && this.#missing.has(directory));
+        if (state === "missing") this.#missing.add(directory);
+        else this.#missing.delete(directory);
+        if (gone && this.#held.delete(directory)) this.#lost.add(directory);
       }
     })().finally(() => { this.#beating = undefined; });
     return this.#beating;
