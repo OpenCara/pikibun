@@ -8,14 +8,38 @@ export class RemoteMcpError extends Error {}
 
 interface JsonRpcAnswer { id?: unknown; result?: unknown; error?: { code?: unknown; message?: unknown } }
 
+const EVENT_END = /\r?\n\r?\n/g;
+
+function eventMessages(event: string, messages: unknown[]): void {
+  const data = event.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n');
+  if (!data) return;
+  try { messages.push(JSON.parse(data)); } catch { }
+}
+
 export function eventStreamMessages(body: string): unknown[] {
   const messages: unknown[] = [];
-  for (const event of body.split(/\r?\n\r?\n/)) {
-    const data = event.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n');
-    if (!data) continue;
-    try { messages.push(JSON.parse(data)); } catch { }
-  }
+  for (const event of body.split(EVENT_END)) eventMessages(event, messages);
   return messages;
+}
+
+export class EventStreamReader {
+  #tail = '';
+  #scanned = 0;
+
+  push(text: string): unknown[] {
+    const messages: unknown[] = [];
+    this.#tail += text;
+    const end = new RegExp(EVENT_END);
+    end.lastIndex = this.#scanned;
+    let start = 0;
+    for (let match = end.exec(this.#tail); match; match = end.exec(this.#tail)) {
+      eventMessages(this.#tail.slice(start, match.index), messages);
+      start = end.lastIndex;
+    }
+    if (start) this.#tail = this.#tail.slice(start);
+    this.#scanned = Math.max(0, this.#tail.length - 3);
+    return messages;
+  }
 }
 
 export function answersId(message: unknown, id: number): boolean {
