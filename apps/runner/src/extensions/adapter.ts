@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
-import { CompactionTask, defineDoc, defineExtension, defineTool, GenerationTask, hook, section, ToolTask, type Extension, type HookRegistration,
+import { CompactionTask, defineDoc, defineDocFamily, defineExtension, defineTool, GenerationTask, hook, section, ToolTask, type Extension, type HookRegistration,
   type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionFactory, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
+import { SessionEntries, type EntryStorage } from "./entries.js";
 import { isJsonValue } from "./json.js";
 import { pikibunOwn, type LoadedSource } from "./load.js";
 import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
 import { wholeForScripts } from "../script-output.js";
 import { modelCallSources } from "./complete.js";
-import type { CommandAnswer, CompleteHandler, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionSkill,
+import type { AppendedHandler, CommandAnswer, CompleteHandler, StoredEntry, ExtensionChannel, ExtensionCommandDescription, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionSkill,
   ExtensionToolDescription, ListedSkill } from "./protocol.js";
 import { addedPrompt, directChannel, ExtensionWorker, modelDescription } from "./worker.js";
 import { ProcessChannel } from "./process.js";
@@ -32,13 +33,18 @@ export interface ExtensionHost {
   readonly commandTimeoutMs?: number;
   warn(source: string, message: string): void;
   readonly piki?: PikiSession;
-  extensionProcess?(warn: (source: string, message: string) => void, options?: { complete?: CompleteHandler; key?: string }): ExtensionChannel;
+  extensionProcess?(warn: (source: string, message: string) => void,
+    options?: { complete?: CompleteHandler; key?: string; appended?: AppendedHandler; entries?(source: string): StoredEntry[] | undefined }): ExtensionChannel;
+  readonly entries?: EntryStorage;
   complete?: CompleteHandler;
   modelCallsAllowed?(source: string): Promise<boolean>;
 }
 
 export const ExtensionPrompts = defineDoc<{ prompts: Record<string, string> }>({ kind: "pikibun.extension-prompts", version: 1, scope: "conversation",
   history: "latest", fork: "current", initial: () => ({ prompts: {} }), checkpointWhen: () => true });
+
+export const ExtensionEntries = defineDocFamily<{ entries: StoredEntry[] }, null>({ kind: "pikibun.extension-entries", version: 1, scope: "session", family: true,
+  initial: () => ({ entries: [] }), checkpointWhen: () => true });
 
 export const extensionKey = (source: string) => `pikibun-extension-${createHash("sha256").update(source).digest("hex").slice(0, 12)}`;
 
@@ -83,6 +89,7 @@ interface Link {
   sandboxed: boolean;
   channel: ExtensionChannel;
   handlers: Set<string>;
+  live: { pending: boolean; restored?: Promise<void> };
   toolsSeen?: string;
   onTools?: (tools: ExtensionToolDescription[]) => void;
 }
@@ -91,7 +98,9 @@ async function request<M extends ExtensionMethod>(host: ExtensionHost, link: Lin
   const model = modelDescription(host.model());
   const thinkingLevel = host.thinkingLevel?.();
   const context = { ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
+  if (method !== "restore") await link.live.restored;
   const answer = await link.channel.call(method, { ...params, context, ...(link.toolsSeen ? { toolsSeen: link.toolsSeen } : {}) } as ExtensionParams<M>, signal);
+  link.live.pending = answer.pending === true;
   if (answer.handlers) {
     link.handlers.clear();
     for (const event of answer.handlers) link.handlers.add(event);
@@ -139,9 +148,26 @@ export class SessionExtensions {
   #isolated?: ExtensionChannel;
   readonly #guards = new Map<string, ExtensionChannel>();
   readonly #callers = new Map<string, ExtensionChannel>();
+  readonly #entries: SessionEntries;
 
   constructor(private readonly host: ExtensionHost, reserved: Iterable<string> = []) {
     this.#reserved = new Set(reserved);
+    this.#entries = new SessionEntries(host.entries, (source, message) => host.warn(source, message));
+  }
+
+  private kept(channel: () => ExtensionChannel | undefined, only?: string): { appended: AppendedHandler; entries(source: string): StoredEntry[] | undefined } {
+    const own = (source: string) => this.#opened.find(item => item.source === (only ?? source))?.channel === channel();
+    return {
+      appended: (source, entry) => { if (own(source)) this.#entries.append(only ?? source, entry); },
+      entries: source => own(source) ? this.#entries.list(only ?? source) : undefined,
+    };
+  }
+
+  private async restore(extension: OpenedSource): Promise<void> {
+    try {
+      const entries = await this.#entries.load(extension.source);
+      if (entries.length) await withTimeout(() => request(this.host, extension, "restore", { source: extension.source, entries }), this.host.hookTimeoutMs, "restoring its entries", extension.channel);
+    } catch (error) { this.host.warn(extension.source, `its entries couldn't be handed back: ${describe(error)}`); }
   }
 
   reserve(names: Iterable<string>): void {
@@ -161,9 +187,11 @@ export class SessionExtensions {
     const warn = (source: string, message: string) => host.warn(source, message);
     if (inConnector) {
       return this.#connector ??= directChannel(new ExtensionWorker({ directory: host.directory, warn, factories: source => this.#factories.get(source),
-        live: { model: () => host.model(), thinkingLevel: () => host.thinkingLevel?.(), ...(host.modelRegistry ? { modelRegistry: host.modelRegistry } : {}) } }));
+        live: { model: () => host.model(), thinkingLevel: () => host.thinkingLevel?.(), ...(host.modelRegistry ? { modelRegistry: host.modelRegistry } : {}) },
+        appended: this.kept(() => this.#connector).appended }));
     }
-    return this.#isolated ??= host.extensionProcess?.(warn) ?? new ProcessChannel({ directory: host.directory, warn });
+    const kept = this.kept(() => this.#isolated);
+    return this.#isolated ??= host.extensionProcess?.(warn, kept) ?? new ProcessChannel({ directory: host.directory, warn, ...kept });
   }
 
   private bound(source: string): CompleteHandler | undefined {
@@ -176,7 +204,8 @@ export class SessionExtensions {
     const existing = this.#guards.get(source);
     if (existing) return existing;
     const complete = this.bound(source);
-    const channel = new ProcessChannel({ directory: host.directory, warn: (from, message) => host.warn(from, message), ...(complete ? { complete } : {}) });
+    const channel = new ProcessChannel({ directory: host.directory, warn: (from, message) => host.warn(from, message), ...(complete ? { complete } : {}),
+      ...this.kept(() => this.#guards.get(source), source) });
     this.#guards.set(source, channel);
     return channel;
   }
@@ -187,8 +216,9 @@ export class SessionExtensions {
     if (existing) return existing;
     const warn = (from: string, message: string) => host.warn(from, message);
     const complete = this.bound(source);
-    const channel = host.extensionProcess?.(warn, { ...(complete ? { complete } : {}), key: source })
-      ?? new ProcessChannel({ directory: host.directory, warn, ...(complete ? { complete } : {}) });
+    const kept = this.kept(() => this.#callers.get(source), source);
+    const channel = host.extensionProcess?.(warn, { ...(complete ? { complete } : {}), key: source, ...kept })
+      ?? new ProcessChannel({ directory: host.directory, warn, ...(complete ? { complete } : {}), ...kept });
     this.#callers.set(source, channel);
     return channel;
   }
@@ -215,7 +245,7 @@ export class SessionExtensions {
         const caller = factories === undefined && callers.has(source);
         const modelCalls = !!this.host.complete && (guard || caller);
         const channel = guard ? this.guardChannel(source) : caller ? this.callerChannel(source) : this.channel(factories !== undefined);
-        const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set() };
+        const link: Link = { source, sandboxed: factories === undefined && channel.sandboxed === true, channel, handlers: new Set(), live: { pending: false } };
         const result = await request(this.host, link, "open", { source, files: loaded.files, models, ...(loaded.mount ? { mount: loaded.mount } : {}),
           ...(modelCalls ? { modelCalls: true as const } : {}), ...(loaded.skills?.length ? { skills: loaded.skills } : {}) });
         for (const error of result.errors) this.host.warn(source, error);
@@ -231,7 +261,7 @@ export class SessionExtensions {
         this.#broken.add(source);
       }
     }
-    if (this.#started) for (const extension of opened) await this.emit(extension, { type: "session_start", reason: "startup" });
+    if (this.#started) await this.start(opened);
   }
 
   select(sources: readonly string[], namespaces: Iterable<string> = []): { selected: SessionExtension[]; created: Extension[] } {
@@ -350,9 +380,17 @@ export class SessionExtensions {
     return this.#opened.find(item => item.source === source)?.sandboxed === true;
   }
 
-  sessionStart(): Promise<void> {
+  async sessionStart(): Promise<void> {
     this.#started = true;
-    return this.each({ type: "session_start", reason: "startup" });
+    await this.start([...this.#opened]);
+  }
+
+  private async start(opened: readonly OpenedSource[]): Promise<void> {
+    for (const extension of opened) extension.live.restored = this.restore(extension);
+    for (const extension of opened) {
+      await extension.live.restored;
+      await this.emit(extension, { type: "session_start", reason: "startup" });
+    }
   }
 
   async beforeAgentStart(prompt: string, images: ImageContent[] | undefined, skills: readonly ListedSkill[] = []): Promise<Record<string, string>> {
@@ -370,12 +408,18 @@ export class SessionExtensions {
   }
 
   async agentEnd(messages: Message[], aborted: boolean): Promise<void> {
+    for (const extension of this.#opened) {
+      if (extension.live.pending && !extension.handlers.has("agent_end")) {
+        await this.one(extension, "agent_end", settings => request(this.host, extension, "emit", { source: extension.source, settings, event: { type: "agent_end", messages: [] } }));
+      }
+    }
     await this.each({ type: "agent_end", messages });
     await this.each({ type: "agent_settled", aborted });
   }
 
   async shutdown(): Promise<void> {
     await this.each({ type: "session_shutdown", reason: "quit" });
+    await this.#entries.flush().catch(() => {});
     for (const channel of [this.#connector, this.#isolated, ...this.#guards.values(), ...this.#callers.values()]) await channel?.close().catch(() => {});
   }
 }
@@ -508,7 +552,7 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
         return undefined;
       },
       onYield: async () => {
-        if (!has("agent_before_settle")) return undefined;
+        if (!has("agent_before_settle") && !link.live.pending) return undefined;
         const settings = await settingsNow();
         if (!settings) return undefined;
         try {
@@ -516,6 +560,22 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
           return result.continue ? { continue: result.text || "Continue." } : undefined;
         } catch (error) {
           host.warn(source, `agent_before_settle: ${describe(error)}`);
+          return undefined;
+        }
+      },
+    }));
+  }
+  else {
+    hooks.push(hook(GenerationTask, {
+      onYield: async () => {
+        if (!link.live.pending) return undefined;
+        const settings = await settingsNow();
+        if (!settings) return undefined;
+        try {
+          const result = await timed("sendUserMessage", () => ask("beforeSettle", { source, settings }));
+          return result.continue && result.text ? { continue: result.text } : undefined;
+        } catch (error) {
+          host.warn(source, `sendUserMessage: ${describe(error)}`);
           return undefined;
         }
       },

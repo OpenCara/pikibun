@@ -79,12 +79,7 @@ export interface CompleteAnswer {
 
 export type CompleteHandler = (request: CompleteRequest, signal: AbortSignal) => Promise<CompleteAnswer>;
 
-export interface StoredEntry {
-  id: string;
-  timestamp: string;
-  customType: string;
-  data: string;
-}
+export type StoredEntry = { id: string; timestamp: string; customType: string; data: string };
 
 export type AppendedHandler = (source: string, entry: unknown) => void;
 

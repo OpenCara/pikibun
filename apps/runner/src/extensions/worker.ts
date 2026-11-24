@@ -7,11 +7,12 @@ import { createAssistantMessageEventStream, type AssistantMessage, type Context 
 import { createEventBus, createExtensionRuntime, ExtensionRunner, SessionManager, type AgentToolResult, type ExtensionActions, type ExtensionContext,
   type ExtensionContextActions, type ExtensionFactory, type ModelRegistry, type ToolCallEvent, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
+import { dataText, entryRefusal } from "./entries.js";
 import { isJsonValue } from "./json.js";
 import { loadSource, piLoader, summarizeModules, supportedEvents } from "./load.js";
 import { collectSkills, discoveredPath } from "./skills.js";
-import type { CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionSkill, ExtensionToolDescription,
-  RequestContext, Scoped, ToolOutput } from "./protocol.js";
+import type { AppendedHandler, CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionRequests, ExtensionSkill, ExtensionToolDescription,
+  RequestContext, Scoped, StoredEntry, ToolOutput } from "./protocol.js";
 
 export interface WorkerOptions {
   directory: string;
@@ -19,6 +20,29 @@ export interface WorkerOptions {
   factories?(source: string): { path: string; factory: ExtensionFactory }[] | undefined;
   live?: { model(): Model<string> | undefined; thinkingLevel(): string | undefined; modelRegistry?: ModelRegistry };
   complete?: CompleteHandler;
+  appended?: AppendedHandler;
+}
+
+export const FOLLOW_UPS_LIMIT = 8;
+export const FOLLOW_UP_LIMIT = 16_000;
+const RUN_METHODS: ReadonlySet<string> = new Set(["beforeAgentStart", "toolCall", "toolResult", "context", "messageEnd", "turnEnd", "beforeSettle", "execute"]);
+const RUN_EVENTS: ReadonlySet<string> = new Set(["agent_start", "turn_start", "tool_execution_start", "tool_execution_end"]);
+
+function sessionView(holder: { current: SessionManager }): SessionManager {
+  return new Proxy({}, { get: (_target, name) => {
+    const value = Reflect.get(holder.current, name) as unknown;
+    return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(holder.current) : value;
+  } }) as SessionManager;
+}
+
+function restoredSession(directory: string, entries: readonly StoredEntry[]): SessionManager {
+  let parentId: string | null = null;
+  const restored = entries.map(entry => {
+    const item = { type: "custom" as const, id: entry.id, parentId, timestamp: entry.timestamp, customType: entry.customType, ...(entry.data ? { data: JSON.parse(entry.data) as unknown } : {}) };
+    parentId = entry.id;
+    return item;
+  });
+  return SessionManager.inMemory(directory, undefined, restored);
 }
 
 export const MODEL_CALLS_REFUSED = "Installed extensions can't call models in Pikibun: a session's model and its host's model list are visible to them, the host's credentials are not.";
@@ -88,6 +112,7 @@ function describedRegistry(models: () => Model<string>[], streamSimple?: ReturnT
 
 const inputCall = new AsyncLocalStorage<{ notices: string[]; errors: string[] }>();
 const commandCall = new AsyncLocalStorage<{ notices: string[]; messages: string[] }>();
+const runCall = new AsyncLocalStorage<true>();
 
 export const NOTICE_LIMIT = 500;
 export const NOTICES_PER_SOURCE = 50;
@@ -148,6 +173,8 @@ type Handlers = { [M in ExtensionMethod]: (params: ExtensionParams<M>, signal?: 
 export class ExtensionWorker {
   readonly #runners = new Map<string, ExtensionRunner>();
   readonly #skillPaths = new Map<string, string[]>();
+  readonly #sessions = new Map<string, { current: SessionManager }>();
+  readonly #followUps = new Map<string, string[]>();
   #context: RequestContext = {};
   #models: Model<string>[] = [];
   readonly #registry: ModelRegistry | undefined;
@@ -157,7 +184,17 @@ export class ExtensionWorker {
     this.#registry = options.live ? options.live.modelRegistry : describedRegistry(() => this.#models);
     this.#handlers = {
       open: params => this.open(params),
-      emit: async params => { await this.runner(params).emit(params.event as never); return null; },
+      emit: async params => {
+        if (params.event.type === "agent_end") this.#followUps.delete(params.source);
+        await this.runner(params).emit(params.event as never);
+        return null;
+      },
+      restore: async params => {
+        const session = this.#sessions.get(params.source);
+        if (!session) throw new Error(`${params.source} isn't open`);
+        session.current = restoredSession(this.options.directory, params.entries);
+        return null;
+      },
       input: params => this.input(params),
       beforeAgentStart: params => this.beforeAgentStart(params),
       toolCall: async params => {
@@ -185,8 +222,10 @@ export class ExtensionWorker {
       beforeSettle: async params => {
         const context = boundary();
         const result = await this.runner(params).emitBoundary({ type: "agent_before_settle", outcome: "completed" } as never, () => context as never);
-        const text = result.entries.map(entry => "content" in entry ? textOf((entry as { content: unknown }).content) : "").filter(Boolean).join("\n\n");
-        return { continue: result.continue === true, text };
+        const queued = this.#followUps.get(params.source) ?? [];
+        this.#followUps.delete(params.source);
+        const text = [...result.entries.map(entry => "content" in entry ? textOf((entry as { content: unknown }).content) : ""), ...queued].filter(Boolean).join("\n\n");
+        return { continue: result.continue === true || queued.length > 0, text };
       },
       compact: async params => {
         const result = await this.runner(params).emit({ type: "session_before_compact", reason: params.reason, willRetry: params.reason === "overflow",
@@ -213,6 +252,8 @@ export class ExtensionWorker {
         }
         this.#runners.clear();
         this.#skillPaths.clear();
+        this.#sessions.clear();
+        this.#followUps.clear();
         return null;
       },
     };
@@ -222,19 +263,21 @@ export class ExtensionWorker {
     if (!Object.hasOwn(this.#handlers, method)) throw new Error(`Unknown extension request ${String(method)}`);
     const handler = this.#handlers[method] as (params: ExtensionParams<M>, signal?: AbortSignal) => Promise<ExtensionRequests[M][1]>;
     if (params.context) this.#context = params.context;
-    const value = await requestContext.run(params.context ?? this.#context, () => handler(params, signal));
+    const inRun = RUN_METHODS.has(method) || (method === "emit" && RUN_EVENTS.has((params as ExtensionParams<"emit">).event?.type));
+    const value = await requestContext.run(params.context ?? this.#context, () => inRun ? runCall.run(true, () => handler(params, signal)) : handler(params, signal));
     const source = (params as { source?: unknown }).source;
     const runner = typeof source === "string" ? this.#runners.get(source) : undefined;
     if (!runner || typeof source !== "string") return { value };
+    const pending = this.#followUps.get(source)?.length ? { pending: true as const } : {};
     const handlers = [...supportedEvents].filter(event => runner.hasHandlers(event));
     let tools: ExtensionToolDescription[];
     try { tools = describeTools(runner); }
     catch (error) {
       this.options.warn(source, `its tools can't be described: ${error instanceof Error ? error.message : String(error)}`);
-      return { value, handlers };
+      return { value, handlers, ...pending };
     }
     const signature = toolSignature(tools);
-    return { value, handlers, toolsSignature: signature, ...(params.toolsSeen !== signature ? { tools } : {}) };
+    return { value, handlers, toolsSignature: signature, ...(params.toolsSeen !== signature ? { tools } : {}), ...pending };
   }
 
   private runner(params: Scoped): ExtensionRunner {
@@ -262,8 +305,25 @@ export class ExtensionWorker {
     const result = await loadSource(factories ? { files: params.files, factories } : { files: params.files }, directory, createEventBus(), runtime);
     const registry = !this.options.live && params.modelCalls && this.options.complete
       ? describedRegistry(() => this.#models, streamOver(source, this.options.complete)) : this.#registry;
-    const runner = new ExtensionRunner(result.extensions, runtime, directory, SessionManager.inMemory(directory), registry ?? (undefined as never));
-    runner.bindCore(noActions(runner, message => warn(source, message), () => this.thinkingLevel()), contextActions(() => this.model()));
+    const session = { current: SessionManager.inMemory(directory) };
+    this.#sessions.set(source, session);
+    const runner = new ExtensionRunner(result.extensions, runtime, directory, sessionView(session), registry ?? (undefined as never));
+    runner.bindCore(noActions(runner, message => warn(source, message), () => this.thinkingLevel(), {
+      appendEntry: (customType, data) => {
+        const text = dataText(data);
+        const refusal = entryRefusal(customType, text);
+        if (refusal) return refusal;
+        const id = session.current.appendCustomEntry(customType as string, text ? JSON.parse(text) : undefined);
+        this.options.appended?.(source, { id, timestamp: session.current.getEntry(id)?.timestamp, customType, data: text });
+        return undefined;
+      },
+      followUp: text => {
+        const queued = this.#followUps.get(source) ?? [];
+        if (queued.length >= FOLLOW_UPS_LIMIT) return false;
+        this.#followUps.set(source, [...queued, text.slice(0, FOLLOW_UP_LIMIT)]);
+        return true;
+      },
+    }), contextActions(() => this.model()));
     const declined = async () => ({ cancelled: true });
     runner.bindCommandContext({ waitForIdle: async () => {}, newSession: declined, fork: declined, navigateTree: declined, switchSession: declined,
       reload: async () => {} } as never);
@@ -339,15 +399,27 @@ function applyFlags(runner: ExtensionRunner, settings: ExtensionSettings): void 
   }
 }
 
-function noActions(runner: ExtensionRunner, warn: (message: string) => void, thinkingLevel: () => string | undefined): ExtensionActions {
+interface SessionActions {
+  appendEntry(customType: unknown, data: unknown): string | undefined;
+  followUp(text: string): boolean;
+}
+
+function noActions(runner: ExtensionRunner, warn: (message: string) => void, thinkingLevel: () => string | undefined, session: SessionActions): ExtensionActions {
   const said = new Set<string>();
-  const noop = (name: string) => () => { if (!said.has(name)) { said.add(name); warn(`${name}() does nothing in Pikibun`); } };
+  const once = (message: string) => { if (!said.has(message)) { said.add(message); warn(message); } };
+  const noop = (name: string) => () => once(`${name}() does nothing in Pikibun`);
   return {
-    sendMessage: noop("sendMessage"), appendEntry: noop("appendEntry"),
+    sendMessage: noop("sendMessage"),
+    appendEntry: (customType: unknown, data?: unknown) => {
+      const refusal = session.appendEntry(customType, data);
+      if (refusal) once(`appendEntry() kept nothing: ${refusal}`);
+    },
     sendUserMessage: (content: unknown) => {
       const sent = commandCall.getStore()?.messages;
       if (sent) sent.push(textOf(content));
-      else noop("sendUserMessage")();
+      else if (!runCall.getStore()) once("sendUserMessage() does nothing outside a command or a message that is running: an extension can't start the agent in Pikibun");
+      else if (!textOf(content).trim()) once("sendUserMessage() sends text only in Pikibun");
+      else if (!session.followUp(textOf(content))) once(`sendUserMessage() queues at most ${FOLLOW_UPS_LIMIT} messages for one reply`);
     },
     setSessionName: noop("setSessionName"), getSessionName: () => undefined, setLabel: noop("setLabel"),
     getActiveTools: () => runner.getAllRegisteredTools().map(tool => tool.definition.name), getAllTools: () => [],

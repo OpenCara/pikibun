@@ -16,7 +16,7 @@ import { bindingRemote } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { ExtensionPrompts, SessionExtensions, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
+import { ExtensionEntries, ExtensionPrompts, SessionExtensions, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
 import { SessionBuiltins } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
@@ -402,6 +402,10 @@ export class RunnerSession {
       wholeResults: this.#wholeResults, operations: this.#operations, apiLease: options => this.#egress?.apiLease(options), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
       mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(), extensionProcess: this.extensionProcess(),
+      extensionEntries: {
+        read: async key => (await this.harness.snapshot(ExtensionEntries, key, context))?.entries,
+        write: async (key, entries) => { await this.root.commit(async tx => { (await tx.doc(ExtensionEntries, key, null)).entries = entries; }, context); },
+      },
     });
     this.#repositories = new SessionRepositories({
       grant: () => this.#egress!.grant(), cached: !!config.repositoryCache, mirror: (repository, onProgress) => this.mirror(repository, onProgress),
@@ -1018,7 +1022,7 @@ export class RunnerSession {
     if (sandbox instanceof HelperWorkspace && sandbox.runsProcesses) {
       if (!sandbox.nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
       return (warn, options) => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox),
-        ...(options?.complete ? { complete: options.complete } : {}) });
+        ...(options?.complete ? { complete: options.complete } : {}), ...(options?.appended ? { appended: options.appended } : {}), ...(options?.entries ? { entries: options.entries } : {}) });
     }
     if (!(sandbox instanceof Sandbox)) return undefined;
     const nodeBin = sandbox.nodeBin;
@@ -1026,7 +1030,8 @@ export class RunnerSession {
     return (warn, options) => {
       const key = `${this.binding.session.id}\0extensions${options?.key ? `\0${options.key}` : ""}`;
       return new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path),
-        ...(options?.complete ? { complete: options.complete } : {}), launch: sandboxLaunch({
+        ...(options?.complete ? { complete: options.complete } : {}), ...(options?.appended ? { appended: options.appended } : {}), ...(options?.entries ? { entries: options.entries } : {}),
+        launch: sandboxLaunch({
       socketDirectory: serviceSocketDirectory(key, this.directory), nodeBin, worktree: sandbox.worktree,
       start: async (command, binds, onOutput, signal) => {
         const config = await this.hostConfig();
