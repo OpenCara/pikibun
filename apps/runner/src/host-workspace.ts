@@ -507,10 +507,10 @@ export class HostWorkspace implements SessionWorkspace {
     const expire = () => {
       const left = started + timeoutMs + (sudo?.waitedSince(started) ?? 0) - Date.now();
       if (sudo?.waiting()) timer = setTimeout(expire, SUDO_RECHECK_MS);
-      else if (left > 0) timer = setTimeout(expire, left);
+      else if (left > 0) timer = setTimeout(expire, Math.min(left, 2_147_000_000));
       else { failure ??= `Command exceeded ${timeoutMs}ms time limit`; kill(); }
     };
-    timer = setTimeout(expire, timeoutMs);
+    timer = setTimeout(expire, Math.min(timeoutMs, 2_147_000_000));
     const capture = (target: Buffer[], chunk: Buffer) => {
       const remaining = Math.max(0, MAX_OUTPUT_BYTES - bytes);
       if (remaining) target.push(chunk.subarray(0, remaining));

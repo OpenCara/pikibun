@@ -2,12 +2,14 @@
 
 Every account also has a [private workspace](#your-private-workspace) of its own, pinned at the top of the sidebar. Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** shows the workspace's name with **New session** beside it, and four tabs that stay in place while their sections scroll:
 
-- **Overview**: **General**, **Setup** (until a source is added, a host paired and a session started), **Members**, **Invite link**, **Pending members** and, for owners and admins, **Data export**.
+- **Overview**: **General**, **Presets** (for owners and admins), **Setup** (until a source is added, a host paired and a session started), **Members**, **Invite link**, **Pending members** and, for owners and admins, **Data export**.
 - **Sources**: the **Git repositories**, document sources and workspace connections sessions work on, and **Push access**.
 - **Agents**: what agents can use and reach. **Network access**, **Your GitHub reach** (each member's own choice of whether their own messages may act on [any GitHub repository they can access](github.md#repositories-outside-the-workspace)), **Sub-task sessions**, **Extensions**, **Remote MCP servers**, **Tool groups** and **Members' tools**.
 - **Sessions**: how sessions run and are kept. **Schedules**, **Transcripts**, **Attachments**, **Prompt cache** (whether hosts [keep sessions' prompt caches warm](models-and-tools.md#prompt-cache-warming)), **Build caches** (directories hosts keep for [builds](#build-caches)), **Archived sessions** (whether their files are [packed automatically](backups.md#packing-archived-sessions)) and **Session database**.
 
-A link from elsewhere in the app opens the tab it is about: **Add a source** opens **Sources**, a session's **Schedules** tab opens **Sessions**.
+A link from elsewhere in the app opens the tab it is about: **Add a source** opens **Sources**, a session's **Schedules** tab opens **Sessions**. On the web the tab is in the page's address (`#/settings/workspaces/<id>/agents`), so a link to a tab can be shared and the browser's back and forward buttons move between tabs.
+
+In **Agents → Extensions**, each extension shows in a line; opening one shows its whole description, its tools and its switches, and the filter above the list finds one by its name, its source or one of its tools.
 
 ## What a new workspace starts with
 
@@ -15,8 +17,20 @@ A workspace starts ready to work in, and its owners and admins narrow it where t
 
 - **Network access** is **Open**: sandboxed commands reach any public host, besides the workspace's repositories. Choose **Allowlist** or **Off** under **Agents → Network access** (see [Network access](hosts.md#network-access)).
 - **Your GitHub reach** is on for each member: messages you send yourself, in sessions you own, may act on [any GitHub repository you can access](github.md#repositories-outside-the-workspace). Each member turns their own off.
-- **Extensions**: Pikibun's starter set is on: [context files](extensions.md#context-files-pikicontext-files) (`piki:context-files`), `piki:git`, `piki:node`, `piki:python`, scheduled prompts (`piki:schedule`), other sessions (`piki:sessions`), [workspace management](extensions.md#workspace-management-pikiworkspace) (`piki:workspace`), artifacts (`piki:artifacts`) and skills (`piki:skills`). The popular third-party extensions and the prompt audit are listed, turned off, and the rest of [Pikibun's tools](extensions.md#session-tools) are added under **Extensions**.
+- **Extensions**: Pikibun's starter set is on: [context files](extensions.md#context-files-pikicontext-files) (`piki:context-files`), `piki:git`, the GitHub tools (`piki:github`) and the GitHub CLI (`piki:gh`), `piki:node`, `piki:python`, scheduled prompts (`piki:schedule`), other sessions (`piki:sessions`), [workspace management](extensions.md#workspace-management-pikiworkspace) (`piki:workspace`), artifacts (`piki:artifacts`) and skills (`piki:skills`). So is web search and page reading, through the third-party `pi-web-access` package, locked to the digest npm publishes for its pinned version: sandboxed Linux and macOS hosts fetch it themselves on first use and run it in the session's sandbox, and other hosts run it once their owner installs it. The other popular third-party extensions and the prompt audit are listed, turned off, and the rest of [Pikibun's tools](extensions.md#session-tools) are added under **Extensions**.
 - **New sessions run on the host** wherever their host takes them, with **Where it runs → Sandbox** one choice away (see [Starting a session](sessions.md)).
+
+### Presets
+
+**New workspace** asks what the workspace **starts as**, and **Overview → Presets** applies one to a workspace you have (owners and admins; `POST /api/workspaces/:id/preset` with `{"preset": "open" | "balanced" | "locked"}`, and `preset` in `POST /api/workspaces`):
+
+| Preset | Network access | Your GitHub reach | Extensions on |
+|---|---|---|---|
+| **Open** (recommended, and what a workspace is without a choice) | Open | On | The starter set above |
+| **Balanced** | Allowlist: package registries only | On | The starter set without third-party packages |
+| **Locked down** | Off | Off | Git alone, beside the file tools |
+
+Applying a preset to an existing workspace sets its network access and the reach of whoever applies it, and turns the preset's extensions on, keeping their settings. **Balanced** also turns off the third-party packages the workspace has, and **Locked down** every other extension; nothing is removed, and **Open** turns nothing off. Other members' reach and every other setting stay as they are. It is recorded in the workspace's activity (`workspace.preset.applied`).
 
 These are defaults for what nobody has chosen. Shared workspaces made before them keep **Off** and the workspace's repositories only, for the members they had, until someone changes that; private workspaces follow the new defaults, and nobody's saved choice changed.
 

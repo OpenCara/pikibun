@@ -18,7 +18,7 @@ import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { monospace, palette, text } from "../theme";
 import { Checkbox, Field, TextField } from "../form";
-import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Row, Section, Small } from "../ui";
+import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Section, Small } from "../ui";
 import { ExtensionSettingsFields } from "./extension-fields";
 import { ExtensionsManager, type ExtensionChange } from "./extensions-manager";
 
@@ -166,8 +166,17 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
     }, "Removed. Sessions stop offering its tools from their next message.");
   }
   const sessionToolSources = new Set<string>(pikiSessionToolExtensions().map(item => item.source));
+  const filter = signal("");
+  const matches = (...values: readonly string[]) => {
+    const wanted = filter().trim().toLowerCase();
+    return !wanted || values.some(value => value.toLowerCase().includes(wanted));
+  };
   const listed = () => (data()?.extensions ?? []).filter(extension => !sessionToolSources.has(extension.source));
   const sessionToolsOn = () => pikiSessionToolExtensions().filter(item => !item.retired && (item.core || sessionToolExtensionOn(data()?.extensions ?? [], item.source)));
+  const shownSessionTools = () => sessionToolsOn().filter(item => matches(item.title, item.source, ...item.sessionTools ?? []));
+  const shownListed = () => listed().filter(extension => matches(pikiExtension(extension.source)?.title ?? "", extension.source,
+    ...extensionOffer(extension.source, installed())?.tools.map(tool => tool.name) ?? []));
+  const filterable = () => sessionToolsOn().length + listed().length > 6;
   const sessionToolsOff = () => pikiSessionToolExtensions().filter(item => !item.retired && !item.core && !sessionToolExtensionOn(data()?.extensions ?? [], item.source));
   const installed = () => installedOn(data()?.hosts ?? []);
   const usable = () => (data() ? workspaceTools(data()!.extensions, installed()) : undefined);
@@ -185,7 +194,8 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
     <Section title="Extensions" testID="workspace-extensions" info={<View style={{ gap: 8 }}>
       <Note>Pi extensions add tools, prompt text and hooks to this workspace's sessions. A session runs those enabled here that its host has installed at the same version: its host's owner installs them there, from the host's page or with pikibun extensions. Sandboxed Linux and macOS hosts fetch npm: extensions themselves on first use, checked against the digest Pikibun locked from npm when the extension was added, and run them only in the session's sandbox.</Note>
       <Note>Tools sessions can use lists every tool they get: Pikibun's own, which the session-tool extensions below add, the built-in code mode, and those of the extensions enabled here, as hosts that have them report them.</Note>
-      <Note>Pikibun's own extensions are added as the workspace needs them: Git, GitHub and the forge's command-line tool with its first repository there, a document source's reader with its first source of that kind. Add the others (Node.js, Python, the browser, scheduled prompts, ...) with Add extension.</Note>
+      <Note>A new workspace starts with Pikibun's starter set on: Git, GitHub and its command-line tool, Node.js, Python, scheduled prompts, other sessions, workspace management, artifacts, skills, context files and web access. A document source's reader comes with the first source of its kind. Add the others (Rust, Go, the browser, the tunnel, ...) with Add extension, and remove what you don't want.</Note>
+      <Note>Each row shows what the extension is in a line: open it for the whole description, its tools and its switches. The filter finds an extension by its name, its source or one of its tools.</Note>
       <Note>Installed extensions run in the session's sandbox on Linux hosts, and on macOS hosts with the sandbox, within the network access above, and their tools run for anyone who may send the session messages. Elsewhere, and for Pikibun's own, they run on the host, as its owner's OS user, outside the sandbox: their tool calls run like host commands, for the host's owner and members granted host commands, and for everyone else only where the host's owner lets every session run them.</Note>
       <Note>Settings are the extension's own options. Never put secrets in them: an extension reads keys on its host, which its owner sets up.</Note>
     </View>} action={admin() ? (
@@ -201,20 +211,30 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
           {current => (
             <>
               <If when={usable()}>{tools => <ToolsOverview usable={tools()} />}</If>
-              <Each of={sessionToolsOn()} key={item => item.source}>
+              <If when={filterable()}>
+                <CardBody>
+                  <TextField testID="extensions-filter" value={filter()} onChange={value => filter.set(value)} maxLength={80} placeholder="Filter by name, source or tool" />
+                  <If when={filter().trim() && !shownSessionTools().length && !shownListed().length}><Small testID="extensions-filter-empty">{`Nothing here matches “${filter().trim()}”. Add extension offers what this workspace doesn't have.`}</Small></If>
+                </CardBody>
+              </If>
+              <Each of={shownSessionTools()} key={item => item.source}>
                 {item => (
-                  <Row leading={<Icon name="tool" size={16} color={palette().muted} />} title={`${item().title} · ${item().source}`}
-                    hint={extensionHint(extensionOffer(item().source, installed()), undefined, Infinity,
-                      item().core ? undefined : item().optIn ? "Hosts on older connectors don't have it." : "Hosts on older connectors offer its tools whatever is chosen here.")}
-                    trailing={item().core ? <Badge>Always on</Badge> : admin()
-                      ? <Button small variant="ghost" icon="trash" label="Remove" disabled={action.busy()} onPress={() => removeSessionTools(item().source)} />
-                      : <Badge tone="success">On</Badge>} />
+                  <CollapsibleRow testID={`session-tools-${item().name}`} leading={<Icon name="tool" size={16} color={palette().muted} />} title={`${item().title} · ${item().source}`}
+                    hint={extensionHint(extensionOffer(item().source, installed()), undefined, 110)}
+                    trailing={<Badge tone={item().core ? "neutral" : "success"}>{item().core ? "Always on" : "On"}</Badge>}>
+                    <Small>{`${item().description}${item().core ? "" : item().optIn ? " Hosts on older connectors don't have it." : " Hosts on older connectors offer its tools whatever is chosen here."}`}</Small>
+                    <If when={!item().core && admin()}>
+                      <View style={{ flexDirection: "row" }}>
+                        <Button small variant="outline" icon="trash" label="Remove" testID={`session-tools-remove-${item().name}`} disabled={action.busy()} onPress={() => removeSessionTools(item().source)} />
+                      </View>
+                    </If>
+                  </CollapsibleRow>
                 )}
               </Each>
               <If when={!listed().length}>
                 <EmptyState title="No other extensions">{admin() ? "Add one of Pikibun's tools, such as Node.js or Python, or a Pi extension, such as npm:cc-safety-net@2.7.2 or piki:gh (the GitHub CLI), to run it in this workspace's sessions." : "Owners and admins add the extensions this workspace's sessions run."}</EmptyState>
               </If>
-              <Each of={listed()} key={extension => extension.source}>
+              <Each of={shownListed()} key={extension => extension.source}>
                 {extension => {
                   const cli = () => pikiExtension(extension().source);
                   const controlPlane = () => cli()?.controlPlane === true;
@@ -226,8 +246,8 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                   const needsNote = () => missing().length ? `Does nothing without ${missing().map(item => item.title).join(" and ")}, which ${missing().length === 1 ? "is" : "are"} off here` : undefined;
                   return (
                     <CollapsibleRow leading={<Icon name={controlPlane() ? "sparkles" : "tool"} size={16} color={palette().muted} />} title={cli() ? `${cli()!.title} · ${extension().source}` : extension().source}
-                      hint={controlPlane() ? `${descriptionSummary(cli()!.description, 300)}\nRuns in Pikibun itself: hosts install nothing`
-                        : extensionHint(offer(), extension().enabled ? shadowedOf(extension().source) : undefined, 300, undefined,
+                      hint={controlPlane() ? `${descriptionSummary(cli()!.description, 110)}\nRuns in Pikibun itself: hosts install nothing`
+                        : extensionHint(offer(), extension().enabled ? shadowedOf(extension().source) : undefined, 110, undefined,
                         [`${cli() ? "On" : "Installed on"} ${hostsWithIt()} of ${current().hosts.length} ${current().hosts.length === 1 ? "host" : "hosts"}${hostsFetching() ? `; ${hostsFetching()} more fetch it in their sandbox on first use` : ""}`, needsNote()].filter(Boolean).join("\n"), registered())}
                       trailing={<Badge tone={extension().enabled ? "success" : "neutral"}>{extension().enabled ? "On" : "Off"}</Badge>}>
                       <Each of={missing()} key={item => item.source}>
@@ -238,6 +258,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                           </Banner>
                         )}
                       </Each>
+                      <If when={controlPlane() ? undefined : offer()?.description ?? registered()}>{description => <Small>{description().trim()}</Small>}</If>
                       <If when={offer()?.tools.length}>
                         <ToolList tools={offer()!.tools.map(tool => ({ ...tool, source: extension().source }))} shadowed={extension().enabled ? shadowedOf(extension().source) : undefined} />
                       </If>

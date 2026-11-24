@@ -10,6 +10,9 @@ describe("the web app's addresses", () => {
     expect(parseRoute("#/w/w1/new")).toEqual({ name: "new", workspaceId: "w1" });
     expect(parseRoute("#/settings/hosts/c1")).toEqual({ name: "settings", section: "hosts", id: "c1" });
     expect(parseRoute("#/settings")).toEqual({ name: "settings" });
+    expect(parseRoute("#/settings/workspaces/w1/agents")).toEqual({ name: "settings", section: "workspaces", id: "w1", tab: "agents" });
+    expect(routeHash({ name: "settings", section: "workspaces", id: "w1", tab: "sessions" })).toBe("#/settings/workspaces/w1/sessions");
+    expect(routeHash({ name: "settings", section: "workspaces", tab: "sessions" })).toBe("#/settings/workspaces");
     for (const unknown of ["", "#", "#/", "#/nope", "#/s/", "#/s/%E0%A4%A"]) expect(parseRoute(unknown)).toEqual({ name: "home" });
     for (const route of [{ name: "session", sessionId: "a b" }, { name: "shared", token: "x/y" }, { name: "settings", section: "hosts", id: "c1" }, { name: "new", workspaceId: "w1" }] as const) {
       expect(parseRoute(routeHash(route))).toEqual(route);
