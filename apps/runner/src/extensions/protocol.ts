@@ -79,9 +79,19 @@ export interface CompleteAnswer {
 
 export type CompleteHandler = (request: CompleteRequest, signal: AbortSignal) => Promise<CompleteAnswer>;
 
+export interface StoredEntry {
+  id: string;
+  timestamp: string;
+  customType: string;
+  data: string;
+}
+
+export type AppendedHandler = (source: string, entry: unknown) => void;
+
 export interface ExtensionRequests {
   open: [{ source: string; files: string[]; models: Model<string>[]; mount?: string; modelCalls?: true; skills?: string[] },
     { errors: string[]; tools: ExtensionToolDescription[]; commands?: ExtensionCommandDescription[] }];
+  restore: [{ source: string; entries: StoredEntry[] }, null];
   command: [Scoped & { name: string; args: string }, CommandAnswer];
   emit: [Scoped & { event: { type: string } & Record<string, unknown> }, null];
   input: [Scoped & { text: string; images: ImageContent[]; inputSource: "interactive" | "rpc" }, InputAnswer];
@@ -101,7 +111,7 @@ export interface ExtensionRequests {
 
 export type ExtensionMethod = keyof ExtensionRequests;
 export type ExtensionParams<M extends ExtensionMethod> = ExtensionRequests[M][0] & { context?: RequestContext; toolsSeen?: string };
-export interface ExtensionAnswer<M extends ExtensionMethod> { value: ExtensionRequests[M][1]; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string }
+export interface ExtensionAnswer<M extends ExtensionMethod> { value: ExtensionRequests[M][1]; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string; pending?: true }
 
 export interface ExtensionChannel {
   readonly sandboxed?: boolean;
