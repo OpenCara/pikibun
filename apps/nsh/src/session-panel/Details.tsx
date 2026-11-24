@@ -9,7 +9,7 @@ import {
   managesSession, sessionRoleAllowed, sessionRoleGrantable, sessionRoleOf, sessionRolePermissions, workspaceManagerRoles, workspaceSessionPermissions,
 } from "../../../../packages/shared/src/policy";
 import { builtinExtensions } from "../../../../packages/shared/src/host-config";
-import { tunnelUnavailableText } from "../../../../packages/shared/src/tunnel";
+import { tunnelLinkHeld, tunnelUnavailableText } from "../../../../packages/shared/src/tunnel";
 import { hostToolPrograms, programsMissingText } from "../../../../packages/shared/src/program-install";
 import type { SessionLink } from "../../../../packages/shared/src/sharing";
 import type { CrossSessionMessage, SessionConnections } from "../../../../packages/shared/src/cross-session";
@@ -85,6 +85,7 @@ function TunnelSection(props: Part & { canStop: boolean }) {
   const action = createAction();
   const name = createUsername();
   const tunnel = () => props.view()!.tunnel!;
+  const opens = () => tunnelLinkHeld(tunnel());
   async function stop() {
     if (!await confirm({ title: "Take this server offline?", confirmLabel: "Stop", destructive: true,
       message: `${tunnel().url} stops answering, and the server stops in the session's sandbox. The agent can put it online again, at a new address, in a message of the host's owner or a member granted host commands.` })) return;
@@ -94,15 +95,17 @@ function TunnelSection(props: Part & { canStop: boolean }) {
     }, "Offline.");
   }
   return (
-    <Section title="Online" info="The agent put the session's web server online through a Cloudflare tunnel, in a message of its host's owner or a member granted host commands. The server runs in the session's sandbox; cloudflared runs on the host and reaches only its port. Anyone with the address can open it.">
+    <Section title="Online" info="The agent put the session's web server online through a Cloudflare tunnel, in a message of its host's owner or a member granted host commands. The server runs in the session's sandbox; cloudflared runs on the host and reaches only its port. Anyone with its link can open it, and the session's collaborators get the link here; a tunnel started as public opens at its address alone.">
       <Row leading={icon("globe")} title={tunnel().url.replace(/^https:\/\//, "")}
         hint={`${tunnel().command} on port ${tunnel().port} · started by ${name(tunnel().startedBy, true)} · online until ${timestamp(tunnel().expiresAt)} at most`}
         trailing={<>
           <Badge tone={tunnel().connected ? "success" : "warning"} dot>{tunnel().connected ? "Online" : "Connecting"}</Badge>
-          <Button small variant="ghost" icon="external-link" label="Open" onPress={() => openExternal(tunnel().url)} />
+          <If when={opens()}><Button small variant="ghost" icon="external-link" label="Open" onPress={() => openExternal(tunnel().url)} /></If>
           <If when={props.canStop}><Button small variant="outline" icon="stop" label="Stop" disabled={action.busy()} onPress={() => void stop()} /></If>
         </>} />
-      <CardBody><Field label="Public address"><CopyField value={tunnel().url} /></Field></CardBody>
+      <If when={opens()} else={<CardBody><Note>Opening it takes its link, which the session's collaborators get. Viewers see that it is online.</Note></CardBody>}>
+        <CardBody><Field label="Public address"><CopyField value={tunnel().url} /></Field></CardBody>
+      </If>
       <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
     </Section>
   );
