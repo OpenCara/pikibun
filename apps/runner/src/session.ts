@@ -160,6 +160,7 @@ export type RunnerConfig = {
   tunnels?: { open(socket: string, signal?: AbortSignal, access?: TunnelAccess): Promise<QuickTunnel>; status(): HostTunnelStatus | undefined };
   reportTunnel?: (report: SessionTunnelReport) => Promise<void>;
   unsandboxed?: boolean;
+  sessionsLeaveSandbox?: boolean;
   pikiHostSignIn?: boolean;
   sandboxBackend?: SandboxBackendConfig;
   openStorage?: (path: string) => Promise<Storage>;

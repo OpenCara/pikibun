@@ -42,6 +42,7 @@ import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./
 import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
 import type { LocalPage, LocalView } from "../../../packages/shared/src/app-host-protocol.js";
 import { PRIVATE_REPORT_LIMIT, PRIVATE_SESSIONS_VERSION } from "../../../packages/shared/src/private-sessions.js";
+import { ReportDigest } from "./connector/report-digest.js";
 import type { PrivateHome } from "./private-home.js";
 
 const STATE_FILE = "connector.json";
@@ -204,6 +205,7 @@ export interface ConnectorOptions {
   buildCaches?: boolean;
   buildCacheEvictMs?: number;
   unsandboxed?: boolean;
+  sessionsLeaveSandbox?: boolean;
   privateEnvironment?: readonly string[];
   sandboxBackend?: SandboxBackendConfig;
   gpu?: GpuKind | null;
@@ -572,17 +574,12 @@ export class LocalConnector {
     const home = this.options.privateHome;
     if (!home) return;
     const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
-    let last = "";
-    let sent = 0;
+    const reports = new ReportDigest();
     while (!signal.aborted) {
       try {
         const sessions = await home.sessions(signal);
         const report = sessions ? JSON.stringify(sessions.slice(0, PRIVATE_REPORT_LIMIT)) : "";
-        if (sessions && (report !== last || Date.now() - sent > 60_000)) {
-          await this.calls.callback(generation, "/api/connectors/self/private-sessions", { sessions: JSON.parse(report) as unknown[] });
-          last = report;
-          sent = Date.now();
-        }
+        if (sessions && reports.due(report)) await reports.send(report, body => this.calls.callback(generation, "/api/connectors/self/private-sessions", body));
       } catch (error) {
         if (error instanceof CallbackRefused && error.status < 500 && error.status !== 408 && error.status !== 429) return;
       }

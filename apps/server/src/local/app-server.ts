@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { stdioTransport, type Transport } from '../../../runner/src/app-host-transport.js';
-import { assertConnectorPlatform, assertPrerequisites, hostIsolation, loadConnectorModels, unsandboxedWarning } from '../../../runner/src/connect-setup.js';
+import { appUnsandboxedWarning, assertConnectorPlatform, assertPrerequisites, hostIsolation, loadConnectorModels } from '../../../runner/src/connect-setup.js';
 import type { LocalModels } from '../../../runner/src/local-pi.js';
 import { ConnectorSetupError } from '../../../runner/src/protocol.js';
 import { identityDirectory } from '../../../runner/src/identity.js';
@@ -68,7 +68,7 @@ async function inspect(): Promise<ServerInspection> {
   const host = await hostCheck();
   return {
     stateDir, port: state?.port ?? DEFAULT_LOCAL_PORT, hostMode: host.mode,
-    ...(host.mode === 'unsandboxed' ? { unsandboxedWarning: unsandboxedWarning() } : {}),
+    ...(host.mode === 'unsandboxed' ? { unsandboxedWarning: appUnsandboxedWarning() } : {}),
     ...(host.problem ? { hostProblem: host.problem } : {}),
   };
 }
@@ -94,7 +94,7 @@ async function launch(request: ServerStartRequest): Promise<void> {
   } else {
     const setHost = (next: ServerHostState) => { if (running === current) { current.hostState = next; status(); } };
     current.host = startLocalHost(server, stateDir, {
-      localModels: host.models, unsandboxed, identityDir: identityDirectory(),
+      localModels: host.models, unsandboxed, sessionsLeaveSandbox: unsandboxed, identityDir: identityDirectory(),
       onWaiting: () => setHost('waiting'),
       onStatus: (next, reason) => {
         setHost(next);

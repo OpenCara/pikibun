@@ -64,6 +64,13 @@ forwarding to it, and a message sent from any of them is queued in the one sessi
   is the only process that opens them, with the options of the process that started it (models, sandbox, resources),
   so nothing changes hands. Connectors paired with other servers keep running those servers' workspace sessions, as
   now.
+- **A session keeps a record of its sandbox.** Whichever process holds the lease decides how the private sessions
+  run, and two of a computer's host processes can differ: one started with a sandbox, another without. So a host
+  keeps, beside each session's binding, how it last ran (`ran.json`: sandboxed or not, since when;
+  `apps/runner/src/sandbox-record.ts`), written when the session opens and only when that changed. A host without a
+  sandbox refuses to open a session whose record says it last ran in one, unless it was started to allow that
+  ([below](#a-session-that-would-leave-its-sandbox)). This holds for every session on every host, not only private
+  ones: the same folder can be opened by a connector started differently.
 - **Shared** (`pikibun serve --share`), it is also a team's server and writes no discovery file: its owner's private
   sessions are its own, but other servers can't reach them until it runs for its owner alone again.
 
@@ -109,16 +116,68 @@ owner's alone.
 ### What the other server keeps
 
 - **A cached record per session** (`forwarded_sessions`: the session's ID, the connector it came through, its record
-  checked field by field, its last activity, and when it was reported). The connector reports the local server's list
-  every five seconds when it changes, and every minute anyway (`POST /api/connectors/self/private-sessions`); records
-  in forwarded answers update it too. The session list shows these records in the private workspace, as its owner's,
-  with `forwarded: { hostName, online }`, online while the connector is connected and has reported in the last three
+  checked field by field, its last activity, and when its row was last written). The connector reports the local
+  server's list every five seconds when it changes, and every minute anyway
+  (`POST /api/connectors/self/private-sessions`); records in forwarded answers update it too, when they differ from
+  what is kept. The session list shows these records in the private workspace, as its owner's, with
+  `forwarded: { hostName, online }`, online while the connector is connected and was heard from in the last three
   minutes. Nothing of the conversation is kept.
+- **A report it already holds costs nothing** ([below](#reports-by-digest)).
 - **Notifications.** A reported change of activity (working to done or failed, or waiting) notifies the owner's devices
   signed in to that server, as for its own sessions. Its feed names the session in `forwarded_session_id`, since there
   is no session row to reference.
 - **Nothing else.** Schedules run on the local server only, the session branch and pushes use its GitHub sign-in, and
   backups are its own.
+
+### Reports by digest
+
+A report used to be checked and written whole each time: every record verified, the connector's rows deleted and
+inserted again, up to 500 of them, every minute and whenever one session's activity changed. Now:
+
+- **The server answers a report with its digest** (`digest`, a SHA-256 of the session owner and the reported list,
+  `apps/server/src/report-digests.ts`) and remembers it for the connector, in memory: one server runs per database
+  ([single instance](security-rationale.md#single-instance)), and a restart only means the next report is applied in
+  full.
+- **A connector that got a digest sends it alone** while its list is unchanged (`{ digest }`, with no `sessions`;
+  `apps/runner/src/connector/report-digest.ts`). The server answers a digest it holds with the same digest and
+  writes nothing; one it doesn't hold (it restarted, an hour passed, a row changed) with `resend`, and the connector
+  sends the list.
+- **A whole report whose digest it holds** is neither checked nor written either, so a connector from before this,
+  which always sends the list, costs the server one hash.
+- **A changed report writes only what changed:** rows whose record or activity differ are written, rows no longer
+  reported are deleted, and the rest are left as they are.
+- **Online** no longer reads from the rows alone: the server keeps when it last heard from each connector beside the
+  digest, and a row's own time serves after a restart until the first report.
+- **What ends a digest:** a different report, a forwarded answer that changed a row, an hour (a held report is
+  applied in full at least that often), and a restart. A report that was being applied while a forwarded answer
+  changed a row is not held.
+- **Older and newer together.** An older server answers without a digest, so the connector keeps sending the list;
+  should a server stop taking digests, the connector falls back to the list. An older connector ignores the answer's
+  new field. Nothing in the manifest changes.
+
+The [identity report](portable-sessions.md#a-delegation-is-signed-at-pairing) is handled the same way on the server
+alone: its digest covers the delegation, rotations, settings and sessions, and a report it holds skips the signature
+checks and the writes. Its answer (`archived`, `sign`) is still worked out each time, and the connector sends the
+whole report as before, since older connectors read that answer strictly and it depends on the reported sessions.
+
+### A session that would leave its sandbox
+
+- **Refused by default.** Opening a session whose record says it last ran in a sandbox, on a host that would run it
+  without one, fails with a reason the session's page shows (`LEFT_SANDBOX`, status 422, which every server version
+  passes on), and the host logs it once a minute at most. Nothing else about the session changes, and a host with a
+  sandbox still opens it.
+- **Allowed by the host's own user, when they start it.** From a terminal, `--sessions-leave-sandbox` beside
+  `--unsafe-no-sandbox` (`pikibun connect` and `pikibun serve`), which the typed confirmation doesn't stand for: a
+  service unit that passes `--unsafe-no-sandbox` has no reader. In the desktop app, the consent dialog for running
+  unsandboxed says that such sessions are opened too, and the consent covers them: a person reads it each time they
+  start the host. A host the app starts again by itself at launch uses the consent given when it was last started,
+  as it does for running unsandboxed at all.
+- **Recorded and logged.** A session opened this way gets `leftSandboxAt` in its record and a line in the host's log,
+  and from then on it opens without the sandbox like any session that never had one.
+- **Not asked per session.** The one who can be asked is the user at the host, when the host starts; a prompt on the
+  session's page would need a new request through every server and the forwarding list. The session's owner sees the
+  refusal's reason, and the host's owner decides. For a private session they are the same person.
+- **Sessions from before the record** have none, so they open as before and get one then.
 
 ## In the apps
 

@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { appOrigin, fail, now } from './http.js';
 import { body, fields, identifier as identifierField } from './schemas.js';
 import { ownerRequest } from './runner.js';
+import { dropReport, holdReport, reportDigest, reportHeld } from './report-digests.js';
 import { sessionSchedules } from './scheduled-prompts.js';
 import { markSessionChanged } from './session-changes.js';
 import { workspaceTranscriptSettings } from './transcript-settings.js';
@@ -148,6 +149,24 @@ async function reportedSessions(value: unknown, key: string): Promise<ReportedSe
 async function identityReport(c: AppContext): Promise<Response> {
   const connector = await authenticateConnector(c);
   const input = await body(c, identityReportBody, { maxBytes: REPORT_BYTES });
+  const reportKey = `identity:${connector.id}`;
+  const digest = await reportDigest([connector.owner_id, appOrigin(c.env), input.delegation, input.rotations, input.settings ?? null, input.sessions]);
+  const attached = reportHeld(c.env.DB, reportKey, digest) ? attachedIn(input.sessions) : await applyIdentityReport(c, connector, input, reportKey, digest);
+  const archived = reportsArchived(input.sessions) ? await archivedHere(c.env, connector.id, connector.owner_id, attached) : undefined;
+  const pending = await c.env.DB.query<SettingsRow>('SELECT * FROM portable_settings WHERE user_id = ?').bind(connector.owner_id).first();
+  const sign = pending?.pending_version && pending.pending_json && Number(pending.pending_version) > Number(pending.version)
+    ? { version: Number(pending.pending_version), settings: JSON.parse(pending.pending_json) } : undefined;
+  return c.json({ ...(sign ? { sign } : {}), ...(archived ? { archived } : {}) });
+}
+
+function attachedIn(sessions: readonly unknown[]): Set<string> {
+  return new Set(sessions.map(item => item as { id?: unknown; attached?: unknown } | null)
+    .flatMap(item => item && item.attached === true && typeof item.id === 'string' ? [item.id] : []));
+}
+
+async function applyIdentityReport(c: AppContext, connector: { id: string; owner_id: string }, input: z.output<typeof identityReportBody>,
+  reportKey: string, digest: string): Promise<Set<string>> {
+  const applying = dropReport(c.env.DB, reportKey);
   let delegation: Signed<StatementOf<'delegation'>>;
   try { delegation = await verifiedSigned(input.delegation, 'delegation'); }
   catch { fail(400, 'invalid_delegation', 'The host\'s delegation is not validly signed.'); }
@@ -189,15 +208,11 @@ async function identityReport(c: AppContext): Promise<Response> {
     try { settings = await verifiedSigned(input.settings, 'settings'); } catch { settings = undefined; }
     if (settings && settings.statement.key === key) await storeSettings(c.env, connector.owner_id, settings, true);
   }
-  const archived = reportsArchived(input.sessions) ? await archivedHere(c.env, connector.id, connector.owner_id, sessions) : undefined;
-  const pending = await c.env.DB.query<SettingsRow>('SELECT * FROM portable_settings WHERE user_id = ?').bind(connector.owner_id).first();
-  const sign = pending?.pending_version && pending.pending_json && Number(pending.pending_version) > Number(pending.version)
-    ? { version: Number(pending.pending_version), settings: JSON.parse(pending.pending_json) } : undefined;
-  return c.json({ ...(sign ? { sign } : {}), ...(archived ? { archived } : {}) });
+  if (sessions.length === input.sessions.length) holdReport(c.env.DB, reportKey, digest, applying);
+  return new Set(sessions.filter(session => session.attached).map(session => session.id));
 }
 
-async function archivedHere(env: Env, connectorId: string, userId: string, sessions: ReportedSession[]): Promise<string[]> {
-  const attached = new Set(sessions.filter(session => session.attached).map(session => session.id));
+async function archivedHere(env: Env, connectorId: string, userId: string, attached: ReadonlySet<string>): Promise<string[]> {
   if (!attached.size) return [];
   const rows = await env.DB.query<{ id: string }>(`SELECT id FROM sessions WHERE connector_id = ? AND owner_id = ? AND portable_key IS NOT NULL
     AND status = 'archived' AND detached_at IS NULL`).bind(connectorId, userId).all();
