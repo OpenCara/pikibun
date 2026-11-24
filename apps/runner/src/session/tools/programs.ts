@@ -5,7 +5,7 @@ import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest
 import { CALL_TIMEOUT_MAX_SECONDS, callTimeout } from "../../host-config.js";
 import { programLimits } from "../../program-command.js";
 import type { StoredOperation } from "../../operation-record.js";
-import { callEnvironment, callEnvironmentLimits, defaultedTimeout, directoryHint, LONG_RUN_DEFAULT_SECONDS, timedOutHint } from "../../program-defaults.js";
+import { callEnvironment, callEnvironmentLimits, defaultedTimeout, directoryHint, killedHint, LONG_RUN_DEFAULT_SECONDS, timedOutHint } from "../../program-defaults.js";
 import { RunnerError } from "../../protocol.js";
 import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "../../python-command.js";
 import { commandText, type ToolContext } from "./context.js";
@@ -21,7 +21,8 @@ export type HintedOperation = StoredOperation & { hint?: string };
 
 export function programHints(context: ToolContext, approval: StoredOperation, directory: string, defaulted: boolean): HintedOperation {
   const hints = [directoryHint({ worktree: context.sandbox.worktree, directory, status: approval.status, result: approval.result }),
-    defaulted && approval.status === "failed" ? timedOutHint(approval.result) : undefined].filter(Boolean);
+    defaulted && approval.status === "failed" ? timedOutHint(approval.result) : undefined,
+    approval.status === "failed" ? killedHint(approval.result) : undefined].filter(Boolean);
   return hints.length ? { ...approval, hint: hints.join(" ") } : approval;
 }
 
