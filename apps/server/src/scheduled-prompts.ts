@@ -9,7 +9,7 @@ import { CronError, isTimeZone, nextCronTime, parseCron } from '../../../package
 import { hasPermission, sessionCreatorRoles, workspaceManagerRoles } from '../../../packages/shared/src/policy.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  admissionExpired, auditStatement, hostCapabilities, requireCallbackScope, requireMember, requireSession, requireSessionCreator, requireToolCall, sessionAccess,
+  admissionExpired, auditStatement, hostCapabilities, isDeletedWorkspace, requireCallbackScope, requireMember, requireSession, requireSessionCreator, requireToolCall, sessionAccess,
 } from './authority/index.js';
 import { requireModel, usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
@@ -384,6 +384,8 @@ async function runDueSchedule(env: Env, schedule: DueSchedule, at: number, times
     : await env.DB.query<{ activity: string | null }>('SELECT activity FROM sessions WHERE id = ?').bind(target).first('activity');
   if (activity === 'working' || activity === 'waiting') {
     outcome = { scheduleId: schedule.id, sessionId: target, error: 'session_busy' };
+  } else if (await isDeletedWorkspace(env, schedule.workspace_id)) {
+    outcome = { scheduleId: schedule.id, sessionId: target, error: 'workspace_deleted' };
   } else if (!(await ownerMayRun(env, schedule))) {
     outcome = { scheduleId: schedule.id, sessionId: target, error: 'owner_unavailable' };
     pause = true;

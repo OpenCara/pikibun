@@ -21,7 +21,7 @@ interface AdminUserRow {
   workspaces: number; hosts: number; sessions: number;
 }
 interface AdminWorkspaceRow {
-  id: string; name: string; owner_id: string; owner_name: string; owner_github_login: string | null; created_at: string;
+  id: string; name: string; owner_id: string; owner_name: string; owner_github_login: string | null; created_at: string; deleted_at: string | null;
   members: number; repositories: number; hosts: number; sessions: number;
 }
 interface AdminHostRow {
@@ -99,7 +99,9 @@ export function registerAdmin(app: Hono<AppEnv>): void {
   app.get('/api/admin/workspaces', async c => {
     const rows = await c.env.DB.query<AdminWorkspaceRow>(`SELECT w.id, w.name, w.owner_id, w.created_at,
         u.display_name AS owner_name, u.github_login AS owner_github_login,
-        (SELECT COUNT(*) FROM workspace_members m WHERE m.workspace_id = w.id) AS members,
+        (SELECT COUNT(*) FROM workspace_members m WHERE m.workspace_id = w.id)
+          + (SELECT COUNT(*) FROM deleted_workspace_members dm WHERE dm.workspace_id = w.id) AS members,
+        (SELECT dw.deleted_at FROM deleted_workspaces dw WHERE dw.workspace_id = w.id) AS deleted_at,
         (SELECT COUNT(*) FROM workspace_repositories r WHERE r.workspace_id = w.id) AS repositories,
         (SELECT COUNT(*) FROM connector_workspaces cw JOIN connectors c ON c.id = cw.connector_id
           WHERE cw.workspace_id = w.id AND ${liveHost}) AS hosts,
@@ -107,7 +109,7 @@ export function registerAdmin(app: Hono<AppEnv>): void {
       FROM workspaces w JOIN users u ON u.id = w.owner_id ORDER BY w.created_at DESC, w.id DESC LIMIT ?`)
       .bind(adminListLimit + 1).all();
     const workspaces: AdminWorkspace[] = rows.map(row => ({ id: row.id, name: row.name, ownerId: row.owner_id, ownerName: row.owner_name,
-      ownerGithubLogin: row.owner_github_login, createdAt: row.created_at, members: Number(row.members),
+      ownerGithubLogin: row.owner_github_login, createdAt: row.created_at, deletedAt: row.deleted_at, members: Number(row.members),
       repositories: Number(row.repositories), hosts: Number(row.hosts), sessions: Number(row.sessions) }));
     return c.json(list(workspaces) satisfies AdminList<AdminWorkspace>);
   });

@@ -1,5 +1,5 @@
 import { effect, Scroll, signal, Text, untracked, View, type JSX } from "nsh";
-import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type UserProfile, type WorkspaceRole } from "../../../../packages/shared/src/types";
+import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type DeletedWorkspace, type UserProfile, type WorkspaceRole } from "../../../../packages/shared/src/types";
 import { adminManagedRoles } from "../../../../packages/shared/src/policy";
 import {
   gitProviderHasForge, gitProviderNames, repositoryLimits, repositoryUrlHost, repositoryUrlOnHost, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type WorkspaceRepository,
@@ -88,8 +88,57 @@ export function Workspaces(props: SectionProps) {
             </If>
           </If>
         </If>
+        <DeletedWorkspaces />
         {sheet}
       </SectionPage>
+    </If>
+  );
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+function DeletedWorkspaces() {
+  const data = useAppData();
+  const deleted = createResource<{ workspaces: DeletedWorkspace[] }>(() => "/api/deleted-workspaces");
+  const action = createAction();
+  const path = (item: DeletedWorkspace) => `/api/deleted-workspaces/${segment(item.id)}`;
+  function restore(item: DeletedWorkspace) {
+    if (action.busy()) return;
+    void action.run(async () => {
+      await session().api(`${path(item)}/restore`, { method: "POST" });
+      deleted.refresh();
+      await data.refreshWorkspaces();
+    }, `${item.name} restored, with its members and sessions.`);
+  }
+  async function purge(item: DeletedWorkspace) {
+    if (action.busy() || item.sessions > 0) return;
+    if (!await confirm({ title: `Delete ${item.name} for good?`, confirmLabel: "Delete for good", destructive: true,
+      message: `${item.name} and its settings, members, sources, models and schedules are erased. This can't be undone.` })) return;
+    void action.run(async () => {
+      await session().api(path(item), { method: "DELETE" });
+      deleted.refresh();
+    }, `${item.name} deleted for good.`);
+  }
+  return (
+    <If when={(deleted.data()?.workspaces.length ?? 0) > 0 || action.notice() || action.error()}>
+      <Section title="Deleted workspaces" testID="deleted-workspaces"
+        info="Workspaces you deleted. No one reaches them or their sessions until you restore them, with their members, sessions and settings. One without sessions can also be deleted for good.">
+        <Each of={deleted.data()?.workspaces ?? []} key={item => item.id}>
+          {item => (
+            <Row testID={`deleted-workspace-${item().id}`} leading={<IdentityBadge name={item().name} id={item().id} />} title={item().name}
+              hint={`Deleted ${relativeTime(item().deletedAt)} · ${plural(item().members, "member", "members")} · ${plural(item().sessions, "session", "sessions")}`}
+              trailing={<>
+                <Button small variant="outline" icon="refresh" label="Restore" testID={`deleted-workspace-restore-${item().id}`} disabled={action.busy()}
+                  onPress={() => restore(item())} />
+                <If when={item().sessions === 0}>
+                  <Button small variant="ghost" icon="trash" label="Delete for good" testID={`deleted-workspace-purge-${item().id}`} disabled={action.busy()}
+                    onPress={() => void purge(item())} />
+                </If>
+              </>} />
+          )}
+        </Each>
+        <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+      </Section>
     </If>
   );
 }
@@ -196,7 +245,7 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
   async function remove() {
     if (deletion.busy() || !deletable()) return;
     if (!await confirm({ title: `Delete ${props.workspace.name}?`, confirmLabel: "Delete workspace", destructive: true,
-      message: `${props.workspace.name} and all its settings, members, sources, models and schedules are deleted for everyone. This can't be undone. A workspace that has sessions, archived ones included, can't be deleted.` })) return;
+      message: `Everyone in ${props.workspace.name}, you included, loses it at once: its sessions, settings, hosts and schedules. Nothing in it is erased, and you can restore it, with its members and sessions, from Deleted workspaces.` })) return;
     const workspaceId = props.workspace.id;
     const deleted = await deletion.run(async () => {
       await session().api(`/api/workspaces/${segment(workspaceId)}`, { method: "DELETE" });
@@ -228,7 +277,7 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
       </>} />
       <Row title="Your role" trailing={<Badge tone={props.admin ? "success" : "neutral"}>{roleLabel[props.role]}</Badge>} />
       <If when={deletable()}>
-        <Row title="Delete workspace" hint="Only a workspace without sessions, archived ones included"
+        <Row title="Delete workspace" hint="Everyone loses it; you can restore it later"
           trailing={<Button small variant="danger" icon="trash" label={deletion.busy() ? "Deleting…" : "Delete…"} testID="workspace-delete" disabled={deletion.busy()}
             onPress={() => void remove()} />} />
         <If when={deletion.error()}><CardBody><Feedback error={deletion.error()} /></CardBody></If>

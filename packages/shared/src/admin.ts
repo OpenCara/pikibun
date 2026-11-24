@@ -27,6 +27,7 @@ export interface AdminWorkspace {
   ownerName: string;
   ownerGithubLogin: string | null;
   createdAt: string;
+  deletedAt: string | null;
   members: number;
   repositories: number;
   hosts: number;
