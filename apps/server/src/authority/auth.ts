@@ -13,7 +13,7 @@ import { appOrigin, fail, id, identifier, jsonObject, localMode, localOwnerQuery
 import type { AppContext, AuthIdentity, Env, UserRow, AppEnv } from '../types.js';
 import { assertVaultConfigured, encryptToken } from './vault.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
-import { forgetDeadGitHubToken } from './github-sign-in.js';
+import { dropDeadGitHubToken, resettingGitHubToken } from './github-sign-in.js';
 import { z } from 'zod';
 import { body as requestBody, fields } from '../schemas.js';
 
@@ -279,7 +279,12 @@ async function githubJson(url: string, init: RequestInit): Promise<unknown> {
   }
 }
 
-export async function resetGitHubToken(env: Env, userId: string, token: string, ciphertext: string): Promise<boolean> {
+export function resetGitHubToken(env: Env, userId: string, token: string, ciphertext: string): Promise<boolean> {
+  if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return Promise.resolve(false);
+  return resettingGitHubToken(userId, () => resetGitHubTokenNow(env, userId, token, ciphertext));
+}
+
+async function resetGitHubTokenNow(env: Env, userId: string, token: string, ciphertext: string): Promise<boolean> {
   const { GITHUB_CLIENT_ID: clientId, GITHUB_CLIENT_SECRET: clientSecret } = env;
   if (!clientId || !clientSecret) return false;
   const request = (method: 'PATCH' | 'DELETE' | 'POST', accessToken: string) => githubRequest(`https://api.github.com/applications/${encodeURIComponent(clientId)}/token`, {
@@ -295,7 +300,7 @@ export async function resetGitHubToken(env: Env, userId: string, token: string, 
     } catch { return false; }
     if (status === 200) return settledIfAlive;
     if (status !== 401) return false;
-    await forgetDeadGitHubToken(env, userId, ciphertext, 'token reset');
+    await dropDeadGitHubToken(env, userId, ciphertext, 'token reset');
     return true;
   };
   let replacement: string;
