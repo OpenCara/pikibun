@@ -8,6 +8,7 @@ import {
   base64url, fromBase64url, IDENTITY_KEY, parseSettings, parseSigned, publicKeyOf, signStatement, verifyStatement,
   type DelegationStatement, type PortableSettings, type RotationStatement, type SessionMarkStatement, type SettingsStatement, type Signed,
 } from "../../../packages/shared/src/identity.js";
+import { beatLock, beatOf, LOCK_BEAT, LOCK_BEAT_MS, processAlive, readLock, takeAway, type LockTiming } from "./lock-file.js";
 import { assertId, RunnerError } from "./protocol.js";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, length: number, options: { N: number; r: number; p: number; maxmem: number }) => Promise<Buffer>;
@@ -16,6 +17,8 @@ const SETTINGS_FILE = "settings.json";
 const EXPORT_FORMAT = "pikibun-identity-export-v1";
 const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const MAX_ROTATIONS = 32;
+const KEY_LOAD_ATTEMPTS = 4;
+const LOCK_ATTEMPTS = 3;
 
 export const defaultIdentityDir = (): string => join(homedir(), ".local", "share", "pikibun", "identity");
 
@@ -54,10 +57,6 @@ async function writePrivate(path: string, content: string, mode: "create" | "rep
 
 export const STALE_LOCK_MS = 60_000;
 
-export async function olderThan(path: string, ms: number): Promise<boolean> {
-  return lstat(path).then(stat => Date.now() - stat.mtimeMs > ms, () => true);
-}
-
 export async function createFilled(path: string, content: string): Promise<boolean> {
   return writePrivate(path, content, "create");
 }
@@ -66,11 +65,6 @@ async function readJson(path: string): Promise<unknown> {
   const stat = await lstat(path);
   if (!stat.isFile()) throw new Error(`${path} is not a regular file`);
   return JSON.parse(await readFile(path, "utf8"));
-}
-
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
 function parseKeyFile(value: unknown): KeyFile {
@@ -97,10 +91,11 @@ async function generate(rotations: Signed<RotationStatement>[] = []): Promise<{ 
 }
 
 export class IdentityStore {
-  #key?: Promise<IdentityKey>;
+  #key?: { stamp: string; value: IdentityKey };
+  #loading?: Promise<IdentityKey>;
   readonly #held = new Set<string>();
 
-  constructor(readonly root: string) {
+  constructor(readonly root: string, private readonly lockTiming: LockTiming = {}) {
     if (!isAbsolute(root)) throw new Error("The identity directory must be an absolute path");
   }
 
@@ -113,25 +108,43 @@ export class IdentityStore {
     return path;
   }
 
-  key(): Promise<IdentityKey> {
-    this.#key ??= this.loadKey().catch(error => { this.#key = undefined; throw error; });
-    return this.#key;
+  private async keyStamp(): Promise<string> {
+    try {
+      const stat = await lstat(join(this.root, KEY_FILE), { bigint: true });
+      return `${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+    } catch { return ""; }
   }
 
-  private async loadKey(): Promise<IdentityKey> {
+  async key(): Promise<IdentityKey> {
+    const stamp = await this.keyStamp();
+    if (stamp && this.#key?.stamp === stamp) return this.#key.value;
+    this.#loading ??= this.loadKey().then(loaded => {
+      this.#key = loaded;
+      return loaded.value;
+    }, error => {
+      this.#key = undefined;
+      throw error;
+    }).finally(() => { this.#loading = undefined; });
+    return this.#loading;
+  }
+
+  private async loadKey(): Promise<{ stamp: string; value: IdentityKey }> {
     const root = await this.directory();
     const path = join(root, KEY_FILE);
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < KEY_LOAD_ATTEMPTS; attempt++) {
+      const stamp = await this.keyStamp();
       try {
         const file = parseKeyFile(await readJson(path));
-        return { publicKey: file.publicKey, privateKey: await importPrivate(file), createdAt: file.createdAt, rotations: file.rotations };
+        const value = { publicKey: file.publicKey, privateKey: await importPrivate(file), createdAt: file.createdAt, rotations: file.rotations };
+        if (stamp && await this.keyStamp() === stamp) return { stamp, value };
+        continue;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      const { file, privateKey } = await generate();
-      if (await writePrivate(path, JSON.stringify(file), "create")) return { publicKey: file.publicKey, privateKey, createdAt: file.createdAt, rotations: [] };
+      const { file } = await generate();
+      await writePrivate(path, JSON.stringify(file), "create");
     }
-    throw new Error("The identity key could not be created");
+    throw new Error("The identity key could not be read while it was being replaced");
   }
 
   async publicKey(): Promise<string> { return (await this.key()).publicKey; }
@@ -141,9 +154,9 @@ export class IdentityStore {
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   }
 
-  async delegation(server: string, connector: string): Promise<Signed<DelegationStatement>> {
+  async delegation(server: string, connector: string, signer?: IdentityKey): Promise<Signed<DelegationStatement>> {
     assertId(connector);
-    const key = await this.key();
+    const key = signer ?? await this.key();
     const directory = await this.directory("delegations");
     const path = join(directory, `${connector}.json`);
     try {
@@ -219,19 +232,32 @@ export class IdentityStore {
     try {
       const path = join(await this.directory("sessions"), `${sessionId}.lock`);
       const busy = () => new IdentityBusy("Another Pikibun on this computer is attaching this session. Try again shortly");
+      const content = `${process.pid} ${LOCK_BEAT} ${randomBytes(16).toString("hex")}`;
       for (let attempt = 0; ; attempt++) {
-        if (await createFilled(path, String(process.pid))) break;
-        if (attempt > 0) throw busy();
-        let content: string;
-        try { content = await readFile(path, "utf8"); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
-        const holder = Number.parseInt(content, 10);
-        const unreadable = !Number.isSafeInteger(holder) || holder < 1;
-        if (unreadable ? !await olderThan(path, STALE_LOCK_MS) : holder !== process.pid && processAlive(holder)) throw busy();
-        await unlink(path).catch(() => {});
+        if (await createFilled(path, content)) break;
+        if (attempt >= LOCK_ATTEMPTS) throw busy();
+        const seen = await readLock(path);
+        if (!seen) continue;
+        const [pidText, beat] = seen.content.trim().split(" ");
+        const holder = Number.parseInt(pidText ?? "", 10);
+        if (!Number.isSafeInteger(holder) || holder < 1) {
+          if (Date.now() - seen.mtimeMs <= STALE_LOCK_MS) throw busy();
+        } else if (beat === LOCK_BEAT) {
+          if (holder === process.pid || processAlive(holder)) {
+            const state = await beatOf(path, seen, this.lockTiming);
+            if (state === "beating") throw busy();
+            if (state === "changed") continue;
+          }
+        } else if (holder !== process.pid && processAlive(holder)) throw busy();
+        await takeAway(path, seen);
       }
+      const beating = setInterval(() => { void beatLock(path, content); }, LOCK_BEAT_MS);
+      beating.unref();
       try { return await work(); }
-      finally { await unlink(path).catch(() => {}); }
+      finally {
+        clearInterval(beating);
+        if ((await readLock(path).catch(() => undefined))?.content === content) await unlink(path).catch(() => {});
+      }
     } finally { this.#held.delete(sessionId); }
   }
 
@@ -272,7 +298,7 @@ export class IdentityStore {
   private async replaceKey(file: KeyFile, privateKey: CryptoKey): Promise<void> {
     const root = await this.directory();
     await writePrivate(join(root, KEY_FILE), JSON.stringify(file), "replace");
-    this.#key = Promise.resolve({ publicKey: file.publicKey, privateKey, createdAt: file.createdAt, rotations: file.rotations });
+    this.#key = undefined;
     await rm(join(root, "delegations"), { recursive: true, force: true });
     const settings = await this.settings();
     if (settings) await this.signSettings(settings.statement.version + 1, settings.statement.settings);

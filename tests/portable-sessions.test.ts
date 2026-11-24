@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { app } from '../apps/server/src/index.js';
@@ -144,6 +145,136 @@ test('one attach at a time holds a session, across processes; a lock its holder 
   await utimes(join(session, 'open.lock'), old, old);
   await leases.acquire(session);
   assert.equal(await leases.holder(session), 'self');
+});
+
+const quick = { staleMs: 200, confirmMs: 150 };
+const longAgo = () => new Date(Date.now() - 120_000);
+
+test('a lease left by a crash is broken once its heartbeat stopped, though another process has its ID, and one taker wins', async t => {
+  const root = await temporary(t, 'lease-stale-');
+  const path = join(root, 'open.lock');
+  await writeFile(path, `${process.ppid} ${randomUUID()} beat`);
+  const takers = Array.from({ length: 8 }, () => new PortableLeases(quick));
+  t.after(() => { for (const taker of takers) taker.close(); });
+  assert.equal(await takers[0]!.holder(root), 'other', 'a lease refreshed lately is held');
+  await assert.rejects(takers[0]!.acquire(root), /open on another/);
+  await utimes(path, longAgo(), longAgo());
+  const outcomes = await Promise.allSettled(takers.map(taker => taker.acquire(root)));
+  assert.deepEqual(outcomes.map(outcome => outcome.status).filter(status => status === 'fulfilled'), ['fulfilled'], 'one of the takers gets it');
+  for (const outcome of outcomes) if (outcome.status === 'rejected') assert.match(String(outcome.reason), /open on another/);
+  const holders = await Promise.all(takers.map(taker => taker.holder(root)));
+  assert.deepEqual(holders.filter(holder => holder === 'self').length, 1);
+  assert.equal(holders[outcomes.findIndex(outcome => outcome.status === 'fulfilled')], 'self');
+  assert.deepEqual(await readdir(root), ['open.lock'], 'the stale lease was moved away and removed');
+});
+
+test('a live holder keeps its lease: one that refreshes it, one that resumes, and an older connector that never does', async t => {
+  const root = await temporary(t, 'lease-live-');
+  const path = join(root, 'open.lock');
+  const content = `${process.ppid} ${randomUUID()} beat`;
+  await writeFile(path, content);
+  const touch = async () => { const now = new Date(); await utimes(path, now, now).catch(() => {}); };
+  const beat = setInterval(() => { void touch(); }, 20);
+  t.after(() => clearInterval(beat));
+  const taker = new PortableLeases({ staleMs: 100, confirmMs: 150 });
+  t.after(() => taker.close());
+  for (let round = 0; round < 5; round++) {
+    await assert.rejects(taker.acquire(root), /open on another/);
+    await delay(60);
+  }
+  clearInterval(beat);
+
+  await utimes(path, longAgo(), longAgo());
+  const resumed = setTimeout(() => { void touch(); }, 40);
+  t.after(() => clearTimeout(resumed));
+  await assert.rejects(taker.acquire(root), /open on another/, 'a holder that was suspended and refreshes again while a taker watches keeps it');
+  assert.equal(await readFile(path, 'utf8'), content);
+
+  await writeFile(path, `${process.ppid} ${randomUUID()}`);
+  await utimes(path, longAgo(), longAgo());
+  assert.equal(await taker.holder(root), 'other', 'a lease without a heartbeat, an older connector\'s, is held while its process lives');
+  await assert.rejects(taker.acquire(root), /open on another/);
+
+  await rm(path);
+  const holder = new PortableLeases(quick);
+  t.after(() => holder.close());
+  await holder.acquire(root);
+  await utimes(path, longAgo(), longAgo());
+  await holder.refresh();
+  assert.ok(Date.now() - (await stat(path)).mtimeMs < 60_000, 'the holder refreshes its lease');
+  assert.equal(holder.lost(root), false);
+  await assert.rejects(taker.acquire(root), /open on another/);
+  await writeFile(path, content);
+  await holder.refresh();
+  assert.equal(holder.lost(root), true, 'a holder whose lease was taken learns it at its next refresh');
+  await holder.release(root);
+  assert.equal(await readFile(path, 'utf8'), content, 'and leaves the taker\'s lease alone');
+});
+
+test('an attach lock left by a crash is taken over once its heartbeat stopped, though another process has its ID', async t => {
+  const root = await temporary(t, 'identity-stale-lock-');
+  const store = new IdentityStore(root, quick);
+  await store.key();
+  const path = join(root, 'sessions', 'session-1.lock');
+  await mkdir(join(root, 'sessions'), { recursive: true });
+  await writeFile(path, `${process.ppid} beat ${randomUUID()}`);
+  await assert.rejects(store.withLock('session-1', async () => {}), IdentityBusy, 'one refreshed lately is held');
+  await utimes(path, longAgo(), longAgo());
+  const settled = Promise.withResolvers<void>();
+  const giveUp = setTimeout(settled.resolve, 10_000);
+  t.after(() => clearTimeout(giveUp));
+  let refused = 0;
+  const outcomes = await Promise.allSettled(Array.from({ length: 6 }, () => new IdentityStore(root, quick).withLock('session-1', () => settled.promise)
+    .catch((error: unknown) => { if (++refused === 5) settled.resolve(); throw error; })));
+  assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1, 'one of the takers gets it');
+  for (const outcome of outcomes) if (outcome.status === 'rejected') assert.ok(outcome.reason instanceof IdentityBusy);
+  assert.deepEqual((await readdir(join(root, 'sessions'))).filter(name => name.startsWith('session-1')), [], 'and removes it when done');
+});
+
+test('a running connection uses the key that replaced its own: rotated, reset or imported', async t => {
+  const root = await temporary(t, 'identity-replaced-');
+  const directory = join(root, 'identity');
+  const running = new IdentityStore(directory);
+  const first = await running.publicKey();
+  const folders = [join(root, 'one'), join(root, 'two'), join(root, 'three')];
+  for (const folder of folders) await mkdir(folder);
+  await running.mark('session-1', folders[0]!);
+
+  const rotated = await new IdentityStore(directory).rotate();
+  assert.equal(rotated.previous, first);
+  assert.equal(await running.publicKey(), rotated.next, 'the next use reads the rotated key');
+  assert.equal((await running.key()).rotations.length, 1);
+  assert.equal((await running.delegation('https://a.example', 'host-a')).statement.key, rotated.next);
+  assert.equal((await running.mark('session-2', folders[1]!)).mark.statement.key, rotated.next, 'a session it makes is marked by the new key');
+  assert.equal((await running.signSettings(1, { name: 'Mine' })).statement.key, rotated.next);
+
+  const reset = await new IdentityStore(directory).reset();
+  assert.equal(await running.publicKey(), reset.next, 'and the key of a reset');
+  assert.equal((await running.key()).rotations.length, 0);
+  assert.equal((await running.mark('session-3', folders[2]!)).mark.statement.key, reset.next);
+  assert.equal(await verifyStatement(await running.delegation('https://a.example', 'host-a')), true);
+
+  const other = new IdentityStore(join(root, 'other'));
+  const sealed = await other.exportKey('a long passphrase');
+  await new IdentityStore(directory).importKey(sealed, 'a long passphrase', { replace: true });
+  assert.equal(await running.publicKey(), await other.publicKey(), 'and an imported one');
+  assert.deepEqual((await running.entries()).map(entry => entry.mark.statement.key), Array(3).fill(await other.publicKey()));
+});
+
+test('a connection that was running when its identity was reset still reports and attaches its sessions', async t => {
+  const f = await hosts(t);
+  const onA = runnerBinding('session-r', 'connector-a', 'test:alice');
+  await f.a.provision(onA, await runnerTicket(onA, 'create'));
+  await f.store.publicKey();
+  const lease = join(f.root, 'a', 'sessions', 'session-r', 'open.lock');
+  await utimes(lease, longAgo(), longAgo());
+  for (let wait = 0; wait < 50 && Date.now() - (await stat(lease)).mtimeMs > 60_000; wait++) await delay(100);
+  assert.ok(Date.now() - (await stat(lease)).mtimeMs < 60_000, 'a connection refreshes the leases of the sessions it has open');
+  const { next } = await new IdentityStore(f.store.root).reset();
+  assert.deepEqual((await f.a.portableSessions()).map(report => [report.id, report.mark.statement.key]), [['session-r', next]]);
+  const onB = runnerBinding('session-r', 'connector-b', 'password:alice');
+  await f.b.attach({ binding: onB }, await runnerTicket(onB, 'attach'));
+  assert.equal((await f.b.get('session-r')).binding.session.connectorId, 'connector-b');
 });
 
 test('a host reports a title it can show whatever was typed', () => {

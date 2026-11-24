@@ -55,8 +55,9 @@ never move a session between them. Their conversation and files never leave your
   signed by your identity so no server can change them for the others.
 - **Your identity** is in `~/.local/share/pikibun/identity` (`--identity-dir`). `pikibun identity show` lists it and
   its portable sessions; `export` and `import` carry it to another computer with a passphrase; `rotate` replaces the
-  key, signed over by the old one; `reset` makes a new one when the old one leaked or was lost. Anyone who can read
-  that folder can act as your identity: keep it as private as your SSH keys.
+  key, signed over by the old one; `reset` makes a new one when the old one leaked or was lost. Connections that are
+  running use a replaced key from then on, without a restart, and their servers learn it within a minute. Anyone who
+  can read that folder can act as your identity: keep it as private as your SSH keys.
 
 How it works, and what it trusts, is in the [design note](design/local-private-sessions.md).
 

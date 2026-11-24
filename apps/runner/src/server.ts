@@ -114,7 +114,10 @@ export class RunnerService {
     await chmod(this.dataDir, 0o700);
     await mkdir(join(this.dataDir, "sessions"), { recursive: true, mode: 0o700 });
     if (this.config.portable) {
-      this.sweep = setInterval(() => { void this.sweepPortable(); }, PORTABLE_SWEEP_MS);
+      this.sweep = setInterval(() => {
+        void this.leases.refresh().catch(() => {});
+        void this.sweepPortable();
+      }, PORTABLE_SWEEP_MS);
       this.sweep.unref();
     }
   }
@@ -128,7 +131,8 @@ export class RunnerService {
         const session = await pending?.catch(() => undefined);
         if (!pending || !session) continue;
         const attached = await this.stillAttached(session.directory, id);
-        if (attached && !await this.leases.releaseRequested(session.directory)) continue;
+        const lost = this.leases.lost(session.directory);
+        if (attached && !lost && !await this.leases.releaseRequested(session.directory)) continue;
         if (await exists(join(session.directory, WORK_MARKER))) continue;
         if (this.sessions.get(id) === pending) await this.evict(id, session);
         if (!attached) this.detach(id);
@@ -567,7 +571,14 @@ export class RunnerService {
 
   async close(): Promise<void> {
     this.closed = true;
-    if (this.sweep) clearInterval(this.sweep);
+    try { await this.closeSessions(); }
+    finally { if (this.sweep) clearInterval(this.sweep); }
+    this.sessions.clear();
+    this.portableOpen.clear();
+    this.leases.close();
+  }
+
+  private async closeSessions(): Promise<void> {
     for (const [id, pending] of this.sessions) {
       const session = await pending.catch(() => undefined);
       if (!session) continue;
@@ -575,9 +586,7 @@ export class RunnerService {
       await session.sandbox.close();
       if (this.portableOpen.has(id)) await this.leases.release(session.directory);
     }
-    this.sessions.clear();
-    this.portableOpen.clear();
-    this.leases.close();
+
   }
 }
 

@@ -92,11 +92,48 @@ attached to:
 
 A host's connections are separate processes, one per server, each with its own runtime, and two of them must never
 work in one session's database. A connection holds a lease file in each portable session it has open
-(`open.lock`: its process ID and a token of the runtime; `apps/runner/src/portable-lease.ts`), and another connection
-refuses to open it while that process lives. Lease and lock files are written whole before they appear (linked into
-place), so none is ever seen empty; one that can't be read is taken as held until it is a minute old. To attach a session another connection has open, the attaching one asks
-it to let go (`release` in the session's folder) and waits up to ten seconds: the other connection closes it at its
-next sweep unless it is working.
+(`open.lock`: its process ID, a token of the runtime and the word `beat`; `apps/runner/src/portable-lease.ts`), and
+another connection refuses to open it while the lease is held. Lease and lock files are written whole before they
+appear (linked into place), so none is ever seen empty; one that can't be read is taken as held until it is a minute
+old. To attach a session another connection has open, the attaching one asks it to let go (`release` in the session's
+folder) and waits up to ten seconds: the other connection closes it at its next sweep unless it is working.
+
+**When a lease is held.** A process ID alone doesn't say so: after a crash or a power loss the operating system gives
+the ID to some other process, and a lease read by its ID would then never end. So a lease also has a **heartbeat**
+(`apps/runner/src/lock-file.ts`):
+
+- The holder sets the file's modification time every second, from the timer of the sweep above, for every lease it
+  holds, after checking the file is still its own. The refresh doesn't wait for the sweep's own work, and goes on
+  while the connection closes its sessions.
+- A lease is free when its process is gone, as before, or when its heartbeat stopped: the time is more than 15
+  seconds from now (either way, so a clock set back doesn't keep one alive), **and** it doesn't move while the taker
+  watches it for 3 more seconds. The watch is what keeps a live holder safe: a computer that slept, a clock that
+  jumped or a process that was held up all leave an old time, and a live holder refreshes within a second of running
+  again. Only a holder that does nothing for 3 seconds while its lease is 15 seconds old loses it, and it then
+  notices at its next refresh that the file isn't its own and closes the session at its next sweep, unless it is
+  working.
+- A lease of the same process (the connection and the host of the computer's own Pikibun share one) is read from
+  memory: held while its runtime is.
+- A lease without `beat` was written by an older connector, which never refreshes it. It is held while its process
+  lives, as before, so a new connection never breaks a live older one's lease; and an older connector reads only the
+  first two fields, so it honours a new lease by its process. A computer whose connections were all updated has no
+  such lease left once they restarted.
+- **Breaking a stale lease.** The taker renames the file away (`open.lock.<random>.stale`), looks at what it moved,
+  and deletes it. Of several takers that judged the same lease stale, one rename succeeds and the others find
+  nothing to move; all then create their own lease, which only one can (it is linked into place). Deleting by path
+  instead let a slower taker remove the lease the faster one had just made. A taker that finds it moved something
+  other than the lease it judged (the content or the time differs: another taker's new lease, or the holder's
+  refreshed one) links it back, which never replaces a file.
+
+The identity's attach lock (`<identity>/sessions/<id>.lock`: the process ID, `beat` and a random value) works the
+same way, refreshed by a timer of its own while the attach runs, and removed afterwards only if it is still the
+attach's own.
+
+**Why not `flock`.** The connector's state and the local server's use a `flock` (or `lockf`) guardian, a child
+process per lock, and a named pipe on Windows (`apps/runner/src/lease.ts`), which the kernel releases when the holder
+dies. That fits one lock per process. A connection holds one lease per open session, so it would run a child process
+for each, on two different mechanisms; the heartbeat is one timer and plain files on Linux, macOS and Windows alike.
+The local server's lease and its hand-over ([design](local-private-sessions.md)) are untouched.
 
 ### What moves with it, and what doesn't
 
@@ -109,12 +146,21 @@ next sweep unless it is working.
 ## Replacing the key
 
 - `pikibun identity rotate` makes a new key, signs a `rotation` with the old one, and signs every mark and the settings
-  again with the new one; delegations are signed again at the next connection. Each server follows the rotations it is
+  again with the new one; delegations are signed again at the next report. Each server follows the rotations it is
   sent, for its user's records, only as a whole chain ending at the key the connection signs with. A mark still by an
   earlier key of the chain (a rotation stopped halfway) is signed again the next time the host reports.
 - `pikibun identity reset` is for a lost or leaked key: a new key without the old one's signature, the marks and
   settings signed again. It is safe because only someone who can read the identity's directory can run it. Each server
   takes the new delegation from its own connector, which it authenticates, and the marks it reports with it.
+- **A running connection follows.** `rotate`, `reset` and `import --replace` run in another process than the
+  connections. A connection doesn't keep the key for its lifetime: before each use it compares `key.json`'s inode,
+  size and modification time with those of the copy it loaded, and reads the file again when they differ (the file is
+  always replaced by a rename, never written in place). So from the moment the command finishes, a connection signs
+  with the new key only, marks new sessions with it, and attaches the sessions the command signed again; its next
+  identity report, within a minute, signs a new delegation and tells its server. It carries on rather than stopping:
+  a reset is what its owner asked for, a restart would do exactly the same on the same files, and stopping would end
+  the sessions that are working. Between the command's first write and its last (the key, then the marks), a mark
+  still by the old key is left out of a report for that moment, as after a restart at the same instant.
 
 ## Private workspace settings
 
