@@ -32,7 +32,7 @@ session's owner on someone else's behalf. The control plane checks, on each call
 
 1. The actor still writes to the origin session, and the call comes from the origin's host (`requireCallbackScope`).
 2. The call belongs to the actor's write admission for the origin, under an hour old, or older while its run still goes
-   on (`admissionExpired` in `run-admissions.ts`, see [security-rationale.md](security-rationale.md)).
+   on (`requireAdmission` in `run-admissions.ts`, see [security-rationale.md](security-rationale.md)).
 3. The origin may use the tool (its agent's, or allowed by the owner: `requireToolCall`).
 4. In a Read-only message, a change elsewhere (`send`, `create`, `stop`, `archive`) was allowed by the owner
    (`sessions:write` grant, for the call or the session), unless it is the owner's own Auto-approve message.
@@ -54,7 +54,9 @@ with approve permission there decide. A read shows pending cards (their kind and
 
 New sessions run as the actor, with their Git accounts, on a model's host: the actor's own host, or the origin's host
 when the actor owns the origin (they trusted that host when they started it). Any other host they must acknowledge
-themselves, in the apps.
+themselves, in the apps. An agent working in a sandbox starts sessions only on hosts that have one (`sandbox_required`,
+or left out of placement), unless a person's message names the unsandboxed host with `host_environment: true`:
+[Sandboxed work stays sandboxed](host-placement.md#sandboxed-work-stays-sandboxed).
 
 ## Models and reasoning of new sessions
 
@@ -80,7 +82,9 @@ each sub-task on what suits it. `list` returns, with the models, the reasoning l
   [workspace-schedules.md](workspace-schedules.md)) choose the same way when the agent or the session's panel saves them,
   with the same checks as a `create` naming a model without placement (`childModel`, built from the same
   `childThinkingLevel`, `sessionCurrentModel` and `agentMayStartOn`, plus `requireModel`), as the schedule's owner;
-  they don't take placement. A run whose choice
+  they don't take placement. The `schedule` tool of a sandboxed session refuses a schedule whose runs start on a host
+  without a sandbox (`sandbox_required`), on create and on any change but pausing; a person's own choice of such a
+  model, in the panel or the workspace's Schedules, stands. A run whose choice
   no longer holds is not skipped: it starts on the session's current model and level, or on its chosen model without a
   level that model no longer offers, and records why as the schedule's `last_error` (`model_unavailable`,
   `thinking_unsupported`, `child_models_disabled`) and the `workspace.schedule.session_started` audit's `fallback`.
@@ -104,8 +108,10 @@ admission (`sessionsNeedGranted`). The owner's own Auto-approve message raises n
 
 Every session is visible to its workspace's members (see [Sessions without visibility](security-rationale.md#sessions-without-visibility)),
 so within a workspace the readers of two sessions differ only where one of them is shared by link. A session the agent
-starts is read by every member and the actor; a `visibility` a runner from before private sessions were removed still
-sends with `create` is accepted and ignored, so such a runner keeps starting sessions.
+starts is read by every member and the actor. A runner from before private sessions were removed can still send a
+`visibility` with `create`: `workspace` is accepted and ignored, and `private` is accepted only where the origin is in
+the actor's private workspace, where it is already true. Anywhere else it is refused (`private_session_unavailable`)
+and nothing is made, rather than a session every member reads.
 
 ## Provenance, chains and limits
 

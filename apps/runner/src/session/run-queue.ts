@@ -342,7 +342,7 @@ export class RunQueue {
     const sources = host ? (await this.options.extensionChoice()).chosen.map(item => item.source) : [];
     let outcome: InputOutcome = host ? await host.input(sources, text, attached, mode) : { action: "continue", text, images: attached };
     if (outcome.action === "continue" && !ran && commands) {
-      const expanded = await commands.expand(outcome.text);
+      const expanded = await commands.expand(outcome.text, run.mode === "write" && run.options?.access !== "read");
       if (expanded === outcome.text) return outcome;
       outcome = host ? await host.input(sources, expanded, outcome.images, mode) : { ...outcome, text: expanded };
     }

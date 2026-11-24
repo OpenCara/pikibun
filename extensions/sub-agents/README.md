@@ -17,7 +17,8 @@ CPUs, memory, free memory or disk, platform, architecture, models), among the ho
 It registers no tool. It adds the policy to each message's system prompt (`before_agent_start`), fills in each
 `sessions create` call (`tool_call`), and notes on its result where the sub-agent runs and how to collect it, or why no
 host qualified (`tool_result`). The `sessions` tool's own rules still apply: the agent starts sessions only on its
-sender's own hosts (and this session's host), as that sender, within the workspace's limits.
+sender's own hosts (and this session's host), as that sender, within the workspace's limits. From a sandboxed session,
+Pikibun leaves out hosts that run sessions without a sandbox, and the note on such a refusal says so.
 
 The policy is also a skill, `sub-agents`, filled in from the settings and offered through `resources_discover`. Where the
 skill is listed (`before_agent_start`'s `systemPromptOptions.skills` names it), the system prompt keeps only when to

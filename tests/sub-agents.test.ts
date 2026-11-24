@@ -118,6 +118,12 @@ test("its notes say where a sub-agent runs and how to collect it, or why no host
     /^\[sub-agents\] Sub-agent s2 started\. Collect its result with sessions wait \{session: "s2", message_id: "msg-s2"\} before you answer\. 1 more/);
   assert.match(result({ action: "create" }, "No host qualifies for placement (gpu true): of 2 hosts ...", true)!.content[1]!.text,
     /^\[sub-agents\] No host met this sub-agent's conditions \(the workspace adds gpu=true to every sub-agent\)\. Relax/);
+  const kept = result({ action: "create" }, "No host qualifies for placement (any host): of 2 hosts offering a matching model, 1 offline; "
+    + "1 running sessions without a sandbox, where this sandboxed session's agent starts none on its own. Relax the conditions.", true)!.content[1]!.text;
+  assert.match(kept, /^\[sub-agents\] No host met this sub-agent's conditions .*Pikibun keeps the sub-agents of a sandboxed session in a sandbox, so hosts that run sessions without one are left out/);
+  assert.match(kept, /only where the person's own message asks for such a host, call create with host_environment: true and placement \{hosts: \[its id\]\}\.$/);
+  assert.match(result({ action: "create", model: "bare" }, "This session runs in a sandbox, and that model's host runs sessions without one, so its agent doesn't start a session there on its own.", true)!
+    .content[1]!.text, /^\[sub-agents\] Pikibun keeps the sub-agents of a sandboxed session in a sandbox.*Otherwise name a model on a sandboxed host, or do the work in this session\.$/);
   assert.equal(result({ action: "list" }, "{}"), undefined);
   assert.equal(result({ action: "create" }, "Session not found.", true), undefined);
 });

@@ -9,12 +9,12 @@ import { CronError, isTimeZone, nextCronTime, parseCron } from '../../../package
 import { hasPermission, sessionCreatorRoles, workspaceManagerRoles } from '../../../packages/shared/src/policy.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  admissionExpired, auditStatement, hostCapabilities, isDeletedWorkspace, requireCallbackScope, requireMember, requireSession, requireSessionCreator, requireToolCall, sessionAccess,
+  auditStatement, hostCapabilities, isDeletedWorkspace, requireAdmission, requireCallbackScope, requireMember, requireSession, requireSessionCreator, requireToolCall, sessionAccess,
 } from './authority/index.js';
 import { requireModel, usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
 import { childModel, childModelChoices, childThinkingLevel, sessionCurrentModel, type ChildModel } from './cross-session.js';
-import { agentMayStartOn } from './placement.js';
+import { agentMayStartOn, hostUnsandboxed, sandboxRequired, sessionSandboxed } from './placement.js';
 import { requireUnfrozen } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
 import { archiveSession, createSession, submitMessage } from './sessions.js';
@@ -424,7 +424,18 @@ async function workspaceInput(c: AppContext): Promise<{ fields: ScheduleInput; t
   return { fields: Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)), ...(trustedConnectorId ? { trusted: trustedConnectorId } : {}) };
 }
 
-type ScheduleChange = { actorId: string; callId?: string; gated: boolean; trusted?: string };
+type ScheduleChange = { actorId: string; callId?: string; gated: boolean; trusted?: string; agentSession?: SessionRow };
+
+async function requireSandboxKept(env: Env, change: ScheduleChange, schedule: Pick<ScheduleRow, 'session_id' | 'origin_session_id' | 'model_id'>): Promise<void> {
+  if (!change.agentSession || schedule.session_id !== null) return;
+  const hosts = await env.DB.query<{ model: string | null; origin: string | null }>(
+    'SELECT (SELECT connector_id FROM models WHERE id = ?) AS model, (SELECT connector_id FROM sessions WHERE id = ?) AS origin')
+    .bind(schedule.model_id, schedule.origin_session_id).first();
+  if (!await hostUnsandboxed(env, hosts?.model) && !await hostUnsandboxed(env, hosts?.origin)) return;
+  if (!await sessionSandboxed(env, change.agentSession)) return;
+  sandboxRequired('make or change a schedule whose runs start there', 'a host this schedule\'s runs can start on',
+    'Choose a model on a sandboxed host (sessions list shows each host\'s sandbox), or ask the person to make or change it themselves, in this session\'s Schedules tab or the workspace\'s Schedules.');
+}
 const changedBy = (change: ScheduleChange) => change.callId === undefined ? {} : { agent: true, callId: change.callId };
 type Target = { workspaceId: string; session: SessionRow | null; origin: SessionRow | null };
 
@@ -463,6 +474,7 @@ async function createSchedule(env: Env, target: Target, change: ScheduleChange, 
     last_run_at: null, last_submission_id: null, last_session_id: null, last_error: null, created_at: timestamp, updated_at: timestamp };
   if (session && (modelId !== null || thinkingLevel !== null)) noModelForSession();
   if (!session) await validModelChoice(env, { workspaceId: target.workspaceId, ownerId: change.actorId, origin: target.origin, gated: change.gated, trusted: change.trusted }, schedule);
+  await requireSandboxKept(env, change, schedule);
   await requireAccessSupported(env, await scheduleHost(env, schedule), access);
   if (enabled && schedule.next_run_at === null) fail(400, 'invalid_cron', 'This schedule never comes round.');
   if (session) {
@@ -523,6 +535,7 @@ async function updateSchedule(env: Env, context: { session: SessionRow | null },
     await validModelChoice(env, { workspaceId: next.workspace_id, ownerId: next.owner_id, origin, gated: change.gated, trusted: change.trusted,
       trustKept: next.model_id === current.model_id && next.owner_id === current.owner_id && current.session_id === null }, next);
   }
+  if (next.enabled === 1 || Object.keys(input).some(key => key !== 'enabled')) await requireSandboxKept(env, change, next);
   if (next.access === 'read' && (next.access !== current.access || next.model_id !== current.model_id || next.session_id !== current.session_id)) {
     await requireAccessSupported(env, await scheduleHost(env, next), next.access);
   }
@@ -610,8 +623,6 @@ export async function restorePortableSchedules(env: Env, row: SessionRow, schedu
   return restored;
 }
 
-type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number };
-
 export async function agentSchedules(c: AppContext, connectorId: string | null): Promise<Response> {
   const input = await jsonObject(c, 512 * 1024);
   if (Object.keys(input).some(key => !['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'scheduleId', ...scheduleFields].includes(key))) {
@@ -645,12 +656,8 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
   const row = access.row;
   if (row.owner_id !== actorId) fail(403, 'owner_required', 'Only the session owner\'s messages schedule prompts.');
   await requireCallbackScope(c, row, connectorId);
-  const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?')
-    .bind(admissionId).first();
-  if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-    || await admissionExpired(c.env, admissionId, admission)) {
-    fail(403, 'schedule_not_admitted', 'Scheduling needs a write message from the session owner sent within the last hour, or whose run is still going.');
-  }
+  const admission = await requireAdmission(c.env, { admissionId, sessionId, actorId }, { code: 'schedule_not_admitted',
+    message: 'Scheduling needs a write message from the session owner sent within the last hour, or whose run is still going.' });
   await requireToolCall(c.env, row, actorId, 'schedule');
   const visible = 'p.workspace_id = ? AND (p.session_id = ? OR p.origin_session_id = ? OR (p.session_id IS NULL AND p.owner_id = ?))';
   if (action === 'list') {
@@ -661,7 +668,7 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
   if (admission.access === 'read') {
     fail(403, 'read_only_message', 'A Read-only message changes nothing, schedules included: ask in a message that may act.');
   }
-  const change: ScheduleChange = { actorId, callId, gated: true };
+  const change: ScheduleChange = { actorId, callId, gated: true, agentSession: row };
   if (action === 'create') {
     const created = await createSchedule(c.env, fields.runIn === 'child' ? { workspaceId: row.workspace_id, session: null, origin: row }
       : { workspaceId: row.workspace_id, session: row, origin: null }, change, fields);

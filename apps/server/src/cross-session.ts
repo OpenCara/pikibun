@@ -9,18 +9,18 @@ import {
 } from '../../../packages/shared/src/cross-session.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  admissionExpired, auditStatement, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
-  sessionsNeedGranted, workspaceSessionAccess,
+  auditStatement, requireAdmission, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
+  sessionsNeedGranted, workspaceSessionAccess, type AdmittedRun,
 } from './authority/index.js';
 import { getUser } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
-import { archiveSession, createSession, stopSession, submitMessage } from './sessions.js';
+import { archiveSession, createSession, requirePrivateWorkspaceFor, stopSession, submitMessage } from './sessions.js';
 import { entryError, isLinkShared } from './session-links.js';
 import { sessionView, transcriptDisplay } from './view-feed.js';
 import { usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
 import { parsePlacement, type PlacementRequirements } from '../../../packages/shared/src/hardware.js';
-import { agentMayStartOn, hostSummary, placeChild, placementHosts } from './placement.js';
+import { agentMayStartOn, hostSummary, hostUnsandboxed, placeChild, placementHosts, sandboxRequired, sessionSandboxed, unsandboxedPath } from './placement.js';
 import type { AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
 
 interface MessageRow {
@@ -30,7 +30,7 @@ interface MessageRow {
   notify_message_id: string | null; reply_to: string | null; created_at: string; updated_at: string;
 }
 
-type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; request_id: string; expires_at: number };
+type AdmissionRow = AdmittedRun;
 
 interface Chain { hops: number; sessions: string[] }
 
@@ -146,16 +146,13 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   }
   const origin = originAccess.row;
   await requireCallbackScope(c, origin, connectorId);
-  const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, request_id, expires_at FROM run_admissions WHERE id = ?')
-    .bind(admissionId).first();
-  if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-    || await admissionExpired(c.env, admissionId, admission)) {
-    fail(403, 'sessions_not_admitted', 'The sessions tool needs a write message sent within the last hour, or whose run is still going.');
-  }
+  const admission = await requireAdmission(c.env, { admissionId, sessionId, actorId }, { code: 'sessions_not_admitted',
+    message: 'The sessions tool needs a write message sent within the last hour, or whose run is still going.' });
   await requireToolCall(c.env, origin, actorId, 'sessions');
   if (sessionsWriteActions.includes(action) && admission.access === 'read') {
     fail(403, 'write_not_allowed', 'A Read-only message changes no other session: ask in a message that may act.');
   }
+  if (action === 'create') await requirePrivateWorkspaceFor(c.env, origin.workspace_id, actorId, input.visibility);
   const call: Call = { c, origin, actorId, admission, callId, chain: await messageChain(c.env, admission), target };
 
   if (action === 'list') return c.json(await list(call));
@@ -332,14 +329,20 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
     'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(namedId, origin.workspace_id).first();
   if (!patterns && !named) fail(404, 'not_found', 'Model not found.');
   const placing = options.placement && (patterns || Object.keys(options.placement).length > 0 || named?.connector_id) ? options.placement : undefined;
+  const keepSandboxed = !options.hostEnvironment && await sessionSandboxed(c.env, origin);
   const placed = placing ? await placeChild(c.env, origin, actorId, await usableModels(c.env, origin.workspace_id, actorId), {
-    requirements: placing, ...(named && !patterns ? { model: named } : {}), ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}) }) : undefined;
+    requirements: placing, ...(named && !patterns ? { model: named } : {}), ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+    ...(keepSandboxed ? { sandboxedOnly: true } : {}) }) : undefined;
   const model = placed?.model ?? named;
   if (!model) fail(404, 'not_found', 'Model not found.');
+  const unsandboxedHost = placed ? placed.host.sandbox === 'unsandboxed' : await hostUnsandboxed(c.env, model.connector_id);
   const modelId = model.id;
   const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
   if (model.connector_id && !agentMayStartOn(origin, actorId, model)) {
     fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
+  }
+  if (keepSandboxed && unsandboxedHost) {
+    sandboxRequired('start a session there', 'that model\'s host', `Choose a model on a sandboxed host (list shows each host's sandbox). ${unsandboxedPath}`);
   }
   if (options.message !== undefined && options.notify) {
     const members = await c.env.DB.query<{ user_id: string }>(`SELECT member.user_id FROM workspace_members member
@@ -349,12 +352,12 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
     if (consent) return c.json(consent);
   }
   const title = options.title ?? cut(`${origin.title} · sub-task`, 190).split('\n')[0]!;
-  const inheritsHost = subSessionInheritsHost({ leftOut: options.hostEnvironmentLeftOut === true, personSent: personSent(call.admission), actorId,
+  const inheritsHost = !unsandboxedHost && subSessionInheritsHost({ leftOut: options.hostEnvironmentLeftOut === true, personSent: personSent(call.admission), actorId,
     parent: { hostEnvironment: Number(origin.host_environment ?? 0) === 1, connectorId: origin.connector_id ?? null },
     host: { connectorId: model.connector_id ?? null, ownerId: model.connector_owner_id ?? null } });
   const start = (hostEnvironment: boolean) => asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, modelId,
     ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}), ...(hostEnvironment ? { hostEnvironment: true } : {}) }, { parentSessionId: origin.id }));
-  let onHost = options.hostEnvironment === true || inheritsHost;
+  let onHost = (options.hostEnvironment === true && !unsandboxedHost) || inheritsHost;
   let started: Awaited<ReturnType<typeof start>>;
   try { started = await start(onHost); }
   catch (error) {
@@ -364,7 +367,8 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   }
   const { row } = started;
   await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId, modelId,
-    ...(onHost ? { hostEnvironment: true } : {}), ...(onHost && inheritsHost ? { inheritedHostEnvironment: true } : {}),
+    ...(options.hostEnvironment || onHost ? { hostEnvironment: true } : {}), ...(onHost && inheritsHost ? { inheritedHostEnvironment: true } : {}),
+    ...(unsandboxedHost ? { unsandboxedHost: true } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}), ...(inheritsModel ? { inheritedModel: true } : {}),
     ...(inheritsThinking && thinkingLevel ? { inheritedThinking: true } : {}),
     ...(placed ? { placement: { hostId: placed.result.host.id, conditions: placed.result.conditions, load: placed.result.load, qualified: placed.result.qualified } } : {}) }).run();
@@ -372,7 +376,7 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   if (!created) fail(409, 'policy_changed', 'The new session is no longer available.');
   const message = options.message === undefined ? undefined : await deliver(call, created.row, 'create', options.message, options.access, options.notify, thinkingLevel);
   return c.json({ session: summary(created), model: { id: modelId, provider: model.provider, modelId: model.model_id, ...(thinkingLevel ? { thinkingLevel } : {}) },
-    ...(placed ? { placement: placed.result } : {}), ...(onHost ? { hostEnvironment: true as const } : {}), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
+    ...(placed ? { placement: placed.result } : {}), ...(options.hostEnvironment || onHost ? { hostEnvironment: true as const } : {}), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
 }
 
 export function subSessionInheritsHost(input: { leftOut: boolean; personSent: boolean; actorId: string;
