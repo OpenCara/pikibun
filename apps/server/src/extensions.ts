@@ -13,6 +13,7 @@ import {
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
 import { resolveNpmExtensionPackage, saveRegistryExtensionMetadata, workspaceRegistryMetadata } from './npm-registry.js';
+import { workspaceMemoryPrompt } from './workspace-memory.js';
 
 const RECENT_REQUESTS = 20;
 const MAX_PENDING = 20;
@@ -137,6 +138,7 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     const toolGroups = await memberToolGroups(c.env, workspaceId);
     const ownerPrivate = await isPersonalWorkspace(c.env, workspaceId, row.owner_id);
     const remote = remoteTools ? await workspaceRemoteTools(c.env, workspaceId) : undefined;
+    const memory = input.memory === true ? await workspaceMemoryPrompt(c.env, workspaceId) : undefined;
     return c.json({
       extensions: shown,
       automaticTools: settings.automaticTools,
@@ -144,6 +146,7 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
       ...(Object.keys(toolGroups).length ? { toolGroups } : {}),
       ...(ownerPrivate ? { ownerPrivate: true } : {}),
       ...(remote ? { remoteTools: remote.tools, remoteServers: remote.servers } : {}),
+      ...(memory ? { memory } : {}),
     });
   });
 }

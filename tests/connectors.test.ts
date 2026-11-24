@@ -1729,7 +1729,7 @@ test('owner runs a session on an unshared host and the default session is listed
 test('a session starts from a model and gets its own chat agent with every tool its host carries', async t => {
   const f = await fixture(t); const s = await privateWorkspace(f);
   const start = (client: Client, body: Record<string, unknown>) => client.request('POST', '/api/sessions', { workspaceId: s.team.id, ...body });
-  const offered: string[] = [...toolNames.filter(tool => !retiredToolNames.includes(tool)), 'workspace'];
+  const offered: string[] = [...toolNames.filter(tool => !retiredToolNames.includes(tool)), 'workspace', 'memory'];
   const startedAgent = () => (JSON.parse(s.hub.requests.at(-1)!.request.body) as RunnerBinding).agent;
 
   await denied(await start(s.owner, {}), 400, 'invalid_input');
@@ -3927,7 +3927,7 @@ test('a connector reads the tools this server defines as data, only with its own
   const hinted = await json<{ clis: unknown }>(await self(f, s.connector, 'tools', { cliHints: true, somethingLater: true }));
   assert.deepEqual(parseCliDefinitions(hinted.clis), bundledCliDefinitions);
   assert.ok(bundledCliDefinitions.some(cli => cli.hints?.length), 'and one that asks gets them');
-  assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read', 'workspace']);
+  assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read', 'workspace', 'memory']);
   await denied(await s.creator.request('POST', '/api/connectors/self/tools', {}), 401, 'connector_authentication_required');
 });
 

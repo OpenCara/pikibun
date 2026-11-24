@@ -37,6 +37,7 @@ test('a delivered message names its origin and sender, and its outcome is the an
   const long = sessionsToolTarget({ action: 'send', targetSessionId: 'b', message: 'x'.repeat(100_000) });
   assert.ok(long.length < 8192 && long.startsWith('send · session b · message:\n'));
   assert.equal(sessionsToolTarget({ action: 'read', targetSessionId: 'b', messageId: 'm1' }), 'read · session b · message m1');
+  assert.equal(sessionsToolTarget({ action: 'search', query: 'connection\npool' }), 'search · query "connection pool"');
 });
 
 const origin = 'http://localhost:8787';
@@ -887,4 +888,52 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   const parentOnly = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Parent only' });
   assert.equal(parentOnly.status, 201, JSON.stringify(parentOnly.body));
   assert.equal(childModel((parentOnly.body.session as CrossSessionSummary).id), deep.id);
+});
+
+test('an agent searches the sessions its sender can read for what one of them did, without content its own readers couldn\'t see', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const write = f.admit('session-a', ownerId);
+  for (const body of [{ action: 'search' }, { action: 'search', query: '  "" ' }, { action: 'search', query: 'x'.repeat(crossSessionLimits.queryChars + 1) },
+    { action: 'search', query: 'pool', targetSessionId: 'session-b' }, { action: 'list', query: 'pool' }]) {
+    await f.refused(f.tool('session-a', ownerId, write, body), 400, 'invalid_input');
+  }
+  f.seed('session-c', 'Connection pool for Postgres');
+  f.seed('session-d', 'Offline worker');
+  const message = (id: string, role: string, text: string, conversationId = '0') => ({ id, kind: 'message' as const, role, text, conversationId });
+  f.fake('session-a').view.entries.push(message('0:1', 'assistant', 'The connection pool for Postgres lives in db.ts.'));
+  const worker = f.fake('session-b');
+  worker.view.entries.push(message('0:1', 'user', 'Why is Postgres slow?'), message('0:2', 'assistant', `${'x '.repeat(600)}We moved the Connection Pool to PgBouncer for Postgres. ${'y '.repeat(600)}`),
+    message('0:3', 'toolResult', 'connection pool postgres'), message('7:4', 'assistant', 'connection pool postgres in a side ask', '7'));
+  worker.view.conversations.push({ id: '7', mode: 'ask' });
+  f.fake('session-d').view = undefined as never;
+
+  const found = await f.tool('session-a', ownerId, write, { action: 'search', query: 'postgres "connection pool"' });
+  assert.equal(found.status, 200, JSON.stringify(found.body));
+  const result = found.body as { query: string; searched: number; results: { session: CrossSessionSummary; titleMatch?: true; matches: { entryId: string; role: string; text: string }[] }[];
+    skipped?: { id: string; reason: string }[] };
+  assert.equal(result.searched, 3, 'every session the sender reads but this one');
+  const byId = new Map(result.results.map(item => [item.session.id, item]));
+  assert.ok(!byId.has('session-a'), 'never this session itself');
+  assert.deepEqual(byId.get('session-b')!.matches.map(match => [match.entryId, match.role]), [['0:2', 'assistant']], 'the shared conversation\'s messages, not tool output or side asks');
+  assert.match(byId.get('session-b')!.matches[0]!.text, /^….*Connection Pool to PgBouncer for Postgres.*…$/);
+  assert.ok(byId.get('session-b')!.matches[0]!.text.length <= crossSessionLimits.snippetChars + 2);
+  assert.deepEqual([byId.get('session-c')!.titleMatch, byId.get('session-c')!.matches], [true, []], 'a title that matches counts too');
+  assert.deepEqual(result.skipped, [{ id: 'session-d', title: 'Offline worker', reason: 'unavailable' }]);
+  assert.equal((await f.tool('session-a', ownerId, write, { action: 'search', query: 'nothing like this' })).body.results instanceof Array, true);
+  assert.deepEqual((await f.tool('session-a', ownerId, write, { action: 'search', query: 'nothing like this' })).body.results, []);
+  const one = await f.tool('session-a', ownerId, write, { action: 'search', query: 'postgres', limit: 1 });
+  assert.equal((one.body.results as unknown[]).length, 1);
+  assert.equal(one.body.more, 1);
+
+  f.share('session-a');
+  const shared = await f.tool('session-a', ownerId, write, { action: 'search', query: 'postgres "connection pool"' });
+  const sharedResult = shared.body as { results: { session: CrossSessionSummary; titleMatch?: true; matches: unknown[] }[]; skipped?: { id: string; reason: string }[] };
+  assert.ok(sharedResult.skipped?.some(item => item.id === 'session-b' && item.reason === 'audience'),
+    'a session shared by link brings in nothing its link\'s readers couldn\'t read');
+  assert.ok(sharedResult.results.every(item => !item.matches.length), JSON.stringify(sharedResult.results));
+  assert.equal((await f.owner.request('PUT', '/api/sessions/session-a/audience-sharing', { enabled: true })).status, 200);
+  const allowed = await f.tool('session-a', ownerId, write, { action: 'search', query: 'postgres "connection pool"' });
+  assert.ok((allowed.body.results as { session: { id: string }; matches: unknown[] }[]).some(item => item.session.id === 'session-b' && item.matches.length),
+    'once its owner lets content through, it is searched');
 });

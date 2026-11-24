@@ -62,7 +62,7 @@ function runnerExtensions(source: RunnerConfigSource, extensions: HostExtensions
     peekCached: (items, autoCache) => extensions.peekCached(items, autoCache),
     workspace: workspaceId => extensions.workspace(workspaceId, async () =>
       source.calls.callback(await source.connection(), "/api/connectors/self/extensions/workspace",
-        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true }, WORKSPACE_EXTENSIONS_LIMIT)),
+        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true, memory: true }, WORKSPACE_EXTENSIONS_LIMIT)),
     lastKnown: workspaceId => extensions.lastKnown(workspaceId),
     ...(source.options.localModels.modelRegistry ? { modelRegistry: source.options.localModels.modelRegistry } : {}),
     ...(source.options.extensionModelCalls === false ? { modelCallsRefused: true as const } : {}),
