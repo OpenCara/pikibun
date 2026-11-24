@@ -16,6 +16,7 @@ import { Badge, Button, CardBody, CollapsibleRow, confirm, Feedback, Note, Row, 
 import { Card } from "./accounts";
 
 const timeouts = [30, 60, 120, 300, 600, 1800, 3600];
+const NO_LIMIT = 0;
 const lifetimes = [900, 1800, 3600, 7200, 14_400, 28_800, 43_200, 86_400];
 
 function duration(seconds: number): string {
@@ -53,7 +54,7 @@ const configInfo = (
     <Note>Running sessions pick up a change within a minute. A repository cache change applies when the host's connector next connects.</Note>
     <Note>Build caches are directories this host keeps for each workspace's declared caches (Settings → Workspaces → Build caches), which commands find through an environment variable, so tools such as ccache, Gradle or Bazel reuse earlier builds. Past the size limit, the least recently changed files go first. They never enter backups, packs or moves.</Note>
     <Note>The service lifetime bounds a session service: a server a session keeps running after the call that started it, such as the one the tunnel tool puts online. It stops then, and goes offline.</Note>
-    <Note>A longer time limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB files, 256 open files) so builds fit. Without provisioned resource limits on the host (connect --resources), a command can use the whole machine for that long.</Note>
+    <Note>The time limit starts at an hour, and the 30-second one also keeps the per-process limits of short commands (25 seconds of CPU, 64 MiB files, 256 open files). With No limit a command runs until it ends, the agent's own timeout for the call passes, or someone stops the session's work; a host on a connector from before it applies the time above it instead. Without provisioned resource limits on the host (connect --resources), a command can use the whole machine for that long.</Note>
   </View>
 );
 
@@ -119,9 +120,10 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
   return (
     <Section title="Configuration" info={configInfo} testID="host-configuration">
       <Row title="Command time limit" hint={capabilities().unsandboxed ? "How long a command (git, node, python, …) may run before it is stopped" : "How long a command (git, node, python, …) may run in the sandbox before it is stopped"}
-        trailing={<Select<number> compact label="Command time limit" value={config().commandTimeoutSeconds} disabled={!editable()}
-          options={choices().map(seconds => ({ value: seconds, label: duration(seconds), ...(seconds === defaultHostConfig.commandTimeoutSeconds ? { hint: "Default" } : {}) }))}
-          onChange={value => set({ commandTimeoutSeconds: value })} />} />
+        trailing={<Select<number> compact testID="host-command-time-limit" label="Command time limit" value={config().commandTimeoutUnlimited ? NO_LIMIT : config().commandTimeoutSeconds} disabled={!editable()}
+          options={[...choices().map(seconds => ({ value: seconds, label: duration(seconds), ...(seconds === defaultHostConfig.commandTimeoutSeconds ? { hint: "Default" } : {}) })),
+            { value: NO_LIMIT, label: "No limit", hint: "Runs until it ends or is stopped" }]}
+          onChange={value => set(value === NO_LIMIT ? { commandTimeoutUnlimited: true } : { commandTimeoutSeconds: value, commandTimeoutUnlimited: false })} />} />
       <If when={!capabilities().unsandboxed}>
         <Row title="Service lifetime" hint="The longest a session's server keeps running after the call that started it, online through its tunnel, before it is stopped"
           trailing={<Select<number> compact label="Service lifetime" value={config().serviceLifetimeSeconds} disabled={!editable()}

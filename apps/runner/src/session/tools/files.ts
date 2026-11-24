@@ -2,7 +2,7 @@ import { defineTool, type JsonObject, type ToolExecutionApi, type ToolRegistrati
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "../../file-operations.js";
-import { commandLimits } from "../../host-config.js";
+import { configuredLimits } from "../../host-config.js";
 import { conversationImageLimits, prepareImage, type FileContent } from "../../images.js";
 import { RunnerError } from "../../protocol.js";
 import { editTarget, findText, GREP_LINE_CHARS, PI_OUTPUT_LIMITS, grepText, imageText, LS_DEFAULT_ENTRIES, lsText, outsideWorktree, PathRefusal, piParameters, prepareEditArguments, readText, runPiEdit,
@@ -54,7 +54,7 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       await calls.check(api, "identity");
       const config = await context.hostConfig();
       const caches = context.buildCaches ? await context.buildCaches().catch(() => []) : [];
-      const commands = { timeoutSeconds: commandLimits(config.commandTimeoutSeconds).seconds, gpu: config.gpu && !context.onHost,
+      const commands = { ...(config.commandTimeoutUnlimited ? { timeLimit: "none" } : { timeoutSeconds: configuredLimits(config).seconds }), gpu: config.gpu && !context.onHost,
         ...(context.onHost ? { onHost: true } : {}),
         ...(caches.length ? { buildCaches: caches.map(cache => ({ name: cache.name, env: cache.env, path: cache.target, scope: cache.scope })) } : {}) };
       return text({ ...await sandbox.identity(() => calls.recheck(attribution)), commands, ...attribution });

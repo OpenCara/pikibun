@@ -10,7 +10,7 @@ import { completeWith, modelCallSources } from "../extensions/complete.js";
 import { cliRules } from "../extensions/piki/cli-engine.js";
 import type { CliDefinition } from "../../../../packages/shared/src/cli-definitions.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "../extensions/piki/command.js";
-import { commandLimits } from "../host-config.js";
+import { configuredLimits } from "../host-config.js";
 import { RunnerError } from "../protocol.js";
 import { SandboxProcessError } from "../sandbox.js";
 import { inScriptCall } from "../script-output.js";
@@ -170,7 +170,7 @@ export class SessionPiki {
     if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
     const id = approval.id;
     await calls.recheck(attribution);
-    const limits = commandLimits((await this.options.hostConfig()).commandTimeoutSeconds);
+    const limits = configuredLimits(await this.options.hostConfig());
     const callId = String(call.api.callId);
     const forgeWrites = await this.options.forgeWrites(attribution.initiatedBy);
     this.#pikiCalls.set(callId, { write: trusted && forgeWrites, forgeWrites, attribution, script: inScriptCall() });

@@ -13,7 +13,7 @@ import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { relativeTime } from "../lib/format";
 import { openServerLink, opensServerPages } from "../lib/links";
-import { forgetWorkspaceTab, takeWorkspaceTab, workspaceTabs, type WorkspaceTab } from "../lib/workspace-tabs";
+import { forgetWorkspaceTab, shownWorkspaceTab, takeWorkspaceTab, workspaceTabs, type WorkspaceTab } from "../lib/workspace-tabs";
 import { createAction, createResource } from "../lib/resource";
 import { createConnections } from "../hosts";
 import { Icon } from "../icons";
@@ -103,6 +103,10 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   effect(() => {
     const wanted = takeWorkspaceTab(untracked(workspace).id);
     if (wanted) tab.set(wanted);
+  });
+  effect(() => {
+    const shown = tab();
+    untracked(() => shownWorkspaceTab.set({ workspaceId: workspace().id, tab: shown }));
   });
   const repositories = createResource<WorkspaceRepositoryList>(() => `/api/workspaces/${segment(workspace().id)}/repositories`);
   const sources = createResource<WorkspaceSourceList>(() => `/api/workspaces/${segment(workspace().id)}/sources`);
