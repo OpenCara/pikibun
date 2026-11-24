@@ -3,6 +3,7 @@ import { remoteMcpLimits, type WorkspaceMcpServer } from "../../../../packages/s
 import { descriptionSummary } from "../../../../packages/shared/src/workspace-tools";
 import { segment, type Workspace } from "../shared";
 import { session } from "../lib/auth";
+import { openServerLink, opensServerPages } from "../lib/links";
 import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { monospace, palette, text } from "../theme";
@@ -26,9 +27,16 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
       message: "Sessions stop offering its tools from their next message, and Pikibun deletes the headers it kept for it." })) return;
     if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}`, { method: "DELETE" }); }, "Removed.")) resource.refresh();
   }
+  async function signOut(server: WorkspaceMcpServer) {
+    if (!await confirm({ title: `Sign out of ${server.name}?`, confirmLabel: "Sign out", destructive: true,
+      message: "Pikibun deletes the sign-in it kept for it. Its tools stay listed but fail until an owner or admin signs in again." })) return;
+    if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}/oauth`, { method: "DELETE" }); }, "Signed out.")) resource.refresh();
+  }
+  const signIn = (server: WorkspaceMcpServer) => openServerLink(`${path()}/${segment(server.id)}/oauth/start`);
   return (
     <Section title="Remote MCP servers" testID="workspace-mcp-servers" info={<View style={{ gap: 8 }}>
       <Note>Remote MCP servers add tools to this workspace's sessions without anything installed on hosts: Pikibun itself calls each server's https:// address, with headers (an API key, say) it keeps encrypted, which no session or host ever sees.</Note>
+      <Note>A server that asks for an OAuth sign-in instead gets one with Sign in: an owner or admin signs in to it once, as the account the workspace's sessions use, and Pikibun keeps and renews the sign-in.</Note>
       <Note>Each tool's name starts with its server's prefix. Tools may change things unless an owner or admin marks them read-only here: only those run in Read-only messages. A server's own claim that a tool only reads counts for nothing.</Note>
       <Note>A server's answers were written by whoever runs it: sessions treat them as information, not as instructions.</Note>
     </View>} action={admin() && (data()?.servers.length ?? 0) < remoteMcpLimits.servers ? <Button small variant="outline" icon="plus" label="Add server" onPress={() => adding.set(true)} /> : undefined}>
@@ -42,9 +50,10 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
               <Each of={current().servers} key={server => server.id}>
                 {server => (
                   <CollapsibleRow leading={<Icon name="sparkles" size={16} color={palette().muted} />} title={`${server().name} · ${server().prefix}_`}
-                    hint={server().error ? `${server().url}\n${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}`}
+                    hint={server().error ? `${server().url}\n${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().oauth ? " · signed in" : ""}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}`}
                     trailing={<Badge tone={server().error ? "danger" : server().enabled ? "success" : "neutral"}>{server().error ? "Error" : server().enabled ? "On" : "Off"}</Badge>}>
-                    <If when={server().error}><Banner tone="danger" title="Its tools couldn't be listed">{server().error!}</Banner></If>
+                    <If when={server().error}><Banner tone="danger" title={server().error!.startsWith("Signing in failed") ? "It couldn't be signed in to" : "Its tools couldn't be listed"}>{server().error!}</Banner></If>
+                    <If when={server().oauth}><Small>{`Signed in with OAuth on ${new Date(server().oauth!.signedInAt).toLocaleString()}.`}</Small></If>
                     <Each of={server().tools} key={tool => tool.name}>
                       {(tool, index) => (
                         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 4, paddingVertical: 8, borderTopWidth: index() ? 1 : 0, borderColor: palette().border }}>
@@ -66,6 +75,14 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
                         <Checkbox label="Enabled" checked={server().enabled} disabled={action.busy()}
                           onChange={on => void patch(server(), { enabled: on }, on ? "Sessions offer its tools from their next message." : "Sessions stop offering its tools from their next message.")} />
                         <View style={{ flex: 1 }} />
+                        <If when={server().oauth || !server().headerNames.length}>
+                          <If when={opensServerPages} else={<Small>Sign in to it from Pikibun on the web.</Small>}>
+                            <Button small variant="outline" label={server().oauth ? "Sign in again" : "Sign in"} disabled={action.busy()} onPress={() => signIn(server())} />
+                          </If>
+                        </If>
+                        <If when={server().oauth}>
+                          <Button small variant="ghost" label="Sign out" disabled={action.busy()} onPress={() => void signOut(server())} />
+                        </If>
                         <Button small variant="outline" icon="refresh" label="List tools again" disabled={action.busy()} onPress={() => void patch(server(), { refresh: true }, "Listed its tools again.")} />
                         <Button small variant="ghost" icon="trash" label="Remove" disabled={action.busy()} onPress={() => void remove(server())} />
                       </View>
@@ -115,7 +132,7 @@ function AddServerSheet(props: { busy: boolean; error: string; close: () => void
       <Field label="Address" hint="The server's Streamable HTTP endpoint. Pikibun reaches public https:// addresses only">
         <TextField monospace value={url()} onChange={value => url.set(value)} disabled={props.busy} maxLength={remoteMcpLimits.url} placeholder="https://mcp.example.com/mcp" keyboardType="url" autoCapitalize="none" autoCorrect={false} />
       </Field>
-      <Field label="Header" hint="Optional: a header Pikibun sends with every request, such as Authorization: Bearer <key>. Kept encrypted; nobody sees it again">
+      <Field label="Header" hint="Optional: a header Pikibun sends with every request, such as Authorization: Bearer <key>. Kept encrypted; nobody sees it again. Leave it empty for a server that signs in with OAuth, then use Sign in once it's added">
         <View style={{ gap: 8 }}>
           <TextField monospace value={header()} onChange={value => header.set(value)} disabled={props.busy} maxLength={remoteMcpLimits.headerName} autoCapitalize="none" autoCorrect={false} />
           <TextField masked value={value()} onChange={next => value.set(next)} disabled={props.busy} maxLength={remoteMcpLimits.headerValue} placeholder="Bearer …" autoCapitalize="none" autoCorrect={false} />

@@ -45,10 +45,11 @@ export function publicHttpsTransport(resolve?: AddressLookup): RemoteMcpTranspor
     if (url.protocol !== 'https:') return reject(new RemoteMcpRefused('Remote MCP servers are reached over https:// only'));
     const host = url.hostname.replace(/^\[|\]$/g, '');
     if (isIP(host) && !publicAddress(host)) return reject(new RemoteMcpRefused(`${host} isn't a public address`));
-    const body = Buffer.from(request.body);
+    const method = request.method ?? 'POST';
+    const body = Buffer.from(method === 'GET' ? '' : request.body);
     const call = httpsRequest(url, {
-      method: 'POST', lookup, agent: false,
-      headers: { ...request.headers, 'Content-Length': String(body.byteLength) },
+      method, lookup, agent: false,
+      headers: { ...request.headers, ...(method === 'GET' ? {} : { 'Content-Length': String(body.byteLength) }) },
     }, response => {
       const chunks: Buffer[] = [];
       let total = 0;
