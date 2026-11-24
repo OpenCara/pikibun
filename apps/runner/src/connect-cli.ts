@@ -76,6 +76,10 @@ This machine's own setup, when the defaults don't fit:
                            Linux and macOS sandboxed hosts fetch and verify them into a shared
                            cache and run them only inside each session's sandbox; the host's
                            owner can also turn this off in Pikibun. Both need remote installs
+  --no-extension-model-calls
+                           Never let an extension you require on this host call your models,
+                           whatever "May call models" says for it in Pikibun: this machine's
+                           word wins. Pikibun's own prompt audit still audits with a model
 
 Development:
   --allow-insecure-loopback  Permit HTTP/WS only on localhost/127.0.0.1/[::1]
@@ -223,7 +227,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     resources: { type: "string" }, "build-caches": { type: "string" }, "allow-insecure-loopback": { type: "boolean" },
     "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" }, "sessions-leave-sandbox": { type: "boolean" }, "no-remote-installs": { type: "boolean" },
     "managed-extensions": { type: "boolean" }, "auto-cache-extensions": { type: "boolean" },
-    "no-managed-extensions": { type: "boolean" }, "no-auto-cache-extensions": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
+    "no-managed-extensions": { type: "boolean" }, "no-auto-cache-extensions": { type: "boolean" }, "no-extension-model-calls": { type: "boolean" }, "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
     "experimental-sandbox": { type: "boolean" }, "memory-limit": { type: "string" }, "process-limit": { type: "string" }, "cpu-limit": { type: "string" },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
@@ -294,6 +298,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     remoteExtensionInstalls: values["no-remote-installs"] !== true,
     ...(values["managed-extensions"] || values["no-managed-extensions"] ? { managedExtensions: values["managed-extensions"] === true } : {}),
     ...(values["auto-cache-extensions"] || values["no-auto-cache-extensions"] ? { autoCacheExtensions: values["auto-cache-extensions"] === true } : {}),
+    ...(values["no-extension-model-calls"] ? { extensionModelCalls: false } : {}),
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
     capabilities: hostCapabilities,
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },

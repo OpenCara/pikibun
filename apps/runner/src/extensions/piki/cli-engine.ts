@@ -1,4 +1,5 @@
-import type { CliCall, CliDefinition } from "../../../../../packages/shared/src/cli-definitions.js";
+import { createContext, Script } from "node:vm";
+import { cliDefinitionLimits, type CliCall, type CliDefinition } from "../../../../../packages/shared/src/cli-definitions.js";
 import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
 import { apiWrites, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
@@ -7,6 +8,50 @@ export interface CliRules {
   writes(args: readonly string[]): string | undefined;
   hints(args: readonly string[], output: string): string[];
   prepare?(args: readonly string[]): readonly string[];
+}
+
+export type Matched = boolean | "unchecked";
+
+const matcherScope: { pattern?: RegExp; inputs?: readonly string[] } = Object.create(null);
+const matcherContext = createContext(matcherScope);
+const matcherScript = new Script("inputs.some(input => pattern.test(input))");
+
+export class BoundedMatcher {
+  #left: number;
+
+  constructor(private readonly note: (message: string) => void = () => {}, budgetMs: number = cliDefinitionLimits.matchMs,
+    private readonly inputLimit: number = cliDefinitionLimits.patternInput) {
+    this.#left = budgetMs;
+  }
+
+  some(pattern: RegExp, inputs: readonly string[], limit: number = this.inputLimit): Matched {
+    const checked = inputs.filter(input => input.length <= limit);
+    const unchecked = checked.length !== inputs.length;
+    if (this.#left < 1) return "unchecked";
+    const started = performance.now();
+    matcherScope.pattern = pattern;
+    matcherScope.inputs = checked;
+    try {
+      if (matcherScript.runInContext(matcherContext, { timeout: Math.max(1, Math.ceil(this.#left)) }) === true) return true;
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "ERR_SCRIPT_EXECUTION_TIMEOUT") throw error;
+      this.#left = 0;
+      this.note(`the pattern ${pattern.source} took longer than a rule check may (${cliDefinitionLimits.matchMs} ms for all of a call's patterns); the call is treated as one its rule covers`);
+      return "unchecked";
+    } finally {
+      matcherScope.pattern = undefined;
+      matcherScope.inputs = undefined;
+      this.#left -= performance.now() - started;
+    }
+    return unchecked ? "unchecked" : false;
+  }
+}
+
+const UNCHECKED = `an argument couldn't be checked against this rule (it is longer than ${cliDefinitionLimits.patternInput} characters, or the check took too long)`;
+
+function boundedOutput(output: string): string {
+  const half = cliDefinitionLimits.patternOutput / 2;
+  return output.length <= cliDefinitionLimits.patternOutput ? output : `${output.slice(0, half)}\n${output.slice(-half)}`;
 }
 
 function abbreviation(arg: string, name: string): boolean {
@@ -30,7 +75,7 @@ function abbreviatedValues(args: readonly string[], names: readonly string[]): s
   return found;
 }
 
-export function cliRules(definition: CliDefinition): CliRules {
+export function cliRules(definition: CliDefinition, note?: (message: string) => void): CliRules {
   const { command, reads } = definition;
   const normalize = (args: readonly string[]) => definition.lowercase ? args.map(arg => arg.toLowerCase()) : args;
   const present = (args: readonly string[], names: readonly string[]) => definition.abbreviatedOptions
@@ -42,7 +87,7 @@ export function cliRules(definition: CliDefinition): CliRules {
   const hints = (definition.hints ?? []).map(rule => ({ rule, pattern: rule.argPattern ? new RegExp(rule.argPattern, "i") : undefined,
     output: rule.outputPattern ? new RegExp(rule.outputPattern, "i") : undefined }));
 
-  const matches = (rule: CliCall, pattern: RegExp | undefined, args: readonly string[], words: readonly string[]) => {
+  const matches = (rule: CliCall, pattern: RegExp | undefined, args: readonly string[], words: readonly string[], matcher: BoundedMatcher): Matched => {
     if (rule.words?.length) {
       const found = (word: string) => rule.wordPrefixes ? words.some(candidate => candidate.length > 0 && word.startsWith(candidate)) : words.includes(word);
       if (!rule.words.every(found)) return false;
@@ -50,7 +95,7 @@ export function cliRules(definition: CliDefinition): CliRules {
     if (rule.options?.length || rule.short) {
       if (!((rule.options?.length && present(args, rule.options)) || (rule.short && hasShortOption(args, rule.short)))) return false;
     }
-    return !pattern || args.some(arg => pattern.test(arg));
+    return pattern ? matcher.some(pattern, args) : true;
   };
 
   const requestWrites = (args: readonly string[], method: readonly string[], body: readonly string[]) => {
@@ -68,12 +113,22 @@ export function cliRules(definition: CliDefinition): CliRules {
     refused(original) {
       const args = normalize(original);
       const words = positionals(args);
-      return refusals.find(({ rule, pattern }) => matches(rule, pattern, args, words))?.rule.reason;
+      const matcher = new BoundedMatcher(note);
+      let unchecked: string | undefined;
+      for (const { rule, pattern } of refusals) {
+        const matched = matches(rule, pattern, args, words, matcher);
+        if (matched === true) return rule.reason;
+        if (matched === "unchecked") unchecked ??= `${rule.reason}: ${UNCHECKED}`;
+      }
+      return unchecked;
     },
     hints(original, output) {
       const args = normalize(original);
       const words = positionals(args);
-      return hints.filter(({ rule, pattern, output: printed }) => matches(rule, pattern, args, words) && (!printed || printed.test(output))).map(({ rule }) => rule.hint);
+      const matcher = new BoundedMatcher(note);
+      const shown = boundedOutput(output);
+      return hints.filter(({ rule, pattern, output: printed }) => matches(rule, pattern, args, words, matcher) === true && (!printed || matcher.some(printed, [shown], cliDefinitionLimits.patternOutput + 1) === true))
+        .map(({ rule }) => rule.hint);
     },
     writes(original) {
       const args = normalize(original);
@@ -81,7 +136,8 @@ export function cliRules(definition: CliDefinition): CliRules {
       if (reads.hostFileArgs && args.some(arg => arg.startsWith("@") || /^-[^=]*=@/.test(arg))) return "an argument reads a host file (@file)";
       const words = commandWords(args);
       if (!words.length) return `${command} ${args.join(" ")} is not a command that only reads`;
-      if (secretWords && words.some(word => secretWords.test(word))) return `${command} ${words.join(" ")} may show keys or secrets`;
+      const matcher = new BoundedMatcher(note);
+      if (secretWords && matcher.some(secretWords, words) !== false) return `${command} ${words.join(" ").slice(0, 200)} may show keys or secrets`;
       if (reads.api !== undefined && words[0] === reads.api) return apiWrites(args);
       const request = reads.requests?.find(rule => rule.words.join(" ") === words.join(" "));
       if (request) return requestWrites(args, request.method, request.body);
@@ -93,7 +149,7 @@ export function cliRules(definition: CliDefinition): CliRules {
         if (allowed === true || (allowed && sub !== undefined && allowed.includes(sub))) return undefined;
         return `${command} ${words.slice(0, 2).join(" ")} is not a command that only reads`;
       }
-      if (verb) return verb.test(words.at(-1)!) ? undefined : `${command} ${words.join(" ")} is not a command that only reads`;
+      if (verb) return matcher.some(verb, [words.at(-1)!]) === true ? undefined : `${command} ${words.join(" ").slice(0, 200)} is not a command that only reads`;
       return `${command} ${words.join(" ")} is not a command that only reads`;
     },
   };

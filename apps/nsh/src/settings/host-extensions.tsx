@@ -320,7 +320,7 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
                         onChange={on => void setRequired(extension(), on)} />
                     </If>
                     <If when={owner() && isRequired(source()) && !isPikiExtensionSource(source())}>
-                      <Checkbox label={props.connector.capabilities.modelCalls ? "May call models" : "May call models (update the connector)"} checked={callsModels(source())}
+                      <Checkbox label={props.connector.capabilities.modelCalls ? "May call models" : "May call models (not on this connector: it is older, or runs with --no-extension-model-calls)"} checked={callsModels(source())}
                         disabled={action.busy() || revoked() || !props.connector.capabilities.modelCalls} onChange={on => void setModelCalls(source(), on)} />
                     </If>
                     <If when={owner() && isRequired(source()) && extension().modules.some(module => module.flags.length)}>

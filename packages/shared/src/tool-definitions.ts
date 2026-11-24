@@ -247,13 +247,19 @@ export function parseToolDefinition(value: unknown): ToolDefinition {
   fail("kind");
 }
 
-export function parseToolDefinitions(value: unknown): ToolDefinition[] {
+export function parseToolDefinitions(value: unknown, skipped: (name: string, reason: string) => void = () => {}): ToolDefinition[] {
   if (!isObject(value) || !Array.isArray(value.tools) || value.tools.length > toolDefinitionLimits.definitions) throw new Error("Invalid tool definitions");
   const found: ToolDefinition[] = [];
   for (const item of value.tools) {
+    const name = isObject(item) && typeof item.name === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(item.name) ? item.name : "";
     let definition: ToolDefinition;
-    try { definition = parseToolDefinition(item); } catch { continue; }
-    if (!found.some(other => other.name === definition.name)) found.push(definition);
+    try { definition = parseToolDefinition(item); }
+    catch (error) {
+      skipped(name, error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    if (found.some(other => other.name === definition.name)) skipped(name, "a second definition of that name");
+    else found.push(definition);
   }
   return found;
 }
