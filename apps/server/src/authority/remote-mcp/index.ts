@@ -1,5 +1,7 @@
 import type { Hono } from 'hono';
+import { getCookie, setCookie } from 'hono/cookie';
 import { compile } from '@earendil-works/pi-schema';
+import { constantTimeEqual, sha256 } from '../../../../../packages/shared/src/crypto.js';
 import { z } from 'zod';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import { extensionSwitchOn } from '../../../../../packages/shared/src/piki-extensions.js';
@@ -9,7 +11,7 @@ import {
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
 import type { AppContext, AppEnv, Env, SessionRow } from '../../types.js';
-import { fail, id, identifier, now, text, userIdentifier } from '../../http.js';
+import { appOrigin, fail, id, identifier, now, randomToken, requireOrigin, text, userIdentifier } from '../../http.js';
 import { body, fields } from '../../schemas.js';
 import { requireMember, sessionAccess, workspaceAdminSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
@@ -17,14 +19,22 @@ import { workspaceExtensions } from '../extension-policy.js';
 import { requireCallbackScope } from '../hosts.js';
 import { admissionExpired } from '../run-admissions.js';
 import { requireToolCall } from '../tool-checks.js';
-import { decryptToken, encryptToken } from '../vault.js';
-import { callRemoteMcpTool, discoverRemoteMcpTools, RemoteMcpError } from './client.js';
+import { assertVaultConfigured, decryptToken, encryptToken } from '../vault.js';
+import { callRemoteMcpTool, discoverRemoteMcpTools, RemoteMcpError, RemoteMcpUnauthorized } from './client.js';
+import {
+  authorizationUrl, discoverOAuth, parseOAuthSecret, registerClient, RemoteMcpOAuthError, tokenRequest, type McpOAuthClient, type McpOAuthSecret,
+} from './oauth.js';
 import { publicHttpsTransport, RemoteMcpRefused } from './transport.js';
 
 interface ServerRow {
   id: string; workspace_id: string; prefix: string; name: string; url: string; headers_ciphertext: string | null; header_names_json: string;
   read_only_tools_json: string; tools_json: string; enabled: number | string; discovered_at: string | null; error: string | null; updated_at: string;
+  oauth_ciphertext: string | null; oauth_by: string | null; oauth_at: string | null;
 }
+
+const STATE_TTL = 10 * 60 * 1000;
+const STATE = /^[A-Za-z0-9_-]{43}$/;
+const RENEW_BEFORE_MS = 60_000;
 
 const refusingTransport: RemoteMcpTransport = async () => { throw new RemoteMcpRefused('This Pikibun server reaches no remote MCP servers in tests'); };
 let productionTransport: RemoteMcpTransport | undefined;
@@ -43,6 +53,8 @@ const changeBody = fields({ name: z.unknown(), url: z.unknown(), headers: z.unkn
   'Change name, url, headers, readOnlyTools or enabled, or set refresh to true.', { code: 'invalid_mcp_server', some: true });
 
 const secretContext = (serverId: string) => `remote-mcp:${serverId}`;
+const oauthContext = (serverId: string) => `remote-mcp-oauth:${serverId}`;
+const stateContext = (serverId: string) => `remote-mcp-oauth-state:${serverId}`;
 const parsedList = (json: string): string[] => { try { const value = JSON.parse(json); return Array.isArray(value) ? value.filter(item => typeof item === 'string') : []; } catch { return []; } };
 const parsedTools = (json: string): RemoteMcpTool[] => { try { const value = JSON.parse(json); return Array.isArray(value) ? value as RemoteMcpTool[] : []; } catch { return []; } };
 
@@ -53,10 +65,15 @@ function view(row: ServerRow): WorkspaceMcpServer {
     return toolName ? [{ ...tool, toolName, readOnly: readOnlyTools.includes(tool.name) }] : [];
   });
   return { id: row.id, name: row.name, prefix: row.prefix, url: row.url, enabled: Number(row.enabled) === 1, headerNames: parsedList(row.header_names_json),
-    readOnlyTools, tools, ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
+    ...(row.oauth_ciphertext && row.oauth_at ? { oauth: { signedInAt: row.oauth_at } } : {}), readOnlyTools, tools, ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
 }
 
-function failure(error: unknown): string {
+function failure(error: unknown, signedIn = false): string {
+  if (error instanceof RemoteMcpUnauthorized && error.status === 401) {
+    return signedIn ? 'The server refused its sign-in (HTTP 401): an owner or admin signs in to it again'
+      : /^\s*Bearer\b/i.test(error.challenge) ? 'The server needs a sign-in (HTTP 401): an owner or admin signs in to it with Sign in, or gives it an Authorization header'
+      : error.message;
+  }
   if (error instanceof RemoteMcpError || error instanceof RemoteMcpRefused) return error.message.slice(0, 500);
   return `It couldn't be reached: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`;
 }
@@ -66,9 +83,82 @@ async function headersOf(env: Env, row: Pick<ServerRow, 'id' | 'headers_cipherte
   return JSON.parse(await decryptToken(env, secretContext(row.id), row.headers_ciphertext)) as Record<string, string>;
 }
 
-async function discover(env: Env, url: string, headers: Record<string, string>): Promise<{ tools: RemoteMcpTool[]; error: string | null }> {
-  try { return { tools: await discoverRemoteMcpTools(transport(env), url, headers), error: null }; }
-  catch (error) { return { tools: [], error: failure(error) }; }
+interface SignIn { secret: McpOAuthSecret; ciphertext: string }
+
+async function signInOf(env: Env, serverId: string, ciphertext: string): Promise<SignIn> {
+  let plain: string;
+  try { plain = await decryptToken(env, oauthContext(serverId), ciphertext); }
+  catch { throw new RemoteMcpOAuthError('Pikibun couldn\'t read the sign-in it keeps for it: an owner or admin signs in again'); }
+  return { secret: parseOAuthSecret(plain), ciphertext };
+}
+
+async function keptSignIn(env: Env, serverId: string): Promise<string | null> {
+  return (await env.DB.query<{ oauth_ciphertext: string | null }>('SELECT oauth_ciphertext FROM workspace_mcp_servers WHERE id = ?').bind(serverId).first())?.oauth_ciphertext ?? null;
+}
+
+async function renew(env: Env, serverId: string, current: SignIn): Promise<SignIn> {
+  const expired = new RemoteMcpOAuthError('Its sign-in expired: an owner or admin signs in to it again');
+  if (!current.secret.refreshToken) throw expired;
+  let next: McpOAuthSecret;
+  try {
+    next = await tokenRequest(transport(env), current.secret.client, { grant_type: 'refresh_token', refresh_token: current.secret.refreshToken }, current.secret);
+  } catch (error) {
+    const latest = await keptSignIn(env, serverId);
+    if (latest && latest !== current.ciphertext) return signInOf(env, serverId, latest);
+    if (error instanceof RemoteMcpOAuthError && (error.code === 'invalid_grant' || error.code === 'invalid_client')) throw expired;
+    throw error;
+  }
+  const ciphertext = await encryptToken(env, oauthContext(serverId), JSON.stringify(next));
+  const saved = await env.DB.query('UPDATE workspace_mcp_servers SET oauth_ciphertext = ? WHERE id = ? AND oauth_ciphertext = ? RETURNING id')
+    .bind(ciphertext, serverId, current.ciphertext).first();
+  if (saved) return { secret: next, ciphertext };
+  const latest = await keptSignIn(env, serverId);
+  if (!latest) throw new RemoteMcpOAuthError('Its sign-in was removed: an owner or admin signs in to it again');
+  return signInOf(env, serverId, latest);
+}
+
+function bearer(headers: Record<string, string>, token: string): Record<string, string> {
+  const kept = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== 'authorization'));
+  return { ...kept, Authorization: `Bearer ${token}` };
+}
+
+async function withCredentials<T>(env: Env, serverId: string, headers: Record<string, string>, oauth: string | null,
+  run: (headers: Record<string, string>) => Promise<T>): Promise<T> {
+  if (!oauth) return run(headers);
+  let signIn = await signInOf(env, serverId, oauth);
+  let renewed = false;
+  if (signIn.secret.expiresAt !== undefined && signIn.secret.expiresAt < Date.now() + RENEW_BEFORE_MS) {
+    signIn = await renew(env, serverId, signIn);
+    renewed = true;
+  }
+  try { return await run(bearer(headers, signIn.secret.accessToken)); }
+  catch (error) {
+    if (renewed || !(error instanceof RemoteMcpUnauthorized) || error.status !== 401 || !signIn.secret.refreshToken) throw error;
+    signIn = await renew(env, serverId, signIn);
+    return run(bearer(headers, signIn.secret.accessToken));
+  }
+}
+
+async function discover(env: Env, serverId: string, url: string, headers: Record<string, string>, oauth: string | null): Promise<{ tools: RemoteMcpTool[]; error: string | null }> {
+  try { return { tools: await withCredentials(env, serverId, headers, oauth, sent => discoverRemoteMcpTools(transport(env), url, sent)), error: null }; }
+  catch (error) { return { tools: [], error: failure(error, !!oauth) }; }
+}
+
+function oauthRedirectUri(env: Env): string {
+  return `${appOrigin(env)}/api/mcp-servers/oauth/callback`;
+}
+
+function stateCookie(env: Env) {
+  const secure = new URL(appOrigin(env)).protocol === 'https:';
+  return { name: secure ? '__Host-mcp-oauth' : 'test-mcp-oauth', options: { secure, httpOnly: true, sameSite: 'Lax' as const, path: '/' } };
+}
+
+async function noteError(env: Env, serverId: string, error: string): Promise<void> {
+  await env.DB.query('UPDATE workspace_mcp_servers SET error = ? WHERE id = ?').bind(error.slice(0, 500), serverId).run();
+}
+
+function settingsPage(c: AppContext, workspaceId: string): Response {
+  return c.redirect(`${appOrigin(c.env)}/#/settings/workspaces/${encodeURIComponent(workspaceId)}`, 302);
 }
 
 function readOnlyList(value: unknown): string[] {
@@ -154,12 +244,13 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
   if (errors.length) {
     fail(400, 'invalid_arguments', `${toolName}: ${errors.slice(0, 3).map(error => `${error.path || 'arguments'} ${error.message}`).join('; ').slice(0, 500)}. Nothing ran.`);
   }
-  const headers = await headersOf(c.env, server);
   let result;
-  try { result = await callRemoteMcpTool(transport(c.env), server.url, headers, tool.name, args as Record<string, unknown>); }
-  catch (error) {
+  try {
+    result = await withCredentials(c.env, server.id, await headersOf(c.env, server), server.oauth_ciphertext,
+      headers => callRemoteMcpTool(transport(c.env), server.url, headers, tool.name, args as Record<string, unknown>));
+  } catch (error) {
     await auditStatement(c.env, actorId, 'workspace.mcp.called', row.workspace_id, sessionId, { server: server.id, tool: tool.name, write, failed: true }).run();
-    return fail(502, 'mcp_call_failed', `${server.name}: ${failure(error)}`);
+    return fail(502, 'mcp_call_failed', `${server.name}: ${failure(error, !!server.oauth_ciphertext)}`);
   }
   await authorize();
   await auditStatement(c.env, actorId, 'workspace.mcp.called', row.workspace_id, sessionId,
@@ -185,8 +276,8 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const url = checked(() => remoteMcpUrl(input.url));
     const headers = input.headers === undefined ? {} : checked(() => remoteMcpHeaders(input.headers));
     const readOnlyTools = input.readOnlyTools === undefined ? [] : readOnlyList(input.readOnlyTools);
-    const found = await discover(c.env, url, headers);
     const serverId = id(); const at = now();
+    const found = await discover(c.env, serverId, url, headers, null);
     const ciphertext = Object.keys(headers).length ? await encryptToken(c.env, secretContext(serverId), JSON.stringify(headers)) : null;
     const saved = await c.env.DB.query<{ id: string }>(`INSERT INTO workspace_mcp_servers (id, workspace_id, prefix, name, url, headers_ciphertext, header_names_json,
         read_only_tools_json, tools_json, enabled, discovered_at, error, created_by, updated_by, created_at, updated_at)
@@ -225,17 +316,21 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const headers = input.headers === undefined ? await headersOf(c.env, row) : input.headers === null ? {} : checked(() => remoteMcpHeaders(input.headers));
     const readOnlyTools = input.readOnlyTools === undefined ? parsedList(row.read_only_tools_json) : readOnlyList(input.readOnlyTools);
     const enabled = input.enabled === undefined ? Number(row.enabled) === 1 : input.enabled as boolean;
+    const moved = url !== row.url;
     const reach = input.refresh === true || input.url !== undefined || input.headers !== undefined;
-    const found = reach ? await discover(c.env, url, headers) : undefined;
+    const found = reach ? await discover(c.env, serverId, url, headers, moved ? null : row.oauth_ciphertext) : undefined;
     const at = now();
     const ciphertext = input.headers === undefined ? row.headers_ciphertext
       : Object.keys(headers).length ? await encryptToken(c.env, secretContext(serverId), JSON.stringify(headers)) : null;
     const saved = await c.env.DB.query<{ id: string }>(`UPDATE workspace_mcp_servers SET name = ?, url = ?, headers_ciphertext = ?, header_names_json = ?,
-        read_only_tools_json = ?, tools_json = ?, enabled = ?, discovered_at = ?, error = ?, updated_by = ?, updated_at = ?
+        read_only_tools_json = ?, tools_json = ?, enabled = ?, discovered_at = ?, error = ?, updated_by = ?, updated_at = ?,
+        oauth_ciphertext = CASE WHEN ? = 1 THEN NULL ELSE oauth_ciphertext END, oauth_by = CASE WHEN ? = 1 THEN NULL ELSE oauth_by END,
+        oauth_at = CASE WHEN ? = 1 THEN NULL ELSE oauth_at END
       WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
       .bind(name, url, ciphertext, JSON.stringify(Object.keys(headers)), JSON.stringify(readOnlyTools),
         found && !found.error ? JSON.stringify(found.tools) : row.tools_json, enabled ? 1 : 0,
-        found ? (found.error ? row.discovered_at : at) : row.discovered_at, found ? found.error : row.error, actor, at, serverId, workspaceId, workspaceId, actor).first();
+        found ? (found.error ? row.discovered_at : at) : row.discovered_at, found ? found.error : row.error, actor, at, moved ? 1 : 0, moved ? 1 : 0, moved ? 1 : 0,
+        serverId, workspaceId, workspaceId, actor).first();
     if (!saved) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
       fail(404, 'not_found', 'Remote MCP server not found.');
@@ -243,6 +338,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     await auditStatement(c.env, actor, 'workspace.mcp.updated', workspaceId, null, {
       server: serverId, changed: keys.filter(item => item !== 'refresh'), ...(input.url !== undefined ? { url } : {}), ...(input.headers !== undefined ? { headers: Object.keys(headers) } : {}),
       ...(input.readOnlyTools !== undefined ? { readOnlyTools } : {}), ...(input.enabled !== undefined ? { enabled } : {}),
+      ...(moved && row.oauth_ciphertext ? { signedOut: true } : {}),
       ...(found ? { tools: found.tools.length, ...(found.error ? { error: found.error } : {}) } : {}),
     }).run();
     return c.json({ server: view(await serverRow(c.env, workspaceId, serverId)) });
@@ -258,5 +354,97 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
       auditStatement(c.env, actor, 'workspace.mcp.removed', workspaceId, null, { server: serverId, prefix: row.prefix }),
     ]);
     return c.json({ ok: true });
+  });
+
+  app.get('/api/workspaces/:id/mcp-servers/:serverId/oauth/start', async c => {
+    requireOrigin(c);
+    const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
+    const serverId = identifier(c.req.param('serverId'), 'serverId');
+    await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
+    await assertVaultConfigured(c.env);
+    const row = await serverRow(c.env, workspaceId, serverId);
+    let client: McpOAuthClient;
+    try { client = await registerClient(transport(c.env), await discoverOAuth(transport(c.env), row.url), oauthRedirectUri(c.env)); }
+    catch (error) {
+      await noteError(c.env, serverId, `Signing in failed: ${failure(error)}`);
+      return settingsPage(c, workspaceId);
+    }
+    const state = randomToken(); const verifier = randomToken();
+    const expiresAt = Date.now() + STATE_TTL;
+    await c.env.DB.batch([
+      c.env.DB.query('DELETE FROM mcp_oauth_states WHERE expires_at < ? OR user_id = ?').bind(Date.now(), actor),
+      c.env.DB.query(`INSERT INTO mcp_oauth_states (state_hash, server_id, user_id, url, verifier, client_ciphertext, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(await sha256(state), serverId, actor, row.url, verifier, await encryptToken(c.env, stateContext(serverId), JSON.stringify(client)), expiresAt, now()),
+    ]);
+    const cookie = stateCookie(c.env);
+    setCookie(c, cookie.name, state, { ...cookie.options, maxAge: STATE_TTL / 1000, expires: new Date(expiresAt) });
+    return c.redirect(authorizationUrl(client, state, verifier), 302);
+  });
+
+  app.get('/api/mcp-servers/oauth/callback', async c => {
+    const actor = c.get('auth').userId;
+    const cookie = stateCookie(c.env);
+    const cookieState = getCookie(c, cookie.name);
+    setCookie(c, cookie.name, '', { ...cookie.options, maxAge: 0, expires: new Date(0) });
+    const states = c.req.queries('state');
+    const state = states?.length === 1 ? states[0]! : '';
+    if (!STATE.test(state) || !cookieState || !STATE.test(cookieState) || !constantTimeEqual(state, cookieState)) {
+      fail(400, 'invalid_oauth_state', 'Invalid or expired OAuth state: start the sign-in again from the workspace\'s settings.');
+    }
+    const saved = await c.env.DB.query<{ server_id: string; user_id: string; url: string; verifier: string; client_ciphertext: string; expires_at: number | string }>(
+      'DELETE FROM mcp_oauth_states WHERE state_hash = ? RETURNING server_id, user_id, url, verifier, client_ciphertext, expires_at').bind(await sha256(state)).first();
+    if (!saved || saved.user_id !== actor || Number(saved.expires_at) < Date.now()) {
+      fail(400, 'invalid_oauth_state', 'Invalid or expired OAuth state: start the sign-in again from the workspace\'s settings.');
+    }
+    const row = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE id = ?').bind(saved.server_id).first()
+      ?? fail(404, 'not_found', 'Remote MCP server not found.');
+    await requireMember(c.env, row.workspace_id, actor, ['owner', 'admin']);
+    const declined = async (reason: string) => { await noteError(c.env, row.id, `Signing in failed: ${reason}`); return settingsPage(c, row.workspace_id); };
+    if (row.url !== saved.url) return declined('its address changed while signing in');
+    const error = c.req.query('error');
+    if (error !== undefined) {
+      return declined(error === 'access_denied' ? 'the sign-in was declined' : `its authorization server answered ${/^[\x20-\x7e]{1,64}$/.test(error) ? error : 'an error'}`);
+    }
+    const codes = c.req.queries('code');
+    const code = codes?.length === 1 ? codes[0]! : '';
+    if (!/^[\x21-\x7e]{1,4096}$/.test(code)) return declined('its authorization server sent no code');
+    let client: McpOAuthClient;
+    try { client = JSON.parse(await decryptToken(c.env, stateContext(row.id), saved.client_ciphertext)) as McpOAuthClient; }
+    catch { return declined('Pikibun couldn\'t read the sign-in it started: start it again'); }
+    const issuer = c.req.query('iss');
+    if (issuer !== undefined && issuer !== client.issuer) return declined('the answer came from another authorization server');
+    let secret: McpOAuthSecret;
+    try {
+      secret = await tokenRequest(transport(c.env), client, { grant_type: 'authorization_code', code, redirect_uri: client.redirectUri, code_verifier: saved.verifier });
+    } catch (failed) { return declined(failure(failed)); }
+    const ciphertext = await encryptToken(c.env, oauthContext(row.id), JSON.stringify(secret));
+    const at = now();
+    const signedIn = await c.env.DB.query(`UPDATE workspace_mcp_servers SET oauth_ciphertext = ?, oauth_by = ?, oauth_at = ?, updated_by = ?, updated_at = ?
+      WHERE id = ? AND url = ? AND ${workspaceAdminSQL} RETURNING id`)
+      .bind(ciphertext, actor, at, actor, at, row.id, saved.url, row.workspace_id, actor).first();
+    if (!signedIn) return declined('the server or your role changed while signing in');
+    const found = await discover(c.env, row.id, row.url, await headersOf(c.env, row), ciphertext);
+    await c.env.DB.batch([
+      c.env.DB.query('UPDATE workspace_mcp_servers SET tools_json = CASE WHEN ? = 1 THEN ? ELSE tools_json END, discovered_at = CASE WHEN ? = 1 THEN ? ELSE discovered_at END, error = ? WHERE id = ?')
+        .bind(found.error ? 0 : 1, JSON.stringify(found.tools), found.error ? 0 : 1, at, found.error, row.id),
+      auditStatement(c.env, actor, 'workspace.mcp.signed_in', row.workspace_id, null,
+        { server: row.id, prefix: row.prefix, tools: found.tools.length, ...(found.error ? { error: found.error } : {}) }),
+    ]);
+    return settingsPage(c, row.workspace_id);
+  });
+
+  app.delete('/api/workspaces/:id/mcp-servers/:serverId/oauth', async c => {
+    const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
+    const serverId = identifier(c.req.param('serverId'), 'serverId');
+    await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
+    const row = await serverRow(c.env, workspaceId, serverId);
+    const at = now();
+    await c.env.DB.batch([
+      c.env.DB.query(`UPDATE workspace_mcp_servers SET oauth_ciphertext = NULL, oauth_by = NULL, oauth_at = NULL, updated_by = ?, updated_at = ?
+        WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`).bind(actor, at, serverId, workspaceId, workspaceId, actor),
+      auditStatement(c.env, actor, 'workspace.mcp.signed_out', workspaceId, null, { server: serverId, prefix: row.prefix }),
+    ]);
+    return c.json({ server: view(await serverRow(c.env, workspaceId, serverId)) });
   });
 }
