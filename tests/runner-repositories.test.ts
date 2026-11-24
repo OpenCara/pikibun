@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256 } from "../packages/shared/src/crypto.js";
-import { repositoryLimits, repositoryPath, type GitHubSessionRepository, type SessionRepository } from "../packages/shared/src/repositories.js";
+import { repositoryPath, type GitHubSessionRepository, type SessionRepository } from "../packages/shared/src/repositories.js";
 import type { RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 import { RunnerError, validateBinding, validateRepositories } from "../apps/runner/src/protocol.js";
 import { RunnerSession, type RunnerConfig } from "../apps/runner/src/session.js";
@@ -55,7 +55,7 @@ function runnerError(status: number, message: RegExp) {
 test("repository protocol accepts only exact immutable pins and returns detached values", () => {
   assert.deepEqual(validateRepositories(undefined), []);
   assert.deepEqual(validateRepositories([]), []);
-  const pins = Array.from({ length: repositoryLimits.repositories }, (_, index) => repository(index + 1));
+  const pins = Array.from({ length: 9 }, (_, index) => repository(index + 1));
   const validated = validateRepositories(pins);
   assert.deepEqual(validated, pins);
   assert.notEqual(validated, pins);
@@ -79,7 +79,7 @@ test("repository names may match ordinary Git config filenames beneath their fix
 test("repository protocol rejects malformed pins, mutable revisions and duplicate identities", async t => {
   const pin = repository();
   const invalid: Array<[string, unknown]> = [
-    ["null list", null], ["object list", {}], ["too many", Array.from({ length: repositoryLimits.repositories + 1 }, (_, index) => repository(index + 1))],
+    ["null list", null], ["object list", {}],
     ["null pin", [null]], ["sparse list", new Array(1)], ["array pin", [[]]], ["string pin", ["acme/project"]],
     ["missing commit", [{ bindingId: pin.bindingId, repositoryId: pin.repositoryId, fullName: pin.fullName, path: pin.path, ref: pin.ref }]],
     ["extra archive URL", [{ ...pin, url: "https://elsewhere.example/archive" }]],

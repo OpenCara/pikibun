@@ -284,7 +284,6 @@ export function repositoryPath(repository: { provider?: GitProvider; host?: stri
 }
 
 export const repositoryLimits = {
-  repositories: 5,
   pickerRepositories: 3000,
 } as const;
 

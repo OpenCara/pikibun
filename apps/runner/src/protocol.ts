@@ -4,7 +4,7 @@ import { validateUserEnv } from "../../../packages/shared/src/policy.js";
 import type { RunnerAction, RunnerBinding, RunnerTicket, Operation, Permission } from "../../../packages/shared/src/types.js";
 import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, definedToolNamePattern, githubMergeMethods, permissionNeeds, toolNames, programToolNames } from "../../../packages/shared/src/types.js";
 import { knownDefinedProgramTool } from "./defined-tools.js";
-import { gitProviderHosts, gitProviders, repositoryLimits, repositoryPath, validCloneDirectory, validGitHost, validPushBranch, validPushTag, validRepositoryId, validRepositoryName, type SessionRepository, type TokenGitProvider } from "../../../packages/shared/src/repositories.js";
+import { gitProviderHosts, gitProviders, repositoryPath, validCloneDirectory, validGitHost, validPushBranch, validPushTag, validRepositoryId, validRepositoryName, type SessionRepository, type TokenGitProvider } from "../../../packages/shared/src/repositories.js";
 import { validSessionBranch } from "../../../packages/shared/src/git-push.js";
 
 export class RunnerError extends Error {
@@ -67,7 +67,7 @@ export function repositoryPinIdentity(value: unknown): string | null {
 }
 export function validateRepositories(value: unknown): SessionRepository[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > repositoryLimits.repositories) throw new RunnerError(400, "Invalid immutable repository bindings");
+  if (!Array.isArray(value)) throw new RunnerError(400, "Invalid immutable repository bindings");
   const ids = new Set<string>(), bindings = new Set<string>(), names = new Set<string>();
   return Array.from(value, repository => {
     const id = repositoryPinIdentity(repository);
