@@ -120,7 +120,7 @@ export class SessionPiki {
       if (lease) for (const name of run.tokenEnv) env[name] = lease.token;
       const command = sandboxShellCommand(run.command, run.args, env, run.directory);
       const output = await this.options.sandbox.execute({ kind: "bash", command }, run.readOnly, () => this.options.calls.recheck(call.attribution), {
-        unbounded: true, ...await this.options.calls.commandOptions(), ...(run.binds.length ? { binds: run.binds } : {}), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
+        unbounded: true, sender: call.attribution.initiatedBy, ...await this.options.calls.commandOptions(), ...(run.binds.length ? { binds: run.binds } : {}), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
       return { exitCode: 0, signal: null, output };
     } catch (error) {
       if (!(error instanceof SandboxProcessError)) throw error;

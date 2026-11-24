@@ -52,9 +52,10 @@ export interface SandboxExecutionOptions {
   gpu?: boolean;
   signal?: AbortSignal;
   binds?: readonly string[];
+  sender?: string;
 }
 
-interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; binds?: readonly string[]; service?: { socketDirectory: string; binds?: readonly string[] };
+interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; binds?: readonly string[]; sender?: string; service?: { socketDirectory: string; binds?: readonly string[] };
   onSpawn?: (hold: (held: boolean) => void) => void; caches?: readonly BuildCacheMount[] }
 
 export interface SandboxOptions {
@@ -63,7 +64,7 @@ export interface SandboxOptions {
   egressSocket?: string;
   sessionBranch?: string;
   mirrors?: () => Promise<readonly MirrorMount[]>;
-  buildCaches?: () => Promise<readonly BuildCacheMount[]>;
+  buildCaches?: (sender: string | null) => Promise<readonly BuildCacheMount[]>;
   gpuRoot?: string;
 }
 
@@ -348,7 +349,7 @@ export class Sandbox implements IsolatedWorkspace {
   readonly #egressSocket: string | undefined;
   readonly #sessionBranch: string | undefined;
   readonly #mirrors: (() => Promise<readonly MirrorMount[]>) | undefined;
-  readonly #buildCaches: (() => Promise<readonly BuildCacheMount[]>) | undefined;
+  readonly #buildCaches: ((sender: string | null) => Promise<readonly BuildCacheMount[]>) | undefined;
   readonly #gpuRoot: string;
   readonly #shim: boolean;
   readonly #nodeMount: SandboxNodeMount | undefined;
@@ -514,7 +515,7 @@ export class Sandbox implements IsolatedWorkspace {
       await authorize();
       if (this.#closed) throw new Error("Sandbox is closed");
       if (command.signal?.aborted) throw new SandboxProcessError("Command stopped before it started", null, null, "", "");
-      const caches = request.kind === "bash" ? await this.#cacheMounts() : [];
+      const caches = request.kind === "bash" && command.sender !== undefined ? await this.#cacheMounts(command.sender) : [];
       return this.#run(request, readOnly, gitWritable, requireResources, {}, await this.#mirrorMounts(request), { ...command, ...(caches.length ? { caches } : {}) });
     });
   }
@@ -523,9 +524,12 @@ export class Sandbox implements IsolatedWorkspace {
     return this.#mirrors && MIRROR_KINDS.has(request.kind) ? (await this.#mirrors()).filter(mirrorMount) : [];
   }
 
-  async #cacheMounts(): Promise<readonly BuildCacheMount[]> {
+  async #cacheMounts(sender: string | null): Promise<readonly BuildCacheMount[]> {
     if (!this.#buildCaches) return [];
-    try { return (await this.#buildCaches()).filter(mount => buildCacheMount(mount) && mount.target.startsWith(`${SANDBOX_BUILD_CACHE_ROOT}/`)); }
+    try {
+      return (await this.#buildCaches(sender)).filter(mount => buildCacheMount(mount) && mount.target.startsWith(`${SANDBOX_BUILD_CACHE_ROOT}/`))
+        .map(mount => (sender === null ? { ...mount, readOnly: true } : mount));
+    }
     catch { return []; }
   }
 
@@ -605,7 +609,8 @@ export class Sandbox implements IsolatedWorkspace {
         }
         for (const bind of options.binds ?? []) if (!commandBindAllowed(bind)) throw new Error(`A command can't be given ${bind}`);
         return this.#operation({ kind: "bash", command: text(operation.command, "command", 64 * 1024, true) }, readOnly, authorize, false, bounded,
-          { limits: options.limits, gpu: options.gpu, signal: options.signal, ...(options.binds?.length ? { binds: options.binds } : {}) });
+          { limits: options.limits, gpu: options.gpu, signal: options.signal, ...(options.binds?.length ? { binds: options.binds } : {}),
+            ...(options.sender !== undefined ? { sender: options.sender } : {}) });
       }
       case "github.comment":
       case "github.merge":
@@ -634,7 +639,7 @@ export class Sandbox implements IsolatedWorkspace {
       options.signal?.addEventListener("abort", kill, { once: true });
       this.#services.add(kill);
       let holder: ((held: boolean) => void) | undefined;
-      const caches = await this.#cacheMounts();
+      const caches = await this.#cacheMounts(null);
       const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
         { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
         { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}) },
@@ -776,7 +781,7 @@ export class Sandbox implements IsolatedWorkspace {
       ...(egress ? ["--ro-bind-try", egress, EGRESS_SOCKET, "--ro-bind", join(this.#root, CA_BUNDLE_FILE), CA_BUNDLE] : []),
       ...(egress && this.#shim ? ["--ro-bind-try", join(this.#root, "bin"), SHIM_DIRECTORY] : []),
       ...mirrors.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
-      ...caches.flatMap(({ source, target }) => [readOnly ? "--ro-bind" : "--bind", source, target]),
+      ...caches.flatMap(cache => [readOnly || cache.readOnly ? "--ro-bind" : "--bind", cache.source, cache.target]),
       ...(browser ? ["--ro-bind-try", join(this.#root, "browser", "pikibun-browser"), SANDBOX_BROWSER_DRIVER] : []),
       ...(browser?.mount ? ["--ro-bind-try", browser.mount.source, browser.mount.target] : []),
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),

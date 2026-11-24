@@ -9,6 +9,7 @@ import { HelperWorkspace } from "../apps/runner/src/helper-workspace.js";
 import { probeBuildCacheStorage } from "../apps/runner/src/resources.js";
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import { seatbeltProfile } from "../apps/runner/src/seatbelt.js";
+import { serviceLimits, serviceSocketDirectory } from "../apps/runner/src/session-service.js";
 import type { SessionBuildCaches } from "../packages/shared/src/build-caches.js";
 import { binding, linuxSandboxMissing, python, Unconfined } from "./helpers/workspaces.js";
 
@@ -121,25 +122,72 @@ test("with resource limits, build caches need a filesystem of their own, never a
 test("a session asks which caches it gets at most every 30 seconds, and keeps a failed answer's predecessor for 5 minutes only", async t => {
   const store = new BuildCacheStore(join(await scratch(t, "build-cache-session-"), "build-caches"));
   let now = 1_000_000;
-  let answer: SessionBuildCaches | Error = { caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "shared" }] };
+  let answer: SessionBuildCaches | Error = { caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "shared", access: "write" }] };
   let asked = 0;
   const mounts = new SessionBuildCacheMounts({
     fetch: async () => { asked += 1; if (answer instanceof Error) throw answer; return answer; },
     store, workspaceId: "w", ownerId: "test:alice", target: name => sandboxBuildCacheTarget(name), now: () => now,
   });
-  const first = await mounts.mounts();
-  assert.deepEqual(first.map(mount => [mount.name, mount.env, mount.scope, mount.target]), [["ccache", "CCACHE_DIR", "shared", "/build-caches/ccache"]]);
+  const first = await mounts.mounts("test:alice");
+  assert.deepEqual(first.map(mount => [mount.name, mount.env, mount.scope, mount.target, mount.readOnly]), [["ccache", "CCACHE_DIR", "shared", "/build-caches/ccache", false]]);
   assert.equal(first[0]!.source, store.directory("w", { name: "ccache", scope: "shared" }, "test:alice"));
-  await mounts.mounts();
+  await mounts.mounts("test:alice");
   assert.equal(asked, 1);
   now += BUILD_CACHE_FRESH_MS;
-  answer = { caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "owner" }] };
-  assert.equal((await mounts.mounts())[0]!.scope, "owner", "a role change reaches the next command within half a minute");
+  answer = { caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "owner", access: "write" }] };
+  assert.equal((await mounts.mounts("test:alice"))[0]!.scope, "owner", "a role change reaches the next command within half a minute");
   now += BUILD_CACHE_FRESH_MS;
   answer = new Error("offline");
-  assert.equal((await mounts.mounts())[0]!.scope, "owner", "a brief outage keeps the last answer");
+  assert.equal((await mounts.mounts("test:alice"))[0]!.scope, "owner", "a brief outage keeps the last answer");
   now += BUILD_CACHE_STALE_MS;
-  assert.deepEqual(await mounts.mounts(), [], "a stale grant is not kept");
+  assert.deepEqual(await mounts.mounts("test:alice"), [], "a stale grant is not kept");
+});
+
+test("a session asks for each sender, so an answer kept for an admin's message never mounts the shared copy writable for a member's", async t => {
+  const store = new BuildCacheStore(join(await scratch(t, "build-cache-senders-"), "build-caches"));
+  let now = 1_000_000;
+  const asked: (string | null)[] = [];
+  let offline = false;
+  let memberWrites = false;
+  const mounts = new SessionBuildCacheMounts({
+    fetch: async sender => {
+      asked.push(sender);
+      if (offline) throw new Error("offline");
+      return { caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "shared", access: sender === "test:admin" || (memberWrites && sender === "test:member") ? "write" : "read" }] };
+    },
+    store, workspaceId: "w", ownerId: "test:admin", target: name => sandboxBuildCacheTarget(name), now: () => now,
+  });
+  const access = async (sender: string | null) => (await mounts.mounts(sender)).map(mount => [mount.scope, mount.readOnly]);
+  assert.deepEqual(await access("test:admin"), [["shared", false]]);
+  assert.deepEqual(await access("test:member"), [["shared", true]], "within the admin's 30 seconds, the member's message has its own answer");
+  assert.deepEqual(await access("test:admin"), [["shared", false]]);
+  assert.deepEqual(asked, ["test:admin", "test:member"], "each sender's answer is kept on its own");
+  assert.deepEqual(await access(null), [["shared", true]], "a service, which outlives the message that started it, only reads");
+  assert.deepEqual(asked.at(-1), null);
+
+  memberWrites = true;
+  assert.deepEqual(await access("test:member"), [["shared", true]]);
+  now += BUILD_CACHE_FRESH_MS;
+  assert.deepEqual(await access("test:member"), [["shared", false]], "a role change reaches that sender's next command once their answer is 30 seconds old");
+  memberWrites = false;
+  now += BUILD_CACHE_FRESH_MS;
+  assert.deepEqual(await access("test:member"), [["shared", true]], "and so does losing it");
+
+  now += BUILD_CACHE_FRESH_MS;
+  offline = true;
+  assert.deepEqual(await access("test:admin"), [["shared", false]], "an outage keeps each sender's own last answer");
+  assert.deepEqual(await access("test:member"), [["shared", true]], "never another sender's");
+  assert.deepEqual(await access("test:stranger"), [], "and a sender never asked about gets nothing");
+  now += BUILD_CACHE_STALE_MS;
+  assert.deepEqual(await access("test:admin"), [], "a stale answer is not kept");
+  assert.deepEqual(await access("test:member"), []);
+
+  offline = false;
+  const writable = new SessionBuildCacheMounts({ fetch: async () => ({ caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "shared", access: "write" }] }),
+    store, workspaceId: "w", ownerId: "test:admin", target: name => sandboxBuildCacheTarget(name), now: () => now });
+  assert.equal((await writable.mounts(null))[0]!.readOnly, true, "whatever the answer says, what no message started only reads");
+  for (let index = 0; index < 100; index += 1) await writable.mounts(`test:sender-${index}`);
+  assert.equal((await writable.mounts("test:sender-99"))[0]!.readOnly, false);
 });
 
 test("macOS sessions get read and write grants for their caches, and only read grants in a Read-only step", () => {
@@ -150,6 +198,13 @@ test("macOS sessions get read and write grants for their caches, and only read g
   assert.match(writable.profile, /\(allow file-write\* \(subpath \(param "CACHE_0"\)\)\)/);
   const reading = seatbeltProfile({ layout, readOnly: true, gitWritable: false, toolRoots: [], caches: ["/state/build-caches/w/ccache/shared"] });
   assert.doesNotMatch(reading.profile, /file-write\* \(subpath \(param "CACHE_0"\)\)/);
+  const mixed = seatbeltProfile({ layout, readOnly: false, gitWritable: false, toolRoots: [], caches: ["/state/build-caches/w/ccache/shared", "/state/build-caches/w/assets/owners/a"],
+    readOnlyCaches: ["/state/build-caches/w/ccache/shared"] });
+  assert.match(mixed.profile, /\(allow file-read\* \(subpath \(param "CACHE_0"\)\) \(subpath \(param "CACHE_1"\)\)\)/);
+  assert.match(mixed.profile, /\(allow file-write\* \(subpath \(param "CACHE_1"\)\)\)/, "a copy the sender doesn't write gets its read grant alone");
+  assert.doesNotMatch(mixed.profile, /file-write\*[^\n]*CACHE_0/);
+  const none = seatbeltProfile({ layout, readOnly: false, gitWritable: false, toolRoots: [], caches: ["/state/build-caches/w/ccache/shared"], readOnlyCaches: ["/state/build-caches/w/ccache/shared"] });
+  assert.doesNotMatch(none.profile, /file-write\*[^\n]*CACHE_/);
   assert.throws(() => seatbeltProfile({ layout, readOnly: false, gitWritable: false, toolRoots: [], caches: ["/a/../etc"] }), /Invalid build cache path/);
   assert.throws(() => seatbeltProfile({ layout, readOnly: false, gitWritable: false, toolRoots: [], caches: ["/a\"b"] }), /Invalid build cache path/);
 });
@@ -159,15 +214,21 @@ test("the helper sandboxes give a command its caches, and nothing else their cac
   const backend = new Unconfined("python", true, "python");
   const cache = join(root, "cache");
   await mkdir(cache);
-  const mount: BuildCacheMount = { name: "ccache", env: "CCACHE_DIR", scope: "owner", source: cache, target: cache };
+  const mount: BuildCacheMount = { name: "ccache", env: "CCACHE_DIR", scope: "owner", source: cache, target: cache, readOnly: false };
   const faux = binding("build-cache-helper");
-  const workspace = new HelperWorkspace({ ...faux, model: { ...faux.model, provider: "faux" } }, join(root, "sandbox"), backend, { buildCaches: async () => [mount] });
+  const senders: (string | null)[] = [];
+  const workspace = new HelperWorkspace({ ...faux, model: { ...faux.model, provider: "faux" } }, join(root, "sandbox"), backend,
+    { buildCaches: async sender => { senders.push(sender); return [{ ...mount, readOnly: sender !== "test:alice" }]; } });
   t.after(() => workspace.close());
   await workspace.initialize();
   await workspace.listFiles(".", async () => {});
+  await workspace.execute({ kind: "bash", command: "true" }, false, async () => {}, { allowTestShell: true, sender: "test:alice" });
+  await workspace.execute({ kind: "bash", command: "true" }, false, async () => {}, { allowTestShell: true, sender: "test:member" });
   await workspace.execute({ kind: "bash", command: "true" }, false, async () => {}, { allowTestShell: true });
   const given = backend.launched.map(item => [item.request.kind, item.context.caches ?? []]);
-  assert.deepEqual(given.filter(([kind]) => kind === "bash"), [["bash", [{ path: cache, env: "CCACHE_DIR" }]]]);
+  assert.deepEqual(given.filter(([kind]) => kind === "bash"), [["bash", [{ path: cache, env: "CCACHE_DIR", readOnly: false }]],
+    ["bash", [{ path: cache, env: "CCACHE_DIR", readOnly: true }]], ["bash", []]], "a command gets the copy as its message's sender may use it, and none without a sender");
+  assert.deepEqual(senders, ["test:alice", "test:member"]);
   assert.ok(given.filter(([kind]) => kind !== "bash").every(([, caches]) => (caches as unknown[]).length === 0));
 });
 
@@ -176,12 +237,12 @@ test("in the Linux sandbox, a command writes its cache at /build-caches/<name>, 
   const store = new BuildCacheStore(join(root, "build-caches"));
   const open = async (id: string, owner: string) => {
     const faux = binding(id);
-    const mounts = new SessionBuildCacheMounts({ fetch: async () => ({ caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "shared" }] }), store,
+    const mounts = new SessionBuildCacheMounts({ fetch: async () => ({ caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "shared", access: "write" }] }), store,
       workspaceId: "workspace", ownerId: owner, target: name => sandboxBuildCacheTarget(name) });
-    const sandbox = new Sandbox({ ...faux, model: { ...faux.model, provider: "faux" } }, join(root, id), undefined, { buildCaches: () => mounts.mounts() });
+    const sandbox = new Sandbox({ ...faux, model: { ...faux.model, provider: "faux" } }, join(root, id), undefined, { buildCaches: sender => mounts.mounts(sender) });
     t.after(() => sandbox.close());
     await sandbox.initialize();
-    return (command: string, readOnly = false) => sandbox.execute({ kind: "bash", command }, readOnly, async () => {}, { allowTestShell: true });
+    return (command: string, readOnly = false) => sandbox.execute({ kind: "bash", command }, readOnly, async () => {}, { allowTestShell: true, sender: owner });
   };
   const first = await open("build-cache-first", "test:alice");
   assert.equal((await first("echo \"$CCACHE_DIR\"; echo built > \"$CCACHE_DIR/object.o\"")).trim(), "/build-caches/ccache");
@@ -190,4 +251,31 @@ test("in the Linux sandbox, a command writes its cache at /build-caches/<name>, 
   assert.equal((await second("cat /build-caches/ccache/object.o")).trim(), "built", "another session sharing the copy reads it");
   assert.equal((await second("touch /build-caches/ccache/other 2>/dev/null || echo read-only", true)).trim(), "read-only");
   assert.equal((await second("test -e /build-caches || echo none; ls /build-caches")).trim(), "ccache");
+});
+
+test("in the Linux sandbox, an admin's session mounts the shared copy read-only for a member's message and for a service, and not at all without a sender", { skip: linuxSandboxMissing() }, async t => {
+  const root = await scratch(t, "build-cache-sender-");
+  const store = new BuildCacheStore(join(root, "build-caches"));
+  const faux = binding("build-cache-sender");
+  const mounts = new SessionBuildCacheMounts({ fetch: async sender => ({ caches: [{ name: "ccache", env: "CCACHE_DIR", scope: "shared", access: sender === "test:admin" ? "write" : "read" }] }),
+    store, workspaceId: "workspace", ownerId: "test:admin", target: name => sandboxBuildCacheTarget(name) });
+  const sandbox = new Sandbox({ ...faux, model: { ...faux.model, provider: "faux" } }, join(root, "sandbox"), undefined, { buildCaches: sender => mounts.mounts(sender) });
+  t.after(() => sandbox.close());
+  await sandbox.initialize();
+  const run = (command: string, sender?: string) => sandbox.execute({ kind: "bash", command }, false, async () => {}, { allowTestShell: true, ...(sender ? { sender } : {}) });
+  const probe = "cat \"$CCACHE_DIR/object.o\"; touch \"$CCACHE_DIR/planted\" 2>/dev/null && echo wrote || echo read-only";
+  assert.equal((await run("echo built > \"$CCACHE_DIR/object.o\"; echo ok", "test:admin")).trim(), "ok");
+  assert.equal((await run(probe, "test:member")).trim(), "built\nread-only", "the member's message reads what the admin's built and can't write it");
+  const shared = store.directory("workspace", { name: "ccache", scope: "shared" }, "test:admin");
+  assert.equal(existsSync(join(shared, "planted")), false);
+  assert.equal((await run("test -e /build-caches || echo none; echo \"[${CCACHE_DIR:-}]\"")).trim(), "none\n[]", "a command no message's sender started gets no cache");
+  assert.equal((await run(probe, "test:admin")).trim(), "built\nwrote", "and the admin's next message writes again");
+  await rm(join(shared, "planted"));
+
+  const output: Buffer[] = [];
+  const service = await sandbox.startService(probe, async () => {}, { limits: serviceLimits(60, 1), unbounded: true,
+    socketDirectory: serviceSocketDirectory("build-cache-sender", root), onOutput: chunk => { output.push(chunk); } });
+  await service.exited;
+  assert.match(Buffer.concat(output).toString(), /built(\s|\\n)+read-only/, "a service outlives its message, so it reads the cache and never writes it");
+  assert.equal(existsSync(join(shared, "planted")), false);
 });

@@ -33,6 +33,12 @@ function piResult(attribution: ToolAttribution, text: string, details?: object) 
   return { output: [{ type: "text" as const, text }], details: JSON.parse(JSON.stringify({ ...details, pikibun: attribution })) as JsonObject };
 }
 
+export const BUILD_CACHES_NOTE = "Each cache's entries are named by their inputs and nobody checks their content. A shared cache holds what commands in other people's sessions "
+  + "wrote, and what this session's commands write to it runs later in theirs with their credentials, like a shared CI cache: whatever a command runs "
+  + "(a dependency's install script, the tests of a repository from outside the workspace) writes it too. Don't point a build of code you have no reason to "
+  + "trust at a cache with access write: unset its variable for that command. A cache with access read is mounted read-only for this message's commands; "
+  + "services always get caches read-only.";
+
 export function fileTools(context: ToolContext): ToolRegistration[] {
   const { calls, sandbox, hostCommands } = context;
   const hostReads = context.onHost && !sandbox.isolated && typeof sandbox.readHostContent === "function";
@@ -53,10 +59,11 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
       const attribution = await calls.actor(api, false);
       await calls.check(api, "identity");
       const config = await context.hostConfig();
-      const caches = context.buildCaches ? await context.buildCaches().catch(() => []) : [];
+      const caches = context.buildCaches ? await context.buildCaches(attribution.initiatedBy).catch(() => []) : [];
       const commands = { timeoutSeconds: commandLimits(config.commandTimeoutSeconds).seconds, gpu: config.gpu && !context.onHost,
         ...(context.onHost ? { onHost: true } : {}),
-        ...(caches.length ? { buildCaches: caches.map(cache => ({ name: cache.name, env: cache.env, path: cache.target, scope: cache.scope })) } : {}) };
+        ...(caches.length ? { buildCaches: caches.map(cache => ({ name: cache.name, env: cache.env, path: cache.target, scope: cache.scope,
+          access: cache.readOnly ? "read" : "write" })), buildCachesNote: BUILD_CACHES_NOTE } : {}) };
       return text({ ...await sandbox.identity(() => calls.recheck(attribution)), commands, ...attribution });
     } }),
     defineTool({ name: "read", parameters: piParameters.read, outputLimits: PI_OUTPUT_LIMITS,

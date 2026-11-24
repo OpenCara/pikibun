@@ -178,7 +178,7 @@ export class SessionOperations {
         if (onHost) await hostCommands.require(actorId, hostCommands.onHostMachine());
         await this.options.authorize(actorId, "write");
       }, { allowTestShell: this.options.testShell(), unbounded: approval.unbounded === true,
-        ...await this.options.commandOptions(timeoutSeconds), signal });
+        ...await this.options.commandOptions(timeoutSeconds), signal, sender: actorId });
       status = "executed";
     } catch (error) {
       const refused = error instanceof RunnerError && error.status < 500;

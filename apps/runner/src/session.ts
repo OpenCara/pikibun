@@ -152,7 +152,7 @@ export type RunnerConfig = {
   portable?: { store: IdentityStore; detached?(sessionId: string): Promise<void> };
   repositoryCache?: RepositoryCache;
   buildCacheStore?: BuildCacheStore;
-  buildCaches?: (sessionId: string) => Promise<SessionBuildCaches>;
+  buildCaches?: (sessionId: string, senderId: string | null) => Promise<SessionBuildCaches>;
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;
   browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
@@ -276,7 +276,7 @@ export class RunnerSession {
     const cacheTarget = !this.#onHost && config.sandboxBackend?.kind !== "windows" ? (config.sandboxBackend?.kind === "seatbelt"
       ? (_name: string, source: string) => source : (name: string) => sandboxBuildCacheTarget(name)) : undefined;
     this.#buildCaches = cacheTarget && config.buildCacheStore && config.buildCaches ? new SessionBuildCacheMounts({
-      fetch: () => config.buildCaches!(binding.session.id), store: config.buildCacheStore, workspaceId: binding.session.workspaceId,
+      fetch: sender => config.buildCaches!(binding.session.id, sender), store: config.buildCacheStore, workspaceId: binding.session.workspaceId,
       ownerId: binding.owner.id, target: cacheTarget,
     }) : undefined;
     if (this.#hostSession && !binding.session.connectorOwnerId) {
@@ -309,7 +309,7 @@ export class RunnerSession {
       const workspace: HelperWorkspace = new HelperWorkspace(binding, join(directory, "sandbox"), backend, {
         egressEnvironment: () => { const endpoint = egress.endpoint; return endpoint && egressEnvironment(branch, endpoint, workspace.layout.caBundle); },
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
-        ...(this.#buildCaches ? { buildCaches: () => this.#buildCaches!.mounts() } : {}),
+        ...(this.#buildCaches ? { buildCaches: (sender: string | null) => this.#buildCaches!.mounts(sender) } : {}),
         ...(this.#clone && hostGitLfs() ? { gitLfs: true } : {}),
       });
       this.sandbox = workspace;
@@ -319,7 +319,7 @@ export class RunnerSession {
         ...(config.browser !== undefined ? { browser: config.browser } : {}),
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}),
-        ...(this.#buildCaches ? { buildCaches: () => this.#buildCaches!.mounts() } : {}) });
+        ...(this.#buildCaches ? { buildCaches: (sender: string | null) => this.#buildCaches!.mounts(sender) } : {}) });
     }
     this.#resources = new SessionResources({ roots: this.sandbox.processes, directory, groups: this.sandbox.resourceGroups?.() });
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
@@ -340,7 +340,7 @@ export class RunnerSession {
       remoteDefinition: name => this.#defined.current(name),
       metadata: () => this.metadata(), mutate: change => this.mutate(change),
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
-      ...(this.#buildCaches ? { buildCaches: () => this.#buildCaches!.mounts() } : {}),
+      ...(this.#buildCaches ? { buildCaches: (sender: string) => this.#buildCaches!.mounts(sender) } : {}),
       programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
       tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
     };
