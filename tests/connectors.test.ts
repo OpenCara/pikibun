@@ -4337,6 +4337,20 @@ test('a remote MCP server that asks for OAuth is signed in to by an admin; Pikib
   const { server: moved } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { url: 'https://elsewhere.example.net/mcp', headers: {} }));
   assert.equal(moved.oauth, undefined, 'a sign-in is never sent to another address');
   assert.equal(kept(), null);
+
+  const { server: home } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { url: fake.mcpUrl, headers: {} }));
+  const switching = await signIn();
+  fake.codes.set('code-4', { challenge: switching.challenge, resource: fake.mcpUrl, redirect: `${origin}/api/mcp-servers/oauth/callback` });
+  settings(await switching.callback({ code: 'code-4', state: switching.state }));
+  assert.ok((await listed()).oauth && home.url === fake.mcpUrl);
+  fake.valid.add('personal-token');
+  const { server: token } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { headers: { Authorization: 'Bearer personal-token' } }));
+  assert.equal(token.oauth, undefined, 'choosing a token in its place signs out of OAuth');
+  assert.equal(kept(), null);
+  assert.deepEqual([token.headerNames, token.error], [['Authorization'], undefined]);
+  assert.equal((await json<{ result: string }>(await call())).result, 'generate_video as personal-token', 'the token, not an OAuth sign-in, is sent');
+  const switched = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.updated'").all().map(row => JSON.parse(String(row.detail_json))).at(-1);
+  assert.equal(switched.signedOut, true);
 });
 
 test('a protected resource covers only its own origin and path, and an authorization server\'s metadata must name the issuer it was asked for', async () => {

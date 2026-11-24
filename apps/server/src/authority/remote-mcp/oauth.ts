@@ -134,7 +134,7 @@ export async function discoverOAuth(transport: RemoteMcpTransport, mcpUrl: strin
   }
   if (!metadata) {
     if (protectedResource || probe.status !== 401) {
-      throw new RemoteMcpOAuthError(protectedResource ? `Its authorization server ${issuer} publishes no OAuth metadata` : 'It publishes no OAuth sign-in: give it a header instead');
+      throw new RemoteMcpOAuthError(protectedResource ? `Its authorization server ${issuer} publishes no OAuth metadata` : 'It publishes no OAuth sign-in: choose a token, a username and password or a header with Change sign-in instead');
     }
     const origin = new URL(issuer).origin;
     return { authorizationEndpoint: `${origin}/authorize`, tokenEndpoint: `${origin}/token`, registrationEndpoint: `${origin}/register`, resource, ...(scope ? { scope } : {}) };
@@ -152,7 +152,7 @@ export async function discoverOAuth(transport: RemoteMcpTransport, mcpUrl: strin
 
 export async function registerClient(transport: RemoteMcpTransport, server: McpAuthorizationServer, redirectUri: string): Promise<McpOAuthClient> {
   if (!server.registrationEndpoint) {
-    throw new RemoteMcpOAuthError('Its authorization server doesn\'t let Pikibun register itself (no dynamic client registration), so Pikibun can\'t sign in to it');
+    throw new RemoteMcpOAuthError('Its authorization server doesn\'t let Pikibun register itself (no dynamic client registration), so Pikibun can\'t sign in to it with OAuth: choose a token, a username and password or a header with Change sign-in instead');
   }
   const wanted: AuthMethod = !server.authMethods || server.authMethods.includes('none') ? 'none'
     : server.authMethods.includes('client_secret_post') ? 'client_secret_post' : 'client_secret_basic';

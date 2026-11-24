@@ -90,6 +90,60 @@ export function remoteMcpHeaders(value: unknown): Record<string, string> {
   return headers;
 }
 
+export type RemoteMcpSignInMethod = "oauth" | "token" | "basic" | "header" | "none";
+
+export type RemoteMcpSignIn =
+  | { method: "oauth" | "none" }
+  | { method: "token"; token: string }
+  | { method: "basic"; username: string; password: string }
+  | { method: "header"; name: string; value: string };
+
+export const remoteMcpSignInMethods: readonly { value: RemoteMcpSignInMethod; label: string; hint: string }[] = Object.freeze([
+  { value: "oauth", label: "OAuth", hint: "Sign in on the server's own page with Sign in once it's added. The server must offer OAuth with dynamic client registration" },
+  { value: "token", label: "Token", hint: "An API key or personal access token, sent as Authorization: Bearer <token>" },
+  { value: "basic", label: "Username and password", hint: "Sent as Authorization: Basic, HTTP basic authentication" },
+  { value: "header", label: "Custom header", hint: "Any header the server asks for, such as X-API-Key" },
+  { value: "none", label: "None", hint: "A public server that needs no sign-in" },
+]);
+
+function base64(value: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(value)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export function remoteMcpSignInHeaders(signIn: RemoteMcpSignIn): Record<string, string> {
+  switch (signIn.method) {
+    case "oauth":
+    case "none":
+      return {};
+    case "token": {
+      const token = signIn.token.trim().replace(/^Bearer\s+/i, "");
+      if (!token) throw new Error("Give the token");
+      return remoteMcpHeaders({ Authorization: `Bearer ${token}` });
+    }
+    case "basic": {
+      const username = signIn.username.trim();
+      if (!username) throw new Error("Give the username");
+      if (username.includes(":")) throw new Error("A username for basic authentication can't hold a colon");
+      if (!signIn.password) throw new Error("Give the password");
+      return remoteMcpHeaders({ Authorization: `Basic ${base64(`${username}:${signIn.password}`)}` });
+    }
+    case "header": {
+      const name = signIn.name.trim();
+      if (!name) throw new Error("Give the header's name");
+      if (!signIn.value) throw new Error("Give the header's value");
+      return remoteMcpHeaders({ [name]: signIn.value });
+    }
+  }
+}
+
+export function remoteMcpSignInOf(server: Pick<WorkspaceMcpServer, "oauth" | "headerNames">): RemoteMcpSignInMethod {
+  if (server.oauth) return "oauth";
+  if (!server.headerNames.length) return "none";
+  return server.headerNames.some(name => name.toLowerCase() === "authorization") ? "token" : "header";
+}
+
 export function remoteMcpToolList(value: unknown): RemoteMcpTool[] {
   if (!Array.isArray(value)) throw new Error("tools/list answered without tools");
   const tools: RemoteMcpTool[] = [];

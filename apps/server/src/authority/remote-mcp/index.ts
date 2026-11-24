@@ -71,7 +71,7 @@ function view(row: ServerRow): WorkspaceMcpServer {
 function failure(error: unknown, signedIn = false): string {
   if (error instanceof RemoteMcpUnauthorized && error.status === 401) {
     return signedIn ? 'The server refused its sign-in (HTTP 401): an owner or admin signs in to it again'
-      : /^\s*Bearer\b/i.test(error.challenge) ? 'The server needs a sign-in (HTTP 401): an owner or admin signs in to it with Sign in, or gives it an Authorization header'
+      : /^\s*Bearer\b/i.test(error.challenge) ? 'The server needs a sign-in (HTTP 401): an owner or admin signs in to it with Sign in, or gives it a token, a username and password or a header with Change sign-in'
       : error.message;
   }
   if (error instanceof RemoteMcpError || error instanceof RemoteMcpRefused) return error.message.slice(0, 500);
@@ -313,8 +313,10 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const readOnlyTools = input.readOnlyTools === undefined ? parsedList(row.read_only_tools_json) : readOnlyList(input.readOnlyTools);
     const enabled = input.enabled === undefined ? Number(row.enabled) === 1 : input.enabled as boolean;
     const moved = url !== row.url;
+    const replaced = input.headers !== undefined && Object.keys(headers).some(name => name.toLowerCase() === 'authorization');
+    const signOut = moved || replaced;
     const reach = input.refresh === true || input.url !== undefined || input.headers !== undefined;
-    const found = reach ? await discover(c.env, serverId, url, headers, moved ? null : row.oauth_ciphertext) : undefined;
+    const found = reach ? await discover(c.env, serverId, url, headers, signOut ? null : row.oauth_ciphertext) : undefined;
     const at = now();
     const ciphertext = input.headers === undefined ? row.headers_ciphertext
       : Object.keys(headers).length ? await encryptToken(c.env, secretContext(serverId), JSON.stringify(headers)) : null;
@@ -325,7 +327,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
       WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
       .bind(name, url, ciphertext, JSON.stringify(Object.keys(headers)), JSON.stringify(readOnlyTools),
         found && !found.error ? JSON.stringify(found.tools) : row.tools_json, enabled ? 1 : 0,
-        found ? (found.error ? row.discovered_at : at) : row.discovered_at, found ? found.error : row.error, actor, at, moved ? 1 : 0, moved ? 1 : 0, moved ? 1 : 0,
+        found ? (found.error ? row.discovered_at : at) : row.discovered_at, found ? found.error : row.error, actor, at, signOut ? 1 : 0, signOut ? 1 : 0, signOut ? 1 : 0,
         serverId, workspaceId, workspaceId, actor).first();
     if (!saved) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
@@ -334,7 +336,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     await auditStatement(c.env, actor, 'workspace.mcp.updated', workspaceId, null, {
       server: serverId, changed: keys.filter(item => item !== 'refresh'), ...(input.url !== undefined ? { url } : {}), ...(input.headers !== undefined ? { headers: Object.keys(headers) } : {}),
       ...(input.readOnlyTools !== undefined ? { readOnlyTools } : {}), ...(input.enabled !== undefined ? { enabled } : {}),
-      ...(moved && row.oauth_ciphertext ? { signedOut: true } : {}),
+      ...(signOut && row.oauth_ciphertext ? { signedOut: true } : {}),
       ...(found ? { tools: found.tools.length, ...(found.error ? { error: found.error } : {}) } : {}),
     }).run();
     return c.json({ server: view(await serverRow(c.env, workspaceId, serverId)) });
