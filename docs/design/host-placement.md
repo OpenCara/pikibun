@@ -82,6 +82,7 @@ are refused, and placement only moves the parent's current model between hosts.
   a refusal says when only they would qualify.
 - **Sandboxing.** A session the agent starts runs in its host's sandbox, as before; `gpu` asks for a GPU that
   sandbox can reach. The one exception is `host_environment: true`, below.
+- **Limits.** The per-session children limit, fan-out, hops and audience checks apply as for any `create`.
 
 ### Sessions directly on a host
 
@@ -97,7 +98,12 @@ those, the agent's call:
 - shows "directly on the host, without the sandbox" in its approval target, and is audited with `hostEnvironment`.
 
 `piki:sub-agents` adds no workspace conditions or balancing to such a call.
-- **Limits.** The per-session children limit, fan-out, hops and audience checks apply as for any `create`.
+
+Whether a person sent the message is read from the run admission's `request_id`: the server's own submissions name
+their source in it, `xs:<message>` for a cross-session message or notification (`cross-session.ts`) and
+`schedule:<id>:<at>` for a scheduled run (`scheduled-prompts.ts`); every other admission comes from a person's request
+to the sessions API. A new path that submits messages on its own must name itself with such a prefix and add it to
+`personSent` in `cross-session.ts`. A person choosing a `requestId` with one of these prefixes only refuses themselves.
 
 ## The sub-agents extension: piki:sub-agents
 
