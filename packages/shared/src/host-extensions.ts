@@ -149,12 +149,24 @@ export function withoutExtensionLocks(extensions: readonly WorkspaceExtension[])
   return extensions.map(({ integrity: _integrity, ...rest }) => rest);
 }
 
+export const starterWorkspaceExtensions: readonly string[] = Object.freeze([
+  "piki:context-files",
+  "piki:git",
+  "piki:node",
+  "piki:python",
+  "piki:schedule",
+  "piki:sessions",
+  "piki:workspace",
+  "piki:artifacts",
+  "piki:skills",
+]);
+
 export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([
   "npm:pi-web-access@0.46.0",
   "npm:pi-web-search@1.7.0",
   "npm:cc-safety-net@2.7.2",
   "piki:prompt-audit",
-  "piki:context-files",
+  ...starterWorkspaceExtensions,
 ]);
 
 export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]): WorkspaceExtension[] {

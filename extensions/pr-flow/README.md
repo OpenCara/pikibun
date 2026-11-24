@@ -14,6 +14,9 @@ to the merge:
    ready, without waiting for reviews.
 5. **`auto-merge` off leaves the merge to people.** The agent still works the review window, but where it would merge
    it tells the person the pull request is ready for them to merge, and leaves it open.
+6. **`wait-for-review` off skips the review window**, whatever `review-minutes` says; **`draft-first` off** opens the
+   pull request ready for review once the change is done, with no draft before; **`require-approval` on** merges only
+   an approved pull request and hands over one whose window ends without an approval.
 
 It registers no tool: the agent does each step with its own tools, and the only call it refuses is a push before the workspace's `pre-push-check` passed, each approved as it always is (in Pikibun:
 `git`, `git_push` with `pull_request.draft`, `github_read` with `wait`, `github_comment`, `github_merge`; elsewhere the
@@ -37,6 +40,9 @@ Where it isn't, the prompt gets the whole procedure.
 | `wait-for-checks` | on | Let the pull request's checks finish, and fix failing ones, before merging. Turn it off with a `review-minutes` of 0 to merge the moment it is ready |
 | `pre-push-check` | empty | Words of a check's command, such as `tests/no-comments.test.ts` or `pnpm check:fast`. Once the session changed files in a clone, a push of it (one pushing only tags or deletions, or a dry run, excepted) is refused (a `tool_call` block) until a program tool's call in that clone whose program and arguments hold those words passed. Empty refuses nothing |
 | `auto-merge` | on | Merge once approved, or once the review window ends with nothing left to address. Off, the agent never merges (nor queues an automatic merge) unless the person asks: it tells them the pull request is ready for them to merge |
+| `wait-for-review` | on | Wait `review-minutes` for reviews. Off skips the review window, as a `review-minutes` of 0 does, without losing the minutes set: it merges (with `auto-merge` off, hands it over) as soon as the pull request is ready |
+| `draft-first` | on | Open a draft at the first change in a clone. Off, the agent commits and pushes to the session branch as it works and opens the pull request, ready for review, only once the change is done |
+| `require-approval` | off | Merge only an approved pull request: one whose review window ends without an approval (with no window, one not already approved) is handed over to people instead. Unused with `auto-merge` off |
 
 ## In Pikibun
 

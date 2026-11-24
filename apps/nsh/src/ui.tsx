@@ -295,7 +295,7 @@ export function Segmented<T extends string>(props: { value: T; options: { value:
       borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surfaceRaised }}>
       <Each of={props.options} key={option => option.value}>
         {option => (
-          <BaseButton role="tab" selected={props.value === option().value} onPress={() => props.onChange(option().value)}
+          <BaseButton role="tab" testID={props.testID ? `${props.testID}-${option().value}` : undefined} selected={props.value === option().value} onPress={() => props.onChange(option().value)}
             style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: props.small ? 8 : 12, height: props.small ? control.xsmall - 6 : control.small - 6,
               borderRadius: radius.small, backgroundColor: props.value === option().value ? palette().control : "transparent" }}
             hoverStyle={{ backgroundColor: props.value === option().value ? palette().control : palette().hover }}>

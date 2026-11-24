@@ -103,8 +103,9 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
 ### The control plane (`apps/server/src/authority/network.ts`)
 
 - `GET|PUT /api/workspaces/:id/network-policy`: members read, owners and admins write (audited as
-  `workspace.network_policy.updated`). Stored in `workspace_network_policies`; no row means `off`. Included in
-  workspace exports.
+  `workspace.network_policy.updated`). Stored in `workspace_network_policies`; no row means `open` (`defaultNetworkPolicy`). It meant
+  `off` until [open defaults](security-rationale.md#open-defaults), whose migration wrote `off` as a row for every shared
+  workspace that had none. Included in workspace exports.
 - `POST /api/connectors/self/network` (and `/api/internal/network`): the grant for one session, only for the
   connector serving it over its current connection. Archived sessions get none.
 - `POST /api/connectors/self/git/relay/:bindingId/:service?sessionId=…` (and `/api/internal/git/relay/…`), `service`
