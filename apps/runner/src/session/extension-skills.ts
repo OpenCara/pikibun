@@ -14,6 +14,8 @@ export interface ProvidedSkills {
 export interface SkillFilesIo {
   write(path: string, text: string): Promise<void>;
   remove(path: string): Promise<void>;
+  read?(path: string): Promise<string>;
+  list?(): Promise<string[]>;
 }
 
 export function extensionOwner(source: string): string {
@@ -51,7 +53,15 @@ export function planSkills(provided: readonly ProvidedSkills[]): SkillPlan {
       if (typeof skill?.name !== "string" || !NAME.test(skill.name) || names.has(skill.name) || !skillFilePath(skill.file)) continue;
       const description = skillDescription(skill.description);
       if (!description || !Array.isArray(skill.files)) continue;
-      const kept = skill.files.slice(0, extensionSkillLimits.files).filter(file => typeof file?.text === "string" && typeof file.path === "string" && skillFilePath(file.path));
+      let bytes = 0;
+      const kept = skill.files.slice(0, extensionSkillLimits.files).filter(file => {
+        if (typeof file?.text !== "string" || typeof file.path !== "string" || !skillFilePath(file.path)) return false;
+        if (file.text.length > extensionSkillLimits.fileBytes) return false;
+        const size = Buffer.byteLength(file.text);
+        if (size > extensionSkillLimits.fileBytes || bytes + size > extensionSkillLimits.totalBytes) return false;
+        bytes += size;
+        return true;
+      });
       if (!kept.some(file => file.path === skill.file)) continue;
       names.add(skill.name);
       const directory = `${EXTENSION_SKILLS_DIRECTORY}/${owner}/${skill.name}`;
@@ -69,6 +79,8 @@ const digest = (text: string) => createHash("sha256").update(text).digest("base6
 export class ExtensionSkillFiles {
   readonly #written = new Map<string, string>();
   readonly #directories = new Set<string>();
+  #texts: ReadonlyMap<string, string> = new Map();
+  #restored = 0;
   #cleared = false;
   #queue: Promise<unknown> = Promise.resolve();
 
@@ -80,8 +92,22 @@ export class ExtensionSkillFiles {
     return run;
   }
 
+  text(path: string): string | undefined {
+    return this.#texts.get(path);
+  }
+
+  get restored(): number {
+    return this.#restored;
+  }
+
+  async #intact(path: string, text: string): Promise<boolean> {
+    if (!this.io.read) return true;
+    try { return await this.io.read(path) === text; } catch { return false; }
+  }
+
   async #sync(provided: readonly ProvidedSkills[]): Promise<SkillItem[]> {
     const plan = planSkills(provided);
+    this.#texts = plan.files;
     if (!this.#cleared) {
       await this.io.remove(EXTENSION_SKILLS_DIRECTORY).catch(() => {});
       this.#cleared = true;
@@ -89,8 +115,13 @@ export class ExtensionSkillFiles {
     const failed = new Set<string>();
     for (const [path, text] of plan.files) {
       const hash = digest(text);
-      if (this.#written.get(path) === hash) continue;
+      const copied = this.#written.get(path) === hash;
+      if (copied && await this.#intact(path, text)) continue;
       try {
+        if (copied) {
+          this.#restored++;
+          await this.io.remove(path).catch(() => {});
+        }
         await this.io.write(path, text);
         this.#written.set(path, hash);
       } catch {
@@ -109,6 +140,11 @@ export class ExtensionSkillFiles {
       this.#written.delete(path);
     }
     for (const directory of directories) this.#directories.add(directory);
+    for (const path of await this.io.list?.().catch(() => []) ?? []) {
+      if (!path.startsWith(`${EXTENSION_SKILLS_DIRECTORY}/`) || path.endsWith("/") || plan.files.has(path)) continue;
+      this.#restored++;
+      await this.io.remove(path).catch(() => {});
+    }
     return plan.items.filter(item => !failed.has(item.path));
   }
 }
