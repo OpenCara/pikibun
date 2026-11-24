@@ -150,11 +150,16 @@ export class SubAgentsState {
         this.modelsRefused = true;
         return "[sub-agents] This workspace runs sub-agents on this session's own model, so models are left out of placement from now on: call create again.";
       }
+      const unsandboxed = /without a sandbox|runs sessions without one/.test(text);
+      const sandboxNote = "Pikibun keeps the sub-agents of a sandboxed session in a sandbox, so hosts that run sessions without one are left out (sessions list shows each host's sandbox). "
+        + "Don't work around it: only where the person's own message asks for such a host, call create with host_environment: true and placement {hosts: [its id]}.";
       if (/No host qualifies|No model you may use matches|No host offers/.test(text)) {
         const defaults = placementText(settings.placement);
         return `[sub-agents] No host met this sub-agent's conditions${defaults ? ` (the workspace adds ${defaults} to every sub-agent)` : ""}. `
-          + "Relax the conditions you set (sessions list shows each host's hardware and load), or do the work in this session, or tell the person what it needs.";
+          + "Relax the conditions you set (sessions list shows each host's hardware and load), or do the work in this session, or tell the person what it needs."
+          + (unsandboxed ? ` ${sandboxNote}` : "");
       }
+      if (unsandboxed) return `[sub-agents] ${sandboxNote} Otherwise name a model on a sandboxed host, or do the work in this session.`;
       return undefined;
     }
     this.started++;

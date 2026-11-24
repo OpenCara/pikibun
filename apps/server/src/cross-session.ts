@@ -19,7 +19,7 @@ import { sessionView, transcriptDisplay } from './view-feed.js';
 import { usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
 import { parsePlacement, type PlacementRequirements } from '../../../packages/shared/src/hardware.js';
-import { agentMayStartOn, hostSummary, placeChild, placementHosts } from './placement.js';
+import { agentMayStartOn, hostSummary, hostUnsandboxed, placeChild, placementHosts, sandboxRequired, sessionSandboxed, unsandboxedPath } from './placement.js';
 import type { AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
 
 interface MessageRow {
@@ -328,14 +328,21 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
     'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(namedId, origin.workspace_id).first();
   if (!patterns && !named) fail(404, 'not_found', 'Model not found.');
   const placing = options.placement && (patterns || Object.keys(options.placement).length > 0 || named?.connector_id) ? options.placement : undefined;
+  const keepSandboxed = !options.hostEnvironment && await sessionSandboxed(c.env, origin);
   const placed = placing ? await placeChild(c.env, origin, actorId, await usableModels(c.env, origin.workspace_id, actorId), {
-    requirements: placing, ...(named && !patterns ? { model: named } : {}), ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}) }) : undefined;
+    requirements: placing, ...(named && !patterns ? { model: named } : {}), ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+    ...(keepSandboxed ? { sandboxedOnly: true } : {}) }) : undefined;
   const model = placed?.model ?? named;
   if (!model) fail(404, 'not_found', 'Model not found.');
+  const unsandboxedHost = placed ? placed.host.sandbox === 'unsandboxed' : await hostUnsandboxed(c.env, model.connector_id);
+  const onHost = options.hostEnvironment === true && !unsandboxedHost;
   const modelId = model.id;
   const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
   if (model.connector_id && !agentMayStartOn(origin, actorId, model)) {
     fail(403, 'connector_trust_required', 'A session started by the agent runs on your own host or on this session\'s host. Start one on another member\'s host yourself.');
+  }
+  if (keepSandboxed && unsandboxedHost) {
+    sandboxRequired('start a session there', 'that model\'s host', `Choose a model on a sandboxed host (list shows each host's sandbox). ${unsandboxedPath}`);
   }
   if (options.message !== undefined && options.notify) {
     const members = await c.env.DB.query<{ user_id: string }>(`SELECT member.user_id FROM workspace_members member
@@ -346,9 +353,9 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   }
   const title = options.title ?? cut(`${origin.title} · sub-task`, 190).split('\n')[0]!;
   const { row } = await asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, modelId,
-    ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}), ...(options.hostEnvironment ? { hostEnvironment: true } : {}) }, { parentSessionId: origin.id }));
+    ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}), ...(onHost ? { hostEnvironment: true } : {}) }, { parentSessionId: origin.id }));
   await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId, modelId,
-    ...(options.hostEnvironment ? { hostEnvironment: true } : {}),
+    ...(options.hostEnvironment ? { hostEnvironment: true } : {}), ...(unsandboxedHost ? { unsandboxedHost: true } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}), ...(inheritsModel ? { inheritedModel: true } : {}),
     ...(inheritsThinking && thinkingLevel ? { inheritedThinking: true } : {}),
     ...(placed ? { placement: { hostId: placed.result.host.id, conditions: placed.result.conditions, load: placed.result.load, qualified: placed.result.qualified } } : {}) }).run();

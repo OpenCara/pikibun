@@ -38,7 +38,9 @@ look idle forever; the rest describes the machine and stays.
 `sessions` `list` now also returns `hosts`: each host that offers the actor a model in this workspace, with its
 online state, whether the agent may start sessions there (`agentMayStart`, the same trust rule as before: the actor's
 own hosts, and this session's host when the actor owns this session), sandbox, whether a sandboxed session there can
-use a GPU, its hardware and its active sessions. Each model names its `host`.
+use a GPU, its hardware and its active sessions. Each model names its `host`. A host whose `sandbox` is `unsandboxed`
+runs every session without one; a sandboxed session's agent reaches it only as
+[Sandboxed work stays sandboxed](#sandboxed-work-stays-sandboxed) says, whatever `agentMayStart` is.
 
 `create` takes `placement` (the tool's `placement` parameter):
 
@@ -57,8 +59,8 @@ candidates are hosts offering this session's current model. `thinking` keeps onl
 level.
 
 The server (`apps/server/src/placement.ts`) collects every (model, host) pair the actor may use, keeps those whose host
-is online, which the agent may start sessions on, and which meet every condition, and picks the one with the lowest
-load score:
+is online, which the agent may start sessions on, which has a sandbox when the calling session runs in one, and which
+meet every condition, and picks the one with the lowest load score:
 
 ```
 score = active sessions on the host (working or waiting, every workspace, and those started in the last
@@ -81,8 +83,46 @@ are refused, and placement only moves the parent's current model between hosts.
   member's host still needs a person to start the session there. Such hosts show `agentMayStart: false` in `list`, and
   a refusal says when only they would qualify.
 - **Sandboxing.** A session the agent starts runs in its host's sandbox, as before; `gpu` asks for a GPU that
-  sandbox can reach. The one exception is `host_environment: true`, below.
+  sandbox can reach. The one exception is `host_environment: true`, below. Where the host has no sandbox at all, the
+  next section decides.
 - **Limits.** The per-session children limit, fan-out, hops and audience checks apply as for any `create`.
+
+### Sandboxed work stays sandboxed
+
+A host can run every session without a sandbox (`--unsafe-no-sandbox`, capability `unsandboxed`). Placement used to
+treat it like any other host the agent may start sessions on, and so did a `create` that names a model there: an agent
+working in a sandbox, possibly steered by something hostile it read, could continue the work outside one, on the
+actor's own machine, with nobody deciding that (finding 61 of #479). Load balancing made it likely rather than
+contrived: an idle unsandboxed host scores lowest.
+
+So where the calling session runs in a sandbox (`sessionSandboxed` in `placement.ts`: it wasn't started directly on
+its host, and its host's connector doesn't run unsandboxed), the Pikibun server keeps what its agent starts in one:
+
+- `placeChild` leaves unsandboxed hosts out (`sandboxedOnly`), and a `placement_unsatisfied` refusal counts them
+  ("running sessions without a sandbox") and names the explicit path below;
+- a `create` whose model, named or inherited, sits on an unsandboxed host is refused (`sandbox_required`) whether or
+  not it has a `placement`, so the rule doesn't depend on which parameters the agent used. It comes after the trust
+  check, so another member's host is refused as that (`connector_trust_required`), not with a path that can't work;
+- the `schedule` tool neither makes nor changes (but for pausing, and deleting) a schedule whose runs start, or can
+  fall back, on an unsandboxed host, whoever chose that host ([workspace schedules](workspace-schedules.md)).
+
+The explicit path is the one a session directly on a host already has: `host_environment: true` with exactly one host
+in `placement.hosts`, in a message a person sent. On an unsandboxed host there is no sandbox to leave, so the new
+session is an ordinary one there (`createSession` gets no `hostEnvironment`, which it refuses for such a host), and the
+`session.cross_session.created` audit records `unsandboxedHost` beside `hostEnvironment`.
+
+There is no workspace setting that lifts the rule. A setting would be read by every message, including those from
+other sessions and schedules, which is exactly where nobody is looking; the explicit path asks for the decision where
+a person made a request. A session that already runs without a sandbox (directly on its host, or on an unsandboxed
+host) is not restricted: its agent already has a machine, so the rule would protect nothing.
+
+What this changes for existing workspaces: a sandboxed session's sub-agents no longer spread onto the sender's
+unsandboxed hosts by load, and an agent that named a model there is refused with the path above. Workspaces whose
+hosts are all unsandboxed, or all sandboxed, see no change.
+
+Auto mode (`POST /api/workspaces/:id/auto-mode`) is not on this path: it answers a person's client, which then starts
+the session or sends the message itself, and it already scores unsandboxed hosts down. A `send` to an existing session
+that runs without a sandbox is not placement either and is unchanged.
 
 ### Sessions directly on a host
 
@@ -121,7 +161,8 @@ policy, without a tool of its own:
   `before_agent_start`). A refusal that no host offers the model, of a placement only the extension added, stops it
   adding one for the session. Pikibun's adapter applies changes to `event.input`
   ([host extensions](host-extensions.md)), and the tool's own checks run on the changed call.
-- `tool_result` notes where the sub-agent runs and how to collect it, or why no host qualified.
+- `tool_result` notes where the sub-agent runs and how to collect it, or why no host qualified; where hosts were left
+  out for running without a sandbox, it says that this is Pikibun's rule and not a condition to relax.
 
 It needs `piki:sessions`, a session-tool switch, rather than being merged into it: merging would give that switch
 hooks and settings, which session-tool extensions don't have, change every workspace that already uses the tool
