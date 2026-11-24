@@ -539,8 +539,8 @@ export class LocalConnector {
     const runtime = this.runtime?.value;
     if (!identity || !runtime?.portable) return;
     const state = this.state!;
-    const delegation = await identity.delegation(new URL(state.controlPlaneUrl).origin, state.connectorId);
     const key = await identity.key();
+    const delegation = await identity.delegation(new URL(state.controlPlaneUrl).origin, state.connectorId, key);
     const sessions = (await runtime.portable()).slice(0, IDENTITY_REPORT_LIMIT);
     const answer = z.object({ sign: z.object({ version: z.number().int().positive(), settings: z.unknown() }).strict().optional(),
       archived: z.array(z.string().max(128)).max(IDENTITY_REPORT_LIMIT).optional() }).strict()

@@ -114,7 +114,10 @@ export class RunnerService {
     await chmod(this.dataDir, 0o700);
     await mkdir(join(this.dataDir, "sessions"), { recursive: true, mode: 0o700 });
     if (this.config.portable) {
-      this.sweep = setInterval(() => { void this.sweepPortable(); }, PORTABLE_SWEEP_MS);
+      this.sweep = setInterval(() => {
+        void this.leases.refresh().catch(() => {});
+        void this.sweepPortable();
+      }, PORTABLE_SWEEP_MS);
       this.sweep.unref();
     }
   }
@@ -128,7 +131,8 @@ export class RunnerService {
         const session = await pending?.catch(() => undefined);
         if (!pending || !session) continue;
         const attached = await this.stillAttached(session.directory, id);
-        if (attached && !await this.leases.releaseRequested(session.directory)) continue;
+        const lost = this.leases.lost(session.directory);
+        if (attached && !lost && !await this.leases.releaseRequested(session.directory)) continue;
         if (await exists(join(session.directory, WORK_MARKER))) continue;
         if (this.sessions.get(id) === pending) await this.evict(id, session);
         if (!attached) this.detach(id);
@@ -424,7 +428,7 @@ export class RunnerService {
     }
     const authority = new RunnerSession(binding, directory, this.config);
     await authority.authorize(ticket.actorId, "manage", ticket.policyVersion);
-    await portable.store.withLock(source, async () => {
+    await portable.store.withLock(source, async held => {
       const marker = join(directory, WORK_MARKER);
       if (await exists(marker)) throw new RunnerError(409, "This session is working. Stop it, or wait for it to finish, where it is attached now");
       if (await this.leases.holder(directory) === "other" && !await this.leases.requestRelease(directory, RELEASE_WAIT_MS)) {
@@ -440,6 +444,7 @@ export class RunnerService {
       await this.leases.acquire(directory);
       try {
         if (await exists(marker)) throw new RunnerError(409, "This session started working where it is attached now. Try again once it finishes");
+        if (!await held()) throw new RunnerError(409, "Another Pikibun on this computer took over attaching this session. Try again shortly");
         if (source !== id && !target) await portable.store.mark(id, directory);
         try { await this.rebind(binding, directory, [source, id]); }
         catch (error) {
@@ -567,7 +572,14 @@ export class RunnerService {
 
   async close(): Promise<void> {
     this.closed = true;
-    if (this.sweep) clearInterval(this.sweep);
+    try { await this.closeSessions(); }
+    finally { if (this.sweep) clearInterval(this.sweep); }
+    this.sessions.clear();
+    this.portableOpen.clear();
+    this.leases.close();
+  }
+
+  private async closeSessions(): Promise<void> {
     for (const [id, pending] of this.sessions) {
       const session = await pending.catch(() => undefined);
       if (!session) continue;
@@ -575,9 +587,7 @@ export class RunnerService {
       await session.sandbox.close();
       if (this.portableOpen.has(id)) await this.leases.release(session.directory);
     }
-    this.sessions.clear();
-    this.portableOpen.clear();
-    this.leases.close();
+
   }
 }
 

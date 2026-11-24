@@ -17,8 +17,8 @@ Commands:
   show                    Your identity's public key, and the portable sessions on this computer
   export --out FILE       Write an encrypted copy of your identity, for a backup or another computer
   import FILE             Use an exported identity on this computer (--replace to swap out one it has)
-  rotate                  Replace the key with a new one, signed over by the old one; servers follow
-                          the next time each connection connects
+  rotate                  Replace the key with a new one, signed over by the old one; running
+                          connections use it at once and their servers follow within a minute
   reset                   Make a new key without the old one, for a key that leaked or was lost
 
 Options:
@@ -73,19 +73,19 @@ export async function identityMain(args: string[]): Promise<void> {
     }
     if (command === "import" && rest.length === 1) {
       const key = await store.importKey(await readFile(resolve(rest[0]!), "utf8"), await passphrase(false), { replace: values.replace === true });
-      process.stdout.write(`This computer now uses identity ${key}. Restart its connections so their servers learn it.\n`);
+      process.stdout.write(`This computer now uses identity ${key}. Its running connections use it from now on, and their servers learn it within a minute.\n`);
       return;
     }
     if (command === "rotate" && !rest.length) {
       const { previous, next } = await store.rotate();
-      process.stdout.write(`Rotated ${previous} to ${next}. Restart this computer's connections so their servers follow.\n`);
+      process.stdout.write(`Rotated ${previous} to ${next}. This computer's running connections use it from now on, and their servers follow within a minute.\n`);
       return;
     }
     if (command === "reset" && !rest.length) {
       await confirmed("reset", "A reset makes a new key without the old one. Your sessions on this computer stay yours; each server forgets the old key\n"
         + "once a connection of yours sends the new one, and sessions on other computers with the old key stay with it.\n");
       const { previous, next } = await store.reset();
-      process.stdout.write(`${previous ? `Replaced ${previous} with` : "Made"} ${next}. Restart this computer's connections.\n`);
+      process.stdout.write(`${previous ? `Replaced ${previous} with` : "Made"} ${next}. This computer's running connections use it from now on, and their servers learn it within a minute.\n`);
       return;
     }
   } catch (error) {
