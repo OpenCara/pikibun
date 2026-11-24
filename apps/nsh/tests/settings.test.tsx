@@ -146,6 +146,25 @@ describe("settings", () => {
     expect(app.shows("id:sign-in-app-copy")).toBe(true);
   });
 
+  test("in the app, Profile disconnects GitHub and signs in to it again in the browser, then shows it connected by itself", async () => {
+    let connected = true;
+    const app = await openSettings("profile", {
+      [`GET ${ORIGIN}/api/me`]: () => ({ body: { user: { ...user, githubConnected: connected } } }),
+      [`DELETE ${ORIGIN}/api/git/accounts/github`]: () => { connected = false; return { status: 204 }; },
+    });
+    await app.waitFor("id:disconnect-github");
+    app.onDialog(dialog => (dialog.title === "Disconnect GitHub" ? "Disconnect" : null));
+    await app.press("id:disconnect-github");
+    await app.waitFor("text:GitHub disconnected.");
+    await app.waitFor("id:connect-github");
+    await app.press("id:connect-github");
+    expect(app.openedUrls()).toEqual([`${ORIGIN}/api/auth/github`]);
+    await app.waitFor("text:github.com · Finish signing in with GitHub as @ada in your browser; this updates by itself");
+    connected = true;
+    await app.waitFor("id:disconnect-github", { timeout: 10_000 });
+    expect(app.texts().join(" ")).toContain("@ada · signed in");
+  });
+
   test("Profile lists the servers the app is signed in to, switches between them without signing out, and adds another", async () => {
     const OTHER = "https://team.example.com";
     const OTHER_TOKEN = "tok_other_0123456789abcdefghijklmnop";
