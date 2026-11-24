@@ -8,6 +8,9 @@ import { runnerSessionRecord, sessionPullRequest, sessionRecord } from '../apps/
 import { settlePushCredentials } from '../apps/server/src/authority/push/broker.js';
 import { forgetRepositoryReadTokens } from '../apps/server/src/authority/push/mint.js';
 import { forgetRateLimits } from '../apps/server/src/authority/github-reads.js';
+import { resetGitHubToken } from '../apps/server/src/authority/auth.js';
+import { forgetDeadGitHubToken } from '../apps/server/src/authority/github-sign-in.js';
+import { repositoryAccess } from '../apps/server/src/authority/repositories.js';
 import { refreshPullRequestStates } from '../apps/server/src/authority/pull-request-states.js';
 import type { Env } from '../apps/server/src/types.js';
 import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
@@ -810,6 +813,54 @@ test('owner-token resets that fail or whose push goes unreported are settled lat
   const kept = await local.json() as { credentialId: string };
   assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-reset-5', credentialId: kept.credentialId, outcome: 'pushed', tip })).status, 200);
   assert.deepEqual([resets().length, row(kept.credentialId).revocation_ciphertext, await stored()], [before, null, 'owner-signed-in-again']);
+});
+
+test('a token reset that races other uses of the old token keeps the sign-in: they wait for the replacement instead of forgetting it', async t => {
+  const f = await fixture(t, { host: { owner } });
+  const ciphertext = String(f.sqlite.prepare('SELECT ciphertext FROM github_tokens WHERE user_id = ?').get(owner)!.ciphertext);
+  const expired = () => Number(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'git.account.expired'").get()!.n);
+  let live = 'owner-oauth-token';
+  let issued = 1;
+  let open!: () => void;
+  const gate = new Promise<void>(resolve => { open = resolve; });
+  let reached!: () => void;
+  const patching = new Promise<void>(resolve => { reached = resolve; });
+  const routed = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(String(input));
+    const method = init.method ?? 'GET';
+    if (url.href !== 'https://api.github.com/applications/oauth-client/token' && url.href !== 'https://api.github.com/user') return routed(input, init);
+    const presented = url.pathname === '/user' ? new Headers(init.headers).get('authorization')!.replace(/^Bearer /, '')
+      : (JSON.parse(String(init.body)) as { access_token: string }).access_token;
+    if (url.pathname === '/user') return presented === live ? Response.json({ login: 'owner' }) : Response.json({ message: 'Bad credentials' }, { status: 401 });
+    if (method === 'POST') return presented === live ? Response.json({ id: 1 }) : Response.json({ message: 'Not Found' }, { status: 404 });
+    if (method === 'PATCH') {
+      if (presented !== live) return Response.json({ message: 'Not Found' }, { status: 404 });
+      live = `owner-oauth-token-${++issued}`;
+      const answer = live;
+      reached();
+      await gate;
+      return Response.json({ token: answer });
+    }
+    return new Response(null, { status: 204 });
+  };
+  t.after(() => { globalThis.fetch = routed; });
+
+  const first = resetGitHubToken(f.env, owner, 'owner-oauth-token', ciphertext);
+  const second = resetGitHubToken(f.env, owner, 'owner-oauth-token', ciphertext);
+  await patching;
+  const forgotten = forgetDeadGitHubToken(f.env, owner, ciphertext, 'a read with the old token');
+  const access = repositoryAccess(f.env, owner, 'github', 'github.com', 'owner/repo');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM github_tokens WHERE user_id = ?').get(owner)!.n), 1,
+    'GitHub already replaced the token, but the replacement is not stored yet: nothing forgets the sign-in meanwhile');
+  open();
+  assert.deepEqual(await Promise.all([first, second, forgotten]), [true, true, undefined]);
+  const during = await access;
+  assert.equal(during.provider === 'github' ? during.github.token : undefined, 'owner-oauth-token-2', 'a read during the reset gets the replacement');
+  assert.equal(await vaultToken(f), 'owner-oauth-token-2');
+  assert.equal(live, 'owner-oauth-token-2', 'the second reset of the same old token changes nothing');
+  assert.equal(expired(), 0);
 });
 
 test('an owner-token reset GitHub went through with unanswered, or whose token GitHub no longer knows, forgets the dead token', async t => {
