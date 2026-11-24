@@ -252,7 +252,7 @@ async function main() {
         save();
         return void process.stdout.write(`✓ Pull request #${pull.number} will be automatically merged when all requirements are met\n`);
       }
-      if (pull.draft === false && flag("-d", "--delete-branch")) pull.branchDeleted = true;
+      if (!flag("--squash", "-s", "--rebase", "-r", "--merge", "-m")) fail("--merge, --rebase, or --squash required when not running interactively");
       const method = flag("--squash", "-s") ? "Squashed and merged" : flag("--rebase", "-r") ? "Rebased and merged" : "Merged";
       pull.mergedOver = decision(pull);
       pull.method = flag("--squash", "-s") ? "squash" : flag("--rebase", "-r") ? "rebase" : "merge";

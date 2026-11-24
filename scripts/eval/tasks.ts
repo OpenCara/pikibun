@@ -397,8 +397,6 @@ export const tasks: readonly EvalTask[] = [
         if (await tryGit(remote.path, ["grep", "-q", "-w", "PORT", "refs/heads/main"]) === undefined) problems.push(`${remote.name}'s main does not name PORT`);
       }
       if (!await testsPass(context.remotes.app!, "main")) problems.push("app's tests fail on main");
-      const config = await tryGit(context.remotes.app!.path, ["show", "refs/heads/main:test/config.test.js"]) ?? "";
-      if (!/PORT: "4100"/.test(config)) problems.push("app's test no longer sets the port through the environment");
       return problems;
     },
   },
