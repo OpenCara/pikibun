@@ -19,6 +19,7 @@ import { checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser
 import { checkedFind, checkedSearch, type FindRequest, type FindResult, type SearchRequest, type SearchResult } from "./search.js";
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
+import type { GpuKind } from "../../../packages/shared/src/host-config.js";
 import type { IsolatedWorkspace } from "./workspace.js";
 import { CREATE_FILE, OPEN_FILE, privateEntry } from "./platform.js";
 import { BROWSER_DRIVER, DESKTOP_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER, SERVICE_DRIVER } from "./sandbox-python.generated.js";
@@ -569,6 +570,10 @@ export class Sandbox implements IsolatedWorkspace {
   get browser(): SessionBrowser | undefined {
     const browser = sandboxBrowserMount(this.#browserSource());
     return browser ? { driver: SANDBOX_BROWSER_DRIVER, chromium: browser.executable } : undefined;
+  }
+
+  get gpu(): GpuKind | undefined {
+    return gpuMounts(this.#gpuRoot)?.kind;
   }
 
   async browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult> {
