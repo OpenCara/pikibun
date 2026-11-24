@@ -47,7 +47,7 @@ export interface ToolContext {
   tunnel(): SessionTunnel | undefined;
   startTunnel(): SessionTunnel;
   grant(): Promise<EgressGrant>;
-  buildCaches?(): Promise<readonly BuildCacheMount[]>;
+  buildCaches?(sender: string): Promise<readonly BuildCacheMount[]>;
 }
 
 export const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });

@@ -167,7 +167,7 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
       .parse(await calls.callback(await source.connection(), "/api/connectors/self/cache-warming", { sessionId })),
     ...(source.buildCaches ? {
       buildCacheStore: source.buildCaches,
-      buildCaches: async (sessionId: string) => parseSessionBuildCaches(await calls.callback(await source.connection(), "/api/connectors/self/build-caches", { sessionId })),
+      buildCaches: async (sessionId: string, senderId: string | null) => parseSessionBuildCaches(await calls.callback(await source.connection(), "/api/connectors/self/build-caches", { sessionId, senderId })),
     } : {}),
     hostGitCredential: async (remote: string, signal?: AbortSignal) => {
       if (!(await hostConfig.current()).gitCredentials) throw new HostCredentialError("This host's owner hasn't turned on its Git credentials in Pikibun (Settings → Hosts → the host → Configuration)");

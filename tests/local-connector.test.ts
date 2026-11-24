@@ -649,15 +649,16 @@ test('a host keeps the repository cache its configuration names for the whole co
 
 test('a sandboxed host keeps build caches in its state directory, says so, and asks Pikibun which copy each session gets', { timeout: 10000 }, async t => {
   const asked: unknown[] = [];
-  const fixture = await connectorFixture(t, { buildCaches: body => { asked.push(body); return Response.json({ caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner' }] }); } });
+  const fixture = await connectorFixture(t, { buildCaches: body => { asked.push(body); return Response.json({ caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner', access: (body as { senderId?: unknown }).senderId === 'test:alice' ? 'write' : 'read' }] }); } });
   await startFixture(fixture);
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
   assert.deepEqual(JSON.parse(manifest.body).capabilities, { ...advertisedBase, buildCaches: true });
   const config = fixture.runtimes[0]!.config;
   assert.equal(config.buildCacheStore?.root, join(await realpath(fixture.dataDir), 'build-caches'));
   assert.equal(config.buildCacheStore?.dedicated, false);
-  assert.deepEqual(await config.buildCaches!('session-1'), { caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner' }] });
-  assert.deepEqual(asked, [{ sessionId: 'session-1' }]);
+  assert.deepEqual(await config.buildCaches!('session-1', 'test:alice'), { caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner', access: 'write' }] });
+  assert.deepEqual(await config.buildCaches!('session-1', null), { caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner', access: 'read' }] });
+  assert.deepEqual(asked, [{ sessionId: 'session-1', senderId: 'test:alice' }, { sessionId: 'session-1', senderId: null }], 'it names the sender of the message whose command it is about to run');
 
   const plain = await connectorFixture(t);
   await startFixture(plain);

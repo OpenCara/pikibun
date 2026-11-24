@@ -4,7 +4,8 @@ import test from 'node:test';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import {
-  buildCacheEnvAllowed, buildCacheScope, parseBuildCache, parseSessionBuildCaches, sessionBuildCaches, type BuildCacheWriter, type SessionBuildCaches, type StoredBuildCache,
+  buildCacheEnvAllowed, buildCacheScope, buildCacheWrites, parseBuildCache, parseSessionBuildCaches, sessionBuildCaches, type BuildCacheSender, type BuildCacheWriter,
+  type SessionBuildCaches, type StoredBuildCache,
 } from '../packages/shared/src/build-caches.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
@@ -39,9 +40,46 @@ test('a session shares a workspace\'s build cache only where its owner can alrea
   assert.equal(buildCacheScope(writer({ groupId: 'builders' }), { writerGroups: ['deleted-group'] }), 'owner', 'a deleted group leaves the workspace owner, never everyone');
 
   const caches = [{ name: 'ccache', env: 'CCACHE_DIR', writerGroups: [] }, { name: 'assets', env: 'PARADISE_EXPORT_CACHE', writerGroups: ['builders'] }];
-  assert.deepEqual(sessionBuildCaches(writer(), caches), { caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'shared' }, { name: 'assets', env: 'PARADISE_EXPORT_CACHE', scope: 'owner' }] });
-  assert.deepEqual(sessionBuildCaches(writer(), caches, 'off'), { caches: [] });
-  assert.deepEqual(sessionBuildCaches(writer({ role: null }), caches), { caches: [] }, 'someone who left the workspace gets none');
+  const self = { kind: 'message', sender: { ...writer(), owns: true }, granted: [] } as const;
+  assert.deepEqual(sessionBuildCaches(writer(), caches, 'workspace', self), { caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'shared', access: 'write' },
+    { name: 'assets', env: 'PARADISE_EXPORT_CACHE', scope: 'owner', access: 'write' }] });
+  assert.deepEqual(sessionBuildCaches(writer(), caches, 'off', self), { caches: [] });
+  assert.deepEqual(sessionBuildCaches(writer({ role: null }), caches, 'workspace', self), { caches: [] }, 'someone who left the workspace gets none');
+});
+
+test('a message writes a session\'s copy of a build cache only where its sender, and everyone holding a session role there, could already change every reader\'s sessions', () => {
+  const sender = (change: Partial<BuildCacheSender> = {}): BuildCacheSender => ({ ...writer(), owns: false, ...change });
+  const admin = sender({ role: 'admin', tools: roleTools.admin });
+  const member = sender({ role: 'member', tools: roleTools.member });
+  const open = { writerGroups: [] };
+  assert.equal(buildCacheWrites(admin, open, 'shared'), true);
+  assert.equal(buildCacheWrites(sender(), open, 'shared'), true);
+  assert.equal(buildCacheWrites(member, open, 'shared'), false, 'a member with a session role of Collaborator on an admin\'s session never writes the shared copy');
+  assert.equal(buildCacheWrites(sender({ role: 'member', tools: roleTools.owner, groupId: 'everything' }), open, 'shared'), false, 'whatever their tool group');
+  assert.equal(buildCacheWrites(sender({ tools: roleTools.collaborator.filter(tool => tool !== 'write') }), open, 'shared'), false);
+  assert.equal(buildCacheWrites(sender({ role: null, tools: [] }), open, 'shared'), false, 'nor does someone outside the workspace');
+  assert.equal(buildCacheWrites(admin, { writerGroups: ['builders'] }, 'shared'), false, 'writer groups narrow senders as they narrow owners');
+  assert.equal(buildCacheWrites(sender({ groupId: 'builders' }), { writerGroups: ['builders'] }, 'shared'), true);
+  assert.equal(buildCacheWrites(sender({ role: 'member', tools: roleTools.member, owns: true }), open, 'owner'), true, 'an owner writes their own copy');
+  assert.equal(buildCacheWrites(admin, open, 'owner'), true, 'as does someone whose role messages every session of the workspace');
+  assert.equal(buildCacheWrites(member, open, 'owner'), false, 'but not a member with a session role on one of the owner\'s sessions: every session of that owner reads the copy');
+  assert.equal(buildCacheWrites(sender({ tools: roleTools.collaborator.filter(tool => tool !== 'write') }), open, 'owner'), false);
+
+  const caches = [{ name: 'ccache', env: 'CCACHE_DIR', writerGroups: [] }];
+  const owner = writer({ role: 'admin', tools: roleTools.admin });
+  const owning = { ...owner, owns: true };
+  const access = (senders: Parameters<typeof sessionBuildCaches>[3], mode: 'workspace' | 'owner' = 'workspace') => sessionBuildCaches(owner, caches, mode, senders).caches.map(cache => `${cache.scope} ${cache.access}`);
+  assert.deepEqual(access({ kind: 'message', sender: owning, granted: [] }), ['shared write']);
+  assert.deepEqual(access({ kind: 'message', sender: member, granted: [member] }), ['shared read'], 'the member\'s message reads the shared copy and never writes it');
+  assert.deepEqual(access({ kind: 'message', sender: member, granted: [] }), ['shared read']);
+  assert.deepEqual(access({ kind: 'message', sender: owning, granted: [member] }), ['shared read'],
+    'nor does the owner\'s own message while the member holds the role: it runs what the member left in the worktree');
+  assert.deepEqual(access({ kind: 'message', sender: owning, granted: [sender()] }), ['shared write'], 'a session role held by someone who writes the copy anyway changes nothing');
+  assert.deepEqual(access({ kind: 'none' }), ['shared read'], 'what no message started, such as a service, only reads');
+  assert.deepEqual(access({ kind: 'message', sender: owning, granted: [] }, 'owner'), ['owner write']);
+  assert.deepEqual(access({ kind: 'message', sender: member, granted: [member] }, 'owner'), ['owner read']);
+  assert.deepEqual(access({ kind: 'unknown', possible: [owning, admin, sender()] }), ['shared write'], 'a connector that names no sender gets a copy every possible sender writes');
+  assert.deepEqual(access({ kind: 'unknown', possible: [owning, admin, member] }), [], 'and none at all where one of them doesn\'t, since it would mount it writable for them');
 });
 
 test('a build cache is a name and a variable the sandbox doesn\'t set, and a host reads only a valid answer', () => {
@@ -57,7 +95,11 @@ test('a build cache is a name and a variable the sandbox doesn\'t set, and a hos
   assert.throws(() => parseBuildCache('x', { env: 'X', path: '/tmp' }), /takes env and writerGroups/);
   assert.throws(() => parseBuildCache('x', { env: 'X', writerGroups: ['bad id'] }), /tool group ids/);
 
-  assert.deepEqual(parseSessionBuildCaches({ caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner' }] }), { caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner' }] });
+  assert.deepEqual(parseSessionBuildCaches({ caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner', access: 'write' }] }),
+    { caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'owner', access: 'write' }] });
+  for (const access of [undefined, 'read', 'everything', true]) {
+    assert.equal(parseSessionBuildCaches({ caches: [{ name: 'ccache', env: 'CCACHE_DIR', scope: 'shared', access }] }).caches[0]!.access, 'read', `${String(access)}: only an explicit write is writable`);
+  }
   for (const value of [null, {}, { caches: {} }, { caches: [{ name: 'x', env: 'PATH', scope: 'owner' }] }, { caches: [{ name: 'x', env: 'X', scope: 'everyone' }] },
     { caches: [{ name: 'x', env: 'X', scope: 'owner' }, { name: 'x', env: 'Y', scope: 'owner' }] }, { caches: [{ name: 'x', env: 'X', scope: 'owner' }, { name: 'y', env: 'X', scope: 'owner' }] },
     { caches: Array.from({ length: 17 }, (_, index) => ({ name: `c${index}`, env: `C${index}`, scope: 'owner' })) }]) {
@@ -150,14 +192,39 @@ test('a workspace\'s owners and admins declare build caches, and a host learns f
   const { session } = await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: models[0]!.id, title: 'Work' }), 201);
   sqlite.exec('DROP TRIGGER sessions_owner_immutable');
   sqlite.prepare('INSERT INTO connector_shares (connector_id, workspace_id, created_at) VALUES (?, ?, ?)').run(credentials.connectorId, workspace.id, new Date().toISOString());
-  const answer = async (owner: string) => {
+  const unnamed = Symbol('no sender');
+  const answer = async (owner: string, sender: string | null | typeof unnamed = owner) => {
     sqlite.prepare('UPDATE sessions SET owner_id = ? WHERE id = ?').run(owner, session.id);
-    return Object.fromEntries((await json<SessionBuildCaches>(await request('POST', '/api/connectors/self/build-caches', { sessionId: session.id }, host))).caches
-      .map(cache => [cache.name, cache.scope]));
+    return Object.fromEntries((await json<SessionBuildCaches>(await request('POST', '/api/connectors/self/build-caches',
+      { sessionId: session.id, ...(sender === unnamed ? {} : { senderId: sender }) }, host))).caches
+      .map(cache => [cache.name, cache.access === 'write' ? cache.scope : `${cache.scope} read`]));
   };
+  const older = (owner: string) => answer(owner, unnamed);
   assert.deepEqual(await answer(alice.user.id), {}, 'a host keeps none until its owner turns them on');
   await json(await alice.request('PATCH', `/api/connectors/${credentials.connectorId}/config`, { buildCaches: 'workspace' }));
   assert.deepEqual(await answer(alice.user.id), { assets: 'shared', ccache: 'shared' });
+
+  assert.deepEqual(await answer(dave.user.id, bob.user.id), { assets: 'owner read', ccache: 'shared read' }, 'a member\'s message never writes an admin\'s copies');
+  assert.deepEqual(await answer(dave.user.id, carol.user.id), { assets: 'owner', ccache: 'shared' }, 'a collaborator\'s does: they message every session');
+  assert.deepEqual(await answer(alice.user.id, dave.user.id), { assets: 'shared read', ccache: 'shared' }, 'a sender outside a cache\'s writer groups reads it');
+  assert.deepEqual(await answer(bob.user.id, carol.user.id), { assets: 'owner', ccache: 'owner' });
+  assert.deepEqual(await answer(dave.user.id, 'test:nobody'), { assets: 'owner read', ccache: 'shared read' }, 'someone outside the workspace writes nothing');
+  assert.deepEqual(await answer(dave.user.id, null), { assets: 'owner read', ccache: 'shared read' }, 'what no message started only reads');
+  assert.deepEqual(await older(dave.user.id), { assets: 'owner', ccache: 'shared' }, 'an older connector names no sender: everyone who may message this session writes these copies');
+  assert.deepEqual(await older(alice.user.id), { ccache: 'shared' }, 'and it gets no copy that one of them doesn\'t write');
+  sqlite.prepare('UPDATE sessions SET owner_id = ? WHERE id = ?').run(dave.user.id, session.id);
+  await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: bob.user.id, role: 'collaborator' }));
+  assert.deepEqual(await answer(dave.user.id, bob.user.id), { assets: 'owner read', ccache: 'shared read' },
+    'a member with a session role of Collaborator on an admin\'s session reads the shared copy and never writes it');
+  assert.deepEqual(await answer(dave.user.id), { assets: 'owner read', ccache: 'shared read' }, 'nor does the admin\'s own message there, which runs what the member left');
+  assert.deepEqual(await older(dave.user.id), {}, 'an older connector, which would mount them writable for the member, gets none');
+  await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: bob.user.id, role: 'viewer' }));
+  assert.deepEqual(await answer(dave.user.id), { assets: 'owner', ccache: 'shared' }, 'a session role that can\'t send messages changes nothing');
+  await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: bob.user.id, role: 'collaborator' }));
+  assert.deepEqual(await answer(dave.user.id), { assets: 'owner read', ccache: 'shared read' });
+  await json(await alice.request('DELETE', `/api/sessions/${session.id}/grants/${bob.user.id}`));
+  assert.deepEqual(await answer(dave.user.id), { assets: 'owner', ccache: 'shared' }, 'once the role is gone the admin writes again');
+  assert.deepEqual(await older(dave.user.id), { assets: 'owner', ccache: 'shared' });
   assert.deepEqual(await answer(dave.user.id), { assets: 'owner', ccache: 'shared' }, 'an admin outside the writer groups');
   assert.deepEqual(await answer(carol.user.id), { assets: 'owner', ccache: 'shared' });
   assert.deepEqual(await answer(bob.user.id), { assets: 'owner', ccache: 'owner' });

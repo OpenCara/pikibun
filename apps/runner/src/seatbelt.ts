@@ -65,6 +65,7 @@ export interface SeatbeltPolicy {
   toolRoots: readonly string[];
   mirrors?: readonly string[];
   caches?: readonly string[];
+  readOnlyCaches?: readonly string[];
 }
 
 export function seatbeltCache(path: string): boolean {
@@ -94,7 +95,10 @@ export function seatbeltProfile(policy: SeatbeltPolicy): { profile: string; para
   const caches = policy.caches ?? [];
   if (!caches.every(seatbeltCache)) throw new Error("Invalid build cache path");
   caches.forEach((cache, index) => { parameters[`CACHE_${index}`] = cache; });
-  const cacheRules = caches.map((_, index) => `(subpath (param "CACHE_${index}"))`).join(" ");
+  const cacheRule = (index: number) => `(subpath (param "CACHE_${index}"))`;
+  const cacheRules = caches.map((_, index) => cacheRule(index)).join(" ");
+  const reading = new Set(policy.readOnlyCaches ?? []);
+  const writableRules = caches.flatMap((cache, index) => reading.has(cache) ? [] : [cacheRule(index)]).join(" ");
   const lines = [
     "(version 1)",
     "(deny default)",
@@ -118,7 +122,7 @@ export function seatbeltProfile(policy: SeatbeltPolicy): { profile: string; para
     ...(mirrors.length ? [`(allow file-read* ${mirrors.map((_, index) => `(subpath (param "MIRROR_${index}"))`).join(" ")})`] : []),
     ...(caches.length ? [`(allow file-read* ${cacheRules})`] : []),
   ];
-  if (caches.length && !policy.readOnly) lines.push(`(allow file-write* ${cacheRules})`);
+  if (writableRules && !policy.readOnly) lines.push(`(allow file-write* ${writableRules})`);
   if (!policy.readOnly) {
     lines.push("(allow file-write* (subpath (param \"HOME_DIR\")) (subpath (param \"WORKTREE\")))");
     lines.push("(allow network-bind (local unix-socket (subpath (param \"HOME_DIR\"))) (local unix-socket (subpath (param \"WORKTREE\"))))");
@@ -193,11 +197,11 @@ export class SeatbeltBackend implements HelperBackend {
     const port = egressPort(context);
     const mirrors = (context.mirrors ?? []).filter(seatbeltMirror);
     const resolved = [...new Set(mirrors.flatMap(path => { try { return [realpathSync(path)]; } catch { return []; } }).filter(seatbeltMirror))];
-    const caches = (context.caches ?? []).flatMap(cache => { try { const path = realpathSync(cache.path); return seatbeltCache(path) ? [{ path, env: cache.env }] : []; } catch { return []; } });
+    const caches = (context.caches ?? []).flatMap(cache => { try { const path = realpathSync(cache.path); return seatbeltCache(path) ? [{ path, env: cache.env, readOnly: cache.readOnly === true }] : []; } catch { return []; } });
     const cacheEnvironment = Object.fromEntries(caches.filter(cache => !Object.hasOwn(context.environment, cache.env)).map(cache => [cache.env, cache.path]));
     const { profile, parameters } = seatbeltProfile({
       layout, readOnly: context.readOnly, gitWritable: context.gitWritable, toolRoots: this.#tools.roots, mirrors: resolved,
-      ...(caches.length ? { caches: [...new Set(caches.map(cache => cache.path))] } : {}),
+      ...(caches.length ? { caches: [...new Set(caches.map(cache => cache.path))], readOnlyCaches: [...new Set(caches.filter(cache => cache.readOnly).map(cache => cache.path))] } : {}),
       ...(port !== undefined ? { egressPort: port } : {}),
     });
     void request;
