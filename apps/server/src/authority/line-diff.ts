@@ -2,6 +2,7 @@ export type LineOperation = '=' | '-' | '+';
 
 const contextLines = 3;
 const maxEdits = 2000;
+export const maxPatchLines = 20_000;
 
 interface Lines { text: string[]; keys: string[]; endsWithNewline: boolean }
 
@@ -69,9 +70,9 @@ function range(start: number, count: number): string {
   return count === 1 ? `${first}` : `${first},${count}`;
 }
 
-export interface UnifiedPatch { patch: string; additions: number; deletions: number }
+export interface UnifiedPatch { patch: string; additions: number; deletions: number; truncated?: true }
 
-export function unifiedPatch(before: string, after: string): UnifiedPatch {
+export function unifiedPatch(before: string, after: string, lineLimit: number = maxPatchLines): UnifiedPatch {
   const old = lines(before);
   const now = lines(after);
   const operations = lineOperations(old.keys, now.keys);
@@ -87,7 +88,10 @@ export function unifiedPatch(before: string, after: string): UnifiedPatch {
     if (operation === '+') additions++;
     if (operation === '-') deletions++;
   }
-  const changed = entries.flatMap((entry, index) => entry.operation === '=' ? [] : [index]);
+  const cut: UnifiedPatch = { patch: '', additions, deletions, truncated: true };
+  if (additions + deletions > lineLimit) return cut;
+  const changed: number[] = [];
+  for (let index = 0; index < entries.length; index++) if (entries[index]!.operation !== '=') changed.push(index);
   const hunks: string[] = [];
   let at = 0;
   while (at < changed.length) {
@@ -112,7 +116,9 @@ export function unifiedPatch(before: string, after: string): UnifiedPatch {
       }
     }
     const first = entries[from]!;
-    hunks.push(`@@ -${range(first.oldIndex + 1, oldCount)} +${range(first.newIndex + 1, newCount)} @@`, ...body);
+    if (hunks.length + 1 + body.length > lineLimit) return cut;
+    hunks.push(`@@ -${range(first.oldIndex + 1, oldCount)} +${range(first.newIndex + 1, newCount)} @@`);
+    for (const line of body) hunks.push(line);
     at = last + 1;
   }
   return { patch: hunks.join('\n'), additions, deletions };
