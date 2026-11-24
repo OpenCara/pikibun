@@ -360,5 +360,7 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   refuses it, and counts as a write if either says so (`PikiSession.servedRules`). So Pikibun can refuse more, or count
   more commands as writes, without a connector release, but neither a compromised Pikibun server nor a mistaken release
   can loosen what the connector holds, such as the refusals that keep its tokens hidden. A definition that would refuse
-  nothing, names another extension, or sets variables or roots outside bounded patterns is passed over.
+  nothing, names another extension, or sets variables or roots outside bounded patterns is passed over. A definition's
+  `hints` (text added to a failed run's result, [Lessons enforced in code](enforced-lessons.md)) are served only to a
+  connector that asks with `cliHints: true`: an older one would pass over the whole definition for the unknown key.
 
