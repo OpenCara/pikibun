@@ -160,7 +160,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "pr-flow", source: "piki:pr-flow", title: "Pull request flow", workflow: true,
-    description: "Has the agent carry each change through a pull request (a merge request on GitLab): a draft as soon as it starts changing a repository's files, ready for review once the change is done, then a review window (review-minutes) in which it fixes the valid review points and waits again for a re-review, then the merge. A review-minutes of 0 merges as soon as it is ready; auto-merge off leaves the merge to people. Each step is the session's own tools, under the session's usual rules.",
+    description: "Has the agent carry each change through a pull request (a merge request on GitLab): a draft as soon as it starts changing a repository's files, ready for review once the change is done, then a review window (review-minutes) in which it fixes the valid review points and waits again for a re-review, then the merge. A review-minutes of 0, or wait-for-review off, merges as soon as it is ready; auto-merge off leaves the merge to people; require-approval merges only approved ones; draft-first off opens it only once the change is done. Each step is the session's own tools, under the session's usual rules.",
     providers: [],
   },
   {
