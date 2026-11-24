@@ -1,3 +1,4 @@
+import type { GpuKind } from "../../../packages/shared/src/host-config.js";
 import type { HostCommandOperation, Operation } from "../../../packages/shared/src/types.js";
 import type { BrowseResult } from "./file-browser.js";
 import type { FileContent } from "./images.js";
@@ -15,6 +16,7 @@ export interface SessionWorkspace {
   readonly hostWorktree: string;
   readonly nodeBin?: string | undefined;
   readonly browser?: SessionBrowser | undefined;
+  readonly gpu?: GpuKind | undefined;
   readonly processes?: ProcessRoots;
   resourceGroups?(): ResourceGroups | undefined;
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>>;

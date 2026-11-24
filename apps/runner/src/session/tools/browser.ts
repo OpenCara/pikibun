@@ -5,7 +5,7 @@ import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 import { browserActions, browserKeys, browserLimits, browserUnavailableText, desktopLimits, type BrowserRequest } from "../../../../../packages/shared/src/browser.js";
 import { tunnelActions, tunnelUnavailableText } from "../../../../../packages/shared/src/tunnel.js";
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation } from "../../../../../packages/shared/src/types.js";
-import { browserRequest, browserShellCommand, servePrograms } from "../../browser-command.js";
+import { browserGpu, browserRequest, browserShellCommand, servePrograms } from "../../browser-command.js";
 import { programLimits } from "../../program-command.js";
 import { RunnerError } from "../../protocol.js";
 import { tunnelAccesses, tunnelRequest, type TunnelRequest } from "../../tunnel-command.js";
@@ -32,6 +32,9 @@ export function browserTool(context: ToolContext): ToolRegistration {
     + "localhost only within the call, so start the web app under test with serve {program, args, directory?, venv?, port}: one of the node and "
     + `python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, which runs from before `
     + "the page opens until the call ends. " + desktopDescription.replace("port serves", "port (open http://localhost:<port>/) serves") + " "
+    + "It renders in software, but on a host that lends its GPU to sandboxed commands as Linux render nodes it renders with that GPU (ANGLE on Vulkan), "
+    + "so WebGL and WebGPU pages can be tested on it (WebGPU needs a secure context, which http://localhost is): the answer's gpu then names the renderer, "
+    + "or says why that call rendered in software after all. "
     + "Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
     + "It stops at the host's command time limit.",
     executionMode: "sequential",
@@ -59,7 +62,8 @@ export function browserTool(context: ToolContext): ToolRegistration {
       let command: string;
       try {
         request = browserRequest(args as Record<string, unknown>);
-        command = browserShellCommand(request, browser, { seconds: (await calls.commandOptions()).limits.seconds, nodeBin: sandbox.nodeBin });
+        const options = await calls.commandOptions();
+        command = browserShellCommand(request, browser, { seconds: options.limits.seconds, nodeBin: sandbox.nodeBin, gpu: browserGpu(options.gpu, sandbox.gpu) });
       } catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid browser call"}. Nothing ran.`); }
       const attribution = await calls.actor(api, true);
       await hostCommands.requireHostEnvironment();
