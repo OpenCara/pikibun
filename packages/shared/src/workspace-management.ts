@@ -42,6 +42,19 @@ export const workspaceActionFields: Readonly<Record<WorkspaceToolAction, { requi
 
 export const workspaceToolLimits = Object.freeze({ settingsChars: 16 * 1024, listed: 200 });
 
+export const workspaceGuardExtensions: readonly string[] = Object.freeze(["piki:prompt-audit", "npm:cc-safety-net"]);
+
+export function contextFileUrls(setting: unknown): string[] {
+  if (typeof setting !== "string") return [];
+  const urls = new Set<string>();
+  for (const raw of setting.split(/[\n,|]/)) {
+    const text = raw.trim();
+    if (!text || text.startsWith("#") || !text.includes("://")) continue;
+    urls.add(URL.canParse(text) ? new URL(text).href : text);
+  }
+  return [...urls];
+}
+
 export const workspaceToolDescription = "Manage this Pikibun workspace (the one this session is in) as the person whose message you are working on, "
   + "with exactly their workspace role: what their role can't do here is refused. "
   + "Reads: get (the workspace, their role), members, repositories, sources (document sources), extensions, tool_groups, network (its network access), join_requests (people asking to join; owners and admins). "
@@ -53,7 +66,9 @@ export const workspaceToolDescription = "Manage this Pikibun workspace (the one 
   + "and remove_repository {repository} (its id or owner/name); "
   + "set_extension {extension, enabled?, settings?} (an extension's source as extensions lists it, such as piki:node or npm:<package>@<version>; enabled and settings, a JSON object of its options, never secrets, "
   + "are kept as they are when left out. It adds only Pikibun's own extensions, piki:<name>, which are added on. An npm: or git: source the workspace doesn't list yet, or another version or commit of one it lists, "
-  + "is refused: that is third-party code for every session, which a person adds or updates under Settings → Workspaces → Extensions, so tell them that instead) and remove_extension {extension}; "
+  + "is refused: that is third-party code for every session, which a person adds or updates under Settings → Workspaces → Extensions, so tell them that instead. "
+  + "A person decides there too, and the tool refuses: a new https:// URL in piki:context-files' context-files setting (removing one, or changing other entries, is taken), "
+  + "and turning off, removing or changing the settings of a guard, piki:prompt-audit or npm:cc-safety-net) and remove_extension {extension}; "
   + "set_network_mode {mode} (off, allowlist or open), allow_domain {domain} and disallow_domain {domain} (a host name, or *.example.com; they matter in allowlist mode). "
   + "user is a member's id (such as github:123) as members or join_requests list it. "
   + "Change the workspace only when the person asked for it, and say what you changed.";

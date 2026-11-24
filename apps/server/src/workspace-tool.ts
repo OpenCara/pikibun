@@ -9,7 +9,7 @@ import { gitProviderHosts, gitProviders, repositoryFullName, repositoryUrlHost, 
 import { networkModes, type NetworkMode, type NetworkPolicy } from '../../../packages/shared/src/network.js';
 import { assignableWorkspaceRoles, type Workspace } from '../../../packages/shared/src/types.js';
 import {
-  isWorkspaceWriteAction, workspaceActionFields, workspaceToolActions, workspaceToolLimits, workspaceToolParameters,
+  contextFileUrls, isWorkspaceWriteAction, workspaceActionFields, workspaceGuardExtensions, workspaceToolActions, workspaceToolLimits, workspaceToolParameters,
   type WorkspaceToolAction, type WorkspaceToolParameter,
 } from '../../../packages/shared/src/workspace-management.js';
 import {
@@ -112,6 +112,32 @@ function requireListedSource(source: string, current: WorkspaceExtension | undef
       + 'Once it is listed there, this tool can turn it on or off and change its settings. Tell the person so; don\'t try another way to add it.');
 }
 
+const PERSON_DECIDES = `A person decides this under ${EXTENSIONS_PAGE} in the app's settings: tell them so, and don't try another way to make the change.`;
+
+const sortedSettings = (settings: Record<string, unknown>) => JSON.stringify(Object.keys(settings).sort().map(key => [key, settings[key]]));
+
+function requireGuardKept(key: string, current: WorkspaceExtension | undefined, next: { enabled: boolean; settings: Record<string, unknown> } | null): void {
+  if (!workspaceGuardExtensions.includes(key)) return;
+  if (!next) fail(403, 'guard_extension_kept', `${key} is a guard: it checks what reaches or runs in the workspace's sessions, so the workspace tool doesn't remove it. ${PERSON_DECIDES}`);
+  if (current?.enabled && !next.enabled) {
+    fail(403, 'guard_extension_kept', `${key} is a guard: it checks what reaches or runs in the workspace's sessions, so the workspace tool doesn't turn it off. ${PERSON_DECIDES}`);
+  }
+  if (sortedSettings(current?.settings ?? {}) !== sortedSettings(next.settings)) {
+    fail(403, 'guard_extension_kept', `${key} is a guard, and its settings decide what it lets through, so the workspace tool doesn't change them. `
+      + `It can still turn the guard on, or add it with its default settings. ${PERSON_DECIDES}`);
+  }
+}
+
+function requireListedContextUrls(key: string, current: WorkspaceExtension | undefined, settings: Record<string, unknown>): void {
+  if (key !== 'piki:context-files') return;
+  const listed = new Set(contextFileUrls(current?.settings?.['context-files']));
+  const added = contextFileUrls(settings['context-files']).filter(url => !listed.has(url));
+  if (!added.length) return;
+  fail(403, 'context_url_not_listed', `${added.join(', ')} ${added.length === 1 ? 'isn\'t' : 'aren\'t'} in piki:context-files' context-files setting yet. `
+    + 'A page there is fetched into the system prompt of every session in the workspace, so the workspace tool adds no URL to it: '
+    + `it can remove URLs and change the setting's other entries (files in a clone, host:<name>). ${PERSON_DECIDES}`);
+}
+
 async function run(env: Env, row: SessionRow, actorId: string, action: WorkspaceToolAction, input: Fields): Promise<Record<string, unknown>> {
   const workspace = `/api/workspaces/${encodeURIComponent(row.workspace_id)}`;
   const member = (user: string) => `${workspace}/members/${encodeURIComponent(user)}`;
@@ -175,11 +201,14 @@ async function run(env: Env, row: SessionRow, actorId: string, action: Workspace
       requireListedSource(source, current);
       const extension = { source, enabled: input.enabled ?? current?.enabled ?? true, tools: current?.tools ?? 'automatic',
         settings: input.settings !== undefined ? settingsInput(input.settings) : current?.settings ?? {} };
+      requireGuardKept(key, current, extension);
+      requireListedContextUrls(key, current, extension.settings);
       const saved = await call<{ extensions: WorkspaceExtension[] }>('PUT', `${workspace}/extensions`, extension);
       return { extension: saved.extensions.find(item => extensionPackageKey(item.source) === key) ?? null, ...(current ? {} : { added: true }) };
     }
     case 'remove_extension': {
       const key = extensionKey(input.extension!);
+      requireGuardKept(key, undefined, null);
       await call('DELETE', `${workspace}/extensions?source=${encodeURIComponent(input.extension!)}`);
       return { removed: key };
     }
