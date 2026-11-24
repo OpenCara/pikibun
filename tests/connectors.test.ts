@@ -29,6 +29,7 @@ import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import type { RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
 import { publicLookup } from '../apps/server/src/authority/remote-mcp/transport.js';
+import { coversResource, discoverOAuth } from '../apps/server/src/authority/remote-mcp/oauth.js';
 import { answersId, eventStreamMessages, RemoteMcpSession } from '../apps/server/src/authority/remote-mcp/client.js';
 
 const origin = 'http://localhost:8787';
@@ -4235,6 +4236,11 @@ test('a remote MCP server that asks for OAuth is signed in to by an admin; Pikib
   const declined = await signIn();
   settings(await declined.callback({ error: 'access_denied', state: declined.state }));
   assert.match((await listed()).error ?? '', /Signing in failed: the sign-in was declined/);
+  const forged = await signIn();
+  fake.codes.set('code-0', { challenge: forged.challenge, resource: fake.mcpUrl, redirect: `${origin}/api/mcp-servers/oauth/callback` });
+  settings(await forged.callback({ code: 'code-0', state: forged.state, iss: 'https://evil.example.com' }));
+  assert.match((await listed()).error ?? '', /Signing in failed: the answer came from another authorization server/);
+  assert.ok(fake.codes.has('code-0'), 'a code from another issuer is never exchanged');
 
   const flow = await signIn();
   fake.codes.set('code-1', { challenge: flow.challenge, resource: fake.mcpUrl, redirect: `${origin}/api/mcp-servers/oauth/callback` });
@@ -4285,6 +4291,25 @@ test('a remote MCP server that asks for OAuth is signed in to by an admin; Pikib
   const { server: moved } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { url: 'https://elsewhere.example.net/mcp', headers: {} }));
   assert.equal(moved.oauth, undefined, 'a sign-in is never sent to another address');
   assert.equal(kept(), null);
+});
+
+test('a protected resource covers only its own origin and path, and an authorization server\'s metadata must name the issuer it was asked for', async () => {
+  assert.ok(coversResource('https://mcp.example.com/mcp', 'https://mcp.example.com/mcp'));
+  assert.ok(coversResource('https://mcp.example.com', 'https://mcp.example.com/mcp'));
+  assert.ok(coversResource('https://mcp.example.com/api/', 'https://mcp.example.com/api/mcp'));
+  assert.ok(!coversResource('https://mcp.example.com/mcp', 'https://mcp.example.com/mcpevil'));
+  assert.ok(!coversResource('https://mcp.example.com', 'https://mcp.example.com.evil.tld/mcp'));
+  assert.ok(!coversResource('https://other.example.com/mcp', 'https://mcp.example.com/mcp'));
+  const json = (value: unknown) => ({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  const transport = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
+    if (request.url === 'https://mcp.example.com/mcp') return { status: 401, headers: { 'www-authenticate': 'Bearer' }, body: '' };
+    if (request.url === 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp') return json({ resource: 'https://mcp.example.com/mcp', authorization_servers: ['https://auth.example.com'] });
+    if (request.url === 'https://auth.example.com/.well-known/oauth-authorization-server') {
+      return json({ issuer: 'https://evil.example.com', authorization_endpoint: 'https://evil.example.com/authorize', token_endpoint: 'https://evil.example.com/token' });
+    }
+    return { status: 404, headers: {}, body: '' };
+  };
+  await assert.rejects(discoverOAuth(transport, 'https://mcp.example.com/mcp'), /publishes no OAuth metadata/);
 });
 
 test('a remote MCP call has one deadline for all its requests, and an event stream answers as soon as its response arrives', async () => {

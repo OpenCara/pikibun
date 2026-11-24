@@ -409,9 +409,11 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const codes = c.req.queries('code');
     const code = codes?.length === 1 ? codes[0]! : '';
     if (!/^[\x21-\x7e]{1,4096}$/.test(code)) return declined('its authorization server sent no code');
-    const client = JSON.parse(await decryptToken(c.env, stateContext(row.id), saved.client_ciphertext)) as McpOAuthClient;
+    let client: McpOAuthClient;
+    try { client = JSON.parse(await decryptToken(c.env, stateContext(row.id), saved.client_ciphertext)) as McpOAuthClient; }
+    catch { return declined('Pikibun couldn\'t read the sign-in it started: start it again'); }
     const issuer = c.req.query('iss');
-    if (issuer !== undefined && client.issuer && issuer !== client.issuer) return declined('the answer came from another authorization server');
+    if (issuer !== undefined && issuer !== client.issuer) return declined('the answer came from another authorization server');
     let secret: McpOAuthSecret;
     try {
       secret = await tokenRequest(transport(c.env), client, { grant_type: 'authorization_code', code, redirect_uri: client.redirectUri, code_verifier: saved.verifier });

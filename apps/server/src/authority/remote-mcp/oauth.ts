@@ -80,6 +80,16 @@ function scopeOf(value: unknown): string | undefined {
   return typeof scope === 'string' && scope.length <= 1024 && SCOPE.test(scope) ? scope : undefined;
 }
 
+export function coversResource(declared: string, mcpUrl: string): boolean {
+  const resource = new URL(declared);
+  const target = new URL(mcpUrl);
+  if (resource.origin !== target.origin || resource.search) return false;
+  const path = resource.pathname.replace(/\/+$/, '');
+  return !path || target.pathname === path || target.pathname === `${path}/` || target.pathname.startsWith(`${path}/`);
+}
+
+const sameIssuer = (a: string, b: string) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+
 function wellKnown(url: URL, name: string): string[] {
   const path = url.pathname.replace(/\/+$/, '');
   return path ? [`${url.origin}/.well-known/${name}${path}`, `${url.origin}/.well-known/${name}`] : [`${url.origin}/.well-known/${name}`];
@@ -112,12 +122,15 @@ export async function discoverOAuth(transport: RemoteMcpTransport, mcpUrl: strin
   const issuer = protectedResource ? httpsUrl((protectedResource.authorization_servers as unknown[])[0]) : mcp.origin;
   if (!issuer) throw new RemoteMcpOAuthError('Its protected resource metadata names no https:// authorization server');
   const declared = httpsUrl(protectedResource?.resource);
-  const resource = declared && mcpUrl.startsWith(declared.replace(/\/$/, '')) ? declared : mcpUrl;
+  const resource = declared && coversResource(declared, mcpUrl) ? declared : mcpUrl;
   const scope = scopeOf(challenge.scope) ?? scopeOf(protectedResource?.scopes_supported);
   let metadata: Json | null = null;
   for (const url of authorizationServerUrls(new URL(issuer))) {
     const found = await getJson(transport, url, deadline);
-    if (found && httpsUrl(found.authorization_endpoint) && httpsUrl(found.token_endpoint)) { metadata = found; break; }
+    if (found && typeof found.issuer === 'string' && sameIssuer(found.issuer, issuer) && httpsUrl(found.authorization_endpoint) && httpsUrl(found.token_endpoint)) {
+      metadata = found;
+      break;
+    }
   }
   if (!metadata) {
     if (protectedResource || probe.status !== 401) {
@@ -131,7 +144,7 @@ export async function discoverOAuth(transport: RemoteMcpTransport, mcpUrl: strin
   const registrationEndpoint = httpsUrl(metadata.registration_endpoint);
   const methods = Array.isArray(metadata.token_endpoint_auth_methods_supported) ? metadata.token_endpoint_auth_methods_supported.filter(item => typeof item === 'string') : undefined;
   return {
-    ...(typeof metadata.issuer === 'string' && metadata.issuer.length <= 2048 ? { issuer: metadata.issuer } : {}),
+    issuer: metadata.issuer as string,
     authorizationEndpoint: httpsUrl(metadata.authorization_endpoint)!, tokenEndpoint: httpsUrl(metadata.token_endpoint)!,
     ...(registrationEndpoint ? { registrationEndpoint } : {}), ...(methods ? { authMethods: methods } : {}), resource, ...(scope ? { scope } : {}),
   };

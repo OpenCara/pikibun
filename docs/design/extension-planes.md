@@ -325,10 +325,11 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   (`GET /api/workspaces/:id/mcp-servers/:serverId/oauth/start`, owners and admins, on the web only, as the callback needs
   the browser's session). Pikibun follows the MCP authorization spec as a client (`remote-mcp/oauth.ts`): an
   unauthenticated `initialize` for the `WWW-Authenticate` challenge (`resource_metadata`, `scope`), the protected resource
-  metadata (RFC 9728: the challenge's address, then `/.well-known/oauth-protected-resource` with and without the path),
-  the authorization server metadata (RFC 8414 and OpenID path insertion, then the issuer's own `/.well-known/...`, which
-  Clerk serves; a server without protected resource metadata falls back to its origin's `/authorize`, `/token` and
-  `/register`), dynamic client registration (RFC 7591, a public client with `token_endpoint_auth_method: none` where the
+  metadata (RFC 9728: the challenge's address, then `/.well-known/oauth-protected-resource` with and without the path;
+  its `resource` is used only where it has the server's origin and covers its path), the authorization server metadata
+  (RFC 8414 and OpenID path insertion, then the issuer's own `/.well-known/...`, which Clerk serves; a document whose
+  `issuer` isn't the one asked for is skipped; a server without protected resource metadata falls back to its origin's
+  `/authorize`, `/token` and `/register`, with no issuer, so a callback carrying `iss` is refused), dynamic client registration (RFC 7591, a public client with `token_endpoint_auth_method: none` where the
   server allows it), and an authorization code with PKCE S256 and `resource` (RFC 8707). Every request goes through the
   same public-only transport. The state is single-use, 10 minutes, bound to the member and to a `SameSite=Lax` cookie
   (`mcp_oauth_states`, with the registered client encrypted), and to the server's address: a callback for an address
