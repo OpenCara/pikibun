@@ -33,6 +33,7 @@ export interface HostCompaction extends CompactionTokens {
 
 export interface HostConfig {
   commandTimeoutSeconds: number;
+  commandTimeoutUnlimited: boolean;
   gpu: boolean;
   gitCredentials: boolean;
   repositoryCache: RepositoryCacheMode;
@@ -63,8 +64,14 @@ export const hostConfigLimits = Object.freeze({
   requiredExtensionsBytes: 32 * 1024,
 });
 
+export const unlimitedCommandSeconds = 2_000_000;
+
+export function commandSeconds(config: Pick<HostConfig, "commandTimeoutSeconds" | "commandTimeoutUnlimited">): number {
+  return config.commandTimeoutUnlimited ? unlimitedCommandSeconds : config.commandTimeoutSeconds;
+}
+
 export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
-  commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
+  commandTimeoutSeconds: 3600, commandTimeoutUnlimited: false, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
   builtinExtensions: Object.freeze([]) as unknown as BuiltinExtensionName[],
   requiredExtensions: Object.freeze([]) as unknown as RequiredExtension[],
   browser: defaultHostBrowserConfig as HostBrowserConfig,
@@ -159,6 +166,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < min || timeout > max) {
     throw new Error(`The command time limit is between ${min} and ${max} seconds`);
   }
+  if (typeof input.commandTimeoutUnlimited !== "boolean") throw new Error("Invalid command time limit setting");
   if (typeof input.gpu !== "boolean") throw new Error("Invalid GPU setting");
   if (typeof input.gitCredentials !== "boolean") throw new Error("Invalid Git credentials setting");
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
@@ -174,7 +182,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (typeof lifetime !== "number" || !Number.isSafeInteger(lifetime) || lifetime < lifetimes.min || lifetime > lifetimes.max) {
     throw new Error(`The service lifetime is between ${lifetimes.min} and ${lifetimes.max} seconds`);
   }
-  return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
+  return { commandTimeoutSeconds: timeout, commandTimeoutUnlimited: input.commandTimeoutUnlimited, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
     hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
     requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser),
     serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel), fakeIpTunnels: input.fakeIpTunnels,

@@ -421,7 +421,7 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   assert.equal(approval.operation.kind === "program" && approval.operation.tool, "browser");
   const command = approval.operation.kind === "program" ? approval.operation.command : "";
   assert.equal(session.sandbox.browser!.driver, SANDBOX_BROWSER_DRIVER);
-  assert.ok(command.startsWith(`'${SANDBOX_BROWSER_DRIVER}' '--chrome' '${session.sandbox.browser!.chromium}' '--time-limit' '30' '{"url":"http://127.0.0.1:${port}/"`), command);
+  assert.ok(command.startsWith(`'${SANDBOX_BROWSER_DRIVER}' '--chrome' '${session.sandbox.browser!.chromium}' '--time-limit' '3600' '{"url":"http://127.0.0.1:${port}/"`), command);
   await idle(session);
   let view = await session.view();
   assert.equal((await records(session)).length, 1, "the refused call left no card");

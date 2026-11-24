@@ -149,9 +149,18 @@ export function withoutExtensionLocks(extensions: readonly WorkspaceExtension[])
   return extensions.map(({ integrity: _integrity, ...rest }) => rest);
 }
 
+const WEB_ACCESS = "npm:pi-web-access@0.46.0";
+
+export const defaultExtensionIntegrity: Readonly<Record<string, string>> = Object.freeze({
+  [WEB_ACCESS]: "sha512-UfeJKU0TPmQU/3hmfAC5Ot/e5Ib0uHkg2+VHM7Ae4kVilLZf7ocGqHFzBzOkYuGLZ87LobzkrhwTAq8lO/N7cQ==",
+});
+
 export const starterWorkspaceExtensions: readonly string[] = Object.freeze([
+  WEB_ACCESS,
   "piki:context-files",
   "piki:git",
+  "piki:gh",
+  "piki:github",
   "piki:node",
   "piki:python",
   "piki:schedule",
@@ -162,11 +171,11 @@ export const starterWorkspaceExtensions: readonly string[] = Object.freeze([
 ]);
 
 export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([
-  "npm:pi-web-access@0.46.0",
+  WEB_ACCESS,
   "npm:pi-web-search@1.7.0",
   "npm:cc-safety-net@2.7.2",
   "piki:prompt-audit",
-  ...starterWorkspaceExtensions,
+  ...starterWorkspaceExtensions.filter(source => source !== WEB_ACCESS),
 ]);
 
 export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]): WorkspaceExtension[] {

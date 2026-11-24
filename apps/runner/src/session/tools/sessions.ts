@@ -20,6 +20,7 @@ const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sess
   + "host_environment true runs the new session directly on its host, without the sandbox, as a person can start one: only in a message a person sent (not one from another session, nor a scheduled run), "
   + "with placement hosts naming that one host (its id, as list returns it), and only where they may start sessions on that host and it accepts them (Settings → Hosts → the host → Configuration). "
   + "Use it only when the person asked for a session on the host itself. "
+  + "Left out, a session started from one that itself runs on its host stays on that host, without the sandbox, where it lands on the same host in a message its owner sent; host_environment false keeps it in the sandbox. "
   + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
   + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
   + "chains of messages stop after 3 hops and never loop back to a session they came from. "

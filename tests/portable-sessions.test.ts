@@ -580,6 +580,52 @@ test('a server records its host\'s identity, says which reported sessions it arc
   await json(await f.alice.request('POST', `/api/sessions/${sessionId}/unarchive`), 409);
 });
 
+test('an identity report the server already applied is neither verified nor written again, until it changes or an hour passes', async t => {
+  const f = await server(t, () => Response.json({ kept: true }));
+  const key = await keyPair();
+  f.sqlite.prepare("INSERT INTO agents (id, author_id, created_at) VALUES ('agent', ?, '2026-01-01')").run(f.alice.user.id);
+  f.sqlite.prepare(`INSERT INTO agent_versions (id, agent_id, author_id, workspace_id, version, name, description, instructions, tools_json, model_id, created_at)
+    VALUES ('version', 'agent', ?, ?, 1, 'Agent', '', '', '[]', 'model', '2026-01-01')`).run(f.alice.user.id, f.workspaceId);
+  const sessionId = randomUUID();
+  f.sqlite.prepare(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id,
+    connector_owner_id, repositories_json, visibility, repository_mode, host_environment, portable_key)
+    VALUES (?, ?, ?, 'version', 'Portable', 1, 'ready', '2026-01-01', 'host', ?, '[]', 'workspace', 'clone', 1, ?)`)
+    .run(sessionId, f.workspaceId, f.alice.user.id, f.alice.user.id, key.publicKey);
+  const report = await identityReport(key, [{ id: sessionId, title: 'Portable', attached: true, archived: null }]);
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', report)), { archived: [] });
+
+  f.sqlite.exec(`CREATE TEMP TABLE written (what TEXT);
+    CREATE TEMP TRIGGER delegation_updated AFTER UPDATE ON identity_delegations BEGIN INSERT INTO written VALUES ('delegation'); END;
+    CREATE TEMP TRIGGER session_keyed AFTER UPDATE OF portable_key ON sessions BEGIN INSERT INTO written VALUES ('session'); END;`);
+  const written = () => {
+    const rows = (f.sqlite.prepare('SELECT what FROM written ORDER BY what').all() as { what: string }[]).map(row => row.what);
+    f.sqlite.exec('DELETE FROM written');
+    return rows;
+  };
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', report)), { archived: [] });
+  assert.deepEqual(written(), [], 'the same report writes nothing');
+  await json(await f.alice.request('POST', `/api/sessions/${sessionId}/archive`));
+  assert.deepEqual(await json(await f.host('/api/connectors/self/identity', report)), { archived: [sessionId] }, 'its answer is still worked out each time');
+  assert.deepEqual(written(), []);
+
+  const stranger = await keyPair();
+  const mixed = { ...report, sessions: [...report.sessions, { ...report.sessions[0]!, id: 'other', mark: await signStatement(stranger.privateKey,
+    { kind: 'session', key: stranger.publicKey, session: 'other', issuedAt }) }] };
+  await json(await f.host('/api/connectors/self/identity', mixed));
+  assert.deepEqual(written(), ['delegation', 'session'], 'a changed report is verified and applied');
+  await json(await f.host('/api/connectors/self/identity', mixed));
+  assert.deepEqual(written(), ['delegation', 'session'], 'a report with a session the server didn\'t take is never held');
+
+  await json(await f.host('/api/connectors/self/identity', report));
+  assert.deepEqual(written(), ['delegation', 'session']);
+  await json(await f.host('/api/connectors/self/identity', report));
+  assert.deepEqual(written(), []);
+  f.env.TEST_AUTH_EXPIRES_AT = new Date(Date.now() + 3 * 3600000).toISOString();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 61 * 60_000 });
+  await json(await f.host('/api/connectors/self/identity', report));
+  assert.deepEqual(written(), ['delegation', 'session'], 'a held report is applied again after an hour');
+});
+
 test('new private sessions on the host are no longer made portable, and a rotated identity moves the sessions made portable before to the new key', async t => {
   const f = await server(t, () => Response.json({ kept: true }));
   const key = await keyPair();

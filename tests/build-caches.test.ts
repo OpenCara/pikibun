@@ -110,8 +110,8 @@ test('a build cache is a name and a variable the sandbox doesn\'t set, and a hos
 test('a host keeps build caches only once its owner turns them on, within a size limit', () => {
   assert.equal(defaultHostConfig.buildCaches, 'off');
   assert.equal(defaultHostConfig.buildCacheGiB, 20);
-  assert.deepEqual(parseHostConfigChange({ buildCaches: 'workspace', buildCacheGiB: 100 }), { buildCaches: 'workspace', buildCacheGiB: 100 });
-  for (const change of [{ buildCaches: 'on' }, { buildCaches: true }, { buildCacheGiB: 0 }, { buildCacheGiB: 10_001 }, { buildCacheGiB: 1.5 }, { buildCacheGiB: '20' }]) {
+  assert.deepEqual(parseHostConfigChange({ buildCaches: 'workspace', buildCacheGiB: 100, commandTimeoutUnlimited: false }), { buildCaches: 'workspace', buildCacheGiB: 100, commandTimeoutUnlimited: false });
+  for (const change of [{ buildCaches: 'on' }, { buildCaches: true }, { buildCacheGiB: 0, commandTimeoutUnlimited: false }, { buildCacheGiB: 10_001 }, { buildCacheGiB: 1.5 }, { buildCacheGiB: '20' }]) {
     assert.throws(() => parseHostConfigChange(change), JSON.stringify(change));
   }
   assert.throws(() => parseHostConfig({ ...defaultHostConfig, buildCaches: undefined }));

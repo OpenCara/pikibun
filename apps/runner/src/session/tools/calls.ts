@@ -5,7 +5,7 @@ import type { HostConfig } from "../../../../../packages/shared/src/host-config.
 import type { AnyToolName, OperationRecord } from "../../../../../packages/shared/src/types.js";
 import type { StoredOperation } from "../../operation-record.js";
 import type { OutputFiles } from "../../extensions/builtin.js";
-import { callLimits, commandLimits, type CommandLimits } from "../../host-config.js";
+import { callLimits, configuredLimits, type CommandLimits } from "../../host-config.js";
 import { conversationImageLimits, prepareImage } from "../../images.js";
 import { RunnerError } from "../../protocol.js";
 import type { SandboxAuthorize } from "../../sandbox.js";
@@ -102,7 +102,7 @@ export class ToolCalls {
 
   async commandOptions(timeoutSeconds?: number): Promise<{ limits: CommandLimits; gpu: boolean }> {
     const config = await this.options.hostConfig();
-    return { limits: callLimits(commandLimits(config.commandTimeoutSeconds), timeoutSeconds), gpu: config.gpu };
+    return { limits: callLimits(configuredLimits(config), timeoutSeconds), gpu: config.gpu };
   }
 
   async check(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean; host?: boolean } = {}): Promise<{ unbounded: boolean }> {

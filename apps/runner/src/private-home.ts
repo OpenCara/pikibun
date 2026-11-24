@@ -2,7 +2,7 @@ import type { ConnectorCapabilities } from "../../../packages/shared/src/connect
 import type { PrivateForwardRequest, PrivateForwardResponse } from "../../../packages/shared/src/private-sessions.js";
 import type { ConnectorOptions } from "./connector.js";
 
-export type PrivateHomeHost = Pick<ConnectorOptions, "localModels" | "unsandboxed" | "resources" | "sandboxBackend" | "allowFaux" | "allowTestShell" | "identityDir">
+export type PrivateHomeHost = Pick<ConnectorOptions, "localModels" | "unsandboxed" | "sessionsLeaveSandbox" | "resources" | "sandboxBackend" | "allowFaux" | "allowTestShell" | "identityDir">
   & { capabilities?: ConnectorCapabilities };
 
 export interface PrivateHome {

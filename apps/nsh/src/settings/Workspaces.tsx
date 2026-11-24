@@ -8,12 +8,13 @@ import {
 import type { WorkspaceSourceList } from "../../../../packages/shared/src/sources";
 import type { WorkspaceConnection } from "../../../../packages/shared/src/workspace-connections";
 import type { WorkspaceInviteLink, WorkspaceJoinRequest } from "../../../../packages/shared/src/invites";
+import { defaultWorkspacePreset, workspacePreset, workspacePresets, type WorkspacePreset } from "../../../../packages/shared/src/workspace-presets";
 import { canCreateSessions, memberPerson, segment, userIdFromInput, username, usernameWithId, type Workspace, type WorkspaceMember } from "../shared";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { relativeTime } from "../lib/format";
 import { openServerLink, opensServerPages } from "../lib/links";
-import { forgetWorkspaceTab, takeWorkspaceTab, workspaceTabs, type WorkspaceTab } from "../lib/workspace-tabs";
+import { forgetWorkspaceTab, shownWorkspaceTab, takeWorkspaceTab, workspaceTabs, type WorkspaceTab } from "../lib/workspace-tabs";
 import { createAction, createResource } from "../lib/resource";
 import { createConnections } from "../hosts";
 import { Icon } from "../icons";
@@ -153,6 +154,10 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
     const wanted = takeWorkspaceTab(untracked(workspace).id);
     if (wanted) tab.set(wanted);
   });
+  effect(() => {
+    const shown = tab();
+    untracked(() => shownWorkspaceTab.set({ workspaceId: workspace().id, tab: shown }));
+  });
   const repositories = createResource<WorkspaceRepositoryList>(() => `/api/workspaces/${segment(workspace().id)}/repositories`);
   const sources = createResource<WorkspaceSourceList>(() => `/api/workspaces/${segment(workspace().id)}/sources`);
   const connections = createWorkspaceConnections(() => workspace().id);
@@ -161,6 +166,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   const overview = () => (
     <>
       <General workspace={workspace()} admin={admin()} role={role()} go={props.go} />
+      <If when={admin()}><Presets workspace={workspace()} /></If>
       <If when={canCreateSessions(role())}><Setup workspace={workspace()} admin={admin()} sourceCount={sourceCount()} go={props.go} addSource={() => tab.set("sources")} /></If>
       <Members workspace={workspace()} admin={admin()} owner={role() === "owner"} />
       <If when={admin()}>
@@ -294,6 +300,33 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
         </Field>
         <Feedback error={action.error()} />
       </FormSheet>
+    </Section>
+  );
+}
+
+function Presets(props: { workspace: Workspace }) {
+  const action = createAction();
+  async function apply(id: WorkspacePreset) {
+    const preset = workspacePreset(id);
+    if (action.busy()) return;
+    if (!await confirm({ title: `Apply ${preset.title} to ${props.workspace.name}?`, confirmLabel: "Apply preset", destructive: id !== defaultWorkspacePreset,
+      message: `${preset.summary}.\n\nThis sets the workspace's network access and your own GitHub reach, turns on the preset's extensions${id === "open" ? "" : id === "balanced" ? " and turns off third-party packages" : " and turns off every other extension"}. Other members' GitHub reach, and every other setting, stay as they are. Sessions pick it up within a minute.` })) return;
+    void action.run(async () => {
+      await session().api(`/api/workspaces/${segment(props.workspace.id)}/preset`, { method: "POST", body: { preset: id } });
+    }, `${preset.title} applied. See Agents for the network access, GitHub reach and extensions it set.`);
+  }
+  return (
+    <Section title="Presets" testID="workspace-presets" info={<View style={{ gap: 8 }}>
+      <Note>A preset sets the settings that decide what agents here can use and reach, in one step: network access, your own GitHub reach and which of the default extensions are on. A new workspace starts as Open unless another is chosen when it is created.</Note>
+      <Note>Applying one changes those settings now and nothing else: change any of them afterwards under Agents. Each member's GitHub reach is their own, so a preset sets only yours.</Note>
+    </View>}>
+      <Each of={workspacePresets.map(id => workspacePreset(id))} key={preset => preset.id}>
+        {preset => (
+          <Row title={`${preset().title}${preset().id === defaultWorkspacePreset ? " (recommended)" : ""}`} hint={preset().summary}
+            trailing={<Button small variant="outline" label="Apply" testID={`workspace-preset-${preset().id}`} disabled={action.busy()} onPress={() => void apply(preset().id)} />} />
+        )}
+      </Each>
+      <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
     </Section>
   );
 }

@@ -160,6 +160,7 @@ export type RunnerConfig = {
   tunnels?: { open(socket: string, signal?: AbortSignal, access?: TunnelAccess): Promise<QuickTunnel>; status(): HostTunnelStatus | undefined };
   reportTunnel?: (report: SessionTunnelReport) => Promise<void>;
   unsandboxed?: boolean;
+  sessionsLeaveSandbox?: boolean;
   pikiHostSignIn?: boolean;
   sandboxBackend?: SandboxBackendConfig;
   openStorage?: (path: string) => Promise<Storage>;
@@ -179,6 +180,7 @@ export type RunnerConfig = {
     workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>;
     lastKnown?(workspaceId: string): WorkspaceExtensionsAnswer | undefined;
     modelRegistry?: ModelRegistry;
+    modelCallsRefused?: true;
   };
 };
 
@@ -405,6 +407,10 @@ export class RunnerSession {
       extensionEntries: {
         read: async key => (await this.harness.snapshot(ExtensionEntries, key, context))?.entries,
         write: async (key, entries) => { await this.root.commit(async tx => { (await tx.doc(ExtensionEntries, key, null)).entries = entries; }, context); },
+      },
+      recordModelUsage: async (model, usage) => {
+        const shared = this.#shared;
+        await shared.commit(async tx => { addTitleUsage((await tx.doc(UsageDoc, shared.id)).models, model, usage); }, context);
       },
     });
     this.#repositories = new SessionRepositories({

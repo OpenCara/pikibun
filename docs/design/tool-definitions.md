@@ -62,7 +62,8 @@ So the connector is now an engine for both kinds, and the control plane describe
    (`bundledToolDefinitions` of its release). A connector asks at most once a minute (`ToolDefinitionsSource`), keeps the
    last answer while it can't ask, and otherwise uses the ones it bundles: a control plane from before this change
    answers 404, and sessions get the tools they always had. A list keeps what it can parse, so a newer kind costs only
-   its own tool.
+   its own tool; the connector logs each definition it passes over, with the parser's reason, once until that changes,
+   so the host's owner can see why a tool is missing.
 
 7. **When a session gets them.** A session builds its defined tools when it opens, into the same extension as its own
    tools, so a call the durable harness resumes finds its tool. Each write message asks again: a tool by a new name joins

@@ -286,6 +286,10 @@ export async function savedPairing(dataDir: string, allowInsecureLoopback = fals
   return (await readConnectorState(dataDir, undefined, allowInsecureLoopback))?.controlPlaneUrl;
 }
 
+export function appUnsandboxedWarning(): string {
+  return `${unsandboxedWarning().trimEnd()}\nSessions on this machine that last ran in a sandbox are opened too, and run this way from then on.\n\n`;
+}
+
 export function unsandboxedWarning(): string {
   return `
 WARNING: running WITHOUT a sandbox (--unsafe-no-sandbox).
