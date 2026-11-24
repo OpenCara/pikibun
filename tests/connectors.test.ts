@@ -2389,10 +2389,14 @@ test('a fork from a side ask starts a child of the session, titled for the side 
   assert.deepEqual([shared.title, shared.parentSessionId], [`Fork: ${s.session.title}`, undefined], 'a fork of the shared conversation stays on its own');
 });
 
-test('a visibility an older app sends is ignored, and removing a member takes away every session of the workspace with their grants', async t => {
+test('a shared workspace refuses a private session, and removing a member takes away every session of the workspace with their grants', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
+  const count = () => f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
+  const before = count();
+  await denied(await s.owner.request('POST', '/api/sessions', { ...s.input, visibility: 'private' }), 400, 'private_session_unavailable');
+  assert.equal(count(), before, 'nothing is made, rather than a session every member sees');
   const { session: other } = await json<{ session: SessionRecord }>(await s.owner.request('POST', '/api/sessions', {
-    ...s.input, visibility: 'private',
+    ...s.input, visibility: 'workspace',
   }), 201);
   assert.equal(other.visibility, 'workspace');
   assert.equal(f.sqlite.prepare('SELECT visibility FROM sessions WHERE id = ?').get(other.id)!.visibility, 'workspace');
