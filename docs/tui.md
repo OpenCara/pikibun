@@ -46,6 +46,8 @@ Copying goes to your computer's clipboard through the terminal (OSC 52), over SS
 
 - **Web pages.** An HTML or SVG artifact shows its source, and a session's app (its tunnel) opens in your browser.
 - **Pictures.** Images keep their place on the page, blank.
+- **Attachments.** A terminal has no file picker, so the chat box has no attach button: attach files from the web or
+  the desktop app.
 - **Updates.** npm updates it: `npm install -g @pikibun/tui@latest`. Settings → Profile → This app says so, where the
   desktop app offers its own updates.
 

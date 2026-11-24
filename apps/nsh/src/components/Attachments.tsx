@@ -3,6 +3,7 @@ import { Button as BaseButton } from "nsh/base";
 import { formatBytes } from "../../../../packages/shared/src/file-uploads";
 import type { Attachments } from "../lib/attachments";
 import { pageAvailable } from "../lib/page";
+import { inTerminal } from "../lib/terminal";
 import { Icon } from "../icons";
 import { palette, radius, text } from "../theme";
 import { DropdownMenu, IconButton } from "../ui";
@@ -54,6 +55,7 @@ export function AttachmentStrip(props: { attachments: Attachments; disabled?: bo
 }
 
 export function AttachButton(props: { attachments: Attachments; disabled?: boolean }) {
+  if (inTerminal) return <></>;
   const files = () => props.attachments.takesFiles();
   const choose = () => files() && !pageAvailable() && !platform.desktop;
   return (

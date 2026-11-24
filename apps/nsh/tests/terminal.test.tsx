@@ -59,6 +59,7 @@ describe("Pikibun in a terminal (nsh test tests/terminal.test.tsx --target tui),
     await app.waitFor("id:composer-input");
     await app.waitFor("text:Why does the login test fail on CI?");
     const session = await cells(app, "session");
+    expect(app.shows("id:composer-attach")).toBe(session === null);
     if (session) {
       expect([session.width, session.height]).toEqual([120, 40]);
       expect(screen(session).includes("login test")).toBe(true);

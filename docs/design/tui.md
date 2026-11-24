@@ -67,6 +67,8 @@ storage file. It signs in with a code, as the desktop and phone apps do, and nam
   (`app-update-npm`).
 - **Web views.** Native Shell draws no `WebView` in a terminal, and reports no error for it either: artifacts show their
   source, as where web views are unavailable, and the session's app (its tunnel) offers to open it in the browser.
+- **Attachments.** Native Shell's terminal backend has no file picker, so the chat box has no attach button there
+  (`AttachButton`); a pick would only fail.
 - **Profile** names the device form `terminal`.
 
 Everything else is the desktop's. Native Shell lays a design made in points out in whole Cells (8 × 16 points each),
