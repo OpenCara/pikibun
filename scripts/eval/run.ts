@@ -53,6 +53,14 @@ export function toolCalls(view: SessionView): ToolCall[] {
   return calls;
 }
 
+export function callsOf(calls: readonly ToolCall[], tools: readonly string[], pattern?: RegExp): number[] {
+  return calls.flatMap((call, index) => {
+    if (tools.includes(call.name)) return !pattern || pattern.test(JSON.stringify(call.args)) ? [index] : [];
+    const code = call.name === "codemode" && typeof call.args.code === "string" ? call.args.code : "";
+    return tools.some(tool => new RegExp(`\\btools\\.${tool}\\b`).test(code)) && (!pattern || pattern.test(code)) ? [index] : [];
+  });
+}
+
 export function finalReply(view: SessionView): string {
   const last = view.entries.findLast(entry => entry.role === "assistant" && !entry.toolCalls?.length && entry.text.trim());
   return last?.text ?? "";

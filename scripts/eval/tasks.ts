@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Fixture, type ForgeCall, hostGit, type Remote, tryGit } from "./fixtures.js";
-import type { EvalTask, TaskContext, ToolCall } from "./run.js";
+import { callsOf, type EvalTask, type TaskContext } from "./run.js";
 import type { EvalExtension } from "./stack.js";
 
 const run = promisify(execFile);
@@ -183,7 +183,7 @@ const step = (call: ForgeCall, group: string, command: string) => {
   return words[0] === group && words[1] === command;
 };
 const draft = (call: ForgeCall) => call.args.some(word => word === "--draft" || word === "-d" || word === "--draft=true");
-const changedFiles = (calls: readonly ToolCall[]) => calls.filter(call => ["write", "edit", "move_file", "copy_file", "delete_file"].includes(call.name));
+const fileChanging = ["write", "edit", "move_file", "copy_file", "delete_file"];
 const mentions = (text: string, pattern: RegExp) => pattern.test(text);
 
 async function pullRequestFlow(context: TaskContext, remote: Remote, merged: boolean): Promise<string[]> {
@@ -210,6 +210,11 @@ async function pullRequestFlow(context: TaskContext, remote: Remote, merged: boo
   }
   if (!context.reply.includes(`/${remote.slug}/pull/${pull.number}`)) problems.push(`the reply does not give ${remote.name}'s pull request link`);
   return problems;
+}
+
+async function readmeCorrected(remote: Remote, branch: string): Promise<boolean> {
+  const text = await tryGit(remote.path, ["show", `refs/heads/${branch}:README.md`]) ?? "";
+  return text.includes("3000") && !text.includes("8080");
 }
 
 const readmeMessage = "Clone {remote:app}. Its README says the server listens on port 8080 by default, but the default in the code is 3000: correct the README.";
@@ -244,7 +249,7 @@ export const tasks: readonly EvalTask[] = [
     message: "Run the tests of app and tell me how many fail and which ones. Don't fix anything.",
     async check(context) {
       const problems = await untouched(context, context.remotes.app!);
-      if (!context.calls.some(call => call.name === "node" && !call.error)) problems.push("the tests were not run with the node tool");
+      if (!callsOf(context.calls, ["node"]).length) problems.push("the tests were not run with the node tool");
       if (!mentions(context.reply, /\b(2|two)\b/i)) problems.push("the reply does not say that two tests fail");
       for (const name of ["drops punctuation at the end", "trims surrounding spaces"]) {
         if (!context.reply.toLowerCase().includes(name)) problems.push(`the reply does not name the failing test "${name}"`);
@@ -262,7 +267,7 @@ export const tasks: readonly EvalTask[] = [
     message: "Which port does the server in app listen on by default, and where is that decided?",
     async check(context) {
       const problems = await untouched(context, context.remotes.app!);
-      if (changedFiles(context.calls).length) problems.push("a tool that changes files was called");
+      if (callsOf(context.calls, fileChanging).length) problems.push("a tool that changes files was called");
       if (context.forge.some(call => step(call, "pr", "create"))) problems.push("a pull request was opened for a question");
       if (!context.reply.includes("3000")) problems.push("the reply does not say 3000");
       if (!mentions(context.reply, /config\.js/)) problems.push("the reply does not name src/config.js");
@@ -280,7 +285,7 @@ export const tasks: readonly EvalTask[] = [
     message: "Fix the typo \"recieve\" in app/README.md and commit it.",
     async check(context) {
       const problems = await untouched(context, context.remotes.app!);
-      const tried = context.calls.filter(call => call.error && /Read-only message/.test(call.result));
+      const tried = context.calls.filter(call => /which a Read-only message doesn't do/.test(call.result));
       if (tried.length) problems.push(`${tried.length} acting tool ${tried.length === 1 ? "call was" : "calls were"} tried and refused in a Read-only message (${[...new Set(tried.map(call => call.name))].join(", ")})`);
       if (!mentions(context.reply, /read[- ]only/i)) problems.push("the reply does not say the message is read-only");
       return problems;
@@ -298,10 +303,10 @@ export const tasks: readonly EvalTask[] = [
       const clone = await findClone(context, remote);
       if (!clone) return ["no clone of app in the worktree"];
       const problems: string[] = [];
-      const read = context.calls.findIndex(call => call.name === "read" && String(call.args.path ?? "").includes("skills/changelog/SKILL.md") && !call.error);
-      const wrote = context.calls.findIndex(call => ["write", "edit"].includes(call.name) && String(call.args.path ?? "").includes("CHANGELOG.md"));
-      if (read < 0) problems.push("the changelog skill was not read");
-      else if (wrote >= 0 && wrote < read) problems.push("the changelog was edited before the skill was read");
+      const read = callsOf(context.calls, ["read"], /skills\/changelog\/SKILL\.md/).find(index => !context.calls[index]!.error);
+      const wrote = callsOf(context.calls, fileChanging, /CHANGELOG\.md/)[0];
+      if (read === undefined) problems.push("the changelog skill was not read");
+      else if (wrote !== undefined && wrote < read) problems.push("the changelog was edited before the skill was read");
       if (await hostGit(clone, ["rev-parse", "HEAD"]) === remote.base) problems.push("nothing was committed");
       const text = await tryGit(clone, ["show", "HEAD:CHANGELOG.md"]) ?? "";
       const first = text.slice(text.indexOf("## Unreleased")).split("\n").slice(1).find(line => line.trim());
@@ -324,10 +329,10 @@ export const tasks: readonly EvalTask[] = [
       const problems: string[] = [];
       const watched = context.forge.some(call => (step(call, "pr", "checks") && call.args.includes("--watch")) || step(call, "run", "watch"));
       if (!watched) problems.push("the checks were not waited for with gh pr checks --watch or gh run watch");
-      if (context.calls.some(call => call.name === "github_read" && call.args.wait !== undefined)) problems.push("github_read was used to wait");
+      if (callsOf(context.calls, ["github_read"], /\bwait\b/).length) problems.push("github_read was used to wait");
       const polls = context.forge.filter(call => (step(call, "pr", "checks") && !call.args.includes("--watch")) || step(call, "run", "view") || step(call, "run", "list")).length;
       if (polls > 3) problems.push(`the checks were polled ${polls} times`);
-      if (context.calls.some(call => ["node", "python"].includes(call.name) && /sleep|setTimeout/.test(JSON.stringify(call.args)))) problems.push("the session slept to wait");
+      if (callsOf(context.calls, ["node", "python"], /sleep|setTimeout/).length) problems.push("the session slept to wait");
       if (!mentions(context.reply, /pass|succe|green/i)) problems.push("the reply does not say the checks passed");
       return problems;
     },
@@ -342,8 +347,7 @@ export const tasks: readonly EvalTask[] = [
     async check(context) {
       const remote = context.remotes.app!;
       const problems = await pullRequestFlow(context, remote, true);
-      const text = await tryGit(remote.path, ["show", "refs/heads/main:README.md"]) ?? "";
-      if (!text.includes("3000") || text.includes("8080")) problems.push("main's README still gives the wrong port");
+      if (!await readmeCorrected(remote, "main")) problems.push("main's README still gives the wrong port");
       return problems;
     },
   },
@@ -359,6 +363,8 @@ export const tasks: readonly EvalTask[] = [
     async check(context) {
       const remote = context.remotes.app!;
       const problems = await pullRequestFlow(context, remote, false);
+      const [pull] = await context.pulls("app");
+      if (pull && !await readmeCorrected(remote, pull.head)) problems.push("the pull request's branch still gives the wrong port in the README");
       if (await hostGit(remote.path, ["rev-parse", "refs/heads/main"]) !== remote.base) problems.push("main moved on the remote");
       if (!mentions(context.reply, /maintainer-kim|request(ed|s|ing)? changes|changes (were |are )?requested|review/i)) problems.push("the reply does not say why the pull request is left open");
       return problems;

@@ -24,7 +24,8 @@ const names = Object.keys(current.repositories);
 
 const valued = new Set(["-R", "--repo", "-t", "--title", "-b", "--body", "-F", "--body-file", "-H", "--head", "-B", "--base", "--json", "-q", "--jq", "-i", "--interval",
   "--match-head-commit", "-s", "--state", "-L", "--limit", "--subject", "-a", "--assignee", "-l", "--label", "-r", "--reviewer", "--template", "--branch", "--commit",
-  "--workflow", "-w", "--event", "-u", "--user", "--job", "-S", "--search", "-A", "--author", "-m", "--milestone", "--required", "-X", "--method", "-f", "-H", "--hostname"]);
+  "--workflow", "-w", "--event", "-u", "--user", "--job", "-S", "--search", "-A", "--author", "-m", "--milestone", "-X", "--method", "--hostname"]);
+if (args.find(word => !word.startsWith("-")) !== "run") valued.delete("-w");
 if (args.includes("merge")) for (const short of ["-s", "-r", "-m"]) valued.delete(short);
 const options = new Map();
 const words = [];

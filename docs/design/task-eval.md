@@ -62,7 +62,11 @@ table; given an earlier result, the table says which tasks changed status.
    counts when they differ), and can't be told when either side has only errors. `--fail-on-regression` makes that an
    exit status. With three runs a single flip between `pass` and `flaky` is weak evidence: run it again, or with more
    runs, before concluding.
-7. **Checks are strict where the instructions are plain.** The Read-only task fails on any call that was refused for
+7. **Calls from code mode count.** A session's view lists the calls the model made, not the calls a code mode script
+   made for it. So a check that asks whether a tool was used (`callsOf`, `scripts/eval/run.ts`) also takes a `codemode`
+   call whose script names `tools.<tool>` and matches what the check looks for, and the Read-only check reads the
+   refusal in a script's result. What a script did to a repository or the forge shows in their state either way.
+8. **Checks are strict where the instructions are plain.** The Read-only task fails on any call that was refused for
    being Read-only, since the instructions say such calls are refused; the checks task fails on a wait with
    `github_read`, a sleep, or more than three polls.
 

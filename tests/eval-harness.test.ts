@@ -230,6 +230,37 @@ test("merging over a request for changes fails its task", { skip }, async () => 
   ], `Merged ${link("app")} after maintainer-kim's review.`)(turn), /app's pull request was merged over CHANGES_REQUESTED; main moved on the remote/);
 });
 
+test("a pull request that follows the flow without making the change asked for fails its task", { skip }, async () => {
+  await failsWith("pr-flow-requested-changes", turn => steps([
+    { tool: "git", args: { args: ["clone", remoteOf(turn.prompt, "app")] } },
+    { tool: "edit", args: { path: "app/README.md", edits: [{ oldText: "recieve", newText: "receive" }] } },
+    ...draftFlow("app", "readme-port", "Correct the README"),
+  ], `I left ${link("app")} open: maintainer-kim requested changes I can't make.`)(turn), /^the pull request's branch still gives the wrong port in the README$/);
+});
+
+test("calls made from a code mode script count as the session's own", { skip }, async () => {
+  const coded = (code: string, last: string): Script => steps([{ tool: "codemode", args: { code } }], last);
+  script = coded("return await tools.node({ program: 'npm', args: ['test'], directory: 'app' });", "2 fail: drops punctuation at the end, trims surrounding spaces.");
+  const reported = await runTask(tasks.find(task => task.id === "run-tests-report")!, 1, options());
+  assert.equal(reported.outcome, "pass", reported.detail);
+  await failsWith("read-only-refusal", coded("return await tools.write({ path: 'app/README.md', content: 'receive' });", "This message is Read-only."),
+    /1 acting tool call was tried and refused in a Read-only message \(codemode\)/);
+  await failsWith("gh-waits-for-checks", coded("return await tools.github_read({ repository: 'eval/app', issue: 7, wait: 'checks' });", "They passed."), /github_read was used to wait/);
+  await failsWith("question-changes-nothing", coded("await tools.write({ path: 'notes.txt', content: 'x' }); return 'ok';", "3000, in src/config.js."), /^a tool that changes files was called$/);
+});
+
+test("the forge stand-in waits for required checks too, and refuses a merge without a method", { skip }, async () => {
+  const waits = tasks.find(task => task.id === "gh-waits-for-checks")!;
+  script = steps([{ tool: "gh", args: { args: ["pr", "checks", "7", "--required", "--watch"], directory: "app" } }], "Both checks passed.");
+  const done = await runTask({ ...waits, forge: { app: { ...waits.forge!.app!, watchMs: 200 } }, check: async context => [...await waits.check(context),
+    ...(/All checks were successful/.test(context.calls[0]!.result) ? [] : [`the watch answered ${context.calls[0]!.result}`])] }, 1, options());
+  assert.equal(done.outcome, "pass", done.detail);
+  await failsWith("pr-flow-to-merge", turn => steps([
+    { tool: "git", args: { args: ["clone", remoteOf(turn.prompt, "app")] } }, fixPort, ...draftFlow("app", "readme-port", "Correct the README's default port"),
+    { tool: "gh", args: { args: ["pr", "merge", "1"], directory: "app" } },
+  ], `Merged: ${link("app")}`)(turn), /app's pull request was not merged \(OPEN\)/);
+});
+
 test("a pull request that was never a draft, or whose link is not given, fails the flow", { skip }, async () => {
   await failsWith("pr-flow-to-merge", turn => steps([
     { tool: "git", args: { args: ["clone", remoteOf(turn.prompt, "app")] } }, fixPort,
