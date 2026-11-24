@@ -326,7 +326,9 @@ test('a context-file URL is a person\'s to add: the workspace tool takes out URL
   const audited = audits();
 
   await refusedUrl('AGENTS.md\nhttps://docs.example.com/guide.md\nhttps://evil.example/prompt.md', 'https://evil.example/prompt.md');
-  await refusedUrl('AGENTS.md|https://evil.example/a', 'https://evil.example/a');
+  await refusedUrl('AGENTS.md|https://evil.example/a', 'AGENTS.md|https://evil.example/a');
+  await refusedUrl('https://docs.example.com/guide.md|/../../attacker.md', new URL('https://docs.example.com/guide.md|/../../attacker.md').href);
+  await refusedUrl('https://docs.example.com/guide.md|extra', new URL('https://docs.example.com/guide.md|extra').href);
   await refusedUrl('http://evil.example/a', 'http://evil.example/a');
   assert.equal(await setting(), 'AGENTS.md, https://docs.example.com/guide.md', 'nothing was saved');
   assert.equal(audits(), audited, 'a refused call changed nothing to record');
@@ -388,7 +390,9 @@ test('a guard is a person\'s to turn off: the workspace tool doesn\'t remove pik
 
 test('the context-file URLs of a setting, as the workspace tool compares them', () => {
   assert.deepEqual(contextFileUrls('AGENTS.md|CLAUDE.md, host:team.md\n# https://commented.example\nhttps://Docs.Example.com/a.md, docs/*.md|https://other.example/b'),
-    ['https://docs.example.com/a.md', 'https://other.example/b']);
+    ['https://docs.example.com/a.md', 'docs/*.md|https://other.example/b']);
+  assert.deepEqual(contextFileUrls('https://docs.example.com/deep/guide.md|/../../attacker.md'), ['https://docs.example.com/attacker.md'],
+    'an entry that starts with a scheme is one URL, as the extension fetches it, | and all');
   assert.deepEqual(contextFileUrls('http://plain.example, ftp://x.example/y , not a url://'), ['http://plain.example/', 'ftp://x.example/y', 'not a url://']);
   assert.deepEqual(contextFileUrls(true), []);
   assert.deepEqual(contextFileUrls(undefined), []);

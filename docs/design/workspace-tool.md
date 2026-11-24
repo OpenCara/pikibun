@@ -112,9 +112,12 @@ button is. The `workspace` tool lets the agent make the change, within the same 
     - **A new remote context page** (`403 context_url_not_listed`, `requireListedContextUrls`). `piki:context-files`
       fetches each `https://` entry of its `context-files` setting into the system prompt of every session, so a URL
       the agent names would put text of an attacker's choosing in front of every model there. Each entry of the new
-      value that holds `://` (split on commas, new lines and `|`, comments skipped, compared as `new URL().href`, so
-      `https://Docs.Example.com/a` is the listed `https://docs.example.com/a`; `contextFileUrls` in
-      `packages/shared/src/workspace-management.ts`) must already be in the current value. Any scheme counts, not
+      value that holds `://` must already be in the current value (`contextFileUrls` in
+      `packages/shared/src/workspace-management.ts`). Entries are read as the extension's `parseContextFiles` reads
+      them: split on commas and new lines only, comments skipped. An entry that starts with a scheme is one URL, `|`
+      and all, compared as the `new URL().href` the extension fetches, so `https://Docs.Example.com/a` is the listed
+      `https://docs.example.com/a`, while `<listed URL>|/../../other.md` is the other page it resolves to. Any other
+      entry holding `://` (a `|` alternative such as `AGENTS.md|https://...`) is compared as written. Any scheme counts, not
       only `https://`, so a URL the extension skips today can't be planted for a later version that reads it. Adding
       `piki:context-files` anew, or after `remove_extension`, compares against nothing, so it takes no URL.
     - **A guard turned off, removed or reconfigured** (`403 guard_extension_kept`, `requireGuardKept`). The guards

@@ -47,10 +47,10 @@ export const workspaceGuardExtensions: readonly string[] = Object.freeze(["piki:
 export function contextFileUrls(setting: unknown): string[] {
   if (typeof setting !== "string") return [];
   const urls = new Set<string>();
-  for (const raw of setting.split(/[\n,|]/)) {
+  for (const raw of setting.split(/[\n,]/)) {
     const text = raw.trim();
     if (!text || text.startsWith("#") || !text.includes("://")) continue;
-    urls.add(URL.canParse(text) ? new URL(text).href : text);
+    urls.add(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) && URL.canParse(text) ? new URL(text).href : text);
   }
   return [...urls];
 }
