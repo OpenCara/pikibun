@@ -589,6 +589,19 @@ could use it. Instead the proxy adds the credential, the way the Git relay does,
     the answer says why, and the proxy passes it on with its refusals.
   The proxy reuses an answer for a minute at most (`API_CREDENTIAL_CACHE_SECONDS`), and an unavailable one (no app, not
   installed, no account, another's host, `SANDBOX_GITHUB_API=off`) is passed on as the reason for its refusals.
+- **A token the API refuses is dropped at once** (`ApiAccess`, `#fresh`; #480). The owner's sign-in token doesn't last
+  the minute it is cached for: a `git_push` with the owner's account (the `owner-account` push identity) resets it
+  afterwards (`resetGitHubToken`), in whichever of the owner's sessions it ran, so every proxy that still held the old
+  one sent a dead token, and `gh` answered `401 Bad credentials` until the cache ran out. It was meant to be dropped on a
+  `401`, but under a key the cache never used, so it stayed. Now a `401` for a request that went with Pikibun's
+  credential drops the cached grant that token came from (its access and reach, and the workspace's grant an older
+  server's fallback kept under `any`), asks the server once, and sends the request again, once, with the token it
+  gives then; the command sees only the second answer. A `401` means the API did nothing with the request, so a write
+  goes again like a read, with the body the proxy already held. Requests refused together share one question to the
+  server. Where the server gives the same token again (a sign-in that is dead for good, or a read token GitHub
+  revoked), the `401` passes as it is and the server isn't asked again about that token for ten seconds
+  (`REJECTED_AGAIN_MS`), so a dead sign-in costs one question, not one for each request. A request carrying the
+  command's own credential is never retried.
 - **`SANDBOX_GITHUB_API`**, for every credentialed API: `on` (default), `own-hosts` (credentials only to owners' own
   hosts and the control plane's runner) or `off` (no `apis` in grants; the API hosts are hosts like any other).
 

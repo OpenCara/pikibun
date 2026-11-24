@@ -12,7 +12,7 @@ import { apiWrites, cliEnvironment, commandWords, optionValues, sandboxDirectory
   type PikiSession } from '../apps/runner/src/extensions/piki/command.js';
 import { ghSpec } from '../apps/runner/src/extensions/piki/gh.js';
 import { cliRules } from '../apps/runner/src/extensions/piki/cli-engine.js';
-import { bundledCliDefinitions, ghDefinition, parseCliDefinition, parseCliDefinitions, type CliDefinition } from '../packages/shared/src/cli-definitions.js';
+import { bundledCliDefinitions, ghDefinition, parseCliDefinition, parseCliDefinitions, withoutCliHints, type CliDefinition } from '../packages/shared/src/cli-definitions.js';
 import { glabSpec } from '../apps/runner/src/extensions/piki/glab.js';
 import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
 import { fitsModel, SAVED_OUTPUT_BYTES } from '../apps/runner/src/tool-output.js';
@@ -284,6 +284,88 @@ test('the gh tool runs gh in the worktree, or a directory in it, and returns its
   assert.ok(fitsModel(big), 'long output keeps its start and end, within what pi-durable gives the model');
   assert.match(big, /bytes left out here, and not saved/, 'a session that can\'t save it says so');
   assert.match(await call({ args: ['pr', 'merge', '1'] }), /arg=merge/, 'without read-only, anything runs (each call approved as the workspace sets)');
+});
+
+test('the gh tool explains a TLS certificate failure and a failed view --comments, and refuses --comments with --json', async t => {
+  let run: CliRun = { exitCode: 0, signal: null, output: 'ok' };
+  const ran: (readonly string[])[] = [];
+  let served: CliDefinition | undefined;
+  const { call } = await ghTool(t, false, { hostSignIn: false, forgeWrites: () => true, sandbox: async given => { ran.push(given.args); return run; },
+    servedRules: async () => served ? cliRules(served) : undefined });
+  const tls = 'Get "https://api.github.com/graphql": tls: failed to verify certificate: x509: certificate signed by unknown authority';
+  const tlsHint = /exited with 1\.\nGet .*x509: certificate signed by unknown authority\nHint: gh couldn't verify GitHub's TLS certificate: this host's TLS setup \(its certificate store, or a proxy that intercepts HTTPS\) refused it\. .*retrying won't help\. github_read \(with wait: "checks" or "change"\), github_comment, github_issue and github_merge still reach GitHub through the Pikibun server: .*the host's owner has to fix the host's certificates\.$/;
+  run = { exitCode: 1, signal: null, output: `${tls}\n` };
+  await assert.rejects(call({ args: ['pr', 'checks', '7', '--watch'] }), tlsHint);
+  await assert.rejects(call({ args: ['api', 'repos/acme/app/issues'] }), tlsHint, 'whatever the command');
+  run = { exitCode: 1, signal: null, output: 'x509: OSStatus -26276' };
+  await assert.rejects(call({ args: ['run', 'list'] }), /OSStatus -26276\nHint: gh couldn't verify GitHub's TLS certificate/, 'as an older gh words it');
+  run = { exitCode: 0, signal: null, output: `title: gh fails\n${tls}` };
+  assert.doesNotMatch(await call({ args: ['issue', 'view', '434'] }), /Hint:/, 'a run that succeeded only quotes the error');
+  run = { exitCode: null, signal: 'SIGTERM', output: tls, failure: 'It took longer than 5 seconds' };
+  await assert.rejects(call({ args: ['run', 'watch', '7'] }), error => !/Hint:/.test((error as Error).message), 'a run that was ended names its own reason');
+  run = { exitCode: null, signal: 'SIGKILL', output: tls };
+  await assert.rejects(call({ args: ['run', 'watch', '7'] }), error => /ended with SIGKILL/.test((error as Error).message) && !/Hint:/.test((error as Error).message), 'nor one a signal ended');
+  run = { exitCode: 1, signal: null, output: 'HTTP 404: Not Found' };
+  await assert.rejects(call({ args: ['run', 'view', '7'] }), error => !/Hint:/.test((error as Error).message), 'another failure gets no hint');
+
+  ran.length = 0;
+  for (const args of [['issue', 'view', '5', '--comments', '--json', 'title,body'], ['issue', 'view', '5', '--json=comments', '-c', '--repo', 'acme/app'],
+    ['pr', 'view', '5', '--repo', 'acme/app', '--json', 'comments', '--comments']]) {
+    await assert.rejects(call({ args }), new RegExp(`^Error: Refused: gh ${args[0]} view takes --comments or --json, not both: use --json comments alone, `
+      + 'with any other fields beside it \\(--json title,body,comments\\)\\. Nothing ran\\.$'), args.join(' '));
+  }
+  assert.deepEqual(ran, [], 'refused before anything runs');
+  run = { exitCode: 0, signal: null, output: 'ok' };
+  for (const args of [['issue', 'view', '5', '--json', 'comments'], ['pr', 'view', '5', '--comments'], ['issue', 'list', '--json', 'comments'],
+    ['pr', 'checks', '5', '--json', 'name', '--watch']]) assert.equal(await call({ args }), 'ok', args.join(' '));
+
+  const commentsHint = (group: string) => new RegExp(`\\nHint: gh ${group} view --comments failed or printed nothing: if the number and repository are right, read the comments with --json comments `
+    + '\\(without --comments\\), or with gh api repos/<owner>/<name>/issues/<n>/comments\\.$');
+  run = { exitCode: 1, signal: null, output: '' };
+  await assert.rejects(call({ args: ['issue', 'view', '5', '--comments', '--repo', 'acme/app'] }), error => /^It exited with 1\.\n\(no output\)\n/.test((error as Error).message)
+    && commentsHint('issue').test((error as Error).message));
+  await assert.rejects(call({ args: ['pr', 'view', '5', '-c'] }), commentsHint('pr'));
+  await assert.rejects(call({ args: ['issue', 'view', '5'] }), error => !/Hint:/.test((error as Error).message), 'only a view that asked for comments');
+  run = { exitCode: 0, signal: null, output: '\n' };
+  const silent = await call({ args: ['issue', 'view', '5', '--comments'] });
+  assert.match(silent, /^\(no output\)\n/);
+  assert.match(silent, commentsHint('issue'), 'a view that printed nothing is explained too');
+  assert.equal(await call({ args: ['issue', 'view', '5', '--json', 'comments'] }), '(no output)');
+  run = { exitCode: 0, signal: null, output: 'a comment' };
+  assert.equal(await call({ args: ['issue', 'view', '5', '--comments'] }), 'a comment', 'one that worked gets none');
+
+  served = { ...ghDefinition, hints: [...ghDefinition.hints!, { words: ['run', 'list'], outputPattern: 'HTTP 502', hint: 'GitHub is having a bad day.' }] };
+  run = { exitCode: 1, signal: null, output: `HTTP 502\n${tls}` };
+  const both = await call({ args: ['run', 'list'] }).catch(error => (error as Error).message);
+  assert.deepEqual(both.match(/^Hint: .{0,40}/gm), ['Hint: gh couldn\'t verify GitHub\'s TLS certific', 'Hint: GitHub is having a bad day.'],
+    'a served definition adds its hints, and one both hold is said once');
+  served = { ...ghDefinition, hints: Array.from({ length: 8 }, (_, index) => ({ words: ['run', 'list'], hint: `Served hint ${index}.` })) };
+  const many = await call({ args: ['run', 'list'] }).catch(error => (error as Error).message);
+  assert.deepEqual(many.match(/^Hint: .{0,13}/gm), ['Hint: gh couldn\'t v', 'Hint: Served hint 0', 'Hint: Served hint 1', 'Hint: Served hint 2'], 'at most four hints a result');
+
+  for (const [why, hints] of [['a hint for every call', [{ hint: 'all' }]], ['an output pattern that isn\'t one', [{ outputPattern: '(', hint: 'x' }]],
+    ['a refusal\'s key', [{ words: ['run'], reason: 'x', hint: 'x' }]], ['no text', [{ words: ['run'] }]], ['not a list', {}]] as const) {
+    assert.throws(() => parseCliDefinition({ ...JSON.parse(JSON.stringify(ghDefinition)), hints }), /Invalid CLI definition/, why);
+  }
+  const older = withoutCliHints(ghDefinition);
+  assert.equal('hints' in older, false, 'what a connector that doesn\'t ask for hints is served: nothing its parser would pass over the definition for');
+  assert.deepEqual(older.refuse, ghDefinition.refuse, 'with the refusals, which it applies');
+  assert.deepEqual(parseCliDefinition(JSON.parse(JSON.stringify(older))), older);
+  assert.deepEqual(cliRules(older).hints(['run', 'list'], tls), []);
+});
+
+test('#480: the gh tool says what a 401 Bad credentials is, and what still works', async t => {
+  let run: CliRun = { exitCode: 1, signal: null, output: '{\n  "message": "Bad credentials",\n  "status": "401"\n}gh: Bad credentials (HTTP 401)\n' };
+  const { call } = await ghTool(t, false, { hostSignIn: false, forgeWrites: () => true, sandbox: async () => run });
+  const hint = /It exited with 1\.\n[\s\S]*gh: Bad credentials \(HTTP 401\)\nHint: GitHub refused the token this request went with \(401 Bad credentials\)\. Usually a git_push, .*just reset the owner's GitHub token .*not a lost sign-in, and it passes within a minute, so run the command again then\. Meanwhile git still works \(git ls-remote --tags origin confirms pushed tags\), and github_read reads a pull request and waits for its checks \(wait: "checks"\) through the Pikibun server\. If gh still answers 401 after a few minutes, stop retrying and tell the person\.$/;
+  await assert.rejects(call({ args: ['api', 'repos/acme/app'] }), hint);
+  run = { exitCode: 1, signal: null, output: 'HTTP 401: Bad credentials (https://api.github.com/graphql)\nTry authenticating with:  gh auth login' };
+  await assert.rejects(call({ args: ['run', 'list', '--repo', 'acme/app'] }), /gh auth login\nHint: GitHub refused the token this request went with/, 'as gh words it for its own commands');
+  run = { exitCode: 0, signal: null, output: 'title: gh keeps answering 401 Bad credentials' };
+  assert.doesNotMatch(await call({ args: ['issue', 'view', '480'] }), /Hint:/, 'a run that succeeded only quotes it');
+  run = { exitCode: 1, signal: null, output: 'HTTP 403: Resource not accessible by integration' };
+  await assert.rejects(call({ args: ['run', 'list'] }), error => !/Hint:/.test((error as Error).message), 'a refusal that isn\'t the token\'s gets none');
+  assert.equal(ghDefinition.hints!.every(item => item.hint.length <= 1024), true, 'each fits what a served definition may carry');
 });
 
 test('read-only: only commands that read run, and outside the worktree', async t => {

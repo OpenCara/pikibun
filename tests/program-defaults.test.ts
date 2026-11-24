@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { callEnvironment, clones, defaultedTimeout, directoryHint, LONG_RUN_DEFAULT_SECONDS, longRun, timedOutHint } from "../apps/runner/src/program-defaults.js";
+import { callEnvironment, clones, defaultedTimeout, directoryHint, killedHint, LONG_RUN_DEFAULT_SECONDS, longRun, timedOutHint } from "../apps/runner/src/program-defaults.js";
 import { pythonRequest, pythonShellCommand } from "../apps/runner/src/python-command.js";
 
 test("a call's environment becomes quoted assignments, refusing what the tool sets itself and what isn't a variable", () => {
@@ -44,6 +44,18 @@ test("test suites and servers get a default time limit when the call gives none;
   assert.match(timedOutHint("Sandbox exceeded 1200000ms time limit\nRunning 300 tests")!, /at most 1200 seconds\. Give timeout_seconds/);
   assert.match(timedOutHint("Host command exceeded its time limit")!, /at most 1200 seconds/);
   assert.equal(timedOutHint("Command failed with exit code 1"), undefined);
+});
+
+test("a process killed by something other than the tool is explained as likely out of memory; the tool's own kills and other failures are not", () => {
+  for (const result of [
+    "Sandbox process failed (exit 137)\nsrc/a.ts checked", "Sandbox process failed (exit 137): Killed", "Sandbox process failed (SIGKILL)",
+    "Command failed (exit 137)", "Command killed by SIGKILL", "Command killed by SIGKILL: Killed",
+  ]) assert.match(killedHint(result)!, /^The process was killed, and not by this tool .*most likely the host ran short of memory\. .*Run a smaller part \(fewer files or projects\), or rely on CI for the full run and say that you did\.$/, result);
+  for (const result of [
+    undefined, "", "Sandbox exceeded 1200000ms time limit", "Command exceeded 2000ms time limit", "Command stopped", "Sandbox closed", "Command stopped before it started",
+    "Sandbox exceeded 1048576 byte output limit", "Sandbox process failed (exit 1)\nexit 137", "Sandbox process failed (exit 1): Command killed by SIGKILL",
+    "Sandbox process failed (exit 1370)", "Sandbox process failed (SIGTERM)", "Command killed by SIGTERM", "Command failed (exit 13)",
+  ]) assert.equal(killedHint(result), undefined, String(result));
 });
 
 test("a run at the worktree's top that failed for want of a manifest names the clones that have one", async t => {

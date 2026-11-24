@@ -114,7 +114,7 @@ export class SubAgentsState {
         + "Collect their results (sessions wait or read), then do the rest in this session or in a later message." };
     }
     let balanced = false;
-    if (!this.placementUnsupported) {
+    if (!this.placementUnsupported && input.host_environment !== true) {
       const given = record(input.placement) ? { ...input.placement } : undefined;
       const namesModel = typeof input.model === "string" && input.model !== "";
       const defaults: Placement = { ...settings.placement };

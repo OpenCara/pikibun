@@ -206,6 +206,45 @@ test("a program call's timeout_seconds ends it sooner than the host's command ti
   assert.equal(ran[1]!.status, "executed", "a timeout longer than the host's limit keeps the host's");
   assert.match(await session.sandbox.readFile("repo/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
   assert.match((await session.view()).entries.map(entry => entry.text).join("\n"), /timeout_seconds: expected >= 1/);
+  const timedOut = (await session.view()).entries.filter(entry => entry.role === "toolResult" && /2000ms time limit/.test(entry.text));
+  assert.equal(timedOut.length, 1);
+  assert.doesNotMatch(timedOut[0]!.text, /"hint"/, "the tool's own kill at the time limit is not explained as a lack of memory");
+});
+
+test("a program call whose process was killed, and not by the tool, is told that it was likely for want of memory; a failure of its own is not", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-call-killed-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("node", { program: "node", args: ["-e", "console.log('checking'); process.kill(process.pid, 'SIGKILL'); setTimeout(() => {}, 25000)"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("node", { program: "node", args: ["-e", "console.log('exit 137'); process.exit(1)"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Done."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-call-killed-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "call-killed-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Check it.", requestId: "killed", admissionId: await sha256("call killed admission") }, "write");
+  for (let count = 0; count < 1500 && (await records(session)).filter(record => record.status !== "executing").length < 2; count++) await delay(20);
+  await idle(session);
+  const ran = await records(session);
+  assert.equal(ran.length, 2);
+  assert.equal(ran[0]!.status, "failed");
+  assert.match(ran[0]!.result!, /^Command (?:failed \(exit 137\)|killed by SIGKILL)/);
+  assert.equal("hint" in ran[0]!, false, "the hint is for the agent, not the stored card");
+  assert.equal(ran[1]!.status, "failed");
+  const results = (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
+  assert.equal(results.length, 2);
+  assert.match(results[0]!, /"hint":"The process was killed, and not by this tool \(no time limit was reached and nobody stopped it\): most likely the host ran short of memory\. This is not a failure of the code it ran\. Run a smaller part \(fewer files or projects\), or rely on CI for the full run and say that you did\."/);
+  assert.doesNotMatch(results[1]!, /"hint"/, "an exit of its own that only prints 137 is the program's failure");
 });
 
 test("a program call sets the environment variables it names, and one run at the worktree's top for want of a clone's manifest is told which directory to give", { skip: process.platform === "win32" }, async t => {

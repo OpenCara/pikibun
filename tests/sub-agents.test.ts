@@ -74,6 +74,10 @@ test("each sub-agent the agent starts gets the workspace's conditions where it s
 
   const plain = load();
   assert.deepEqual(plain.call({ action: "create", message: "Go" }).input.placement, {}, "balance: an empty placement, so Pikibun picks the least loaded host");
+  const onHost = load({ placement: "gpu=true", models: "anthropic/*" });
+  assert.deepEqual(onHost.call({ action: "create", message: "Go", host_environment: true, placement: { hosts: ["h1"] } }).input.placement, { hosts: ["h1"] },
+    "a session directly on a host goes to the one host the call names, with no workspace conditions");
+  assert.equal(onHost.call({ action: "create", message: "Go", host_environment: true }).input.placement, undefined);
   const unbalanced = load({ balance: false, notify: false });
   assert.deepEqual(unbalanced.call({ action: "create", message: "Go" }).input, { action: "create", message: "Go" });
 });

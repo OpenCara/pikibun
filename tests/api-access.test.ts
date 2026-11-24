@@ -476,6 +476,68 @@ test("a write lease on a host that doesn't get the owner's credential reads as b
   assert.equal(upstream.length, 1);
 });
 
+const badCredentials = { status: 401, headers: { "content-type": "application/json" }, body: "{\"message\":\"Bad credentials\"}" };
+
+test("a cached token GitHub refuses (401) is dropped, and the request goes again with a fresh one", async t => {
+  let owner = "gho_first";
+  let app = "ghs_first";
+  const grant = (account: string, token: string): ApiCredentialGrant => ({ available: true, cacheSeconds: 60, credentials: [
+    { account, authorization: `Bearer ${token}`, repositories: ["acme/app"], expiresAt: new Date(Date.now() + 3600_000).toISOString() }] });
+  const { instance, socketPath, upstream, asked, log } = await proxy(t, {
+    credential: async (_host, access) => access === "write" ? grant("session-owner", owner) : grant("acme", app),
+    answer: request => [`Bearer ${owner}`, `Bearer ${app}`].includes(request.headers.authorization ?? "") ? { status: 200, body: "{\"ok\":true}" } : badCredentials });
+  const lease = instance.apiLease()!;
+  t.after(() => lease.release());
+  const leased = { authorization: `token ${lease.token}` };
+  const query = { method: "POST", headers: { ...leased, "content-type": "application/json" }, body: JSON.stringify({ query: "query { viewer { login } }" }) };
+  assert.equal((await call(socketPath, "/graphql", query)).status, 200);
+  assert.deepEqual(asked, ["api.github.com", "api.github.com (write)"]);
+
+  owner = "gho_second";
+  const again = await call(socketPath, "/graphql", query);
+  assert.equal(again.status, 200, "the command never sees the 401");
+  assert.equal(again.body, "{\"ok\":true}");
+  assert.deepEqual(upstream.slice(1).map(request => request.headers.authorization), ["Bearer gho_first", "Bearer gho_second"]);
+  assert.equal(Buffer.from(upstream[2]!.body!).toString("utf8"), query.body, "the body goes again as it was");
+  assert.deepEqual(asked.slice(2), ["api.github.com (write)"]);
+  assert.ok(log().some(entry => entry.reason === "the session owner's token for session-owner, with a fresh token as the cached one was refused (401) (200)"));
+  assert.equal((await call(socketPath, "/user", { headers: leased })).status, 200);
+  assert.equal(upstream[3]!.headers.authorization, "Bearer gho_second");
+  assert.equal(asked.length, 3, "the fresh one is cached");
+
+  owner = "gho_third";
+  const parallel = await Promise.all([1, 2, 3, 4].map(() => call(socketPath, "/user", { headers: leased })));
+  assert.deepEqual(parallel.map(answer => answer.status), [200, 200, 200, 200]);
+  assert.deepEqual(asked.slice(3), ["api.github.com (write)"], "requests refused together ask for one fresh credential");
+
+  app = "ghs_second";
+  const read = await call(socketPath, "/repos/acme/app/actions/runs");
+  assert.equal(read.status, 200, "the read-only token is replaced the same way");
+  assert.equal(upstream.at(-1)!.headers.authorization, "Bearer ghs_second");
+  assert.deepEqual(asked.slice(4), ["api.github.com"]);
+});
+
+test("a token GitHub keeps refusing is passed on as the 401 it is, without asking the Pikibun server at every request", async t => {
+  const { instance, socketPath, upstream, asked } = await proxy(t, { credential: async (_host, access) => access === "write" ? owners : credentials,
+    answer: () => badCredentials });
+  const lease = instance.apiLease()!;
+  t.after(() => lease.release());
+  const leased = { authorization: `token ${lease.token}` };
+  const first = await call(socketPath, "/user", { headers: leased });
+  assert.equal(first.status, 401);
+  assert.equal(JSON.parse(first.body).message, "Bad credentials");
+  assert.deepEqual(asked, ["api.github.com", "api.github.com (write)", "api.github.com (write)"]);
+  assert.equal(upstream.length, 1, "the same token isn't sent twice");
+  assert.equal((await call(socketPath, "/user", { headers: leased })).status, 401);
+  assert.equal(asked.length, 3);
+
+  const realNow = Date.now;
+  Date.now = () => realNow() + 11_000;
+  t.after(() => { Date.now = realNow; });
+  assert.equal((await call(socketPath, "/user", { headers: leased })).status, 401);
+  assert.equal(asked.length, 4, "a little later it asks once more");
+});
+
 test("gitlab.com: glab's requests get the owner's token, its website goes on as a tunnel would", async t => {
   const gitlab: ApiCredentialGrant = { available: true, cacheSeconds: 60, credentials: [
     { account: "gitlab.com", authorization: "Bearer glpat-owner", repositories: [], expiresAt: new Date(Date.now() + 3600_000).toISOString() }] };

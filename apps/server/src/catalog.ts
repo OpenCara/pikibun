@@ -7,7 +7,7 @@ import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import {
   addMemberStatement, auditAfterChange, defaultWorkspaceExtensionStatements, auditStatement, changeMemberRoleStatement, ownHostsOnlySQL, personalWorkspaceName, removeMemberStatements, requireMember,
-  requireSharedWorkspace, workspaceOwnerStatement,
+  requireSharedWorkspace, workspaceDeletionAuditStatements, workspaceOwnerStatement,
 } from './authority/index.js';
 import { modelDefinition } from './db.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
@@ -280,6 +280,36 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     const workspace: Workspace = { ...row, personal: Number(row.personal) === 1 };
     if (workspace.personal) await portableSettingsChanged(c.env, workspaceId);
     return c.json({ workspace });
+  });
+
+  app.delete('/api/workspaces/:id', async c => {
+    const workspaceId = identifier(c.req.param('id'), 'workspaceId');
+    const actorId = c.get('auth').userId;
+    await requireMember(c.env, workspaceId, actorId);
+    const row = await c.env.DB.query<{ name: string; ownerId: string; personal: number; sessions: number }>(`SELECT w.name, w.owner_id AS ownerId,
+        (SELECT COUNT(*) FROM personal_workspaces p WHERE p.workspace_id = w.id) AS personal,
+        (SELECT COUNT(*) FROM sessions s WHERE s.workspace_id = w.id) AS sessions
+      FROM workspaces w WHERE w.id = ?`).bind(workspaceId).first();
+    if (!row) fail(404, 'not_found', 'Workspace not found.');
+    if (row.ownerId !== actorId) fail(403, 'forbidden', 'Only the workspace owner can delete it.');
+    if (Number(row.personal) > 0) fail(409, 'personal_workspace', 'Your private workspace can\'t be deleted.');
+    if (Number(row.sessions) > 0) fail(409, 'workspace_in_use', 'This workspace has sessions, archived ones included, which are kept with their backups and history, so it can\'t be deleted.');
+    const auditId = id();
+    const deleted = `EXISTS (SELECT 1 FROM audit WHERE id = ?)`;
+    let result: { changes: number }[];
+    try {
+      result = await c.env.DB.batch([
+        c.env.DB.query<never>('UPDATE workspaces SET owner_id = owner_id WHERE id = ? AND owner_id = ?').bind(workspaceId, actorId),
+        ...workspaceDeletionAuditStatements(c.env, actorId, { id: workspaceId, name: row.name }, auditId),
+        c.env.DB.query<never>(`UPDATE connector_pairings SET workspace_id = NULL WHERE workspace_id = ? AND ${deleted}`).bind(workspaceId, auditId),
+        c.env.DB.query<never>(`DELETE FROM workspaces WHERE id = ? AND ${deleted}`).bind(workspaceId, auditId),
+      ]);
+    } catch (error) {
+      if (error instanceof ConstraintError) fail(409, 'workspace_in_use', 'Something else still uses this workspace, such as an agent on one of its models, so it can\'t be deleted.');
+      throw error;
+    }
+    if (result[4]!.changes !== 1) fail(409, 'workspace_changed', 'The workspace changed. Refresh and try again.');
+    return c.body(null, 204);
   });
 
   app.get('/api/workspaces/:id/members', async c => {

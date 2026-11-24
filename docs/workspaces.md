@@ -22,6 +22,8 @@ These are defaults for what nobody has chosen. Shared workspaces made before the
 
 Owners and admins rename a workspace with **General → Rename** (`PATCH /api/workspaces/:id` with `{"name": "…"}`); everyone in it sees the new name. The audit log records who renamed it, not the names.
 
+The owner deletes a workspace with **General → Delete…** (`DELETE /api/workspaces/:id`), after confirming: it goes for everyone, with its members, sources, models, settings and schedules, and can't be undone. Only a workspace that has never had a session can be deleted: sessions, archived ones included, are kept with their backups and history, so a workspace with any is refused (`409 workspace_in_use`), as is one whose models an agent still uses. Your [private workspace](#your-private-workspace) can't be deleted. The audit log keeps the workspace's earlier entries, no longer tied to it, and records who deleted it, with its ID and name.
+
 Owners and admins add people with **Members → Add member**, entering the person's **User ID** and a role; saving an existing member changes their role, which takes effect at once. Or they share an invite link instead (see [Invite links and pending members](#invite-links-and-pending-members)). Below the owner there are four tiers:
 
 - **Viewer**: follows the workspace's sessions read-only and can't start sessions, restore a backup into a new one, or move one to another host. A session role can't give a viewer more than session viewer (read).
@@ -38,6 +40,7 @@ Every session is visible to every member of its workspace; there are no private 
 | Send messages to any session and stop its work | ✓ | ✓ | ✓ | | |
 | Rename, archive or unarchive any session, change its tool output, give it session roles, turn off its share link | ✓ | ✓ | | | |
 | Rename the workspace | ✓ | ✓ | | | |
+| Delete the workspace, if it has no sessions | ✓ | | | | |
 | Add and remove sources (repositories, documents), set repositories' push policy and Git LFS | ✓ | ✓ | | | |
 | Manage push identities | ✓ | ✓ | | | |
 | Set network access | ✓ | ✓ | | | |
