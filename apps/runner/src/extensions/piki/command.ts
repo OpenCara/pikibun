@@ -98,6 +98,7 @@ export function cliEnvironment(spec: Pick<CliSpec, "passEnv" | "setEnv">, source
 const HEAD_BYTES = 256 * 1024;
 const TAIL_BYTES = SAVED_OUTPUT_BYTES - HEAD_BYTES - 256;
 const DEFAULT_TIMEOUT_SECONDS = 300;
+const MAX_HINTS = 4;
 
 class Output {
   #head: Buffer[] = [];
@@ -279,8 +280,8 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
           const status = run.failure ?? (run.exitCode === 0 ? undefined : run.signal ? `It ended with ${run.signal}` : `It exited with ${run.exitCode}`);
           const printed = run.output.trim();
           const output = printed || "(no output)";
-          const hints = !run.failure && (status || !printed)
-            ? [...new Set([...spec.hints?.(args, run.output) ?? [], ...served?.hints?.(args, run.output) ?? []])].map(hint => `\nHint: ${hint}`).join("") : "";
+          const hints = !run.failure && !run.signal && (status || !printed)
+            ? [...new Set([...spec.hints?.(args, run.output) ?? [], ...served?.hints?.(args, run.output) ?? []])].slice(0, MAX_HINTS).map(hint => `\nHint: ${hint}`).join("") : "";
           const text = (session.fromScript?.(toolCallId) ? scriptOutput(output) : await boundOutput(output, {
             ...(session.saveOutput ? { save: (whole: string) => session.saveOutput!(toolCallId, tool, whole) } : {}),
             ...(status || hints ? { fits: (shown: string) => fitsModel(`${status ? `${status}.\n` : ""}${shown}${hints}`) } : {}),

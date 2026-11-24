@@ -303,6 +303,8 @@ test('the gh tool explains a TLS certificate failure and a failed view --comment
   assert.doesNotMatch(await call({ args: ['issue', 'view', '434'] }), /Hint:/, 'a run that succeeded only quotes the error');
   run = { exitCode: null, signal: 'SIGTERM', output: tls, failure: 'It took longer than 5 seconds' };
   await assert.rejects(call({ args: ['run', 'watch', '7'] }), error => !/Hint:/.test((error as Error).message), 'a run that was ended names its own reason');
+  run = { exitCode: null, signal: 'SIGKILL', output: tls };
+  await assert.rejects(call({ args: ['run', 'watch', '7'] }), error => /ended with SIGKILL/.test((error as Error).message) && !/Hint:/.test((error as Error).message), 'nor one a signal ended');
   run = { exitCode: 1, signal: null, output: 'HTTP 404: Not Found' };
   await assert.rejects(call({ args: ['run', 'view', '7'] }), error => !/Hint:/.test((error as Error).message), 'another failure gets no hint');
 
@@ -317,7 +319,7 @@ test('the gh tool explains a TLS certificate failure and a failed view --comment
   for (const args of [['issue', 'view', '5', '--json', 'comments'], ['pr', 'view', '5', '--comments'], ['issue', 'list', '--json', 'comments'],
     ['pr', 'checks', '5', '--json', 'name', '--watch']]) assert.equal(await call({ args }), 'ok', args.join(' '));
 
-  const commentsHint = (group: string) => new RegExp(`\\nHint: gh ${group} view --comments failed or printed nothing: read the comments with --json comments `
+  const commentsHint = (group: string) => new RegExp(`\\nHint: gh ${group} view --comments failed or printed nothing: if the number and repository are right, read the comments with --json comments `
     + '\\(without --comments\\), or with gh api repos/<owner>/<name>/issues/<n>/comments\\.$');
   run = { exitCode: 1, signal: null, output: '' };
   await assert.rejects(call({ args: ['issue', 'view', '5', '--comments', '--repo', 'acme/app'] }), error => /^It exited with 1\.\n\(no output\)\n/.test((error as Error).message)
@@ -337,6 +339,9 @@ test('the gh tool explains a TLS certificate failure and a failed view --comment
   const both = await call({ args: ['run', 'list'] }).catch(error => (error as Error).message);
   assert.deepEqual(both.match(/^Hint: .{0,40}/gm), ['Hint: gh couldn\'t verify GitHub\'s TLS certific', 'Hint: GitHub is having a bad day.'],
     'a served definition adds its hints, and one both hold is said once');
+  served = { ...ghDefinition, hints: Array.from({ length: 8 }, (_, index) => ({ words: ['run', 'list'], hint: `Served hint ${index}.` })) };
+  const many = await call({ args: ['run', 'list'] }).catch(error => (error as Error).message);
+  assert.deepEqual(many.match(/^Hint: .{0,13}/gm), ['Hint: gh couldn\'t v', 'Hint: Served hint 0', 'Hint: Served hint 1', 'Hint: Served hint 2'], 'at most four hints a result');
 
   for (const [why, hints] of [['a hint for every call', [{ hint: 'all' }]], ['an output pattern that isn\'t one', [{ outputPattern: '(', hint: 'x' }]],
     ['a refusal\'s key', [{ words: ['run'], reason: 'x', hint: 'x' }]], ['no text', [{ words: ['run'] }]], ['not a list', {}]] as const) {

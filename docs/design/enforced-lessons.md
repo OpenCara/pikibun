@@ -72,7 +72,8 @@ A CLI definition (`packages/shared/src/cli-definitions.ts`) carries `hints` besi
 refusal does (`words`, `options`, `short`, `argPattern`), an `outputPattern`, or both, and the text to add. The engine
 (`cliRules().hints`) picks them, and the tool adds each as a `Hint:` line after the output, only for a run that ended on
 its own with a non-zero exit, or printed nothing: a run that succeeded may quote an error (an issue about it), and one
-the tool stopped names its own reason.
+the tool stopped or a signal ended names its own reason. A result takes at most four hints, so a faulty served
+definition can't crowd out the output.
 
 - **A TLS certificate failure** (#434). Output with `tls: failed to verify certificate` or `x509: ` gets a hint: the
   host's certificate store or an intercepting proxy refused GitHub's certificate, retrying won't help, the brokered

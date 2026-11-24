@@ -96,7 +96,7 @@ export const ghDefinition: CliDefinition = {
         + "That is not GitHub being down, nor a failed check, and retrying won't help. github_read (with wait: \"checks\" or \"change\"), github_comment, "
         + "github_issue and github_merge still reach GitHub through the Pikibun server: use them, and tell the person that the host's owner has to fix the host's certificates." },
     ...ghCommentViews.map(({ group, call }) => ({ ...call,
-      hint: `gh ${group} view --comments failed or printed nothing: read the comments with --json comments (without --comments), or with gh api repos/<owner>/<name>/issues/<n>/comments.` })),
+      hint: `gh ${group} view --comments failed or printed nothing: if the number and repository are right, read the comments with --json comments (without --comments), or with gh api repos/<owner>/<name>/issues/<n>/comments.` })),
   ],
   reads: { api: "api", browserOptions: ["--web"], groups: ghReads },
   watch: { commands: [{ words: ["run", "watch"] }, { words: ["pr", "checks"], option: "--watch" }], interval: "--interval", short: "i", seconds: GH_WATCH_INTERVAL_SECONDS },
