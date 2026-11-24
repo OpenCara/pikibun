@@ -4,7 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
 import { sessionToolExtensionOn } from '../../../packages/shared/src/piki-extensions.js';
-import { extensionPackageKey, normalizeExtensionSource, type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
+import { extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import { gitProviderHosts, gitProviders, repositoryFullName, repositoryUrlHost, type GitProvider, type WorkspaceRepository } from '../../../packages/shared/src/repositories.js';
 import { networkModes, type NetworkMode, type NetworkPolicy } from '../../../packages/shared/src/network.js';
 import { assignableWorkspaceRoles, type Workspace } from '../../../packages/shared/src/types.js';
@@ -92,9 +92,26 @@ function settingsInput(value: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function extensionKey(source: string): string {
-  try { return extensionPackageKey(normalizeExtensionSource(source)); }
+function extensionSource(source: string): string {
+  try { return normalizeExtensionSource(source); }
   catch (error) { return fail(400, 'invalid_extension', error instanceof Error ? error.message : 'Name the extension by its source, such as piki:node or npm:<package>@<version>.'); }
+}
+
+function extensionKey(source: string): string {
+  return extensionPackageKey(extensionSource(source));
+}
+
+const EXTENSIONS_PAGE = 'Settings → Workspaces → the workspace → Extensions';
+
+function requireListedSource(source: string, current: WorkspaceExtension | undefined): void {
+  if (isPikiExtensionSource(source) || current?.source === source) return;
+  fail(403, 'extension_source_not_listed', current
+    ? `This workspace lists ${current.source}. ${source} is another version of it, which is new code for every session here: `
+      + `the workspace tool doesn't change an extension's version. A person changes it under ${EXTENSIONS_PAGE}; `
+      + `name ${current.source} to turn it on or off or to change its settings.`
+    : `${source} isn't in this workspace's extensions. The workspace tool adds only Pikibun's own extensions (piki:<name>): `
+      + `a third-party source is code that would run in the workspace's sessions, so a person adds it under ${EXTENSIONS_PAGE}. `
+      + 'Once it is listed there, this tool can turn it on or off and change its settings. Tell the person so; don\'t try another way to add it.');
 }
 
 async function run(env: Env, row: SessionRow, actorId: string, action: WorkspaceToolAction, input: Fields): Promise<Record<string, unknown>> {
@@ -153,10 +170,12 @@ async function run(env: Env, row: SessionRow, actorId: string, action: Workspace
       return { removed: { id: found.id, provider: found.provider, host: found.host, fullName: found.fullName } };
     }
     case 'set_extension': {
-      const key = extensionKey(input.extension!);
+      const source = extensionSource(input.extension!);
+      const key = extensionPackageKey(source);
       const { extensions } = await call<{ extensions: WorkspaceExtension[] }>('GET', `${workspace}/extensions`);
       const current = extensions.find(item => extensionPackageKey(item.source) === key);
-      const extension = { source: input.extension, enabled: input.enabled ?? current?.enabled ?? true, tools: current?.tools ?? 'automatic',
+      requireListedSource(source, current);
+      const extension = { source, enabled: input.enabled ?? current?.enabled ?? true, tools: current?.tools ?? 'automatic',
         settings: input.settings !== undefined ? settingsInput(input.settings) : current?.settings ?? {} };
       const saved = await call<{ extensions: WorkspaceExtension[] }>('PUT', `${workspace}/extensions`, extension);
       return { extension: saved.extensions.find(item => extensionPackageKey(item.source) === key) ?? null, ...(current ? {} : { added: true }) };
