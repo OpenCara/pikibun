@@ -73,7 +73,7 @@ anyway: they are on the host (or in the extension's process), outside the worktr
   source) it sends the text files of its folder: no dot files, no `node_modules`, no links, no binary files, at most
   50 files, 256 KB a file and 1 MB a skill. A `SKILL.md` at the top of the temporary directory is refused, as its
   folder would be all of it.
-- **The session copies them into the worktree.** Before each message and side ask, the session asks every open,
+- **The session copies them into the worktree.** Before each message that may act, the session asks every open,
   active extension that handles `resources_discover` or has package skills, and copies what they answer to
   `.pikibun/skills/<extension>/<skill>/` through its own file access (`ExtensionSkillFiles`): only files that changed
   are written, a skill that goes away has its folder removed, and the first copy in a session clears what an earlier
@@ -83,11 +83,36 @@ anyway: they are on the host (or in the extension's process), outside the worktr
 - **Listed whenever the extension is on.** An extension's skills are listed with the repositories' and answer to
   `/skill:name`, whatever `piki:skills` says: the workspace's owners chose the extension, as the host's owner
   installed it, and the switch is for repositories' skills, which anyone who can push writes. The list says that
-  skills under `.pikibun/skills` come with the workspace's extensions and aren't to be edited. A copy is written again
-  when the extension's skill changes, not when the agent edited it, as the session doesn't read the copies back.
+  skills under `.pikibun/skills` come with the workspace's extensions and aren't to be edited.
   A session without extensions still clears what an earlier run copied.
 - **What an extension sends is checked.** Names must be command names, a description is required, file paths may not
-  leave the skill's folder or start with a dot, and a skill whose own file couldn't be written isn't listed.
+  leave the skill's folder or start with a dot, and a skill whose own file couldn't be written isn't listed. The
+  worker's bounds are applied again in the session (`planSkills`), since a sandboxed session's extension process
+  runs in its sandbox: a file over 256 KB is left out, and so is one that would take its skill past 1 MB.
+- **The copies are the sandbox's to change, so the host doesn't trust them** (review 479, finding 73). The worktree is
+  writable by everything the session runs, so a copy can be rewritten after the host wrote it.
+  - What the host itself says comes from the host's memory of what the extension sent, never from the copy: the
+    names and descriptions in the prompt's list and the command list (`planSkills`' items), and the body
+    `/skill:name` sends (`ExtensionSkillFiles.text`). Without that text (a connector that restarted and hasn't run
+    an acting message yet), `/skill:name` in a side ask stays as typed rather than take the copy's.
+  - Before each message that may act, every copy is read back and compared with the extension's text. One that
+    differs, is missing or can't be read is removed and written again, and a file under `.pikibun/skills` that no
+    extension sent is removed. That is one read per copied file and one listing per message, through the session's
+    file access; with the two workflow skills it is two reads.
+  - What remains: between that check and the agent's own `read`, code in the sandbox can change a copy again, and
+    the agent then reads the changed text under a path the prompt says is an extension's. Only a mount the sandbox
+    can't write would close that, on every sandbox backend, and nothing could for sessions on the host; it isn't
+    built. The check narrows it to code running during the same message,
+    which can already put any text in front of the agent through a tool result. A directory planted empty under
+    `.pikibun/skills` is not removed, nor is anything in a `.git` folder there, which the listing skips.
+- **Views, side asks and Read-only messages write nothing and run no handler** (review 479, finding 74). Copying
+  writes to the worktree and asking runs extensions' `resources_discover`, so both happen only where a message that
+  may act starts (a shared message that isn't Read-only, the rule `/compact` and extension commands follow). A view's
+  command list, a side ask's prompt and `/skill:name`, and a Read-only message's prompt use the extension skills the
+  last acting message found, and still look at the repositories' skills, which only reads. So until a session's
+  first acting message (in each run of the connector), they list no extension skill, and a workflow extension
+  keeps its whole procedure in the prompt (phase 3); an extension turned off stays listed for them until the next
+  acting message; and a copy changed meanwhile is restored only then.
 
 The prompt and theme paths `resources_discover` returns are ignored, as before.
 

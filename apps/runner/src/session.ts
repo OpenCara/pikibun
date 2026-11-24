@@ -77,7 +77,7 @@ import { requeue, RunQueue, submissionRequestId, type RunContent } from "./sessi
 import { COMPACTED, COMPACTION_STOPPED, compactionFailed, NOTHING_TO_COMPACT, parseCommand, SessionCommands, type ExtensionCommand } from "./session/commands.js";
 import { piText } from "./session/pi-text.js";
 import { SessionSkills, type Skill } from "./session/skills.js";
-import { ExtensionSkillFiles } from "./session/extension-skills.js";
+import { EXTENSION_SKILL_COPIES, EXTENSION_SKILLS_DIRECTORY, ExtensionSkillFiles } from "./session/extension-skills.js";
 import { autoModelRequest, chooseAutoModel, messageText } from "./session/auto-model.js";
 import { addTitleUsage, titleRequestInput, titleTimeoutMs, writeTitle } from "./session/titles.js";
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
@@ -356,8 +356,11 @@ export class RunnerSession {
     const skillFiles = new ExtensionSkillFiles({
       write: (path, text) => this.sandbox.writeFile(path, text, alreadyAllowed),
       remove: async path => { await this.sandbox.fileOperation({ kind: "delete", path, recursive: true }, alreadyAllowed); },
+      read,
+      list: async () => (await this.sandbox.find({ kind: "find", path: EXTENSION_SKILLS_DIRECTORY, pattern: "*", byPath: false, ignoreCase: false,
+        maxResults: EXTENSION_SKILL_COPIES, all: true }, alreadyAllowed)).paths.map(path => `${EXTENSION_SKILLS_DIRECTORY}/${path}`),
     });
-    this.#skills = new SessionSkills({ find, read, text: piText, provided: async () => {
+    this.#skills = new SessionSkills({ find, read, text: piText, providedText: path => skillFiles.text(path), provided: async () => {
       const host = this.#hostExtensions;
       if (this.closing || this.#packed) return [];
       if (!host || !this.config.extensions) return skillFiles.sync([]);
@@ -617,8 +620,8 @@ export class RunnerSession {
       sudo: mode !== "ask" && this.#sudoOffered, skills });
   }
 
-  private async listedSkills(): Promise<Skill[]> {
-    return this.#skills.current(undefined, await this.#availability.skillsListed());
+  private async listedSkills(acts: boolean): Promise<Skill[]> {
+    return this.#skills.current(undefined, await this.#availability.skillsListed(), acts);
   }
 
   private async sudoAllowed(): Promise<boolean> {
@@ -917,7 +920,7 @@ export class RunnerSession {
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
     if (run.mode === "write") await this.#sudo?.prepare();
-    const skills = run.mode === "write" ? await this.listedSkills() : [];
+    const skills = run.mode === "write" ? await this.listedSkills(options.access !== "read") : [];
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();
     const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.#availability.browserUnavailable() : undefined;
@@ -1278,7 +1281,7 @@ export class RunnerSession {
         const head = transcript.entries.at(-1);
         const fork = { ownership: { kind: "ownerless" as const }, agent: {
           model: (await shared.agent(context)).model ?? this.modelRef,
-          instructions: this.agentInstructions("ask", new Set(), undefined, undefined, new Set(), new Set(), await this.listedSkills()),
+          instructions: this.agentInstructions("ask", new Set(), undefined, undefined, new Set(), new Set(), await this.listedSkills(false)),
           tools: this.tools.filter(tool => readOnlyTools.includes(tool.name) && sessionToolNames(this.binding.agent.tools).includes(tool.name)),
         } };
         conversation = head ? await shared.fork(head.id, fork, context) : await this.harness.createConversation(fork, context);

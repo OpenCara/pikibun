@@ -49,7 +49,7 @@ export interface SessionCommandsOptions {
   find(pattern: string, limit: number): Promise<string[]>;
   read(path: string): Promise<string>;
   text(): Promise<PiText>;
-  skills: { listed(): Skill[]; expand(name: string, args: string): Promise<string | undefined> };
+  skills: { listed(): Skill[]; expand(name: string, args: string, acts?: boolean): Promise<string | undefined> };
   now?(): number;
 }
 
@@ -141,10 +141,10 @@ export class SessionCommands {
     }
   }
 
-  async expand(text: string): Promise<string> {
+  async expand(text: string, acts = true): Promise<string> {
     const parsed = parseCommand(text);
     if (!parsed) return text;
-    if (parsed.name.startsWith("skill:")) return await this.options.skills.expand(parsed.name.slice("skill:".length), parsed.args) ?? text;
+    if (parsed.name.startsWith("skill:")) return await this.options.skills.expand(parsed.name.slice("skill:".length), parsed.args, acts) ?? text;
     const file = await this.found(parsed.name);
     if (!file) return text;
     try {

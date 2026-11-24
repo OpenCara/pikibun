@@ -5,6 +5,7 @@ import { NAME } from "./names.js";
 import { skillDescription, type SkillItem } from "./skills.js";
 
 export const EXTENSION_SKILLS_DIRECTORY = ".pikibun/skills";
+export const EXTENSION_SKILL_COPIES = 2000;
 
 export interface ProvidedSkills {
   source: string;

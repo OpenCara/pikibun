@@ -398,6 +398,19 @@ the host instead of going to the model.
   them whatever `piki:skills` says: the workspace's owners chose the extension and the host's owner installed it, as
   for its tools and prompt. Anyone who can read the session's files can read the copies, as they can read the
   extension's prompt in the transcript's system message, so an extension mustn't put secrets in a skill.
+- **A copy isn't the extension's word once it is in the worktree** (review 479, finding 73). Everything the session
+  runs can write there, so the host never reads a copy back as the extension's text: the list in the prompt and the
+  body `/skill:name` sends come from what the extension's process sent, kept in the connector, and what that process
+  sent is bounded again in the session (256 KB a file, 1 MB a skill), as it may itself run in the sandbox. Before
+  each message that may act, the copies are compared with that text: a changed, missing or unreadable one is written
+  again and a file no extension sent is removed. What that leaves: code running in the sandbox during a message can
+  change a copy after the check, and the agent's own `read` then returns the changed text under a path the prompt
+  calls an extension's. Closing it needs a mount the sandbox can't write, which isn't built; such code can already
+  put any text before the agent through a tool's result, and a skill widens nothing the session may do.
+- **Reading a session doesn't copy skills or run their handlers** (review 479, finding 74). A view, a side ask and a
+  Read-only message promise to change nothing, so none of them writes copies or runs an extension's
+  `resources_discover`: they use the extension skills the last acting message found (none before the first), and
+  only read the repositories' own.
 - **The list is the host's word.** The server passes it through with the view; the client keeps only names of the
   expected shape and bounded text (`parseSessionCommands`), and a name the client has itself always wins, so a
   repository can't take over `/model` or `/new`.
