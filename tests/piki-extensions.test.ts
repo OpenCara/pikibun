@@ -354,6 +354,20 @@ test('the gh tool explains a TLS certificate failure and a failed view --comment
   assert.deepEqual(cliRules(older).hints(['run', 'list'], tls), []);
 });
 
+test('#480: the gh tool says what a 401 Bad credentials is, and what still works', async t => {
+  let run: CliRun = { exitCode: 1, signal: null, output: '{\n  "message": "Bad credentials",\n  "status": "401"\n}gh: Bad credentials (HTTP 401)\n' };
+  const { call } = await ghTool(t, false, { hostSignIn: false, forgeWrites: () => true, sandbox: async () => run });
+  const hint = /It exited with 1\.\n[\s\S]*gh: Bad credentials \(HTTP 401\)\nHint: GitHub refused the token this request went with \(401 Bad credentials\)\. Usually a git_push, .*just reset the owner's GitHub token .*not a lost sign-in, and it passes within a minute, so run the command again then\. Meanwhile git still works \(git ls-remote --tags origin confirms pushed tags\), and github_read reads a pull request and waits for its checks \(wait: "checks"\) through the Pikibun server\. If gh still answers 401 after a few minutes, stop retrying and tell the person\.$/;
+  await assert.rejects(call({ args: ['api', 'repos/acme/app'] }), hint);
+  run = { exitCode: 1, signal: null, output: 'HTTP 401: Bad credentials (https://api.github.com/graphql)\nTry authenticating with:  gh auth login' };
+  await assert.rejects(call({ args: ['run', 'list', '--repo', 'acme/app'] }), /gh auth login\nHint: GitHub refused the token this request went with/, 'as gh words it for its own commands');
+  run = { exitCode: 0, signal: null, output: 'title: gh keeps answering 401 Bad credentials' };
+  assert.doesNotMatch(await call({ args: ['issue', 'view', '480'] }), /Hint:/, 'a run that succeeded only quotes it');
+  run = { exitCode: 1, signal: null, output: 'HTTP 403: Resource not accessible by integration' };
+  await assert.rejects(call({ args: ['run', 'list'] }), error => !/Hint:/.test((error as Error).message), 'a refusal that isn\'t the token\'s gets none');
+  assert.equal(ghDefinition.hints!.every(item => item.hint.length <= 1024), true, 'each fits what a served definition may carry');
+});
+
 test('read-only: only commands that read run, and outside the worktree', async t => {
   const { call, worktree } = await ghTool(t, true);
   const text = await call({ args: ['run', 'view', '7', '--log-failed', '--repo', 'acme/app'] });

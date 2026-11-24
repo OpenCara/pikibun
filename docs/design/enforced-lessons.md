@@ -90,6 +90,12 @@ definition can't crowd out the output.
 - **`view --comments`** (#466). `gh issue view` and `gh pr view` with both `--comments` and `--json` are refused before
   anything runs, naming `--json comments` alone; a view with `--comments` that fails or prints nothing gets a hint
   naming `--json comments` and `gh api repos/<owner>/<name>/issues/<n>/comments`.
+- **`401 Bad credentials`** (#480). Output with `Bad credentials` or `HTTP 401` gets a hint: usually a `git_push`
+  just reset the owner's token and the host still held the old one, which is not a lost sign-in and passes within a
+  minute; git still works (`git ls-remote --tags origin` confirms pushed tags), `github_read` reads a pull request and
+  waits for its checks, and a `401` that lasts minutes is one to tell the person about. On a connector whose proxy
+  replaces a refused token itself (under GitHub, above) the hint is for what is left: a token the Pikibun server keeps
+  giving though GitHub refuses it.
 
 Served definitions add hints as they add refusals: a connector applies its own and the served ones, each text once.
 A connector's parser passes over a whole definition with a key it doesn't know, silently, so one from before `hints`
