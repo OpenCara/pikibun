@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { portableKeyFor } from '../apps/server/src/portable-sessions.js';
 import { IdentityBusy, IdentityStore } from '../apps/runner/src/identity.js';
 import { reportedTitle, RunnerService } from '../apps/runner/src/server.js';
 import { PortableLeases } from '../apps/runner/src/portable-lease.js';
@@ -627,7 +626,7 @@ test('an identity report the server already applied is neither verified nor writ
   assert.deepEqual(written(), ['delegation', 'session'], 'a held report is applied again after an hour');
 });
 
-test('new private sessions on the host are portable from the start, and a rotated identity moves its sessions to the new key', async t => {
+test('new private sessions on the host are no longer made portable, and a rotated identity moves the sessions made portable before to the new key', async t => {
   const f = await server(t, () => Response.json({ kept: true }));
   const key = await keyPair();
   await json(await f.host('/api/connectors/self/identity', await identityReport(key, [])));
@@ -640,13 +639,15 @@ test('new private sessions on the host are portable from the start, and a rotate
     .run(f.workspaceId, f.alice.user.id, f.alice.user.id, key.publicKey);
   await json(await f.alice.request('POST', '/api/connectors/host/portable'), 404);
 
-  const row = { workspace_id: f.workspaceId, owner_id: f.alice.user.id, connector_id: 'host', connector_owner_id: f.alice.user.id, host_environment: 1 };
-  assert.equal(await portableKeyFor(f.env, row, false), key.publicKey);
-  assert.equal(await portableKeyFor(f.env, { ...row, host_environment: 0 }, true), key.publicKey, 'a sandboxed session with no sources is portable too');
-  assert.equal(await portableKeyFor(f.env, { ...row, host_environment: 0 }, false), null);
-  assert.equal(await portableKeyFor(f.env, { ...row, connector_owner_id: 'test:someone' }, false), null);
-  f.sqlite.prepare("INSERT INTO workspaces (id, name, owner_id, created_at) VALUES ('team', 'Team', ?, '2026-01-01')").run(f.alice.user.id);
-  assert.equal(await portableKeyFor(f.env, { ...row, workspace_id: 'team' }, false), null, 'only the private workspace\'s sessions');
+  for (const hostEnvironment of [true, false]) {
+    const { session } = await json<{ session: SessionRecord }>(await f.alice.request('POST', '/api/sessions', { workspaceId: f.workspaceId, modelId: 'model',
+      title: 'Made now', ...(hostEnvironment ? { hostEnvironment: true } : {}) }), 201);
+    assert.equal(session.portable, undefined, 'its record and binding don\'t call it portable');
+    assert.equal((f.sqlite.prepare('SELECT portable_key FROM sessions WHERE id = ?').get(session.id) as { portable_key: string | null }).portable_key, null,
+      'a session made on a host that keeps portable sessions and sent its delegation belongs to no identity');
+    const created = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.created' AND session_id = ?").get(session.id) as { detail_json: string };
+    assert.equal(JSON.parse(created.detail_json).portable, undefined);
+  }
 
   const next = await keyPair();
   const stray = await keyPair();

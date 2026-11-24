@@ -79,6 +79,27 @@ export async function admissionExpired(env: Env, admissionId: string, admission:
   return running?.id !== admissionId;
 }
 
+export interface AdmittedRun {
+  id: string;
+  session_id: string;
+  actor_id: string;
+  mode: string;
+  access: string | null;
+  request_id: string;
+  expires_at: number;
+}
+
+export async function requireAdmission(env: Env, call: { admissionId: string; sessionId: string; actorId: string },
+  refusal: { code: string; message: string }, options: { acting?: boolean } = {}): Promise<AdmittedRun> {
+  const admission = await env.DB.query<AdmittedRun>(
+    'SELECT id, session_id, actor_id, mode, access, request_id, expires_at FROM run_admissions WHERE id = ?').bind(call.admissionId).first();
+  if (!admission || admission.session_id !== call.sessionId || admission.actor_id !== call.actorId || admission.mode !== 'write'
+    || (options.acting === true && admission.access === 'read') || await admissionExpired(env, call.admissionId, admission)) {
+    fail(403, refusal.code, refusal.message);
+  }
+  return admission;
+}
+
 async function admissionStorage<T>(operation: Promise<T>): Promise<T> {
   try { return await operation; }
   catch { fail(503, 'admission_unavailable', 'Run admission storage is temporarily unavailable.'); }

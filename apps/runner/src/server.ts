@@ -240,8 +240,11 @@ export class RunnerService {
     if (portable) await this.leases.acquire(directory);
     await settlePack(directory);
     const session = new RunnerSession(immutable(binding), directory, this.config);
-    try { await session.open(); }
-    catch (error) {
+    try {
+      await session.open();
+      const { leftSandbox } = await recordRan(directory, sandboxed, ran);
+      if (leftSandbox) this.failures.report(`Session ${id}`, "it last ran in the sandbox and now runs directly on this computer, as this host was started to allow");
+    } catch (error) {
       await session.close().catch(() => {});
       await session.sandbox.close().catch(() => {});
       if (portable) await this.leases.release(directory);
@@ -251,9 +254,6 @@ export class RunnerService {
       this.portableOpen.add(id);
       this.detachedReported.delete(id);
     }
-    await recordRan(directory, sandboxed, ran).then(({ leftSandbox }) => {
-      if (leftSandbox) this.failures.report(`Session ${id}`, "it last ran in the sandbox and now runs directly on this computer, as this host was started to allow");
-    }, error => this.failures.report(`Session ${id}: how it runs couldn't be recorded`, error));
     return session;
   }
 

@@ -35,7 +35,10 @@ export function dropReport(db: object, key: string): number {
 export function holdReport(db: object, key: string, digest: string, version: number, at = Date.now()): boolean {
   const map = held(db);
   const report = map.get(key);
-  if (report?.version !== version) return false;
+  if (report?.version !== version) {
+    map.set(key, { appliedAt: 0, heardAt: report?.heardAt ?? 0, version: ++versions });
+    return false;
+  }
   map.set(key, { digest, appliedAt: at, heardAt: at, version });
   return true;
 }

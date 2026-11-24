@@ -2,7 +2,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256, signToken } from "../packages/shared/src/crypto.js";
@@ -63,8 +63,14 @@ test("how a session runs follows its binding and its host, and is kept beside th
   assert.deepEqual(left, { record: { sandboxed: false, since: "2026-11-24T12:00:00.000Z", leftSandboxAt: "2026-11-24T12:00:00.000Z" }, leftSandbox: true });
   assert.deepEqual(await lastRan(base), left.record);
   assert.deepEqual((await recordRan(base, true, undefined, new Date("2026-11-24T13:00:00Z"))).record, { sandboxed: true, since: "2026-11-24T13:00:00.000Z" });
-  await writeFile(join(base, RAN_FILE), "{\"sandboxed\":\"yes\"}");
-  assert.equal(await lastRan(base), undefined, "a record that can't be read says nothing");
+  for (const broken of ["{\"sandboxed\":\"yes\"}", "not json", " ".repeat(2000)]) {
+    await writeFile(join(base, RAN_FILE), broken);
+    const unreadable = await lastRan(base);
+    assert.deepEqual(unreadable, { sandboxed: true, since: "", unreadable: true }, "a record that is there but can't be read counts as sandboxed");
+    assert.throws(() => assertSandboxKept(unreadable, false, false), RunnerError);
+  }
+  assert.deepEqual((await recordRan(base, true, undefined, new Date("2026-11-24T14:00:00Z"))).record, { sandboxed: true, since: "2026-11-24T14:00:00.000Z" },
+    "and is written again by the next open");
 
   assert.doesNotThrow(() => assertSandboxKept(undefined, false, false));
   assert.doesNotThrow(() => assertSandboxKept({ sandboxed: false, since: "x" }, false, false));
@@ -108,6 +114,15 @@ test("a session that last ran in the sandbox isn't opened by a host without one,
   const fourth = await service(t, base, lines, { unsandboxed: true });
   assert.equal((await fourth.get("kept")).binding.session.id, "kept", "once it ran without the sandbox, it opens there again");
   assert.equal(lines.length, 2);
+  await fourth.close();
+
+  await rm(join(session.directory, RAN_FILE));
+  await mkdir(join(session.directory, RAN_FILE));
+  const fifth = await service(t, base, [], { unsandboxed: true });
+  await assert.rejects(fifth.get("kept"), (error: unknown) => error instanceof RunnerError && error.status === 422, "a record that can't be read doesn't open it without the sandbox");
+  await fifth.close();
+  const sixth = await service(t, base, [], { unsandboxed: true, sessionsLeaveSandbox: true });
+  await assert.rejects(sixth.get("kept"), (error: unknown) => !(error instanceof RunnerError), "and a session whose record can't be written isn't opened");
 });
 
 test("a session provisioned in the Linux sandbox is recorded as sandboxed, and a host without one refuses it", { skip: linuxSandboxMissing() }, async t => {

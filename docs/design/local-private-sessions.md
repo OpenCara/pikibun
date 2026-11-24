@@ -36,7 +36,9 @@ forwarding to it, and a message sent from any of them is queued in the one sessi
 5. **Each computer's local server holds its own private sessions.** A server whose user has paired several computers
    lists all of theirs, each under its computer. Moving a session between computers stays **Move to another host**.
 6. **No migration.** **Bring here** is removed. Private sessions that exist already stay where they are and work as
-   they do now; new ones are made on the local server.
+   they do now; new ones are made on the local server. No new session is made portable any more, on any server: what
+   is left of portable sessions serves the ones made before, and
+   [its removal is planned](portable-sessions.md#removing-the-rest).
 
 ## The local server
 
@@ -150,7 +152,8 @@ inserted again, up to 500 of them, every minute and whenever one session's activ
   digest, and a row's own time serves after a restart until the first report.
 - **What ends a digest:** a different report, a forwarded answer that changed a row, an hour (a held report is
   applied in full at least that often), and a restart. A report that was being applied while a forwarded answer
-  changed a row is not held.
+  changed a row is not held, and of two reports applied at once, the one that finishes last ends the other's digest,
+  since its rows were written last.
 - **Older and newer together.** An older server answers without a digest, so the connector keeps sending the list;
   should a server stop taking digests, the connector falls back to the list. An older connector ignores the answer's
   new field. Nothing in the manifest changes.
@@ -178,6 +181,9 @@ whole report as before, since older connectors read that answer strictly and it 
   session's page would need a new request through every server and the forwarding list. The session's owner sees the
   refusal's reason, and the host's owner decides. For a private session they are the same person.
 - **Sessions from before the record** have none, so they open as before and get one then.
+- **A record that is there but can't be read** (damaged, too large, not a file) counts as sandboxed, so it never
+  opens a session without the sandbox unasked; the next open writes it again. A session whose record can't be
+  written isn't opened: a later open would otherwise go by a record that is wrong.
 
 ## In the apps
 
@@ -212,7 +218,7 @@ whole report as before, since older connectors read that answer strictly and it 
 | `apps/server` | `forwarded-sessions.ts` (cache, list, forwarding, creation, notifications), `private-sessions.ts` (the local server's list and creation), the `private` ticket in the authority |
 | `packages/shared/src/private-sessions.ts` | The list of requests and their shapes |
 | `apps/nsh` | Forwarded sessions in the list, by computer and offline; **Bring here** and making sessions portable removed |
-| `apps/server/src/portable-sessions.ts` | `GET /api/portable-sessions`, `POST /api/portable-sessions/:id/attach` and `POST /api/connectors/:id/portable` removed, with `portable_offers`; identity reports, settings and detaching kept for sessions that moved before |
+| `apps/server/src/portable-sessions.ts` | `GET /api/portable-sessions`, `POST /api/portable-sessions/:id/attach` and `POST /api/connectors/:id/portable` removed, with `portable_offers`; identity reports, settings and detaching kept for sessions that moved before; `portableKeyFor` removed, so no new session gets a `portable_key` |
 
 ## Not decided here
 

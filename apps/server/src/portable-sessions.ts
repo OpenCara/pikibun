@@ -1,10 +1,9 @@
 import type { Hono } from 'hono';
-import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import {
   canonicalJson, parseSettings, verifiedSigned, type PortableSettings, type Signed, type StatementOf,
 } from '../../../packages/shared/src/identity.js';
 import type { SessionSchedule } from '../../../packages/shared/src/types.js';
-import { auditStatement, authenticateConnector, isPersonalWorkspace } from './authority/index.js';
+import { auditStatement, authenticateConnector } from './authority/index.js';
 import { z } from 'zod';
 import { appOrigin, fail, now } from './http.js';
 import { body, fields, identifier as identifierField } from './schemas.js';
@@ -46,16 +45,6 @@ export async function delegationFor(env: Env, connectorId: string, userId: strin
   return env.DB.query<DelegationRow>(`SELECT d.connector_id, d.user_id, d.public_key FROM identity_delegations d
     JOIN connectors c ON c.id = d.connector_id AND c.owner_id = d.user_id AND c.revoked_at IS NULL
     WHERE d.connector_id = ? AND d.user_id = ?`).bind(connectorId, userId).first();
-}
-
-export async function portableKeyFor(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id' | 'connector_id' | 'connector_owner_id' | 'host_environment'>,
-  sourcesEmpty: boolean): Promise<string | null> {
-  if (!row.connector_id || row.connector_owner_id !== row.owner_id) return null;
-  if (Number(row.host_environment ?? 0) !== 1 && !sourcesEmpty) return null;
-  const capabilities = parseCapabilities((await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?')
-    .bind(row.connector_id).first())?.capabilities_json);
-  if (capabilities.portableSessions !== true || !await isPersonalWorkspace(env, row.workspace_id, row.owner_id)) return null;
-  return (await delegationFor(env, row.connector_id, row.owner_id))?.public_key ?? null;
 }
 
 async function currentSettings(env: Env, workspaceId: string): Promise<PortableSettings> {

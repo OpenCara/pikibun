@@ -74,4 +74,13 @@ test('a server holds a report\'s digest for an hour, unless something changed wh
   dropReport(db, 'private:host');
   assert.equal(holdReport(db, 'private:host', digest, first, 3000), false, 'a report that something changed while it was applied is not held');
   assert.equal(reportHeld(db, 'private:host', digest, 3000), false);
+
+  const slow = dropReport(db, 'private:host');
+  const fast = dropReport(db, 'private:host');
+  assert.equal(holdReport(db, 'private:host', 'newer', fast, 4000), true);
+  assert.equal(reportHeld(db, 'private:host', 'newer', 4000), true);
+  assert.equal(holdReport(db, 'private:host', 'older', slow, 4000), false);
+  assert.equal(reportHeld(db, 'private:host', 'newer', 4000), false, 'an earlier report that finishes last ends the later one\'s digest: its rows were written last');
+  assert.equal(reportHeld(db, 'private:host', 'older', 4000), false);
+  assert.equal(reportHeardAt(db, 'private:host'), 4000);
 });

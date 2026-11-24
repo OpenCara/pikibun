@@ -14,7 +14,10 @@ export interface RanRecord {
   sandboxed: boolean;
   since: string;
   leftSandboxAt?: string;
+  unreadable?: true;
 }
+
+const UNREADABLE: RanRecord = { sandboxed: true, since: "", unreadable: true };
 
 export function runsSandboxed(binding: { session: Pick<RunnerBinding["session"], "hostEnvironment"> }, config: { unsandboxed?: boolean }): boolean {
   return config.unsandboxed !== true && binding.session.hostEnvironment !== true;
@@ -24,11 +27,11 @@ export async function lastRan(directory: string): Promise<RanRecord | undefined>
   let value: unknown;
   try {
     const text = await readFile(join(directory, RAN_FILE), "utf8");
-    if (text.length > RAN_BYTES) return undefined;
+    if (text.length > RAN_BYTES) return UNREADABLE;
     value = JSON.parse(text);
-  } catch { return undefined; }
+  } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : UNREADABLE; }
   const record = value as { sandboxed?: unknown; since?: unknown; leftSandboxAt?: unknown } | null;
-  if (!record || typeof record !== "object" || typeof record.sandboxed !== "boolean" || typeof record.since !== "string") return undefined;
+  if (!record || typeof record !== "object" || typeof record.sandboxed !== "boolean" || typeof record.since !== "string") return UNREADABLE;
   return { sandboxed: record.sandboxed, since: record.since, ...(typeof record.leftSandboxAt === "string" ? { leftSandboxAt: record.leftSandboxAt } : {}) };
 }
 
@@ -38,7 +41,7 @@ export function assertSandboxKept(last: RanRecord | undefined, sandboxed: boolea
 
 export async function recordRan(directory: string, sandboxed: boolean, last?: RanRecord, now = new Date()): Promise<{ record: RanRecord; leftSandbox: boolean }> {
   const previous = last ?? await lastRan(directory);
-  if (previous && previous.sandboxed === sandboxed) return { record: previous, leftSandbox: false };
+  if (previous && previous.sandboxed === sandboxed && !previous.unreadable) return { record: previous, leftSandbox: false };
   const leftSandbox = previous?.sandboxed === true && !sandboxed;
   const record: RanRecord = { sandboxed, since: now.toISOString(), ...(leftSandbox ? { leftSandboxAt: now.toISOString() } : {}) };
   const path = join(directory, RAN_FILE);
