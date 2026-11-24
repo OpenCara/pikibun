@@ -750,10 +750,11 @@ jobs:
           DIST_TAG: ${{ needs.check.outputs.prerelease == 'true' && 'next' || 'latest' }}
         run: |
           shopt -s nullglob
-          main=(npm-tui/pikibun-tui-[0-9]*.tgz)
+          # ./ keeps npm from reading npm-tui/<file> as a GitHub owner/repo shorthand.
+          main=(./npm-tui/pikibun-tui-[0-9]*.tgz)
           [ ${#main[@]} -eq 1 ] || { echo "::error::Expected one @pikibun/tui tarball, found ${#main[@]}."; exit 1; }
           hosts=()
-          for file in npm-tui/pikibun-tui-*.tgz; do [ "$file" = "${main[0]}" ] || hosts+=("$file"); done
+          for file in ./npm-tui/pikibun-tui-*.tgz; do [ "$file" = "${main[0]}" ] || hosts+=("$file"); done
           for file in "${hosts[@]}" "${main[0]}"; do
             id=$(tar -xzOf "$file" package/package.json | node -p 'const m = JSON.parse(require("fs").readFileSync(0, "utf8")); `${m.name}@${m.version}`')
             if npm view "$id" version > /dev/null 2>&1; then
