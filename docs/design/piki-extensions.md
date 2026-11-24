@@ -424,6 +424,16 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
       token and GitHub refuses that token itself (`GET /user` answers `401`), so a misconfigured client ID, for which
       GitHub also answers `404`, never signs anyone out; a newer sign-in or reset is left alone. An unanswered reset
       whose token still works is retried as before.
+    - **Nothing forgets a token while it is being reset.** GitHub kills the old token as it answers the reset, and
+      the vault gets the new one a moment later; anything that met the old token's `401` in between (the push's own
+      next request: a plain `git push` resets after its `info/refs` and again after its `receive-pack`, a second push
+      settling at once, the pull request states, `github_read`) deleted the row, still holding the old token, so the
+      reset's own update found nothing and revoked the new token: the owner was signed out of GitHub now and then,
+      for no reason they could see. Resets of one owner's token now run one at a time (`resettingGitHubToken`), and
+      `forgetDeadGitHubToken`, `ownerGitHub` and `githubAccess` wait for a running reset first
+      (`gitHubTokenSettled`), so they forget only a token that is still dead once it has finished, and read the new
+      one rather than the one about to die. The reset itself forgets without waiting (`dropDeadGitHubToken`). The
+      wait is the server process's: servers sharing one database across processes keep the old race between them.
     - **The proxy says why GitHub turned a request away** (`ApiAccess`, `unaided`): a request that went without a
       credential because Pikibun had none to give, and that GitHub turns away for its rate limit (`429`, or `403`
       with no requests left), gets Pikibun's reason with it, instead of GitHub's answer naming the host's address.
