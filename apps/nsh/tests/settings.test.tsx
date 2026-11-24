@@ -1,5 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { notificationRoute } from "../src/lib/notifications";
+import { defaultHostConfig } from "../../../packages/shared/src/host-config";
 import { host, ORIGIN, server, signedIn, toolGroups, user, workspace } from "./fixtures";
 
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
@@ -294,7 +295,7 @@ describe("settings", () => {
 
   test("a host without Chromium offers its owner a chat on it, in their private workspace, that installs one", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [] };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
     const browser = { source: "piki:browser", dev: false, description: "A headless Chromium", modules: [] };
     const app = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },
@@ -381,7 +382,7 @@ describe("settings", () => {
     const tabs: Record<string, string[]> = {
       overview: ["workspace-members", "workspace-invite"],
       sources: ["workspace-sources", "workspace-connections", "workspace-push-access"],
-      agents: ["workspace-extensions", "workspace-tool-groups", "workspace-network", "workspace-github-reach"],
+      agents: ["workspace-extensions", "workspace-tool-groups", "workspace-network", "workspace-github-reach", "workspace-memory"],
       sessions: ["workspace-schedules", "workspace-cache-warming", "workspace-database"],
     };
     const everyPart = Object.values(tabs).flat();
@@ -476,6 +477,27 @@ describe("settings", () => {
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`)).toEqual({ anyRepository: false });
   });
 
+  test("Workspaces shows the workspace's memory and the notes agents proposed, and an admin adds one to the memory as they save it", async () => {
+    const app = await openSettings("workspaces", {
+      [`PUT ${ORIGIN}/api/workspaces/w1/memory`]: { body: { memory: { instructions: "Use pnpm.", memory: "- The login test races the cookie.\n- Retry the login test once before failing it.\n",
+        revision: 3, updatedBy: "u1", updatedAt: "2026-11-06T09:00:00.000Z" }, notes: [], pendingNotes: 0, enabled: true, admin: true } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("id:workspace-memory-text");
+    expect(app.value("id:workspace-memory-instructions")).toBe("Use pnpm.");
+    expect(app.value("id:workspace-memory-text")).toBe("- The login test races the cookie.");
+    expect(app.texts().join(" ")).toContain("Retry the login test once before failing it.");
+    expect(app.shows("id:workspace-memory-save")).toBe(false);
+    await app.press("text:Add to memory");
+    await app.waitFor("id:workspace-memory-save");
+    expect(app.value("id:workspace-memory-text")).toBe("- The login test races the cookie.\n- Retry the login test once before failing it.\n");
+    expect(app.texts().join(" ")).toContain("Save, adding 1 note");
+    await app.press("id:workspace-memory-save");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/memory`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/memory`)).toEqual({ revision: 2,
+      memory: "- The login test races the cookie.\n- Retry the login test once before failing it.\n", accept: ["n1"] });
+  });
+
   test("Workspaces shows each role's tools and creates a tool group with the tools an admin picks", async () => {
     const app = await openSettings("workspaces");
     await openWorkspace(app, "agents");
@@ -535,6 +557,30 @@ describe("settings", () => {
     await app.press("id:host-config-save");
     await app.waitUntil(() => bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`) !== undefined);
     expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`)).toEqual({ commandTimeoutUnlimited: true });
+  });
+
+  test("Hosts let their owner turn prompt cache warming off, and show admins the owner's choice read-only", async () => {
+    const app = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0",
+        capabilities: { ...host.capabilities, hostConfig: true } }] } },
+      [`PATCH ${ORIGIN}/api/connectors/c1/config`]: { body: { ok: true } },
+    });
+    await app.press("id:host-row-c1");
+    await app.waitFor("id:host-cache-warming-allow");
+    await app.press("id:host-cache-warming-allow");
+    await app.press("id:host-config-save");
+    await app.waitUntil(() => bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`) !== undefined);
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`)).toEqual({ cacheWarming: false });
+    app.dispose();
+
+    const admin = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, ownerId: "u9", ownerName: "grace", role: "admin", connectedWorkspaceIds: ["w1"], version: "0.40.0",
+        config: { ...defaultHostConfig, cacheWarming: false }, capabilities: { ...host.capabilities, hostConfig: true } }] } },
+    });
+    await admin.press("id:host-row-c1");
+    await admin.waitFor("id:host-cache-warming");
+    expect(admin.shows("id:host-cache-warming-allow")).toBe(false);
+    expect(admin.texts().join(" ")).toContain("Only the host's owner changes this");
   });
 
   test("a new workspace starts as the preset chosen for it, and an existing one takes a preset once confirmed", async () => {
@@ -601,7 +647,7 @@ describe("settings", () => {
 
   test("Hosts says a connector predates build caches, and shows admins the owner's choice read-only", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64, commandTimeoutUnlimited: false, modelExtensions: [] };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
     const older = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0", capabilities: { ...host.capabilities, hostConfig: true } }] } },
     });

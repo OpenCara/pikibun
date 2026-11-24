@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
-import { cacheWarmingModes } from "../../../../packages/shared/src/cache-warming.js";
+import { cacheWarmingModes, sessionCacheWarmingMode } from "../../../../packages/shared/src/cache-warming.js";
 import { parseSessionBuildCaches } from "../../../../packages/shared/src/build-caches.js";
 import type { BuildCacheStore } from "../build-caches.js";
 import type { ConnectorCredentials } from "../../../../packages/shared/src/connector.js";
@@ -62,7 +62,7 @@ function runnerExtensions(source: RunnerConfigSource, extensions: HostExtensions
     peekCached: (items, autoCache) => extensions.peekCached(items, autoCache),
     workspace: workspaceId => extensions.workspace(workspaceId, async () =>
       source.calls.callback(await source.connection(), "/api/connectors/self/extensions/workspace",
-        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true }, WORKSPACE_EXTENSIONS_LIMIT)),
+        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true, memory: true }, WORKSPACE_EXTENSIONS_LIMIT)),
     lastKnown: workspaceId => extensions.lastKnown(workspaceId),
     ...(source.options.localModels.modelRegistry ? { modelRegistry: source.options.localModels.modelRegistry } : {}),
     ...(source.options.extensionModelCalls === false ? { modelCallsRefused: true as const } : {}),
@@ -165,8 +165,11 @@ export function connectorRunnerConfig(source: RunnerConfigSource, repositoryCach
     },
     hostConfig: () => hostConfig.current(),
     requiredExtensions: () => hostConfig.required(),
-    cacheWarming: async sessionId => z.object({ mode: z.enum(cacheWarmingModes), child: z.boolean() })
-      .parse(await calls.callback(await source.connection(), "/api/connectors/self/cache-warming", { sessionId })),
+    cacheWarming: async sessionId => {
+      const answer = z.object({ mode: z.enum(cacheWarmingModes), child: z.boolean() })
+        .parse(await calls.callback(await source.connection(), "/api/connectors/self/cache-warming", { sessionId }));
+      return { ...answer, mode: sessionCacheWarmingMode(answer.mode, await hostConfig.current()) };
+    },
     ...(source.buildCaches ? {
       buildCacheStore: source.buildCaches,
       buildCaches: async (sessionId: string, senderId: string | null) => parseSessionBuildCaches(await calls.callback(await source.connection(), "/api/connectors/self/build-caches", { sessionId, senderId })),

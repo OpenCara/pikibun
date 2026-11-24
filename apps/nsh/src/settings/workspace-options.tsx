@@ -109,6 +109,7 @@ export function CacheWarmingSettings(props: { workspace: Workspace; admin: boole
       <If when={!props.admin}>{adminOnly}</If>
       <Note>Model providers keep the start of a conversation cached for a few minutes, and read it far cheaper than they write it again. A host can refresh a session's cache shortly before it expires, with a request of one output token, so the next message after a pause or a slow tool reads it instead of writing it again.</Note>
       <Note>A refresh is sent only for models with a known cache lifetime, and only when it is expected to save at least $0.05; its usage counts as the session's own. Sessions that agents start for sub-tasks are refreshed only while they work.</Note>
+      <Note>Refreshes spend the model accounts of the host a session runs on, so a host's owner can turn them off on their host in its configuration; sessions there are then never refreshed, whatever this setting says.</Note>
     </View>}>
       <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>
         <If when={mode()}>

@@ -173,8 +173,8 @@ test("piki:schedule: the workspace turns the schedule tool off, and a call by na
 });
 
 test("sessionToolsOff: only a session-tool extension the workspace lists turned off turns its tools off, but an opt-in one is off unless listed on", () => {
-  const optIn = ["tunnel", "workspace", "publish_artifact"];
-  const on = [{ source: "piki:workspace", enabled: true }, { source: "piki:artifacts", enabled: true }];
+  const optIn = ["tunnel", "workspace", "memory", "publish_artifact"];
+  const on = [{ source: "piki:workspace", enabled: true }, { source: "piki:memory", enabled: true }, { source: "piki:artifacts", enabled: true }];
   assert.deepEqual([...sessionToolsOff([])], optIn);
   assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: true }])], optIn);
   assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule", ...optIn]);
