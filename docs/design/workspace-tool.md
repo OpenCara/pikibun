@@ -36,7 +36,7 @@ button is. The `workspace` tool lets the agent make the change, within the same 
 
 5. **Gates before any route runs.** In order: the sender can still write to the session; the call comes from the
    session's own host (`requireCallbackScope`); the admission is the sender's, a write message, and live
-   (`admissionExpired`); both the session owner's and the sender's tool groups have `workspace` (`requireToolCall`);
+   (`requireAdmission`); both the session owner's and the sender's tool groups have `workspace` (`requireToolCall`);
    `piki:workspace` is on in the workspace; and a change needs a message that isn't Read-only. The connector checks the
    switch, the tool groups and Read-only too, but the control plane is where they hold, including for connectors that
    don't know `piki:workspace`.

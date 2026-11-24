@@ -9,7 +9,7 @@ import { CronError, isTimeZone, nextCronTime, parseCron } from '../../../package
 import { hasPermission, sessionCreatorRoles, workspaceManagerRoles } from '../../../packages/shared/src/policy.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  admissionExpired, auditStatement, hostCapabilities, isDeletedWorkspace, requireCallbackScope, requireMember, requireSession, requireSessionCreator, requireToolCall, sessionAccess,
+  auditStatement, hostCapabilities, isDeletedWorkspace, requireAdmission, requireCallbackScope, requireMember, requireSession, requireSessionCreator, requireToolCall, sessionAccess,
 } from './authority/index.js';
 import { requireModel, usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
@@ -623,8 +623,6 @@ export async function restorePortableSchedules(env: Env, row: SessionRow, schedu
   return restored;
 }
 
-type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number };
-
 export async function agentSchedules(c: AppContext, connectorId: string | null): Promise<Response> {
   const input = await jsonObject(c, 512 * 1024);
   if (Object.keys(input).some(key => !['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'scheduleId', ...scheduleFields].includes(key))) {
@@ -658,12 +656,8 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
   const row = access.row;
   if (row.owner_id !== actorId) fail(403, 'owner_required', 'Only the session owner\'s messages schedule prompts.');
   await requireCallbackScope(c, row, connectorId);
-  const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?')
-    .bind(admissionId).first();
-  if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
-    || await admissionExpired(c.env, admissionId, admission)) {
-    fail(403, 'schedule_not_admitted', 'Scheduling needs a write message from the session owner sent within the last hour, or whose run is still going.');
-  }
+  const admission = await requireAdmission(c.env, { admissionId, sessionId, actorId }, { code: 'schedule_not_admitted',
+    message: 'Scheduling needs a write message from the session owner sent within the last hour, or whose run is still going.' });
   await requireToolCall(c.env, row, actorId, 'schedule');
   const visible = 'p.workspace_id = ? AND (p.session_id = ? OR p.origin_session_id = ? OR (p.session_id IS NULL AND p.owner_id = ?))';
   if (action === 'list') {

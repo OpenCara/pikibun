@@ -1,9 +1,11 @@
 # Design: portable sessions
 
-Status: implemented. Signing each request on the owner's devices, so that the server a session is attached to is out
-of its trust entirely, is not: see [Trust](#trust). Replaced for new private sessions by
-[private sessions on the local server](local-private-sessions.md), which removed **Bring here**: what follows of moving
-sessions between servers applies to those made portable before.
+Status: being removed. Replaced by [private sessions on the local server](local-private-sessions.md), which removed
+**Bring here**, so nothing moves a session between servers any more. No new session is made portable: what follows
+describes the sessions made portable before, which keep working where they are, and
+[Removing the rest](#removing-the-rest) says what is still in the code for them and in which order it goes. Signing
+each request on the owner's devices, so that the server a session is attached to is out of its trust entirely, was
+never built: see [Trust](#trust).
 
 ## Why
 
@@ -51,14 +53,17 @@ its pairing itself, and sends it, with its sessions, each time it connects and e
 connector calling, and records it (`identity_delegations`). Nobody signs anything in a browser or on a phone: the apps
 hold no key.
 
-## What makes a session portable
+## What made a session portable
 
-At creation (`portableKeyFor` in `apps/server/src/portable-sessions.ts`), a session is portable when it is in its
-owner's private workspace, on a host they paired themselves that says it keeps portable sessions (`portableSessions`
-capability) and has sent a delegation, and it runs on the host or in the sandbox with no workspace sources (its clones
-are made on demand with the owner's own access, on whichever server it is attached to). The server records the key
-(`sessions.portable_key`) and the binding says so (`session.portable`). The host, provisioning it, signs its mark and
-records it in the identity's index (`<identity>/sessions/<id>.json`: its folder and the mark).
+No session is made portable now: `createSession` sets no `portable_key`, so a new session's binding carries no
+`session.portable`, its host signs no mark for it, and it lives in its connection's own folder like any other session.
+
+Until then a session was made portable at creation when it was in its owner's private workspace, on a host they paired
+themselves that said it keeps portable sessions (`portableSessions` capability) and had sent a delegation, and it ran
+on the host or in the sandbox with no workspace sources (its clones are made on demand with the owner's own access, on
+whichever server it is attached to). The server recorded the key (`sessions.portable_key`) and the binding said so
+(`session.portable`). The host, provisioning it, signed its mark and recorded it in the identity's index
+(`<identity>/sessions/<id>.json`: its folder and the mark). Sessions made that way keep all of it.
 
 The folder stays where its connection made it. Moving it would break absolute paths in its files (virtual
 environments, `node_modules/.bin`), and the index lets every connection of the identity find it.
@@ -173,6 +178,64 @@ sign the new version (`sign` in its answer); the host keeps the latest beside it
 A server applies a signed version newer than any it applied, so a new server takes the name and defaults the owner set
 elsewhere, and none can forge them: the version, the settings and the key are all signed. A change made on this server
 that isn't signed yet wins over a version from elsewhere no newer than it: it is signed next, as the newer one.
+
+## Removing the rest
+
+Nothing can move a session any more. The routes that did (`GET /api/portable-sessions`,
+`POST /api/portable-sessions/:id/attach`) are gone with **Bring here**, and no code on the Pikibun server asks a host
+to `attach`: the action is still in `RunnerAction`, `ownerActions` and the relay's path table, but nothing requests a
+ticket for it. So new sessions stopped being made portable first, and the rest goes in the order below. Hosts update
+their connectors slowly, so each step leaves older hosts working.
+
+**What still reads `portable_key` on the Pikibun server**
+
+| Where | What it does | Still needed |
+|---|---|---|
+| `sessionRecord` (`apps/server/src/db.ts`) | Puts `portable: true` in the session's record and in the binding a host is sent | Only by a host provisioning a session, which marks it. No session is provisioned portable now, and the client reads `detached`, never `portable` |
+| `keepPortable` (`portable-sessions.ts`; called on a rename in `sessions.ts`, from `session-titles.ts` and from every schedule change in `scheduled-prompts.ts`) | Sends the title and schedules to the host (`portable.json`) | No: the copy exists for the next server to read when it attaches the session, and none can |
+| The identity report (`POST /api/connectors/self/identity`) | Moves `portable_key` along a rotation chain and to the key a host reports a session under; answers with the reported sessions archived here (`archivedHere`) | No: the key decided who may attach, and the archived list told other servers' **Bring here** rows. The same route also records the delegation and carries the signed settings, which stay (below) |
+| `POST /api/connectors/self/portable/detached` | Archives the record as **Moved to another server** when its host says another connection attached it | No: a host reports it only after an attach |
+
+`detached_at` is separate from the key: the records archived as moved stay read-only and can't be unarchived, and
+that stays for as long as the records do.
+
+**What the host still does for them** (`apps/runner`): finds a portable session's folder through the identity's index
+(`locate`), holds an open lease on it and sweeps the leases every second (`portable-lease.ts`), checks at each open
+that the binding still names its own pairing, reports its identity's sessions with their marks every minute, keeps
+`portable.json` and `portable-archived.json`, and serves `attach` and `portable`. Of these only the first is needed
+without a move: a session attached from another connection's folder lives outside this connection's own `sessions`
+directory, and the index is the only record of where.
+
+**What existing rows need**
+
+- A session attached here (`portable_key` set, `detached_at` empty) must keep opening. Its folder may be another
+  connection's, so the host has to keep finding it through the identity's index, or record the folder somewhere
+  else first. Nothing else about it differs from any other session of the private workspace.
+- A record that moved away (`detached_at` set) stays as it is: archived, read-only, never unarchived.
+- No row needs its `portable_key` for anything once the steps below are done, so the last one drops the column
+  without touching the rows.
+
+**The order**
+
+1. *Done:* no new session is made portable (`createSession`), and `portableKeyFor` is gone.
+2. **Pikibun server:** stop calling `keepPortable` and remove it; stop sending `portable` in bindings and records;
+   take `attach` and `portable` out of `RunnerAction`, the permission tables (`runner-access.ts`) and the relay's paths;
+   reduce the identity report to the delegation and the settings (accepting and ignoring `sessions` and `rotations`,
+   which hosts keep sending, and never answering `archived`). Keep `portable/detached` as a route that answers `ok`
+   and changes nothing, since older hosts can still call it. An older host is never asked anything it
+   needs, so no minimum connector version rises.
+3. **Connector** (a `cli-v` release): remove `attach`, `keep`, the attach lock, `portable.json`,
+   `portable-archived.json`, the report of sessions and the detach report. Keep the identity's index for finding
+   folders, and keep the open lease while a computer can still run a connector from before this step beside a new
+   one, as two of them could otherwise open one session's database. Stop advertising `portableSessions`.
+4. **Last, once step 3's connector is the minimum:** drop `sessions.portable_key` in a migration for SQLite and
+   Postgres (the column has no index and no `CHECK`, so SQLite drops it in place), remove `portable` from
+   `SessionRecord` and `portableSessions` from the capabilities, and delete the open lease and its sweep, replacing
+   the identity's index by a plain record of where each such session's folder is.
+
+**Not part of this removal:** the identity key itself, its delegations (`identity_delegations`) and the signed
+private-workspace settings (`portable_settings`). They don't depend on `portable_key`. Whether the settings should
+still travel between servers, now that private sessions have one home, is its own decision.
 
 ## Trust
 

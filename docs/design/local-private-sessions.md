@@ -36,7 +36,9 @@ forwarding to it, and a message sent from any of them is queued in the one sessi
 5. **Each computer's local server holds its own private sessions.** A server whose user has paired several computers
    lists all of theirs, each under its computer. Moving a session between computers stays **Move to another host**.
 6. **No migration.** **Bring here** is removed. Private sessions that exist already stay where they are and work as
-   they do now; new ones are made on the local server.
+   they do now; new ones are made on the local server. No new session is made portable any more, on any server: what
+   is left of portable sessions serves the ones made before, and
+   [its removal is planned](portable-sessions.md#removing-the-rest).
 
 ## The local server
 
@@ -153,7 +155,7 @@ owner's alone.
 | `apps/server` | `forwarded-sessions.ts` (cache, list, forwarding, creation, notifications), `private-sessions.ts` (the local server's list and creation), the `private` ticket in the authority |
 | `packages/shared/src/private-sessions.ts` | The list of requests and their shapes |
 | `apps/nsh` | Forwarded sessions in the list, by computer and offline; **Bring here** and making sessions portable removed |
-| `apps/server/src/portable-sessions.ts` | `GET /api/portable-sessions`, `POST /api/portable-sessions/:id/attach` and `POST /api/connectors/:id/portable` removed, with `portable_offers`; identity reports, settings and detaching kept for sessions that moved before |
+| `apps/server/src/portable-sessions.ts` | `GET /api/portable-sessions`, `POST /api/portable-sessions/:id/attach` and `POST /api/connectors/:id/portable` removed, with `portable_offers`; identity reports, settings and detaching kept for sessions that moved before; `portableKeyFor` removed, so no new session gets a `portable_key` |
 
 ## Not decided here
 

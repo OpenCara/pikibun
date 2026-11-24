@@ -271,12 +271,16 @@ test('an agent stops and archives sessions as its sender may, and starts linked 
   assert.equal(spacedChild.status, 201, JSON.stringify(spacedChild.body));
   assert.equal((spacedChild.body.session as CrossSessionSummary).title, 'Spaced title');
 
-  const created = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Write the docs', message: 'Document the API', notify: true, visibility: 'private' });
+  const sessions = () => f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
+  const sessionsBefore = sessions();
+  await f.refused(f.tool('session-a', ownerId, write, { action: 'create', title: 'Kept to myself', message: 'Document the API', visibility: 'private' }), 400, 'private_session_unavailable');
+  assert.equal(sessions(), sessionsBefore, 'a private session asked for in a shared workspace is refused, not made visible');
+  const created = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Write the docs', message: 'Document the API', notify: true, visibility: 'workspace' });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const child = created.body.session as CrossSessionSummary;
   const opening = created.body.message as CrossSessionMessage;
   assert.deepEqual([child.title, child.parentSessionId, child.ownerId, child.status], ['Write the docs', 'session-a', ownerId, 'ready']);
-  assert.equal((await f.collaborator.request('GET', `/api/sessions/${child.id}`)).status, 200, 'a visibility an older runner sends is ignored: every member sees the new session');
+  assert.equal((await f.collaborator.request('GET', `/api/sessions/${child.id}`)).status, 200, 'every member sees the new session');
   assert.deepEqual([opening.kind, opening.targetSessionId, opening.notify], ['create', child.id, 'pending']);
   assert.match(String(f.fake(child.id).submitted[0]!.body.content), /^\[Pikibun cross-session opening message xs:\S+ · from session "Coordinator"/);
   const record = (await (await f.owner.request('GET', `/api/sessions/${child.id}`)).json() as { session: SessionRecord }).session;
