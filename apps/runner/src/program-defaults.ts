@@ -86,6 +86,14 @@ export function timedOutHint(result: string | undefined): string | undefined {
     + "Give timeout_seconds to one that needs longer.";
 }
 
+const KILLED = /^(?:(?:Sandbox process|Command) failed \((?:exit 137|SIGKILL)\)|Command killed by SIGKILL)/;
+
+export function killedHint(result: string | undefined): string | undefined {
+  if (!result || !KILLED.test(result)) return undefined;
+  return "The process was killed, and not by this tool (no time limit was reached and nobody stopped it): most likely the host ran short of memory. "
+    + "This is not a failure of the code it ran. Run a smaller part (fewer files or projects), or rely on CI for the full run and say that you did.";
+}
+
 const manifests: readonly { file: string; pattern: RegExp }[] = [
   { file: "package.json", pattern: /ENOENT[^\n]*package\.json|ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND|ERR_PNPM_NO_PKG_MANIFEST|No package\.json (?:was )?found|Couldn't find a package\.json/i },
   { file: "pyproject.toml", pattern: /could not find a pyproject\.toml|No `pyproject\.toml` found|No such file or directory: '(?:requirements[^']*\.txt|setup\.py)'|Could not open requirements file/i },
