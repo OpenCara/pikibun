@@ -23,7 +23,7 @@ import type { RunnerAction, RunnerBinding } from "../packages/shared/src/types.j
 test("code mode is core: every session runs it, whatever the host's configuration lists, unless a workspace's extension offers its tool", async t => {
   const builtins = new SessionBuiltins();
   t.after(() => builtins.close());
-  assert.deepEqual([...builtins.extensions.keys()], ["pi:codemode"]);
+  assert.deepEqual([...builtins.extensions.keys()], ["pi:codemode", "pi:tool-search"]);
   assert.deepEqual(builtins.select([], new Set()).map(item => item.name), ["pi:codemode"], "on though the host's configuration lists nothing");
   assert.deepEqual(builtins.select(["pi:codemode"], new Set()).map(item => item.name), ["pi:codemode"]);
   assert.deepEqual(builtins.select([], new Set(["codemode"])), [], "a workspace's extension offering codemode still replaces it");

@@ -14,6 +14,10 @@ export const builtinExtensions = Object.freeze([
     name: "pi:codemode", title: "Code mode", tools: Object.freeze(["codemode"]), core: true,
     description: "The codemode tool: the model writes JavaScript that calls the session's tools, run in a QuickJS sandbox in the connector, to batch, chain and filter calls. Each call it makes is decided like the model's own, and a script resumes where it was after a restart.",
   }),
+  Object.freeze({
+    name: "pi:tool-search", title: "Tool search", tools: Object.freeze(["tool_search"]),
+    description: "Defers the session's rarely used tools: the model is offered the file tools, git, GitHub, Python, Node.js and code mode from the start, and finds the others (tunnel, schedule, other toolchains, extensions' tools and the like) with the tool_search tool, which loads them for the rest of the conversation. Loaded tools refuse as they do when offered from the start.",
+  }),
 ] as const);
 export type BuiltinExtensionName = (typeof builtinExtensions)[number]["name"];
 export const builtinExtensionNames: readonly BuiltinExtensionName[] = Object.freeze(builtinExtensions.map(item => item.name));

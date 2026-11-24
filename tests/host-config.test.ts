@@ -52,7 +52,7 @@ test("a host configuration is whole and within bounds, or refused", () => {
     { ...config, commandTimeoutSeconds: 60.5 }, { ...config, commandTimeoutSeconds: "60" }, { ...config, gpu: 1 }, { ...config, gitCredentials: "true" },
     { ...config, repositoryCache: "shared" }, { ...config, hostSessions: "true" }, { ...config, extra: true },
     { ...config, compaction: undefined }, { ...config, compaction: { reserveTokens: -1 } },
-    { ...config, builtinExtensions: undefined }, { ...config, builtinExtensions: "codemode" }, { ...config, builtinExtensions: ["tool-search"] },
+    { ...config, builtinExtensions: undefined }, { ...config, builtinExtensions: "codemode" }, { ...config, builtinExtensions: ["mcp"] },
     { ...config, builtinExtensions: ["pi:codemode", "codemode"] },
     { ...config, requiredExtensions: undefined }, { ...config, requiredExtensions: [{ source: "npm:cc-safety-net" }] },
     { commandTimeoutSeconds: 60, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false },
@@ -128,7 +128,8 @@ test("a connector reads what it knows of a configuration: newer settings are lef
     builtinExtensions: ["pi:codemode"], requiredExtensions: [{ source: "piki:prompt-audit", settings: {} }], browser: { source: "download" },
     serviceLifetimeSeconds: 3600, tunnel: { source: "download" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [] };
   assert.deepEqual(readHostConfig({ ...sent, someLaterSetting: "on" }), sent);
-  assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["tool-search", "pi:codemode"] }), sent);
+  assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["mcp", "pi:codemode"] }), sent);
+  assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["tool-search"] }).builtinExtensions, ["pi:tool-search"], "tool search is Pi's, named bare before pi: names");
   assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["codemode"] }), sent, "a control plane of before pi: names names them bare");
   assert.deepEqual(readHostConfig({ commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host" }), { ...sent, hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" }, serviceLifetimeSeconds: 14400, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [] },
     "a control plane that predates required extensions sends none: the host requires none");
