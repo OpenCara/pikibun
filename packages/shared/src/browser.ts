@@ -86,6 +86,7 @@ export interface BrowserReport {
   page_errors?: string[];
   failed_requests?: { url: string; error?: string; status?: number }[];
   serve_output?: string;
+  gpu?: { in_use: boolean; renderer?: string; note?: string };
   seconds?: number;
   report?: string;
 }
@@ -161,6 +162,9 @@ export function parseBrowserReport(text: string): BrowserReport | undefined {
     url: entry.url, ...(typeof entry.error === "string" ? { error: entry.error } : {}), ...(typeof entry.status === "number" ? { status: entry.status } : {}),
   } : undefined);
   if (failed) report.failed_requests = failed;
+  if (isObject(value.gpu) && typeof value.gpu.in_use === "boolean") {
+    report.gpu = { in_use: value.gpu.in_use, ...typed(value.gpu, "string", ["renderer", "note"]) };
+  }
   return report;
 }
 

@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { browserRequest, browserShellCommand, browserTarget } from "../apps/runner/src/browser-command.js";
+import { browserGpu, browserRequest, browserShellCommand, browserTarget } from "../apps/runner/src/browser-command.js";
 import { browserAt, browserEnvironment, downloadedBrowsers, hostBrowser, sandboxBrowserMount, SANDBOX_BROWSER_DIRECTORY, SANDBOX_BROWSER_DRIVER } from "../apps/runner/src/browser-toolchain.js";
 import { BROWSER_DRIVER } from "../apps/runner/src/sandbox-python.generated.js";
 import { validateOperation } from "../apps/runner/src/protocol.js";
@@ -81,6 +81,14 @@ test("the browser tool's command runs the driver with the host's Chromium and th
     + "'{\"serve\":{\"program\":\"pnpm\",\"args\":[\"dev\"],\"port\":3000}}' </dev/null 2>&1");
   assert.doesNotMatch(browserShellCommand(browserRequest({ serve: { program: "python3", args: ["-m", "http.server"], port: 8000 } }), browser,
     { seconds: 30, nodeBin: "/opt/pikibun/node/bin" }), /--node-bin/);
+  assert.equal(browserShellCommand(browserRequest({ serve: { program: "pnpm", args: ["dev"], port: 3000 } }), browser, { seconds: 30, nodeBin: "/opt/pikibun/node/bin", gpu: true }),
+    "'/opt/pikibun/browser/pikibun-browser' '--chrome' '/opt/pikibun/chromium/chrome' '--time-limit' '30' '--node-bin' '/opt/pikibun/node/bin' '--gpu' "
+    + "'{\"serve\":{\"program\":\"pnpm\",\"args\":[\"dev\"],\"port\":3000}}' </dev/null 2>&1");
+  for (const gpu of [false, undefined]) assert.doesNotMatch(browserShellCommand(request, browser, { seconds: 30, gpu }), /--gpu/);
+  assert.equal(browserGpu(true, "render"), true);
+  assert.equal(browserGpu(false, "render"), false, "a GPU the host doesn't lend");
+  assert.equal(browserGpu(true, "dxg"), false, "WSL's /dev/dxg: its Vulkan driver can't run ANGLE");
+  assert.equal(browserGpu(true, undefined), false);
   assert.doesNotThrow(() => validateOperation({ kind: "bash", command: browserShellCommand(request, browser, { seconds: 30 }) }));
   assert.throws(() => browserShellCommand(browserRequest({ actions: Array.from({ length: 3 }, () => ({ action: "evaluate", expression: "x".repeat(3000) })) }), browser, { seconds: 30 }),
     /over 8192 characters/);
@@ -113,6 +121,10 @@ test("a browser report is taken only as far as it has the expected shape: the wo
     serve: { program: "pnpm", args: ["dev", 5173], port: 5173, directory: ["app"] } } }))?.request, {
     actions: [{ action: "type", selector: "#q" }], serve: { program: "pnpm", port: 5173, args: ["dev"] },
   });
+  assert.deepEqual(parseBrowserReport(JSON.stringify({ gpu: { in_use: true, renderer: "ANGLE (Intel, Vulkan 1.3)", note: 7, device: "/dev/dri/renderD128" } }))?.gpu,
+    { in_use: true, renderer: "ANGLE (Intel, Vulkan 1.3)" });
+  assert.deepEqual(parseBrowserReport(JSON.stringify({ gpu: { in_use: false, note: "software" } }))?.gpu, { in_use: false, note: "software" });
+  for (const gpu of [true, "yes", { renderer: "ANGLE" }, { in_use: "yes" }]) assert.equal(parseBrowserReport(JSON.stringify({ gpu }))?.gpu, undefined);
   assert.equal(parseBrowserReport("Sandbox process failed"), undefined);
   assert.equal(parseBrowserReport("[1, 2]"), undefined);
 });
@@ -274,6 +286,124 @@ test("a Chromium that starts but never answers is reported with what it printed,
   const report = parseBrowserReport(output);
   assert.ok(report, output);
   assert.match(report.error ?? "", /^Chromium did not answer within \d+ seconds of starting: stuck before DevTools/, output);
+});
+
+const STAND_IN_CHROMIUM = `#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+
+mode = os.environ.get('STAND_IN_GPU', 'hardware')
+with open(os.environ['STAND_IN_STARTS'], 'a') as starts:
+    starts.write(json.dumps(sys.argv[1:]) + '\\n')
+lent = '--use-angle=vulkan' in sys.argv
+if lent and mode == 'exits':
+    sys.stderr.write('vulkan: no device\\n')
+    sys.exit(1)
+if lent and mode == 'silent':
+    time.sleep(60)
+renderer = 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)'
+webgl = 'unavailable_software'
+if lent:
+    renderer = 'ANGLE (Intel, Vulkan 1.3.255 (Intel(R) Xe Graphics (TGL GT2) (0x00009A49)), Intel open-source Mesa driver)'
+    webgl = 'unavailable_software' if mode == 'blocked' else 'enabled'
+    if mode == 'none':
+        renderer, webgl = '', 'disabled_off'
+    if mode == 'software':
+        renderer = 'ANGLE (Mesa, Vulkan 1.3.255 (llvmpipe (LLVM 17.0.6, 256 bits) (0x00000000)), llvmpipe)'
+buffer = b''
+while True:
+    chunk = os.read(3, 65536)
+    if not chunk:
+        break
+    buffer += chunk
+    while b'\\0' in buffer:
+        raw, buffer = buffer.split(b'\\0', 1)
+        message = json.loads(raw)
+        method = message['method']
+        result = {}
+        if method == 'Target.getTargets':
+            result = {'targetInfos': [{'type': 'page', 'targetId': 'page'}]}
+        elif method == 'Target.attachToTarget':
+            result = {'sessionId': 'session'}
+        elif method == 'Page.getFrameTree':
+            result = {'frameTree': {'frame': {'id': 'frame'}}}
+        elif method == 'SystemInfo.getInfo':
+            result = {'gpu': {'auxAttributes': {'glRenderer': renderer}, 'featureStatus': {'webgl': webgl}}}
+        elif method == 'Runtime.evaluate':
+            described = {'text': '', 'textTruncated': False, 'elements': [], 'size': {'width': 1, 'height': 1}}
+            result = {'result': {'value': described if 'describe(' in message['params']['expression'] else 'about:blank'}}
+        elif method == 'Page.captureScreenshot':
+            result = {'data': ''}
+        deaf = lent and mode == 'deaf' and method == 'Target.getTargets'
+        if deaf:
+            os.close(3)
+        os.write(4, json.dumps({'id': message['id'], 'result': result}).encode() + b'\\0')
+        if deaf:
+            time.sleep(2)
+            sys.exit(1)
+        if method == 'Browser.close':
+            sys.exit(0)
+`;
+
+test("with the host's GPU lent, the driver starts Chromium on ANGLE's Vulkan and keeps it only if it renders on hardware; otherwise, and without one, today's flags",
+  { skip: !python && "python3 is not installed" }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-gpu-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const driver = join(root, "pikibun-browser");
+  await writeFile(driver, BROWSER_DRIVER);
+  await chmod(driver, 0o700);
+  const standIn = join(root, "chromium");
+  await writeFile(standIn, STAND_IN_CHROMIUM);
+  await chmod(standIn, 0o700);
+  const temporary = join(root, "tmp");
+  await mkdir(temporary);
+  const gpuFlags = ["--enable-gpu", "--ignore-gpu-blocklist", "--use-gl=angle", "--use-angle=vulkan", "--enable-features=Vulkan", "--disable-vulkan-surface", "--enable-unsafe-webgpu"];
+  let runs = 0;
+  const call = async (mode: string, lent: boolean, seconds = 30) => {
+    const starts = join(root, `starts-${runs++}`);
+    const output = await new Promise<string>(resolve => {
+      const child = spawn(python, ["-I", driver, "--chrome", standIn, "--time-limit", String(seconds), ...(lent ? ["--gpu"] : []), "{}"],
+        { cwd: root, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root, TMPDIR: temporary, STAND_IN_GPU: mode, STAND_IN_STARTS: starts } });
+      let text = "";
+      child.stdout.on("data", chunk => { text += chunk; });
+      child.stderr.on("data", chunk => { text += chunk; });
+      child.on("close", () => resolve(text));
+    });
+    const report = parseBrowserReport(output);
+    assert.ok(report, output);
+    assert.equal(report.error, undefined, output);
+    return { report, starts: (await readFile(starts, "utf8")).trim().split("\n").map(line => JSON.parse(line) as string[]) };
+  };
+
+  const without = await call("hardware", false);
+  assert.equal(without.starts.length, 1);
+  const software = without.starts[0]!;
+  assert.ok(software.includes("--disable-gpu") && software.includes("--headless=new") && software.at(-1) === "about:blank", software.join(" "));
+  for (const flag of gpuFlags) assert.ok(!software.includes(flag), `${flag} without a lent GPU`);
+  assert.equal(without.report.gpu, undefined, "nothing is said of a GPU the host doesn't lend");
+
+  const lent = await call("hardware", true);
+  assert.equal(lent.starts.length, 1);
+  assert.ok(!lent.starts[0]!.includes("--disable-gpu"));
+  assert.deepEqual(lent.starts[0]!.filter(flag => !gpuFlags.includes(flag)), software.filter(flag => flag !== "--disable-gpu"), "the other flags are as they were");
+  assert.deepEqual(lent.starts[0]!.filter(flag => gpuFlags.includes(flag)), gpuFlags);
+  assert.deepEqual(lent.report.gpu, { in_use: true, renderer: "ANGLE (Intel, Vulkan 1.3.255 (Intel(R) Xe Graphics (TGL GT2) (0x00009A49)), Intel open-source Mesa driver)" });
+
+  const reasons: [string, RegExp, number?][] = [["none", /its GPU process did not start/], ["software", /it found no driver for the GPU, only ANGLE \(Mesa.*llvmpipe/],
+    ["blocked", /WebGL was unavailable_software on ANGLE \(Intel/], ["exits", /the browser closed: vulkan: no device/], ["deaf", /it stopped taking commands \(Broken pipe\)/], ["silent", /Chromium did not answer within \d+ seconds of starting|it did not answer within 3 seconds/, 14]];
+  for (const [mode, reason, seconds] of reasons) {
+    const fallen = await call(mode, true, seconds);
+    assert.equal(fallen.starts.length, 2, mode);
+    assert.ok(fallen.starts[0]!.includes("--use-angle=vulkan"), mode);
+    assert.deepEqual(fallen.starts[1], software, `${mode}: the second start is the one a host without a GPU gets`);
+    assert.equal(fallen.report.gpu?.in_use, false, mode);
+    assert.equal(fallen.report.gpu?.renderer, undefined, mode);
+    assert.match(fallen.report.gpu?.note ?? "", reason, mode);
+    assert.match(fallen.report.gpu?.note ?? "", /^Chromium could not render with the GPU the host lends \(.*\), so this call rendered in software, as on a host that lends none\./s, mode);
+    assert.equal(fallen.report.url, "about:blank", mode);
+  }
 });
 
 test("in the Linux sandbox, the driver runs the host's Chromium, given read-only, with the session's own files", { skip: linuxSandboxMissing() ?? ((!chromium && "no Chromium on this host (PIKIBUN_TEST_BROWSER names one)") || undefined) }, async t => {

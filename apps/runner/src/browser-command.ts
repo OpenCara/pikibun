@@ -1,4 +1,5 @@
 import { browserActions, browserKeys, browserLimits, desktopLimits, type BrowserAction, type BrowserActionName, type BrowserRequest, type BrowserServe } from "../../../packages/shared/src/browser.js";
+import type { GpuKind } from "../../../packages/shared/src/host-config.js";
 import { nodePrograms, nodeRequest } from "./node-command.js";
 import { pythonPrograms, pythonRequest } from "./python-command.js";
 import { programShellCommand, shellQuote } from "./program-command.js";
@@ -157,8 +158,12 @@ export function browserTarget(request: BrowserRequest): string {
   return parts.join(" → ").slice(0, 8192);
 }
 
-export function browserShellCommand(request: BrowserRequest, browser: SessionBrowser, options: { seconds: number; nodeBin?: string | undefined }): string {
+export function browserGpu(lent: boolean, device: GpuKind | undefined): boolean {
+  return lent && device === "render";
+}
+
+export function browserShellCommand(request: BrowserRequest, browser: SessionBrowser, options: { seconds: number; nodeBin?: string | undefined; gpu?: boolean | undefined }): string {
   const node = request.serve && options.nodeBin && (nodePrograms as readonly string[]).includes(request.serve.program) ? ["--node-bin", options.nodeBin] : [];
   return programShellCommand({ directory: ".", program: shellQuote(browser.driver),
-    args: ["--chrome", browser.chromium, "--time-limit", String(Math.trunc(options.seconds)), ...node, JSON.stringify(request)] });
+    args: ["--chrome", browser.chromium, "--time-limit", String(Math.trunc(options.seconds)), ...node, ...(options.gpu ? ["--gpu"] : []), JSON.stringify(request)] });
 }

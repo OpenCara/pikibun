@@ -553,6 +553,26 @@ download the sandbox can't make, a display, and a way to drive it. `piki:browser
     for x86-64 only, so ARM hosts install their distribution's `chromium`; and Chromium links system libraries (NSS,
     GBM, ALSA) that a minimal server may lack, which the hosts guide names rather than the connector installing
     packages.
+35. **The lent GPU, for WebGL and WebGPU.** The driver always passed `--disable-gpu`, so pages drew with SwiftShader,
+    Chromium's software renderer, and WebGPU found no adapter ([#448](https://github.com/OpenCara/pikibun/issues/448),
+    gap 3). Where the host's owner lends the GPU and the host has it as Linux render nodes or NVIDIA's devices
+    (`gpuMounts`' `render` kind, which `Sandbox.gpu` names), the tool passes the driver `--gpu` (`browserGpu`, from the
+    same `gpu` setting every command's mounts come from). The driver then starts Chromium without `--disable-gpu` and
+    with `--enable-gpu --ignore-gpu-blocklist --use-gl=angle --use-angle=vulkan --enable-features=Vulkan
+    --disable-vulkan-surface --enable-unsafe-webgpu`: ANGLE on Vulkan, which needs no display (GL's own driver
+    detection wants an X server) and no swapchain, with WebGPU on and its adapter blocklist off, the set Chrome's guide
+    for headless GPUs gives. That Chromium starts doesn't say it renders: on a WSL2 host with these flags forced, Mesa's
+    dzn couldn't give ANGLE an ES 3 context, the GPU process exited, Chromium kept running and then refused every WebGL
+    context, which is worse than the software renderer. So the driver asks Chromium what it renders with
+    (`SystemInfo.getInfo`) and keeps this start only when there is a renderer, it isn't a software one (SwiftShader,
+    llvmpipe, lavapipe: what Vulkan finds when the GPU's own driver isn't visible) and WebGL is enabled, within 10
+    seconds at most and less on a short call. Otherwise it ends that Chromium and starts again with exactly the flags a
+    host without a GPU gets. The report's `gpu` says which: `{in_use: true, renderer}`, or `{in_use: false, note}` with
+    the reason and where that start's output is; a call on a host that lends none has no `gpu`, and nothing about it
+    changed. WSL2's `/dev/dxg` is left out, for the reason measured above. What the sandbox exposes is unchanged: the
+    devices are those `gpuMounts` gives every command of the session. NVIDIA's proprietary driver is found only where
+    its Vulkan ICD file is under `/usr`: the sandbox has its own `/etc`, so one in `/etc/vulkan/icd.d` isn't seen, and
+    the call renders in software and says so.
 
 Later: a browser that lives across calls, for long flows and watching a page as it changes, in a sandbox of the
 session's that outlives one command, beside the app it tests; the user driving it from the Browser tab; the macOS and
@@ -788,6 +808,7 @@ that kind of task on, among the models that host offers. The member still choose
 | Draft pull requests and marking them ready | `apps/server/src/authority/push/targets.ts` (`openPullRequest`), `broker.ts`; `PullRequestRequest.draft` (types.ts); tests in `tests/pull-request-drafts.test.ts` |
 | The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session/tools/browser.ts` (the `browser` tool), `session/tools/calls.ts` (`browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
+| The browser on the lent GPU | `browser.py` (`GPU_FLAGS`, `open_browser`, `gpu_renderer`); `browser-command.ts` (`browserGpu`); `sandbox.ts` (`gpu`); tests in `tests/browser-command.test.ts` (with a stand-in Chromium), `tests/host-config.test.ts` |
 | The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |
 | The Browser tab | `apps/nsh/src/session-panel/Browser.tsx` |
 | Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`, `pikiExtensionOn`, `extensionSwitchOn`, `documentKindsOff`); `session.ts` (`applyOptions`); `session/availability.ts` (`ToolAvailability`: `requireSessionTool`, `sessionToolsOff`, `documentKindsOff`); tests in `tests/runner-schedule.test.ts` |

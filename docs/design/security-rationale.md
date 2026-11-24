@@ -27,7 +27,7 @@ The source code has no comments (see [Comments](../development.md#comments)), so
 - **Without cgroups, the connector outlives a runaway command.** Where the host's owner lets commands run without the cgroup limits, nothing bounds their memory. A command that took all of it (a script named `bisect.py` that shadowed Python's own `bisect`, so the program it ran imported it and started itself again, thousands of times over) made the kernel's OOM killer take the largest process, the connector, and every session on the host lost its connection, twice in a row as the session ran it again. Two things now stop that:
   - *The sandbox goes first.* Every step starts as `/bin/sh -c '{ echo 1000 >/proc/self/oom_score_adj; } 2>/dev/null; exec "$@"' sh /usr/bin/bwrap …` (`EXPENDABLE`), so the highest OOM score is set before bubblewrap starts and everything in the sandbox inherits it. It is set outside because the sandbox's `/proc` is read-only, raising a score needs no privilege, and `exec` keeps the process the connector started, its process group and its descriptors. Under the resource supervisor, the supervisor's own child sets it just before it execs bubblewrap, so the supervisor keeps an ordinary score and stays to empty the command's cgroup. Commands on the host get the same score from a `{ echo 1000 >/proc/self/oom_score_adj; } 2>/dev/null; ` prefix on the command's first line (`hostBashArgs`, Linux only): bash's builtin forks nothing, so no process of the command can start before it, and `$LINENO` and error lines stay the command's own.
   - *A runaway chain of processes stops.* The helper sets `RLIMIT_NPROC` to 4096 tasks (`PROCESS_LIMIT`, processes and threads, ample for parallel builds). Since Linux 5.14 the kernel counts it per user namespace, and every Linux step has its own (bubblewrap's `--unshare-user` is the only way the helper runs there), so it counts only that step's tasks. Before 5.14, or outside a namespace of its own (`/proc/self/uid_map` is the identity map), it would count every process the host user runs, the connector's too, so it is set only on 5.14 and later, inside one.
-- **What it leaves to the host.** The host's GPU render device only where its owner lends it (with NVIDIA's character devices, which CUDA opens: more of the driver's kernel interface than a render node, which is why lending the GPU stays the owner's choice; see [A session's app in its panel](session-apps.md), decision 9), and the connector's Node.js and the host's Chromium read-only where `/usr` doesn't already hold them.
+- **What it leaves to the host.** The host's GPU render device only where its owner lends it (with NVIDIA's character devices, which CUDA opens: more of the driver's kernel interface than a render node, which is why lending the GPU stays the owner's choice; see [A session's app in its panel](session-apps.md), decision 9; where it is lent as render nodes the browser tool's Chromium renders with it too, with WebGPU's adapter blocklist off, which gives a page no device the session's own commands don't already open, see [the browser](piki-extensions.md#a-browser-pikibrowser), rule 35), and the connector's Node.js and the host's Chromium read-only where `/usr` doesn't already hold them.
 - **Checked before the connector starts.** `bubblewrapPrerequisite` (`apps/runner/src/connect-setup.ts`) runs the helper's Python under the same namespace flags and read-only mounts once, before a sandboxed connector pairs or connects. bubblewrap can be installed and still unable to make a user namespace (AppArmor's `apparmor_restrict_unprivileged_userns` on Ubuntu 23.10 and later, `unprivileged_userns_clone=0`, `max_user_namespaces=0`, or a container that forbids them). Without the check such a host started, took sandboxed sessions and failed every one of them later, so the connector now refuses to start there, as it does when bubblewrap is missing.
 - **Verified before the host says it is sandboxed.** Every host used to advertise `sandbox: false`, so every one showed "Sandbox unverified" and the label told nobody anything. Before a Linux host on bubblewrap sends its manifest (`pikibun connect`, the desktop app's host and `pikibun serve`'s host), `verifySandboxIsolation` (`apps/runner/src/connect-setup.ts`) runs one step under the session's namespace flags and read-only mounts, plus `--clearenv`, and the step checks itself from inside: its user, mount, PID, network, IPC and UTS namespaces all differ from the connector's (compared by `/proc/self/ns` links), it has no network interface but loopback, no effective capabilities, can't see a sentinel file the connector made in its temporary directory nor the host user's home, can't write its root, can't make a user namespace, and didn't inherit a canary variable from the connector's environment. Only when it prints `ok` and exits 0 does the host advertise `sandbox: true`; anything else (bubblewrap refused, a leak, a timeout) leaves it `false` with the reason in the connector's log, and the host still runs, sandboxed, as before. Experimental sandboxes (Seatbelt, Windows) aren't checked and stay unverified. It is a self-report by the host, not an attestation: the server can't check it, and a modified connector could claim anything, so it only steers the label and Auto's preference for sandboxed hosts, never what a session may do. Sessions keep their own checks.
 
@@ -422,6 +422,44 @@ the owner's account or the Pikibun server could mark an installed extension, and
 first. That is no more than they could already do there, since the same word starts a session on the host, as its
 user ([Sessions on the host](#sessions-on-the-host)); it is one more path that runs code outside the sandbox on that
 word, which the local refusal closes and `--no-remote-installs` narrows to what was installed on the machine.
+
+## What an extension keeps and sends
+
+`apps/runner/src/extensions/entries.ts`, `worker.ts` (`noActions`, `runCall`), `adapter.ts` (`kept`, `onYield`); the
+design is [extension isolation](extension-isolation.md#entries-an-extension-keeps). An installed extension's process
+runs in the session's sandbox where there is one, and what the agent reads can steer its code, so what it asks the
+connector to keep or to send is untrusted.
+
+- **Entries are data for the extension alone.** `pi.appendEntry` stores JSON that only the same package's process in the
+  same session gets back. Nothing else reads it: not the model, not the transcript, not another extension, not the
+  Pikibun server. The connector checks each entry's shape and size, replaces an id it can't use, and bounds the list
+  (64 KB an entry, 256 entries and 1 MB per extension, at most two writes a second), so a process can't grow the
+  session's store without limit. It takes an entry only from the process that runs that source, so the session's shared
+  process can't write the entries of a guard that runs outside the sandbox.
+- **An extension never starts a run.** In Pi, `pi.sendUserMessage` while the agent is idle starts it. In Pikibun every
+  run is a person's message: it acts with its sender's permissions and tool group and the owner's accounts, under an
+  admission the Pikibun server gave for that message, and a Read-only message stays read-only. A run an extension
+  started would have no sender, and lending it the last sender's or the owner's would let code in the sandbox act as that
+  person at a time of its choosing, with nobody having asked for anything. So outside a running message (and outside a
+  command's handler, where a person typed the command) the call does nothing but log.
+- **Inside a running message it adds a turn to that message.** Text queued from a tool or a handler of the message goes
+  to the agent when the message would settle, through the same hook as `agent_before_settle`'s `continue`
+  (`GenerationHooks.onYield`), which extensions already had. The turn is part of that run, so it has that message's
+  sender, access mode, admission and tools, no more; a side ask runs no extensions, so it gets none. The worker queues at
+  most 8 texts of 16,000 characters for one settle, and the connector asks for them only where a run yields.
+- **A text belongs to the run it was queued in.** Every request carries the connector's number for the run going on
+  (`RequestContext.run`, set as a message starts and cleared as it ends). The worker takes a text only from code that
+  began in a request of that run, while that run is still the one the connector names, and hands texts only to the
+  run they were queued in; the rest is dropped at the next request. So a timer or a promise a tool left behind queues
+  nothing once its message has ended, whether it fires before the next message or during it: what one sender's
+  message started never becomes a turn of another's.
+
+What it doesn't protect against: an extension can keep a run going by sending again at each settle, as it could with
+`agent_before_settle`, until someone stops it. The run check is made in the extension's process, so it holds for an
+extension's own mistakes, not against one written to get around it: such an extension can keep a text itself and
+answer `continue` with it in a later message's run, as it could before this, and the text then enters with that later
+sender's authority, as any text an extension puts before the agent (a prompt section, a changed tool result) does. And the conversation is shared: what one message's extension turn wrote is context
+for the next message, whoever sends it.
 
 ## Slash commands the host runs
 

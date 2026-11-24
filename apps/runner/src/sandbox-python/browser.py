@@ -34,6 +34,13 @@ CHROME_FLAGS = [
     '--password-store=basic', '--use-mock-keychain', '--disk-cache-size=1', '--font-render-hinting=none',
     '--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,CertificateTransparencyComponentUpdater',
 ]
+GPU_FLAGS = [
+    '--enable-gpu', '--ignore-gpu-blocklist', '--use-gl=angle', '--use-angle=vulkan', '--enable-features=Vulkan',
+    '--disable-vulkan-surface', '--enable-unsafe-webgpu',
+]
+GPU_START_SECONDS = 10
+GPU_LOG = 'pikibun-browser-chrome-gpu.log'
+SOFTWARE_RENDERERS = ('swiftshader', 'llvmpipe', 'lavapipe', 'softpipe', 'software')
 KEYS = {
     'Enter': (13, 'Enter', '\r'), 'Tab': (9, 'Tab', ''), 'Escape': (27, 'Escape', ''), 'Backspace': (8, 'Backspace', ''),
     'Delete': (46, 'Delete', ''), 'Space': (32, 'Space', ' '), 'ArrowUp': (38, 'ArrowUp', ''), 'ArrowDown': (40, 'ArrowDown', ''),
@@ -195,8 +202,14 @@ def fonts_config() -> Optional[str]:
     return path
 
 
+def chrome_flags(gpu: bool) -> List[str]:
+    if not gpu:
+        return list(CHROME_FLAGS)
+    return [flag for flag in CHROME_FLAGS if flag != '--disable-gpu'] + GPU_FLAGS
+
+
 class Chrome:
-    def __init__(self, executable: str, profile: str, viewport: Tuple[int, int], log: str, deadline: float):
+    def __init__(self, executable: str, profile: str, viewport: Tuple[int, int], log: str, deadline: float, gpu: bool = False):
         self.deadline = deadline
         self.started = time.monotonic()
         self.answered = False
@@ -222,7 +235,7 @@ class Chrome:
         if os.path.isdir('/proc/self/cwd'):
             env['TMPDIR'] = '/proc/self/cwd'
         proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
-        flags = list(CHROME_FLAGS) + ['--user-data-dir=' + profile, '--window-size=%d,%d' % viewport]
+        flags = chrome_flags(gpu) + ['--user-data-dir=' + profile, '--window-size=%d,%d' % viewport]
         if proxy:
             flags.append('--proxy-server=' + proxy)
 
@@ -302,13 +315,13 @@ class Chrome:
         except OSError:
             return 'no output'
 
-    def close(self) -> None:
+    def close(self, wait: float = 3) -> None:
         try:
-            self.send('Browser.close', timeout=3)
+            self.send('Browser.close', timeout=wait)
         except (BrowserError, OSError):
             pass
         try:
-            self.process.wait(timeout=3)
+            self.process.wait(timeout=wait)
         except subprocess.TimeoutExpired:
             stop_group(self.process)
         for fd in (self.reader, self.writer):
@@ -477,6 +490,43 @@ class Page:
         with open(path, 'wb') as handle:
             handle.write(data)
         return {'screenshot': path}
+
+
+def gpu_renderer(chrome: Chrome) -> str:
+    info = chrome.send('SystemInfo.getInfo').get('gpu') or {}
+    renderer = str((info.get('auxAttributes') or {}).get('glRenderer') or '')
+    webgl = str((info.get('featureStatus') or {}).get('webgl') or '')
+    if not renderer:
+        raise BrowserError('its GPU process did not start')
+    if any(name in renderer.lower() for name in SOFTWARE_RENDERERS):
+        raise BrowserError('it found no driver for the GPU, only ' + bounded(renderer, 200))
+    if webgl and not webgl.startswith('enabled'):
+        raise BrowserError('WebGL was ' + bounded(webgl, 60) + ' on ' + bounded(renderer, 200))
+    return bounded(renderer, 300)
+
+
+def open_browser(executable: str, profile: str, viewport: Tuple[int, int], temporary: str, deadline: float,
+                 gpu: bool) -> Tuple[Chrome, Optional[Dict[str, Any]]]:
+    state: Optional[Dict[str, Any]] = None
+    if gpu:
+        left = deadline - time.monotonic()
+        seconds = max(3.0, min(GPU_START_SECONDS, left / 3))
+        log = os.path.join(temporary, GPU_LOG)
+        chrome = Chrome(executable, profile, viewport, log, min(deadline, time.monotonic() + seconds), True)
+        try:
+            chrome.send('Target.getTargets')
+            renderer = gpu_renderer(chrome)
+            chrome.deadline = deadline
+            return chrome, {'in_use': True, 'renderer': renderer}
+        except (BrowserError, OSError) as error:
+            if isinstance(error, OSError):
+                reason = 'it stopped taking commands (%s): %s' % (error.strerror or type(error).__name__, bounded(chrome.tail(), 200))
+            else:
+                reason = 'it did not answer within %d seconds' % round(seconds) if str(error) == OUT_OF_TIME else bounded(str(error), 300)
+            chrome.close(1)
+            state = {'in_use': False, 'note': 'Chromium could not render with the GPU the host lends (' + reason
+                     + '), so this call rendered in software, as on a host that lends none. Its output from that start is in ' + log + '.'}
+    return Chrome(executable, profile, viewport, os.path.join(temporary, 'pikibun-browser-chrome.log'), deadline), state
 
 
 def proxy_hint(error: str) -> str:
@@ -686,7 +736,12 @@ def main() -> int:
     executable = None
     node_bin = None
     seconds = 30
-    while len(args) > 1 and args[0] in ('--chrome', '--time-limit', '--node-bin'):
+    gpu = False
+    while args and args[0] == '--gpu' or len(args) > 1 and args[0] in ('--chrome', '--time-limit', '--node-bin'):
+        if args[0] == '--gpu':
+            gpu = True
+            args = args[1:]
+            continue
         if args[0] == '--chrome':
             executable = args[1]
         elif args[0] == '--node-bin':
@@ -695,7 +750,7 @@ def main() -> int:
             seconds = int(args[1])
         args = args[2:]
     if len(args) != 1 or not executable:
-        print(json.dumps({'error': "usage: pikibun-browser --chrome <chromium> [--time-limit <seconds>] [--node-bin <directory>] '<request as JSON>'"}))
+        print(json.dumps({'error': "usage: pikibun-browser --chrome <chromium> [--time-limit <seconds>] [--node-bin <directory>] [--gpu] '<request as JSON>'"}))
         return 2
     started = time.monotonic()
     deadline = started + max(5, seconds - 5)
@@ -722,7 +777,9 @@ def main() -> int:
     try:
         if request.get('serve'):
             server = serve(request['serve'], node_bin, os.path.join(temporary, 'pikibun-browser-serve.log'), deadline)
-        chrome = Chrome(executable, profile, size, os.path.join(temporary, 'pikibun-browser-chrome.log'), deadline)
+        chrome, rendering = open_browser(executable, profile, size, temporary, deadline, gpu)
+        if rendering:
+            report['gpu'] = rendering
         page = Page(chrome, size)
         if url:
             page.navigate(url, timeout)

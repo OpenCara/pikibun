@@ -10,7 +10,7 @@ import { CONNECTOR_ENVIRONMENT } from "../connector-environment.js";
 import { shellQuote } from "../program-command.js";
 import { pinServiceSocket, SANDBOX_SERVICE_SOCKETS, type ServiceProcess } from "../session-service.js";
 import { lineReader } from "./lines.js";
-import type { CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionToolDescription } from "./protocol.js";
+import type { AppendedHandler, CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionToolDescription, StoredEntry } from "./protocol.js";
 import { completeLimits, completeRequestOf } from "./complete.js";
 
 export type WorkerCommandFor = (directory: string, mounts: readonly string[]) => WorkerCommand | Promise<WorkerCommand>;
@@ -22,7 +22,8 @@ export interface WorkerCommand {
   cwd?: string;
 }
 
-type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string; error?: string } | { warn: { source: string; message: string } }
+type Reply = { id: number; value?: unknown; handlers?: string[]; tools?: ExtensionToolDescription[]; toolsSignature?: string; pending?: true; error?: string }
+  | { warn: { source: string; message: string } } | { entry: { source: string; value: unknown } }
   | { ask: number; complete?: CompleteRequest; invalid?: true } | { cancelAsk: number };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -41,19 +42,23 @@ export function replyOf(value: unknown): Reply | undefined {
     const warn = value.warn;
     return isObject(warn) && typeof warn.source === "string" && typeof warn.message === "string" ? { warn: { source: warn.source, message: warn.message } } : undefined;
   }
+  if ("entry" in value) {
+    const entry = value.entry;
+    return isObject(entry) && typeof entry.source === "string" ? { entry: { source: entry.source, value: entry.value } } : undefined;
+  }
   if ("ask" in value) {
     if (typeof value.ask !== "number" || !Number.isSafeInteger(value.ask)) return undefined;
     const complete = completeRequestOf(value.complete);
     return complete ? { ask: value.ask, complete } : { ask: value.ask, invalid: true };
   }
   if ("cancelAsk" in value) return typeof value.cancelAsk === "number" && Number.isSafeInteger(value.cancelAsk) ? { cancelAsk: value.cancelAsk } : undefined;
-  const { id, error, handlers, tools, toolsSignature } = value;
+  const { id, error, handlers, tools, toolsSignature, pending } = value;
   if (typeof id !== "number" || !Number.isSafeInteger(id)) return undefined;
   if (error !== undefined) return typeof error === "string" ? { id, error } : undefined;
   if ((handlers !== undefined && !isStrings(handlers)) || (tools !== undefined && !(Array.isArray(tools) && tools.every(toolDescription)))
     || (toolsSignature !== undefined && typeof toolsSignature !== "string")) return undefined;
   return { id, value: value.value, ...(handlers ? { handlers } : {}), ...(tools ? { tools: tools as ExtensionToolDescription[] } : {}),
-    ...(toolsSignature !== undefined ? { toolsSignature } : {}) };
+    ...(toolsSignature !== undefined ? { toolsSignature } : {}), ...(pending === true ? { pending: true as const } : {}) };
 }
 
 function deliver(handlers: LaunchHandlers, value: unknown): void {
@@ -86,6 +91,8 @@ export interface ProcessChannelOptions {
   mountAllowed?(path: string): boolean;
   log?(line: string): void;
   complete?: CompleteHandler;
+  appended?: AppendedHandler;
+  entries?(source: string): StoredEntry[] | undefined;
 }
 
 const SHUTDOWN_GRACE_MS = 2000;
@@ -439,6 +446,8 @@ export class ProcessChannel implements ExtensionChannel {
     if (!run.opened.has(source)) {
       await this.#send(run, "open", this.#opened.get(source)!);
       run.opened.add(source);
+      const entries = this.options.entries?.(source);
+      if (entries?.length) await this.#send(run, "restore", { source, entries });
     }
     const started = this.#started.get(source);
     if (started) await this.#send(run, "emit", started);
@@ -514,6 +523,10 @@ export class ProcessChannel implements ExtensionChannel {
       run?.asks.get(reply.cancelAsk)?.abort();
       return;
     }
+    if ("entry" in reply) {
+      if (run && this.#live === run && run.opened.has(reply.entry.source)) this.options.appended?.(reply.entry.source, reply.entry.value);
+      return;
+    }
     if ("warn" in reply) {
       const { source, message } = reply.warn;
       if (source) this.options.warn(source, message);
@@ -524,7 +537,7 @@ export class ProcessChannel implements ExtensionChannel {
     const pending = this.#pending.get(reply.id);
     if (!pending) return;
     if (reply.error !== undefined) pending.reject(new Error(reply.error));
-    else pending.resolve({ value: reply.value as never, ...(reply.handlers ? { handlers: reply.handlers } : {}), ...(reply.tools ? { tools: reply.tools } : {}), ...(reply.toolsSignature ? { toolsSignature: reply.toolsSignature } : {}) });
+    else pending.resolve({ value: reply.value as never, ...(reply.handlers ? { handlers: reply.handlers } : {}), ...(reply.tools ? { tools: reply.tools } : {}), ...(reply.toolsSignature ? { toolsSignature: reply.toolsSignature } : {}), ...(reply.pending ? { pending: true as const } : {}) });
   }
 
   #ended(run: Run, reason: string): void {

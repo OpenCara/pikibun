@@ -283,6 +283,19 @@ test("NVIDIA's devices are lent with the render nodes, or alone, so CUDA runs in
   assert.deepEqual(gpuMounts(root), { kind: "dxg", args: ["--dev-bind", join(base, "dev/dxg"), "/dev/dxg"], env: {} }, "WSL lends /dev/dxg as before");
 });
 
+test("a sandbox says which GPU device its host has to lend, which decides whether the browser may render with it", { skip: process.platform !== "linux" }, async t => {
+  const base = realpathSync(await mkdtemp(join(tmpdir(), "pikibun-gpu-kind-")));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const kind = (host: string) => new Sandbox(fauxBinding(`gpu-kind-${host}`), join(base, `session-${host}`), undefined, { gpuRoot: join(base, host) }).gpu;
+  await mkdir(join(base, "none"));
+  assert.equal(kind("none"), undefined);
+  await standInGpu(join(base, "render"));
+  assert.equal(kind("render"), "render");
+  await mkdir(join(base, "wsl/dev"), { recursive: true });
+  await writeFile(join(base, "wsl/dev/dxg"), "");
+  assert.equal(kind("wsl"), "dxg");
+});
+
 test("a sandboxed command lent the GPU finds its render node, the node's sysfs device and the /sys/dev/char link that names it", { skip: !sandboxed }, async t => {
   const base = realpathSync(await mkdtemp(join(tmpdir(), "pikibun-gpu-sandbox-")));
   t.after(() => rm(base, { recursive: true, force: true }));
