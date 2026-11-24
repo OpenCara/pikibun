@@ -172,21 +172,22 @@ export async function githubComment(c: AppContext, connectorId: string | null): 
   const operation = parseOperation({ kind: 'github.comment', repository: input.repository, issue: input.issue, body: input.body });
   if (operation.kind !== 'github.comment') fail(400, 'invalid_operation', 'Only GitHub comments are supported.');
   const { sessionId, actorId, approvalId } = approval;
-  const { row, github } = await approvedEffect(c, connectorId, approval, operation, 'github.comment', async () => undefined);
-  const [repositoryOwner, repositoryName] = operation.repository.split('/');
-  const url = new URL(`${githubApi}/repos/${encodeURIComponent(repositoryOwner)}/${encodeURIComponent(repositoryName)}/issues/${operation.issue}/comments`);
+  const { row, github, prepared: pin } = await approvedEffect(c, connectorId, approval, operation, 'github.comment',
+    async (session, access) => githubTarget(c, session, actorId, operation.repository, access));
+  const detail = { approvalId, repository: pin.fullName, issue: operation.issue, ...(pin.outside ? { outsideWorkspace: true } : {}) };
+  const url = `${githubApi}/repos/${pin.fullName}/issues/${operation.issue}/comments`;
   let response: Response;
   try {
     response = await fetch(url, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout), headers: {
       ...githubHeaders(github.token), 'Content-Type': 'application/json',
     }, body: JSON.stringify({ body: operation.body }) });
   } catch {
-    await auditStatement(c.env, actorId, 'github.comment.ambiguous', row.workspace_id, sessionId, { approvalId }).run();
+    await auditStatement(c.env, actorId, 'github.comment.ambiguous', row.workspace_id, sessionId, detail).run();
     fail(502, 'github_outcome_unknown', 'GitHub could not confirm the outcome. The capability remains consumed; inspect GitHub before making a new request.');
   }
   if (!response.ok) {
     await response.body?.cancel();
-    await auditStatement(c.env, actorId, 'github.comment.failed', row.workspace_id, sessionId, { approvalId, status: response.status }).run();
+    await auditStatement(c.env, actorId, 'github.comment.failed', row.workspace_id, sessionId, { ...detail, status: response.status }).run();
     if (response.status === 401) {
       await github.expired?.('github_comment').catch(() => {});
       failGitHubSignInExpired();
@@ -201,7 +202,7 @@ export async function githubComment(c: AppContext, connectorId: string | null): 
   let resultURL: URL;
   try { resultURL = new URL(result.html_url); } catch { fail(502, 'github_outcome_unknown', 'GitHub returned an unexpected result.'); }
   if (resultURL.protocol !== 'https:' || resultURL.hostname !== 'github.com') fail(502, 'github_outcome_unknown', 'GitHub returned an unexpected result.');
-  await auditStatement(c.env, actorId, 'github.comment.completed', row.workspace_id, sessionId, { approvalId, commentId: result.id, actingAs: github.userId }).run();
+  await auditStatement(c.env, actorId, 'github.comment.completed', row.workspace_id, sessionId, { ...detail, commentId: result.id, actingAs: github.userId }).run();
   return c.json({ id: result.id, url: resultURL.href });
 }
 
