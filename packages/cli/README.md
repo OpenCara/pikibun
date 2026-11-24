@@ -93,6 +93,8 @@ This needs only Git on your `PATH` (on macOS: `xcode-select --install` or `brew 
 
 Nobody approves commands one by one: they run at once for you and the members you grant host commands. Pikibun labels the host **Unsandboxed** to everyone who can see it.
 
+Sessions on this machine that last ran in a sandbox are not opened by a host without one, so none leaves its sandbox unnoticed. Add `--sessions-leave-sandbox` to run them directly on the machine too.
+
 ## Repository cache (preview)
 
 Every session starts with an empty worktree, and its agent clones the workspace repositories it needs. With **Repository cache** set to **Shared** (one cache for every session on this host) or **Per owner** (a separate cache for each session owner) in the host's configuration, the connector keeps a full mirror of each repository on the host, so clones borrow its objects instead of downloading everything again. A change applies when the connector next connects.

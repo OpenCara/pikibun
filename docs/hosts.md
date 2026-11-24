@@ -252,6 +252,16 @@ The connector prints the risks and asks you to type `unsandboxed` before it star
 
 Pikibun labels such a host **Unsandboxed** to everyone who can see it.
 
+### Sessions that ran in a sandbox before
+
+A host remembers, for each session, whether it last ran in a sandbox. If you start the host without one (the same state directory with `--unsafe-no-sandbox`, or another of this computer's hosts taking over your private sessions), it doesn't open the sessions that last ran sandboxed: opening one says "This session last ran in the sandbox, and this host now runs without one". Start the host with its sandbox again to carry on there, or allow it:
+
+```sh
+npx pikibun@latest connect --unsafe-no-sandbox --sessions-leave-sandbox
+```
+
+Those sessions then run directly on the machine, like every other session of an unsandboxed host, and stay that way. `pikibun serve` takes the same option. The desktop app asks in the dialog that confirms running unsandboxed: confirming it allows these sessions too. Sessions made before the connector kept this record are opened as before. Update the connector (`npx pikibun@latest connect`) to get it.
+
 ### The owner's own environment
 
 A session that runs on its host, directly or on an unsandboxed one, and whose owner is the host's owner runs its commands with the environment the connector started with, as a terminal of yours would: your `HOME`, so `~/.ssh/config`, `~/.config` (the `gh` and `glab` sign-ins, cloud CLIs) and tool caches are yours; `SSH_AUTH_SOCK`, so `ssh` and Git over SSH use your ssh agent (the macOS keychain, 1Password, `ssh-agent`); your global and system Git configuration (`url.insteadOf`, credential helpers such as `osxkeychain`, signing); and your `LANG`, `TMPDIR` and `DISPLAY`. Your personal environment values (**Settings → Profile**) are set on top, and commits keep your Pikibun Git identity. Commands still run without a terminal: nothing can prompt for a passphrase, so keys need the agent or no passphrase.
@@ -297,6 +307,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 | `--resources PATH` | Operator-provisioned resource limits that let commands run in every session |
 | `--build-caches PATH` | Where the host keeps [build caches](design/build-caches.md) (default `build-caches` in the state directory); with `--resources`, required for them and checked to be a dedicated, private filesystem mount (`rw,nosuid,nodev`) |
 | `--unsafe-no-sandbox` | Run agent work directly on this machine, without isolation; asks for confirmation |
+| `--sessions-leave-sandbox` | With `--unsafe-no-sandbox`, also open [sessions that last ran in a sandbox](#sessions-that-ran-in-a-sandbox-before), which then run directly on this machine |
 | `--allow-insecure-loopback` | Allow an `http://` server on localhost (development) |
 | `--help` | Show all options |
 
