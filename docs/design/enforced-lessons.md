@@ -65,6 +65,12 @@ connector's, so it reaches hosts with a `cli-v` release.
   both the first read and the current one. Anyone else's comment, review or push still ends the wait; checks on the
   session's own push are what `wait: "checks"` is for. What the session did is read from its own operation records, so
   nothing new is stored.
+- **`gh` gets past a token a push reset** (#480). A `git_push` with the owner's account resets the owner's GitHub
+  token afterwards, and each host's API proxy kept the old one for up to a minute: `gh` answered `401 Bad credentials`
+  some seconds after a push, in that session and the owner's others, and agents reported release runs as unchecked.
+  The proxy now drops a token the API refuses, asks the Pikibun server for the current one and sends the request
+  again, so the command never sees that `401` ([its design](egress.md), "A token the API refuses is dropped at
+  once"). It is the connector's, so it reaches hosts with a `cli-v` release.
 
 ## What stays text
 
