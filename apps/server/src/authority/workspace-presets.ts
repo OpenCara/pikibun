@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
-import { defaultExtensionIntegrity, defaultWorkspaceExtensions, extensionPackageKey } from '../../../../packages/shared/src/host-extensions.js';
+import { defaultExtensionIntegrity, defaultWorkspaceExtensions, extensionLimits, extensionPackageKey } from '../../../../packages/shared/src/host-extensions.js';
 import { packageRegistryDomains } from '../../../../packages/shared/src/network.js';
 import { defaultWorkspacePreset, isWorkspacePreset, workspacePreset, workspacePresets, type WorkspacePreset } from '../../../../packages/shared/src/workspace-presets.js';
 import type { Database, Query } from '../db/types.js';
@@ -9,7 +9,7 @@ import { fail, identifier, now } from '../http.js';
 import { body } from '../schemas.js';
 import { requireMember, workspaceAdminSQL } from './access.js';
 import { auditStatement } from './audit.js';
-import { workspaceExtensions } from './extension-policy.js';
+import { sessionToolSources, workspaceExtensions } from './extension-policy.js';
 import { memberGitHubReach } from './github-reach.js';
 import { workspaceNetworkPolicy } from './network.js';
 
@@ -40,7 +40,7 @@ function applyStatements(env: Env, workspaceId: string, actorId: string, at: str
   const kept = chosen.extensions.map(extensionPackageKey);
   const turnOff = preset === 'open' ? []
     : preset === 'balanced' ? [db.query<never>(`UPDATE workspace_extensions SET enabled = 0, updated_by = ?, updated_at = ?
-        WHERE workspace_id = ? AND enabled = 1 AND source NOT LIKE 'piki:%' AND ${workspaceAdminSQL}`).bind(actorId, at, workspaceId, workspaceId, actorId)]
+        WHERE workspace_id = ? AND enabled = 1 AND (source LIKE 'npm:%' OR source LIKE 'git:%') AND ${workspaceAdminSQL}`).bind(actorId, at, workspaceId, workspaceId, actorId)]
     : [db.query<never>(`UPDATE workspace_extensions SET enabled = 0, updated_by = ?, updated_at = ?
         WHERE workspace_id = ? AND enabled = 1 AND package_key NOT IN (${kept.map(() => '?').join(', ')}) AND ${workspaceAdminSQL}`)
       .bind(actorId, at, workspaceId, ...kept, workspaceId, actorId)];
@@ -58,7 +58,9 @@ function applyStatements(env: Env, workspaceId: string, actorId: string, at: str
     ...defaultWorkspaceExtensions.filter(source => chosen.extensions.includes(source)).map(source => db.query<never>(`INSERT INTO workspace_extensions
         (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, integrity, updated_by, updated_at)
       SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), 1, 'automatic', '{}', ?, ?, ? WHERE ${workspaceAdminSQL}
-      ON CONFLICT (workspace_id, package_key) DO UPDATE SET enabled = 1, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+      ON CONFLICT (workspace_id, package_key) DO UPDATE SET enabled = 1,
+        integrity = CASE WHEN workspace_extensions.source = excluded.source THEN COALESCE(workspace_extensions.integrity, excluded.integrity) ELSE workspace_extensions.integrity END,
+        updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
       .bind(workspaceId, extensionPackageKey(source), source, workspaceId, defaultExtensionIntegrity[source] ?? null, actorId, at, workspaceId, actorId)),
     auditStatement(env, actorId, 'workspace.preset.applied', workspaceId, null, { preset, network: chosen.network.mode, githubReach: chosen.githubReach, extensions: [...chosen.extensions] }),
   ];
@@ -70,6 +72,13 @@ export function registerWorkspacePresets(app: Hono<AppEnv>): void {
     const actorId = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actorId, ['owner', 'admin']);
     const { preset } = await body(c, z.strictObject({ preset: z.enum(workspacePresets) }), { maxBytes: 1024, message: `preset is one of ${workspacePresets.join(', ')}.` });
+    const listed = await c.env.DB.query<{ package_key: string }>('SELECT package_key FROM workspace_extensions WHERE workspace_id = ?').bind(workspaceId).all();
+    const taking = (key: string) => !sessionToolSources.includes(key);
+    const has = new Set(listed.map(row => row.package_key));
+    const added = workspacePreset(preset).extensions.map(extensionPackageKey).filter(key => taking(key) && !has.has(key));
+    if (added.length && [...has].filter(taking).length + added.length > extensionLimits.workspace) {
+      fail(409, 'extension_limit', `This workspace has ${[...has].filter(taking).length} of its ${extensionLimits.workspace} extensions, and this preset adds ${added.join(', ')}. Remove ${added.length === 1 ? 'one' : 'some'} first.`);
+    }
     await c.env.DB.batch(applyStatements(c.env, workspaceId, actorId, now(), preset));
     await requireMember(c.env, workspaceId, actorId, ['owner', 'admin']);
     return c.json({ preset, policy: await workspaceNetworkPolicy(c.env.DB, workspaceId), packageRegistryDomains,

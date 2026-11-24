@@ -4,7 +4,7 @@ import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { defaultExtensionIntegrity, defaultWorkspaceExtensions, starterWorkspaceExtensions, type WorkspaceExtension } from '../packages/shared/src/host-extensions.js';
-import { sessionToolsOff } from '../packages/shared/src/piki-extensions.js';
+import { pikiSessionToolExtensions, sessionToolsOff } from '../packages/shared/src/piki-extensions.js';
 import { defaultWorkspacePreset, isWorkspacePreset, workspacePreset, workspacePresets } from '../packages/shared/src/workspace-presets.js';
 import { testDatabase } from './helpers/control-plane.js';
 
@@ -124,8 +124,52 @@ test('owners and admins apply a preset to a workspace they have: it sets the net
   assert.ok(balanced.on.includes('piki:rust'), 'Pikibun\'s own stay on');
   assert.ok(balanced.extensions.some(item => item.source === 'npm:cc-safety-net@2.7.2' && !item.enabled), 'turned off, not removed');
 
+  await json(await ada.request('PUT', `/api/workspaces/${workspace.id}/extensions`, { source: 'piki:pr-flow', enabled: true }));
+  await json(await ada.request('POST', path, { preset: 'balanced' }));
+  assert.ok((await state(ada, workspace.id)).on.includes('piki:pr-flow'), 'only third-party packages (npm: and git:) are turned off');
+
   await json(await ada.request('POST', path, { preset: 'locked' }));
   const locked = await state(ada, workspace.id);
   assert.deepEqual([locked.policy.mode, locked.reach, locked.on], ['off', false, ['piki:git']]);
   assert.equal((await state(bob, workspace.id)).reach, true, 'another member\'s reach is theirs');
+});
+
+test('a preset locks web access to its digest in a workspace from before, and adds nothing past the workspace\'s 32 extensions', async t => {
+  const f = await fixture(t);
+  const ada = await f.client('ada');
+  const webAccess = 'npm:pi-web-access@0.46.0';
+  const create = async (name: string) => (await json<{ workspace: { id: string } }>(await ada.request('POST', '/api/workspaces', { name }), 201)).workspace.id;
+
+  const before = await create('Before');
+  f.sqlite.prepare("UPDATE workspace_extensions SET enabled = 0, integrity = NULL WHERE workspace_id = ? AND package_key = 'npm:pi-web-access'").run(before);
+  assert.equal((await state(ada, before)).extensions.find(item => item.source === webAccess)?.integrity, undefined);
+  await json(await ada.request('POST', `/api/workspaces/${before}/preset`, { preset: 'open' }));
+  const opened = (await state(ada, before)).extensions.find(item => item.source === webAccess);
+  assert.deepEqual([opened?.enabled, opened?.integrity], [true, defaultExtensionIntegrity[webAccess]], 'without the digest a sandboxed host would never fetch it');
+
+  const other = await create('Another version');
+  f.sqlite.prepare("UPDATE workspace_extensions SET source = 'npm:pi-web-access@0.45.0', enabled = 0, integrity = NULL WHERE workspace_id = ? AND package_key = 'npm:pi-web-access'").run(other);
+  await json(await ada.request('POST', `/api/workspaces/${other}/preset`, { preset: 'open' }));
+  assert.equal(f.sqlite.prepare("SELECT integrity FROM workspace_extensions WHERE workspace_id = ? AND package_key = 'npm:pi-web-access'").get(other)!.integrity, null,
+    'another version of the package never gets this version\'s digest');
+
+  const full = await create('Full');
+  f.sqlite.prepare("DELETE FROM workspace_extensions WHERE workspace_id = ? AND package_key = 'piki:gh'").run(full);
+  const sessionTools = new Set(pikiSessionToolExtensions().map(item => item.source));
+  const taken = (f.sqlite.prepare('SELECT package_key FROM workspace_extensions WHERE workspace_id = ?').all(full) as { package_key: string }[])
+    .filter(row => !sessionTools.has(row.package_key)).length;
+  for (let index = taken; index < 32; index++) {
+    f.sqlite.prepare("INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at) VALUES (?, ?, ?, ?, 1, 'automatic', '{}', ?, ?)")
+      .run(full, `npm:filler-${index}`, `npm:filler-${index}@1.0.0`, 100 + index, ada.user.id, new Date().toISOString());
+  }
+  const rows = () => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_extensions WHERE workspace_id = ?').get(full)!.n);
+  const count = rows();
+  const refused = await json<{ code: string; error: string }>(await ada.request('POST', `/api/workspaces/${full}/preset`, { preset: 'open' }), 409);
+  assert.equal(refused.code, 'extension_limit');
+  assert.match(refused.error, /this preset adds piki:gh/);
+  assert.equal(rows(), count, 'a refused preset changes nothing');
+  assert.equal((await state(ada, full)).policy.mode, 'open');
+  await json(await ada.request('POST', `/api/workspaces/${full}/preset`, { preset: 'locked' }));
+  assert.equal(rows(), count, 'a preset that adds nothing still applies to a full workspace');
+  assert.deepEqual((await state(ada, full)).on, ['piki:git']);
 });
