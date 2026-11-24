@@ -531,6 +531,47 @@ describe("settings", () => {
     await app.waitFor("text:ccache deleted.");
   });
 
+  test("Workspaces lets the owner delete a shared workspace, says why the server refused, and offers it on no private workspace", async () => {
+    let deletes = 0;
+    const team = { id: "w2", name: "Difference Engine", ownerId: "u1", role: "owner" };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces`]: () => ({ body: { workspaces: deletes > 1 ? [workspace] : [workspace, team] } }),
+      [`DELETE ${ORIGIN}/api/workspaces/w2`]: () => (++deletes === 1
+        ? { status: 409, body: { code: "workspace_in_use", error: "This workspace has sessions, archived ones included, which are kept with their backups and history, so it can't be deleted." } }
+        : { status: 204 }),
+    });
+    await app.waitFor("id:workspace-w2");
+    await app.press("id:workspace-w2");
+    await app.waitFor("id:workspace-delete");
+
+    app.onDialog(dialog => (dialog.title === "Delete Difference Engine?" ? "Cancel" : null));
+    await app.press("id:workspace-delete");
+    expect(app.requests().some(item => item.method === "DELETE" && item.url === `${ORIGIN}/api/workspaces/w2`)).toBe(false);
+
+    app.onDialog(dialog => (dialog.title === "Delete Difference Engine?" ? "Delete workspace" : null));
+    await app.press("id:workspace-delete");
+    await app.waitFor("text:This workspace has sessions, archived ones included, which are kept with their backups and history, so it can't be deleted.");
+    expect(app.shows("id:workspace-delete")).toBe(true);
+
+    await app.press("id:workspace-delete");
+    await app.waitUntil(() => deletes === 2);
+    await app.waitUntil(() => !app.shows("id:workspace-w2") && app.shows("id:workspace-w1"));
+    expect(app.shows("id:workspace-delete")).toBe(false);
+  });
+
+  test("Workspaces offers no delete to admins, nor on a private workspace", async () => {
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, personal: true }, { id: "w3", name: "Shared", ownerId: "u9", role: "admin" }] } },
+    });
+    for (const id of ["w1", "w3"]) {
+      await app.waitFor(`id:workspace-${id}`);
+      await app.press(`id:workspace-${id}`);
+      await app.waitFor("id:workspace-rename");
+      expect(app.shows("id:workspace-delete")).toBe(false);
+      await app.press("id:workspaces-back");
+    }
+  });
+
   test("Workspaces shows members the build caches without letting them change any", async () => {
     const stamp = "2026-11-20T10:00:00.000Z";
     const app = await openSettings("workspaces", {

@@ -99,7 +99,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   const sourceCount = () => (repositories.data() ? repositories.data()!.sources ?? repositories.data()!.repositories.length : null);
   return (
     <>
-      <General workspace={workspace()} admin={admin()} role={role()} />
+      <General workspace={workspace()} admin={admin()} role={role()} go={props.go} />
       <If when={canCreateSessions(role())}><Setup workspace={workspace()} admin={admin()} sourceCount={sourceCount()} go={props.go} /></If>
       <Repositories workspace={workspace()} admin={admin()} repositories={repositories.data()?.repositories ?? null} sourceCount={sourceCount()}
         loading={repositories.loading() && !repositories.data()} error={repositories.error()} refresh={repositories.refresh}
@@ -137,9 +137,23 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   );
 }
 
-function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceRole }) {
+function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceRole; go: SectionProps["go"] }) {
   const data = useAppData();
   const action = createAction();
+  const deletion = createAction();
+  const deletable = () => props.role === "owner" && !props.workspace.personal;
+  async function remove() {
+    if (deletion.busy() || !deletable()) return;
+    if (!await confirm({ title: `Delete ${props.workspace.name}?`, confirmLabel: "Delete workspace", destructive: true,
+      message: `${props.workspace.name} and all its settings, members, sources, models and schedules are deleted for everyone. This can't be undone. A workspace that has sessions, archived ones included, can't be deleted.` })) return;
+    const workspaceId = props.workspace.id;
+    const deleted = await deletion.run(async () => {
+      await session().api(`/api/workspaces/${segment(workspaceId)}`, { method: "DELETE" });
+    });
+    if (!deleted) return;
+    props.go({ name: "settings", section: "workspaces" });
+    void data.refreshWorkspaces();
+  }
   const renaming = signal(false);
   const name = signal("");
   const open = () => { action.clear(); name.set(props.workspace.name); renaming.set(true); };
@@ -162,6 +176,12 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
         </If>
       </>} />
       <Row title="Your role" trailing={<Badge tone={props.admin ? "success" : "neutral"}>{roleLabel[props.role]}</Badge>} />
+      <If when={deletable()}>
+        <Row title="Delete workspace" hint="Only a workspace without sessions, archived ones included"
+          trailing={<Button small variant="danger" icon="trash" label={deletion.busy() ? "Deleting…" : "Delete…"} testID="workspace-delete" disabled={deletion.busy()}
+            onPress={() => void remove()} />} />
+        <If when={deletion.error()}><CardBody><Feedback error={deletion.error()} /></CardBody></If>
+      </If>
       <If when={!renaming() && action.notice()}><CardBody><Feedback notice={action.notice()} /></CardBody></If>
       <FormSheet open={renaming()} title="Rename workspace" onClose={() => { if (!action.busy()) renaming.set(false); }} testID="rename-workspace-sheet"
         footer={<>
