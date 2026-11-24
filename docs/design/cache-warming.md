@@ -13,7 +13,8 @@ in [Models and tools](../models-and-tools.md#prompt-cache-warming); this note sa
 | What the session knows: is the conversation busy, would its next request differ, is it the shared conversation | `sessionWarming` in the same file, over the session's `Harness` and metadata |
 | Wiring | `RunnerSession.openHarness`: the session's `Models` are wrapped, and the hooks sit on its `workspace-tools` extension, which every conversation of the session runs |
 | The workspace setting | `workspace_cache_warming_settings` (`apps/server/src/cache-warming-settings.ts`); hosts ask for a session's with `POST /api/connectors/self/cache-warming` (`{ sessionId }` → `{ mode, child }`), through `RunnerConfig.cacheWarming` and `cachedSettings`; `packages/shared/src/cache-warming.ts` |
-| Client | **Settings → Workspaces → Prompt cache** (`apps/nsh/src/settings/workspace-options.tsx`) |
+| The host switch | `HostConfig.cacheWarming` (`connector_configs.cache_warming`, `packages/shared/src/host-config.ts`, `apps/server/src/host-config.ts`), owner-only; `sessionCacheWarmingMode` in `packages/shared/src/cache-warming.ts` combines it with the workspace's mode, on the server's answer and again in the connector's `RunnerConfig.cacheWarming` (`apps/runner/src/connector/runner-config.ts`) |
+| Client | **Settings → Workspaces → Prompt cache** (`apps/nsh/src/settings/workspace-options.tsx`); the host's **Prompt cache warming** (`apps/nsh/src/settings/host-sections.tsx`) |
 
 ## Decisions
 
@@ -55,4 +56,13 @@ in [Models and tools](../models-and-tools.md#prompt-cache-warming); this note sa
   answer for 30 seconds and reads it before each refresh, so a change applies within a minute. When the server can't
   be asked, the last answer holds for 5 minutes; with none, nothing is warmed, so a host paired with an older Pikibun
   server, which has no such route, never warms.
+- **The host's owner can refuse it.** The refreshes spend the model accounts of the host a session runs on, so the
+  host's owner has an owner-only switch, **Prompt cache warming** in the host's configuration (`HostConfig.cacheWarming`,
+  on by default), modelled on the host's **Build caches** switch: stored in `connector_configs`, changed with
+  `PATCH /api/connectors/:id/config` and audited as `host.config.updated`, and sent to the host with the rest of its
+  configuration. Turned off, no session on that host is warmed, whatever its workspace chooses; left on, the
+  workspace's setting decides, and a workspace that turns warming off still turns it off everywhere. The server applies
+  it in its answer to `POST /api/connectors/self/cache-warming` (`mode` is `off`), so connectors from before the switch
+  obey it too; current connectors apply it again from their own host configuration, so the owner's choice holds even
+  if an answer were to say otherwise. Like the workspace's, a change applies within a minute.
 - **Older connectors** know nothing of it and don't warm; nothing on the server depends on it.
