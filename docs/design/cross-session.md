@@ -43,6 +43,9 @@ session's owner on someone else's behalf. The control plane checks, on each call
    ask's) inherits the access, never `auto_merge`, from the same admission, delivered into the origin under the same
    conditions: the reply it carries may be steered by others writing in the target. Anything else stays `approval`, so no
    message runs with more than its sender's.
+7. An `ask` or `send` from a sandboxed origin to a session that runs without a sandbox goes only in a message a person
+   sent; one relayed from another session or a scheduled run is refused (`sandbox_required`):
+   [Messages to sessions outside a sandbox](host-placement.md#messages-to-sessions-outside-a-sandbox).
 
 Work in the other session then runs through `asActor` (a request context of the actor's own), through the same
 functions as the apps' routes: `submitMessage`, `createSession`, `stopSession`, `archiveSession`, `sessionView`. Each
