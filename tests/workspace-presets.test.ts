@@ -12,7 +12,8 @@ const origin = 'http://localhost:8787';
 const token = () => randomBytes(32).toString('base64url');
 
 async function fixture(t: TestContext) {
-  const database = await testDatabase(t);
+  const database = await testDatabase();
+  t.after(() => database.db.close());
   const env: Env = { DB: database.db, APP_ORIGIN: origin, SESSION_SECRET: token(), RUNNER_SHARED_SECRET: token(), TEST_AUTH_ENABLED: 'true', TEST_AUTH_SECRET: token(),
     TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString(), VAULT_KEY: token() };
   async function client(id: string) {

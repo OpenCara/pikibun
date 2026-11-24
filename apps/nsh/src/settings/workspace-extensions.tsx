@@ -258,7 +258,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                           </Banner>
                         )}
                       </Each>
-                      <If when={!controlPlane() && (offer()?.description ?? registered())}>{description => <Small>{description().trim()}</Small>}</If>
+                      <If when={controlPlane() ? undefined : offer()?.description ?? registered()}>{description => <Small>{description().trim()}</Small>}</If>
                       <If when={offer()?.tools.length}>
                         <ToolList tools={offer()!.tools.map(tool => ({ ...tool, source: extension().source }))} shadowed={extension().enabled ? shadowedOf(extension().source) : undefined} />
                       </If>
