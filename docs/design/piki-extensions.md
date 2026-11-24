@@ -355,7 +355,12 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     `piki:github` with its first GitHub repository (as `piki:gh`, note 6; `addPikiExtensions`), a document source's
     with its first source of that kind (`addDocumentSourceExtension`), and the others by its owners and admins (**Add
     extension → Pikibun tools**); `piki:files` stays core. One a workspace turned off stays off, and one it removed comes
-    back only with a later first source of its kind. Removing one turns it off.
+    back only with a later first source of its kind. Removing one turns it off. Since
+    [open defaults](security-rationale.md#open-defaults) a new workspace is created with the starter ones already
+    added (`starterWorkspaceExtensions`: `piki:git`, `piki:node`, `piki:python`, `piki:schedule`, `piki:sessions`,
+    `piki:workspace`, `piki:artifacts`, `piki:skills`), as rows like any added by hand, so nothing about how a
+    workspace's list is read changed: an unlisted one is still off, and the forge's and document sources' still come
+    with a first source.
     - **Connectors read the list as before.** Every connector, and pages from before, read a session-tool extension a
       workspace doesn't list as on (note 17), and connectors keep doing so when they can't reach the control plane. So
       the control plane doesn't change what "unlisted" means on the wire: it lists every session-tool extension a
