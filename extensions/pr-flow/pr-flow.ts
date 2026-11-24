@@ -9,6 +9,9 @@ export const prFlowFlags = Object.freeze({
   "wait-for-checks": "Wait for the pull request's checks to finish, and fix failing ones, before merging",
   "auto-merge": "Merge the pull request once it is approved, or once its review window ends with nothing left to address. Off leaves the merge to people: the agent tells the person it is ready to merge instead",
   "pre-push-check": "A check that must pass in a clone before the session pushes it, after it changed files there: words of the command, such as tests/no-comments.test.ts or pnpm check:fast. A push before a run of a program tool (node, python, rust, go, dotnet, make) whose command holds them passed in that clone is refused. Empty checks nothing",
+  "wait-for-review": "Wait review-minutes for reviews once a pull request is ready. Off skips the review window whatever review-minutes says: the agent merges (or, with auto-merge off, hands it over) as soon as it is ready",
+  "draft-first": "Open a draft pull request at the first change in a clone. Off has the agent commit and push to the session branch as it works and open the pull request, ready for review, only once the change is done",
+  "require-approval": "Merge only a pull request that is approved. A review window that ends without an approval (or, with no window, a pull request not yet approved) is handed over to people instead of merged",
 });
 
 export const DEFAULT_REVIEW_MINUTES = 30;
@@ -16,7 +19,9 @@ export const MAX_REVIEW_MINUTES = 7 * 24 * 60;
 const GITHUB_WAIT_SECONDS = 1800;
 
 export type MergeMethod = "squash" | "merge" | "rebase";
-export interface PrFlowSettings { reviewMinutes: number; mergeMethod: MergeMethod; waitForChecks: boolean; autoMerge: boolean; prePushCheck?: string }
+export interface PrFlowSettings {
+  reviewMinutes: number; mergeMethod: MergeMethod; waitForChecks: boolean; autoMerge: boolean; prePushCheck?: string; draftFirst?: boolean; requireApproval?: boolean;
+}
 
 export function prePushCheck(setting: unknown): string {
   return typeof setting === "string" ? setting.replace(/\s+/g, " ").trim().slice(0, 500) : "";
@@ -33,9 +38,25 @@ export function mergeMethod(setting: unknown): MergeMethod {
   return value === "merge" || value === "rebase" ? value : "squash";
 }
 
+export function switchSetting(setting: unknown, fallback: boolean): boolean {
+  if (typeof setting === "boolean") return setting;
+  if (typeof setting === "number") return setting !== 0;
+  if (typeof setting !== "string") return fallback;
+  const value = setting.trim().toLowerCase();
+  if (["true", "on", "yes", "1"].includes(value)) return true;
+  if (["false", "off", "no", "0"].includes(value)) return false;
+  return fallback;
+}
+
 export function autoMerge(setting: unknown): boolean {
-  if (typeof setting === "string") return !["false", "off", "no", "0"].includes(setting.trim().toLowerCase());
-  return setting !== false && setting !== 0;
+  return switchSetting(setting, true);
+}
+
+const draftFirst = (settings: PrFlowSettings) => settings.draftFirst !== false;
+const approvalOnly = (settings: PrFlowSettings) => settings.autoMerge && settings.requireApproval === true;
+
+function list(items: readonly string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 export interface PullRequestFlow {
