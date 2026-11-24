@@ -80,10 +80,11 @@ async function audienceCovered(env: Env, self: Party, other: Party, direction: '
   return true;
 }
 
-const inputFields = ['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'targetSessionId', 'message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'placement', 'visibility', 'messageId', 'limit'];
+const inputFields = ['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'targetSessionId', 'message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'placement',
+  'hostEnvironment', 'visibility', 'messageId', 'limit'];
 const actionFields: Record<SessionsBrokerAction, readonly string[]> = {
   list: [], read: ['targetSessionId', 'messageId', 'limit'], ask: ['targetSessionId', 'message', 'notify'], send: ['targetSessionId', 'message', 'access', 'notify'],
-  create: ['message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'placement', 'visibility'], stop: ['targetSessionId'], archive: ['targetSessionId'],
+  create: ['message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'placement', 'hostEnvironment', 'visibility'], stop: ['targetSessionId'], archive: ['targetSessionId'],
 };
 
 interface Call {
@@ -126,12 +127,17 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
     catch (error) { fail(400, 'invalid_input', error instanceof Error ? error.message : 'Invalid placement.'); }
   }
   if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'workspace') fail(400, 'invalid_input', 'Sessions are visible to the workspace\'s members; leave visibility out.');
+  if (input.hostEnvironment !== undefined && typeof input.hostEnvironment !== 'boolean') fail(400, 'invalid_input', 'hostEnvironment is true or false.');
+  const hostEnvironment = input.hostEnvironment === true;
+  if (hostEnvironment && placement?.hosts?.length !== 1) {
+    fail(400, 'invalid_input', 'A session that runs directly on a host names that one host: placement {hosts: [its id]}, as list returns it.');
+  }
   const messageId = input.messageId === undefined ? undefined : identifier(input.messageId, 'messageId');
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > crossSessionLimits.readEntries)) {
     fail(400, 'invalid_input', `The limit is 1 to ${crossSessionLimits.readEntries}.`);
   }
   const limit = (input.limit as number | undefined) ?? crossSessionLimits.defaultEntries;
-  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, placement, messageId });
+  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, placement, hostEnvironment, messageId });
 
   const originAccess = await sessionAccess(c.env, sessionId, actorId);
   if (!originAccess || originAccess.row.status === 'archived' || !hasPermission(originAccess.permissions, 'write')) {
@@ -159,7 +165,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
     if (consent) return c.json(consent);
     return c.json({ message: await deliver(call, other, action, message!, access, notify) } satisfies SessionsToolResult, 202);
   }
-  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel, placement });
+  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel, placement, hostEnvironment });
   const other = await requireOther(call, targetSessionId!, action === 'stop' ? 'write' : 'manage');
   const audit = { crossSession: true, originSessionId: origin.id, callId };
   if (action === 'stop') {
@@ -300,9 +306,12 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
 }
 
 async function createChild(call: Call, options: { message?: string; access?: AccessMode; notify: boolean; title?: string; modelId?: string; thinkingLevel?: ThinkingLevel;
-  placement?: PlacementRequirements }): Promise<Response> {
+  placement?: PlacementRequirements; hostEnvironment?: boolean }): Promise<Response> {
   const { c, origin, actorId } = call;
   await requireSessionCreator(c.env, origin.workspace_id, actorId);
+  if (options.hostEnvironment && !personSent(call.admission)) {
+    fail(403, 'host_session_person_required', 'Only a message a person sent starts a session that runs directly on a host: not a message from another session, nor a scheduled run.');
+  }
   const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ? AND schedule_id IS NULL').bind(origin.id).first();
   if (Number(children?.n ?? 0) >= crossSessionLimits.children) fail(429, 'cross_session_limit', `A session starts at most ${crossSessionLimits.children} sessions.`);
   if (options.message !== undefined) await requireSendable(call, null);
@@ -339,8 +348,9 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   }
   const title = options.title ?? cut(`${origin.title} · sub-task`, 190).split('\n')[0]!;
   const { row } = await asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, modelId,
-    ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}) }, { parentSessionId: origin.id }));
+    ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}), ...(options.hostEnvironment ? { hostEnvironment: true } : {}) }, { parentSessionId: origin.id }));
   await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId, modelId,
+    ...(options.hostEnvironment ? { hostEnvironment: true } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}), ...(inheritsModel ? { inheritedModel: true } : {}),
     ...(inheritsThinking && thinkingLevel ? { inheritedThinking: true } : {}),
     ...(placed ? { placement: { hostId: placed.result.host.id, conditions: placed.result.conditions, load: placed.result.load, qualified: placed.result.qualified } } : {}) }).run();
@@ -348,7 +358,11 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   if (!created) fail(409, 'policy_changed', 'The new session is no longer available.');
   const message = options.message === undefined ? undefined : await deliver(call, created.row, 'create', options.message, options.access, options.notify, thinkingLevel);
   return c.json({ session: summary(created), model: { id: modelId, provider: model.provider, modelId: model.model_id, ...(thinkingLevel ? { thinkingLevel } : {}) },
-    ...(placed ? { placement: placed.result } : {}), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
+    ...(placed ? { placement: placed.result } : {}), ...(options.hostEnvironment ? { hostEnvironment: true as const } : {}), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
+}
+
+function personSent(admission: AdmissionRow): boolean {
+  return !/^(xs|schedule):/.test(admission.request_id);
 }
 
 type HostOffer = { chatOptions: boolean; models: LocalModelSummary[] };

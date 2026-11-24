@@ -14,9 +14,12 @@ const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sess
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access read: inspect only; left out, it acts as that session's tools allow); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
-  + "create {message?, title?, model?, thinking?, placement?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
+  + "create {message?, title?, model?, thinking?, placement?, host_environment?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
   + "placement lets Pikibun choose the host: the least loaded online host you may start sessions on that meets every condition given, among hosts offering model (any host offering its provider/model, not only its own), or any of placement models (model ids, provider/model, or globs such as anthropic/*: any match qualifies and load decides among them, so name one model alone to insist on it), or else this session's model: "
   + "{hosts?, models?, gpu?, gpu_vendor?, gpu_memory_gb?, min_cpus?, min_memory_gb?, min_free_memory_gb?, min_free_disk_gb?, platform?, arch?}, such as {gpu: true, min_memory_gb: 32} for a task that needs a GPU, or {} to spread work over the hosts offering the same model. The result names the host chosen. "
+  + "host_environment true runs the new session directly on its host, without the sandbox, as a person can start one: only in a message a person sent (not one from another session, nor a scheduled run), "
+  + "with placement hosts naming that one host (its id, as list returns it), and only where they may start sessions on that host and it accepts them (Settings → Hosts → the host → Configuration). "
+  + "Use it only when the person asked for a session on the host itself. "
   + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
   + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
   + "chains of messages stop after 3 hops and never loop back to a session they came from. "
@@ -47,13 +50,14 @@ export function sessionsTool(context: ToolContext): ToolRegistration {
       min_cpus: opt(int({ minimum: 1 })), min_memory_gb: opt(num({ minimum: 0 })), min_free_memory_gb: opt(num({ minimum: 0 })), min_free_disk_gb: opt(num({ minimum: 0 })),
       platform: opt(str()), arch: opt(str()),
     })),
+    host_environment: opt(bool()),
     limit: opt(int({ minimum: 1, maximum: crossSessionLimits.readEntries })),
     timeout_seconds: opt(int({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
   }, { open: true }), execute: async (args, api) => {
     await context.requireSessionTool("sessions");
     const attribution = await calls.actor(api, true);
     const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-      modelId: args.model, thinkingLevel: args.thinking, placement: placementRequest(args.placement), messageId: args.message_id, limit: args.limit })
+      modelId: args.model, thinkingLevel: args.thinking, placement: placementRequest(args.placement), hostEnvironment: args.host_environment, messageId: args.message_id, limit: args.limit })
       .filter(([, value]) => value !== undefined)) as
       Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
     if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");
