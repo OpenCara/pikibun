@@ -7,6 +7,7 @@ import type { ExtensionFile } from "../../../../packages/shared/src/host-config.
 export interface FileBind {
   source: string;
   target: string;
+  stamp?: string;
 }
 
 export interface ExtensionFileBinds {
@@ -31,14 +32,17 @@ export function extensionFileBinds(files: readonly ExtensionFile[], source: stri
   for (const file of files) {
     if (file.extension !== key) continue;
     let real: string;
+    let stamp: string;
     try {
       real = realpathSync(hostFilePath(file.path, hostHome));
-      if (!statSync(real).isFile()) throw new Error("not a file");
+      const stat = statSync(real);
+      if (!stat.isFile()) throw new Error("not a file");
+      stamp = `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`;
     } catch {
       missing.push(file.path);
       continue;
     }
-    binds.push({ source: real, target: posix.join(sessionHome, file.target) });
+    binds.push({ source: real, target: posix.join(sessionHome, file.target), stamp });
   }
   return { binds, missing };
 }

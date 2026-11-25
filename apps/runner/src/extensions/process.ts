@@ -329,6 +329,7 @@ export class ProcessChannel implements ExtensionChannel {
   readonly #mounts = new Set<string>();
   readonly #files = new Map<string, readonly FileBind[]>();
   #filesAt = 0;
+  readonly #refused = new Set<string>();
   readonly #pending = new Map<number, Pending>();
   readonly #opened = new Map<string, ExtensionParams<"open">>();
   readonly #started = new Map<string, ExtensionParams<"emit">>();
@@ -355,7 +356,15 @@ export class ProcessChannel implements ExtensionChannel {
 
   bind(source: string, files: readonly FileBind[]): void {
     if (!this.#mounted) return;
-    const allowed = files.filter(file => this.#mountAllowed(file.source));
+    const allowed = files.filter(file => {
+      if (this.#mountAllowed(file.source)) return true;
+      const key = `${source}\0${file.source}`;
+      if (!this.#refused.has(key)) {
+        this.#refused.add(key);
+        this.options.warn(source, `${file.source}, which the host's owner shares with it, can't be given to the session's sandbox, so it runs without it`);
+      }
+      return false;
+    });
     if (JSON.stringify(this.#files.get(source) ?? []) === JSON.stringify(allowed)) return;
     if (allowed.length) this.#files.set(source, allowed);
     else this.#files.delete(source);
@@ -393,7 +402,7 @@ export class ProcessChannel implements ExtensionChannel {
       const source = (params as { source?: unknown }).source;
       if (method === "open" && typeof source === "string" && this.options.files) {
         this.#filesAt = this.options.now?.() ?? Date.now();
-        this.bind(source, await this.options.files(source));
+        this.bind(source, await this.options.files(source).catch(() => this.#files.get(source) ?? []));
       }
     } else await this.#refreshFiles();
     const run = await this.#ensure();
@@ -446,7 +455,7 @@ export class ProcessChannel implements ExtensionChannel {
     const log = this.options.log ?? (line => { process.stderr.write(`Extension process: ${line.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 1000)}\n`); });
     try {
       run.link = await this.#launch({ reply: reply => this.#reply(reply, run), log, ended: reason => this.#ended(run, reason) }, [...this.#mounts],
-        this.#fileBinds());
+        this.#fileBinds().map(({ source, target }) => ({ source, target })));
     } catch (error) {
       if (this.#live === run) this.#live = undefined;
       throw new Error(`The extension process couldn't start: ${error instanceof Error ? error.message : String(error)}`);

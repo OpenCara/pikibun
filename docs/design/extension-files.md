@@ -34,7 +34,16 @@ else.
 4. **Changes apply between calls.** The channel asks for the entries again at most every 30 seconds
    (`FILES_REFRESH_MS`), on a request while none is in flight, and starts the process again only when they changed, as
    it does for a new extension's files. So a file the owner stops sharing leaves a running session within about a minute
-   of its next activity, and no tool call is cut short for it.
+   of its next activity, and no tool call is cut short for it. A bind holds the file it was made with, and editors save
+   by putting a new file in its place, so each entry carries its file's device, inode, modification time and size
+   (`stamp`): a file saved anew counts as a change too. The empty file `bwrap` made for a place stays in the session's
+   home after the owner stops sharing it.
+7. **Where the agent can reach the place.** The session's home is the agent's to write, so a command could put a link
+   where a place's directory goes. `bwrap` makes the place and its directories inside the service's own mount namespace,
+   whose only writable mounts are the session's own home, worktree and socket directory, so a link there leads nowhere
+   the agent couldn't already write; at worst the extension finds its file somewhere else in its own view, or doesn't
+   start. An entry whose host file the sandbox refuses (`serviceBindAllowed`) is left out, and the session told once.
+   An entry the host's configuration can't be read for keeps what the extension had, and never stops it opening.
 5. **Linux only.** macOS's Seatbelt sandbox can allow paths but not put a file at another one, so there the session says
    once that the extension runs without its shared files. Outside the sandbox (Windows, sessions on the host,
    unsandboxed hosts) extensions run as the owner and read the owner's files themselves, so nothing is bound.

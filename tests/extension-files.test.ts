@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultHostConfig, extensionFilePackage, hostConfigLimits, ownerOnlyHostConfig, parseExtensionFiles, parseHostConfigChange, readHostConfig } from "../packages/shared/src/host-config.js";
@@ -52,11 +52,16 @@ test("a shared file reaches the extension's package at any version, as the real 
   assert.equal(hostFilePath("/etc/a", "/home/ada"), "/etc/a");
   const real = join(root, ".pi", "agent", "web-search.json");
   for (const source of ["npm:pi-web-access@0.46.0", "npm:pi-web-access@0.47.1"]) {
-    assert.deepEqual(extensionFileBinds(files, source, "/sessions/s/home", root), {
-      binds: [{ source: real, target: "/sessions/s/home/.config/pi/web-search.json" }, { source: real, target: "/sessions/s/home/.pi/agent/web-search.json" }],
-      missing: ["~/.pi/agent", "~/absent.json"],
-    });
+    const { binds, missing } = extensionFileBinds(files, source, "/sessions/s/home", root);
+    assert.deepEqual(binds.map(({ source, target }) => ({ source, target })),
+      [{ source: real, target: "/sessions/s/home/.config/pi/web-search.json" }, { source: real, target: "/sessions/s/home/.pi/agent/web-search.json" }]);
+    assert.deepEqual(missing, ["~/.pi/agent", "~/absent.json"]);
   }
+  const before = extensionFileBinds(files, "npm:pi-web-access@0.46.0", "/sessions/s/home", root).binds[0]!.stamp;
+  await writeFile(`${real}.new`, `{"ssrf":{}}`);
+  await rename(`${real}.new`, real);
+  assert.notEqual(extensionFileBinds(files, "npm:pi-web-access@0.46.0", "/sessions/s/home", root).binds[0]!.stamp, before,
+    "a file saved anew, as editors do by replacing it, reads as changed");
   assert.deepEqual(extensionFileBinds(files, "piki:gh", "/sessions/s/home", root), { binds: [], missing: [] });
   assert.deepEqual(extensionFileBinds(files, "local:/x/ext.ts", "/sessions/s/home", root), { binds: [], missing: [] });
 });
@@ -107,9 +112,21 @@ test("the extension process starts again with the files shared with its extensio
   clock += FILES_REFRESH_MS;
   await emit();
   assert.equal(launches.length, 2, "unchanged, it keeps running");
-  shared = [{ source: "/etc/shadow", target: "/sessions/s/home/shadow" }];
+  shared = [{ ...first, stamp: "replaced" }];
   clock += FILES_REFRESH_MS;
   await emit();
-  assert.equal(launches.length, 2, "a path the sandbox refuses is never given");
+  assert.deepEqual(launches.at(-1), [first], "a file saved anew starts it again, so the bind holds the new file");
+  shared = [{ source: "/etc/shadow", target: "/sessions/s/home/shadow" }];
+  for (let round = 0; round < 2; round++) {
+    clock += FILES_REFRESH_MS;
+    await emit();
+  }
+  assert.deepEqual(launches.at(-1), [], "a path the sandbox refuses is never given");
+  assert.equal(warnings.filter(message => message.startsWith("/etc/shadow")).length, 1, "and the session is told so once");
   await channel.close();
+
+  const failing = new ProcessChannel({ directory: "/sessions/s/worktree", warn: () => {}, launch, files: async () => { throw new Error("no configuration"); } });
+  const opened = await failing.call("open", { source, files: ["/x/index.ts"], models: [] });
+  assert.deepEqual(opened.value.errors, [], "an extension still opens when the host's configuration can't be read");
+  await failing.close();
 });
