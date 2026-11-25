@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { arch, platform } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,12 @@ export const NSH_COMPONENTS = Object.freeze({
   tui: { assets: NSH_TUI_HOSTS, paths: ["runtime/tui"] },
 });
 const TARGET_COMPONENTS = { web: "web", android: "android", ios: "ios", catalyst: "ios", tui: "tui" };
+
+export const NSH_TARGET_MODULES = Object.freeze({
+  ios: Object.freeze({
+    "nsh-extra": Object.freeze({ version: NSH_VERSION.slice(1), features: Object.freeze(["push"]), sha256: "d23d7ff9d2471b2c1a7154b1ebd14e0e93c07c4d95e10c0677f390978559de80" }),
+  }),
+});
 
 export function componentAsset(component, host = `${platform()}-${arch()}`) {
   return component.asset ?? component.assets?.[host] ?? null;
@@ -164,13 +170,75 @@ export async function nshComponent(name, { required = false } = {}) {
   }
 }
 
-export function targetComponent(args) {
+export function commandTarget(args) {
   const end = args.indexOf("--");
   const own = end < 0 ? args : args.slice(0, end);
   const at = own.findIndex(argument => argument === "--target" || argument.startsWith("--target="));
   if (at < 0) return null;
-  const target = own[at].startsWith("--target=") ? own[at].slice("--target=".length) : own[at + 1];
-  return TARGET_COMPONENTS[target] ?? null;
+  return (own[at].startsWith("--target=") ? own[at].slice("--target=".length) : own[at + 1]) ?? null;
+}
+
+export function targetComponent(args) {
+  return TARGET_COMPONENTS[commandTarget(args)] ?? null;
+}
+
+export function targetManifest(text, modules) {
+  const manifest = JSON.parse(text);
+  const taken = Object.keys(modules).filter(name => manifest.dependencies?.[name]);
+  if (taken.length) throw new Error(`apps/nsh/nsh.json already lists ${taken.join(", ")}: scripts/nsh.mjs adds it for the targets that need it (NSH_TARGET_MODULES).`);
+  manifest.dependencies = { ...manifest.dependencies,
+    ...Object.fromEntries(Object.entries(modules).map(([name, module]) => [name, { version: `=${module.version}`, features: [...module.features] }])) };
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
+export function targetLock(modules) {
+  return `${JSON.stringify({ version: 2, packages: Object.entries(modules).map(([name, module]) => ({
+    name, version: module.version, source: "crates.io", checksum: `sha256-${module.sha256}`, dir: `${name}/${module.version}`, module: name,
+  })) }, null, 2)}\n`;
+}
+
+function sameJson(one, other) {
+  try { return JSON.stringify(JSON.parse(one)) === JSON.stringify(JSON.parse(other)); } catch { return false; }
+}
+
+async function withTargetModules(target, work) {
+  const modules = NSH_TARGET_MODULES[target];
+  if (!modules) return work();
+  for (const [name, module] of Object.entries(modules)) {
+    const crate = await releaseAsset(`https://static.crates.io/crates/${name}/${name}-${module.version}.crate`);
+    const actual = createHash("sha256").update(crate).digest("hex");
+    if (actual !== module.sha256) throw new Error(`${name} ${module.version} on crates.io does not match the SHA-256 pinned in NSH_TARGET_MODULES (${actual} != ${module.sha256})`);
+  }
+  const manifest = path.join(app, "nsh.json");
+  const lock = path.join(app, "nsh.lock");
+  const original = readFileSync(manifest, "utf8");
+  const pinned = targetLock(modules);
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    writeFileSync(manifest, original);
+    rmSync(lock, { force: true });
+  };
+  const interrupted = () => { restore(); process.exit(130); };
+  process.once("SIGINT", interrupted);
+  process.once("SIGTERM", interrupted);
+  try {
+    writeFileSync(manifest, targetManifest(original, modules));
+    writeFileSync(lock, pinned);
+    console.error(`Building for ${target} with ${Object.entries(modules).map(([name, module]) => `${name} ${module.version} (${module.features.join(", ")})`).join(", ")}: this target is built with the Rust toolchain (https://rustup.rs).`);
+    const status = work();
+    const locked = existsSync(lock) ? readFileSync(lock, "utf8") : "";
+    if (status === 0 && !sameJson(locked, pinned)) {
+      console.error(`Native Shell locked other modules than scripts/nsh.mjs pins for ${target} (NSH_TARGET_MODULES):\n${locked}`);
+      return 1;
+    }
+    return status;
+  } finally {
+    restore();
+    process.off("SIGINT", interrupted);
+    process.off("SIGTERM", interrupted);
+  }
 }
 
 export async function nshBinary() {
@@ -225,7 +293,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const bin = await nshBinary();
       const component = targetComponent(args);
       if (component) await nshComponent(component);
-      process.exitCode = run(bin, args);
+      process.exitCode = await withTargetModules(commandTarget(args), () => run(bin, args));
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

@@ -3,7 +3,7 @@ import type { NotificationConfig, NotificationDevice, NotificationPreferences } 
 import { segment } from "../shared";
 import { session } from "../lib/auth";
 import { timestamp } from "../lib/format";
-import { currentDeviceId, deviceSupport, disableNotifications, enableNotifications, notificationsOn, type DeviceSupport } from "../lib/notifications";
+import { currentDeviceId, deviceSupport, disableNotifications, enableNotifications, notificationsOn, pushProblem, type DeviceSupport } from "../lib/notifications";
 import { createAction, createResource } from "../lib/resource";
 import { CheckControl } from "../form";
 import { Badge, Button, CardBody, Feedback, Note, ResourceState, Row, Section } from "../ui";
@@ -19,7 +19,16 @@ const supportHints = {
   push: "This browser shows notifications even when no Pikibun tab is open.",
   page: "This browser shows notifications while a Pikibun tab is open.",
   app: "This app shows notifications while it's open, also behind other windows. Pressing one opens its session.",
+  remote: "This app gets notifications while it's closed too, unless a browser or desktop app of yours showed them first. Pressing one opens its session.",
 };
+
+const deviceKinds: Record<NotificationDevice["kind"], string> = { web: "Browser", expo: "iPhone or iPad app" };
+
+function supportHint(support: DeviceSupport, problem: string): string {
+  if (support.kind === "unsupported") return support.reason;
+  if (support.kind !== "app" || !support.remote) return supportHints[support.kind];
+  return problem ? `${supportHints.app} It can't get them while it's closed yet: ${problem}` : supportHints.remote;
+}
 
 const blockedHints = {
   app: "Notifications from Pikibun are off in this device's settings. Turn them on there.",
@@ -76,14 +85,13 @@ export function Notifications(_props: SectionProps) {
       <Section title="This device" info={<View style={{ gap: 8 }}>
         <Note>Pikibun tells you when one of your sessions finishes or fails: sessions you own, and those you sent the latest message to.</Note>
         <Note>Turn notifications on in each browser or app where you want them. Browsers get them through their push service (Google's, Mozilla's, Apple's or Microsoft's), encrypted so that only your browser can read them. The apps ask Pikibun for them while they're open.</Note>
+        <Note>The iPhone and iPad app also gets them while it's closed, through Expo's and Apple's push services, which can read them. They come last: half a minute after the others, and only when no browser or desktop app of yours showed the notification by then.</Note>
       </View>}>
         <ResourceState inline loading={config.loading() && !config.data()} error={config.error()} retry={config.refresh}>
           <If when={support()}>
             {current => (
               <Row title="Notifications on this device" testID="notifications-device"
-                hint={current().kind === "unsupported" ? (current() as { reason: string }).reason
-                  : blocked() ? blockedHints[current().kind === "app" ? "app" : "browser"]
-                  : supportHints[current().kind as "push" | "page" | "app"]}
+                hint={blocked() ? blockedHints[current().kind === "app" ? "app" : "browser"] : supportHint(current(), pushProblem())}
                 trailing={current().kind === "unsupported" ? <Badge>Unavailable</Badge>
                   : <CheckControl testID="notifications-device-toggle" label="Notifications on this device" checked={notificationsOn()}
                     disabled={device.busy() || (blocked() && !notificationsOn())} onChange={toggleDevice} />} />
@@ -104,13 +112,13 @@ export function Notifications(_props: SectionProps) {
         </ResourceState>
         <If when={preferences.error()}><CardBody><Feedback error={preferences.error()} /></CardBody></If>
       </Section>
-      <Section title="Devices" info="The browsers that get your notifications even when Pikibun isn't open. Signing out of one stops its notifications."
+      <Section title="Devices" info="The browsers and the iPhone and iPad apps that get your notifications even when Pikibun isn't open. Signing out of one stops its notifications."
         action={<Button small variant="outline" icon="bell" label="Send a test" disabled={devices.busy()} onPress={sendTest} />}>
         <If when={config.data()?.devices.length} else={<Row title="No devices yet" hint={support()?.kind === "unsupported" ? "Turn notifications on in Pikibun on the web, or in a browser" : "Turn notifications on above"} />}>
           <Each of={config.data()?.devices ?? []} key={item => item.id}>
             {item => (
-              <Row title={`${item().name ?? "Browser"}${item().current ? " · This device" : ""}`}
-                hint={`Browser · since ${timestamp(item().createdAt)}`}
+              <Row title={`${item().name ?? deviceKinds[item().kind] ?? "Device"}${item().current ? " · This device" : ""}`}
+                hint={`${deviceKinds[item().kind] ?? "Device"} · since ${timestamp(item().createdAt)}`}
                 trailing={<Button small variant="outline" label="Remove" disabled={devices.busy()} onPress={() => remove(item())} />} />
             )}
           </Each>

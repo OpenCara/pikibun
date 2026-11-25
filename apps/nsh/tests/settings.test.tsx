@@ -255,7 +255,7 @@ describe("settings", () => {
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/notifications/preferences`)).toEqual({ finished: true });
   });
 
-  test("in the desktop app, notifications turned on show the account's new ones as the system's, each opening its session, but not one about the session in front", async () => {
+  test("in the desktop app, notifications turned on show the account's new ones as the system's and take them from the phone, each opening its session, but not one about the session in front", async () => {
     let permission = "default";
     const shown: { id: string; title: string; body?: string }[] = [];
     let fed = 0;
@@ -283,6 +283,7 @@ describe("settings", () => {
     await app.clock!.runFor(25_000);
     await app.waitUntil(() => shown.length > 0);
     expect(shown).toEqual([{ id: "n1 #/s/s1", title: "Finished: Fix the flaky login test", body: "The agent finished." }]);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/notifications/handled`)).toEqual({ ids: ["n1"] });
     expect(notificationRoute(shown[0]!.id)).toEqual({ name: "session", sessionId: "s1" });
     expect(notificationRoute("n2 #/settings/notifications")).toEqual({ name: "settings", section: "notifications" });
     expect(notificationRoute("n3")).toBe(null);

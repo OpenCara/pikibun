@@ -46,6 +46,7 @@ export interface Env {
   TENCENT_DOCS_CLIENT_ID?: string;
   TENCENT_DOCS_CLIENT_SECRET?: string;
   WEB_PUSH_CONTACT?: string;
+  EXPO_ACCESS_TOKEN?: string;
   LOCAL_MODE?: string;
   LOCAL_CLAIM_SECRET?: string;
   LOCAL_OWNER_ID?: string;

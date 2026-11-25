@@ -1,2 +1,4 @@
 # Written by nsh: generated declarations, builds and packages.
 .nsh/
+# Written by scripts/nsh.mjs while it builds for a target with modules of its own (NSH_TARGET_MODULES), then removed.
+nsh.lock

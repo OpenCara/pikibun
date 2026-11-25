@@ -1,4 +1,4 @@
-import { host, platform, signal } from "nsh";
+import { host, platform, signal, untracked, type Accessor } from "nsh";
 
 export type PageRoute =
   | { name: "home" }
@@ -55,13 +55,14 @@ export function startPage(): void {
 }
 
 export function showRoute(route: PageRoute): void {
-  shown = route;
+  shown.set(route);
   if (!hasPage()) return;
   host.call("page.setRoute", { hash: routeHash(route) }).catch(() => undefined);
 }
 
-let shown: PageRoute = { name: "home" };
-export const shownRoute = (): PageRoute => shown;
+const shown = signal<PageRoute>({ name: "home" });
+export const shownPage: Accessor<PageRoute> = shown;
+export const shownRoute = (): PageRoute => untracked(shown);
 
 export function openServerPage(path: string): boolean {
   if (!hasPage()) return false;
