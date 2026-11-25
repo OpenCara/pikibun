@@ -2,7 +2,9 @@ import type { Hono } from 'hono';
 import { signToken, verifyToken } from '../../../packages/shared/src/crypto.js';
 import { checkMediaRange, mediaLimits, mediaType, parseByteRange, type MediaRange } from '../../../packages/shared/src/media.js';
 import { hostCapabilities, requireSession } from './authority/index.js';
-import { fail, identifier, jsonObject } from './http.js';
+import { z } from 'zod';
+import { fail, identifier } from './http.js';
+import { body } from './schemas.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { worktreePath } from './session-files.js';
 import type { AppContext, AppEnv, Env, SessionRow } from './types.js';
@@ -16,6 +18,7 @@ interface MediaClaims {
   exp: number;
 }
 
+const mediaLinkBody = z.strictObject({ path: z.string() });
 const TOKEN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 function mediaSecret(env: Env): string {
@@ -106,8 +109,7 @@ export function registerMediaLinks(app: Hono<AppEnv>): void {
 export function registerMediaLinkIssuing(app: Hono<AppEnv>): void {
   app.post('/api/sessions/:id/media', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
-    const input = await jsonObject(c, 4096);
-    if (Object.keys(input).some(key => key !== 'path') || typeof input.path !== 'string') fail(400, 'invalid_media', 'Expected the path of a file in the session worktree.');
+    const input = await body(c, mediaLinkBody, { maxBytes: 4096, message: 'Expected the path of a file in the session worktree.' });
     const path = worktreePath(input.path);
     const type = mediaType(path);
     if (path === '.' || !type) fail(400, 'invalid_media', 'Only images (PNG, JPEG, GIF, WebP), videos (MP4, MOV, WebM, Ogg) and audio (MP3, M4A, AAC, WAV, Ogg, Opus, FLAC) can be shown.');

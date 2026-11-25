@@ -3553,7 +3553,9 @@ test('media in the chat: a signed link to a worktree file, served in parts from 
   await denied(await issue('out/demo.mp4'), 409, 'media_unsupported');
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, mediaFiles: true } }));
 
-  for (const path of ['../x.mp4', '/etc/x.mp4', 'notes.txt', 'out/demo', 7]) await denied(await issue(path), 400, path === '../x.mp4' || path === '/etc/x.mp4' ? 'invalid_path' : 'invalid_media');
+  for (const [path, code] of [['../x.mp4', 'invalid_path'], ['/etc/x.mp4', 'invalid_path'], ['notes.txt', 'invalid_media'], ['out/demo', 'invalid_media'], ['.', 'invalid_media'], [7, 'invalid_input']] as const) {
+    await denied(await issue(path), 400, code);
+  }
   await denied(await issue('out/demo.mp4', s.host), 403, 'forbidden');
   assert.equal(requests.length, 0);
 
