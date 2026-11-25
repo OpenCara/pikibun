@@ -165,7 +165,8 @@ test("with tool search off, the tool list and the system prompt are byte for byt
   const before = await runner.provision("deferral-before");
   runner.config = { ...defaultHostConfig, builtinExtensions: parseBuiltinExtensions(["pi:codemode"]) };
   await send(before, "one");
-  assert.equal(runner.requests.at(-1)!.system, first!.system, "a host that lists only code mode, as hosts did before, sends the same");
+  const unbranched = (system: string) => system.replaceAll(/pikibun\/deferral-[a-z]+/g, "<session branch>");
+  assert.equal(unbranched(runner.requests.at(-1)!.system), unbranched(first!.system), "a host that lists only code mode, as hosts did before, sends the same");
 
   runner.config = on;
   await send(session, "three");
@@ -173,7 +174,7 @@ test("with tool search off, the tool list and the system prompt are byte for byt
   runner.config = off;
   const fresh = await runner.provision("deferral-after");
   await send(fresh, "one");
-  assert.equal(runner.requests.at(-1)!.system, first!.system, "turned off again, a new session's first request is as before");
+  assert.equal(unbranched(runner.requests.at(-1)!.system), unbranched(first!.system), "turned off again, a new session's first request is as before");
 });
 
 test("with tool search on, rare tools wait to be loaded, the prompt stays a prefix of the next, and loaded tools survive restart, compaction and forks", async t => {
