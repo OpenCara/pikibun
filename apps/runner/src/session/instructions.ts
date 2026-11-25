@@ -36,6 +36,7 @@ export interface InstructionsInput {
   codemode: boolean;
   browser: boolean;
   sudo?: boolean;
+  hostDirectory?: string;
   skills?: readonly Skill[];
   memory?: WorkspaceMemoryPrompt;
 }
@@ -62,7 +63,10 @@ export function agentInstructions(input: InstructionsInput): string {
   let instructions = input.base;
   if (input.clone && !input.sandboxed) {
     instructions += "\n\nTrusted runtime repository context:\n"
-      + "The execution root is the session worktree, which starts empty; file-tool paths are relative to it. This host runs without a sandbox: "
+      + (input.hostDirectory
+        ? `The execution root is ${input.hostDirectory}, a directory of this host the session's owner chose to work in; it holds their own files, `
+          + "so look before you change or delete anything there. File-tool paths are relative to it. This host runs without a sandbox: "
+        : "The execution root is the session worktree, which starts empty; file-tool paths are relative to it. This host runs without a sandbox: ")
       + "clone the repositories you need into the worktree with plain Git (for example git clone https://github.com/<owner>/<name>), "
       + "and fetch, switch, commit and push as usual. Git uses this host's own network and credentials. "
       + `This session's own branch is ${input.branch}: push the work for a pull request to it, for example git push origin HEAD:${input.branch}, `

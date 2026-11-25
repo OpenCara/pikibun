@@ -304,6 +304,7 @@ export class RunnerSession {
     }) : undefined;
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
       { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment, ...(this.#sudo ? { sudo: this.#sudo } : {}),
+        ...(this.#hostSession && binding.session.hostDirectory ? { worktree: binding.session.hostDirectory, refused: [config.dataDir] } : {}),
         ...(this.#hostGit ? { gitShim: () => this.hostGitBin() } : {}) });
     else if (config.sandboxBackend) {
       const egress = this.egressProxy(egressSocketPath(binding.session.id, directory), randomBytes(24).toString("base64url"));
@@ -633,7 +634,8 @@ export class RunnerSession {
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
       linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser,
-      sudo: mode !== "ask" && this.#sudoOffered, skills, ...(memory ? { memory } : {}) });
+      sudo: mode !== "ask" && this.#sudoOffered, skills, ...(memory ? { memory } : {}),
+      ...(this.sandbox instanceof HostWorkspace && this.sandbox.chosenDirectory ? { hostDirectory: this.sandbox.worktree } : {}) });
   }
 
   private async listedSkills(acts: boolean): Promise<Skill[]> {
