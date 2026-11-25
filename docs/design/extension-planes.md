@@ -334,8 +334,8 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   and the sign-in's requests to authorization servers alike, and it knows the address, not the workspace. A workspace has at most 8 servers, so it holds at most all 64;
   workspaces that registered the same address share its 8.
 - **Remote MCP OAuth**: a server that answers 401 with a `Bearer` challenge (Higgsfield, for one) gets a **Sign in**
-  (`GET /api/workspaces/:id/mcp-servers/:serverId/oauth/start`, owners and admins, on the web only, as the callback needs
-  the browser's session). Pikibun follows the MCP authorization spec as a client (`remote-mcp/oauth.ts`): an
+  (`GET /api/workspaces/:id/mcp-servers/:serverId/oauth/start`, owners and admins, on the web, as the callback needs
+  the browser's session; the apps sign in as the next point says). Pikibun follows the MCP authorization spec as a client (`remote-mcp/oauth.ts`): an
   unauthenticated `initialize` for the `WWW-Authenticate` challenge (`resource_metadata`, `scope`), the protected resource
   metadata (RFC 9728: the challenge's address, then `/.well-known/oauth-protected-resource` with and without the path;
   its `resource` is used only where it has the server's origin and covers its path), the authorization server metadata
@@ -352,6 +352,20 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   loses the race uses the winner's). A refused refresh says to sign in again. A `PATCH` that moves the address drops the
   sign-in, as it does the headers; the bearer token replaces any `Authorization` header the server also has. A failed
   sign-in is shown as the server's error (`Signing in failed: ...`) on the settings page it returns to.
+- **Remote MCP OAuth from the app**: a native app signs in with a bearer token the system browser doesn't have, so the
+  browser can't prove who it is, and sending it to `oauth/start` would answer 401 (or sign in as whoever that browser
+  is). The app asks for a link instead (`POST .../mcp-servers/:serverId/oauth/app`, owners and admins): a one-time
+  token, 10 minutes, for that member, server and address (`mcp_oauth_app_sign_ins`), which the app opens in the system
+  browser. Its page (`GET /api/mcp-servers/oauth/app/begin`, served before the sign-in check, `Referrer-Policy:
+  no-referrer`) spends the token, checks the member is still an owner or admin, and starts the same flow as above with
+  its own callback (`/api/mcp-servers/oauth/app/callback`) and state cookie (`mcp-oauth-app`). The callback exchanges the
+  code but keeps nothing for the server: it keeps the tokens aside, encrypted (context `remote-mcp-oauth-app:<id>`),
+  under a one-time code, 10 minutes, and its page offers `pikibun://mcp/sign-in?server=...&code=...` and shows the code
+  to paste. The app sends it (`POST /api/mcp-servers/oauth/app/finish`) with its own sign-in, and only the member who
+  asked for the link, still an owner or admin, with the server still at its address, keeps the sign-in (audited `via:
+  'app'`). The code, not the link, is what binds the flow to that member: a link passed to someone else (an admin of
+  another workspace phishing for an account, say) ends with a code on the other person's device, which their own app
+  can't finish (`not_your_sign_in`, and the code is spent) and the asker never sees.
 - **Sign-in methods**: the settings page asks how a server signs in, when it's added and later with **Change sign-in**:
   OAuth (the flow above), a token (`Authorization: Bearer`), a username and password (`Authorization: Basic`, UTF-8,
   RFC 7617), a custom header, or none. All but OAuth are only headers, built on the client by `remoteMcpSignInHeaders`

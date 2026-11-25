@@ -496,6 +496,49 @@ describe("settings", () => {
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`)).toEqual({ anyRepository: false });
   });
 
+  test("Workspaces signs an app in to a remote MCP server with OAuth through the system browser, finished by the link it opens or a pasted code", async () => {
+    const mcp = { id: "m1", name: "Gen", prefix: "gen", url: "https://mcp.example.com/mcp", enabled: true, headerNames: [], readOnlyTools: [], tools: [],
+      error: "The server needs a sign-in (HTTP 401)", updatedAt: "2026-01-01T00:00:00.000Z" };
+    const begin = `${ORIGIN}/api/mcp-servers/oauth/app/begin?token=${"b".repeat(43)}`;
+    const code = "c".repeat(43);
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/mcp-servers`]: { body: { servers: [mcp], admin: true } },
+      [`POST ${ORIGIN}/api/workspaces/w1/mcp-servers/m1/oauth/app`]: { status: 201, body: { url: begin, expiresAt: "2099-01-01T00:00:00.000Z" } },
+      [`POST ${ORIGIN}/api/mcp-servers/oauth/app/finish`]: { body: { workspaceId: "w1", server: { ...mcp, error: undefined, oauth: { signedInAt: "2026-01-01T00:00:00.000Z" } } } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("text:Gen · gen_");
+    await app.press("text:Gen · gen_");
+    await app.press("id:mcp-sign-in-gen");
+    await app.waitFor("id:mcp-app-sign-in");
+    expect(app.openedUrls()).toContain(begin);
+    expect(app.texts().join(" ")).not.toContain("from Pikibun on the web");
+    const finishes = () => app.requests().filter(item => item.method === "POST" && item.url === `${ORIGIN}/api/mcp-servers/oauth/app/finish`);
+
+    await app.type("id:mcp-app-code", "not a code");
+    await app.press("id:mcp-app-finish");
+    await app.waitUntil(() => app.texts().join(" ").includes("isn't a sign-in code"));
+    await app.openWithUrl(`pikibun://mcp/sign-in?server=${encodeURIComponent("https://other.example.com")}&code=${code}`);
+    await app.waitUntil(() => app.texts().join(" ").includes("for another Pikibun server"));
+    expect(finishes().length).toBe(0);
+
+    await app.openWithUrl(`pikibun://mcp/sign-in?server=${encodeURIComponent(ORIGIN)}&code=${code}`);
+    await app.waitUntil(() => finishes().length === 1);
+    expect(JSON.parse(finishes()[0]!.body!)).toEqual({ code });
+    await app.waitUntil(() => !app.shows("id:mcp-app-sign-in"));
+    expect(app.texts().join(" ")).toContain("Signed in.");
+
+    await app.openWithUrl(`pikibun://mcp/sign-in?server=${encodeURIComponent(ORIGIN)}&code=${code}`);
+    await app.wait(200);
+    expect(finishes().length).toBe(1);
+    await app.press("id:mcp-sign-in-gen");
+    await app.waitFor("id:mcp-app-sign-in");
+    await app.type("id:mcp-app-code", ` ${code} `);
+    await app.press("id:mcp-app-finish");
+    await app.waitUntil(() => finishes().length === 2);
+    await app.waitUntil(() => !app.shows("id:mcp-app-sign-in"));
+  });
+
   test("Workspaces shows the workspace's memory and the notes agents proposed, and an admin adds one to the memory as they save it", async () => {
     const app = await openSettings("workspaces", {
       [`PUT ${ORIGIN}/api/workspaces/w1/memory`]: { body: { memory: { instructions: "Use pnpm.", memory: "- The login test races the cookie.\n- Retry the login test once before failing it.\n",

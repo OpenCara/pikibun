@@ -165,7 +165,6 @@ function stateCookie(env: Env, app = false) {
   return { name, options: { secure, httpOnly: true, sameSite: 'Lax' as const, path: '/' } };
 }
 
-/** The state a callback was sent, checked against the cookie its browser was given when the flow began; the cookie is spent either way. */
 function callbackState(c: AppContext, app: boolean): string | null {
   const cookie = stateCookie(c.env, app);
   const cookieState = getCookie(c, cookie.name);
@@ -175,7 +174,6 @@ function callbackState(c: AppContext, app: boolean): string | null {
   return STATE.test(state) && cookieState && STATE.test(cookieState) && constantTimeEqual(state, cookieState) ? state : null;
 }
 
-/** The authorization server's answer at a callback: its code, or why there's none (and nothing is exchanged). */
 function callbackCode(c: AppContext, client: McpOAuthClient): { code: string } | { reason: string } {
   const error = c.req.query('error');
   if (error !== undefined) {
@@ -189,7 +187,6 @@ function callbackCode(c: AppContext, client: McpOAuthClient): { code: string } |
   return { code };
 }
 
-/** Keeps a sign-in for a server still at the address it was made for, as a member still its workspace's owner or admin, and lists its tools with it. */
 async function keepSignIn(env: Env, row: ServerRow, actor: string, url: string, secret: McpOAuthSecret, detail: Record<string, unknown> = {}): Promise<boolean> {
   const ciphertext = await encryptToken(env, oauthContext(row.id), JSON.stringify(secret));
   const at = now();
@@ -209,7 +206,6 @@ async function keepSignIn(env: Env, row: ServerRow, actor: string, url: string, 
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' })[ch]!);
 
-/** The page the system browser ends on in a sign-in the app started: it isn't signed in to Pikibun, so it only hands back to the app. */
 function appPage(c: AppContext, title: string, message: string, finish?: { link: string; code: string }, status: 200 | 400 = 200): Response {
   const style = 'font:16px system-ui,sans-serif;max-width:32em;margin:20vh auto 0;padding:0 1em;line-height:1.5';
   const body = finish
@@ -475,8 +471,6 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     return settingsPage(c, row.workspace_id);
   });
 
-  // A sign-in from a native app, which signs in with a bearer token the system browser doesn't have: the app asks for a
-  // one-time link to open there (registerRemoteMcpAppPages serves it), and finishes with the code the browser ends on.
   app.post('/api/workspaces/:id/mcp-servers/:serverId/oauth/app', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     const serverId = identifier(c.req.param('serverId'), 'serverId');
@@ -532,12 +526,6 @@ interface AppSignInRow {
   id: string; server_id: string; user_id: string; url: string; verifier: string | null; client_ciphertext: string | null; expires_at: number | string;
 }
 
-/**
- * The pages a system browser opens in a sign-in a native app started (POST .../oauth/app), registered before the
- * server's sign-in check: that browser isn't signed in to Pikibun, or not as the app's member. Its one-time link stands
- * in for the member until the authorization server answers; the tokens are then kept aside under a one-time code the
- * page shows, and become the server's sign-in only when that member's app sends the code (POST .../oauth/app/finish).
- */
 export function registerRemoteMcpAppPages(app: Hono<AppEnv>): void {
   app.get(APP_BEGIN_PATH, privateResponse, async c => {
     requireOrigin(c);

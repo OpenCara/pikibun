@@ -144,8 +144,6 @@ export function remoteMcpSignInOf(server: Pick<WorkspaceMcpServer, "oauth" | "he
   return server.headerNames.some(name => name.toLowerCase() === "authorization") ? "token" : "header";
 }
 
-/** The link a browser hands an app to finish an OAuth sign-in the app started (`POST .../oauth/app`): the browser
- * isn't signed in to Pikibun as anyone, so the code goes back to the app, which finishes with its own sign-in. */
 export const REMOTE_MCP_APP_LINK = "pikibun://mcp/sign-in";
 const APP_SIGN_IN_CODE = /^[A-Za-z0-9_-]{43}$/;
 
@@ -153,7 +151,6 @@ export function remoteMcpAppLink(server: string, code: string): string {
   return `${REMOTE_MCP_APP_LINK}?${new URLSearchParams({ server, code }).toString()}`;
 }
 
-/** A code, or the link carrying it (with the server it's for), as a person pastes it or the system opens it. */
 export function parseRemoteMcpAppCode(input: string): { server: string | null; code: string } | null {
   const text = input.trim();
   if (APP_SIGN_IN_CODE.test(text)) return { server: null, code: text };

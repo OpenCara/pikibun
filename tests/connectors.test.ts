@@ -4370,7 +4370,6 @@ test('an app signs in to a remote MCP server through a system browser that isn\'
   const link = path + '/' + server.id + '/oauth/app';
   await denied(await otherApp('POST', link), 403, 'forbidden');
 
-  // The browser holds no Pikibun sign-in at all: no cookie but the flow's own.
   const browser = async () => {
     const { url, expiresAt } = await json<{ url: string; expiresAt: string }>(await adminApp('POST', link), 201);
     assert.ok(Date.parse(expiresAt) > Date.now());
@@ -4408,7 +4407,6 @@ test('an app signs in to a remote MCP server through a system browser that isn\'
   assert.match(await refused.text(), /the sign-in was declined/);
   assert.match((await listed()).error ?? '', /Signing in failed: the sign-in was declined/);
 
-  // A link passed to someone else: whoever follows it gets a code that only the member who asked can use.
   const passed = await browser();
   fake.codes.set('code-1', { challenge: passed.challenge, resource: fake.mcpUrl, redirect: appCallback });
   assert.equal((await passed.callback({ code: 'code-1', state: passed.state }, false)).status, 400, 'a callback needs the cookie its browser got');

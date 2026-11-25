@@ -197,7 +197,9 @@ Administration). What is left out, and why:
 - **Up** in an empty chat box takes back a queued message on the desktops and in desktop browsers; on phones the
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
-  they are offered on the web build only; native builds point to Pikibun on the web.
+  they are offered on the web build only; native builds point to Pikibun on the web. A workspace's remote MCP servers
+  are the exception: the app opens a one-time link in the system browser, whose last page hands back a
+  `pikibun://mcp/sign-in` link or a code to paste, and the app finishes the sign-in with its own.
 
 ## This Computer
 

@@ -1,16 +1,17 @@
-import { signal, Text, untracked, View } from "nsh";
+import { cleanup, openUrl, signal, Text, untracked, UrlScheme, View } from "nsh";
 import {
-  remoteMcpLimits, remoteMcpSignInHeaders, remoteMcpSignInMethods, remoteMcpSignInOf, type RemoteMcpSignInMethod, type WorkspaceMcpServer,
+  parseRemoteMcpAppCode, REMOTE_MCP_APP_LINK, remoteMcpLimits, remoteMcpSignInHeaders, remoteMcpSignInMethods, remoteMcpSignInOf, type RemoteMcpSignInMethod, type WorkspaceMcpServer,
 } from "../../../../packages/shared/src/remote-mcp";
 import { descriptionSummary } from "../../../../packages/shared/src/workspace-tools";
 import { segment, type Workspace } from "../shared";
 import { session } from "../lib/auth";
 import { openServerLink, opensServerPages } from "../lib/links";
+import { currentOrigin, displayOrigin } from "../lib/server";
 import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { monospace, palette, text } from "../theme";
 import { Checkbox, Field, RadioGroup, TextField } from "../form";
-import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Section, Small } from "../ui";
+import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyButton, EmptyState, Feedback, FormSheet, Note, ResourceState, Section, Small } from "../ui";
 
 interface McpServersResponse { servers: WorkspaceMcpServer[]; admin: boolean }
 
@@ -36,6 +37,36 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
     if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}/oauth`, { method: "DELETE" }); }, "Signed out.")) resource.refresh();
   }
   const signIn = (server: WorkspaceMcpServer) => openServerLink(`${path()}/${segment(server.id)}/oauth/start`);
+  const finishing = signal<{ server: WorkspaceMcpServer; url: string } | undefined>(undefined);
+  const pasted = signal("");
+  async function signInFromApp(server: WorkspaceMcpServer) {
+    await action.run(async () => {
+      const { url } = await session().api<{ url: string }>(`${path()}/${segment(server.id)}/oauth/app`, { method: "POST" });
+      pasted.set("");
+      finishing.set({ server, url });
+      await openUrl(url).catch(() => undefined);
+    });
+  }
+  async function finish(input: string) {
+    const parsed = parseRemoteMcpAppCode(input);
+    const done = await action.run(async () => {
+      if (!parsed) throw new Error("That isn't a sign-in code: copy the code, or the whole pikibun:// link, from the page your browser ended on.");
+      if (parsed.server !== null && currentOrigin(parsed.server) !== session().origin) {
+        throw new Error(`That code is for another Pikibun server (${displayOrigin(parsed.server)}): finish it in the app signed in there.`);
+      }
+      await session().api("/api/mcp-servers/oauth/app/finish", { method: "POST", body: { code: parsed.code } });
+    }, "Signed in. Sessions use its tools from their next message.");
+    if (done) {
+      finishing.set(undefined);
+      pasted.set("");
+    }
+    resource.refresh();
+  }
+  if (!opensServerPages) {
+    cleanup(UrlScheme.on("open", ({ url }) => {
+      if (url.startsWith(REMOTE_MCP_APP_LINK) && untracked(finishing)) void finish(url);
+    }));
+  }
   async function changeSignIn(server: WorkspaceMcpServer, method: RemoteMcpSignInMethod, headers: Record<string, string>) {
     const notice = method === "oauth" ? (server.oauth ? "It signs in with OAuth." : "Now sign in to it with Sign in.")
       : method === "none" ? "It now sends no sign-in." : "Its new sign-in is kept encrypted.";
@@ -93,9 +124,8 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
                           onChange={on => void patch(server(), { enabled: on }, on ? "Sessions offer its tools from their next message." : "Sessions stop offering its tools from their next message.")} />
                         <View style={{ flex: 1 }} />
                         <If when={server().oauth || !server().headerNames.length}>
-                          <If when={opensServerPages} else={<Small>Sign in to it from Pikibun on the web.</Small>}>
-                            <Button small variant="outline" label={server().oauth ? "Sign in again" : "Sign in"} disabled={action.busy()} onPress={() => signIn(server())} />
-                          </If>
+                          <Button small variant="outline" label={server().oauth ? "Sign in again" : "Sign in"} testID={`mcp-sign-in-${server().prefix}`} disabled={action.busy()}
+                            onPress={() => (opensServerPages ? signIn(server()) : void signInFromApp(server()))} />
                         </If>
                         <If when={server().oauth}>
                           <Button small variant="ghost" label="Sign out" disabled={action.busy()} onPress={() => void signOut(server())} />
@@ -112,6 +142,29 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
           )}
         </If>
       </ResourceState>
+      <If when={finishing()}>
+        {current => (
+          <CardBody>
+            <View testID="mcp-app-sign-in" style={{ gap: 8 }}>
+              <Banner tone="info" title={`Signing in to ${current().server.name}`}
+                actions={<Button small variant="ghost" label="Cancel" testID="mcp-app-cancel" disabled={action.busy()} onPress={() => finishing.set(undefined)} />}>
+                Finish signing in in your browser. Its last page opens Pikibun, which finishes here, or shows a code to paste below.
+              </Banner>
+              <Field label="Code">
+                <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+                  <TextField flex monospace testID="mcp-app-code" value={pasted()} onChange={value => pasted.set(value)} disabled={action.busy()}
+                    placeholder="Code or pikibun:// link" autoCapitalize="none" autoCorrect={false} maxLength={512} onSubmit={() => void finish(pasted())} />
+                  <Button small variant="primary" label="Finish" testID="mcp-app-finish" disabled={action.busy() || !pasted().trim()} onPress={() => void finish(pasted())} />
+                </View>
+              </Field>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View style={{ flex: 1 }}><Small>No browser opened? Copy this link into one. It works once, for 10 minutes.</Small></View>
+                <CopyButton value={current().url} label="Copy link" testID="mcp-app-copy-link" />
+              </View>
+            </View>
+          </CardBody>
+        )}
+      </If>
       <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
       <If when={adding()}>
         <AddServerSheet busy={action.busy()} error={action.error()} close={() => adding.set(false)}
