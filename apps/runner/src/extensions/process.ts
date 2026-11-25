@@ -91,6 +91,7 @@ export interface ProcessChannelOptions {
   launch?: WorkerLaunch;
   mountAllowed?(path: string): boolean;
   files?(source: string): Promise<readonly FileBind[]>;
+  now?(): number;
   log?(line: string): void;
   complete?: CompleteHandler;
   appended?: AppendedHandler;
@@ -101,6 +102,7 @@ const SHUTDOWN_GRACE_MS = 2000;
 export const START_TIMEOUT_MS = 60_000;
 export const CANCEL_GRACE_MS = 5000;
 export const EXTENSION_SOCKET = "extensions.sock";
+export const FILES_REFRESH_MS = 30_000;
 
 export function workerEntry(): string[] {
   for (const name of ["./extension-worker.js", "../extension-worker.js"]) {
@@ -326,6 +328,7 @@ export class ProcessChannel implements ExtensionChannel {
   readonly #launch: WorkerLaunch;
   readonly #mounts = new Set<string>();
   readonly #files = new Map<string, readonly FileBind[]>();
+  #filesAt = 0;
   readonly #pending = new Map<number, Pending>();
   readonly #opened = new Map<string, ExtensionParams<"open">>();
   readonly #started = new Map<string, ExtensionParams<"emit">>();
@@ -361,6 +364,16 @@ export class ProcessChannel implements ExtensionChannel {
     else this.#stale = true;
   }
 
+  async #refreshFiles(): Promise<void> {
+    const now = this.options.now?.() ?? Date.now();
+    if (!this.options.files || !this.#mounted || this.#pending.size || now - this.#filesAt < FILES_REFRESH_MS) return;
+    this.#filesAt = now;
+    for (const source of this.#opened.keys()) {
+      const files = await this.options.files(source).catch(() => this.#files.get(source) ?? []);
+      if (!this.#pending.size) this.bind(source, files);
+    }
+  }
+
   #fileBinds(): FileBind[] {
     const byTarget = new Map<string, FileBind>();
     for (const files of this.#files.values()) for (const file of files) if (!byTarget.has(file.target)) byTarget.set(file.target, file);
@@ -378,8 +391,11 @@ export class ProcessChannel implements ExtensionChannel {
       if (this.#mounted && mount && !this.#mountAllowed(mount)) throw new Error(`Its files, in ${mount}, can't be given to the session's sandbox`);
       this.mount([mount]);
       const source = (params as { source?: unknown }).source;
-      if (method === "open" && typeof source === "string" && this.options.files) this.bind(source, await this.options.files(source));
-    }
+      if (method === "open" && typeof source === "string" && this.options.files) {
+        this.#filesAt = this.options.now?.() ?? Date.now();
+        this.bind(source, await this.options.files(source));
+      }
+    } else await this.#refreshFiles();
     const run = await this.#ensure();
     const source = (params as { source?: unknown }).source;
     if (method !== "open" && typeof source === "string" && this.#unopened.has(source)) await this.#reopen(run, source);

@@ -227,6 +227,7 @@ export class RunnerSession {
   readonly #skills: SessionSkills;
   readonly #commandSources = new Set<string>();
   readonly #cachedSources = new Map<string, LoadedSource>();
+  readonly #fileWarnings = new Set<string>();
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   #compaction: () => CompactionSettings | undefined = () => undefined;
@@ -1051,7 +1052,7 @@ export class RunnerSession {
       if (!sandbox.nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
       return (warn, options) => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox),
         files: async source => {
-          if ((await this.sharedFiles(source, sandbox.home, warn)).length) warn(source, "the host's files shared with it reach extensions only in the Linux sandbox, so it runs without them here");
+          if ((await this.sharedFiles(source, sandbox.home, warn)).length) this.warnOnce(warn, source, "the host's files shared with it reach extensions only in the Linux sandbox, so it runs without them here");
           return [];
         },
         ...(options?.complete ? { complete: options.complete } : {}), ...(options?.appended ? { appended: options.appended } : {}), ...(options?.entries ? { entries: options.entries } : {}) });
@@ -1074,11 +1075,18 @@ export class RunnerSession {
     };
   }
 
+  private warnOnce(warn: (source: string, message: string) => void, source: string, message: string): void {
+    const key = `${source}\0${message}`;
+    if (this.#fileWarnings.has(key)) return;
+    this.#fileWarnings.add(key);
+    warn(source, message);
+  }
+
   private async sharedFiles(source: string, home: string, warn: (source: string, message: string) => void): Promise<FileBind[]> {
     const extensionFiles = (await this.hostConfig()).extensionFiles ?? [];
     if (!extensionFiles.length) return [];
     const { binds, missing } = extensionFileBinds(extensionFiles, source, home);
-    for (const path of missing) warn(source, `${path}, which the host's owner shares with it, isn't a file on the host, so it runs without it`);
+    for (const path of missing) this.warnOnce(warn, source, `${path}, which the host's owner shares with it, isn't a file on the host, so it runs without it`);
     return binds;
   }
 

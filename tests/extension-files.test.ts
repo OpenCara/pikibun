@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultHostConfig, extensionFilePackage, hostConfigLimits, ownerOnlyHostConfig, parseExtensionFiles, parseHostConfigChange, readHostConfig } from "../packages/shared/src/host-config.js";
 import { extensionFileBinds, hostFilePath, type FileBind } from "../apps/runner/src/extensions/files.js";
-import { ProcessChannel, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
+import { FILES_REFRESH_MS, ProcessChannel, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
 import { homeFileTarget } from "../apps/runner/src/sandbox.js";
 
 const commit = "0123456789abcdef0123456789abcdef01234567";
@@ -84,21 +84,32 @@ test("the extension process starts again with the files shared with its extensio
       exited: Promise.resolve(),
     };
   };
-  let shared: FileBind[] = [{ source: "/home/ada/.pi/agent/web-search.json", target: "/sessions/s/home/.config/pi/web-search.json" }];
+  const first = { source: "/home/ada/.pi/agent/web-search.json", target: "/sessions/s/home/.config/pi/web-search.json" };
+  let shared: FileBind[] = [first];
+  let clock = 1_000_000;
+  const asked: string[] = [];
   const warnings: string[] = [];
-  const channel = new ProcessChannel({ directory: "/sessions/s/worktree", warn: (_source, message) => { warnings.push(message); }, launch,
-    mountAllowed: path => !path.startsWith("/etc/"), files: async () => shared });
-  const open = { source: "npm:pi-web-access@0.46.0", files: ["/x/index.ts"], models: [] };
-  await channel.call("open", open);
-  assert.deepEqual(launches, [shared], "the first start has them");
-  await channel.call("open", open);
-  assert.equal(launches.length, 1, "unchanged, it keeps running");
+  const channel = new ProcessChannel({ directory: "/sessions/s/worktree", warn: (_source, message) => { warnings.push(message); }, launch, now: () => clock,
+    mountAllowed: path => !path.startsWith("/etc/"), files: async source => { asked.push(source); return source.startsWith("npm:pi-web-access@") ? shared : []; } });
+  const source = "npm:pi-web-access@0.46.0";
+  const emit = () => channel.call("emit", { source, settings: {}, event: { type: "turn_start", turnIndex: 0, timestamp: 0 } } as never);
+  await channel.call("open", { source, files: ["/x/index.ts"], models: [] });
+  await channel.call("open", { source: "npm:other@1.0.0", files: ["/y/index.ts"], models: [] });
+  assert.deepEqual(launches, [[first]], "the first start has them, and an extension without any adds none");
   shared = [];
-  await channel.call("open", open);
-  assert.deepEqual(launches, [[{ source: "/home/ada/.pi/agent/web-search.json", target: "/sessions/s/home/.config/pi/web-search.json" }], []], "one no longer shared is gone at the next start");
+  await emit();
+  assert.equal(launches.length, 1, "the list is asked for again only after a while");
+  clock += FILES_REFRESH_MS;
+  await emit();
+  assert.deepEqual(launches, [[first], []], "one no longer shared is gone once the list is asked for again");
   assert.ok(warnings.some(message => message.includes("the host's files shared with its extensions")), warnings.join("\n"));
+  assert.deepEqual(asked.slice(-2).sort(), ["npm:other@1.0.0", source], "each open extension is asked about");
+  clock += FILES_REFRESH_MS;
+  await emit();
+  assert.equal(launches.length, 2, "unchanged, it keeps running");
   shared = [{ source: "/etc/shadow", target: "/sessions/s/home/shadow" }];
-  await channel.call("open", open);
+  clock += FILES_REFRESH_MS;
+  await emit();
   assert.equal(launches.length, 2, "a path the sandbox refuses is never given");
   await channel.close();
 });

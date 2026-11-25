@@ -169,6 +169,7 @@ const info = (
     <Note>Where an extension runs in the session's sandbox, its tool calls run for anyone who may send the session messages. Elsewhere they run for you and members granted host commands; for everyone else only if you let every session run them here. Nobody approves each call.</Note>
     <Note>Require an extension of every session to run it on this host whatever each workspace chose, yours included, with the settings you give it here. While this host can't run one you require, its sessions take no messages.</Note>
     <Note>An extension that registers model providers offers its models here only once you tick Provide models on it. Its code then runs in this host's connector, as your OS user and outside any sandbox, and its models join this host's list, where you turn them on or off like the others. Sign in to such a provider with Pi on the host first.</Note>
+    <Note>An extension that reads a file of its own, such as pi-web-access's web-search.json, finds none of yours in the sandbox. Share it under Files shared with extensions: in sandboxed Linux sessions its process reads it, read-only, and the agent's commands don't. Only the path leaves this host.</Note>
   </View>
 );
 
