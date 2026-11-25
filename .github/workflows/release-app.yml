@@ -29,8 +29,9 @@ name: Release app
 # - Android: ANDROID_KEYSTORE (base64 release keystore), ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS. Keep the
 #   keystore: every later APK must be signed with it to install over this one.
 # - iOS: IOS_CERTIFICATE_P12 (base64 Apple Distribution .p12), IOS_CERTIFICATE_PASSWORD, IOS_PROVISIONING_PROFILE (base64
-#   App Store profile for com.pikibun.app) and the App Store Connect key above. Unsigned, the app is only packaged, to
-#   check it builds.
+#   App Store profile for com.pikibun.app, with Push Notifications on for the App ID: the app's aps-environment
+#   entitlement comes from it) and the App Store Connect key above. Unsigned, the app is only packaged, to check it
+#   builds.
 on:
   push:
     tags: ["app-v*.*.*"]
@@ -500,6 +501,11 @@ jobs:
   # added the keys itself. Since 0.6 the prebuilt runner is linked with the iOS 26 SDK (longbridge/nsh#2089) and
   # `nsh package` writes the keys from this runner's Xcode before it signs (longbridge/nsh#2137); the export compliance
   # answer comes from nsh.json's `ios.infoPlist`. The job only checks that each still holds before the upload.
+  #
+  # The iPhone app alone links a Rust module, nsh-extra's `push`, for notifications while it is closed (#537):
+  # scripts/nsh.mjs adds it for `--target ios` (NSH_TARGET_MODULES), so `nsh package` builds this target's runner with
+  # the Rust toolchain, from the crates of the pinned Native Shell, instead of taking the prebuilt one. The module adds
+  # the `remote-notification` background mode; the `aps-environment` entitlement comes from the provisioning profile.
   ios:
     needs: [check, ci]
     if: ${{ !cancelled() && !failure() }}
@@ -570,6 +576,18 @@ jobs:
           printf '%s' "$IOS_PROVISIONING_PROFILE" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
       - name: Xcode
         run: xcodebuild -version
+      # The runner is built from source for iPhones (above): Rust's target for them, and what a build leaves behind.
+      - name: Rust for iOS
+        run: |
+          rustup target add aarch64-apple-ios
+          rustc --version
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.nsh/builds
+          key: nsh-ios-runner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
       - name: Stamp the version into the app
         run: node scripts/app-version.mjs "$VERSION"
       - name: Package
@@ -586,6 +604,10 @@ jobs:
       # as Missing Compliance, and TestFlight's testers get none until someone answers by hand (0.10.1 to 0.15.0 waited
       # so). Read from the package as it is uploaded, never changed: a change would break its signature.
       # A signed package is checked in the .ipa the upload sends, which it must have; an unsigned one has only the .app.
+      # And what pushed notifications need (#537): the `remote-notification` background mode, which `nsh package` adds
+      # from nsh-extra's metadata, and in a signed app the `aps-environment` entitlement, which only a provisioning
+      # profile made with Push Notifications on for the App ID grants. Without it the app registers with nobody, and
+      # says so under Settings → Notifications.
       - name: The SDK and Info.plist App Store Connect requires
         env:
           SIGNED: ${{ steps.signing.outputs.configured }}
@@ -625,6 +647,14 @@ jobs:
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::The iOS package's Info.plist lacks what App Store Connect requires: ${missing[*]}."
             exit 1
+          fi
+          /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$plist" 2>/dev/null | grep -qx '[[:space:]]*remote-notification' \
+            || { echo "::error::The iOS package's Info.plist has no remote-notification in UIBackgroundModes: nsh-extra's push module was not linked (NSH_TARGET_MODULES in scripts/nsh.mjs)."; exit 1; }
+          if [ "$SIGNED" = true ]; then
+            entitlements=$(codesign -d --entitlements - --xml "$app" 2>/dev/null | plutil -p - 2>/dev/null || true)
+            echo "$entitlements" | grep -E 'aps-environment|application-identifier' || true
+            echo "$entitlements" | grep -q '"aps-environment" => "production"' \
+              || { echo "::error::The signed app has no aps-environment entitlement for production, so it gets no pushed notifications: turn Push Notifications on for the App ID com.pikibun.app, make its App Store provisioning profile again, and set it as IOS_PROVISIONING_PROFILE."; exit 1; }
           fi
       # Every app-v tag goes to TestFlight; submitting a build for App Store review stays manual. App Store Connect
       # takes each version's build numbers only increasing: this workflow's run number. Apple's upload service fails

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test, { type TestContext } from "node:test";
-import { checkAsset, componentAsset, NSH_ASSET_SHA256, NSH_COMPONENTS, NSH_TUI_HOSTS, NSH_VERSION, nshComponent, releaseAsset, targetComponent } from "../scripts/nsh.mjs";
+import {
+  checkAsset, commandTarget, componentAsset, NSH_ASSET_SHA256, NSH_COMPONENTS, NSH_TARGET_MODULES, NSH_TUI_HOSTS, NSH_VERSION, nshComponent, releaseAsset, targetComponent,
+  targetLock, targetManifest,
+} from "../scripts/nsh.mjs";
 
 const url = `https://github.com/longbridge/nsh/releases/download/${NSH_VERSION}/nsh-linux-x86_64.tar.gz`;
 
@@ -60,6 +64,27 @@ test("every pinned component's archive has a pinned SHA-256, and a command's --t
   assert.equal(targetComponent(["package", "App.tsx", "--target", "macos"]), null, "this platform's own runtime comes with the CLI");
   assert.equal(targetComponent(["test"]), null);
   assert.equal(targetComponent(["run", "--target", "macos", "--", "--target", "web"]), null, "what follows -- is the app's");
+});
+
+test("only the iPhone build links Rust modules: the app lists none, and its build adds the pinned ones", () => {
+  const manifest = readFileSync(new URL("../apps/nsh/nsh.json", import.meta.url), "utf8");
+  assert.equal(JSON.parse(manifest).dependencies, undefined, "a Rust module listed in nsh.json makes every target, the web's too, build with the Rust toolchain");
+  assert.equal(JSON.parse(manifest).capabilities.notifications, true, "nsh-extra's push needs the notifications capability");
+  assert.deepEqual(Object.keys(NSH_TARGET_MODULES), ["ios"]);
+  assert.equal(commandTarget(["package", "App.tsx", "--target", "ios", "--out", "x"]), "ios");
+  assert.equal(commandTarget(["run", "--target=catalyst"]), "catalyst", "Mac Catalyst has no remote notifications");
+  assert.equal(commandTarget(["test"]), null);
+  const modules = NSH_TARGET_MODULES.ios!;
+  for (const module of Object.values(modules)) {
+    assert.equal(`v${module.version}`, NSH_VERSION, "nsh-extra is released with nsh, and built by the nsh that builds the app");
+    assert.match(module.sha256, /^[0-9a-f]{64}$/);
+  }
+  const built = JSON.parse(targetManifest(manifest, modules));
+  assert.deepEqual(built.dependencies, { "nsh-extra": { version: `=${NSH_VERSION.slice(1)}`, features: ["push"] } });
+  assert.deepEqual({ ...built, dependencies: undefined }, { ...JSON.parse(manifest), dependencies: undefined }, "nothing else of the app changes");
+  assert.throws(() => targetManifest(JSON.stringify(built), modules), /already lists nsh-extra/);
+  assert.deepEqual(JSON.parse(targetLock(modules)).packages, [{ name: "nsh-extra", version: NSH_VERSION.slice(1), source: "crates.io",
+    checksum: `sha256-${modules["nsh-extra"]!.sha256}`, dir: `nsh-extra/${NSH_VERSION.slice(1)}`, module: "nsh-extra" }]);
 });
 
 test("a component asked for by name is added or the request fails, never skipped quietly", async t => {

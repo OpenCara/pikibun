@@ -8,9 +8,9 @@ are removed, on the same backend, `@pikibun/client` and `packages/shared`. See [
 What NSH can't do yet isn't in the client: Keychain and Keystore storage
 (longbridge/nsh#1061), a system sign-in session (0.6 added `open_auth_session` for Rust apps only, and 0.7 still has none in TSX: native
 sign-in goes through the system browser and comes back as a `pikibun://` link instead), and bundling the `pikibun` connector inside the app (the
-desktop builds run the installed command instead: see [This Computer](#this-computer)). Push notifications are
-NSH's since 0.7 (`nsh-extra`'s `push`, iOS and Android), but not yet the client's: the server sends no APNs or FCM
-pushes (see [Notifications while the app is closed](#what-the-react-client-had-that-this-client-doesnt)).
+desktop builds run the installed command instead: see [This Computer](#this-computer)). Pushed notifications are
+the iPhone build's since NSH 0.7 (`nsh-extra`'s `push`); Android's wait for a push service binding (see
+[Notifications while the app is closed](#notifications-while-the-app-is-closed)).
 
 ## Run it
 
@@ -203,19 +203,49 @@ Administration). What is left out, and why:
   the Electron app's had is left out: sharing the Pikibun it runs with others (`pikibun serve --share`, in a terminal),
   installing prerequisites itself, and hosting while the app is closed (its tray). In a browser there are no such
   sections.
-- **Notifications while the app is closed**: the native apps show the account's notifications with NSH's
-  `Notifications` only while they run (`src/lib/notifications.ts` asks the server's feed every 20 seconds, as a browser
-  tab without Web Push does; pressing one opens its session, and one about the session in front isn't shown). Pushed
-  ones wait for the server to send them through APNs and FCM, which NSH 0.7's `nsh-extra` `push` would receive on
-  iPhone and Android (longbridge/nsh#1058). The web build turns them on in the browser as the web
-  app does (Web Push through the `sw.js` the build ships, or while a tab is open), and every build manages the
-  account's preferences and devices.
+- **Notifications while the app is closed** on Android and the desktops: there the apps show the account's
+  notifications only while they run ([below](#notifications-while-the-app-is-closed)). NSH's `push` module needs a
+  push service binding on Android, and none exists for Firebase yet; on the desktops it isn't available in 0.7.
 - **Up** in an empty chat box takes back a queued message on the desktops and in desktop browsers; on phones the
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
   they are offered on the web build only; native builds point to Pikibun on the web. A workspace's remote MCP servers
   are the exception: the app opens a one-time link in the system browser, whose last page hands back a
   `pikibun://mcp/sign-in` link or a code to paste, and the app finishes the sign-in with its own.
+
+## Notifications while the app is closed
+
+Every build shows the account's [notifications](../../docs/notifications.md) once they are turned on under Settings
+(`src/lib/notifications.ts`), and manages the account's preferences and devices:
+
+- **The web build** turns them on in the browser: Web Push through the `sw.js` the build ships, or while a tab is
+  open.
+- **The apps** show them with NSH's `Notifications` while they run: they ask the server's feed every 20 seconds, as a
+  browser tab without Web Push does. Pressing one opens its session, and one about the session in front isn't shown.
+- **The iPhone and iPad app** also gets them in the background and closed, through APNs (`src/lib/push.ts`). NSH's
+  `Push` (`nsh-extra`, feature `push`) registers the device and gives its APNs token. The app trades it at Expo's push
+  service for an Expo push token, as `expo-notifications`' `getExpoPushTokenAsync` does (`POST
+  https://exp.host/--/api/v2/push/getExpoPushToken` with the token, the app's id, the Expo project's ID, a per-install
+  ID it keeps in its storage, and whether the build is a development one, which uses Apple's sandbox), and registers
+  that with the server as an `expo` device. It does so when notifications are turned on, at each launch, and when
+  `Push.on("token")` reports a new token. `Push.on("press")` opens the pushed notification's session (the payload
+  carries its `path` and `origin`, as Web Push's does; a push from another server the app is signed in to switches to
+  it first), and `Push.setForegroundPresentation` keeps the session on screen from getting a banner. Turning
+  notifications off removes the device on the server; signing out does too, with the sign-in. A device Apple or Expo
+  doesn't register still gets notifications while the app is open, and Settings says why it gets none closed.
+
+A notification is one device's to show. Every client that takes one from the feed, and the service worker that shows
+a Web Push, tells the server (`POST /api/notifications/handled`), and the server pushes to the iPhone only what nobody
+took within 30 seconds ([the rule](../../docs/notifications.md#the-iphone-comes-last)). The iPhone app itself, while
+open, shows from the feed only what its own call took, and nothing the server already pushed (`pushed` in the feed),
+so a notification never shows twice on it.
+
+`nsh-extra` is a Rust module, and an app that lists one builds every target from source. So `nsh.json` lists none:
+`scripts/nsh.mjs` adds it for `--target ios` alone, and the app imports it at run time (`pushModule`), finding none
+in every other build. See [upstream workarounds](../../docs/design/upstream-workarounds.md). Building for iOS
+(`pnpm nsh run --target ios`, `pnpm nsh package App.tsx --target ios`) therefore needs the Rust toolchain with the
+`aarch64-apple-ios` target (`aarch64-apple-ios-sim` for the simulator). `tests/push.test.tsx` runs the app against a
+stand-in for the module (`tests/harness/push.tsx`), since the headless runner doesn't link it.
 
 ## This Computer
 

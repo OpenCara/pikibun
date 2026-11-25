@@ -12,4 +12,4 @@ New to the Mac, Windows or Linux app? The [desktop app user guide](desktop/READM
 
 The same client runs in a terminal as well: [`@pikibun/tui`](tui.md) on npm, released with each `app-v` release at its version (`pikibun tui` starts it).
 
-The web client can [notify you](notifications.md) when a session finishes or fails; the native builds don't show notifications yet, but manage your preferences and devices under **Settings → Notifications**.
+Every build can [notify you](notifications.md) when a session needs you, finishes or fails, once you turn notifications on under **Settings → Notifications**: browsers through Web Push, the desktop and Android apps while they are open, and the iPhone and iPad app while it is closed too, when no browser or desktop app of yours showed the notification first.

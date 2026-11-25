@@ -83,6 +83,7 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/join-requests`]: { body: { requests: [] } },
     [`PATCH ${ORIGIN}/api/me`]: (request: Request) => ({ body: { user: { ...user, ...JSON.parse(request.body ?? "{}") } } }),
     [`GET ${ORIGIN}/api/notifications/config`]: { body: { preferences: { approvals: true, finished: false, failed: true, details: true }, devices: [], webPushKey: null } },
+    [`POST ${ORIGIN}/api/notifications/handled`]: (request: Request) => ({ body: { handled: (JSON.parse(request.body ?? "{}") as { ids?: string[] }).ids ?? [] } }),
     [`PUT ${ORIGIN}/api/notifications/preferences`]: (request: Request) => ({ body: { preferences: { approvals: true, finished: false, failed: true, details: true, ...JSON.parse(request.body ?? "{}") } } }),
     [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0" }] } },
     [`GET ${ORIGIN}/api/connectors/c1/extensions`]: { body: { role: "owner", automaticTools: false, requests: [], workspaces: [] } },

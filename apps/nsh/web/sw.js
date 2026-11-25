@@ -14,6 +14,19 @@ function safePath(path) {
   return typeof path === "string" && path.startsWith("/#/") ? path : "/";
 }
 
+async function handled(id) {
+  if (typeof id !== "string") return;
+  try {
+    const session = await fetch("/api/auth/csrf", { credentials: "same-origin", headers: { Accept: "application/json" } });
+    if (!session.ok) return;
+    const { csrfToken } = await session.json();
+    await fetch("/api/notifications/handled", {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken }, body: JSON.stringify({ ids: [id] }),
+    });
+  } catch {
+  }
+}
+
 self.addEventListener("push", event => {
   const payload = payloadOf(event);
   if (!payload || (payload.origin && payload.origin !== self.location.origin)) return;
@@ -33,6 +46,7 @@ self.addEventListener("push", event => {
       data: { path },
     });
     if (watching) for (const shown of await self.registration.getNotifications({ tag })) shown.close();
+    await handled(payload.id);
   })());
 });
 
