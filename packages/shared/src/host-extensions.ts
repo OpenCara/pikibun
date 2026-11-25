@@ -187,10 +187,12 @@ export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]
 }
 
 export function withPrivateWorkspaceTools(extensions: readonly WorkspaceExtension[]): WorkspaceExtension[] {
-  const always = privateWorkspaceTools().map(item => item.source as string);
-  const shown = extensions.map(item => always.includes(extensionPackageKey(item.source)) && !item.enabled ? { ...item, enabled: true } : item);
+  const always = privateWorkspaceTools();
+  const sources = always.map(item => item.source as string);
+  const shown = extensions.map(item => sources.includes(extensionPackageKey(item.source)) && !item.enabled ? { ...item, enabled: true } : item);
   const listed = new Set(shown.map(item => extensionPackageKey(item.source)));
-  return [...shown, ...always.filter(source => !listed.has(source)).map(source => ({ source, enabled: true, tools: "automatic" as const, settings: {} }))];
+  const unplaced = always.filter(item => item.sessionTools !== undefined && !listed.has(item.source));
+  return [...shown, ...unplaced.map(item => ({ source: item.source, enabled: true, tools: "automatic" as const, settings: {} }))];
 }
 
 export const extensionLimits = Object.freeze({

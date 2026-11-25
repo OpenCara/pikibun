@@ -5,7 +5,7 @@ import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
-import { parseWorkspaceExtensionsAnswer, withPrivateWorkspaceTools, type WorkspaceExtension } from '../packages/shared/src/host-extensions.js';
+import { extensionLimits, parseWorkspaceExtensions, parseWorkspaceExtensionsAnswer, withPrivateWorkspaceTools, withSessionToolsListed, type WorkspaceExtension } from '../packages/shared/src/host-extensions.js';
 import { isPrivateWorkspaceTool, privateWorkspaceTools, sessionToolsOff } from '../packages/shared/src/piki-extensions.js';
 import type { Workspace } from '../packages/shared/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
@@ -68,6 +68,15 @@ test('the always-on tools are Pikibun\'s commands, GitHub, sessions and schedule
   assert.equal(shown.find(item => item.source === 'piki:tunnel')?.enabled, false, 'an opt-in one stays as chosen');
   assert.equal(shown.filter(item => item.source === 'piki:git').length, 1, 'listed once');
   assert.equal(shown.find(item => item.source === 'piki:node')?.enabled, true, 'a missing one is added on');
+  assert.equal(shown.some(item => item.source === 'piki:glab'), false, 'a command-line tool the workspace doesn\'t list isn\'t added: it would take one of its places');
+  const listedCli = withPrivateWorkspaceTools([{ source: 'piki:gh', enabled: false, tools: 'automatic', settings: {} }]);
+  assert.equal(listedCli.find(item => item.source === 'piki:gh')?.enabled, true, 'one it lists is on');
+});
+
+test('a full private workspace still parses: the tools it is given take none of its places', () => {
+  const packages: WorkspaceExtension[] = Array.from({ length: extensionLimits.workspace }, (_, index) => ({ source: `npm:pkg-${index}@1.0.0`, enabled: true, tools: 'automatic', settings: {} }));
+  const shown = withSessionToolsListed(packages);
+  assert.equal(parseWorkspaceExtensions(withPrivateWorkspaceTools(shown)).length, withPrivateWorkspaceTools(shown).length);
 });
 
 test('in an older private workspace a host gets Pikibun\'s command tools on, whatever its rows say; a shared workspace keeps its switches', async t => {
@@ -77,7 +86,7 @@ test('in an older private workspace a host gets Pikibun\'s command tools on, wha
   const personal = await f.answer(f.personal.id);
   const offHere = sessionToolsOff(personal.extensions);
   for (const tool of commandTools) assert.equal(offHere.has(tool), false, `${tool} is on in the private workspace`);
-  assert.equal(personal.extensions.find(item => item.source === 'piki:gh')?.enabled, true, 'the GitHub CLI too');
+  assert.equal(personal.extensions.some(item => item.source === 'piki:gh'), false, 'the GitHub CLI it removed takes a place, so it is added by hand');
   assert.equal(offHere.has('tunnel'), true, 'an opt-in tool stays off until chosen');
   const offThere = sessionToolsOff((await f.answer(f.team.id)).extensions);
   for (const tool of ['git', 'node', 'python', 'sessions']) assert.equal(offThere.has(tool), true, `${tool} stays off in the shared workspace`);
