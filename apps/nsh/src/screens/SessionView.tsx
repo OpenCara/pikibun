@@ -308,7 +308,7 @@ export function SessionView(props: { id: string; page: boolean; front?: () => bo
               </If>
             </If>
           }>
-          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={sudoDock} front={front}
+          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={sudoDock} docked={() => Boolean(!readOnly() && live.view()?.sudo)} front={front}
             openSession={target => { data.refreshSessions(); props.openSession(target); }}
             go={props.go} manages={manages} onDetails={() => openPanel()} onRename={() => renaming.set(true)} />
         </If>
@@ -341,7 +341,7 @@ export function SessionView(props: { id: string; page: boolean; front?: () => bo
 }
 
 function Conversation(props: {
-  id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; front: () => boolean; openSession: (id: string) => void;
+  id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; docked: () => boolean; front: () => boolean; openSession: (id: string) => void;
   go: (route: PageRoute) => void; manages: Accessor<boolean>; onDetails: () => void; onRename: () => void;
 }) {
   const { user } = untracked(session);
@@ -723,7 +723,7 @@ function Conversation(props: {
   const statusTone = () => (stopPending() ? "warning" : view().busy && view().activity === "waiting" ? "warning" : "running");
 
   return (
-    <View style={{ flex: 1 }} captureKeys="text">
+    <View style={{ flex: 1 }} captureKeys={props.docked() ? "none" : "text"}>
       <View style={{ flex: 1 }} onTouchStart={releaseChatBox}>
       <List each={entries()} keyExtractor={entry => entry.id} ref={list} style={{ flex: 1 }} contentStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 }}
         maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 80 }} testID="transcript"

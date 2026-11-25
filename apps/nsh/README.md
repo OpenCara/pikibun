@@ -60,7 +60,8 @@ needs a decision stand out:
   along its bottom edge: on a phone one line of them, tighter, that scrolls sideways where it doesn't fit, and any hint
   but "Runs as … (you)" on a line under it; a `/` typed first lists its
   [slash commands](../../docs/sessions.md#slash-commands) inside the box, above the text. On macOS and Linux, typing
-  while the transcript or a button has the keyboard goes into the chat box (NSH's `captureKeys="text"`). Details (owner, host, visibility, ID) are in the session's panel.
+  while the transcript or a button has the keyboard goes into the chat box (NSH's `captureKeys="text"`), except while a
+  sudo prompt shows: NSH moves the typing into the first input it finds, which would be the prompt's password field. Details (owner, host, visibility, ID) are in the session's panel.
 - **Commands**: the [command palette](../../docs/sessions.md#command-palette) (Ctrl/⌘ K, Ctrl/⌘ O for Switch session…, a
   button in the session's header) lists every action by name. Screens contribute their commands as data to one
   registry (`src/lib/commands.ts`, `useCommands`) while they are in front, and `src/components/CommandPalette.tsx`
