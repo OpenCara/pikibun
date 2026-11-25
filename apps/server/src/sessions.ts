@@ -33,7 +33,7 @@ import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 import { packDueAfterArchiving } from './automatic-packing.js';
 import { autoModeSettings } from './auto-mode.js';
-import { autoModelAllowed, autoModelsText } from '../../../packages/shared/src/auto-mode.js';
+import { autoModelAllowed, autoModelsText, autoModelUsable } from '../../../packages/shared/src/auto-mode.js';
 import { keepPortable } from './portable-sessions.js';
 import { createForwardedSession, forwardedRecords } from './forwarded-sessions.js';
 import { dispatchModel, ruleEvaluation } from '../../../packages/shared/src/auto-dispatch.js';
@@ -50,7 +50,7 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
   if (input.autoMerge !== undefined && typeof input.autoMerge !== 'boolean') fail(400, 'invalid_options', 'Invalid auto-merge choice.');
   if (input.auto !== undefined && input.auto !== true) fail(400, 'invalid_options', 'Invalid Auto choice.');
   if (input.auto && (input.model !== undefined || input.thinkingLevel !== undefined)) fail(400, 'invalid_options', 'Auto chooses the model and reasoning: send neither with it.');
-  const autoSettings = input.auto ? await autoModeSettings(c.env, row.workspace_id) : undefined;
+  const autoSettings = input.auto ? await autoModeSettings(c.env, row.workspace_id, c.get('auth').userId) : undefined;
   if (autoSettings && !autoSettings.enabled) fail(409, 'auto_mode_off', 'Auto mode is off in this workspace: its owners and admins add it under Extensions.');
   if (input.model === undefined && input.thinkingLevel === undefined && input.access !== 'read' && !input.auto) return undefined;
   if (!row.connector_id) fail(400, 'options_unsupported', 'This session\'s runner cannot change model, reasoning or access.');
@@ -66,9 +66,11 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
     const disabled = await disabledModelKeys(c.env, row.connector_id);
     const usable = (JSON.parse(host.models_json) as LocalModelSummary[]).filter(model => !isModelDisabled(disabled, model));
     if (!usable.length) fail(409, 'auto_mode_unavailable', 'The session\'s host offers no model you can use.');
-    const candidates = usable.filter(model => autoModelAllowed(autoSettings!.models, model));
+    const candidates = usable.filter(model => autoModelUsable(autoSettings!, model));
     if (!candidates.length) {
-      fail(409, 'auto_mode_unavailable', `The session's host offers none of the models auto mode may choose in this workspace (${autoModelsText(autoSettings!.models ?? [])}): choose a model yourself, or ask its owners and admins to widen auto mode's models setting.`);
+      fail(409, 'auto_mode_unavailable', autoSettings!.selected && usable.some(model => autoModelAllowed(autoSettings!.models, model))
+        ? `The session's host offers none of the models you chose for Auto in this workspace (${autoSettings!.selected.join(', ')}): choose a model yourself, or add one of its models to yours under the workspace's Agents settings.`
+        : `The session's host offers none of the models auto mode may choose in this workspace (${autoModelsText(autoSettings!.models ?? [])}): choose a model yourself, or ask its owners and admins to widen auto mode's models setting.`);
     }
     if (capabilities.autoModel === true) options.auto = { candidates };
     else {
