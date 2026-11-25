@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { defaultHostConfig, extensionFilePackage, hostConfigLimits, ownerOnlyHostConfig, parseExtensionFiles, parseHostConfigChange, readHostConfig } from "../packages/shared/src/host-config.js";
 import { extensionFileBinds, hostFilePath, type FileBind } from "../apps/runner/src/extensions/files.js";
 import { FILES_REFRESH_MS, ProcessChannel, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
-import { homeFileTarget } from "../apps/runner/src/sandbox.js";
+import { homeFileClear, homeFileTarget } from "../apps/runner/src/sandbox.js";
 
 const commit = "0123456789abcdef0123456789abcdef01234567";
 
@@ -72,6 +72,26 @@ test("a shared file goes only somewhere in the session's home other than its Git
   for (const target of [home, `${home}/`, `${home}/.gitconfig`, `${home}/.tmp/x`, `${home}/../x`, "/etc/x", `${home}x/a`, "relative", `${home}/a\nb`]) {
     assert.equal(homeFileTarget(target, home), false, target);
   }
+});
+
+test("a shared file is left out where the agent put a link or another kind of file on its way, in the session's home", async t => {
+  const home = await realpath(await mkdtemp(join(tmpdir(), "pikibun-extension-home-")));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  assert.equal(homeFileClear(home, ".config/pi/web-search.json"), true, "nothing there yet");
+  await mkdir(join(home, ".config", "pi"), { recursive: true });
+  assert.equal(homeFileClear(home, ".config/pi/web-search.json"), true);
+  await writeFile(join(home, ".config", "pi", "web-search.json"), "");
+  assert.equal(homeFileClear(home, ".config/pi/web-search.json"), true, "the empty file a previous start left");
+  await rm(join(home, ".config", "pi"), { recursive: true });
+  await symlink("/etc", join(home, ".config", "pi"));
+  assert.equal(homeFileClear(home, ".config/pi/web-search.json"), false, "a link in its directories");
+  await rm(join(home, ".config", "pi"));
+  await mkdir(join(home, ".config", "pi"));
+  await symlink("/etc/passwd", join(home, ".config", "pi", "web-search.json"));
+  assert.equal(homeFileClear(home, ".config/pi/web-search.json"), false, "a link in its place");
+  await rm(join(home, ".config", "pi", "web-search.json"));
+  await mkdir(join(home, ".config", "pi", "web-search.json"));
+  assert.equal(homeFileClear(home, ".config/pi/web-search.json"), false, "a directory in its place");
 });
 
 test("the extension process starts again with the files shared with its extensions, as they change", async () => {

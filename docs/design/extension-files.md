@@ -39,10 +39,12 @@ else.
    (`stamp`): a file saved anew counts as a change too. The empty file `bwrap` made for a place stays in the session's
    home after the owner stops sharing it.
 7. **Where the agent can reach the place.** The session's home is the agent's to write, so a command could put a link
-   where a place's directory goes. `bwrap` makes the place and its directories inside the service's own mount namespace,
-   whose only writable mounts are the session's own home, worktree and socket directory, so a link there leads nowhere
-   the agent couldn't already write; at worst the extension finds its file somewhere else in its own view, or doesn't
-   start. An entry whose host file the sandbox refuses (`serviceBindAllowed`) is left out, and the session told once.
+   where a place or one of its directories goes. `bwrap` resolves every destination under the new root it builds (a
+   tmpfs whose only writable mounts are the session's own home, worktree and socket directory), so such a link leads
+   nowhere the agent couldn't already write. All the same, `startService` checks the place's path in the session's home
+   on the host before each start (`homeFileClear`) and leaves the file out where a link, or anything but a directory on
+   the way and a file at the end, is there, so no `bwrap` version's handling of links matters. A link put there between
+   the check and the start still resolves inside the new root. An entry whose host file the sandbox refuses (`serviceBindAllowed`) is left out, and the session told once.
    An entry the host's configuration can't be read for keeps what the extension had, and never stops it opening.
 5. **Linux only.** macOS's Seatbelt sandbox can allow paths but not put a file at another one, so there the session says
    once that the extension runs without its shared files. Outside the sandbox (Windows, sessions on the host,

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { createHash } from "node:crypto";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, lstatSync } from "node:fs";
 import { chmod, mkdir, open, realpath, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
@@ -337,6 +337,18 @@ export function homeFileTarget(target: string, home: string): boolean {
   return first !== ".gitconfig" && first !== ".tmp";
 }
 
+export function homeFileClear(hostHome: string, relativeTarget: string): boolean {
+  let path = hostHome;
+  const parts = relativeTarget.split("/");
+  for (const [index, part] of parts.entries()) {
+    path = join(path, part);
+    let stat;
+    try { stat = lstatSync(path); } catch { return true; }
+    if (stat.isSymbolicLink() || (index < parts.length - 1 ? !stat.isDirectory() : !stat.isFile())) return false;
+  }
+  return true;
+}
+
 export function serviceBindAllowed(path: string, sessionRoot: string): boolean {
   if (!isAbsolute(path) || resolve(path) !== path || /[\x00-\x1f\x7f]/.test(path)) return false;
   if (SERVICE_BIND_REFUSED.includes(path) || path === homedir() || homedir().startsWith(`${path}/`)) return false;
@@ -655,9 +667,11 @@ export class Sandbox implements IsolatedWorkspace {
       this.#services.add(kill);
       let holder: ((held: boolean) => void) | undefined;
       const caches = await this.#cacheMounts(null);
+      const files = (options.files ?? []).filter(file => homeFileClear(join(this.#root, "home"), file.target.slice(this.home.length + 1)));
       const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
         { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
-        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}), ...(options.files?.length ? { files: options.files } : {}) },
+        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}),
+            ...(files.length ? { files } : {}) },
           ...(caches.length ? { caches } : {}),
           onSpawn: hold => { holder = hold; } })
         .then((): ServiceExit => ({ code: 0, signal: null }), (error: unknown): ServiceExit => error instanceof SandboxProcessError
