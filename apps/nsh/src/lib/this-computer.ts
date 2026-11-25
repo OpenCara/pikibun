@@ -268,6 +268,8 @@ export class LocalEnvironment {
   private updated?: Promise<void>;
   private autoRun?: Promise<void>;
   private autoBlocked?: string;
+  private autoFailed?: string;
+  private installDone: Promise<void> = Promise.resolve();
   private readonly users = new Set<CommandUser>();
   private readonly versions = new Map<CommandUser, string>();
   private readonly checks = new Map<CommandUser, number>();
@@ -336,7 +338,13 @@ export class LocalEnvironment {
     this.logs.update(lines => [...lines, { time: Date.now(), level, message }].slice(-LOG_LIMIT));
   }
 
-  private async runInstall(version: string | undefined = packageVersion()): Promise<{ where: InstallRun["where"]; lines: string[]; result: InstallResult }> {
+  private runInstall(version: string | undefined = packageVersion()): Promise<{ where: InstallRun["where"]; lines: string[]; result: InstallResult }> {
+    const run = this.npmInstall(version);
+    this.installDone = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async npmInstall(version: string | undefined): Promise<{ where: InstallRun["where"]; lines: string[]; result: InstallResult }> {
     this.installing.set(true);
     const lines: string[] = [];
     let where = "global" as InstallRun["where"];
@@ -373,48 +381,63 @@ export class LocalEnvironment {
     return (await commandUpdate.commandVersion?.(this.target).catch(() => null)) ?? null;
   }
 
-  async autoUpdate(latest: string): Promise<void> {
-    if (!hostsHere || !isVersion(latest) || this.autoRun || untracked(this.installing) || untracked(this.updating)) return;
+  async autoUpdate(latest: string, options: { retry?: boolean } = {}): Promise<void> {
+    if (!hostsHere || !isVersion(latest) || this.autoRun) return;
     await this.commandUpdated();
+    while (untracked(this.installing)) { await this.installDone; await this.commandUpdated(); }
+    if (this.autoRun) return;
+    if (this.autoFailed === latest && !options.retry) return;
     const has = await this.installedVersion();
     if (!has || !isVersion(has) || compareVersions(latest, has) !== 1 || this.autoRun || untracked(this.installing) || untracked(this.updating)) return;
     if (untracked(() => this.serverRunning())) {
       if (this.autoBlocked !== latest) {
         this.autoBlocked = latest;
-        this.log("info", `npm has pikibun ${latest}, newer than the ${has} ${this.wsl ? "in" : "on"} ${this.where()}: it is updated once Pikibun on ${computerName} under Self host is stopped.`);
+        this.log("info", `npm has pikibun ${latest}, newer than the ${has} ${this.wsl ? "in" : "on"} ${this.where()}, but Pikibun runs on it under Self host: stop it there, then choose Check now under Updates, or the next check updates it.`);
       }
       return;
     }
     this.autoBlocked = undefined;
     const running = localHosts().all().filter(host => host.environment === this && untracked(host.state) !== "stopped");
-    const resumes = running.map(host => ({ host, resume: untracked(host.config).resume }));
     const install = this.runAutoInstall(latest, has, running);
     const run = install.then(() => undefined, () => undefined);
     this.autoRun = run;
-    try { await install; }
+    let stopped: LocalHost[] = [];
+    try { stopped = await install; }
     finally { if (this.autoRun === run) this.autoRun = undefined; }
-    for (const { host, resume } of resumes) {
+    for (const host of stopped) {
+      const resume = untracked(host.config).resume;
       const outcome = await host.start(resume ? { resume } : {}).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
-      if (!outcome.ok) this.log("warning", `${host.name()} didn't start again after the update${outcome.error ? `: ${outcome.error}` : ""}.`);
+      if (!outcome.ok) this.log("warning", `${host.name()} didn't start again after the update${outcome.error ? `: ${outcome.error}` : ""}. Start it under Local hosts, or it starts again the next time Pikibun opens.`);
     }
   }
 
-  private async runAutoInstall(latest: string, has: string, running: LocalHost[]): Promise<void> {
+  private async runAutoInstall(latest: string, has: string, running: LocalHost[]): Promise<LocalHost[]> {
     this.updating.set(true);
     this.updatingTo.set(latest);
+    const stopped: LocalHost[] = [];
     try {
       this.log("info", `npm has pikibun ${latest}, newer than the ${has} ${this.wsl ? "in" : "on"} ${this.where()}: updating it${running.length ? ", and restarting the hosts that run it" : ""}.`);
-      for (const host of running) await host.stop();
+      for (const host of running) {
+        const outcome = await host.stop({ keepResume: true });
+        if (!outcome.ok) {
+          this.log("warning", `${host.name()} didn't stop${outcome.error ? ` (${outcome.error})` : ""}, so Pikibun's command wasn't updated to ${latest}. Pikibun tries again at its next check.`);
+          return stopped;
+        }
+        stopped.push(host);
+      }
       const { lines, result } = await this.runInstall(latest);
       if (result.code !== 0) {
+        this.autoFailed = latest;
         const last = lastLines(lines);
-        this.log("warning", `npm couldn't update Pikibun's command to ${latest} (${result.error || last || `exit code ${result.code ?? "unknown"}`}). ${this.title()} keeps the ${has} it has, and Pikibun tries again at its next check.`);
-        return;
+        this.log("warning", `npm couldn't update Pikibun's command to ${latest} (${result.error || last || `exit code ${result.code ?? "unknown"}`}). ${this.title()} keeps the ${has} it has. Pikibun tries again once npm has a newer pikibun, or on Check now under Updates.`);
+        return stopped;
       }
+      this.autoFailed = undefined;
       autoVersion.set(latest);
       await Storage.setItem(COMMAND_AUTO_VERSION_KEY, latest).catch(() => undefined);
       this.log("info", `npm updated pikibun to ${latest} ${this.wsl ? "in" : "on"} ${this.where()}.`);
       await this.restartAll();
+      return stopped;
     } finally {
       this.updatingTo.set(null);
       this.updating.set(false);
@@ -784,8 +807,8 @@ export class LocalHost {
     return { ok: false, error: error || undefined };
   }
 
-  async stop(): Promise<Outcome> {
-    if (untracked(this.config).resume) this.setResume(undefined);
+  async stop(options: { keepResume?: boolean } = {}): Promise<Outcome> {
+    if (!options.keepResume && untracked(this.config).resume) this.setResume(undefined);
     if (!this.channel.running || untracked(this.state) === "stopped") return { ok: true };
     const result = await this.channel.request({ type: "stop" });
     await this.fresh();
@@ -1174,7 +1197,7 @@ export function thisComputerHostIds(server?: string): string[] {
   return localHosts().servingIds(origin);
 }
 
-export async function checkCommandUpdates(): Promise<void> {
+export async function checkCommandUpdates(options: { retry?: boolean } = {}): Promise<void> {
   if (!hostsHere) return;
   await loadAutoUpdate();
   if (!untracked(commandAutoUpdate) || untracked(commandAutoChecking)) return;
@@ -1190,7 +1213,7 @@ export async function checkCommandUpdates(): Promise<void> {
     if (!latest || !untracked(commandAutoUpdate)) return;
     await localHosts().load();
     nativeEnvironment();
-    await Promise.all([...environments.values()].map(environment => environment.autoUpdate(latest).catch(() => undefined)));
+    await Promise.all([...environments.values()].map(environment => environment.autoUpdate(latest, options).catch(() => undefined)));
   } finally {
     commandAutoChecking.set(false);
   }
@@ -1200,7 +1223,7 @@ export async function setCommandAutoUpdate(on: boolean): Promise<void> {
   await loadAutoUpdate();
   commandAutoUpdate.set(on);
   await Storage.setItem(COMMAND_AUTO_UPDATE_KEY, on ? "on" : "off").catch(() => undefined);
-  if (on) void checkCommandUpdates();
+  if (on) void checkCommandUpdates({ retry: true });
 }
 
 export function commandAutoUpdateLoaded(): Promise<void> { return loadAutoUpdate(); }

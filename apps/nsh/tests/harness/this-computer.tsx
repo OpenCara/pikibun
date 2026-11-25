@@ -1,7 +1,7 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection, LoginProvider } from "../../../../packages/shared/src/app-host-protocol";
 import {
-  appCliFolder, installCommand, localHosts, nativeEnvironment, resumeThisComputer, setCommandUpdate, setHostLauncher, setInstaller, setWslLister, thisComputerHostIds,
+  appCliFolder, checkCommandUpdates, installCommand, localHosts, nativeEnvironment, resumeThisComputer, setCommandUpdate, setHostLauncher, setInstaller, setWslLister, thisComputerHostIds,
   wslInstallCommand, type HostLink, type HostTarget, type InstallRun,
 } from "../../src/lib/this-computer";
 import { Button } from "../../src/ui";
@@ -184,6 +184,7 @@ mount(() => (
     <Text>{`this computer's hosts: ${thisComputerHostIds(SERVER).join(",") || "none"}`}</Text>
     <Text>{`hosts: ${localHosts().all().map(item => `${item.pairedWith() ?? "unpaired"}=${item.state()}`).join(" ")}`}</Text>
     <Button testID="fake-resume" label="Resume hosting" onPress={() => resumeThisComputer()} />
+    <Button testID="fake-auto-check" label="Scheduled check" onPress={() => void checkCommandUpdates()} />
     <Button testID="fake-read-session" label="Read a session" onPress={() => {
       const serving = localHosts().serving(SERVER);
       void (serving ? serving.host.readView("s1", { brief: false }) : Promise.resolve(null)).then(reply => localView.set(reply && "view" in reply ? reply.view.sessionId : "none"));

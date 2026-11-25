@@ -201,7 +201,7 @@ function AutoUpdateSection() {
   void commandAutoUpdateLoaded().finally(() => loaded.set(true));
   const action = createAction();
   const toggle = (on: boolean) => void action.run(() => setCommandAutoUpdate(on));
-  const check = () => void checkCommandUpdates();
+  const check = () => void checkCommandUpdates({ retry: true });
   const status = () => {
     const last = commandAutoCheck();
     if (commandAutoChecking()) return "Asking npm for pikibun's latest version…";

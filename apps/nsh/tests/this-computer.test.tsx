@@ -327,6 +327,52 @@ describe("automatic updates of the command", () => {
     expect(sent().filter(line => line.startsWith("install")).length).toBe(1);
   });
 
+  test("the host keeps its saved resume while npm runs, so quitting then still starts it again at the next launch", async () => {
+    const { app, sent, showsText } = await openPanel({ ...current, latest: "0.42.0", npmMs: 1500 }, updated);
+    await app.press("id:fake-resume");
+    await app.waitFor("id:local-host-stop-default");
+    await app.press("id:this-computer-auto-update-toggle");
+    await app.waitUntil(() => sent().includes("install pikibun@0.42.0"));
+    await app.waitFor("id:this-computer-updating");
+    expect(showsText("npm has pikibun 0.42.0, so npm is updating the command to it")).toBe(true);
+    expect(JSON.parse(app.storage()[HOSTS_KEY]!)[0].resume).toEqual({ unsandboxedConsent: true });
+    await app.waitUntil(() => app.storage()[COMMAND_AUTO_VERSION_KEY] === "0.42.0");
+  });
+
+  test("an npm that fails starts the host again, and the next checks leave that version alone until Check now", async () => {
+    const { app, sent, showsText } = await openPanel({ ...current, latest: "0.42.0", npm: "denied" }, updated);
+    const stops = () => sent().filter(line => line === JSON.stringify({ type: "stop" })).length;
+    const installs = () => sent().filter(line => line === "install pikibun@0.42.0").length;
+    await app.press("id:fake-resume");
+    await app.waitFor("id:local-host-stop-default");
+    await app.press("id:this-computer-auto-update-toggle");
+    await app.waitUntil(() => installs() === 1);
+    await app.waitUntil(() => showsText(`hosts: ${SERVER}=connected`));
+    expect(stops()).toBe(1);
+    expect(JSON.parse(app.storage()[HOSTS_KEY]!)[0].resume).toEqual({ unsandboxedConsent: true });
+    expect(app.storage()[COMMAND_AUTO_VERSION_KEY]).toBeUndefined();
+    await app.press("id:fake-auto-check");
+    await app.waitUntil(() => sent().filter(line => line === "npm latest").length === 2);
+    await app.waitUntil(() => !app.shows("text:Asking npm for pikibun's latest version…"));
+    expect(stops()).toBe(1);
+    expect(installs()).toBe(1);
+    await app.press("id:this-computer-auto-update-check");
+    await app.waitUntil(() => installs() === 2);
+    expect(stops()).toBe(2);
+    await app.press("text:Recent activity");
+    await app.waitUntil(() => showsText("Pikibun tries again once npm has a newer pikibun, or on Check now under Updates."));
+  });
+
+  test("a check while npm installs the app's own command waits for it, then updates to npm's newer one", async () => {
+    const { app, sent } = await openPanel({ ...current, latest: "0.42.0", npmMs: 800 },
+      { [COMMAND_UPDATED_KEY]: "0.35.0", [COMMAND_AUTO_UPDATE_KEY]: "on", [HOSTS_KEY]: JSON.stringify([host]) });
+    await app.waitFor("id:this-computer-updating");
+    await app.press("id:fake-auto-check");
+    await app.waitUntil(() => sent().includes("install pikibun@0.42.0"));
+    expect(sent().indexOf("install")).toBeLessThan(sent().indexOf("install pikibun@0.42.0"));
+    await app.waitUntil(() => app.storage()[COMMAND_AUTO_VERSION_KEY] === "0.42.0");
+  });
+
   test("a version npm has that isn't newer installs nothing, and a check that fails says why", async () => {
     const same = await openPanel({ ...current, latest: "0.40.0" }, { ...updated, [COMMAND_AUTO_UPDATE_KEY]: "on" });
     await same.app.waitFor("id:this-computer-auto-update-check");
