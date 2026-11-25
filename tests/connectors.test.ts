@@ -29,7 +29,7 @@ import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import type { RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
 import { publicLookup, RemoteMcpRefused } from '../apps/server/src/authority/remote-mcp/transport.js';
-import { coversResource, discoverOAuth } from '../apps/server/src/authority/remote-mcp/oauth.js';
+import { authorizationUrl, coversResource, discoverOAuth, registerClient } from '../apps/server/src/authority/remote-mcp/oauth.js';
 import { answersId, eventStreamMessages, RemoteMcpSession } from '../apps/server/src/authority/remote-mcp/client.js';
 
 const origin = 'http://localhost:8787';
@@ -4550,6 +4550,108 @@ test('a protected resource covers only its own origin and path, and an authoriza
     return { status: 404, headers: {}, body: '' };
   };
   await assert.rejects(discoverOAuth(transport, 'https://mcp.example.com/mcp'), /publishes no OAuth metadata/);
+});
+
+function metadataDocumentMcpFake(registration = false) {
+  const mcpUrl = 'https://api.mcp.example.com/v1/mcp';
+  const calls: { method: string; url: string; body: string }[] = [];
+  const tokens: URLSearchParams[] = [];
+  const json = (status: number, value: unknown) => ({ status, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  const transport = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
+    const method = request.method ?? 'POST';
+    calls.push({ method, url: request.url, body: request.body });
+    if (request.url === mcpUrl && method === 'POST') {
+      if (request.headers.Authorization !== 'Bearer access-1') {
+        return { status: 401, headers: { 'www-authenticate': 'Bearer resource_metadata="https://api.mcp.example.com/.well-known/oauth-protected-resource"' },
+          body: '{"detail":"OAuth bearer token required for the hosted MCP."}' };
+      }
+      const body = JSON.parse(request.body) as { id?: number; method: string };
+      if (body.id === undefined) return { status: 202, headers: {}, body: '' };
+      const result = body.method === 'initialize' ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'voice', version: '1' } }
+        : { tools: [{ name: 'speak', inputSchema: { type: 'object' } }] };
+      return json(200, { jsonrpc: '2.0', id: body.id, result });
+    }
+    if (request.url === 'https://api.mcp.example.com/.well-known/oauth-protected-resource' && method === 'GET') {
+      return json(200, { resource: mcpUrl, authorization_servers: ['https://api.mcp.example.com'] });
+    }
+    if (request.url === 'https://api.mcp.example.com/.well-known/oauth-authorization-server' && method === 'GET') {
+      return json(200, { issuer: 'https://api.mcp.example.com', authorization_endpoint: 'https://mcp.example.com/app/oauth/authorize',
+        token_endpoint: 'https://api.mcp.example.com/v1/oauth/token', code_challenge_methods_supported: ['S256'],
+        token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'private_key_jwt'], client_id_metadata_document_supported: true,
+        ...(registration ? { registration_endpoint: 'https://api.mcp.example.com/v1/oauth/register' } : {}) });
+    }
+    if (request.url === 'https://api.mcp.example.com/v1/oauth/token' && method === 'POST') {
+      const form = new URLSearchParams(request.body);
+      tokens.push(form);
+      return json(200, { access_token: 'access-1', refresh_token: 'refresh-1', token_type: 'Bearer', expires_in: 3600 });
+    }
+    return { status: 404, headers: {}, body: '' };
+  };
+  return { mcpUrl, calls, tokens, transport };
+}
+
+test('an authorization server with client ID metadata documents and no dynamic client registration signs Pikibun in by its document\'s URL (#534)', async () => {
+  const document = 'https://pikibun.example.com/oauth/mcp-client.json';
+  const redirect = 'https://pikibun.example.com/api/mcp-servers/oauth/callback';
+  const fake = metadataDocumentMcpFake();
+  const server = await discoverOAuth(fake.transport, fake.mcpUrl);
+  assert.equal(server.clientIdMetadataDocument, true);
+  assert.equal(server.registrationEndpoint, undefined);
+  const client = await registerClient(fake.transport, server, redirect, document);
+  assert.deepEqual([client.clientId, client.clientSecret, client.authMethod, client.redirectUri, client.resource], [document, undefined, 'none', redirect, fake.mcpUrl]);
+  const location = new URL(authorizationUrl(client, 'state', 'verifier'));
+  assert.equal(`${location.origin}${location.pathname}`, 'https://mcp.example.com/app/oauth/authorize');
+  assert.deepEqual(['client_id', 'redirect_uri', 'code_challenge_method', 'resource'].map(name => location.searchParams.get(name)), [document, redirect, 'S256', fake.mcpUrl]);
+  await assert.rejects(registerClient(fake.transport, server, 'http://127.0.0.1:8787/api/mcp-servers/oauth/callback'),
+    /client metadata document .* not served over https:\/\//, 'a Pikibun without an https:// origin has no document an authorization server can fetch');
+
+  const both = metadataDocumentMcpFake(true);
+  const offered = await discoverOAuth(both.transport, both.mcpUrl);
+  assert.ok(offered.registrationEndpoint && offered.clientIdMetadataDocument);
+  const preferred = await registerClient(both.transport, offered, redirect, document);
+  assert.equal(preferred.clientId, document);
+  assert.ok(!both.calls.some(call => call.url.endsWith('/register')), 'the document is preferred: no client is registered at every sign-in');
+  assert.equal((await registerClient(both.transport, { ...offered, authMethods: ['private_key_jwt'], registrationEndpoint: undefined }, redirect, document)
+    .catch(error => error as Error)).constructor.name, 'RemoteMcpOAuthError', 'a server that takes no public clients isn\'t signed in to as one');
+});
+
+test('Pikibun serves its OAuth client metadata document, and signs in with it end to end where its origin is https:// (#534)', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  await denied(await f.request('GET', '/oauth/mcp-client.json'), 404, 'not_found');
+  const fake = metadataDocumentMcpFake();
+  f.env.REMOTE_MCP_TRANSPORT = fake.transport;
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const { server } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path, { name: 'Voice', prefix: 'voice', url: fake.mcpUrl }), 201);
+
+  const secure = f.env.APP_ORIGIN = 'https://workspace.example.test';
+  const document = `${secure}/oauth/mcp-client.json`;
+  const served = await f.request('GET', `${secure}/oauth/mcp-client.json`, undefined, { Origin: secure });
+  assert.equal(served.headers.get('content-type')?.split(';')[0], 'application/json');
+  assert.deepEqual(await json(served), {
+    client_id: document, client_name: 'Pikibun', client_uri: secure,
+    redirect_uris: [`${secure}/api/mcp-servers/oauth/callback`, `${secure}/api/mcp-servers/oauth/app/callback`],
+    grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none',
+  });
+
+  const cookie = s.admin.cookie.replace(/^test-auth=/, '__Host-auth=');
+  const headers = { Cookie: cookie, Origin: secure, 'X-CSRF-Token': s.admin.csrf };
+  const start = await f.request('GET', `${secure}${path}/${server.id}/oauth/start`, undefined, headers);
+  assert.equal(start.status, 302, await start.clone().text());
+  const location = new URL(start.headers.get('location')!);
+  assert.equal(`${location.origin}${location.pathname}`, 'https://mcp.example.com/app/oauth/authorize');
+  assert.deepEqual(['client_id', 'redirect_uri', 'resource'].map(name => location.searchParams.get(name)),
+    [document, `${secure}/api/mcp-servers/oauth/callback`, fake.mcpUrl]);
+  const state = location.searchParams.get('state')!;
+  assert.equal(start.headers.get('set-cookie')!.match(/__Host-mcp-oauth=([^;]+)/)![1], state);
+  const callback = await f.request('GET', `${secure}/api/mcp-servers/oauth/callback?${new URLSearchParams({ code: 'code-1', state })}`, undefined,
+    { ...headers, Cookie: `${cookie}; __Host-mcp-oauth=${state}` });
+  assert.equal(callback.status, 302);
+  assert.equal(fake.tokens.length, 1);
+  assert.deepEqual([fake.tokens[0]!.get('client_id'), fake.tokens[0]!.get('client_secret'), fake.tokens[0]!.get('grant_type')], [document, null, 'authorization_code']);
+  const listed = (await json<{ servers: WorkspaceMcpServer[] }>(await f.request('GET', `${secure}${path}`, undefined, headers))).servers[0]!;
+  assert.equal(listed.error, undefined);
+  assert.ok(listed.oauth?.signedInAt);
+  assert.deepEqual(listed.tools.map(tool => tool.toolName), ['voice_speak']);
 });
 
 test('a remote MCP call has one deadline for all its requests, and an event stream answers as soon as its response arrives', async () => {

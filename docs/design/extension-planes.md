@@ -343,7 +343,13 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   its `resource` is used only where it has the server's origin and covers its path), the authorization server metadata
   (RFC 8414 and OpenID path insertion, then the issuer's own `/.well-known/...`, which Clerk serves; a document whose
   `issuer` isn't the one asked for is skipped; a server without protected resource metadata falls back to its origin's
-  `/authorize`, `/token` and `/register`, with no issuer, so a callback carrying `iss` is refused), dynamic client registration (RFC 7591, a public client with `token_endpoint_auth_method: none` where the
+  `/authorize`, `/token` and `/register`, with no issuer, so a callback carrying `iss` is refused), a client ID metadata document where the authorization server
+  says `client_id_metadata_document_supported` and takes public clients (#534: ElevenLabs, Higgsfield and Runway offer
+  no dynamic client registration): Pikibun serves its document at `GET /oauth/mcp-client.json` (public, before the
+  sign-in check: `client_id` is its own URL, both callbacks as `redirect_uris`, `token_endpoint_auth_method: none`) and
+  signs in with that URL as `client_id`, registering nothing, so it's preferred over registration where both are
+  offered; only an `https://` origin has one, since the authorization server fetches it, so a local `http://` Pikibun
+  falls back to registration or says why it can't sign in; otherwise dynamic client registration (RFC 7591, a public client with `token_endpoint_auth_method: none` where the
   server allows it), and an authorization code with PKCE S256 and `resource` (RFC 8707). Every request goes through the
   same public-only transport. The state is single-use, 10 minutes, bound to the member and to a `SameSite=Lax` cookie
   (`mcp_oauth_states`, with the registered client encrypted), and to the server's address: a callback for an address
