@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONNECTOR_ENVIRONMENT, HostWorkspace, hostOwnersSession, ownerHostEnvironment } from "../apps/runner/src/host-workspace.js";
+import { CONNECTOR_ENVIRONMENT, HostWorkspace, chosenWorktree, hostOwnersSession, ownerHostEnvironment } from "../apps/runner/src/host-workspace.js";
 import { serverEnvironment, stringVars } from "../apps/server/src/config.js";
 import { runHostShell } from "../apps/runner/src/host-shell.js";
 import { Sandbox, type SandboxAuthorize } from "../apps/runner/src/sandbox.js";
@@ -32,6 +32,54 @@ async function hostWorkspace(t: TestContext, repositories: SessionRepository[] =
   await workspace.initialize();
   return { workspace, outside: directory };
 }
+
+test("a host session works in the directory of the host its owner chose, as it is, and never outside it", hostMode, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-chosen-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const project = join(directory, "project");
+  await mkdir(project);
+  await writeFile(join(project, "README.md"), "the owner's own");
+  await writeFile(join(directory, "secret.txt"), "host secret");
+  const workspace = new HostWorkspace(binding("host-chosen"), join(directory, "session"), { worktree: project, refused: [join(directory, "data")] });
+  t.after(() => workspace.close());
+  await workspace.initialize();
+  assert.equal(workspace.worktree, project);
+  assert.equal(workspace.chosenDirectory, true);
+  assert.deepEqual(await readdir(project), ["README.md"], "it is neither made a repository nor given anything of Pikibun's");
+  assert.equal(await workspace.readFile("README.md", authorize), "the owner's own");
+  await workspace.writeFile("notes/plan.md", "inside", authorize);
+  assert.equal(await readFile(join(project, "notes/plan.md"), "utf8"), "inside");
+  await assert.rejects(workspace.readFile("../secret.txt", authorize), /traversal/);
+  assert.equal(await workspace.execute({ kind: "bash", command: printWorkingDirectory }, false, authorize), `${project}\n`);
+  await assert.rejects(workspace.snapshot(authorize), /works in a directory of its host/);
+});
+
+test("a chosen working directory must already be a directory of the host, outside Pikibun's storage", hostMode, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-refused-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(join(directory, "data", "elsewhere"), { recursive: true });
+  await writeFile(join(directory, "file.txt"), "");
+  const cases: [string, string, RegExp][] = [
+    ["missing", join(directory, "missing"), /isn't usable on this host: no such file/],
+    ["file", join(directory, "file.txt"), /isn't usable on this host/],
+    ["storage", join(directory, "data", "elsewhere"), /Pikibun's own storage/],
+    ["own", join(directory, "session-own"), /Pikibun's own storage/],
+  ];
+  for (const [name, worktree, refusal] of cases) {
+    if (name === "own") await mkdir(join(directory, "session-own", "x"), { recursive: true, mode: 0o700 });
+    const root = name === "own" ? join(directory, "session-own") : join(directory, `session-${name}`);
+    const workspace = new HostWorkspace(binding(`host-${name}`), root, { worktree: name === "own" ? join(root, "x") : worktree, refused: [join(directory, "data")] });
+    t.after(() => workspace.close());
+    await assert.rejects(workspace.initialize(), refusal, name);
+  }
+  assert.throws(() => new HostWorkspace(binding("host-relative"), join(directory, "relative"), { worktree: "projects/app" }), /absolute path/);
+});
+
+test("a working directory under ~ is the host user's home", () => {
+  assert.equal(chosenWorktree("~", "/home/alice"), "/home/alice");
+  assert.equal(chosenWorktree("~/projects/app", "/home/alice"), join("/home/alice", "projects/app"));
+  assert.equal(chosenWorktree("/srv/app/", "/home/alice"), "/srv/app");
+});
 
 test("the Linux sandbox never falls back to host execution on other platforms", { skip: process.platform === "linux" }, () => {
   assert.throws(() => new Sandbox(binding("implicit"), join(tmpdir(), "pikibun-implicit")), /requires Linux/);

@@ -3639,6 +3639,29 @@ test('a host\'s owner starts a session directly on the host, without its configu
   await denied(await start({ hostEnvironment: true }), 400, 'host_unsandboxed');
 });
 
+test('a session directly on its host works in the directory of the host its owner chose, which its binding carries', async t => {
+  const f = await fixture(t); const s = await privateWorkspace(f);
+  const start = (body: Record<string, unknown>) => s.owner.request('POST', '/api/sessions', { ...s.input, ...body });
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, hostConfig: true, ownerHostSessions: true } }));
+  await denied(await start({ hostEnvironment: true, hostDirectory: '~/projects/app' }), 409, 'connector_update_required');
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, hostConfig: true, ownerHostSessions: true, hostDirectories: true } }));
+  for (const hostDirectory of ['projects/app', '', ' /srv/app', '/srv/\napp', 7, 'x'.repeat(1025)]) {
+    await denied(await start({ hostEnvironment: true, hostDirectory }), 400, 'invalid_input');
+  }
+  await denied(await start({ hostDirectory: '/srv/app' }), 400, 'invalid_input');
+  await denied(await start({ hostEnvironment: false, hostDirectory: '/srv/app' }), 400, 'invalid_input');
+  const before = s.hub.requests.length;
+  const { session } = await json<{ session: SessionRecord }>(await start({ hostEnvironment: true, hostDirectory: '~/projects/app' }), 201);
+  assert.equal(session.hostDirectory, '~/projects/app');
+  assert.equal((JSON.parse(s.hub.requests[before]!.request.body) as RunnerBinding).session.hostDirectory, '~/projects/app', 'the host learns it from the immutable binding');
+  assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', `/api/sessions/${session.id}`))).session.hostDirectory, '~/projects/app');
+  const audit = f.sqlite.prepare(`SELECT detail_json FROM audit WHERE action = 'session.created' AND session_id = ?`).get(session.id)!;
+  assert.equal(JSON.parse(String(audit.detail_json)).hostDirectory, '~/projects/app');
+  const own = (await json<{ session: SessionRecord }>(await start({ hostEnvironment: true }), 201)).session;
+  assert.equal(own.hostDirectory, undefined, 'left out, the session works in its own worktree');
+  assert.equal((JSON.parse(s.hub.requests.at(-1)!.request.body) as RunnerBinding).session.hostDirectory, undefined);
+});
+
 test('a member it is shared with starts sessions directly on a host only with a grant from its owner that includes them', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const id = s.connector.connectorId; const grants = `/api/connectors/${id}/host-grants/${s.team.id}`;

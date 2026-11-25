@@ -1,6 +1,3 @@
-// The working directory a session's owner chose on its host, for a session that runs directly on the host (hostEnvironment).
-// It stands in for the private, empty worktree such a session starts with otherwise: an absolute path on the host, or one
-// under its user's home (~, ~/...). The host checks it exists when the session opens (apps/runner/src/host-workspace.ts).
 export const HOST_DIRECTORY_MAX_LENGTH = 1024;
 
 export function validHostDirectory(value: unknown): value is string {

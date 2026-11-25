@@ -42,7 +42,12 @@ export interface HostSudo {
 export type HostWorkspaceOptions = {
   ownerEnvironment?: boolean; privateEnvironment?: readonly string[]; sudo?: HostSudo;
   gitShim?: () => Promise<string | undefined>;
+  worktree?: string; refused?: readonly string[];
 };
+
+export function chosenWorktree(value: string, home = homedir()): string {
+  return resolve(value === "~" || /^~[\\/]/.test(value) ? join(home, value.slice(2)) : value);
+}
 const SUDO_RECHECK_MS = 1000;
 
 export { CONNECTOR_ENVIRONMENT };
@@ -86,6 +91,8 @@ export class HostWorkspace implements SessionWorkspace {
   readonly ownerEnvironment: boolean;
   readonly #testProvider: boolean;
   readonly #clone: boolean;
+  readonly #chosen: boolean;
+  readonly #refused: readonly string[];
   #initialization: Promise<void> | undefined;
   #ready = false;
   #closed = false;
@@ -108,8 +115,12 @@ export class HostWorkspace implements SessionWorkspace {
     this.#root = resolve(root);
     this.#testProvider = binding.model.provider === "faux";
     this.#clone = binding.session.repositoryMode === "clone";
+    this.#chosen = options.worktree !== undefined;
+    if (this.#chosen && !isAbsolute(options.worktree!) && !/^~(?:[\\/]|$)/.test(options.worktree!)) throw new Error("The session's working directory must be an absolute path on the host");
+    this.#refused = [this.#root, ...(options.refused ?? [])].map(path => resolve(path));
     this.#identity = Object.freeze({
-      ownerId, githubLogin, gitName, gitEmail, home: join(this.#root, "home"), worktree: join(this.#root, "worktree"),
+      ownerId, githubLogin, gitName, gitEmail, home: join(this.#root, "home"),
+      worktree: this.#chosen ? chosenWorktree(options.worktree!) : join(this.#root, "worktree"),
       env: Object.freeze({ ...binding.owner.env }),
     });
     this.ownerEnvironment = options.ownerEnvironment === true;
@@ -128,6 +139,7 @@ export class HostWorkspace implements SessionWorkspace {
   get worktree(): string { return this.#identity.worktree; }
   get hostWorktree(): string { return this.worktree; }
   get activeCommand(): string | undefined { return this.#activeCommand; }
+  get chosenDirectory(): boolean { return this.#chosen; }
 
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
     return this.#operation(authorize, async () => this.#reported);
@@ -136,19 +148,22 @@ export class HostWorkspace implements SessionWorkspace {
   initialize(): Promise<void> {
     if (this.#closed) return Promise.reject(new Error("Sandbox is closed"));
     this.#initialization ??= this.#exclusive(async () => {
-      for (const directory of [this.#root, this.home, this.worktree, join(this.home, ".tmp")]) {
+      for (const directory of [this.#root, this.home, ...(this.#chosen ? [] : [this.worktree]), join(this.home, ".tmp")]) {
         await mkdir(directory, { recursive: true, mode: 0o700 });
         const info = await lstat(directory);
         if (!info.isDirectory() || !privateEntry(info)) {
           throw new Error("Sandbox storage must be private and owned by the runner user");
         }
       }
+      if (this.#chosen) await this.#checkChosen();
       const config = ownerGitConfig(this.#identity) + (this.#clone ? hostCredentialConfig(process.env.HOME || homedir()) : "");
       await (await pinOwnerConfig(join(this.#root, "owner.gitconfig"), config)).close();
-      if (!await exists(join(this.worktree, ".git", "HEAD"))) {
-        await this.#git(["init", "--quiet", "--template=", "--initial-branch=main", this.worktree]);
+      if (!this.#chosen) {
+        if (!await exists(join(this.worktree, ".git", "HEAD"))) {
+          await this.#git(["init", "--quiet", "--template=", "--initial-branch=main", this.worktree]);
+        }
+        await this.#git(["rev-parse", "--is-inside-work-tree"]);
       }
-      await this.#git(["rev-parse", "--is-inside-work-tree"]);
       this.#ready = true;
     });
     return this.#initialization;
@@ -318,6 +333,7 @@ export class HostWorkspace implements SessionWorkspace {
 
   snapshot(authorize: SandboxAuthorize): Promise<SnapshotFile[]> {
     return this.#operation(authorize, async () => {
+      if (this.#chosen) throw hostError("this session works in a directory of its host, which a backup doesn't copy");
       const files: SnapshotFile[] = [];
       const skipped = new Set(SNAPSHOT_SKIPPED_HOME.map(path => `home/${path}`));
       let total = 0;
@@ -376,6 +392,25 @@ export class HostWorkspace implements SessionWorkspace {
     this.#cancelActive?.();
     await this.#initialization?.catch(() => undefined);
     await this.#exclusive(async () => { this.#ready = false; });
+  }
+
+  async #checkChosen(): Promise<void> {
+    const shown = this.worktree;
+    let real: string;
+    try {
+      real = await realpath(shown);
+      if (!(await lstat(real)).isDirectory()) throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+    } catch (error) {
+      throw new Error(`The session's working directory ${shown} isn't usable on this host: ${describe(error)}`);
+    }
+    if (real === resolve(real, "..")) throw new Error(`The session's working directory ${shown} is the filesystem's root`);
+    for (const refused of this.#refused) {
+      const storage = await realpath(refused).catch(() => refused);
+      const inside = relative(storage, real);
+      if (!inside || (!inside.startsWith("..") && !isAbsolute(inside))) {
+        throw new Error(`The session's working directory ${shown} is in Pikibun's own storage on this host`);
+      }
+    }
   }
 
   async #exclusive<T>(operation: () => Promise<T>): Promise<T> {

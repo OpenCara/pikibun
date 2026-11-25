@@ -2,6 +2,7 @@ import type { Hono, MiddlewareHandler } from 'hono';
 import { connectorLimits, parseCapabilities } from '../../../packages/shared/src/connector.js';
 import { PRIVATE_REPORT_LIMIT, PRIVATE_SESSIONS_VERSION, privateRoute, type PrivateForwardRequest, type PrivateForwardResponse } from '../../../packages/shared/src/private-sessions.js';
 import { permissions, sessionActivities, type SessionActivity, type SessionRecord } from '../../../packages/shared/src/types.js';
+import { validHostDirectory } from '../../../packages/shared/src/host-directory.js';
 import { authenticateConnector } from './authority/index.js';
 import { privateConnectorRequest } from './connector-transport.js';
 import { z } from 'zod';
@@ -15,7 +16,7 @@ const IDENT = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const STATUSES = ['provisioning', 'ready', 'error', 'archived'];
 const ONLINE_WITHIN_MS = 3 * 60_000;
 const RECORD_BYTES = 16 * 1024;
-const CREATE_FIELDS = ['title', 'hostEnvironment', 'generateTitle'];
+const CREATE_FIELDS = ['title', 'hostEnvironment', 'hostDirectory', 'generateTitle'];
 const reportBody = fields({
   sessions: z.array(z.unknown(), { error: 'Invalid private session report.' }).max(PRIVATE_REPORT_LIMIT, 'Invalid private session report.').optional(),
   digest: z.string({ error: 'Invalid private session report.' }).min(1, 'Invalid private session report.').max(128, 'Invalid private session report.').optional(),
@@ -61,6 +62,7 @@ export function reportedRecord(value: unknown): SessionRecord | null {
     repositoryMode: 'clone', ...(activity ? { activity } : {}), ...(branch ? { branch } : {}), ...(parentSessionId ? { parentSessionId } : {}),
     ...(input.packed === true ? { packed: true as const } : {}), ...(input.toolOutput === 'brief' ? { toolOutput: 'brief' as const } : {}),
     ...(input.hostEnvironment === true ? { hostEnvironment: true as const } : {}), ...(nextScheduledAt ? { nextScheduledAt } : {}),
+    ...(input.hostEnvironment === true && validHostDirectory(input.hostDirectory) ? { hostDirectory: input.hostDirectory } : {}),
     ...(pullRequest ? { pullRequest: pullRequest as unknown as SessionRecord['pullRequest'] } : {}),
   };
 }
@@ -242,7 +244,11 @@ export async function createForwardedSession(c: AppContext, input: Record<string
     SELECT m.provider, m.model_id, m.connector_id, h.capabilities_json, h.name AS host_name FROM models m
     JOIN connectors h ON h.id = m.connector_id AND h.owner_id = ? AND h.revoked_at IS NULL
     WHERE m.id = ? AND m.workspace_id = ?`).bind(userId, modelId, workspaceId).first();
-  if (!model || (parseCapabilities(model.capabilities_json).privateSessions ?? 0) < PRIVATE_SESSIONS_VERSION) return undefined;
+  const capabilities = model ? parseCapabilities(model.capabilities_json) : undefined;
+  if (!model || !capabilities || (capabilities.privateSessions ?? 0) < PRIVATE_SESSIONS_VERSION) return undefined;
+  if (input.hostDirectory !== undefined && capabilities.hostDirectories !== true) {
+    fail(409, 'connector_update_required', `Update Pikibun on ${model.host_name} to choose the directory a session works in on it.`);
+  }
   const fields = Object.fromEntries(Object.entries(input).filter(([key]) => CREATE_FIELDS.includes(key)));
   const body = JSON.stringify({ ...fields, provider: model.provider, modelId: model.model_id });
   const result = await relay(c, { connector_id: model.connector_id, host_name: model.host_name }, { method: 'POST', path: '/api/private-sessions', body });

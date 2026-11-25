@@ -22,6 +22,9 @@ export function backupRefusal(error: unknown): unknown {
     return new RunnerError(422, `The work in this session's clones that their origins don't have is too large to back up: a backup holds at most 24 MiB. Push it, ${OR_CONVERSATION}`);
   }
   if (/size limit|byte output limit/.test(message)) return new RunnerError(422, BACKUP_TOO_LARGE);
+  if (/works in a directory of its host/.test(message)) {
+    return new RunnerError(422, "This session works in a directory of its host its owner chose, which a backup doesn't copy. Back up its conversation only");
+  }
   if (/need a host with the sandbox/.test(message)) {
     return new RunnerError(422, `This session has a clone in its worktree, which only a host with the sandbox can back up. Push the clone's work, ${OR_CONVERSATION}`);
   }
