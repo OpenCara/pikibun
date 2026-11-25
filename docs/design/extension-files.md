@@ -38,13 +38,16 @@ else.
    by putting a new file in its place, so each entry carries its file's device, inode, modification time and size
    (`stamp`): a file saved anew counts as a change too. The empty file `bwrap` made for a place stays in the session's
    home after the owner stops sharing it.
-7. **Where the agent can reach the place.** The session's home is the agent's to write, so a command could put a link
-   where a place or one of its directories goes. `bwrap` resolves every destination under the new root it builds (a
-   tmpfs whose only writable mounts are the session's own home, worktree and socket directory), so such a link leads
-   nowhere the agent couldn't already write. All the same, `startService` checks the place's path in the session's home
-   on the host before each start (`homeFileClear`) and leaves the file out where a link, or anything but a directory on
-   the way and a file at the end, is there, so no `bwrap` version's handling of links matters. A link put there between
-   the check and the start still resolves inside the new root. An entry whose host file the sandbox refuses (`serviceBindAllowed`) is left out, and the session told once.
+7. **Where the agent can reach the place, bubblewrap 0.12.0 or newer.** The session's home is the agent's to write, so
+   a command could put a link where a place or one of its directories goes. While `bwrap` sets up, the host's tree is
+   still mounted (`/oldroot`), and before 0.12.0 it followed such a link as it made a destination's directories and
+   file, so a link aimed there could make it create them on the host as the connector's user. From 0.12.0 it resolves
+   destinations inside the new root (`openat2` with `RESOLVE_IN_ROOT`). So files are shared only where `/usr/bin/bwrap
+   --version` says 0.12.0 or newer (`hostSharedFilesRefusal`, checked once per connector); elsewhere the session says
+   once that they are left out and why, which the connector's prerequisite (0.8) doesn't otherwise require. On top of
+   that, before each start the session and `startService` check the place's path in the session's home on the host
+   (`homeFileClear`) and leave the file out where a link, anything but a directory on the way or a file at the end, or
+   a path that can't be read is there, telling the session once. An entry whose host file the sandbox refuses (`serviceBindAllowed`) is left out, and the session told once.
    An entry the host's configuration can't be read for keeps what the extension had, and never stops it opening.
 5. **Linux only.** macOS's Seatbelt sandbox can allow paths but not put a file at another one, so there the session says
    once that the extension runs without its shared files. Outside the sandbox (Windows, sessions on the host,
@@ -56,7 +59,7 @@ else.
 
 | Part | Files |
 | --- | --- |
-| The setting | `packages/shared/src/host-config.ts` (`extensionFiles`, `parseExtensionFiles`, `extensionFilePackage`); `apps/server/src/host-config.ts`; migrations `sqlite/0092_extension_files.sql`, `postgres/0085_extension_files.sql` |
+| The setting | `packages/shared/src/host-config.ts` (`extensionFiles`, `parseExtensionFiles`, `extensionFilePackage`); `apps/server/src/host-config.ts`; migrations `sqlite/0093_extension_files.sql`, `postgres/0086_extension_files.sql` |
 | The binds | `apps/runner/src/extensions/files.ts`, `extensions/process.ts` (`ProcessChannel.bind`, `files`), `session.ts` (`sharedFiles`), `sandbox.ts` (`startService` `files`, `homeFileTarget`) |
 | The page | `apps/nsh/src/settings/host-extensions.tsx` (`ShareFileSheet`) |
 | Tests | `tests/extension-files.test.ts`, `tests/extension-sandbox.test.ts`, `tests/connectors.test.ts`, `apps/nsh/tests/settings.test.tsx` |

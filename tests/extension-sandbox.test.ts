@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { ProcessChannel, sandboxLaunch, workerCodeMounts } from "../apps/runner/src/extensions/process.js";
 import { installMount } from "../apps/runner/src/extensions/load.js";
 import { sandboxDescribe } from "../apps/runner/src/extensions/describe.js";
-import { commandBindAllowed, Sandbox, serviceBindAllowed } from "../apps/runner/src/sandbox.js";
+import { commandBindAllowed, hostSharedFilesRefusal, Sandbox, serviceBindAllowed } from "../apps/runner/src/sandbox.js";
 import { serviceLimits, serviceSocketDirectory } from "../apps/runner/src/session-service.js";
 import { binding, linuxSandboxMissing } from "./helpers/workspaces.js";
 
@@ -153,9 +153,14 @@ test("in the Linux sandbox, a host file shared with an extension is in its proce
   assert.deepEqual(asked, ["local:probe"], "the files are asked for as the extension opens");
   const answer = await channel.call("execute", { source: "local:probe", settings: {}, tool: "probe", callId: "c", args: {} });
   const seen = JSON.parse((answer.value.content[0] as { text: string }).text) as Record<string, string>;
-  assert.equal(seen.read, `{"ssrf":{"allowRanges":["198.18.0.0/15"]}}`, "the extension reads the host's file where it looks for it");
-  assert.match(seen.write, /^refused: (EROFS|EACCES)$/, "and can't change it");
-  assert.equal(seen.beside, "undefined", "the rest of the session's home stays writable, for its caches");
+  if (hostSharedFilesRefusal()) {
+    t.diagnostic(`shared files are left out here: ${hostSharedFilesRefusal()}`);
+    assert.equal(seen.read, "refused: ENOENT", "with a bubblewrap too old to place it safely, the file is left out");
+  } else {
+    assert.equal(seen.read, `{"ssrf":{"allowRanges":["198.18.0.0/15"]}}`, "the extension reads the host's file where it looks for it");
+    assert.match(seen.write, /^refused: (EROFS|EACCES)$/, "and can't change it");
+    assert.equal(seen.beside, "undefined", "the rest of the session's home stays writable, for its caches");
+  }
   const shell = (command: string) => sandbox.execute({ kind: "bash", command }, false, authorize, { allowTestShell: true });
   assert.equal((await shell(`cat ${target} 2>/dev/null; echo "[end]"`)).trim(), "[end]", "the agent's own commands never see its contents");
   await assert.rejects(sandbox.startService("true", authorize, { limits: serviceLimits(60, 1), unbounded: true, socketDirectory, onOutput: () => {}, files: [{ source: shared, target: join(sandbox.home, ".gitconfig") }] }),

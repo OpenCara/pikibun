@@ -85,7 +85,7 @@ import { addTitleUsage, titleRequestInput, titleTimeoutMs, writeTitle } from "./
 import type { AutoRunChoice } from "../../../packages/shared/src/auto-dispatch.js";
 import type { AutoModelRequest } from "../../../packages/shared/src/types.js";
 import {
-  hostGitLfs, Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
+  hostGitLfs, hostSharedFilesRefusal, Sandbox, type CloneBackup, type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
 import { fitImagesExtension, modelImageLimits, thumbnailImage, tightestImageLimits } from "./images.js";
 import type { GitRemote } from "./git-remote.js";
@@ -1063,7 +1063,20 @@ export class RunnerSession {
     return (warn, options) => {
       const key = `${this.binding.session.id}\0extensions${options?.key ? `\0${options.key}` : ""}`;
       return new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path),
-        files: source => this.sharedFiles(source, sandbox.home, warn),
+        files: async source => {
+          const binds = await this.sharedFiles(source, sandbox.home, warn);
+          if (!binds.length) return [];
+          const refusal = hostSharedFilesRefusal();
+          if (refusal) {
+            this.warnOnce(warn, source, `the host's files shared with it are left out: ${refusal}`);
+            return [];
+          }
+          return binds.filter(bind => {
+            if (sandbox.homePlaceClear(bind.target)) return true;
+            this.warnOnce(warn, source, `~${bind.target.slice(sandbox.home.length)} in the session's home is a link, or not a file, so the host's file shared with it there is left out`);
+            return false;
+          });
+        },
         ...(options?.complete ? { complete: options.complete } : {}), ...(options?.appended ? { appended: options.appended } : {}), ...(options?.entries ? { entries: options.entries } : {}),
         launch: sandboxLaunch({
       socketDirectory: serviceSocketDirectory(key, this.directory), nodeBin, worktree: sandbox.worktree,

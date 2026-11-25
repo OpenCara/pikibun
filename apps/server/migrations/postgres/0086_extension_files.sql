@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0092_extension_files.sql.
+-- Postgres translation of sqlite/0093_extension_files.sql.
 
 -- Files a host shares with extensions (docs/design/extension-files.md). connector_configs.extension_files_json is the host
 -- owner's list (HostConfig.extensionFiles): host files, each with the npm: or git: package it goes to and its place in the

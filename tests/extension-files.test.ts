@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { defaultHostConfig, extensionFilePackage, hostConfigLimits, ownerOnlyHostConfig, parseExtensionFiles, parseHostConfigChange, readHostConfig } from "../packages/shared/src/host-config.js";
 import { extensionFileBinds, hostFilePath, type FileBind } from "../apps/runner/src/extensions/files.js";
 import { FILES_REFRESH_MS, ProcessChannel, type WorkerLaunch } from "../apps/runner/src/extensions/process.js";
-import { homeFileClear, homeFileTarget } from "../apps/runner/src/sandbox.js";
+import { homeFileClear, homeFileTarget, sharedFilesRefusal } from "../apps/runner/src/sandbox.js";
 
 const commit = "0123456789abcdef0123456789abcdef01234567";
 
@@ -72,6 +72,12 @@ test("a shared file goes only somewhere in the session's home other than its Git
   for (const target of [home, `${home}/`, `${home}/.gitconfig`, `${home}/.tmp/x`, `${home}/../x`, "/etc/x", `${home}x/a`, "relative", `${home}/a\nb`]) {
     assert.equal(homeFileTarget(target, home), false, target);
   }
+});
+
+test("files are shared only with a bubblewrap that keeps links from leading out of the sandbox as it places them, 0.12.0 or newer", () => {
+  for (const version of ["0.12.0", "0.12.1", "0.13.1", "1.0.0"]) assert.equal(sharedFilesRefusal(version), undefined, version);
+  for (const version of ["0.11.9", "0.8.0", "0.9.0"]) assert.match(sharedFilesRefusal(version)!, new RegExp(`bubblewrap ${version.replace(/\./g, "\\.")} predates 0\\.12\\.0`), version);
+  for (const version of [null, "", "0.12", "x.y.z"]) assert.match(sharedFilesRefusal(version)!, /can't be told/, String(version));
 });
 
 test("a shared file is left out where the agent put a link or another kind of file on its way, in the session's home", async t => {

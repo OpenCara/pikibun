@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { createHash } from "node:crypto";
 import { accessSync, constants, lstatSync } from "node:fs";
@@ -337,13 +337,38 @@ export function homeFileTarget(target: string, home: string): boolean {
   return first !== ".gitconfig" && first !== ".tmp";
 }
 
+export const SHARED_FILES_BUBBLEWRAP = "0.12.0";
+
+export function bubblewrapVersion(): string | null {
+  const result = spawnSync("/usr/bin/bwrap", ["--version"], { encoding: "utf8", timeout: 5000 });
+  return result.status === 0 ? /bubblewrap\s+(\d+\.\d+\.\d+)/.exec(result.stdout)?.[1] ?? null : null;
+}
+
+export function sharedFilesRefusal(version: string | null): string | undefined {
+  const parts = version?.split(".").map(Number);
+  if (!parts || parts.length !== 3 || parts.some(part => !Number.isSafeInteger(part))) return `this host's bubblewrap version can't be told, and sharing files needs ${SHARED_FILES_BUBBLEWRAP} or newer`;
+  const needed = SHARED_FILES_BUBBLEWRAP.split(".").map(Number);
+  for (let index = 0; index < 3; index++) {
+    if (parts[index]! > needed[index]!) return undefined;
+    if (parts[index]! < needed[index]!) return `this host's bubblewrap ${version} predates ${SHARED_FILES_BUBBLEWRAP}, which keeps links in the session's home from leading out of the sandbox as it places a file: update it to share files`;
+  }
+  return undefined;
+}
+
+let bubblewrapRefusal: { reason: string | undefined } | undefined;
+
+export function hostSharedFilesRefusal(): string | undefined {
+  bubblewrapRefusal ??= { reason: sharedFilesRefusal(bubblewrapVersion()) };
+  return bubblewrapRefusal.reason;
+}
+
 export function homeFileClear(hostHome: string, relativeTarget: string): boolean {
   let path = hostHome;
   const parts = relativeTarget.split("/");
   for (const [index, part] of parts.entries()) {
     path = join(path, part);
     let stat;
-    try { stat = lstatSync(path); } catch { return true; }
+    try { stat = lstatSync(path); } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
     if (stat.isSymbolicLink() || (index < parts.length - 1 ? !stat.isDirectory() : !stat.isFile())) return false;
   }
   return true;
@@ -427,6 +452,10 @@ export class Sandbox implements IsolatedWorkspace {
   get hostWorktree(): string { return resolve(this.#root, "worktree"); }
 
   bindAllowed(path: string): boolean { return serviceBindAllowed(path, this.#root); }
+
+  homePlaceClear(target: string): boolean {
+    return homeFileTarget(target, this.home) && homeFileClear(join(this.#root, "home"), target.slice(this.home.length + 1));
+  }
 
   async identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
@@ -667,7 +696,7 @@ export class Sandbox implements IsolatedWorkspace {
       this.#services.add(kill);
       let holder: ((held: boolean) => void) | undefined;
       const caches = await this.#cacheMounts(null);
-      const files = (options.files ?? []).filter(file => homeFileClear(join(this.#root, "home"), file.target.slice(this.home.length + 1)));
+      const files = options.files?.length && !hostSharedFilesRefusal() ? options.files.filter(file => this.homePlaceClear(file.target)) : [];
       const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
         { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
         { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}),
