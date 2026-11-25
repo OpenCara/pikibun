@@ -20,9 +20,23 @@ export interface McpAuthorizationServer {
   authorizationEndpoint: string;
   tokenEndpoint: string;
   registrationEndpoint?: string;
+  clientIdMetadataDocument?: boolean;
   authMethods?: string[];
   resource: string;
   scope?: string;
+}
+
+export const MCP_CLIENT_METADATA_PATH = '/oauth/mcp-client.json';
+
+/** The URL of Pikibun's OAuth client ID metadata document, which is its client_id where an authorization server supports them: only an https:// origin, which an authorization server can fetch. */
+export function clientMetadataDocumentUrl(origin: string): string | undefined {
+  return new URL(origin).protocol === 'https:' ? `${origin}${MCP_CLIENT_METADATA_PATH}` : undefined;
+}
+
+/** Pikibun's OAuth client ID metadata document (draft-ietf-oauth-client-id-metadata-document), served at clientMetadataDocumentUrl. */
+export function clientMetadataDocument(origin: string, redirectUris: string[]): Record<string, unknown> {
+  return { client_id: `${origin}${MCP_CLIENT_METADATA_PATH}`, client_name: 'Pikibun', client_uri: origin, redirect_uris: redirectUris,
+    grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' };
 }
 
 export interface McpOAuthClient {
@@ -146,13 +160,29 @@ export async function discoverOAuth(transport: RemoteMcpTransport, mcpUrl: strin
   return {
     issuer: metadata.issuer as string,
     authorizationEndpoint: httpsUrl(metadata.authorization_endpoint)!, tokenEndpoint: httpsUrl(metadata.token_endpoint)!,
-    ...(registrationEndpoint ? { registrationEndpoint } : {}), ...(methods ? { authMethods: methods } : {}), resource, ...(scope ? { scope } : {}),
+    ...(registrationEndpoint ? { registrationEndpoint } : {}), ...(metadata.client_id_metadata_document_supported === true ? { clientIdMetadataDocument: true } : {}),
+    ...(methods ? { authMethods: methods } : {}), resource, ...(scope ? { scope } : {}),
   };
 }
 
-export async function registerClient(transport: RemoteMcpTransport, server: McpAuthorizationServer, redirectUri: string): Promise<McpOAuthClient> {
+/**
+ * The client Pikibun signs in as. Where the authorization server supports client ID metadata documents and Pikibun has one (an https:// origin),
+ * its URL is the client_id, with no client secret and nothing registered: preferred even where dynamic client registration is offered too,
+ * since it registers no new client at every sign-in. Otherwise Pikibun registers itself with dynamic client registration.
+ */
+export async function registerClient(transport: RemoteMcpTransport, server: McpAuthorizationServer, redirectUri: string,
+  metadataDocumentUrl?: string): Promise<McpOAuthClient> {
+  const publicClients = !server.authMethods || server.authMethods.includes('none');
+  if (server.clientIdMetadataDocument && metadataDocumentUrl && publicClients) {
+    return {
+      ...(server.issuer ? { issuer: server.issuer } : {}), authorizationEndpoint: server.authorizationEndpoint, tokenEndpoint: server.tokenEndpoint,
+      clientId: metadataDocumentUrl, authMethod: 'none', redirectUri, resource: server.resource, ...(server.scope ? { scope: server.scope } : {}),
+    };
+  }
   if (!server.registrationEndpoint) {
-    throw new RemoteMcpOAuthError('Its authorization server doesn\'t let Pikibun register itself (no dynamic client registration), so Pikibun can\'t sign in to it with OAuth: choose a token, a username and password or a header with Change sign-in instead');
+    throw new RemoteMcpOAuthError(server.clientIdMetadataDocument && !metadataDocumentUrl
+      ? 'Its authorization server identifies clients only by a client metadata document it fetches from their address, which this Pikibun server, not served over https://, can\'t offer: choose a token, a username and password or a header with Change sign-in instead'
+      : 'Its authorization server doesn\'t let Pikibun register itself (no dynamic client registration), so Pikibun can\'t sign in to it with OAuth: choose a token, a username and password or a header with Change sign-in instead');
   }
   const wanted: AuthMethod = !server.authMethods || server.authMethods.includes('none') ? 'none'
     : server.authMethods.includes('client_secret_post') ? 'client_secret_post' : 'client_secret_basic';
