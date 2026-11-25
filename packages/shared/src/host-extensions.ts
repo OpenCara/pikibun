@@ -1,4 +1,4 @@
-import { pikiExtension, pikiExtensions, pikiSessionToolExtensions } from "./piki-extensions.js";
+import { pikiExtension, pikiExtensions, pikiSessionToolExtensions, privateWorkspaceTools } from "./piki-extensions.js";
 import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
 import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 import { parseMemberToolGroups, type MemberToolGroup } from "./tool-groups.js";
@@ -184,6 +184,13 @@ export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]
   const replaced = new Set<string>(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
   const unlisted = pikiSessionToolExtensions().filter(item => !item.core && !replaced.has(item.source) && !listed.has(item.source));
   return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "automatic" as const, settings: {} }))];
+}
+
+export function withPrivateWorkspaceTools(extensions: readonly WorkspaceExtension[]): WorkspaceExtension[] {
+  const always = privateWorkspaceTools().map(item => item.source as string);
+  const shown = extensions.map(item => always.includes(extensionPackageKey(item.source)) && !item.enabled ? { ...item, enabled: true } : item);
+  const listed = new Set(shown.map(item => extensionPackageKey(item.source)));
+  return [...shown, ...always.filter(source => !listed.has(source)).map(source => ({ source, enabled: true, tools: "automatic" as const, settings: {} }))];
 }
 
 export const extensionLimits = Object.freeze({

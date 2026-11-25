@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { isControlPlaneExtension, pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
+import { isControlPlaneExtension, isPrivateWorkspaceTool, pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { managedExtensions } from '../../../packages/shared/src/managed-extensions.js';
 import { parseCapabilities } from '../../../packages/shared/src/connector.js';
@@ -41,6 +41,9 @@ function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExte
 }
 
 const coreSources: readonly string[] = pikiSessionToolExtensions().filter(item => item.core).map(item => item.source);
+
+const privateToolRefusal = (key: string) => `${key} is always on in your private workspace, whose sessions run on your own hosts, as you; `
+  + 'start the session in the sandbox (Where it runs → Sandbox) to keep work away from your host.';
 
 export function knowsGitSubdirectories(row: { capabilities_json?: string | null }): boolean {
   try { return parseCapabilities(row.capabilities_json ?? '{}').gitSubdirectories === true; } catch { return false; }
@@ -194,6 +197,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     const sessionTool = sessionToolSources.includes(key);
     if (sessionTool) extension = { ...extension, tools: 'automatic', settings: {} };
     if (coreSources.includes(key) && !extension.enabled) fail(400, 'invalid_extension', `${key} offers the tools every session needs; it can't be turned off.`);
+    if (!extension.enabled && isPrivateWorkspaceTool(key) && await isPersonalWorkspace(c.env, workspaceId)) fail(400, 'invalid_extension', privateToolRefusal(key));
     const at = now();
     if (extension.source.startsWith('npm:')) {
       const existing = await workspaceExtensionLock(c.env, workspaceId, key);
@@ -236,6 +240,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     let key: string;
     try { key = extensionPackageKey(normalizeExtensionSource(c.req.query('source') ?? '')); }
     catch { return fail(400, 'invalid_extension', 'Name the extension by its source, such as npm:<package>@<version>.'); }
+    if (isPrivateWorkspaceTool(key) && await isPersonalWorkspace(c.env, workspaceId)) fail(400, 'invalid_extension', privateToolRefusal(key));
     const removed = await removeWorkspaceExtensionStatement(c.env.DB, workspaceId, key, actor).first();
     if (!removed) fail(404, 'not_found', 'The workspace doesn\'t use that extension.');
     await auditStatement(c.env, actor, 'workspace.extension.removed', workspaceId, null, { source: removed.source }).run();
