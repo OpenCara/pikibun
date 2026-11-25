@@ -50,9 +50,9 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
     }, () => added && !added.headerNames.length && added.error
       ? (opensServerPages ? "Connected. Signing in…" : "Connected. Sign in to it under Settings → Profile → Connected accounts.")
       : "Connected. Your requests use it from your next message.");
+    resource.refresh();
     if (!done) return;
     connecting.set(undefined);
-    resource.refresh();
     if (added && !added.headerNames.length && added.error && opensServerPages) openServerLink(`/api/mcp-connections/${segment(added.id)}/oauth/start`);
   }
   const admin = () => data()?.admin === true;

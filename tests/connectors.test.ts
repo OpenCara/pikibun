@@ -4776,10 +4776,13 @@ test('a member signs in to their own remote MCP connection with OAuth from the w
   await denied(await callback(s.admin, stolen.state, { code: 'code-1' }), 400, 'invalid_oauth_state');
   assert.ok(fake.codes.has('code-1'), 'another member\'s callback exchanges nothing');
   const flow = await signIn();
+  const { connection: other } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections, { name: 'Other', url: 'https://other.example.com/mcp' }), 201);
+  await json(await s.creator.request('POST', `${connections}/${other.id}/oauth/app`), 201);
   fake.codes.set('code-2', { challenge: flow.challenge, resource: fake.mcpUrl, redirect: callbackUrl });
   const done = await callback(s.creator, flow.state, { code: 'code-2', iss: 'https://auth.example.com/_clerk' });
-  assert.equal(done.status, 302);
+  assert.equal(done.status, 302, 'a sign-in started for another connection meanwhile leaves this one under way');
   assert.equal(done.headers.get('location'), `${origin}/#/settings/profile`);
+  await json(await s.creator.request('DELETE', `${connections}/${other.id}`));
   const mine = (await json<{ connections: McpConnection[] }>(await s.creator.request('GET', connections))).connections[0]!;
   assert.ok(mine.oauth?.signedInAt);
   assert.equal(mine.error, undefined);

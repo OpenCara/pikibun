@@ -353,7 +353,7 @@ export function registerMcpConnections(app: Hono<AppEnv>): void {
     const state = randomToken(); const verifier = randomToken();
     const expiresAt = Date.now() + STATE_TTL;
     await c.env.DB.batch([
-      c.env.DB.query('DELETE FROM mcp_connection_sign_ins WHERE expires_at < ? OR user_id = ?').bind(Date.now(), actor),
+      c.env.DB.query('DELETE FROM mcp_connection_sign_ins WHERE expires_at < ? OR (user_id = ? AND connection_id = ?)').bind(Date.now(), actor, connectionId),
       c.env.DB.query(`INSERT INTO mcp_connection_sign_ins (id, connection_id, user_id, url, app, state_hash, verifier, client_ciphertext, expires_at, created_at)
         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`)
         .bind(id(), connectionId, actor, row.url, await sha256(state), verifier, await encryptToken(c.env, stateContext(connectionId), JSON.stringify(client)), expiresAt, now()),
@@ -370,7 +370,7 @@ export function registerMcpConnections(app: Hono<AppEnv>): void {
     const begin = randomToken();
     const expiresAt = Date.now() + STATE_TTL;
     await c.env.DB.batch([
-      c.env.DB.query('DELETE FROM mcp_connection_sign_ins WHERE expires_at < ? OR user_id = ?').bind(Date.now(), actor),
+      c.env.DB.query('DELETE FROM mcp_connection_sign_ins WHERE expires_at < ? OR (user_id = ? AND connection_id = ?)').bind(Date.now(), actor, connectionId),
       c.env.DB.query(`INSERT INTO mcp_connection_sign_ins (id, connection_id, user_id, url, app, begin_hash, expires_at, created_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?)`)
         .bind(id(), connectionId, actor, row.url, await sha256(begin), expiresAt, now()),
     ]);
