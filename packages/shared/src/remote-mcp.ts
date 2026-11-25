@@ -5,8 +5,11 @@ export const REMOTE_MCP_EXTENSION = "piki:remote-mcp";
 
 export const remoteMcpLimits = Object.freeze({
   servers: 8, tools: 64, headers: 8, headerName: 64, headerValue: 4096, url: 2048, name: 64, description: 2048,
-  discoverSeconds: 15, callSeconds: 60, responseBytes: 1024 * 1024, resultCharacters: 64 * 1024,
+  discoverSeconds: 15, callSeconds: 60, responseBytes: 1024 * 1024, listBytes: 16 * 1024 * 1024, resultCharacters: 64 * 1024,
 });
+
+/** The tools a server listed that Pikibun doesn't offer: those past remoteMcpLimits.tools, and those whose names or input schemas it can't take. */
+export interface RemoteMcpToolsLeftOut { overLimit: number; unusable: number }
 
 export interface RemoteMcpHttpRequest { url: string; method?: "GET" | "POST"; headers: Record<string, string>; body: string; timeoutMs: number; maxBytes: number; expectId?: number }
 export interface RemoteMcpHttpResponse { status: number; headers: Record<string, string>; body: string }
@@ -29,6 +32,7 @@ export interface WorkspaceMcpServer {
   oauth?: { signedInAt: string };
   readOnlyTools: string[];
   tools: (RemoteMcpTool & { toolName: string; readOnly: boolean })[];
+  toolsLeftOut?: RemoteMcpToolsLeftOut;
   discoveredAt?: string;
   error?: string;
   updatedAt: string;
@@ -161,21 +165,33 @@ export function parseRemoteMcpAppCode(input: string): { server: string | null; c
   return APP_SIGN_IN_CODE.test(code) ? { server: url.searchParams.get("server"), code } : null;
 }
 
-export function remoteMcpToolList(value: unknown): RemoteMcpTool[] {
+export function remoteMcpToolList(value: unknown): { tools: RemoteMcpTool[]; leftOut: RemoteMcpToolsLeftOut } {
   if (!Array.isArray(value)) throw new Error("tools/list answered without tools");
   const tools: RemoteMcpTool[] = [];
+  const leftOut: RemoteMcpToolsLeftOut = { overLimit: 0, unusable: 0 };
   for (const item of value) {
-    if (tools.length >= remoteMcpLimits.tools) break;
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    if (!item || typeof item !== "object" || Array.isArray(item)) { leftOut.unusable++; continue; }
     const tool = item as { name?: unknown; description?: unknown; inputSchema?: unknown; annotations?: { readOnlyHint?: unknown } };
-    if (typeof tool.name !== "string" || !MCP_TOOL.test(tool.name) || tools.some(other => other.name === tool.name)) continue;
+    if (typeof tool.name === "string" && tools.some(other => other.name === tool.name)) continue;
+    if (typeof tool.name !== "string" || !MCP_TOOL.test(tool.name)) { leftOut.unusable++; continue; }
     const inputSchema = sanitizeInputSchema(tool.inputSchema ?? { type: "object" });
-    if (!inputSchema) continue;
+    if (!inputSchema) { leftOut.unusable++; continue; }
+    if (tools.length >= remoteMcpLimits.tools) { leftOut.overLimit++; continue; }
     const description = typeof tool.description === "string" ? tool.description.slice(0, remoteMcpLimits.description) : "";
     tools.push({ name: tool.name, description, inputSchema,
       ...(typeof tool.annotations?.readOnlyHint === "boolean" ? { readOnlyHint: tool.annotations.readOnlyHint } : {}) });
   }
-  return tools;
+  return { tools, leftOut };
+}
+
+export function remoteMcpLeftOutNote(leftOut: RemoteMcpToolsLeftOut | undefined): string {
+  if (!leftOut || (!leftOut.overLimit && !leftOut.unusable)) return "";
+  const count = (n: number) => `${n} ${n === 1 ? "tool" : "tools"}`;
+  const parts = [
+    ...(leftOut.overLimit ? [`${count(leftOut.overLimit)} past the ${remoteMcpLimits.tools} Pikibun offers from one server`] : []),
+    ...(leftOut.unusable ? [`${count(leftOut.unusable)} whose names or input schemas Pikibun can't offer`] : []),
+  ];
+  return `Left out ${parts.join(" and ")}.`;
 }
 
 export function remoteMcpToolKey(name: string): string {
