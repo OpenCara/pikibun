@@ -25,6 +25,8 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const EXPO_TOKEN = /^Expo(?:nent)?PushToken\[[A-Za-z0-9_-]{10,200}\]$/;
 const EXPO_BATCH = 100;
 const FEED_LISTENING_MS = 3 * NOTIFICATION_FEED_POLL_MS;
+const PHONE_PUSH_RETRY_MS = 60_000;
+const PHONE_PUSH_GIVE_UP_MS = 60 * 60_000;
 
 export function activityNotification(previous: SessionActivity | null | undefined, next: SessionActivity): Exclude<NotificationKind, 'test'> | null {
   if (previous === next) return null;
@@ -155,9 +157,9 @@ async function notify(env: Env, items: Notified[], options: { everywhere?: boole
     env.DB.query(`INSERT INTO notifications (id, user_id, session_id, forwarded_session_id, kind, title, body, created_at, push_at, pushed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(n.id, userId, options.forwarded ? null : n.sessionId ?? null, options.forwarded ? n.sessionId ?? null : null, n.kind, n.title, n.body, n.createdAt,
-        waits(userId) ? new Date(at + PHONE_PUSH_WAIT_MS).toISOString() : null, has(userId, 'expo') && !waits(userId) ? new Date(at).toISOString() : null),
+        !has(userId, 'expo') || options.everywhere ? null : new Date(at + (waits(userId) ? PHONE_PUSH_WAIT_MS : PHONE_PUSH_RETRY_MS)).toISOString(), null),
   ]));
-  const delivery = deliver(env, items, devices.filter(device => device.kind === 'web' || !waits(device.user_id)));
+  const delivery = deliver(env, items, devices.filter(device => device.kind === 'web' || !waits(device.user_id)), at);
   if (options.everywhere) return delivery;
   background(delivery);
   return { web: 0, expo: 0 };
@@ -169,35 +171,54 @@ function payloadsFrom(env: Env): ((notification: PikibunNotification) => Notific
   return notification => ({ ...notification, origin, path: notificationPath(notification) });
 }
 
-async function deliver(env: Env, items: Notified[], devices: DeviceRow[]): Promise<NotificationDelivery> {
+async function deliver(env: Env, items: Notified[], devices: DeviceRow[], at: number): Promise<NotificationDelivery> {
   const payloadFor = devices.length ? payloadsFrom(env) : null;
   if (!payloadFor) return { web: 0, expo: 0 };
   const forUser = new Map(items.map(item => [item.userId, item.notification]));
   const pushes = devices.map(device => ({ device, payload: payloadFor(forUser.get(device.user_id)!) }));
   const [web, expo] = await Promise.all([
     sendWebPushes(env, pushes.filter(push => push.device.kind === 'web')),
-    sendExpoPushes(env, pushes.filter(push => push.device.kind === 'expo')),
+    sendPhonePushes(env, pushes.filter(push => push.device.kind === 'expo'), at),
   ]);
   return { web, expo };
+}
+
+async function sendPhonePushes(env: Env, pushes: Push[], at: number): Promise<number> {
+  if (!pushes.length) return 0;
+  const { accepted, unanswered } = await sendExpoPushes(env, pushes);
+  const answered = [...new Set(pushes.map(push => push.payload.id))].filter(id => !unanswered.has(id));
+  if (answered.length) {
+    await env.DB.query('UPDATE notifications SET push_at = NULL, pushed_at = ? WHERE id IN (SELECT value FROM json_each(?)) AND handled_at IS NULL')
+      .bind(new Date(at).toISOString(), JSON.stringify(answered)).run();
+  }
+  return accepted;
 }
 
 interface DueRow { id: string; user_id: string; kind: NotificationKind; title: string; body: string; session_id: string | null; forwarded_session_id: string | null; created_at: string }
 
 async function sendDuePhonePushes(env: Env, at: number): Promise<number> {
   const due = new Date(at).toISOString();
-  await env.DB.query(`UPDATE notifications SET push_at = NULL, handled_at = ? WHERE push_at IS NOT NULL AND push_at <= ? AND kind = 'approval' AND session_id IS NOT NULL
-    AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = notifications.session_id AND s.activity = 'waiting')`).bind(due, due).run();
-  const rows = await env.DB.query<DueRow>(`UPDATE notifications SET push_at = NULL, pushed_at = ? WHERE push_at IS NOT NULL AND push_at <= ?
-    RETURNING id, user_id, kind, title, body, session_id, forwarded_session_id, created_at`).bind(due, due).all();
+  await env.DB.batch([
+    env.DB.query('UPDATE notifications SET push_at = NULL WHERE push_at IS NOT NULL AND push_at <= ? AND created_at < ?').bind(due, new Date(at - PHONE_PUSH_GIVE_UP_MS).toISOString()),
+    env.DB.query(`UPDATE notifications SET push_at = NULL, handled_at = ? WHERE push_at IS NOT NULL AND push_at <= ? AND kind = 'approval' AND (
+      (session_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = notifications.session_id AND s.activity = 'waiting'))
+      OR (forwarded_session_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM forwarded_sessions f
+        WHERE f.session_id = notifications.forwarded_session_id AND f.user_id = notifications.user_id AND f.activity = 'waiting')))`).bind(due, due),
+  ]);
+  const rows = await env.DB.query<DueRow>(`UPDATE notifications SET push_at = ? WHERE push_at IS NOT NULL AND push_at <= ?
+    RETURNING id, user_id, kind, title, body, session_id, forwarded_session_id, created_at`).bind(new Date(at + PHONE_PUSH_RETRY_MS).toISOString(), due).all();
   if (!rows.length) return 0;
   const payloadFor = payloadsFrom(env);
   if (!payloadFor) return 0;
   const devices = (await liveDevices(env, rows.map(row => row.user_id))).filter(device => device.kind === 'expo');
-  return sendExpoPushes(env, rows.flatMap(row => {
+  const pushes = rows.flatMap(row => {
     const sessionId = row.session_id ?? row.forwarded_session_id;
     const payload = payloadFor({ id: row.id, kind: row.kind, title: row.title, body: row.body, ...(sessionId ? { sessionId } : {}), createdAt: row.created_at });
     return devices.filter(device => device.user_id === row.user_id).map(device => ({ device, payload }));
-  }));
+  });
+  const nobody = rows.filter(row => !devices.some(device => device.user_id === row.user_id)).map(row => row.id);
+  if (nobody.length) await env.DB.query('UPDATE notifications SET push_at = NULL WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(nobody)).run();
+  return sendPhonePushes(env, pushes, at);
 }
 
 export function runPhonePushes(env: Env, at = Date.now()): Promise<number> {
@@ -235,10 +256,15 @@ async function sendWebPushes(env: Env, pushes: Push[]): Promise<number> {
   return results.filter(result => result.status === 'fulfilled' && result.value).length;
 }
 
-async function sendExpoPushes(env: Env, pushes: Push[]): Promise<number> {
+async function sendExpoPushes(env: Env, pushes: Push[]): Promise<{ accepted: number; unanswered: Set<string> }> {
   const batches: Push[][] = [];
   for (let start = 0; start < pushes.length; start += EXPO_BATCH) batches.push(pushes.slice(start, start + EXPO_BATCH));
   const gone: string[] = [];
+  const unanswered = new Set<string>();
+  const lost = (batch: Push[]) => {
+    for (const { payload } of batch) unanswered.add(payload.id);
+    return 0;
+  };
   const sent = await Promise.all(batches.map(batch => withPushSlot(async () => {
     try {
       const response = await fetch(EXPO_PUSH_URL, {
@@ -250,22 +276,23 @@ async function sendExpoPushes(env: Env, pushes: Push[]): Promise<number> {
           ...(payload.sessionId ? { threadId: payload.sessionId } : {}),
         }))),
       });
-      if (!response.ok) { await response.body?.cancel().catch(() => {}); return 0; }
+      if (!response.ok) { await response.body?.cancel().catch(() => {}); return lost(batch); }
       const tickets = (await response.json() as { data?: unknown }).data;
-      if (!Array.isArray(tickets)) return 0;
+      if (!Array.isArray(tickets)) return lost(batch);
       let accepted = 0;
-      batch.forEach(({ device }, index) => {
+      batch.forEach(({ device, payload }, index) => {
         const ticket = tickets[index] as { status?: unknown; details?: { error?: unknown } } | null | undefined;
         if (ticket?.status === 'ok') accepted++;
         else if (ticket?.details?.error === 'DeviceNotRegistered') gone.push(device.id);
+        else if (ticket?.details?.error !== 'MessageTooBig') unanswered.add(payload.id);
       });
       return accepted;
     } catch {
-      return 0;
+      return lost(batch);
     }
   })));
   await forgetDevices(env, gone);
-  return sent.reduce((total, accepted) => total + accepted, 0);
+  return { accepted: sent.reduce((total, accepted) => total + accepted, 0), unanswered };
 }
 
 export async function notifySessionActivity(env: Env, row: Pick<SessionRow, 'id' | 'title' | 'owner_id' | 'workspace_id'>, previous: SessionActivity | null | undefined,

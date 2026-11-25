@@ -55,15 +55,23 @@ async function registerPush(userId: string, webPushKey: string): Promise<Notific
 
 const phoneName = () => (platform.idiom === "pad" ? "iPad" : "iPhone");
 
-async function registerPhone(userId: string, token: string): Promise<void> {
+const chosen = async (userId: string) => (await Storage.getItem(choiceKey(userId)).catch(() => null)) === "on";
+
+async function registerPhone(userId: string, token: string, turningOn = false): Promise<void> {
+  const wanted = async () => turningOn || await chosen(userId);
   try {
-    const { device } = await session().api<{ device: NotificationDevice }>("/api/notifications/devices", {
-      method: "POST", body: { kind: "expo", token: await expoPushToken(token), name: phoneName() },
-    });
+    const expo = await expoPushToken(token);
+    if (!await wanted()) return;
+    const api = session().api;
+    const { device } = await api<{ device: NotificationDevice }>("/api/notifications/devices", { method: "POST", body: { kind: "expo", token: expo, name: phoneName() } });
+    if (!await wanted()) {
+      await api(`/api/notifications/devices/${segment(device.id)}`, { method: "DELETE" }).catch(() => undefined);
+      return;
+    }
     await Storage.setItem(deviceKey(userId), device.id);
     problem.set("");
   } catch (reason) {
-    problem.set(errorMessage(reason));
+    if (await wanted()) problem.set(errorMessage(reason));
   }
 }
 
@@ -80,7 +88,7 @@ export async function enableNotifications(userId: string, config: Pick<Notificat
     const push = await pushModule();
     if (push) {
       try {
-        await registerPhone(userId, await deviceToken(push));
+        await registerPhone(userId, await deviceToken(push), true);
       } catch (reason) {
         problem.set(errorMessage(reason));
       }

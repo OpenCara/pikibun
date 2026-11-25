@@ -355,6 +355,63 @@ test('with no other device listening, the phone is told at once', async t => {
   assert.deepEqual(expoMessages(f.expo()[0]!).map(sent => sent.data.kind), ['failed']);
 });
 
+test('a push Expo did not take is tried again, never said to be pushed, and given up after an hour', async t => {
+  const f = await fixture(t);
+  await f.phone(f.alice, 'alice');
+  const from = await f.cursor(f.alice);
+  const pushed = async () => (await f.feed(f.alice, from)).notifications.map(n => n.pushed);
+  const minute = 61_000;
+  const first = Date.now() + PHONE_PUSH_WAIT_MS + 1000;
+
+  f.setAnswer(() => new Response('unavailable', { status: 503 }));
+  await f.reportAll('working', 'done');
+  assert.equal(await runPhonePushes(f.env, first), 0);
+  assert.equal(f.expo().length, 1);
+  assert.deepEqual(await pushed(), [undefined], 'the open app may still take it');
+  assert.equal(await runPhonePushes(f.env, first + 1000), 0);
+  assert.equal(f.expo().length, 1, 'not again within the minute');
+
+  f.setAnswer((_url, sent) => Response.json({ data: expoMessages(sent).map(() => ({ status: 'error', details: { error: 'MessageRateExceeded' } })) }));
+  assert.equal(await runPhonePushes(f.env, first + minute), 0);
+  assert.equal(f.expo().length, 2);
+  assert.deepEqual(await pushed(), [undefined]);
+
+  f.setAnswer((_url, sent) => Response.json({ data: expoMessages(sent).map(() => ({ status: 'ok', id: 'ticket' })) }));
+  assert.equal(await runPhonePushes(f.env, first + 2 * minute), 1);
+  assert.deepEqual(await pushed(), [true]);
+  assert.equal(await runPhonePushes(f.env, first + 3 * minute), 0, 'once Expo has it');
+  assert.equal(f.expo().length, 3);
+
+  f.setAnswer(() => { throw new Error('unreachable'); });
+  await f.reportAll('working', 'failed');
+  const second = Date.now() + PHONE_PUSH_WAIT_MS + 1000;
+  assert.equal(await runPhonePushes(f.env, second), 0);
+  assert.equal(f.expo().length, 4);
+  assert.equal(await runPhonePushes(f.env, second + 61 * minute), 0);
+  assert.equal(f.expo().length, 4, 'an hour on, it is given up');
+  const [, failed] = (await f.feed(f.alice, from)).notifications;
+  assert.equal(failed!.pushed, undefined);
+  assert.deepEqual(await f.handled(f.alice, [failed!.id]), [failed!.id], 'the app, once open, shows it from the feed');
+});
+
+test('a session on its owner\'s computer that got its answer elsewhere is not pushed either', async t => {
+  const f = await fixture(t);
+  await f.phone(f.alice, 'alice');
+  const connector = f.sqlite.prepare('SELECT id FROM connectors LIMIT 1').get()!.id as string;
+  const at = new Date().toISOString();
+  const report = f.sqlite.prepare(`INSERT INTO forwarded_sessions (connector_id, session_id, user_id, record_json, activity, reported_at) VALUES (?, ?, ?, '{}', ?, ?)`);
+  const notified = f.sqlite.prepare(`INSERT INTO notifications (id, user_id, forwarded_session_id, kind, title, body, created_at, push_at)
+    VALUES (?, ?, ?, 'approval', 'Private', 'Waiting for you', ?, ?)`);
+  report.run(connector, 'answered', f.alice.user.id, 'working', at);
+  report.run(connector, 'waiting', f.alice.user.id, 'waiting', at);
+  notified.run('0000000001-aaaaaaaaaaaa', f.alice.user.id, 'answered', at, at);
+  notified.run('0000000002-bbbbbbbbbbbb', f.alice.user.id, 'waiting', at, at);
+  assert.equal(await runPhonePushes(f.env, Date.now() + 1000), 1);
+  assert.deepEqual(f.expo().flatMap(expoMessages).map(sent => [sent.data.sessionId, sent.threadId]), [['waiting', 'waiting']]);
+  assert.deepEqual(f.sqlite.prepare('SELECT forwarded_session_id AS session, handled_at IS NOT NULL AS handled, pushed_at IS NOT NULL AS pushed, push_at FROM notifications ORDER BY id').all()
+    .map(row => ({ ...row })), [{ session: 'answered', handled: 1, pushed: 0, push_at: null }, { session: 'waiting', handled: 0, pushed: 1, push_at: null }]);
+});
+
 test('a phone app registers its Expo push token, one a sign-in, and goes when Expo forgets it', async t => {
   const f = await fixture(t);
   const register = (client: Client, body: unknown) => client.request('POST', '/api/notifications/devices', body);

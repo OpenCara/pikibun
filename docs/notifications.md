@@ -77,7 +77,9 @@ Pushes to the iPhone and iPad app need no setup either. The server sends them to
 (`https://exp.host/--/api/v2/push/send`), which relays them to Apple with the key of the app's Expo project, so it
 needs outbound HTTPS to `exp.host`. A device is addressed only by an Expo push token, never by an address a client
 gives. Expo's answer removes a device it no longer knows. The pushes that wait for another device (see
-[above](#the-iphone-comes-last)) are kept in the database, so a restart sends them late rather than not at all.
+[above](#the-iphone-comes-last)) are kept in the database, so a restart sends them late rather than not at all. A
+push counts as sent only once Expo took it: while Expo can't be reached or refuses it for now, the server tries again
+every minute for an hour, and the app, once open, can still show the notification itself.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
