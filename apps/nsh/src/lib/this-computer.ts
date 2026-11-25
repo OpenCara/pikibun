@@ -1200,7 +1200,7 @@ export async function setCommandAutoUpdate(on: boolean): Promise<void> {
   await loadAutoUpdate();
   commandAutoUpdate.set(on);
   await Storage.setItem(COMMAND_AUTO_UPDATE_KEY, on ? "on" : "off").catch(() => undefined);
-  if (on) await checkCommandUpdates();
+  if (on) void checkCommandUpdates();
 }
 
 export function commandAutoUpdateLoaded(): Promise<void> { return loadAutoUpdate(); }

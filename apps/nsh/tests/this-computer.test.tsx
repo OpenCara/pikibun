@@ -3,7 +3,7 @@ import type { HostEvent, HostRequest } from "../../../packages/shared/src/app-ho
 import { agentSocketImport } from "../src/lib/agent-socket";
 import { CommandChannel, pikibunCommand, reportedVersion } from "../src/lib/pikibun-command";
 import {
-  appCliFolder, COMMAND_UPDATED_KEY, hostArgs, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, parseWslList, serverStateDir, updateFailure,
+  appCliFolder, COMMAND_AUTO_UPDATE_KEY, COMMAND_AUTO_VERSION_KEY, COMMAND_UPDATED_KEY, hostArgs, hostCommand, installCommand, installFailure, launchProblem, ownCopyManifest, parseWslList, serverStateDir, updateFailure,
   validHostConfigs, wslInstallCommand, wslPikibunCommand,
 } from "../src/lib/this-computer";
 import { server, signedIn } from "./fixtures";
@@ -286,6 +286,68 @@ describe("after the app is updated", () => {
     expect(sent().filter(line => line === "install wsl:Ubuntu").length).toBe(1);
     expect(sent().indexOf("install wsl:Ubuntu")).toBeLessThan(sent().findIndex(line => line.startsWith("wsl:Ubuntu {")));
     expect(sent()).not.toContain("install");
+  });
+});
+
+describe("automatic updates of the command", () => {
+  const host = { id: "default", server: SERVER, name: "My Mac", sandbox: "none", resume: { unsandboxedConsent: true } };
+  const current = { paired: SERVER, appVersion: "0.36.0", cliVersion: "0.40.0", reports: "0.40.0", ownCopy: "0.40.0" };
+  const updated = { [COMMAND_UPDATED_KEY]: "0.36.0", [HOSTS_KEY]: JSON.stringify([host]) };
+
+  test("are off until chosen: nothing asks npm", async () => {
+    const { app, sent } = await openPanel({ ...current, latest: "0.42.0" }, updated);
+    await app.waitFor("id:this-computer-auto-update-toggle");
+    await app.press("id:fake-resume");
+    await app.waitFor("id:local-host-stop-default");
+    expect(sent()).not.toContain("npm latest");
+    expect(sent().some(line => line.startsWith("install"))).toBe(false);
+    expect(app.shows("id:this-computer-auto-update-check")).toBe(false);
+  });
+
+  test("once chosen, a newer pikibun on npm is installed, with the running host stopped for it and started again after", async () => {
+    const { app, sent, showsText } = await openPanel({ ...current, latest: "0.42.0" }, updated);
+    await app.press("id:fake-resume");
+    await app.waitFor("id:local-host-stop-default");
+    await app.waitUntil(() => showsText("this computer's hosts: c9"));
+    await app.press("id:this-computer-auto-update-toggle");
+    await app.waitUntil(() => app.storage()[COMMAND_AUTO_VERSION_KEY] === "0.42.0");
+    expect(app.storage()[COMMAND_AUTO_UPDATE_KEY]).toBe("on");
+    const stop = sent().indexOf(JSON.stringify({ type: "stop" }));
+    const install = sent().indexOf("install pikibun@0.42.0");
+    expect(stop).toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(stop);
+    await app.waitUntil(() => sent().lastIndexOf(JSON.stringify({ type: "start", server: SERVER, unsandboxedConsent: true })) > install);
+    await app.waitUntil(() => showsText("this computer's hosts: c9"));
+    expect(JSON.parse(app.storage()[HOSTS_KEY]!)[0].resume).toEqual({ unsandboxedConsent: true });
+    await app.waitUntil(() => showsText("npm's latest pikibun is 0.42.0"));
+    await app.press("text:Recent activity");
+    await app.waitUntil(() => showsText("npm updated pikibun to 0.42.0 on this Mac."));
+    await app.press("id:this-computer-auto-update-check");
+    await app.waitUntil(() => sent().filter(line => line === "npm latest").length === 2);
+    expect(sent().filter(line => line.startsWith("install")).length).toBe(1);
+  });
+
+  test("a version npm has that isn't newer installs nothing, and a check that fails says why", async () => {
+    const same = await openPanel({ ...current, latest: "0.40.0" }, { ...updated, [COMMAND_AUTO_UPDATE_KEY]: "on" });
+    await same.app.waitFor("id:this-computer-auto-update-check");
+    await same.app.press("id:this-computer-auto-update-check");
+    await same.app.waitUntil(() => same.showsText("npm's latest pikibun is 0.40.0"));
+    expect(same.sent().some(line => line.startsWith("install"))).toBe(false);
+    const offline = await openPanel({ ...current, latest: "offline" }, { ...updated, [COMMAND_AUTO_UPDATE_KEY]: "on" });
+    await offline.app.waitFor("id:this-computer-auto-update-check");
+    await offline.app.press("id:this-computer-auto-update-check");
+    await offline.app.waitUntil(() => offline.showsText("Couldn't ask npm for pikibun's latest version: fetch failed"));
+    expect(offline.sent().some(line => line.startsWith("install"))).toBe(false);
+  });
+
+  test("the app's own update keeps the newer pikibun installed automatically, unless they were turned off", async () => {
+    const kept = await openPanel({ ...current }, { [COMMAND_UPDATED_KEY]: "0.35.0", [COMMAND_AUTO_UPDATE_KEY]: "on", [COMMAND_AUTO_VERSION_KEY]: "0.42.0" });
+    await kept.app.waitUntil(() => kept.app.storage()[COMMAND_UPDATED_KEY] === "0.36.0");
+    expect(kept.sent()).toContain("install pikibun@0.42.0");
+    const off = await openPanel({ ...current }, { [COMMAND_UPDATED_KEY]: "0.35.0", [COMMAND_AUTO_UPDATE_KEY]: "off", [COMMAND_AUTO_VERSION_KEY]: "0.42.0" });
+    await off.app.waitUntil(() => off.app.storage()[COMMAND_UPDATED_KEY] === "0.36.0");
+    expect(off.sent()).toContain("install");
+    expect(off.sent()).not.toContain("install pikibun@0.42.0");
   });
 });
 

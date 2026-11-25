@@ -157,6 +157,16 @@ this computer into the app's data folder (`updates/`, `capabilities.fs.write`) w
 4 MiB that the platform's own `copy /b` or `cat` joins (NSH writes at most 8 MiB at once), checks it against the SHA-256
 GitHub publishes for the asset, installs it and quits; the new version starts once the old one has gone.
 
+The `pikibun` command the app installs stays at `CLI_VERSION` unless its owner turns on **Update Pikibun's command
+automatically** under Local hosts (`pikibun.commandAutoUpdate` in the app's storage; off by default). With it on, the
+app asks npm (`https://registry.npmjs.org/pikibun/latest`) a minute after launch, every six hours after, when it is
+turned on and on **Check now**, and where
+npm has a newer `pikibun` than the app's own copy (or a copy it installed in WSL) it stops the hosts that run that copy,
+installs the new version with npm, and starts them again with the consent they ran with. It leaves the command alone
+while Pikibun runs on it under Self host, and never touches a global install it didn't make. The version it installed
+is kept (`pikibun.commandAutoUpdatedTo`), so the app's own update after it, and installs from the page, keep the newer
+one rather than going back to `CLI_VERSION`.
+
 The download goes through the proxy the computer's own tools use (`src/lib/update-proxy.ts`). NSH's `fetch` is
 `NSURLSession` on macOS, which follows the system's proxy settings but not a shell's variables, and ureq on Windows and
 Linux, which follows the app process's own `HTTPS_PROXY`, `ALL_PROXY` and `HTTP_PROXY` but not the system's settings; an

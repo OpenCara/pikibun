@@ -8,6 +8,7 @@ import { openExternal } from "../lib/links";
 import { createAction } from "../lib/resource";
 import { displayOrigin } from "../lib/server";
 import {
+  checkCommandUpdates, commandAutoCheck, commandAutoChecking, commandAutoUpdate, commandAutoUpdateLoaded, setCommandAutoUpdate,
   computerName, computerTitle, defaultHostName, INSTALL_COMMAND, localHosts, nativeEnvironment, NVM_INSTALL, originOf, sandboxChoices, sandboxNames, setUnsandboxedConsent,
   relistWsl, wslDistributions, wslName, type LaunchProblem, type LocalEnvironment, type LocalHost, type LocalSandbox, type LogLine,
 } from "../lib/this-computer";
@@ -116,6 +117,7 @@ function HostList(props: { server: string; servers: () => string[]; createPairin
       <CommandSection environment={native} refresh={refresh} busy={Boolean(inspector()?.inspecting())} />
       <UpdatingSection environment={native} />
       <HostsSection server={props.server} servers={props.servers} createPairing={props.createPairing} open={props.open} ready={ready()} />
+      <AutoUpdateSection />
       <Section title="Activity" testID="this-computer-activity"
         action={<Button small variant="ghost" icon="refresh" label="Refresh" testID="this-computer-refresh" disabled={Boolean(inspector()?.inspecting())} onPress={() => void refresh()} />}>
         <ActivityRows lines={logs()} />
@@ -184,11 +186,44 @@ function UpdatingSection(props: { environment: LocalEnvironment }) {
       <Section title="Pikibun's command" testID="this-computer-updating">
         <CardBody>
           <Banner tone="info" title={`Updating Pikibun's command ${props.environment.wsl ? "in" : "on"} ${props.environment.where()}`}>
-            {`Pikibun was updated, so npm is updating its pikibun command to match: this takes a minute, and the hosts there start once it is done. Its output is under Recent activity below.`}
+            {props.environment.updatingTo()
+              ? `npm has pikibun ${props.environment.updatingTo()}, so npm is updating the command to it: this takes a minute, and the hosts there start again once it is done. Its output is under Recent activity below.`
+              : `Pikibun was updated, so npm is updating its pikibun command to match: this takes a minute, and the hosts there start once it is done. Its output is under Recent activity below.`}
           </Banner>
         </CardBody>
       </Section>
     </If>
+  );
+}
+
+function AutoUpdateSection() {
+  const loaded = signal(false);
+  void commandAutoUpdateLoaded().finally(() => loaded.set(true));
+  const action = createAction();
+  const toggle = (on: boolean) => void action.run(() => setCommandAutoUpdate(on));
+  const check = () => void checkCommandUpdates();
+  const status = () => {
+    const last = commandAutoCheck();
+    if (commandAutoChecking()) return "Asking npm for pikibun's latest version…";
+    if (!last) return "";
+    const at = new Date(last.at).toLocaleTimeString();
+    return last.error ? `${at}: ${last.error}` : last.latest ? `Checked at ${at}: npm's latest pikibun is ${last.latest}.` : `Checked at ${at}: npm named no version.`;
+  };
+  return (
+    <Section title="Updates" testID="this-computer-auto-update"
+      info={`Pikibun's command on ${computerName} is the version this app was released with. With this on, the app asks npm for a newer pikibun when it opens and every few hours, and installs it into its own copy (and the copies it installed in WSL), stopping the hosts that run it for the minute npm takes and starting them again after, as stopping and starting them here does.`}>
+      <CardBody>
+        <Checkbox testID="this-computer-auto-update-toggle" label="Update Pikibun's command automatically" hint="Install a newer pikibun from npm as soon as it is released"
+          checked={commandAutoUpdate()} disabled={!loaded() || action.busy()} onChange={toggle} />
+        <If when={commandAutoUpdate()}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Button small variant="outline" icon="refresh" label="Check now" testID="this-computer-auto-update-check" disabled={action.busy() || commandAutoChecking()} onPress={check} />
+          </View>
+          <If when={status()}><Small testID="this-computer-auto-update-status">{status()}</Small></If>
+        </If>
+        <Feedback error={action.error()} />
+      </CardBody>
+    </Section>
   );
 }
 
