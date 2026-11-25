@@ -33,6 +33,14 @@ function piResult(attribution: ToolAttribution, text: string, details?: object) 
   return { output: [{ type: "text" as const, text }], details: JSON.parse(JSON.stringify({ ...details, pikibun: attribution })) as JsonObject };
 }
 
+export const SHOW_IMAGE_DESCRIPTION = "Show an image to the people in this chat: path is a PNG, JPEG, GIF or WebP file in the worktree, "
+  + "which appears in the transcript beside your message, scaled to fit, and also reaches you as an image. The transcript doesn't load images "
+  + "from links (Markdown ![...](https://...) shows only its text), so to show one from a URL, download it into the worktree first, then show_image it.";
+
+export function showImageText(path: string, mimeType: string): string {
+  return `Shown in the chat: ${path} [${mimeType}]`;
+}
+
 export const BUILD_CACHES_NOTE = "Each cache's entries are named by their inputs and nobody checks their content. A shared cache holds what commands in other people's sessions "
   + "wrote, and what this session's commands write to it runs later in theirs with their credentials, like a shared CI cache: whatever a command runs "
   + "(a dependency's install script, the tests of a repository from outside the workspace) writes it too. Don't point a build of code you have no reason to "
@@ -120,6 +128,20 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
         await calls.check(api, "find");
         const found = findText(await sandbox.find(request, () => calls.recheck(attribution)), request.maxResults, findLimits.maxResults);
         return piResult(attribution, found.text, found.details);
+      } }),
+    defineTool({ name: "show_image", parameters: obj({ path: str() }),
+      description: SHOW_IMAGE_DESCRIPTION,
+      execute: async (args, api, _call) => {
+        const path = inWorktree(args.path);
+        const attribution = await calls.actor(api, false);
+        await calls.check(api, "show_image");
+        const file = await sandbox.readContent(path, () => calls.recheck(attribution));
+        if ("text" in file) throw new RunnerError(400, `${args.path} isn't a PNG, JPEG, GIF or WebP image`);
+        const prepared = await prepareImage(file.image, await conversationImageLimits(api));
+        if ("error" in prepared) return { output: [], isError: true, diagnostics: [{ severity: "error" as const, code: "image", message: prepared.error }] };
+        const { image } = prepared;
+        return { output: [{ type: "text" as const, text: showImageText(args.path, image.mimeType) }, { type: "image" as const, data: image.data, mimeType: image.mimeType }],
+          details: { pikibun: attribution } };
       } }),
     defineTool({ name: "write", executionMode: "sequential", parameters: piParameters.write,
       description: "Write a confined worktree file: it is created if it doesn't exist and overwritten if it does, and the directories it needs are made. A Read-only message's call is refused.",
