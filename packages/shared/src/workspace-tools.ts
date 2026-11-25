@@ -14,6 +14,7 @@ export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.
   move_file: "Moves or renames a file, directory or link in the worktree.",
   copy_file: "Copies a file, directory or link in the worktree.",
   delete_file: "Deletes a file, directory or link in the worktree.",
+  show_image: "Shows a worktree image file in the chat, beside the agent's message; the model sees it too.",
   git: "Runs Git in a clone, its arguments as a list, without a shell.",
   git_push: "Pushes a clone's checked-out commit to a branch, optionally opening a pull request, or tags a commit already on one.",
   node: "Runs Node.js or a package manager (node, npm, npx, pnpm, yarn, corepack) in a clone, without a shell.",

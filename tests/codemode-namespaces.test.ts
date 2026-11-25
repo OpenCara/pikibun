@@ -194,7 +194,7 @@ test("a session's code mode section lists its tools by namespace, the same from 
   const result = (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text).at(-1)!;
   const found = JSON.parse(/\{"files"[\s\S]*\}/.exec(result)?.[0] ?? "null") as Record<string, unknown>;
   assert.ok(found, result);
-  assert.deepEqual(found.files, ["identity", "read", "ls", "grep", "find", "write", "edit", "move_file", "copy_file", "delete_file"],
+  assert.deepEqual(found.files, ["identity", "read", "ls", "grep", "find", "show_image", "write", "edit", "move_file", "copy_file", "delete_file"],
     "describeNamespace finds the tools the section leaves out for space");
   assert.equal(found.filesDescription, sessionNamespaces.files.description);
   assert.deepEqual(found.tracker, ["tracker_search_issues"]);

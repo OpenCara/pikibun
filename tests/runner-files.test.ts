@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { crc32, deflateSync } from "node:zlib";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { RunnerService } from "../apps/runner/src/server.js";
@@ -26,6 +27,24 @@ function binding(id: string): RunnerBinding {
 async function ticket(id: string, action: RunnerAction): Promise<RunnerTicket> {
   const now = Math.floor(Date.now() / 1000);
   return { aud: "runner", sessionId: id, actorId: "test:alice", ownerId: "test:alice", action, policyVersion: 1, iat: now, exp: now + 60, jti: randomUUID(), bodyHash: await sha256("") };
+}
+
+function png(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const framed = Buffer.alloc(body.length + 8);
+    framed.writeUInt32BE(data.length, 0);
+    body.copy(framed, 4);
+    framed.writeUInt32BE(crc32(body), body.length + 4);
+    return framed;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const rows = Buffer.alloc((width * 3 + 1) * height);
+  return Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), chunk("IHDR", header), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
 }
 
 async function idle(session: RunnerSession): Promise<void> {
@@ -72,6 +91,48 @@ test("search and read_file's line ranges: the agent finds code and reads around 
   assert.deepEqual(stored.find(result => result.tool === "write")?.text, "Successfully wrote to src/a.ts");
   assert.match(transcript, /invalid regular expression/);
   assert.match(transcript, /Found it\./);
+});
+
+test("show_image: the agent shows a worktree image in the chat, in a Read-only message too; a file that isn't an image, or outside the worktree, is refused", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-show-image-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1", input: ["text", "image"] }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("show_image", { path: "art/lighthouse.png" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("show_image", { path: "notes.txt" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("show_image", { path: "../outside.png" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Here it is."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-show-image-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "show-image-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.sandbox.writeFile("notes.txt", "not a picture\n", async () => {});
+  await session.sandbox.writeFile("art/.keep", "", async () => {});
+  await writeFile(join(session.sandbox.worktree, "art", "lighthouse.png"), png(16, 9));
+  await session.submit(await ticket(id, "submit"), { content: "Show me the picture.", requestId: "show", admissionId: await sha256("show image admission"),
+    options: { access: "read" } }, "write");
+  await idle(session);
+  const view = await session.view();
+  const results = view.entries.filter(entry => entry.role === "toolResult");
+  assert.equal(view.approvals.length, 0, "no approval card");
+  assert.equal(results.length, 3);
+  assert.deepEqual([results[0]!.toolResult?.tool, results[0]!.images, results[0]!.toolResult?.error], ["show_image", [{ mimeType: "image/png" }], undefined],
+    "the image is in the transcript, for the chat to show, from a Read-only message");
+  assert.match(results[0]!.text, /^Shown in the chat: art\/lighthouse\.png \[image\/png\]/);
+  assert.equal(results[1]!.toolResult?.error, true);
+  assert.match(results[1]!.text, /notes\.txt isn't a PNG, JPEG, GIF or WebP image/);
+  assert.equal(results[1]!.images, undefined);
+  assert.equal(results[2]!.toolResult?.error, true, "a path outside the worktree is refused");
+  assert.equal(results[2]!.images, undefined);
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Here it is\./);
 });
 
 test("move_file, copy_file and delete_file: the agent moves, copies and deletes without a shell or an approval", async t => {

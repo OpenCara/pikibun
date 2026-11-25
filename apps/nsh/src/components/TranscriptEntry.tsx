@@ -26,7 +26,7 @@ const toolIcons: Record<string, IconName> = {
   delete_file: "trash", identity: "user", web_search: "search", fetch_content: "globe", gh: "github",
   browser: "globe", git: "branch", git_commit: "branch", git_push: "branch", git_repin: "branch",
   github_comment: "pull-request", github_merge: "pull-request", github_issue: "pull-request", github_read: "pull-request",
-  schedule: "clock", sessions: "list", tunnel: "link", publish_artifact: "image",
+  schedule: "clock", sessions: "list", tunnel: "link", publish_artifact: "image", show_image: "image",
 };
 const toolIcon = (name: string): IconName => toolIcons[name] ?? "terminal";
 
@@ -40,8 +40,11 @@ type ToolItem = {
   output?: string;
   trimmed?: EntryView["trimmed"];
   imageEntry?: EntryView;
+  inChat?: true;
   artifact?: ArtifactRef;
 };
+
+const showsInChat = (tool: string | undefined, images: number) => tool === "show_image" && images > 0;
 
 type Shown =
   | { kind: "stopped"; text: string }
@@ -66,7 +69,8 @@ function callItems(entry: EntryView, results: readonly (EntryView | undefined)[]
       key: row.key, icon: row.outcome?.failed ? "alert" : toolIcon(row.name), failed: row.outcome?.failed === true, input: row.args,
       label: `${callHeadline(row.name, row.target)}${row.outcome?.text ? ` → ${row.outcome.text}` : ""}`,
       meta: [took, actor, autoApprovedSuffix(row.autoApproved ? [row.autoApproved] : undefined).replace(/^ · /, "")].filter(Boolean).join(" · "),
-      ...(result && shown ? { output: resultOutput(result, shown.text), ...(shown.images ? { imageEntry: result } : {}) } : {}),
+      ...(result && shown ? { output: resultOutput(result, shown.text), ...(shown.images ? { imageEntry: result } : {}),
+        ...(showsInChat(row.name, shown.images) ? { inChat: true as const } : {}) } : {}),
       ...(result?.trimmed ? { trimmed: result.trimmed } : index === rows.length - 1 && entry.trimmed ? { trimmed: entry.trimmed } : {}),
       ...(artifact ? { artifact } : {}),
     };
@@ -89,7 +93,8 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
     return { kind: "tools", tools: [{
       key: entry.id, icon: outcome.failed ? "alert" : tool ? toolIcon(tool) : "file", failed: outcome.failed, input: "",
       label: `${tool ?? "Output"}${outcome.text ? ` · ${outcome.text}` : ""}`, meta: [took, other].filter(Boolean).join(" · "),
-      output: resultOutput(entry, shown.text), ...(shown.images ? { imageEntry: entry } : {}), ...(entry.trimmed ? { trimmed: entry.trimmed } : {}),
+      output: resultOutput(entry, shown.text), ...(shown.images ? { imageEntry: entry } : {}), ...(showsInChat(tool, shown.images) ? { inChat: true as const } : {}),
+      ...(entry.trimmed ? { trimmed: entry.trimmed } : {}),
       ...(artifact ? { artifact } : {}),
     }] };
   }
@@ -245,7 +250,8 @@ export function TranscriptEntry(props: {
     <Each of={tools()} key={item => item.key}>
       {item => (
         <View style={{ gap: 8 }}>
-          <ToolRow item={item()} open={props.expanded(item().key)} onToggle={() => props.toggle(item().key)} images={resultThumbnails(item())} />
+          <ToolRow item={item()} open={props.expanded(item().key)} onToggle={() => props.toggle(item().key)} images={item().inChat ? undefined : resultThumbnails(item())} />
+          {item().inChat ? resultThumbnails(item()) : undefined}
           <If when={item().artifact}>{artifact => <ArtifactCard reference={artifact()} source={props.artifacts} />}</If>
         </View>
       )}

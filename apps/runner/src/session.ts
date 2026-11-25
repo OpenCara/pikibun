@@ -127,7 +127,7 @@ interface RunnerBackup {
   createdAt: string;
 }
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
-const readOnlyTools = ["identity", "read", "ls", "grep", "find"];
+const readOnlyTools = ["identity", "read", "ls", "grep", "find", "show_image"];
 export type RunnerConfig = {
   dataDir: string; controlPlaneUrl: string; sharedSecret: string; allowFaux: boolean; allowTestShell?: boolean; fetch?: typeof fetch;
   connectorId?: string;

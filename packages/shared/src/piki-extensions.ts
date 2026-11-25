@@ -118,8 +118,8 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "files", source: "piki:files", title: "Files", core: true,
-    sessionTools: ["identity", "ls", "read", "grep", "find", "write", "edit", "move_file", "copy_file", "delete_file"],
-    description: "The file tools: the agent reads, searches, writes, edits, moves, copies and deletes the session's files, and reads who the session is for. Every session needs them, so they are always on.",
+    sessionTools: ["identity", "ls", "read", "grep", "find", "write", "edit", "move_file", "copy_file", "delete_file", "show_image"],
+    description: "The file tools: the agent reads, searches, writes, edits, moves, copies and deletes the session's files, shows an image file in the chat, and reads who the session is for. Every session needs them, so they are always on.",
     providers: [],
   },
   {

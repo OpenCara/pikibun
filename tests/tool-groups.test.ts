@@ -62,6 +62,16 @@ test('find goes with grep in tool groups: no tool of its own to tick, on whereve
     'a host turns find off with grep, whatever control plane sent the list');
 });
 
+test('show_image goes with read in tool groups: no tool of its own to tick, on wherever read is and off wherever read is off', () => {
+  assert.ok(!groupTools.includes('show_image' as never) && !retiredGroupTools.includes('show_image'), 'show_image is neither a group tool nor retired');
+  assert.ok(toolsOff(groupTools.filter(tool => tool !== 'read')).includes('show_image'), 'a group without read turns show_image off');
+  assert.ok(!toolsOff(groupTools.filter(tool => tool !== 'grep')).includes('show_image'));
+  assert.ok(!toolsOff(roleTools.viewer).includes('show_image'), 'viewers read and show images');
+  assert.ok(!toolsOff(['identity', 'read_file']).includes('show_image'), 'a group saved with read_file shows images too');
+  assert.deepEqual(parseMemberToolGroups({ u1: { name: 'Old', off: ['read_file'] } }), { u1: { name: 'Old', off: ['read', 'show_image'] } },
+    'a host turns show_image off with read, whatever control plane sent the list');
+});
+
 const origin = 'http://localhost:8787';
 const secret = 'tool-groups-test-secret-not-for-deployment';
 

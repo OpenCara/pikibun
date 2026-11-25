@@ -128,7 +128,7 @@ export const DEFERRED_TOOLS = "pikibun-deferred-tools";
 export { TOOL_SEARCH_TOOL_NAME };
 
 export const upFrontTools: ReadonlySet<string> = new Set([
-  "identity", "read", "ls", "grep", "find", "write", "edit", "move_file", "copy_file", "delete_file",
+  "identity", "read", "ls", "grep", "find", "write", "edit", "move_file", "copy_file", "delete_file", "show_image",
   "git", "git_push", "github_read", "github_comment", "github_merge", "github_issue", "gh",
   "python", "node", "codemode", TOOL_SEARCH_TOOL_NAME,
 ]);
