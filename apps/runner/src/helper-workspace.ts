@@ -15,13 +15,13 @@ import { killTree, privateEntry } from "./platform.js";
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import type { ClonePushPreparation } from "./push.js";
 import {
-  CA_BUNDLE_FILE, importedPath, importRequest, MAX_CONTENT_OUTPUT_BYTES, MAX_FILE_BYTES, MAX_SNAPSHOT_OUTPUT_BYTES, OID, PUSH_TIMEOUT_MS, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig,
+  CA_BUNDLE_FILE, checkedFileRange, fileRange, importedPath, importRequest, MAX_CONTENT_OUTPUT_BYTES, MAX_FILE_BYTES, MAX_SNAPSHOT_OUTPUT_BYTES, OID, PUSH_TIMEOUT_MS, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig,
   serviceBindAllowed, sessionEnvironment, text, type CloneBackup, type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SandboxRequest,
   type MirrorMount, type SnapshotFile,
 } from "./sandbox.js";
 import { sandboxCertificates } from "./trust-store.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
-import type { IsolatedWorkspace } from "./workspace.js";
+import type { FileRange, IsolatedWorkspace } from "./workspace.js";
 import { buildCacheMount, type BuildCacheMount } from "./build-caches.js";
 
 export interface HelperLayout {
@@ -237,6 +237,11 @@ export class HelperWorkspace implements IsolatedWorkspace {
 
   async browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult> {
     return checkedBrowse(JSON.parse(await this.#operation({ kind: "browse", path: text(path, "path", 1024) }, { readOnly: true }, authorize)));
+  }
+
+  async readRange(path: string, offset: number, length: number, authorize: SandboxAuthorize): Promise<FileRange> {
+    const range = fileRange(offset, length);
+    return checkedFileRange(JSON.parse(await this.#operation({ kind: "read-range", path: text(path, "path", 1024), ...range }, { readOnly: true }, authorize)), range);
   }
 
   async search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult> {

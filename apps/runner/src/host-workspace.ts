@@ -11,12 +11,12 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { hostGitEnvironment } from "./host-git-shim.js";
 import type { Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
 import {
-  importRequest, MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, SNAPSHOT_SKIPPED_HOME, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
+  fileRange, importRequest, MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, SNAPSHOT_SKIPPED_HOME, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
   type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SnapshotFile,
 } from "./sandbox.js";
 import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
 import { browseDirectory, browseFile, checkedBrowse, checkedEntries, type BrowseResult } from "./file-browser.js";
-import type { SessionWorkspace } from "./workspace.js";
+import type { FileRange, SessionWorkspace } from "./workspace.js";
 import { findInWorker, searchInWorker, type FindRequest, type FindResult, type SearchRequest, type SearchResult } from "./search.js";
 import { bashPath, CREATE_FILE, hostBashArgs, killTree, OPEN_DIRECTORY, OPEN_FILE, privateEntry, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
 import { readCloneBranches, type CloneBranch } from "./clone-branches.js";
@@ -282,6 +282,16 @@ export class HostWorkspace implements SessionWorkspace {
       const parent = await directoryAt(this.worktree, parts.slice(0, -1));
       const target = join(parent, parts.at(-1)!);
       return checkedBrowse((await lstat(target)).isDirectory() ? await browseDirectory(target) : await browseFile(target));
+    });
+  }
+
+  async readRange(path: string, offset: number, length: number, authorize: SandboxAuthorize): Promise<FileRange> {
+    const value = text(path, "path", 1024);
+    const range = fileRange(offset, length);
+    return this.#operation(authorize, async () => {
+      const parts = await this.#parts(value, false);
+      if (!parts.length) throw hostError("a file path is required");
+      return readRangeAt(await directoryAt(this.worktree, parts.slice(0, -1)), parts.at(-1)!, range.offset, range.length);
     });
   }
 
@@ -666,6 +676,25 @@ async function readAt(parent: string, name: string, limit: number): Promise<{ da
       throw hostError("file changed while being read; retry the operation");
     }
     return { data: Buffer.concat(chunks), mode: Number(before.mode) & 0o777 };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readRangeAt(parent: string, name: string, offset: number, length: number): Promise<FileRange> {
+  const handle = await open(join(parent, name), FILE_FLAGS);
+  try {
+    const info = await handle.stat();
+    regular(info);
+    const want = Math.max(0, Math.min(length, info.size - offset));
+    const data = Buffer.alloc(want);
+    let read = 0;
+    while (read < want) {
+      const { bytesRead } = await handle.read(data, read, want - read, offset + read);
+      if (!bytesRead) throw hostError("file changed while being read; retry the operation");
+      read += bytesRead;
+    }
+    return { size: info.size, data };
   } finally {
     await handle.close();
   }

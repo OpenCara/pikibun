@@ -9,6 +9,11 @@ import type { FileOperationRequest, FileOperationResult } from "./file-operation
 import type { SessionBrowser } from "./browser-command.js";
 import type { ProcessRoots, ResourceGroups } from "./session-resources.js";
 
+export interface FileRange {
+  size: number;
+  data: Buffer;
+}
+
 export interface SessionWorkspace {
   readonly isolated: boolean;
   readonly home: string;
@@ -32,6 +37,7 @@ export interface SessionWorkspace {
   find(request: FindRequest, authorize: SandboxAuthorize): Promise<FindResult>;
   fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult>;
   browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult>;
+  readRange(path: string, offset: number, length: number, authorize: SandboxAuthorize): Promise<FileRange>;
   execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options?: SandboxExecutionOptions): Promise<string>;
   snapshot(authorize: SandboxAuthorize, clones?: readonly string[]): Promise<SnapshotFile[]>;
   executeHost(operation: HostCommandOperation, authorize: SandboxAuthorize, signal: AbortSignal): Promise<string>;

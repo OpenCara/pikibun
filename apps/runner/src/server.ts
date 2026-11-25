@@ -10,6 +10,7 @@ import type { SessionMarkStatement, Signed } from "../../../packages/shared/src/
 import type { RestoreDescriptor, RestoreInput } from "../../../packages/shared/src/connector.js";
 import { ViewRevisions } from "../../../packages/shared/src/view-patch.js";
 import { assertId, permissionFor, RunnerError, stableJson, validateBinding, verifyRunnerTicket } from "./protocol.js";
+import { mediaRangeRequest } from "../../../packages/shared/src/media.js";
 import { RunnerSession, WORK_MARKER, type RunnerConfig } from "./session.js";
 import { restoreSession } from "./restore.js";
 import { PACK_FILE, readPack, settlePack, unpackSandbox, writePack, type PackSummary } from "./pack.js";
@@ -700,6 +701,11 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (action === "portable") return c.json(await service.keep(session, ticket, input));
     if (action === "revert") return c.json(await session.revert(ticket, input));
     if (action === "fork") return c.json(await service.fork(session, ticket, input));
+    if (action === "files" && input && typeof input === "object" && !Array.isArray(input) && "offset" in input) {
+      const request = mediaRangeRequest(input);
+      if (!request) throw new RunnerError(400, "Invalid file range request");
+      return c.json({ range: await session.readRange(ticket, request) });
+    }
     if (action === "files") {
       if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => key !== "path")
         || typeof input.path !== "string" || !input.path || input.path.length > 1024) throw new RunnerError(400, "Invalid file browser request");
