@@ -24,6 +24,7 @@ test("a call's target is the command line it runs, or what it reads, searches or
   assert.equal(target("search", { pattern: "toolResult", path: "src", glob: "*.ts" }), '"toolResult" in src *.ts');
   assert.equal(target("move_file", { from: "a", to: "b" }), "a → b");
   assert.equal(target("delete_file", { path: "out", recursive: true }), "out (recursive)");
+  assert.equal(target("show_image", { path: "art/lighthouse.png" }), "art/lighthouse.png");
   assert.equal(target("github_read", { repository: "a/b", issue: 7 }), "a/b#7");
   assert.equal(target("git_push", { directory: "app", branch: "main", tag: "v1" }), "app → tag v1");
   assert.equal(target("browser", { url: "http://localhost:5173/", actions: [{}, {}] }), "http://localhost:5173/ · 2 actions");

@@ -66,6 +66,7 @@ export function callTarget(name: string, args: Fields | undefined): string {
     case "read": case "read_file": if (path) return `${path}${lineSpan(args)}`; break;
     case "edit": case "edit_file": if (path) return Array.isArray(args.edits) && args.edits.length > 1 ? `${path} (${args.edits.length} edits)` : path; break;
     case "delete_file": if (path) return args.recursive === true ? `${path} (recursive)` : path; break;
+    case "show_image": if (path) return path; break;
     case "move_file": case "copy_file": {
       const from = string(args, "from");
       const to = string(args, "to");

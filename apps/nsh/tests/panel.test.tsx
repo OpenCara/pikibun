@@ -218,6 +218,38 @@ describe("a session's panel", () => {
     expect(app.requests().some(item => item.url === `${ORIGIN}/api/sessions/s1/artifacts?name=chart&version=1`)).toBe(true);
   });
 
+  test("an image the agent shows with show_image is in the chat at once, while a read's image stays folded into its tool row", async () => {
+    const pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const call = (tool: string, id: string) => [
+      { id: `0:${id}a`, kind: "message", role: "assistant", text: `${tool}({"path":"art/lighthouse.png"})`, toolCalls: [{ id, name: tool }], conversationId: "0" },
+      { id: `0:${id}b`, kind: "message", role: "toolResult", text: `${tool === "show_image" ? "Shown in the chat: art/lighthouse.png" : "Read image file"} [image/png]\n[image image/png]`,
+        images: [{ mimeType: "image/png" }], toolResult: { tool, callId: id }, conversationId: "0" },
+    ];
+    const thumbnail = (entry: string) => ({ [`GET ${ORIGIN}/api/sessions/s1/images?entry=${encodeURIComponent(entry)}&index=0&size=thumbnail`]: { body: { image: { mimeType: "image/png", data: pixel } } } });
+    const shown = await open("../App.tsx", { network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, entries: call("show_image", "c1"), approvals: [], busy: false, queue: [] }, revision: "r1" } },
+      ...thumbnail("0:c1b"),
+    }), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await shown.press("id:session-row-s1");
+    await shown.waitFor("label:Image 1 (image/png): show it whole");
+    expect(shown.requests().some(item => item.url === `${ORIGIN}/api/sessions/s1/images?entry=0%3Ac1b&index=0&size=thumbnail`)).toBe(true);
+    shown.dispose();
+    const read = await open("../App.tsx", { network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, entries: call("read", "c2"), approvals: [], busy: false, queue: [] }, revision: "r1" } },
+      ...thumbnail("0:c2b"),
+    }), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await read.press("id:session-row-s1");
+    let row: string | undefined;
+    for (let tries = 0; !row && tries < 200; tries++) {
+      row = read.texts().find(item => item.startsWith("read · art/lighthouse.png"));
+      if (!row) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(row).toBeDefined();
+    expect(read.shows("label:Image 1 (image/png): show it whole")).toBe(false);
+    await read.press(`text:${row}`);
+    await read.waitFor("label:Image 1 (image/png): show it whole");
+  });
+
   test("Artifacts says when there are none, and when the host is too old to show them", async () => {
     const none = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/artifacts`]: { body: { artifacts: [] } } });
     await none.press("text:Artifacts");

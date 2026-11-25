@@ -6,7 +6,7 @@ import { remoteMcpRoutePrefix, type RemoteMcpServerSummary } from "../../../../p
 export const WORKSPACE_TOOLS = "workspace-tools";
 
 export const sessionNamespaces = Object.freeze({
-  files: { name: "files", description: "Read, list, search, write, edit, move, copy and delete the session's files; identity says whose session this is." },
+  files: { name: "files", description: "Read, list, search, write, edit, move, copy and delete the session's files, and show an image file in the chat; identity says whose session this is." },
   programs: { name: "programs", description: "Run Git, Python, Node.js and the other toolchains (Rust, Go, .NET, make) in the worktree, each with its arguments as a list, without a shell." },
   github: { name: "github", description: "GitHub as the session owner: read, comment on and merge issues and pull requests, open issues, run gh; git_push publishes a clone's commit to a branch and opens its pull request." },
   sessions: { name: "sessions", description: "The workspace's other sessions (list, read, ask, message, start sub-agents) and scheduled prompts that run later or on a schedule." },
@@ -19,7 +19,7 @@ export const sessionNamespaces = Object.freeze({
 type SessionNamespace = keyof typeof sessionNamespaces;
 
 const ownTools: Readonly<Record<string, SessionNamespace>> = Object.freeze({
-  identity: "files", ls: "files", read: "files", grep: "files", find: "files", write: "files", edit: "files", move_file: "files", copy_file: "files", delete_file: "files",
+  identity: "files", ls: "files", read: "files", grep: "files", find: "files", write: "files", edit: "files", move_file: "files", copy_file: "files", delete_file: "files", show_image: "files",
   git: "programs", python: "programs", node: "programs", rust: "programs", go: "programs", dotnet: "programs", make: "programs",
   git_push: "github", github_read: "github", github_comment: "github", github_merge: "github", github_issue: "github",
   sessions: "sessions", schedule: "sessions",
