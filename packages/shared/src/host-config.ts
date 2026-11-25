@@ -1,4 +1,4 @@
-import { extensionPackageKey, normalizeExtensionSource, parseExtensionSettings, type ExtensionSettings } from "./host-extensions.js";
+import { extensionPackageKey, normalizeExtensionSource, PACKAGE_NAME, parseExtensionSettings, type ExtensionSettings } from "./host-extensions.js";
 import { defaultHostBrowserConfig, parseHostBrowserConfig, type HostBrowserConfig } from "./browser.js";
 import { defaultHostTunnelConfig, parseHostTunnelConfig, serviceLifetimeLimits, type HostTunnelConfig } from "./tunnel.js";
 import { buildCacheLimits, buildCacheModes, type BuildCacheMode } from "./build-caches.js";
@@ -53,6 +53,13 @@ export interface HostConfig {
   buildCacheGiB: number;
   modelExtensions: string[];
   cacheWarming: boolean;
+  extensionFiles: ExtensionFile[];
+}
+
+export interface ExtensionFile {
+  extension: string;
+  path: string;
+  target: string;
 }
 
 export interface RequiredExtension {
@@ -69,6 +76,9 @@ export const hostConfigLimits = Object.freeze({
   requiredExtensions: 16,
   requiredExtensionsBytes: 32 * 1024,
   modelExtensions: 16,
+  extensionFiles: 32,
+  extensionFilePath: 1024,
+  extensionFileTarget: 512,
 });
 
 export const unlimitedCommandSeconds = 2_000_000;
@@ -89,7 +99,64 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   buildCacheGiB: buildCacheLimits.gib.default,
   modelExtensions: Object.freeze([]) as unknown as string[],
   cacheWarming: true,
+  extensionFiles: Object.freeze([]) as unknown as ExtensionFile[],
 });
+
+const ZERO_COMMIT = "0".repeat(40);
+const UNSAFE_PATH = /[\x00-\x1f\x7f]/;
+const SESSION_HOME_FILES = new Set([".gitconfig", ".tmp"]);
+
+export function extensionFilePackage(input: string): string {
+  const value = input.trim();
+  if (value.startsWith("npm:")) {
+    const rest = value.slice(4);
+    const name = rest.lastIndexOf("@") > 0 ? rest.slice(0, rest.lastIndexOf("@")) : rest;
+    if (!PACKAGE_NAME.test(name) || name.length > 214) throw new Error(`Invalid npm package name: ${name}`);
+    return `npm:${name}`;
+  }
+  if (value.startsWith("git:")) {
+    const hash = value.indexOf("#");
+    const base = hash < 0 ? value : value.slice(0, hash);
+    const path = hash < 0 ? "" : value.slice(hash);
+    const pinned = /@[0-9a-f]{40}$/.test(base) ? base : `${base}@${ZERO_COMMIT}`;
+    return extensionPackageKey(normalizeExtensionSource(`${pinned}${path}`));
+  }
+  throw new Error("Files are shared with an extension installed from npm or Git: npm:<package> or git:<https URL>");
+}
+
+export function validExtensionFilePath(path: string): boolean {
+  return path.length <= hostConfigLimits.extensionFilePath && !UNSAFE_PATH.test(path) && (path.startsWith("/") || path.startsWith("~/"))
+    && path.split("/").every(segment => segment !== "..") && path.replace(/^~?\/+/, "").length > 0;
+}
+
+export function validExtensionFileTarget(target: string): boolean {
+  if (!target || target.length > hostConfigLimits.extensionFileTarget || UNSAFE_PATH.test(target) || target.startsWith("/") || target.endsWith("/")) return false;
+  const segments = target.split("/");
+  return segments.every(segment => segment !== "" && segment !== "." && segment !== "..") && !SESSION_HOME_FILES.has(segments[0]!);
+}
+
+export function parseExtensionFiles(input: unknown): ExtensionFile[] {
+  if (!Array.isArray(input)) throw new Error("Invalid shared extension files");
+  if (input.length > hostConfigLimits.extensionFiles) throw new Error(`A host shares at most ${hostConfigLimits.extensionFiles} files with extensions`);
+  const targets = new Set<string>();
+  return input.map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => key !== "extension" && key !== "path" && key !== "target")) {
+      throw new Error("Invalid shared extension file");
+    }
+    const { extension, path, target } = item as Record<string, unknown>;
+    if (typeof extension !== "string" || typeof path !== "string" || typeof target !== "string") throw new Error("Invalid shared extension file");
+    let key: string;
+    try { key = extensionFilePackage(extension); }
+    catch (error) { throw new Error(`Invalid shared extension file: ${error instanceof Error ? error.message : "its extension"}`); }
+    const file = path.trim();
+    const inside = target.trim();
+    if (!validExtensionFilePath(file)) throw new Error(`A shared file is named by its absolute path on the host, or one from ~/, without ..: ${file.slice(0, 80) || "(empty)"}`);
+    if (!validExtensionFileTarget(inside)) throw new Error(`A shared file's place is a path in the session's home, such as .config/pi/web-search.json, without . or .., and not .gitconfig or .tmp: ${inside.slice(0, 80) || "(empty)"}`);
+    if (targets.has(inside)) throw new Error(`Two shared files go to ${inside}`);
+    targets.add(inside);
+    return { extension: key, path: file, target: inside };
+  });
+}
 
 export function parseModelExtensions(input: unknown): string[] {
   if (!Array.isArray(input)) throw new Error("Invalid model extensions");
@@ -178,7 +245,7 @@ export function parseHostCompaction(value: unknown): HostCompaction {
   return Object.keys(overrides).length ? { ...compaction, modelOverrides: overrides } : compaction;
 }
 
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB", "modelExtensions", "cacheWarming"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB", "modelExtensions", "cacheWarming", "extensionFiles"]);
 
 export function parseHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
@@ -213,7 +280,8 @@ export function parseHostConfig(value: unknown): HostConfig {
     hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
     requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser),
     serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel), fakeIpTunnels: input.fakeIpTunnels,
-    buildCaches: input.buildCaches as BuildCacheMode, buildCacheGiB: gib, modelExtensions: parseModelExtensions(input.modelExtensions), cacheWarming: input.cacheWarming };
+    buildCaches: input.buildCaches as BuildCacheMode, buildCacheGiB: gib, modelExtensions: parseModelExtensions(input.modelExtensions), cacheWarming: input.cacheWarming,
+    extensionFiles: parseExtensionFiles(input.extensionFiles) };
 }
 
 export function parseHostConfigChange(value: unknown): Partial<HostConfig> {
