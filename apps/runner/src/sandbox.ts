@@ -20,7 +20,8 @@ import { checkedFind, checkedSearch, type FindRequest, type FindResult, type Sea
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
 import type { GpuKind } from "../../../packages/shared/src/host-config.js";
-import type { IsolatedWorkspace } from "./workspace.js";
+import type { FileRange, IsolatedWorkspace } from "./workspace.js";
+import { checkMediaRange, mediaLimits } from "../../../packages/shared/src/media.js";
 import { CREATE_FILE, OPEN_FILE, privateEntry } from "./platform.js";
 import { BROWSER_DRIVER, DESKTOP_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER, SERVICE_DRIVER } from "./sandbox-python.generated.js";
 import { SANDBOX_DESKTOP_DRIVER, SANDBOX_SERVICE_DRIVER, SANDBOX_SERVICE_SOCKETS, type ServiceExit, type ServiceProcess } from "./session-service.js";
@@ -99,6 +100,17 @@ export function hostGitLfs(): string | undefined {
 
 const GIT_SHIM = EMBEDDED_GIT_SHIM;
 
+export function fileRange(offset: number, length: number): { offset: number; length: number } {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > mediaLimits.chunkBytes) throw new Error("Invalid file range");
+  return { offset, length };
+}
+
+export function checkedFileRange(value: unknown, range: { offset: number; length: number }): FileRange {
+  const checked = checkMediaRange(value, range);
+  if (!checked) throw new Error("Invalid sandbox range response");
+  return { size: checked.size, data: Buffer.from(checked.data, "base64") };
+}
+
 export function importRequest(directory: string, name: string, data: Buffer): { kind: "import"; directory: string; name: string; data: string } {
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(directory) || directory.startsWith(".") || !name || uploadFileName(name) !== name
     || !Buffer.isBuffer(data) || data.length > fileUploadLimits.maxBytes) throw new Error("Invalid file import");
@@ -147,6 +159,7 @@ export type SandboxRequest = Request;
 type Request =
   | { kind: "initialize" }
   | { kind: "read" | "read-content" | "list" | "browse"; path: string }
+  | { kind: "read-range"; path: string; offset: number; length: number }
   | { kind: "list"; path: string; marked: true }
   | SearchRequest
   | FindRequest
@@ -625,6 +638,11 @@ export class Sandbox implements IsolatedWorkspace {
 
   async browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult> {
     return checkedBrowse(JSON.parse(await this.#operation({ kind: "browse", path: text(path, "path", 1024) }, true, authorize)));
+  }
+
+  async readRange(path: string, offset: number, length: number, authorize: SandboxAuthorize): Promise<FileRange> {
+    const range = fileRange(offset, length);
+    return checkedFileRange(JSON.parse(await this.#operation({ kind: "read-range", path: text(path, "path", 1024), ...range }, true, authorize)), range);
   }
 
   resourceGroups(): ResourceGroups | undefined {

@@ -21,6 +21,7 @@ import { deferredToolsExtension, loadedToolNames, SessionBuiltins, TOOL_SEARCH }
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
+import type { MediaRange, MediaRangeRequest } from "../../../packages/shared/src/media.js";
 import { requestKey, RunnerError, stableJson } from "./protocol.js";
 import type { IdentityStore } from "./identity.js";
 import { localChangesRequest, type LocalChanges, type LocalChangesRequest } from "../../../packages/shared/src/local-changes.js";
@@ -110,6 +111,20 @@ export type { Run } from "./session/state.js";
 export type ForkedEntry = { kind: string; model: readonly Message[] };
 export type ForkedConversation = { entries: ForkedEntry[]; agent: { model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel } };
 const FORKED_KIND = "workspace.forked";
+
+export function fileReadError(error: unknown): unknown {
+  if (error instanceof RunnerError) return error;
+  const message = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ""}`.toLowerCase() : "";
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (code === "ENOENT" || code === "ENOTDIR" || /no such file or directory|not a directory/.test(message)) return new RunnerError(422, "That path is not in the worktree");
+  if (/path escapes the worktree/.test(message)) return new RunnerError(422, "That path leads outside the worktree");
+  if (/invalid relative path|absolute paths|path traversal|path component is not a real directory|a file path is required/.test(message)) return new RunnerError(422, "Invalid worktree path");
+  if (/too many entries/.test(message)) return new RunnerError(422, "That directory has too many entries to list");
+  if (/only regular, non-hardlinked files/.test(message)) return new RunnerError(422, "Only a regular file can be shown");
+  if (/file changed while being read/.test(message)) return new RunnerError(409, "The file changed while it was read. Try again");
+  if (code === "EACCES" || code === "ELOOP" || code === "EISDIR" || /permission denied|symlinks are not followed|too many levels of symbolic links|is a directory/.test(message)) return new RunnerError(422, "That path can't be read");
+  return error;
+}
 
 export function messageInput(input: unknown): string {
   const value = input as { entryId?: unknown } | null;
@@ -1720,15 +1735,19 @@ export class RunnerSession {
     try {
       return { path, ...await this.sandbox.browse(path, authorize) };
     } catch (error) {
-      if (error instanceof RunnerError) throw error;
-      const message = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ""}`.toLowerCase() : "";
-      const code = (error as NodeJS.ErrnoException | null)?.code;
-      if (code === "ENOENT" || code === "ENOTDIR" || /no such file or directory|not a directory/.test(message)) throw new RunnerError(422, "That path is not in the worktree");
-      if (/path escapes the worktree/.test(message)) throw new RunnerError(422, "That path leads outside the worktree");
-      if (/invalid relative path|absolute paths|path traversal|path component is not a real directory/.test(message)) throw new RunnerError(422, "Invalid worktree path");
-      if (/too many entries/.test(message)) throw new RunnerError(422, "That directory has too many entries to list");
-      if (code === "EACCES" || code === "ELOOP" || /permission denied|symlinks are not followed|too many levels of symbolic links/.test(message)) throw new RunnerError(422, "That path can't be read");
-      throw error;
+      throw fileReadError(error);
+    }
+  }
+
+  async readRange(ticket: RunnerTicket, request: MediaRangeRequest): Promise<MediaRange> {
+    this.assertTicket(ticket);
+    await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    const authorize = async () => { await this.authorize(ticket.actorId, "write", ticket.policyVersion); };
+    try {
+      const range = await this.sandbox.readRange(request.path, request.offset, request.length, authorize);
+      return { size: range.size, data: range.data.toString("base64") };
+    } catch (error) {
+      throw fileReadError(error);
     }
   }
 

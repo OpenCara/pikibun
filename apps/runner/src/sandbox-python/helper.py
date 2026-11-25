@@ -236,6 +236,30 @@ def browse_file(parent, name):
         os.close(fd)
 
 
+RANGE_BYTES = 1024 * 1024
+
+
+def read_range_at(parent, name, offset, length):
+    if (not isinstance(offset, int) or isinstance(offset, bool) or offset < 0
+            or not isinstance(length, int) or isinstance(length, bool) or length < 1 or length > RANGE_BYTES):
+        raise ValueError('invalid file range')
+    fd = os.open(name, FILE_FLAGS, dir_fd=parent)
+    try:
+        info = os.fstat(fd)
+        regular(info)
+        want = max(0, min(length, info.st_size - offset))
+        chunks, size = [], 0
+        while size < want:
+            chunk = os.pread(fd, min(65536, want - size), offset + size)
+            if not chunk:
+                raise ValueError('file changed while being read; retry the operation')
+            chunks.append(chunk)
+            size += len(chunk)
+        return {'size': info.st_size, 'data': base64.b64encode(b''.join(chunks)).decode('ascii')}
+    finally:
+        os.close(fd)
+
+
 def import_candidate(name, index):
     if index <= 1:
         return name
@@ -1573,6 +1597,14 @@ def main():
                         result = browse_file(parent, parts[-1])
                 finally:
                     os.close(parent)
+        elif kind == 'read-range':
+            if not parts:
+                raise ValueError('a file path is required')
+            parent = walk(root, parts[:-1])
+            try:
+                result = read_range_at(parent, parts[-1], request['offset'], request['length'])
+            finally:
+                os.close(parent)
         elif kind == 'list':
             directory = walk(root, parts)
             try:

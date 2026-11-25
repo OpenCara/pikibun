@@ -1,6 +1,7 @@
 import { SEARCH_CORE } from "./search.js";
 import { FILE_OPERATIONS_CORE, FILE_OPERATIONS_FS, fileOperationLimits } from "./file-operations.js";
 import { SNAPSHOT_SKIPPED_HOME } from "./sandbox.js";
+import { mediaLimits } from "../../../packages/shared/src/media.js";
 export const NODE_HELPER = String.raw`
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, copyFileSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
@@ -164,6 +165,25 @@ function readAt(path, limit) {
     const after = fstatSync(fd);
     if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) refuse("file changed while being read; retry the operation");
     return { data: Buffer.concat(chunks), mode: before.mode & 0o777 };
+  } finally { closeSync(fd); }
+}
+
+function readRangeAt(path, offset, length) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > ${mediaLimits.chunkBytes}) refuse("invalid file range");
+  regular(lstatSync(path));
+  const fd = openSync(path, "r");
+  try {
+    const info = fstatSync(fd);
+    regular(info);
+    const want = Math.max(0, Math.min(length, info.size - offset));
+    const data = Buffer.alloc(want);
+    let read = 0;
+    while (read < want) {
+      const count = readSync(fd, data, read, want - read, offset + read);
+      if (!count) refuse("file changed while being read; retry the operation");
+      read += count;
+    }
+    return { size: info.size, data: data.toString("base64") };
   } finally { closeSync(fd); }
 }
 
@@ -744,6 +764,10 @@ async function main() {
     const info = lstatSync(path);
     return print(info.isDirectory() && !info.isSymbolicLink() ? browseDirectory(path) : browseFile(path));
   }
+  if (kind === "read-range") {
+    if (!parts.length) refuse("a file path is required");
+    return print(readRangeAt(join(directoryAt(parts.slice(0, -1)), parts.at(-1)), request.offset, request.length));
+  }
   if (kind === "search") {
     const start = parts.length ? join(directoryAt(parts.slice(0, -1)), parts.at(-1)) : worktreeRoot();
     try { return print(searchTree(searchFs, start, parts.length ? parts.join("/") : ".", request)); }
@@ -777,6 +801,6 @@ main().catch(error => {
 });
 `;
 
-export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "search", "find", "snapshot", "bash",
+export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "read-range", "search", "find", "snapshot", "bash",
   "move", "copy", "delete",
   "clone-head", "clone-push-prepare", "clone-push-pack", "clone-backup", "clone-pending", "clone-restore"]);

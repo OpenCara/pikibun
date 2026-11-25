@@ -34,8 +34,8 @@ function piResult(attribution: ToolAttribution, text: string, details?: object) 
 }
 
 export const SHOW_IMAGE_DESCRIPTION = "Show an image to the people in this chat: path is a PNG, JPEG, GIF or WebP file in the worktree, "
-  + "which appears in the transcript beside your message, scaled to fit, and also reaches you as an image. The transcript doesn't load images "
-  + "from links (Markdown ![...](https://...) shows only its text), so to show one from a URL, download it into the worktree first, then show_image it.";
+  + "which appears in the transcript beside your message, scaled to fit, and also reaches you as an image. To only show a worktree image, video or audio file, "
+  + "put it in your reply as Markdown instead (![caption](out/demo.mp4)); an image from an https link may not load in the chat, so download it into the worktree first.";
 
 export function showImageText(path: string, mimeType: string): string {
   return `Shown in the chat: ${path} [${mimeType}]`;

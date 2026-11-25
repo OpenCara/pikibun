@@ -1,5 +1,5 @@
 import { computed, effect, platform, signal, Text, View, type JSX } from "nsh";
-import { Button as BaseButton, TextView, Tooltip } from "nsh/base";
+import { Button as BaseButton, TextView, Tooltip, type TextViewImage } from "nsh/base";
 import {
   callHeadline, COMPACTION_FAILED_TITLE, compactionFailureText, copyText, publishedArtifact, resultOutcome, resultOutput, shownImages, splitToolCalls, textBesideImages, toolCallRows,
   type ArtifactSource, type EntryView,
@@ -7,6 +7,9 @@ import {
 import type { ArtifactRef } from "../../../../packages/shared/src/artifacts";
 import { ArtifactCard } from "./Artifact";
 import { EntryImages } from "./EntryImages";
+import { RemoteImage, WorktreeMedia } from "./Media";
+import { attachedFilePaths } from "../../../../packages/shared/src/file-uploads";
+import { mediaType, worktreeMediaPath } from "../../../../packages/shared/src/media";
 import { formatDuration, modelFailure } from "../lib/format";
 import { openMessageLink } from "../lib/links";
 import { createUsername } from "../lib/people";
@@ -167,6 +170,13 @@ function ToolRow(props: { item: ToolItem; open: boolean; onToggle: () => void; i
   );
 }
 
+export function messageImage(image: TextViewImage, sessionId: string | undefined): JSX.Element {
+  const path = worktreeMediaPath(image.src);
+  if (path) return <WorktreeMedia sessionId={sessionId} path={path} alt={image.alt || undefined} />;
+  if (/^https:\/\//i.test(image.src)) return <RemoteImage src={image.src} alt={image.alt || undefined} />;
+  return <Text style={{ fontSize: text.small, color: palette().muted }}>{`[image${image.alt ? `: ${image.alt}` : ""}]`}</Text>;
+}
+
 export type MessageAction = { label: string; run: () => void; disabled?: boolean };
 export type MessageActions = (entry: EntryView) => { revert?: MessageAction; fork?: MessageAction };
 
@@ -258,6 +268,7 @@ export function TranscriptEntry(props: {
     </Each>
   );
   const gapAfter = () => (shown().kind === "tools" ? 8 : 16);
+  const attachedMedia = computed(() => (props.entry.role === "user" && props.imagesOf !== undefined ? attachedFilePaths(props.entry.text).filter(path => mediaType(path) !== undefined) : []));
   return (
     <View style={{ gap: 6, paddingBottom: gapAfter() }}>
       <If when={shown().kind === "stopped" ? shown() as Extract<Shown, { kind: "stopped" }> : null}>
@@ -294,6 +305,13 @@ export function TranscriptEntry(props: {
               </View>
             </If>
             {thumbnails(true)}
+            <If when={attachedMedia().length > 0}>
+              <View style={{ gap: 8, alignItems: "flex-end", maxWidth: "85%" }}>
+                <Each of={attachedMedia()} key={path => path}>
+                  {path => <WorktreeMedia sessionId={props.imagesOf} path={path()} />}
+                </Each>
+              </View>
+            </If>
             <Footer entry={props.entry} meta="" onCopy={props.onCopy} actions={props.actions} end />
           </View>
         )}
@@ -302,7 +320,8 @@ export function TranscriptEntry(props: {
         {assistant => (
           <>
             <If when={assistant().prose.trim()}>
-              <TextView markdown={assistant().prose} selectable options={{ streaming: true }} onLinkPress={event => openMessageLink(event.url)} />
+              <TextView markdown={assistant().prose} selectable options={{ streaming: true }} onLinkPress={event => openMessageLink(event.url)}
+                renderImage={image => messageImage(image, props.imagesOf)} />
             </If>
             <If when={assistant().tools.length}>
               <View style={{ gap: 8 }}>{toolRows()}</View>

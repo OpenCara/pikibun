@@ -20,6 +20,7 @@ import { MINIMUM_CONNECTOR_VERSION } from '../packages/shared/src/version.js';
 import type { LocalChanges } from '../packages/shared/src/local-changes.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
+import { mediaLimits } from '../packages/shared/src/media.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
 import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
@@ -3560,6 +3561,85 @@ test('transcript images come from the session host, as thumbnails or whole, for 
   await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
   await json(await image('entry=0:3&index=0', s.host));
   assert.equal(requests.at(-1)!.request.ticket.actorId, s.host.user.id);
+});
+
+test('media in the chat: a signed link to a worktree file, served in parts from the session host while the holder may still write', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  f.env.SESSION_SECRET = 'm'.repeat(40);
+  const file = Buffer.alloc(mediaLimits.chunkBytes + 10);
+  for (let index = 0; index < file.length; index++) file[index] = index % 251;
+  const issue = (path: unknown, client = s.creator) => client.request('POST', `/api/sessions/${s.session.id}/media`, { path });
+  const requests = rpcHub(f, s.connector, envelope => {
+    const { path, offset, length } = JSON.parse(envelope.request.body) as { path: string; offset: number; length: number };
+    if (path === 'out/missing.mp4') return Response.json({ error: 'That path is not in the worktree' }, { status: 422 });
+    if (path === 'out/short.mp4') return Response.json({ range: { size: 100, data: Buffer.from('x').toString('base64') } });
+    return Response.json({ range: { size: file.length, data: file.subarray(offset, offset + length).toString('base64') } });
+  });
+  await denied(await issue('out/demo.mp4'), 409, 'media_unsupported');
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, mediaFiles: true } }));
+
+  for (const [path, code] of [['../x.mp4', 'invalid_path'], ['/etc/x.mp4', 'invalid_path'], ['notes.txt', 'invalid_media'], ['out/demo', 'invalid_media'], ['.', 'invalid_media'], [7, 'invalid_input']] as const) {
+    await denied(await issue(path), 400, code);
+  }
+  await denied(await issue('out/demo.mp4', s.host), 403, 'forbidden');
+  assert.equal(requests.length, 0);
+
+  const { media } = await json<{ media: { url: string; path: string; kind: string; mimeType: string; expiresAt: number } }>(await issue('./out/demo.mp4'));
+  assert.deepEqual([media.path, media.kind, media.mimeType], ['out/demo.mp4', 'video', 'video/mp4']);
+  assert.match(media.url, /^\/api\/media\/[\w-]+\.[\w-]+\.[\w-]+$/);
+  assert.ok(media.expiresAt > Date.now() + 50 * 60 * 1000 && media.expiresAt <= Date.now() + 60 * 60 * 1000);
+  assert.equal(requests.length, 0, 'issuing a link reads nothing');
+
+  const whole = await f.request('GET', media.url);
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get('content-type'), 'video/mp4');
+  assert.equal(whole.headers.get('content-length'), String(file.length));
+  assert.equal(whole.headers.get('accept-ranges'), 'bytes');
+  assert.ok(Buffer.from(await whole.arrayBuffer()).equals(file));
+  const read = requests.map(envelope => JSON.parse(envelope.request.body));
+  assert.deepEqual(read, [{ path: 'out/demo.mp4', offset: 0, length: mediaLimits.chunkBytes }, { path: 'out/demo.mp4', offset: mediaLimits.chunkBytes, length: 10 }]);
+  assert.ok(requests.every(envelope => envelope.request.ticket.action === 'files' && envelope.request.ticket.actorId === s.creator.user.id));
+
+  const beforeSeek = requests.length;
+  const part = await f.request('GET', media.url, undefined, { Range: `bytes=${mediaLimits.chunkBytes + 2}-` });
+  assert.equal(part.status, 206);
+  assert.deepEqual(requests.slice(beforeSeek).map(envelope => JSON.parse(envelope.request.body)), [{ path: 'out/demo.mp4', offset: mediaLimits.chunkBytes + 2, length: mediaLimits.chunkBytes }],
+    'a seek reads only the part it asks for');
+  const beforeHead = requests.length;
+  const head = await f.request('HEAD', media.url);
+  assert.deepEqual([head.status, head.headers.get('content-length')], [200, String(file.length)]);
+  assert.deepEqual(requests.slice(beforeHead).map(envelope => JSON.parse(envelope.request.body).length), [1], 'HEAD reads one byte for the size');
+  const ignored = await f.request('GET', media.url, undefined, { Range: 'bytes=9-2' });
+  assert.equal(ignored.status, 200, 'an invalid range is ignored');
+  assert.ok(Buffer.from(await ignored.arrayBuffer()).equals(file));
+  assert.equal(part.headers.get('content-range'), `bytes ${mediaLimits.chunkBytes + 2}-${file.length - 1}/${file.length}`);
+  assert.ok(Buffer.from(await part.arrayBuffer()).equals(file.subarray(mediaLimits.chunkBytes + 2)));
+  const start = await f.request('GET', media.url, undefined, { Range: 'bytes=0-' });
+  assert.equal(start.status, 206);
+  assert.equal(start.headers.get('content-range'), `bytes 0-${mediaLimits.chunkBytes - 1}/${file.length}`);
+  assert.equal((await start.arrayBuffer()).byteLength, mediaLimits.chunkBytes);
+  const tail = await f.request('GET', media.url, undefined, { Range: 'bytes=-4' });
+  assert.ok(Buffer.from(await tail.arrayBuffer()).equals(file.subarray(file.length - 4)));
+  const beyond = await f.request('GET', media.url, undefined, { Range: `bytes=${file.length}-` });
+  assert.equal(beyond.status, 416);
+  assert.equal(beyond.headers.get('content-range'), `bytes */${file.length}`);
+
+  const [header, payload, signature] = media.url.slice('/api/media/'.length).split('.');
+  const forged = JSON.parse(Buffer.from(payload!, 'base64url').toString());
+  forged.path = 'out/other.mp4';
+  await denied(await f.request('GET', `/api/media/${header}.${Buffer.from(JSON.stringify(forged)).toString('base64url')}.${signature}`), 404, 'not_found');
+  await denied(await f.request('GET', '/api/media/not-a-token'), 404, 'not_found');
+
+  const { media: missing } = await json<{ media: { url: string } }>(await issue('out/missing.mp4'));
+  await denied(await f.request('GET', missing.url), 422, 'runner_error');
+  const { media: short } = await json<{ media: { url: string } }>(await issue('out/short.mp4'));
+  await denied(await f.request('GET', short.url), 502, 'invalid_runner_response');
+
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
+  const { media: granted } = await json<{ media: { url: string } }>(await issue('out/demo.mp4', s.host));
+  assert.equal((await f.request('GET', granted.url, undefined, { Range: 'bytes=0-3' })).status, 206);
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'viewer' }));
+  await denied(await f.request('GET', granted.url, undefined, { Range: 'bytes=0-3' }), 403, 'forbidden');
 });
 
 test('files attached to messages go to the session host in chunks, within the workspace limit its admins set', async t => {

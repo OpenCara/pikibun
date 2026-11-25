@@ -17,6 +17,10 @@ const write = (path: string, content = "written"): Operation => workspace => wor
 const list = (path: string): Operation => async workspace => (await workspace.listFiles(path, allow)).filter(name => name !== "n");
 const browse = (path: string): Operation => workspace => workspace.browse(path, allow);
 const content = (path: string): Operation => workspace => workspace.readContent(path, allow);
+const range = (path: string, offset: number, length: number): Operation => async workspace => {
+  const read = await workspace.readRange(path, offset, length, allow);
+  return { size: read.size, data: read.data.toString() };
+};
 const upload = (directory: string, name: string, data = "uploaded"): Operation => workspace => workspace.importFile(directory, name, Buffer.from(data), allow);
 const find = (args: Parameters<typeof searchRequest>[0]): Operation => workspace => workspace.search(searchRequest(args), allow);
 const move = (from: string, to: string): Operation => workspace => workspace.fileOperation(fileOperationRequest("move", { from, to }), allow);
@@ -79,6 +83,20 @@ const cases: Case[] = [
   ["refuses writing into a link to a directory outside", write("out-dir/new.txt"), { refused: ESCAPES }],
   ["refuses writing through a dangling link to outside", write("dangling"), { refused: REFUSED }],
   ["refuses a link to itself", read("loop"), { refused: REFUSED }],
+
+  ["writes a file to read in parts", write("media/ranged.bin", "0123456789"), { ok: undefined }],
+  ["reads a part of a file, with the file's size", range("media/ranged.bin", 3, 4), { ok: { size: 10, data: "3456" } }],
+  ["reads a part running past the end up to the end", range("media/ranged.bin", 8, 100), { ok: { size: 10, data: "89" } }],
+  ["reads nothing past the end", range("media/ranged.bin", 20, 4), { ok: { size: 10, data: "" } }],
+  ["reads a part through a link to a file inside", range("in-file", 0, 4), { ok: { size: 1, data: "A" } }],
+  ["refuses a part through a link to a file outside", range("out-file", 0, 4), { refused: ESCAPES }],
+  ["refuses a part of a file above the worktree", range("../outside/secret.txt", 0, 4), { refused: TRAVERSAL }],
+  ["refuses a part of a hard link", range("hard.txt", 0, 4), { refused: NOT_REGULAR }],
+  ["refuses a part of a directory", range("inside", 0, 4), { refused: REFUSED }],
+  ["refuses a part of a missing file", range("missing.bin", 0, 4), { refused: REFUSED }],
+  ["refuses an empty part", range("media/ranged.bin", 0, 0), { refused: /Invalid file range/ }],
+  ["refuses a part larger than a chunk", range("media/ranged.bin", 0, 2 * 1024 * 1024), { refused: /Invalid file range/ }],
+  ["refuses a negative offset", range("media/ranged.bin", -1, 4), { refused: /Invalid file range/ }],
 
   ["refuses reading a hard link", read("hard.txt"), { refused: NOT_REGULAR }],
   ["refuses writing a hard link", write("hard.txt"), { refused: NOT_REGULAR }],

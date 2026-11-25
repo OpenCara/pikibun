@@ -44,6 +44,7 @@ export interface ConnectorCapabilities {
   unboundedShellGrants?: boolean;
   fileBrowser?: boolean;
   fileUploads?: boolean;
+  mediaFiles?: boolean;
   web?: boolean;
   extensions?: boolean;
   builtinExtensions?: boolean;
