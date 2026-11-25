@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import { extensionSwitchOn } from '../../../../../packages/shared/src/piki-extensions.js';
 import {
-  REMOTE_MCP_EXTENSION, remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl, validRemoteMcpPrefix,
+  REMOTE_MCP_EXTENSION, remoteMcpAppLink, remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl, validRemoteMcpPrefix,
   type RemoteMcpServerSummary, type RemoteMcpTool, type RemoteMcpTransport, type WorkspaceMcpServer,
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
@@ -15,6 +15,7 @@ import { appOrigin, fail, id, identifier, now, randomToken, requireOrigin, text,
 import { body, fields } from '../../schemas.js';
 import { requireMember, sessionAccess, workspaceAdminSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
+import { privateResponse } from '../auth.js';
 import { workspaceExtensions } from '../extension-policy.js';
 import { requireCallbackScope } from '../hosts.js';
 import { requireAdmission } from '../run-admissions.js';
@@ -34,6 +35,9 @@ interface ServerRow {
 
 const STATE_TTL = 10 * 60 * 1000;
 const STATE = /^[A-Za-z0-9_-]{43}$/;
+const APP_BEGIN_PATH = '/api/mcp-servers/oauth/app/begin';
+const APP_CALLBACK_PATH = '/api/mcp-servers/oauth/app/callback';
+const APP_EXPIRED = 'This sign-in has expired or was already used. Start it again with Sign in in the Pikibun app.';
 const RENEW_BEFORE_MS = 60_000;
 
 const refusingTransport: RemoteMcpTransport = async () => { throw new RemoteMcpRefused('This Pikibun server reaches no remote MCP servers in tests'); };
@@ -52,9 +56,12 @@ const addBody = fields({ name: z.unknown(), prefix: z.unknown(), url: z.unknown(
 const changeBody = fields({ name: z.unknown(), url: z.unknown(), headers: z.unknown(), readOnlyTools: z.unknown(), enabled: z.unknown(), refresh: z.unknown() },
   'Change name, url, headers, readOnlyTools or enabled, or set refresh to true.', { code: 'invalid_mcp_server', some: true });
 
+const finishBody = fields({ code: z.unknown() }, 'Only code is accepted.');
+
 const secretContext = (serverId: string) => `remote-mcp:${serverId}`;
 const oauthContext = (serverId: string) => `remote-mcp-oauth:${serverId}`;
 const stateContext = (serverId: string) => `remote-mcp-oauth-state:${serverId}`;
+const appSecretContext = (signInId: string) => `remote-mcp-oauth-app:${signInId}`;
 const parsedList = (json: string): string[] => { try { const value = JSON.parse(json); return Array.isArray(value) ? value.filter(item => typeof item === 'string') : []; } catch { return []; } };
 const parsedTools = (json: string): RemoteMcpTool[] => { try { const value = JSON.parse(json); return Array.isArray(value) ? value as RemoteMcpTool[] : []; } catch { return []; } };
 
@@ -148,9 +155,70 @@ function oauthRedirectUri(env: Env): string {
   return `${appOrigin(env)}/api/mcp-servers/oauth/callback`;
 }
 
-function stateCookie(env: Env) {
+function appRedirectUri(env: Env): string {
+  return `${appOrigin(env)}${APP_CALLBACK_PATH}`;
+}
+
+function stateCookie(env: Env, app = false) {
   const secure = new URL(appOrigin(env)).protocol === 'https:';
-  return { name: secure ? '__Host-mcp-oauth' : 'test-mcp-oauth', options: { secure, httpOnly: true, sameSite: 'Lax' as const, path: '/' } };
+  const name = `${secure ? '__Host-' : 'test-'}mcp-oauth${app ? '-app' : ''}`;
+  return { name, options: { secure, httpOnly: true, sameSite: 'Lax' as const, path: '/' } };
+}
+
+/** The state a callback was sent, checked against the cookie its browser was given when the flow began; the cookie is spent either way. */
+function callbackState(c: AppContext, app: boolean): string | null {
+  const cookie = stateCookie(c.env, app);
+  const cookieState = getCookie(c, cookie.name);
+  setCookie(c, cookie.name, '', { ...cookie.options, maxAge: 0, expires: new Date(0) });
+  const states = c.req.queries('state');
+  const state = states?.length === 1 ? states[0]! : '';
+  return STATE.test(state) && cookieState && STATE.test(cookieState) && constantTimeEqual(state, cookieState) ? state : null;
+}
+
+/** The authorization server's answer at a callback: its code, or why there's none (and nothing is exchanged). */
+function callbackCode(c: AppContext, client: McpOAuthClient): { code: string } | { reason: string } {
+  const error = c.req.query('error');
+  if (error !== undefined) {
+    return { reason: error === 'access_denied' ? 'the sign-in was declined' : `its authorization server answered ${/^[\x20-\x7e]{1,64}$/.test(error) ? error : 'an error'}` };
+  }
+  const codes = c.req.queries('code');
+  const code = codes?.length === 1 ? codes[0]! : '';
+  if (!/^[\x21-\x7e]{1,4096}$/.test(code)) return { reason: 'its authorization server sent no code' };
+  const issuer = c.req.query('iss');
+  if (issuer !== undefined && issuer !== client.issuer) return { reason: 'the answer came from another authorization server' };
+  return { code };
+}
+
+/** Keeps a sign-in for a server still at the address it was made for, as a member still its workspace's owner or admin, and lists its tools with it. */
+async function keepSignIn(env: Env, row: ServerRow, actor: string, url: string, secret: McpOAuthSecret, detail: Record<string, unknown> = {}): Promise<boolean> {
+  const ciphertext = await encryptToken(env, oauthContext(row.id), JSON.stringify(secret));
+  const at = now();
+  const signedIn = await env.DB.query(`UPDATE workspace_mcp_servers SET oauth_ciphertext = ?, oauth_by = ?, oauth_at = ?, updated_by = ?, updated_at = ?
+    WHERE id = ? AND url = ? AND ${workspaceAdminSQL} RETURNING id`)
+    .bind(ciphertext, actor, at, actor, at, row.id, url, row.workspace_id, actor).first();
+  if (!signedIn) return false;
+  const found = await discover(env, row.id, row.url, await headersOf(env, row), ciphertext);
+  await env.DB.batch([
+    env.DB.query('UPDATE workspace_mcp_servers SET tools_json = CASE WHEN ? = 1 THEN ? ELSE tools_json END, discovered_at = CASE WHEN ? = 1 THEN ? ELSE discovered_at END, error = ? WHERE id = ?')
+      .bind(found.error ? 0 : 1, JSON.stringify(found.tools), found.error ? 0 : 1, at, found.error, row.id),
+    auditStatement(env, actor, 'workspace.mcp.signed_in', row.workspace_id, null,
+      { server: row.id, prefix: row.prefix, tools: found.tools.length, ...detail, ...(found.error ? { error: found.error } : {}) }),
+  ]);
+  return true;
+}
+
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' })[ch]!);
+
+/** The page the system browser ends on in a sign-in the app started: it isn't signed in to Pikibun, so it only hands back to the app. */
+function appPage(c: AppContext, title: string, message: string, finish?: { link: string; code: string }, status: 200 | 400 = 200): Response {
+  const style = 'font:16px system-ui,sans-serif;max-width:32em;margin:20vh auto 0;padding:0 1em;line-height:1.5';
+  const body = finish
+    ? `<p><a href="${escapeHtml(finish.link)}" style="display:inline-block;padding:.6em 1.2em;border-radius:6px;background:#2563eb;color:#fff;text-decoration:none">Open Pikibun</a></p>`
+      + `<p>Or paste this code where the app asks for it:</p><p><code style="font-size:14px;word-break:break-all;user-select:all">${escapeHtml(finish.code)}</code></p>`
+      + '<p style="color:#666;font-size:14px">It works once, for 10 minutes, and only in the Pikibun app of whoever started this sign-in. Show it to nobody.</p>'
+    : '';
+  return c.html('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pikibun</title>'
+    + `<main style="${style}"><h1 style="font-size:20px">${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>${body}</main>`, status);
 }
 
 async function noteError(env: Env, serverId: string, error: string): Promise<void> {
@@ -382,14 +450,8 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
 
   app.get('/api/mcp-servers/oauth/callback', async c => {
     const actor = c.get('auth').userId;
-    const cookie = stateCookie(c.env);
-    const cookieState = getCookie(c, cookie.name);
-    setCookie(c, cookie.name, '', { ...cookie.options, maxAge: 0, expires: new Date(0) });
-    const states = c.req.queries('state');
-    const state = states?.length === 1 ? states[0]! : '';
-    if (!STATE.test(state) || !cookieState || !STATE.test(cookieState) || !constantTimeEqual(state, cookieState)) {
-      fail(400, 'invalid_oauth_state', 'Invalid or expired OAuth state: start the sign-in again from the workspace\'s settings.');
-    }
+    const state = callbackState(c, false);
+    if (!state) fail(400, 'invalid_oauth_state', 'Invalid or expired OAuth state: start the sign-in again from the workspace\'s settings.');
     const saved = await c.env.DB.query<{ server_id: string; user_id: string; url: string; verifier: string; client_ciphertext: string; expires_at: number | string }>(
       'DELETE FROM mcp_oauth_states WHERE state_hash = ? RETURNING server_id, user_id, url, verifier, client_ciphertext, expires_at').bind(await sha256(state)).first();
     if (!saved || saved.user_id !== actor || Number(saved.expires_at) < Date.now()) {
@@ -400,36 +462,55 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     await requireMember(c.env, row.workspace_id, actor, ['owner', 'admin']);
     const declined = async (reason: string) => { await noteError(c.env, row.id, `Signing in failed: ${reason}`); return settingsPage(c, row.workspace_id); };
     if (row.url !== saved.url) return declined('its address changed while signing in');
-    const error = c.req.query('error');
-    if (error !== undefined) {
-      return declined(error === 'access_denied' ? 'the sign-in was declined' : `its authorization server answered ${/^[\x20-\x7e]{1,64}$/.test(error) ? error : 'an error'}`);
-    }
-    const codes = c.req.queries('code');
-    const code = codes?.length === 1 ? codes[0]! : '';
-    if (!/^[\x21-\x7e]{1,4096}$/.test(code)) return declined('its authorization server sent no code');
     let client: McpOAuthClient;
     try { client = JSON.parse(await decryptToken(c.env, stateContext(row.id), saved.client_ciphertext)) as McpOAuthClient; }
     catch { return declined('Pikibun couldn\'t read the sign-in it started: start it again'); }
-    const issuer = c.req.query('iss');
-    if (issuer !== undefined && issuer !== client.issuer) return declined('the answer came from another authorization server');
+    const answer = callbackCode(c, client);
+    if ('reason' in answer) return declined(answer.reason);
     let secret: McpOAuthSecret;
     try {
-      secret = await tokenRequest(transport(c.env), client, { grant_type: 'authorization_code', code, redirect_uri: client.redirectUri, code_verifier: saved.verifier });
+      secret = await tokenRequest(transport(c.env), client, { grant_type: 'authorization_code', code: answer.code, redirect_uri: client.redirectUri, code_verifier: saved.verifier });
     } catch (failed) { return declined(failure(failed)); }
-    const ciphertext = await encryptToken(c.env, oauthContext(row.id), JSON.stringify(secret));
-    const at = now();
-    const signedIn = await c.env.DB.query(`UPDATE workspace_mcp_servers SET oauth_ciphertext = ?, oauth_by = ?, oauth_at = ?, updated_by = ?, updated_at = ?
-      WHERE id = ? AND url = ? AND ${workspaceAdminSQL} RETURNING id`)
-      .bind(ciphertext, actor, at, actor, at, row.id, saved.url, row.workspace_id, actor).first();
-    if (!signedIn) return declined('the server or your role changed while signing in');
-    const found = await discover(c.env, row.id, row.url, await headersOf(c.env, row), ciphertext);
-    await c.env.DB.batch([
-      c.env.DB.query('UPDATE workspace_mcp_servers SET tools_json = CASE WHEN ? = 1 THEN ? ELSE tools_json END, discovered_at = CASE WHEN ? = 1 THEN ? ELSE discovered_at END, error = ? WHERE id = ?')
-        .bind(found.error ? 0 : 1, JSON.stringify(found.tools), found.error ? 0 : 1, at, found.error, row.id),
-      auditStatement(c.env, actor, 'workspace.mcp.signed_in', row.workspace_id, null,
-        { server: row.id, prefix: row.prefix, tools: found.tools.length, ...(found.error ? { error: found.error } : {}) }),
-    ]);
+    if (!await keepSignIn(c.env, row, actor, saved.url, secret)) return declined('the server or your role changed while signing in');
     return settingsPage(c, row.workspace_id);
+  });
+
+  // A sign-in from a native app, which signs in with a bearer token the system browser doesn't have: the app asks for a
+  // one-time link to open there (registerRemoteMcpAppPages serves it), and finishes with the code the browser ends on.
+  app.post('/api/workspaces/:id/mcp-servers/:serverId/oauth/app', async c => {
+    const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
+    const serverId = identifier(c.req.param('serverId'), 'serverId');
+    await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
+    await assertVaultConfigured(c.env);
+    const row = await serverRow(c.env, workspaceId, serverId);
+    const begin = randomToken();
+    const expiresAt = Date.now() + STATE_TTL;
+    await c.env.DB.batch([
+      c.env.DB.query('DELETE FROM mcp_oauth_app_sign_ins WHERE expires_at < ? OR user_id = ?').bind(Date.now(), actor),
+      c.env.DB.query(`INSERT INTO mcp_oauth_app_sign_ins (id, server_id, user_id, url, begin_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .bind(id(), serverId, actor, row.url, await sha256(begin), expiresAt, now()),
+    ]);
+    return c.json({ url: `${appOrigin(c.env)}${APP_BEGIN_PATH}?${new URLSearchParams({ token: begin }).toString()}`, expiresAt: new Date(expiresAt).toISOString() }, 201);
+  });
+
+  app.post('/api/mcp-servers/oauth/app/finish', async c => {
+    const actor = c.get('auth').userId;
+    const input = await body(c, finishBody, { maxBytes: 1024 });
+    const expired: () => never = () => fail(400, 'invalid_grant', APP_EXPIRED);
+    const code = typeof input.code === 'string' && STATE.test(input.code) ? input.code : expired();
+    const saved = await c.env.DB.query<{ id: string; server_id: string; user_id: string; url: string; secret_ciphertext: string | null; expires_at: number | string }>(
+      'DELETE FROM mcp_oauth_app_sign_ins WHERE finish_hash = ? RETURNING id, server_id, user_id, url, secret_ciphertext, expires_at').bind(await sha256(code)).first();
+    if (!saved || !saved.secret_ciphertext || Number(saved.expires_at) < Date.now()) return expired();
+    if (saved.user_id !== actor) fail(403, 'not_your_sign_in', 'This code finishes a sign-in someone else started: only their Pikibun app can use it. Nothing was kept.');
+    const row = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE id = ?').bind(saved.server_id).first()
+      ?? fail(404, 'not_found', 'Remote MCP server not found.');
+    await requireMember(c.env, row.workspace_id, actor, ['owner', 'admin']);
+    if (row.url !== saved.url) fail(409, 'mcp_server_changed', 'Its address changed while signing in: sign in to it again.');
+    let secret: McpOAuthSecret;
+    try { secret = parseOAuthSecret(await decryptToken(c.env, appSecretContext(saved.id), saved.secret_ciphertext)); }
+    catch { return expired(); }
+    if (!await keepSignIn(c.env, row, actor, saved.url, secret, { via: 'app' })) fail(409, 'mcp_server_changed', 'The server or your role changed while signing in.');
+    return c.json({ workspaceId: row.workspace_id, server: view(await serverRow(c.env, row.workspace_id, row.id)) });
   });
 
   app.delete('/api/workspaces/:id/mcp-servers/:serverId/oauth', async c => {
@@ -444,5 +525,81 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
       auditStatement(c.env, actor, 'workspace.mcp.signed_out', workspaceId, null, { server: serverId, prefix: row.prefix }),
     ]);
     return c.json({ server: view(await serverRow(c.env, workspaceId, serverId)) });
+  });
+}
+
+interface AppSignInRow {
+  id: string; server_id: string; user_id: string; url: string; verifier: string | null; client_ciphertext: string | null; expires_at: number | string;
+}
+
+/**
+ * The pages a system browser opens in a sign-in a native app started (POST .../oauth/app), registered before the
+ * server's sign-in check: that browser isn't signed in to Pikibun, or not as the app's member. Its one-time link stands
+ * in for the member until the authorization server answers; the tokens are then kept aside under a one-time code the
+ * page shows, and become the server's sign-in only when that member's app sends the code (POST .../oauth/app/finish).
+ */
+export function registerRemoteMcpAppPages(app: Hono<AppEnv>): void {
+  app.get(APP_BEGIN_PATH, privateResponse, async c => {
+    requireOrigin(c);
+    const tokens = c.req.queries('token');
+    const token = tokens?.length === 1 ? tokens[0]! : '';
+    const expired = () => appPage(c, 'This sign-in link has expired', APP_EXPIRED, undefined, 400);
+    if (!STATE.test(token)) return expired();
+    const saved = await c.env.DB.query<AppSignInRow>(
+      'UPDATE mcp_oauth_app_sign_ins SET begin_hash = NULL WHERE begin_hash = ? RETURNING id, server_id, user_id, url, verifier, client_ciphertext, expires_at')
+      .bind(await sha256(token)).first();
+    if (!saved || Number(saved.expires_at) < Date.now()) return expired();
+    const row = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE id = ?').bind(saved.server_id).first();
+    if (!row || row.url !== saved.url) return appPage(c, 'Signing in failed', 'The server was removed or moved to another address meanwhile. Start again in the Pikibun app.', undefined, 400);
+    try { await requireMember(c.env, row.workspace_id, saved.user_id, ['owner', 'admin']); }
+    catch { return appPage(c, 'Signing in failed', 'Only an owner or admin of its workspace signs in to it.', undefined, 400); }
+    await assertVaultConfigured(c.env);
+    let client: McpOAuthClient;
+    try { client = await registerClient(transport(c.env), await discoverOAuth(transport(c.env), row.url), appRedirectUri(c.env)); }
+    catch (error) {
+      const reason = `Signing in failed: ${failure(error)}`;
+      await noteError(c.env, row.id, reason);
+      return appPage(c, 'Signing in failed', `${reason}.`, undefined, 400);
+    }
+    const state = randomToken(); const verifier = randomToken();
+    await c.env.DB.query('UPDATE mcp_oauth_app_sign_ins SET state_hash = ?, verifier = ?, client_ciphertext = ? WHERE id = ?')
+      .bind(await sha256(state), verifier, await encryptToken(c.env, stateContext(row.id), JSON.stringify(client)), saved.id).run();
+    const cookie = stateCookie(c.env, true);
+    setCookie(c, cookie.name, state, { ...cookie.options, maxAge: STATE_TTL / 1000, expires: new Date(Number(saved.expires_at)) });
+    return c.redirect(authorizationUrl(client, state, verifier), 302);
+  });
+
+  app.get(APP_CALLBACK_PATH, privateResponse, async c => {
+    const state = callbackState(c, true);
+    const expired = () => appPage(c, 'This sign-in has expired', APP_EXPIRED, undefined, 400);
+    if (!state) return expired();
+    const saved = await c.env.DB.query<AppSignInRow>(
+      'UPDATE mcp_oauth_app_sign_ins SET state_hash = NULL WHERE state_hash = ? RETURNING id, server_id, user_id, url, verifier, client_ciphertext, expires_at')
+      .bind(await sha256(state)).first();
+    if (!saved || !saved.verifier || !saved.client_ciphertext || Number(saved.expires_at) < Date.now()) return expired();
+    const declined = async (reason: string, serverId?: string) => {
+      await c.env.DB.query('DELETE FROM mcp_oauth_app_sign_ins WHERE id = ?').bind(saved.id).run();
+      if (serverId) await noteError(c.env, serverId, `Signing in failed: ${reason}`);
+      return appPage(c, 'Signing in failed', `Signing in failed: ${reason}. Start again in the Pikibun app.`, undefined, 400);
+    };
+    const row = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE id = ?').bind(saved.server_id).first();
+    if (!row) return declined('the server was removed meanwhile');
+    if (row.url !== saved.url) return declined('its address changed while signing in', row.id);
+    let client: McpOAuthClient;
+    try { client = JSON.parse(await decryptToken(c.env, stateContext(row.id), saved.client_ciphertext)) as McpOAuthClient; }
+    catch { return declined('Pikibun couldn\'t read the sign-in it started', row.id); }
+    const answer = callbackCode(c, client);
+    if ('reason' in answer) return declined(answer.reason, row.id);
+    let secret: McpOAuthSecret;
+    try {
+      secret = await tokenRequest(transport(c.env), client, { grant_type: 'authorization_code', code: answer.code, redirect_uri: client.redirectUri, code_verifier: saved.verifier });
+    } catch (failed) { return declined(failure(failed), row.id); }
+    const finish = randomToken();
+    const kept = await c.env.DB.query(`UPDATE mcp_oauth_app_sign_ins SET finish_hash = ?, secret_ciphertext = ?, verifier = NULL, client_ciphertext = NULL, expires_at = ?
+      WHERE id = ? RETURNING id`)
+      .bind(await sha256(finish), await encryptToken(c.env, appSecretContext(saved.id), JSON.stringify(secret)), Date.now() + STATE_TTL, saved.id).first();
+    if (!kept) return expired();
+    return appPage(c, 'Almost signed in', `Go back to the Pikibun app to finish signing in to ${row.name}.`,
+      { link: remoteMcpAppLink(appOrigin(c.env), finish), code: finish });
   });
 }
