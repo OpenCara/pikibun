@@ -4231,7 +4231,8 @@ function oauthMcpFake() {
     }
     if (request.url === 'https://auth.example.com/_clerk/oauth/register' && method === 'POST') {
       const body = JSON.parse(request.body) as { redirect_uris: string[]; token_endpoint_auth_method: string };
-      assert.deepEqual(body.redirect_uris, [`${origin}/api/mcp-servers/oauth/callback`]);
+      assert.equal(body.redirect_uris.length, 1);
+      assert.ok([`${origin}/api/mcp-servers/oauth/callback`, `${origin}/api/mcp-servers/oauth/app/callback`].includes(body.redirect_uris[0]!));
       assert.equal(body.token_endpoint_auth_method, 'none');
       return json(201, { client_id: 'client-1', token_endpoint_auth_method: 'none' });
     }
@@ -4363,6 +4364,101 @@ test('a remote MCP server that asks for OAuth is signed in to by an admin; Pikib
   assert.equal((await json<{ result: string }>(await call())).result, 'generate_video as personal-token', 'the token, not an OAuth sign-in, is sent');
   const switched = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.updated'").all().map(row => JSON.parse(String(row.detail_json))).at(-1);
   assert.equal(switched.signedOut, true);
+});
+
+test('an app signs in to a remote MCP server through a system browser that isn\'t signed in to Pikibun, and only that member\'s app keeps the sign-in', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const fake = oauthMcpFake();
+  f.env.REMOTE_MCP_TRANSPORT = fake.transport;
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const { server } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path, { name: 'Gen', prefix: 'gen', url: fake.mcpUrl }), 201);
+  const native = async (name: string) => {
+    const { token: bearer } = await json<{ token: string }>(await f.request('POST', '/api/auth/test', { id: name, client: 'native', deviceName: 'Phone' }, { Authorization: `Bearer ${testSecret}` }));
+    return (method: string, route: string, body?: unknown) => f.request(method, route, body, { Authorization: `Bearer ${bearer}` });
+  };
+  const adminApp = await native('admin');
+  const otherApp = await native('host');
+  const appCallback = `${origin}/api/mcp-servers/oauth/app/callback`;
+  const link = path + '/' + server.id + '/oauth/app';
+  await denied(await otherApp('POST', link), 403, 'forbidden');
+
+  const browser = async () => {
+    const { url, expiresAt } = await json<{ url: string; expiresAt: string }>(await adminApp('POST', link), 201);
+    assert.ok(Date.parse(expiresAt) > Date.now());
+    const begin = new URL(url);
+    assert.equal(`${begin.origin}${begin.pathname}`, `${origin}/api/mcp-servers/oauth/app/begin`);
+    const response = await f.request('GET', begin.pathname + begin.search);
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer', 'the one-time link never leaves in a Referer');
+    const location = new URL(response.headers.get('location')!);
+    assert.equal(`${location.origin}${location.pathname}`, 'https://auth.example.com/_clerk/oauth/authorize');
+    assert.equal(location.searchParams.get('redirect_uri'), appCallback);
+    const state = location.searchParams.get('state')!;
+    assert.equal(response.headers.get('set-cookie')!.match(/test-mcp-oauth-app=([^;]+)/)![1], state);
+    const again = await f.request('GET', begin.pathname + begin.search);
+    assert.equal(again.status, 400, 'the link works once');
+    assert.match(await again.text(), /expired or was already used/);
+    return { state, challenge: location.searchParams.get('code_challenge')!,
+      callback: (query: Record<string, string>, withCookie = true) => f.request('GET', `/api/mcp-servers/oauth/app/callback?${new URLSearchParams(query)}`,
+        undefined, withCookie ? { Cookie: `test-mcp-oauth-app=${state}` } : {}) };
+  };
+  const finished = async (response: Response) => {
+    assert.equal(response.status, 200);
+    const page = await response.text();
+    const code = /pikibun:\/\/mcp\/sign-in\?server=([^&"]+)&amp;code=([A-Za-z0-9_-]{43})/.exec(page);
+    assert.ok(code, page);
+    assert.equal(decodeURIComponent(code[1]!), origin);
+    assert.ok(page.includes(`<code style="font-size:14px;word-break:break-all;user-select:all">${code[2]}</code>`));
+    return code[2]!;
+  };
+  const listed = async () => (await json<{ servers: WorkspaceMcpServer[] }>(await s.admin.request('GET', path))).servers[0]!;
+
+  const declined = await browser();
+  const refused = await declined.callback({ error: 'access_denied', state: declined.state });
+  assert.equal(refused.status, 400);
+  assert.match(await refused.text(), /the sign-in was declined/);
+  assert.match((await listed()).error ?? '', /Signing in failed: the sign-in was declined/);
+
+  const passed = await browser();
+  fake.codes.set('code-1', { challenge: passed.challenge, resource: fake.mcpUrl, redirect: appCallback });
+  assert.equal((await passed.callback({ code: 'code-1', state: passed.state }, false)).status, 400, 'a callback needs the cookie its browser got');
+  const stolen = await finished(await passed.callback({ code: 'code-1', state: passed.state }));
+  assert.equal((await passed.callback({ code: 'code-1', state: passed.state })).status, 400, 'a callback works once');
+  assert.ok(!/access-\d|refresh-\d/.test(JSON.stringify(f.sqlite.prepare('SELECT * FROM mcp_oauth_app_sign_ins').all())), 'tokens kept aside are encrypted');
+  await denied(await otherApp('POST', '/api/mcp-servers/oauth/app/finish', { code: stolen }), 403, 'not_your_sign_in');
+  await denied(await adminApp('POST', '/api/mcp-servers/oauth/app/finish', { code: stolen }), 400, 'invalid_grant');
+  assert.equal((await listed()).oauth, undefined, 'nothing was kept');
+
+  const flow = await browser();
+  fake.codes.set('code-2', { challenge: flow.challenge, resource: fake.mcpUrl, redirect: appCallback });
+  const code = await finished(await flow.callback({ code: 'code-2', state: flow.state, iss: 'https://auth.example.com/_clerk' }));
+  assert.equal((await listed()).oauth, undefined, 'the browser alone keeps no sign-in');
+  await denied(await f.request('POST', '/api/mcp-servers/oauth/app/finish', { code }), 401, 'unauthorized');
+  await denied(await adminApp('POST', '/api/mcp-servers/oauth/app/finish', { code: 'short' }), 400, 'invalid_grant');
+  const done = await json<{ workspaceId: string; server: WorkspaceMcpServer }>(await adminApp('POST', '/api/mcp-servers/oauth/app/finish', { code }));
+  assert.equal(done.workspaceId, s.team.id);
+  assert.ok(done.server.oauth?.signedInAt);
+  assert.equal(done.server.error, undefined);
+  assert.deepEqual(done.server.tools.map(tool => tool.toolName), ['gen_generate_video']);
+  await denied(await adminApp('POST', '/api/mcp-servers/oauth/app/finish', { code }), 400, 'invalid_grant');
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM mcp_oauth_app_sign_ins').get()!.n, 0);
+  const audit = f.sqlite.prepare("SELECT actor_id, detail_json FROM audit WHERE action = 'workspace.mcp.signed_in'").all();
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0]!.actor_id, s.admin.user.id);
+  assert.equal(JSON.parse(String(audit[0]!.detail_json)).via, 'app');
+
+  const answer = parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true })));
+  const route = answer.remoteTools![0]!.route;
+  const called = await json<{ result: string }>(await self(f, s.connector, route,
+    { sessionId: s.session.id, actorId: s.session.ownerId, admissionId: admit(f, s.session.id, s.session.ownerId), callId: 'call-1', arguments: { prompt: 'cat' } }));
+  assert.equal(called.result, 'generate_video as access-2');
+
+  const moving = await browser();
+  fake.codes.set('code-3', { challenge: moving.challenge, resource: fake.mcpUrl, redirect: appCallback });
+  const late = await finished(await moving.callback({ code: 'code-3', state: moving.state }));
+  await json(await s.admin.request('PATCH', path + '/' + server.id, { url: 'https://elsewhere.example.net/mcp', headers: {} }));
+  await denied(await adminApp('POST', '/api/mcp-servers/oauth/app/finish', { code: late }), 409, 'mcp_server_changed');
+  assert.equal((await listed()).oauth, undefined, 'a sign-in made for one address is never kept for another');
 });
 
 test('a protected resource covers only its own origin and path, and an authorization server\'s metadata must name the issuer it was asked for', async () => {

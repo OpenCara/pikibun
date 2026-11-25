@@ -144,6 +144,23 @@ export function remoteMcpSignInOf(server: Pick<WorkspaceMcpServer, "oauth" | "he
   return server.headerNames.some(name => name.toLowerCase() === "authorization") ? "token" : "header";
 }
 
+export const REMOTE_MCP_APP_LINK = "pikibun://mcp/sign-in";
+const APP_SIGN_IN_CODE = /^[A-Za-z0-9_-]{43}$/;
+
+export function remoteMcpAppLink(server: string, code: string): string {
+  return `${REMOTE_MCP_APP_LINK}?${new URLSearchParams({ server, code }).toString()}`;
+}
+
+export function parseRemoteMcpAppCode(input: string): { server: string | null; code: string } | null {
+  const text = input.trim();
+  if (APP_SIGN_IN_CODE.test(text)) return { server: null, code: text };
+  let url: URL;
+  try { url = new URL(text); } catch { return null; }
+  if (`${url.protocol}//${url.host}${url.pathname}` !== REMOTE_MCP_APP_LINK) return null;
+  const code = url.searchParams.get("code") ?? "";
+  return APP_SIGN_IN_CODE.test(code) ? { server: url.searchParams.get("server"), code } : null;
+}
+
 export function remoteMcpToolList(value: unknown): RemoteMcpTool[] {
   if (!Array.isArray(value)) throw new Error("tools/list answered without tools");
   const tools: RemoteMcpTool[] = [];
