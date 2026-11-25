@@ -149,6 +149,7 @@ export interface SessionRecord {
   hostUnsandboxed?: boolean;
   viewable?: boolean;
   hostEnvironment?: true;
+  hostDirectory?: string;
   portable?: true;
   detached?: true;
   audienceSharing?: true;
