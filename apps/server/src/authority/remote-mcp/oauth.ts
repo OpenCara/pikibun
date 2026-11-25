@@ -28,12 +28,10 @@ export interface McpAuthorizationServer {
 
 export const MCP_CLIENT_METADATA_PATH = '/oauth/mcp-client.json';
 
-/** The URL of Pikibun's OAuth client ID metadata document, which is its client_id where an authorization server supports them: only an https:// origin, which an authorization server can fetch. */
 export function clientMetadataDocumentUrl(origin: string): string | undefined {
   return new URL(origin).protocol === 'https:' ? `${origin}${MCP_CLIENT_METADATA_PATH}` : undefined;
 }
 
-/** Pikibun's OAuth client ID metadata document (draft-ietf-oauth-client-id-metadata-document), served at clientMetadataDocumentUrl. */
 export function clientMetadataDocument(origin: string, redirectUris: string[]): Record<string, unknown> {
   return { client_id: `${origin}${MCP_CLIENT_METADATA_PATH}`, client_name: 'Pikibun', client_uri: origin, redirect_uris: redirectUris,
     grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' };
@@ -165,11 +163,6 @@ export async function discoverOAuth(transport: RemoteMcpTransport, mcpUrl: strin
   };
 }
 
-/**
- * The client Pikibun signs in as. Where the authorization server supports client ID metadata documents and Pikibun has one (an https:// origin),
- * its URL is the client_id, with no client secret and nothing registered: preferred even where dynamic client registration is offered too,
- * since it registers no new client at every sign-in. Otherwise Pikibun registers itself with dynamic client registration.
- */
 export async function registerClient(transport: RemoteMcpTransport, server: McpAuthorizationServer, redirectUri: string,
   metadataDocumentUrl?: string): Promise<McpOAuthClient> {
   const publicClients = !server.authMethods || server.authMethods.includes('none');

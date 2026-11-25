@@ -23,7 +23,8 @@ import { requireToolCall } from '../tool-checks.js';
 import { assertVaultConfigured, decryptToken, encryptToken } from '../vault.js';
 import { callRemoteMcpTool, discoverRemoteMcpTools, RemoteMcpError, RemoteMcpUnauthorized } from './client.js';
 import {
-  authorizationUrl, discoverOAuth, parseOAuthSecret, registerClient, RemoteMcpOAuthError, tokenRequest, type McpOAuthClient, type McpOAuthSecret,
+  authorizationUrl, clientMetadataDocument, clientMetadataDocumentUrl, discoverOAuth, MCP_CLIENT_METADATA_PATH, parseOAuthSecret, registerClient, RemoteMcpOAuthError,
+  tokenRequest, type McpOAuthClient, type McpOAuthSecret,
 } from './oauth.js';
 import { publicHttpsTransport, RemoteMcpRefused } from './transport.js';
 
@@ -167,6 +168,10 @@ function oauthRedirectUri(env: Env): string {
 
 function appRedirectUri(env: Env): string {
   return `${appOrigin(env)}${APP_CALLBACK_PATH}`;
+}
+
+async function signInClient(env: Env, url: string, redirectUri: string): Promise<McpOAuthClient> {
+  return registerClient(transport(env), await discoverOAuth(transport(env), url), redirectUri, clientMetadataDocumentUrl(appOrigin(env)));
 }
 
 function stateCookie(env: Env, app = false) {
@@ -440,7 +445,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     await assertVaultConfigured(c.env);
     const row = await serverRow(c.env, workspaceId, serverId);
     let client: McpOAuthClient;
-    try { client = await registerClient(transport(c.env), await discoverOAuth(transport(c.env), row.url), oauthRedirectUri(c.env)); }
+    try { client = await signInClient(c.env, row.url, oauthRedirectUri(c.env)); }
     catch (error) {
       await noteError(c.env, serverId, `Signing in failed: ${failure(error)}`);
       return settingsPage(c, workspaceId);
@@ -541,6 +546,12 @@ interface AppSignInRow {
 }
 
 export function registerRemoteMcpAppPages(app: Hono<AppEnv>): void {
+  app.get(MCP_CLIENT_METADATA_PATH, c => {
+    const origin = appOrigin(c.env);
+    if (!clientMetadataDocumentUrl(origin)) fail(404, 'not_found', 'This Pikibun server, not served over https://, has no OAuth client metadata document.');
+    c.header('Cache-Control', 'public, max-age=300');
+    return c.json(clientMetadataDocument(origin, [oauthRedirectUri(c.env), appRedirectUri(c.env)]));
+  });
   app.get(APP_BEGIN_PATH, privateResponse, async c => {
     requireOrigin(c);
     const tokens = c.req.queries('token');
@@ -557,7 +568,7 @@ export function registerRemoteMcpAppPages(app: Hono<AppEnv>): void {
     catch { return appPage(c, 'Signing in failed', 'Only an owner or admin of its workspace signs in to it.', undefined, 400); }
     await assertVaultConfigured(c.env);
     let client: McpOAuthClient;
-    try { client = await registerClient(transport(c.env), await discoverOAuth(transport(c.env), row.url), appRedirectUri(c.env)); }
+    try { client = await signInClient(c.env, row.url, appRedirectUri(c.env)); }
     catch (error) {
       const reason = `Signing in failed: ${failure(error)}`;
       await noteError(c.env, row.id, reason);
