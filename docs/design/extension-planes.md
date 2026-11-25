@@ -191,7 +191,9 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
    - **Workspace Remote MCP servers (Plane 1):** a workspace's owners and admins register a remote MCP endpoint
      (`https://` URL on a public address, refused against `non-public-addresses.ts`, with optional Bearer / header
      secret stored encrypted in the Pikibun server's vault) under **Workspace → Extensions → Remote MCP**. The Pikibun
-     server connects over Streamable HTTP (bounded at 15 seconds for `tools/list`, 60 seconds and 1 MB per `tools/call`),
+     server connects over Streamable HTTP (bounded at 15 seconds and 8 MB per answer for `tools/list`, which a server listing many large input schemas
+     unpaged passes 1 MB with, 60 seconds and 1 MB per `tools/call`; the tools it leaves out, past 64 or with names or
+     schemas it can't offer, are counted and shown on the settings page rather than dropped silently),
      prefixes or namespaces colliding tool names, enforces `tool_groups`, audits calls, and serves the discovered tools
      to connectors in `POST /api/connectors/self/tools` as `BrokeredToolDefinition`s routing to
      `broker/mcp/<serverId>/<tool>`. Because a remote MCP server's `annotations.readOnlyHint` is untrusted, every remote

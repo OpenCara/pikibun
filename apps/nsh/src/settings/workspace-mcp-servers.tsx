@@ -1,6 +1,6 @@
 import { cleanup, openUrl, signal, Text, untracked, UrlScheme, View } from "nsh";
 import {
-  parseRemoteMcpAppCode, REMOTE_MCP_APP_LINK, remoteMcpLimits, remoteMcpSignInHeaders, remoteMcpSignInMethods, remoteMcpSignInOf, type RemoteMcpSignInMethod, type WorkspaceMcpServer,
+  parseRemoteMcpAppCode, REMOTE_MCP_APP_LINK, remoteMcpLeftOutNote, remoteMcpLimits, remoteMcpSignInHeaders, remoteMcpSignInMethods, remoteMcpSignInOf, type RemoteMcpSignInMethod, type WorkspaceMcpServer,
 } from "../../../../packages/shared/src/remote-mcp";
 import { descriptionSummary } from "../../../../packages/shared/src/workspace-tools";
 import { segment, type Workspace } from "../shared";
@@ -14,6 +14,13 @@ import { Checkbox, Field, RadioGroup, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyButton, EmptyState, Feedback, FormSheet, Note, ResourceState, Section, Small } from "../ui";
 
 interface McpServersResponse { servers: WorkspaceMcpServer[]; admin: boolean }
+
+const signInFailed = (server: WorkspaceMcpServer) => !!server.error?.startsWith("Signing in failed");
+
+function mcpErrorTitle(server: WorkspaceMcpServer): string {
+  if (signInFailed(server)) return "It couldn't be signed in to";
+  return server.oauth ? "Signed in, but its tools couldn't be listed" : "Its tools couldn't be listed";
+}
 
 export function WorkspaceMcpServers(props: { workspace: Workspace }) {
   const path = () => `/api/workspaces/${segment(props.workspace.id)}/mcp-servers`;
@@ -49,13 +56,14 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
   }
   async function finish(input: string) {
     const parsed = parseRemoteMcpAppCode(input);
+    let listed: WorkspaceMcpServer | undefined;
     const done = await action.run(async () => {
       if (!parsed) throw new Error("That isn't a sign-in code: copy the code, or the whole pikibun:// link, from the page your browser ended on.");
       if (parsed.server !== null && currentOrigin(parsed.server) !== session().origin) {
         throw new Error(`That code is for another Pikibun server (${displayOrigin(parsed.server)}): finish it in the app signed in there.`);
       }
-      await session().api("/api/mcp-servers/oauth/app/finish", { method: "POST", body: { code: parsed.code } });
-    }, "Signed in. Sessions use its tools from their next message.");
+      listed = (await session().api<{ server: WorkspaceMcpServer }>("/api/mcp-servers/oauth/app/finish", { method: "POST", body: { code: parsed.code } })).server;
+    }, () => listed?.error ? `Signed in, but its tools couldn't be listed: ${listed.error}` : "Signed in. Sessions use its tools from their next message.");
     if (done) {
       finishing.set(undefined);
       pasted.set("");
@@ -98,9 +106,10 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
               <Each of={current().servers} key={server => server.id}>
                 {server => (
                   <CollapsibleRow leading={<Icon name="sparkles" size={16} color={palette().muted} />} title={`${server().name} · ${server().prefix}_`}
-                    hint={server().error ? `${server().url}\n${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().oauth ? " · signed in" : ""}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}`}
+                    hint={server().error ? `${server().url}\n${server().oauth && !signInFailed(server()) ? "Signed in · " : ""}${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().toolsLeftOut ? " (some left out)" : ""}${server().oauth ? " · signed in" : ""}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}`}
                     trailing={<Badge tone={server().error ? "danger" : server().enabled ? "success" : "neutral"}>{server().error ? "Error" : server().enabled ? "On" : "Off"}</Badge>}>
-                    <If when={server().error}><Banner tone="danger" title={server().error!.startsWith("Signing in failed") ? "It couldn't be signed in to" : "Its tools couldn't be listed"}>{server().error!}</Banner></If>
+                    <If when={server().error}><Banner tone="danger" title={mcpErrorTitle(server())}>{server().error!}</Banner></If>
+                    <If when={server().toolsLeftOut}><Banner tone="warning" title="Some of its tools are left out">{remoteMcpLeftOutNote(server().toolsLeftOut)}</Banner></If>
                     <If when={server().oauth}><Small>{`Signed in with OAuth on ${new Date(server().oauth!.signedInAt).toLocaleString()}.`}</Small></If>
                     <Each of={server().tools} key={tool => tool.name}>
                       {(tool, index) => (

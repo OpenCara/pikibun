@@ -7,7 +7,7 @@ import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import { extensionSwitchOn } from '../../../../../packages/shared/src/piki-extensions.js';
 import {
   REMOTE_MCP_EXTENSION, remoteMcpAppLink, remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl, validRemoteMcpPrefix,
-  type RemoteMcpServerSummary, type RemoteMcpTool, type RemoteMcpTransport, type WorkspaceMcpServer,
+  type RemoteMcpServerSummary, type RemoteMcpTool, type RemoteMcpToolsLeftOut, type RemoteMcpTransport, type WorkspaceMcpServer,
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
 import type { AppContext, AppEnv, Env, SessionRow } from '../../types.js';
@@ -31,6 +31,7 @@ interface ServerRow {
   id: string; workspace_id: string; prefix: string; name: string; url: string; headers_ciphertext: string | null; header_names_json: string;
   read_only_tools_json: string; tools_json: string; enabled: number | string; discovered_at: string | null; error: string | null; updated_at: string;
   oauth_ciphertext: string | null; oauth_by: string | null; oauth_at: string | null;
+  tools_over_limit: number | string | null; tools_unusable: number | string | null;
 }
 
 const STATE_TTL = 10 * 60 * 1000;
@@ -71,8 +72,10 @@ function view(row: ServerRow): WorkspaceMcpServer {
     const toolName = remoteMcpToolName(row.prefix, tool.name);
     return toolName ? [{ ...tool, toolName, readOnly: readOnlyTools.includes(tool.name) }] : [];
   });
+  const leftOut = { overLimit: Number(row.tools_over_limit) || 0, unusable: Number(row.tools_unusable) || 0 };
   return { id: row.id, name: row.name, prefix: row.prefix, url: row.url, enabled: Number(row.enabled) === 1, headerNames: parsedList(row.header_names_json),
-    ...(row.oauth_ciphertext && row.oauth_at ? { oauth: { signedInAt: row.oauth_at } } : {}), readOnlyTools, tools, ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
+    ...(row.oauth_ciphertext && row.oauth_at ? { oauth: { signedInAt: row.oauth_at } } : {}), readOnlyTools, tools,
+    ...(leftOut.overLimit || leftOut.unusable ? { toolsLeftOut: leftOut } : {}), ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
 }
 
 function failure(error: unknown, signedIn = false): string {
@@ -146,9 +149,16 @@ async function withCredentials<T>(env: Env, serverId: string, headers: Record<st
   }
 }
 
-async function discover(env: Env, serverId: string, url: string, headers: Record<string, string>, oauth: string | null): Promise<{ tools: RemoteMcpTool[]; error: string | null }> {
-  try { return { tools: await withCredentials(env, serverId, headers, oauth, sent => discoverRemoteMcpTools(transport(env), url, sent)), error: null }; }
-  catch (error) { return { tools: [], error: failure(error, !!oauth) }; }
+interface Discovered { tools: RemoteMcpTool[]; leftOut: RemoteMcpToolsLeftOut; error: string | null }
+
+async function discover(env: Env, serverId: string, url: string, headers: Record<string, string>, oauth: string | null): Promise<Discovered> {
+  try { return { ...await withCredentials(env, serverId, headers, oauth, sent => discoverRemoteMcpTools(transport(env), url, sent)), error: null }; }
+  catch (error) { return { tools: [], leftOut: { overLimit: 0, unusable: 0 }, error: failure(error, !!oauth) }; }
+}
+
+function discoveredDetail(found: Discovered): Record<string, unknown> {
+  return { tools: found.tools.length, ...(found.leftOut.overLimit ? { toolsOverLimit: found.leftOut.overLimit } : {}),
+    ...(found.leftOut.unusable ? { toolsUnusable: found.leftOut.unusable } : {}), ...(found.error ? { error: found.error } : {}) };
 }
 
 function oauthRedirectUri(env: Env): string {
@@ -196,10 +206,12 @@ async function keepSignIn(env: Env, row: ServerRow, actor: string, url: string, 
   if (!signedIn) return false;
   const found = await discover(env, row.id, row.url, await headersOf(env, row), ciphertext);
   await env.DB.batch([
-    env.DB.query('UPDATE workspace_mcp_servers SET tools_json = CASE WHEN ? = 1 THEN ? ELSE tools_json END, discovered_at = CASE WHEN ? = 1 THEN ? ELSE discovered_at END, error = ? WHERE id = ?')
-      .bind(found.error ? 0 : 1, JSON.stringify(found.tools), found.error ? 0 : 1, at, found.error, row.id),
+    env.DB.query(`UPDATE workspace_mcp_servers SET tools_json = CASE WHEN ? = 1 THEN ? ELSE tools_json END, discovered_at = CASE WHEN ? = 1 THEN ? ELSE discovered_at END,
+        tools_over_limit = CASE WHEN ? = 1 THEN ? ELSE tools_over_limit END, tools_unusable = CASE WHEN ? = 1 THEN ? ELSE tools_unusable END, error = ? WHERE id = ?`)
+      .bind(found.error ? 0 : 1, JSON.stringify(found.tools), found.error ? 0 : 1, at, found.error ? 0 : 1, found.leftOut.overLimit, found.error ? 0 : 1, found.leftOut.unusable,
+        found.error, row.id),
     auditStatement(env, actor, 'workspace.mcp.signed_in', row.workspace_id, null,
-      { server: row.id, prefix: row.prefix, tools: found.tools.length, ...detail, ...(found.error ? { error: found.error } : {}) }),
+      { server: row.id, prefix: row.prefix, ...detail, ...discoveredDetail(found) }),
   ]);
   return true;
 }
@@ -340,13 +352,13 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const found = await discover(c.env, serverId, url, headers, null);
     const ciphertext = Object.keys(headers).length ? await encryptToken(c.env, secretContext(serverId), JSON.stringify(headers)) : null;
     const saved = await c.env.DB.query<{ id: string }>(`INSERT INTO workspace_mcp_servers (id, workspace_id, prefix, name, url, headers_ciphertext, header_names_json,
-        read_only_tools_json, tools_json, enabled, discovered_at, error, created_by, updated_by, created_at, updated_at)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ? WHERE ${workspaceAdminSQL}
+        read_only_tools_json, tools_json, tools_over_limit, tools_unusable, enabled, discovered_at, error, created_by, updated_by, created_at, updated_at)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ? WHERE ${workspaceAdminSQL}
         AND (SELECT COUNT(*) FROM workspace_mcp_servers WHERE workspace_id = ?) < ?
         AND NOT EXISTS (SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND prefix = ?)
       RETURNING id`)
       .bind(serverId, workspaceId, prefix, name, url, ciphertext, JSON.stringify(Object.keys(headers)), JSON.stringify(readOnlyTools), JSON.stringify(found.tools),
-        found.error ? null : at, found.error, actor, actor, at, at, workspaceId, actor, workspaceId, remoteMcpLimits.servers, workspaceId, prefix).first();
+        found.leftOut.overLimit, found.leftOut.unusable, found.error ? null : at, found.error, actor, actor, at, at, workspaceId, actor, workspaceId, remoteMcpLimits.servers, workspaceId, prefix).first();
     if (!saved) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
       if (await c.env.DB.query('SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND prefix = ?').bind(workspaceId, prefix).first()) {
@@ -355,7 +367,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
       fail(409, 'mcp_server_limit', `A workspace has at most ${remoteMcpLimits.servers} remote MCP servers.`);
     }
     await auditStatement(c.env, actor, 'workspace.mcp.added', workspaceId, null,
-      { server: serverId, name, prefix, url, headers: Object.keys(headers), readOnlyTools, tools: found.tools.length, ...(found.error ? { error: found.error } : {}) }).run();
+      { server: serverId, name, prefix, url, headers: Object.keys(headers), readOnlyTools, ...discoveredDetail(found) }).run();
     return c.json({ server: view(await serverRow(c.env, workspaceId, serverId)) }, 201);
   });
 
@@ -385,12 +397,14 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const ciphertext = input.headers === undefined ? row.headers_ciphertext
       : Object.keys(headers).length ? await encryptToken(c.env, secretContext(serverId), JSON.stringify(headers)) : null;
     const saved = await c.env.DB.query<{ id: string }>(`UPDATE workspace_mcp_servers SET name = ?, url = ?, headers_ciphertext = ?, header_names_json = ?,
-        read_only_tools_json = ?, tools_json = ?, enabled = ?, discovered_at = ?, error = ?, updated_by = ?, updated_at = ?,
+        read_only_tools_json = ?, tools_json = ?, tools_over_limit = ?, tools_unusable = ?, enabled = ?, discovered_at = ?, error = ?, updated_by = ?, updated_at = ?,
         oauth_ciphertext = CASE WHEN ? = 1 THEN NULL ELSE oauth_ciphertext END, oauth_by = CASE WHEN ? = 1 THEN NULL ELSE oauth_by END,
         oauth_at = CASE WHEN ? = 1 THEN NULL ELSE oauth_at END
       WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
       .bind(name, url, ciphertext, JSON.stringify(Object.keys(headers)), JSON.stringify(readOnlyTools),
-        found && !found.error ? JSON.stringify(found.tools) : row.tools_json, enabled ? 1 : 0,
+        found && !found.error ? JSON.stringify(found.tools) : row.tools_json,
+        found && !found.error ? found.leftOut.overLimit : Number(row.tools_over_limit) || 0, found && !found.error ? found.leftOut.unusable : Number(row.tools_unusable) || 0,
+        enabled ? 1 : 0,
         found ? (found.error ? row.discovered_at : at) : row.discovered_at, found ? found.error : row.error, actor, at, signOut ? 1 : 0, signOut ? 1 : 0, signOut ? 1 : 0,
         serverId, workspaceId, workspaceId, actor).first();
     if (!saved) {
@@ -401,7 +415,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
       server: serverId, changed: keys.filter(item => item !== 'refresh'), ...(input.url !== undefined ? { url } : {}), ...(input.headers !== undefined ? { headers: Object.keys(headers) } : {}),
       ...(input.readOnlyTools !== undefined ? { readOnlyTools } : {}), ...(input.enabled !== undefined ? { enabled } : {}),
       ...(signOut && row.oauth_ciphertext ? { signedOut: true } : {}),
-      ...(found ? { tools: found.tools.length, ...(found.error ? { error: found.error } : {}) } : {}),
+      ...(found ? discoveredDetail(found) : {}),
     }).run();
     return c.json({ server: view(await serverRow(c.env, workspaceId, serverId)) });
   });
