@@ -13,6 +13,7 @@ import { Icon } from "../icons";
 import { palette, text, weight } from "../theme";
 import { Field, Select, TextField } from "../form";
 import { Badge, Button, CardBody, confirm, CopyField, Feedback, FormSheet, Note, ResourceState, Row, Section } from "../ui";
+import { McpConnectionsGroup } from "./mcp-connections";
 
 const tokenProviders = gitProviders.filter((provider): provider is TokenGitProvider => provider !== "github");
 
@@ -536,11 +537,13 @@ export function ConnectedAccountsSection() {
         <Note>Sessions you own work on the workspaces' sources with your own accounts here, through Pikibun.</Note>
         <Note>{gitAccountsInfo}</Note>
         <Note>Documents are read with your own connections: sign in to a provider, or for Notion, Google Drive and Feishu/Lark paste a secret. Their tokens and secrets are encrypted on the server, refreshed there, and never sent to any host, yours included. Each provider lets its connection read only what you share with it, and sessions read only what lies under the workspace's sources.</Note>
+        <Note>Remote MCP servers: sign in to one once here, with OAuth, a token, a username and password or a header, and use it in the workspaces you choose. A workspace uses it only where its server signs in with each member's own account, and only for requests you send. The sign-in is encrypted on the server and never sent to any host or to any other address.</Note>
         <Note>Connecting an account doesn't change how you sign in; viewing a session, sharing a host or publishing an agent never grants access to your accounts.</Note>
       </View>}>
       <View style={{ gap: 24 }}>
         <GitAccountsGroup />
         <DocumentAccountsGroup />
+        <McpConnectionsGroup />
       </View>
     </Section>
   );

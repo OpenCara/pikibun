@@ -79,6 +79,7 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`POST ${ORIGIN}/api/auth/logout`]: { status: 204 },
     [`GET ${ORIGIN}/api/git/accounts`]: { body: { accounts: [] } },
     [`GET ${ORIGIN}/api/source-accounts`]: { body: { accounts: [], oauth: [] } },
+    [`GET ${ORIGIN}/api/mcp-connections`]: { body: { connections: [] } },
     [`GET ${ORIGIN}/api/me/devices`]: { body: { devices: [{ id: "d1", name: "Ada's iPhone", createdAt: "2026-11-01T10:00:00.000Z", expiresAt: "2026-12-01T10:00:00.000Z" }] } },
     [`GET ${ORIGIN}/api/join-requests`]: { body: { requests: [] } },
     [`PATCH ${ORIGIN}/api/me`]: (request: Request) => ({ body: { user: { ...user, ...JSON.parse(request.body ?? "{}") } } }),

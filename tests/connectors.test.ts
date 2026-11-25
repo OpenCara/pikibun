@@ -4691,7 +4691,8 @@ test('members bring their own remote MCP connections from their profile, and a w
   assert.deepEqual((await json<{ connections: McpConnection[] }>(await s.admin.request('GET', connections))).connections, [], 'each member sees only their own');
 
   const brought = await json<{ connection: McpConnection }>(await s.creator.request('PUT', `${connections}/${connection.id}/workspaces/${s.team.id}`));
-  assert.deepEqual(brought.connection.workspaces, [{ id: s.team.id, name: s.team.name }]);
+  const team = { id: s.team.id, name: String(f.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(s.team.id)!.name) };
+  assert.deepEqual(brought.connection.workspaces, [team]);
   assert.equal(await result(), 'search as workspace-token', 'a server that signs in as the workspace ignores members\' connections');
 
   await denied(await s.creator.request('PATCH', path + '/' + server.id, { signInAs: 'members' }), 403, 'forbidden');
@@ -4708,7 +4709,7 @@ test('members bring their own remote MCP connections from their profile, and a w
   await json(await s.creator.request('DELETE', `${connections}/${connection.id}/workspaces/${s.team.id}`));
   assert.equal(await result(), 'search as workspace-token', 'without it, the workspace\'s sign-in');
   const { connection: offered } = await json<{ connection: McpConnection }>(await s.creator.request('PATCH', `${connections}/${connection.id}`, { name: 'Mine' }));
-  assert.deepEqual([offered.name, offered.workspaces, offered.offeredIn], ['Mine', [], [{ id: s.team.id, name: s.team.name }]]);
+  assert.deepEqual([offered.name, offered.workspaces, offered.offeredIn], ['Mine', [], [team]]);
 
   await json(await s.admin.request('PATCH', path + '/' + server.id, { signInAs: 'members' }));
   const reached = fake.calls.length;
@@ -4752,7 +4753,7 @@ test('a member signs in to their own remote MCP connection with OAuth from the w
   const connections = '/api/mcp-connections';
   const { connection } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections, { name: 'Gen', url: fake.mcpUrl }), 201);
   assert.match(connection.error ?? '', /needs a sign-in \(HTTP 401\): sign in to it with Sign in/);
-  assert.deepEqual(connection.offeredIn, [{ id: s.team.id, name: s.team.name }]);
+  assert.deepEqual(connection.offeredIn, [{ id: s.team.id, name: String(f.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(s.team.id)!.name) }]);
 
   const start = `${connections}/${connection.id}/oauth/start`;
   await denied(await s.admin.request('GET', start), 404, 'not_found');
