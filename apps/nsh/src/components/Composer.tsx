@@ -99,7 +99,11 @@ export function Composer(props: {
     <View testID="composer" style={{ gap: narrow() ? 6 : 8, padding: narrow() ? 8 : 12, paddingLeft: narrow() ? 10 : 12, borderWidth: 1, borderRadius: radius.large,
       borderColor: dragging() ? palette().accent : focused() ? palette().borderStrong : palette().border, backgroundColor: palette().surface }}
       onFileDragEnter={() => dragging.set(accepting())} onFileDragLeave={() => dragging.set(false)}
-      onFileDrop={event => { dragging.set(false); attachLocal(event.uris); }}>
+      onFileDrop={event => {
+        dragging.set(false);
+        if (event.uris.length) attachLocal(event.uris);
+        else if (accepting() && event.files.length) props.attachments!.attachDropped(event.files);
+      }}>
       <If when={props.attachments}>{attachments => <AttachmentStrip attachments={attachments()} disabled={props.busy || props.disabled} />}</If>
       <If when={suggesting()}>
         <View testID="composer-suggestions" style={{ paddingBottom: 6, borderBottomWidth: 1, borderColor: palette().border }}>
@@ -128,10 +132,11 @@ export function Composer(props: {
         <Input ref={ref => { input = ref; }} testID={props.testID ?? "composer-input"} value={props.value} onChange={event => props.onChange(event.value)} multiline readonly={props.busy || props.disabled}
           placeholder={props.placeholder} accessibilityLabel={props.placeholder}
           submitBehavior={platform.desktop ? "submit" : "newline"} onSubmit={submit}
+          pasteMaxSize={props.attachments?.pasteLimit()}
           onPaste={event => {
             if (!accepting()) return;
             if (event.uris.length) attachLocal(event.uris);
-            else if (event.files.length) props.attachments!.attach(event.files);
+            else if (event.files.length || event.tooLarge.length) props.attachments!.attachPasted(event.files, event.tooLarge);
           }}
           onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
           style={{ fontSize: text.reading, lineHeight: 22, minHeight: props.minHeight ?? 24, maxHeight: MAX_TEXT_HEIGHT, paddingHorizontal: 4, paddingVertical: 0,

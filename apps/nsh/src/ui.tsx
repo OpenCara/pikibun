@@ -1,5 +1,6 @@
-import { cleanup, Clipboard, computed, createAnimatedValue, effect, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
+import { cleanup, computed, createAnimatedValue, effect, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
 import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
+import { writeClipboard } from "./lib/clipboard";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
 
@@ -686,7 +687,7 @@ export function CollapsibleRow(props: {
 export function CopyButton(props: { value: string; label?: string; testID?: string }) {
   const copied = signal(false);
   async function copy() {
-    await Clipboard.writeText(props.value).catch(() => undefined);
+    if (!await writeClipboard(props.value).then(() => true, () => false)) return;
     copied.set(true);
     setTimeout(() => copied.set(false), 1500);
   }

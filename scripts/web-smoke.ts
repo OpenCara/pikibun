@@ -134,6 +134,13 @@ class Page {
     }
   }
 
+  async dropFiles(label: string, files: string[]) {
+    const point = await this.onScreen(label);
+    if (!point) throw new Error(`Nothing on screen to drop on says "${label}". The page says:\n${await this.text()}`);
+    const data = { items: [], files, dragOperationsMask: 1 };
+    for (const type of ["dragEnter", "dragOver", "drop"]) await this.send("Input.dispatchDragEvent", { type, ...point, data });
+  }
+
   private onScreen(label: string) {
     return this.evaluate<{ x: number; y: number } | null>(`(() => {
       const label = ${JSON.stringify(label)};
@@ -300,6 +307,12 @@ try {
     await new Promise(done => setTimeout(done, 200));
   }
   console.log("✓ a file and an image picked in the browser's own chooser are attached to the first message");
+
+  const dropped = join(work, "dropped-notes.md");
+  await writeFile(dropped, "# dropped from the smoke test\n");
+  await page.dropFiles("Attach files", [dropped]);
+  await page.waitForText("dropped-notes.md");
+  console.log("✓ a file dragged in from the system and dropped on the chat box is attached too");
 
   await page.evaluate("location.hash = '#/settings/notifications'");
   await page.waitForText("This browser shows notifications even when no Pikibun tab is open.");

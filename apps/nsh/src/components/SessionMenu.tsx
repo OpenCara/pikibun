@@ -1,4 +1,5 @@
-import { Clipboard, effect, openUrl, signal, untracked, type Accessor } from "nsh";
+import { effect, openUrl, signal, untracked, type Accessor } from "nsh";
+import { writeClipboard } from "../lib/clipboard";
 import { managesSession, segment, type SessionRecord } from "../shared";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
@@ -56,8 +57,8 @@ export function createSessionMenu(): SessionMenu {
       openTab: pageAvailable()
         ? { label: "Open in new tab", icon: "external-link", testID: "menu-open-tab", onSelect: () => void openUrl(sessionLink(current.id)).catch(() => undefined) } satisfies MenuAction
         : null,
-      copyLink: { label: "Copy link", icon: "link", testID: "menu-copy-link", onSelect: () => void action.run(() => Clipboard.writeText(sessionLink(current.id)), "Link copied") } satisfies MenuAction,
-      copyId: { label: "Copy session ID", icon: "copy", testID: "menu-copy-id", onSelect: () => void action.run(() => Clipboard.writeText(current.id), "Session ID copied") } satisfies MenuAction,
+      copyLink: { label: "Copy link", icon: "link", testID: "menu-copy-link", onSelect: () => void action.run(() => writeClipboard(sessionLink(current.id)), "Link copied") } satisfies MenuAction,
+      copyId: { label: "Copy session ID", icon: "copy", testID: "menu-copy-id", onSelect: () => void action.run(() => writeClipboard(current.id), "Session ID copied") } satisfies MenuAction,
       rename: editable ? { label: "Rename", icon: "pencil", testID: "menu-rename", disabled: busy, onSelect: () => { action.clear(); renaming.set(current); } } satisfies MenuAction : null,
       archive: editable ? { label: "Archive", icon: "archive", testID: "menu-archive", disabled: busy, onSelect: () => void archive(current) } satisfies MenuAction : null,
       unarchive: manages && archived

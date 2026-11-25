@@ -47,7 +47,7 @@ and runs it with `--bundle <app/bundle.js>` and its log in the system's place fo
 own options on (`--no-mouse`, `--points-per-cell`, `--fps`, `--log-file`, `--data-dir`). It refuses to start where its
 input or output isn't a terminal, and returns the host's exit status.
 
-`nsh package` has no terminal target (Native Shell 0.6.1), so the package is put together from `nsh build`'s output
+`nsh package` has no terminal target (Native Shell 0.7.0), so the package is put together from `nsh build`'s output
 and the prebuilt host. The host loads `bundle.js` as source: it refuses bytecode (`bundle.nshc`) from a file anyone could
 replace, so the build leaves that out.
 

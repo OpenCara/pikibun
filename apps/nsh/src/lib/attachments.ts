@@ -100,11 +100,16 @@ export interface Attachments {
   attach: (chosen: readonly Blob[]) => void;
   addImages: (chosen: readonly Blob[]) => void;
   attachLocal: (uris: readonly string[]) => Promise<void>;
+  attachDropped: (dropped: readonly DroppedFile[]) => void;
+  pasteLimit: Accessor<number>;
+  attachPasted: (files: readonly File[], tooLarge: readonly unknown[]) => void;
   pick: (kind?: "images" | "files") => Promise<void>;
   remove: (id: string) => void;
   sent: (images: readonly PendingImage[], files: readonly AttachedFile[]) => void;
   upload: (sessionId: string, files: readonly AttachedFile[]) => Promise<string>;
 }
+
+export interface DroppedFile { file: File | null; name: string; status: "read" | "tooLarge" }
 
 export function createAttachments(options: { imagesUnavailable: Accessor<string | undefined>; fileOptions?: Accessor<FileAttachmentOptions>; sessionId?: string }): Attachments {
   const images = signal<PendingImage[]>([]);
@@ -213,6 +218,26 @@ export function createAttachments(options: { imagesUnavailable: Accessor<string 
       || (read.tooLarge ? (anyFile ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.` : "An image larger than 32 MiB can't be attached.") : ""));
   }
 
+  function attachDropped(dropped: readonly DroppedFile[]) {
+    if (!dropped.length) return;
+    notice.set("");
+    const anyFile = untracked(takesFiles);
+    const maxBytes = anyFile ? untracked(options.fileOptions!).maxBytes : MAX_PASTE_BYTES;
+    const found = dropped.flatMap(({ file }) => (!file ? [] : [file.type ? file : new File([file], file.name, { type: typeOfName(file.name) })]));
+    const unread = dropped.filter(item => !item.file);
+    attachFound(found, maxBytes, anyFile, unread.some(item => item.status === "tooLarge") ? tooLargeNotice(anyFile, maxBytes)
+      : unread.length ? `Couldn't read ${unread.map(item => item.name).join(", ")}.` : "");
+  }
+
+  const pasteLimit = () => (takesFiles() ? Math.max(MAX_PASTE_BYTES, options.fileOptions!().maxBytes) : MAX_PASTE_BYTES);
+
+  function attachPasted(pasted: readonly File[], tooLarge: readonly unknown[]) {
+    if (pasted.length) attach(pasted);
+    if (!tooLarge.length) return;
+    const anyFile = untracked(takesFiles);
+    notice.set(tooLargeNotice(anyFile, anyFile ? untracked(options.fileOptions!).maxBytes : MAX_PASTE_BYTES));
+  }
+
   function remove(id: string) {
     forget(untracked(images).filter(item => item.id === id));
     images.update(previous => previous.filter(item => item.id !== id));
@@ -256,8 +281,12 @@ export function createAttachments(options: { imagesUnavailable: Accessor<string 
   return {
     images, files, progress, notice, takesFiles,
     count: computed(() => images().length + files().length),
-    attach, addImages, attachLocal, pick, remove, sent, upload,
+    attach, addImages, attachLocal, attachDropped, pasteLimit, attachPasted, pick, remove, sent, upload,
   };
+}
+
+function tooLargeNotice(anyFile: boolean, maxBytes: number): string {
+  return anyFile ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.` : "An image larger than 32 MiB can't be attached.";
 }
 
 export function withFilesNote(content: string, note: string): string {

@@ -1,4 +1,5 @@
-import { Clipboard, effect, openUrl, signal, untracked, View } from "nsh";
+import { effect, openUrl, signal, untracked, View } from "nsh";
+import { writeClipboard } from "../lib/clipboard";
 import type { AppSignInCode, AppSignInCodeState } from "../../../../packages/shared/src/types";
 import { ApiError, segment } from "../shared";
 import { session } from "../lib/auth";
@@ -50,7 +51,7 @@ export function SignInApp(props: { onClose: () => void; onSignedIn: (deviceName:
   }
 
   function copy(link: string) {
-    void Clipboard.writeText(link).then(() => {
+    void writeClipboard(link).then(() => {
       copied.set(true);
       setTimeout(() => copied.set(false), 1500);
     }, () => undefined);

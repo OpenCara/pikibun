@@ -47,7 +47,7 @@ export async function readLocalFiles(uris: readonly string[], maxBytes: number):
       files.push(new File([bytes as Uint8Array<ArrayBuffer>], name, { type: typeOfName(name) }));
     } catch (reason) {
       const code = (reason as { code?: string }).code;
-      problem = code === "ERR_ACCESS_DENIED" ? "Only files in your home folder can be attached."
+      problem = code === "ERR_ACCESS_DENIED" ? `The app isn't allowed to read ${baseName(path)}.`
         : code === "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" ? "Files can't be read on this device."
         : `Couldn't read ${baseName(path)}.`;
     }

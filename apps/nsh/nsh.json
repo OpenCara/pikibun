@@ -3,7 +3,7 @@
   "id": "com.pikibun.app",
   "version": "0.1.0",
   "build": 1,
-  "nsh": ">=0.6.1",
+  "nsh": ">=0.7.0",
   "icon": "icon.png",
   "schemes": ["pikibun"],
   "capabilities": {
@@ -16,7 +16,7 @@
     "notifications": true,
     "application": true,
     "homeDir": true,
-    "fs": { "read": ["${homeDir}", "${dataDir}/updates", "${dataDir}/cli"], "write": ["${dataDir}/updates"] },
+    "fs": { "read": ["${dataDir}/updates", "${dataDir}/cli"], "write": ["${dataDir}/updates"] },
     "process": {
       "execute": ["zsh", "bash", "sh", "cmd", "schtasks", "wsl"],
       "exit": true,
