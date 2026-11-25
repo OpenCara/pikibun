@@ -40,6 +40,25 @@ export function autoModelAllowed(patterns: readonly string[] | undefined, model:
   return patterns === undefined || patterns.some(pattern => autoModelPatternMatches(pattern, model));
 }
 
+export const AUTO_MODE_SELECTION_LIMIT = 200;
+
+export interface MemberAutoModels {
+  selected: string[] | null;
+  workspace: string[] | null;
+}
+
+export function autoModelKey(model: { provider: string; modelId: string }): string {
+  return `${model.provider}/${model.modelId}`;
+}
+
+export function autoModelSelected(selected: readonly string[] | null | undefined, model: { provider: string; modelId: string }): boolean {
+  return !selected || selected.includes(autoModelKey(model));
+}
+
+export function autoModelUsable(settings: { models?: readonly string[] | undefined; selected?: readonly string[] | null }, model: { provider: string; modelId: string }): boolean {
+  return autoModelAllowed(settings.models, model) && autoModelSelected(settings.selected, model);
+}
+
 export const taskComplexities = ["simple", "moderate", "complex"] as const;
 export type TaskComplexity = (typeof taskComplexities)[number];
 

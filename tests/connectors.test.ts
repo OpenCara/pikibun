@@ -1101,6 +1101,18 @@ test('a message sent with Auto gives the runner the host\'s usable models to cho
   await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'piki:auto-mode', settings: { models: 'anthropic/claude-haiku-*' } }));
   await json(await send('limited', { auto: true }), 202);
   assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { auto: { candidates: [haiku] } }, 'only the models auto mode\'s models setting allows');
+  const own = `/api/workspaces/${s.team.id}/auto-mode/models`;
+  await json(await s.creator.request('PUT', own, { models: ['anthropic/claude-sonnet-4-5'] }));
+  const before3 = requests.length;
+  const narrowed = await json<{ code: string; error: string }>(await send('own-none', { auto: true }), 409);
+  assert.equal(narrowed.code, 'auto_mode_unavailable');
+  assert.match(narrowed.error, /none of the models you chose for Auto in this workspace \(anthropic\/claude-sonnet-4-5\)/);
+  assert.equal(requests.length, before3);
+  await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'piki:auto-mode', settings: {} }));
+  await json(await send('own', { auto: true }), 202);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { auto: { candidates: [sonnet] } }, 'only the models the sender chose for Auto');
+  await json(await s.creator.request('PUT', own, { models: null }));
+  await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'piki:auto-mode', settings: { models: 'anthropic/claude-haiku-*' } }));
   await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/models`, { provider: opus.provider, modelId: opus.modelId, enabled: true }));
   await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'piki:auto-mode', settings: { models: 'openai/*' } }));
   const before2 = requests.length;

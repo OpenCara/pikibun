@@ -266,8 +266,8 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                         <Small>{`${cli()?.description ?? ""} Members see Auto in the new session's host and model menus, and in a session's model menu, while it is on.`}</Small>
                         <If when={extension().source === AUTO_MODE_SOURCE}>
                           <Small testID="auto-mode-models">{autoModeModels([extension()]) !== undefined
-                            ? `Auto chooses only among: ${autoModelsText(autoModeModels([extension()]) ?? [])}.`
-                            : "Auto chooses among every model the session's host offers: set models under Edit to limit it."}</Small>
+                            ? `Auto chooses only among: ${autoModelsText(autoModeModels([extension()]) ?? [])}. Each member can narrow it further for their own messages under Your Auto models.`
+                            : "Auto chooses among every model the session's host offers: set models under Edit to limit it. Each member can narrow it for their own messages under Your Auto models."}</Small>
                         </If>
                       </If>
                       <Each of={controlPlane() ? [] : current().hosts} key={host => host.id}>

@@ -876,6 +876,56 @@ describe("settings", () => {
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/extensions`)).toMatchObject({ source: "piki:auto-mode", settings: { models: "anthropic/claude-sonnet-*" } });
   });
 
+  const autoModels = {
+    [`GET ${ORIGIN}/api/workspaces/w1/auto-mode`]: { body: { enabled: true } },
+    [`GET ${ORIGIN}/api/workspaces/w1/models`]: { body: { models: [
+      { id: "m1", workspaceId: "w1", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" },
+      { id: "m2", workspaceId: "w1", name: "Claude Opus", connectorId: "c1", provider: "anthropic", modelId: "claude-opus" },
+      { id: "m3", workspaceId: "w1", name: "Claude Opus", connectorId: "c2", provider: "anthropic", modelId: "claude-opus" },
+      { id: "m4", workspaceId: "w1", name: "GPT-5", connectorId: "c1", provider: "openai", modelId: "gpt-5" },
+    ] } },
+  };
+
+  test("Your Auto models stays hidden while auto mode is off", async () => {
+    const app = await openSettings("workspaces");
+    await openWorkspace(app, "agents");
+    await app.waitFor("id:workspace-extensions");
+    expect(app.shows("id:workspace-auto-models")).toBe(false);
+    expect(app.requests().some(item => item.url.endsWith("/auto-mode/models"))).toBe(false);
+  });
+
+  test("Your Auto models lets a member keep only some of the models the workspace lets Auto choose", async () => {
+    const app = await openSettings("workspaces", {
+      ...autoModels,
+      [`GET ${ORIGIN}/api/workspaces/w1/auto-mode/models`]: { body: { settings: { selected: null, workspace: ["anthropic/*"] } } },
+      [`PUT ${ORIGIN}/api/workspaces/w1/auto-mode/models`]: { body: { settings: { selected: ["anthropic/claude-opus", "anthropic/claude-sonnet"], workspace: ["anthropic/*"] } } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("id:workspace-auto-models");
+    await app.waitFor("id:auto-model-anthropic/claude-opus");
+    expect(app.shows("id:auto-model-openai/gpt-5")).toBe(false);
+    expect(app.texts().join(" ")).toContain("Auto chooses among every model the workspace allows it (anthropic/*)");
+    await app.press("id:auto-models-every-toggle");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/auto-mode/models`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/auto-mode/models`)).toEqual({ models: ["anthropic/claude-opus", "anthropic/claude-sonnet"] });
+  });
+
+  test("Your Auto models unchecks a model and keeps the ones no host offers now", async () => {
+    const app = await openSettings("workspaces", {
+      ...autoModels,
+      [`GET ${ORIGIN}/api/workspaces/w1/auto-mode/models`]: { body: { settings: { selected: ["anthropic/claude-opus", "anthropic/claude-sonnet", "google/gemini"], workspace: null } } },
+      [`PUT ${ORIGIN}/api/workspaces/w1/auto-mode/models`]: { body: { settings: { selected: ["anthropic/claude-sonnet", "google/gemini"], workspace: null } } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("id:auto-model-anthropic/claude-opus");
+    expect(app.texts().join(" ")).toContain("Auto chooses only among the 3 models you keep below");
+    await app.waitFor("id:auto-models-missing");
+    expect(app.texts().join(" ")).toContain("no host here offers it to you now: google/gemini.");
+    await app.press("id:auto-model-toggle-anthropic/claude-opus");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/auto-mode/models`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/auto-mode/models`)).toEqual({ models: ["anthropic/claude-sonnet", "google/gemini"] });
+  });
+
   test("Extensions shows a models setting with nothing readable in it as allowing no model, as Auto treats it", async () => {
     const app = await openSettings("workspaces", {
       [`GET ${ORIGIN}/api/workspaces/w1/extensions`]: { body: { admin: true, hosts: [],

@@ -28,6 +28,7 @@ import { Card, gitAccountLabel, GroupTitle } from "./accounts";
 import { SectionPage, type SectionProps } from "./parts";
 import { WorkspaceDatabaseSection } from "./workspace-database";
 import { WorkspaceExtensions } from "./workspace-extensions";
+import { WorkspaceAutoModels } from "./workspace-auto-models";
 import { WorkspaceMcpServers } from "./workspace-mcp-servers";
 import { WorkspaceSchedules } from "./workspace-schedules";
 import { ToolGroups } from "./workspace-tool-groups";
@@ -201,6 +202,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
       <ChildSessionSettings workspace={workspace()} admin={admin()} />
       <WorkspaceMemorySettings workspace={workspace()} />
       <WorkspaceExtensions workspace={workspace()} />
+      <WorkspaceAutoModels workspace={workspace()} />
       <WorkspaceMcpServers workspace={workspace()} />
       <ToolGroups workspace={workspace()} owner={role() === "owner"} />
     </>

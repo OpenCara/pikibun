@@ -791,6 +791,15 @@ that kind of task on, among the models that host offers. The member still choose
     `POST` filters its `usable` models the same way, and its refusal names the setting where one is set. With none of the host's usable models allowed, a message sent
     with Auto is refused with `auto_mode_unavailable`, naming the setting, rather than run on a model the workspace
     ruled out. A model picked by hand is unaffected: the setting limits Auto, not members.
+48. **A member's own Auto models.** Within what the workspace allows, each member may narrow Auto further for the
+    messages they send: Your Auto models, on the workspace's Agents tab while auto mode is on, lists the models they
+    can use there that the models setting allows, with a checkbox each. The choice is theirs alone, per workspace
+    (`member_auto_models`, `GET`/`PUT /api/workspaces/:id/auto-mode/models`, `{ models: string[] | null }`): exact
+    `provider/modelId` keys (`autoModelKey`, at most 200), not patterns, so it names what they ticked; `null` (no row)
+    is every model the workspace allows. `chatOptions` and the old `POST` read the sender's choice with the setting
+    (`autoModeSettings`) and keep only models both allow (`autoModelUsable`); with none of the host's left, the refusal
+    names the member's choice rather than the workspace's setting when the setting alone would have allowed one. Keys
+    no host offers now are kept, and shown as such, so a host going offline doesn't change the choice.
 
 ## Where things are
 
