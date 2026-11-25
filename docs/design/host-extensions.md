@@ -36,7 +36,8 @@ its host has.
    version, starts without it and says so. One the host's owner requires is the exception (rule 11).
 8. **Settings per workspace.** An extension's settings are its Pi flags (`registerFlag`); the workspace sets their values.
    Secrets never go there: the extension reads them on the host (its environment, files, or Pi's `auth.json`), which the
-   host's owner sets up.
+   host's owner sets up. In the sandbox, where the host's files aren't, the owner shares the files an extension reads
+   ([extension-files.md](extension-files.md)).
 9. **Web tools are extensions.** Pikibun's own `web_fetch` and `web_search` are retired (`retiredToolNames`): no session
    offers them, the server's `WEB_SEARCH` provider and the workspace's **Web search** setting are gone, and older
    connectors' searches are refused (410). An extension may register tools with retired names, so a Pi web search

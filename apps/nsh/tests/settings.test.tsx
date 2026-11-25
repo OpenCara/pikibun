@@ -315,7 +315,7 @@ describe("settings", () => {
 
   test("a host without Chromium offers its owner a chat on it, in their private workspace, that installs one", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] };
     const browser = { source: "piki:browser", dev: false, description: "A headless Chromium", modules: [] };
     const app = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },
@@ -383,6 +383,41 @@ describe("settings", () => {
     await admin.waitFor("text:Not supported: provider proxy");
     expect(admin.shows("id:provide-models-npm:pi-provider@1.0.0")).toBe(false);
     expect(admin.shows("text:Unmark")).toBe(false);
+  });
+
+  test("a host's owner shares a host file with an extension, prefilled for pi-web-access, once they confirm who reads it, and stops sharing it", async () => {
+    const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, modelExtensions: [], cacheWarming: true,
+      extensionFiles: [{ extension: "npm:other", path: "~/other.json", target: "other.json" }] };
+    const installed = { source: "npm:pi-web-access@0.46.0", dev: false, description: "Web search", modules: [] };
+    const routes = (role: "owner" | "admin") => ({
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role, connectedWorkspaceIds: ["w1"], version: "0.40.0", config, capabilities: { ...host.capabilities, extensions: true } }] } },
+      [`GET ${ORIGIN}/api/connectors/c1/extensions`]: { body: { role, automaticTools: false, requests: [], workspaces: [], report: { installed: [installed], remoteInstalls: true } } },
+      [`PATCH ${ORIGIN}/api/connectors/c1/config`]: { body: { config } },
+    });
+    const patched = (app: Parameters<typeof bodyOf>[0]) => app.requests().filter(item => item.method === "PATCH" && item.url === `${ORIGIN}/api/connectors/c1/config`).map(item => JSON.parse(item.body ?? "{}"));
+    const app = await openSettings("hosts", routes("owner"));
+    await app.press("id:host-row-c1");
+    await app.waitFor("id:host-extension-files");
+    await app.waitFor("text:~/other.json");
+    await app.press("id:share-extension-file");
+    await app.waitFor("id:extension-file-target");
+    const asked: string[] = [];
+    app.onDialog(dialog => { asked.push(`${dialog.title}: ${dialog.message}`); return dialog.title?.startsWith("Share ") ? "Share" : null; });
+    await app.press("text:Share");
+    await app.waitUntil(() => patched(app).length === 1);
+    expect(asked[0]).toContain("Share ~/.pi/agent/web-search.json with npm:pi-web-access?");
+    expect(asked[0]).toContain("The agent's own commands can't");
+    expect(patched(app)).toEqual([{ extensionFiles: [config.extensionFiles[0], { extension: "npm:pi-web-access", path: "~/.pi/agent/web-search.json", target: ".config/pi/web-search.json" }] }]);
+    await app.press("text:Stop sharing");
+    await app.waitUntil(() => patched(app).length === 2);
+    expect(patched(app)[1]).toEqual({ extensionFiles: [] });
+
+    const admin = await openSettings("hosts", routes("admin"));
+    await admin.press("id:host-row-c1");
+    await admin.waitFor("text:npm:pi-web-access@0.46.0");
+    expect(admin.shows("id:host-extension-files")).toBe(false);
+    expect(admin.shows("text:~/other.json")).toBe(false);
   });
 
   test("a host's browser setup keeps what is being typed while its status refreshes", async () => {
@@ -729,7 +764,7 @@ describe("settings", () => {
 
   test("Hosts says a connector predates build caches, and shows admins the owner's choice read-only", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] };
     const older = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0", capabilities: { ...host.capabilities, hostConfig: true } }] } },
     });

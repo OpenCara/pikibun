@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { createHash } from "node:crypto";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, lstatSync } from "node:fs";
 import { chmod, mkdir, open, realpath, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
@@ -56,7 +56,7 @@ export interface SandboxExecutionOptions {
   sender?: string;
 }
 
-interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; binds?: readonly string[]; sender?: string; service?: { socketDirectory: string; binds?: readonly string[] };
+interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; binds?: readonly string[]; sender?: string; service?: { socketDirectory: string; binds?: readonly string[]; files?: readonly { source: string; target: string }[] };
   onSpawn?: (hold: (held: boolean) => void) => void; caches?: readonly BuildCacheMount[] }
 
 export interface SandboxOptions {
@@ -331,6 +331,49 @@ export function commandBindAllowed(path: string): boolean {
   return path.startsWith("/opt/") && path !== "/opt/pikibun" && !path.startsWith("/opt/pikibun/");
 }
 
+export function homeFileTarget(target: string, home: string): boolean {
+  if (!isAbsolute(target) || resolve(target) !== target || /[\x00-\x1f\x7f]/.test(target) || !target.startsWith(`${home}/`)) return false;
+  const first = target.slice(home.length + 1).split("/")[0];
+  return first !== ".gitconfig" && first !== ".tmp";
+}
+
+export const SHARED_FILES_BUBBLEWRAP = "0.12.0";
+
+export function bubblewrapVersion(): string | null {
+  const result = spawnSync("/usr/bin/bwrap", ["--version"], { encoding: "utf8", timeout: 5000 });
+  return result.status === 0 ? /bubblewrap\s+(\d+\.\d+\.\d+)/.exec(result.stdout)?.[1] ?? null : null;
+}
+
+export function sharedFilesRefusal(version: string | null): string | undefined {
+  const parts = version?.split(".").map(Number);
+  if (!parts || parts.length !== 3 || parts.some(part => !Number.isSafeInteger(part))) return `this host's bubblewrap version can't be told, and sharing files needs ${SHARED_FILES_BUBBLEWRAP} or newer`;
+  const needed = SHARED_FILES_BUBBLEWRAP.split(".").map(Number);
+  for (let index = 0; index < 3; index++) {
+    if (parts[index]! > needed[index]!) return undefined;
+    if (parts[index]! < needed[index]!) return `this host's bubblewrap ${version} predates ${SHARED_FILES_BUBBLEWRAP}, which keeps links in the session's home from leading out of the sandbox as it places a file: update it to share files`;
+  }
+  return undefined;
+}
+
+let bubblewrapRefusal: { reason: string | undefined } | undefined;
+
+export function hostSharedFilesRefusal(): string | undefined {
+  bubblewrapRefusal ??= { reason: sharedFilesRefusal(bubblewrapVersion()) };
+  return bubblewrapRefusal.reason;
+}
+
+export function homeFileClear(hostHome: string, relativeTarget: string): boolean {
+  let path = hostHome;
+  const parts = relativeTarget.split("/");
+  for (const [index, part] of parts.entries()) {
+    path = join(path, part);
+    let stat;
+    try { stat = lstatSync(path); } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
+    if (stat.isSymbolicLink() || (index < parts.length - 1 ? !stat.isDirectory() : !stat.isFile())) return false;
+  }
+  return true;
+}
+
 export function serviceBindAllowed(path: string, sessionRoot: string): boolean {
   if (!isAbsolute(path) || resolve(path) !== path || /[\x00-\x1f\x7f]/.test(path)) return false;
   if (SERVICE_BIND_REFUSED.includes(path) || path === homedir() || homedir().startsWith(`${path}/`)) return false;
@@ -409,6 +452,10 @@ export class Sandbox implements IsolatedWorkspace {
   get hostWorktree(): string { return resolve(this.#root, "worktree"); }
 
   bindAllowed(path: string): boolean { return serviceBindAllowed(path, this.#root); }
+
+  homePlaceClear(target: string): boolean {
+    return homeFileTarget(target, this.home) && homeFileClear(join(this.#root, "home"), target.slice(this.home.length + 1));
+  }
 
   async identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
@@ -627,10 +674,14 @@ export class Sandbox implements IsolatedWorkspace {
   }
 
   async startService(command: string, authorize: SandboxAuthorize, options: { limits: CommandLimits; unbounded: boolean; gpu?: boolean; socketDirectory: string;
-    onOutput: (chunk: Buffer) => void; signal?: AbortSignal; binds?: readonly string[] }): Promise<ServiceProcess> {
+    onOutput: (chunk: Buffer) => void; signal?: AbortSignal; binds?: readonly string[]; files?: readonly { source: string; target: string }[] }): Promise<ServiceProcess> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
     if (!isAbsolute(options.socketDirectory)) throw new Error("Invalid service socket directory");
     for (const bind of options.binds ?? []) if (!serviceBindAllowed(bind, this.#root)) throw new Error(`A service can't be given ${bind}`);
+    for (const file of options.files ?? []) {
+      if (!serviceBindAllowed(file.source, this.#root)) throw new Error(`A service can't be given ${file.source}`);
+      if (!homeFileTarget(file.target, this.home)) throw new Error(`A service's file can't go to ${file.target}`);
+    }
     const bounded = !!this.#resources || !options.unbounded;
     if (bounded && !this.#resources) throw new Error("Commands can't run here: they need explicitly provisioned cgroup and bounded filesystem resources");
     await this.initialize();
@@ -645,9 +696,11 @@ export class Sandbox implements IsolatedWorkspace {
       this.#services.add(kill);
       let holder: ((held: boolean) => void) | undefined;
       const caches = await this.#cacheMounts(null);
+      const files = options.files?.length && !hostSharedFilesRefusal() ? options.files.filter(file => this.homePlaceClear(file.target)) : [];
       const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
         { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
-        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}) },
+        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}),
+            ...(files.length ? { files } : {}) },
           ...(caches.length ? { caches } : {}),
           onSpawn: hold => { holder = hold; } })
         .then((): ServiceExit => ({ code: 0, signal: null }), (error: unknown): ServiceExit => error instanceof SandboxProcessError
@@ -792,6 +845,7 @@ export class Sandbox implements IsolatedWorkspace {
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
       ...(request.kind === "bash" ? ["--ro-bind-try", join(this.#root, "desktop", "pikibun-desktop"), SANDBOX_DESKTOP_DRIVER] : []),
       ...(service?.binds ?? []).flatMap(bind => ["--ro-bind-try", bind, bind]),
+      ...(service?.files ?? []).flatMap(file => ["--ro-bind-try", file.source, file.target]),
       ...(request.kind === "bash" ? command.binds ?? [] : []).flatMap(bind => ["--ro-bind-try", bind, bind]),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
         ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),

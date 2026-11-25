@@ -12,6 +12,7 @@ import { pinServiceSocket, SANDBOX_SERVICE_SOCKETS, type ServiceProcess } from "
 import { lineReader } from "./lines.js";
 import type { AppendedHandler, CompleteHandler, CompleteRequest, ExtensionAnswer, ExtensionChannel, ExtensionMethod, ExtensionParams, ExtensionToolDescription, StoredEntry } from "./protocol.js";
 import { completeLimits, completeRequestOf } from "./complete.js";
+import type { FileBind } from "./files.js";
 
 export type WorkerCommandFor = (directory: string, mounts: readonly string[]) => WorkerCommand | Promise<WorkerCommand>;
 
@@ -80,7 +81,7 @@ export interface LaunchHandlers {
   ended(reason: string): void;
 }
 
-export type WorkerLaunch = (handlers: LaunchHandlers, mounts: readonly string[]) => Promise<WorkerLink>;
+export type WorkerLaunch = (handlers: LaunchHandlers, mounts: readonly string[], files?: readonly FileBind[]) => Promise<WorkerLink>;
 
 export interface ProcessChannelOptions {
   directory: string;
@@ -89,6 +90,8 @@ export interface ProcessChannelOptions {
   command?: WorkerCommandFor;
   launch?: WorkerLaunch;
   mountAllowed?(path: string): boolean;
+  files?(source: string): Promise<readonly FileBind[]>;
+  now?(): number;
   log?(line: string): void;
   complete?: CompleteHandler;
   appended?: AppendedHandler;
@@ -99,6 +102,7 @@ const SHUTDOWN_GRACE_MS = 2000;
 export const START_TIMEOUT_MS = 60_000;
 export const CANCEL_GRACE_MS = 5000;
 export const EXTENSION_SOCKET = "extensions.sock";
+export const FILES_REFRESH_MS = 30_000;
 
 export function workerEntry(): string[] {
   for (const name of ["./extension-worker.js", "../extension-worker.js"]) {
@@ -242,16 +246,16 @@ export interface SandboxWorker {
   socketDirectory: string;
   nodeBin: string;
   worktree: string;
-  start(command: string, binds: readonly string[], onOutput: (chunk: Buffer) => void, signal: AbortSignal): Promise<ServiceProcess>;
+  start(command: string, binds: readonly string[], onOutput: (chunk: Buffer) => void, signal: AbortSignal, files?: readonly FileBind[]): Promise<ServiceProcess>;
 }
 
 export function sandboxLaunch(worker: SandboxWorker): WorkerLaunch {
-  return async (handlers, mounts) => {
+  return async (handlers, mounts, files = []) => {
     const listening = join(worker.socketDirectory, EXTENSION_SOCKET);
     rmSync(listening, { force: true });
     const command = `exec ${[`${worker.nodeBin}/node`, ...workerEntry(), "--socket", `${SANDBOX_SERVICE_SOCKETS}/${EXTENSION_SOCKET}`, worker.worktree].map(shellQuote).join(" ")} 2>&1`;
     const output = lineReader(handlers.log, () => {}, 64 * 1024);
-    const service = await worker.start(command, [...new Set([...workerCodeMounts(), ...mounts])], output, new AbortController().signal);
+    const service = await worker.start(command, [...new Set([...workerCodeMounts(), ...mounts])], output, new AbortController().signal, files);
     let stopped: string | undefined;
     const end = (reason: string) => {
       if (stopped !== undefined) return;
@@ -323,6 +327,9 @@ export class ProcessChannel implements ExtensionChannel {
   readonly #mounted: boolean;
   readonly #launch: WorkerLaunch;
   readonly #mounts = new Set<string>();
+  readonly #files = new Map<string, readonly FileBind[]>();
+  #filesAt = 0;
+  readonly #refused = new Set<string>();
   readonly #pending = new Map<number, Pending>();
   readonly #opened = new Map<string, ExtensionParams<"open">>();
   readonly #started = new Map<string, ExtensionParams<"emit">>();
@@ -347,6 +354,41 @@ export class ProcessChannel implements ExtensionChannel {
     else this.#stale = true;
   }
 
+  bind(source: string, files: readonly FileBind[]): void {
+    if (!this.#mounted) return;
+    const allowed = files.filter(file => {
+      if (this.#mountAllowed(file.source)) return true;
+      const key = `${source}\0${file.source}`;
+      if (!this.#refused.has(key)) {
+        this.#refused.add(key);
+        this.options.warn(source, `${file.source}, which the host's owner shares with it, can't be given to the session's sandbox, so it runs without it`);
+      }
+      return false;
+    });
+    if (JSON.stringify(this.#files.get(source) ?? []) === JSON.stringify(allowed)) return;
+    if (allowed.length) this.#files.set(source, allowed);
+    else this.#files.delete(source);
+    if (!this.#live) return;
+    if (this.#live.link) this.restart("it starts again with the host's files shared with its extensions");
+    else this.#stale = true;
+  }
+
+  async #refreshFiles(): Promise<void> {
+    const now = this.options.now?.() ?? Date.now();
+    if (!this.options.files || !this.#mounted || this.#pending.size || now - this.#filesAt < FILES_REFRESH_MS) return;
+    this.#filesAt = now;
+    for (const source of this.#opened.keys()) {
+      const files = await this.options.files(source).catch(() => this.#files.get(source) ?? []);
+      if (!this.#pending.size) this.bind(source, files);
+    }
+  }
+
+  #fileBinds(): FileBind[] {
+    const byTarget = new Map<string, FileBind>();
+    for (const files of this.#files.values()) for (const file of files) if (!byTarget.has(file.target)) byTarget.set(file.target, file);
+    return [...byTarget.values()];
+  }
+
   #mountAllowed(path: string): boolean {
     return this.options.mountAllowed?.(path) ?? true;
   }
@@ -357,7 +399,12 @@ export class ProcessChannel implements ExtensionChannel {
       const { mount } = params as ExtensionParams<"open" | "describe">;
       if (this.#mounted && mount && !this.#mountAllowed(mount)) throw new Error(`Its files, in ${mount}, can't be given to the session's sandbox`);
       this.mount([mount]);
-    }
+      const source = (params as { source?: unknown }).source;
+      if (method === "open" && typeof source === "string" && this.options.files) {
+        this.#filesAt = this.options.now?.() ?? Date.now();
+        this.bind(source, await this.options.files(source).catch(() => this.#files.get(source) ?? []));
+      }
+    } else await this.#refreshFiles();
     const run = await this.#ensure();
     const source = (params as { source?: unknown }).source;
     if (method !== "open" && typeof source === "string" && this.#unopened.has(source)) await this.#reopen(run, source);
@@ -407,7 +454,8 @@ export class ProcessChannel implements ExtensionChannel {
     this.#stale = false;
     const log = this.options.log ?? (line => { process.stderr.write(`Extension process: ${line.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 1000)}\n`); });
     try {
-      run.link = await this.#launch({ reply: reply => this.#reply(reply, run), log, ended: reason => this.#ended(run, reason) }, [...this.#mounts]);
+      run.link = await this.#launch({ reply: reply => this.#reply(reply, run), log, ended: reason => this.#ended(run, reason) }, [...this.#mounts],
+        this.#fileBinds().map(({ source, target }) => ({ source, target })));
     } catch (error) {
       if (this.#live === run) this.#live = undefined;
       throw new Error(`The extension process couldn't start: ${error instanceof Error ? error.message : String(error)}`);
