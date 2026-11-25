@@ -4,6 +4,7 @@ import { canCreateSessions, nestSessions, pullRequestStateLabels, sessionStatus,
 import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../components/PullRequest";
 import { createSessionMenu, RenameSheet, type SessionMenu } from "../components/SessionMenu";
 import { useAppData } from "../lib/app-data";
+import { stableRows } from "../lib/stable-rows";
 import { session } from "../lib/auth";
 import { type Action } from "../lib/resource";
 import { Icon } from "../icons";
@@ -64,7 +65,7 @@ export function SessionList(props: {
   const swiped = signal<string | null>(null);
   const swipe = (id: string, open: boolean) => swiped.update(current => (open ? id : current === id ? null : current));
   const severalComputers = computed(() => new Set(data.sessions().flatMap(item => (item.forwarded ? [item.forwarded.hostName] : []))).size > 1);
-  const rows = computed<Row[]>(() => {
+  const groupedRows = computed<Row[]>(() => {
     const needle = query().trim().toLowerCase();
     const byWorkspace = new Map<string, SessionRecord[]>();
     const archived = new Map<string, number>();
@@ -93,6 +94,8 @@ export function SessionList(props: {
       ];
     });
   });
+  const keep = stableRows<Row>();
+  const rows = computed<Row[]>(() => keep(groupedRows()));
   const flip = (id: string) => (current: readonly string[]) => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
   const toggle = (id: string) => collapsed.update(flip(id));
   const toggleArchived = (id: string) => {
@@ -111,7 +114,7 @@ export function SessionList(props: {
 
   return (
     <If when={!data.sessionsLoading()} else={<Loading />}>
-      <List each={rows()} keyExtractor={row => row.key} testID="session-list" style={{ flex: 1 }} refreshing={refreshing()} onRefresh={pullToRefresh}
+      <List each={rows()} keyExtractor={row => row.key} testID="session-list" style={{ flex: 1 }} estimatedItemSize={props.compact ? 40 : 52} refreshing={refreshing()} onRefresh={pullToRefresh}
         contentStyle={{ paddingBottom: 16 }} onScrollDragStart={() => { if (untracked(swiped)) swiped.set(null); }}
         header={() => (
           <View style={{ gap: 8, paddingHorizontal: inset(), paddingTop: 4, paddingBottom: 8 }}>
