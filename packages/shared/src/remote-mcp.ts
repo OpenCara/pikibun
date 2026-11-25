@@ -4,7 +4,7 @@ import { reservedToolNames, type BrokeredToolDefinition } from "./tool-definitio
 export const REMOTE_MCP_EXTENSION = "piki:remote-mcp";
 
 export const remoteMcpLimits = Object.freeze({
-  servers: 8, tools: 64, headers: 8, headerName: 64, headerValue: 4096, url: 2048, name: 64, description: 2048,
+  servers: 8, connections: 32, tools: 64, headers: 8, headerName: 64, headerValue: 4096, url: 2048, name: 64, description: 2048,
   discoverSeconds: 15, callSeconds: 60, responseBytes: 1024 * 1024, listBytes: 8 * 1024 * 1024, resultCharacters: 64 * 1024,
 });
 
@@ -21,19 +21,49 @@ export interface RemoteMcpTool {
   readOnlyHint?: boolean;
 }
 
+export const remoteMcpSignInAsValues = ["workspace", "members", "members-then-workspace"] as const;
+export type RemoteMcpSignInAs = typeof remoteMcpSignInAsValues[number];
+
+export function isRemoteMcpSignInAs(value: unknown): value is RemoteMcpSignInAs {
+  return typeof value === "string" && (remoteMcpSignInAsValues as readonly string[]).includes(value);
+}
+
+export const remoteMcpSignInAsOptions: readonly { value: RemoteMcpSignInAs; label: string; hint: string }[] = Object.freeze([
+  { value: "workspace", label: "The workspace's sign-in", hint: "Every member's sessions call it with the sign-in kept here, as one account" },
+  { value: "members", label: "Each member's own", hint: "Each request uses the requester's own connection, which they connect in their profile and bring here; without one, its tools don't run for them" },
+  { value: "members-then-workspace", label: "Each member's own, else the workspace's", hint: "The requester's own connection where they brought one here, else the sign-in kept here" },
+]);
+
+export interface McpConnectionUse { id: string; name: string; using: boolean; signedIn: boolean; error?: string }
+
 export interface WorkspaceMcpServer {
   id: string;
   name: string;
   prefix: string;
   url: string;
   enabled: boolean;
+  signInAs: RemoteMcpSignInAs;
   headerNames: string[];
   oauth?: { signedInAt: string };
+  connection?: McpConnectionUse;
   readOnlyTools: string[];
   tools: (RemoteMcpTool & { toolName: string; readOnly: boolean })[];
   toolsLeftOut?: RemoteMcpToolsLeftOut;
   discoveredAt?: string;
   error?: string;
+  updatedAt: string;
+}
+
+export interface McpConnection {
+  id: string;
+  name: string;
+  url: string;
+  headerNames: string[];
+  oauth?: { signedInAt: string };
+  error?: string;
+  workspaces: { id: string; name: string }[];
+  offeredIn: { id: string; name: string }[];
+  createdAt: string;
   updatedAt: string;
 }
 
