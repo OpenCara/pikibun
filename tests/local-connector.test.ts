@@ -594,7 +594,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.equal(config.dataDir, join(fixture.dataDir, 'runner'));
   assert.equal(config.connectorId, credentials.connectorId);
   await assert.rejects(config.hostGitCredential!('https://github.com/acme/alpha.git'), /hasn't turned on its Git credentials/);
-  assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true });
+  assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] });
   assert.equal(config.allowFaux, false);
   assert.equal(config.allowTestShell, false);
   assert.equal(config.compaction, undefined, 'without Pi settings, sessions compact by pi-durable\'s defaults');
@@ -614,7 +614,7 @@ const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree:
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
-  const configured = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 40_000 }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
+  const configured = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 40_000 }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] };
   const fixture = await connectorFixture(t, { gpu: 'dxg', hostConfig: () => Response.json({ config: configured }), pushCredential: () => Response.json(issued) });
   await startFixture(fixture);
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
@@ -738,7 +738,7 @@ test('the macOS and Windows sandboxes keep the repository cache too', { timeout:
 test('a host reads the largest configuration the control plane saves: compaction counts for every model, with the longest names', { timeout: 10000 }, async t => {
   const modelOverrides = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`${String(index).padStart(80, 'p')}/${'m'.repeat(200)}`,
     { reserveTokens: 10_000_000, keepRecentTokens: 10_000_000 }]));
-  const configured = { commandTimeoutSeconds: 600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 10_000_000, modelOverrides }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true };
+  const configured = { commandTimeoutSeconds: 600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 10_000_000, modelOverrides }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] };
   const body = JSON.stringify({ config: configured });
   assert.ok(body.length > 64 * 1024, 'more than other callbacks take');
   const fixture = await connectorFixture(t, { hostConfig: () => new Response(body, { headers: { 'content-type': 'application/json' } }) });
@@ -753,7 +753,7 @@ test('without a configuration from the control plane, a host runs with the defau
       await startFixture(fixture);
       const config = fixture.runtimes[0]!.config;
       assert.equal(config.repositoryCache, undefined);
-      assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true });
+      assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 3600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false, buildCaches: 'off', buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] });
       const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
       assert.deepEqual(JSON.parse(manifest.body).capabilities, advertisedBase);
     });

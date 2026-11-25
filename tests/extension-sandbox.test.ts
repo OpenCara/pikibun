@@ -110,6 +110,62 @@ test("in the Linux sandbox, an installed extension sees the session's worktree a
   assert.deepEqual(warnings.filter(warning => warning.name === "MaxListenersExceededWarning"), [], "holding its process for each request leaves nothing on the process's closed pipes");
 });
 
+test("in the Linux sandbox, a host file shared with an extension is in its process, read-only, at its place in the session's home, and never in the agent's commands", { skip: linuxSandboxMissing() }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-extension-files-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const faux = binding("extension-files");
+  const sandbox = new Sandbox({ ...faux, model: { ...faux.model, provider: "faux" } }, join(root, "session"), undefined, {});
+  t.after(() => sandbox.close());
+  await sandbox.initialize();
+  const authorize = async () => {};
+  const extension = await realpath(await mkdtemp(join(homedir(), ".pikibun-extension-files-")));
+  t.after(() => rm(extension, { recursive: true, force: true }));
+  const shared = join(extension, "web-search.json");
+  await writeFile(shared, `{"ssrf":{"allowRanges":["198.18.0.0/15"]}}`);
+  const target = join(sandbox.home, ".config", "pi", "web-search.json");
+  const file = join(extension, "probe.ts");
+  await writeFile(file, `import { Type } from "typebox";
+    import { readFileSync, writeFileSync } from "node:fs";
+    const attempt = work => { try { return String(work()); } catch (error) { return "refused: " + error.code; } };
+    export default function (pi) {
+      pi.registerTool({ name: "probe", label: "Probe", description: "Probe the shared file.", parameters: Type.Object({}),
+        async execute() {
+          return { content: [{ type: "text", text: JSON.stringify({
+            read: attempt(() => readFileSync(${JSON.stringify(target)}, "utf8")),
+            write: attempt(() => writeFileSync(${JSON.stringify(target)}, "{}")),
+            beside: attempt(() => writeFileSync(${JSON.stringify(join(sandbox.home, ".config", "pi", "cache.json"))}, "{}")) }) }], details: undefined };
+        } });
+    }`);
+  const socketDirectory = serviceSocketDirectory("extension-files", root);
+  const output: string[] = [];
+  const asked: string[] = [];
+  const channel = new ProcessChannel({ directory: sandbox.worktree, warn: (source, message) => { output.push(`${source}: ${message}`); }, log: line => { output.push(line); },
+    mountAllowed: path => sandbox.bindAllowed(path),
+    files: async source => { asked.push(source); return [{ source: shared, target }]; },
+    launch: sandboxLaunch({ socketDirectory, nodeBin: sandbox.nodeBin!, worktree: sandbox.worktree,
+      start: (command, binds, onOutput, signal, files) => sandbox.startService(command, authorize, { limits: serviceLimits(300, 1), unbounded: true, socketDirectory, onOutput, signal, binds,
+        ...(files?.length ? { files } : {}) }) }) });
+  t.after(() => channel.close());
+  const opened = await channel.call("open", { source: "local:probe", files: [file], models: [], mount: extension }).catch(error => {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output.join("\n")}`);
+  });
+  assert.deepEqual(opened.value.errors, [], output.join("\n"));
+  assert.deepEqual(asked, ["local:probe"], "the files are asked for as the extension opens");
+  const answer = await channel.call("execute", { source: "local:probe", settings: {}, tool: "probe", callId: "c", args: {} });
+  const seen = JSON.parse((answer.value.content[0] as { text: string }).text) as Record<string, string>;
+  assert.equal(seen.read, `{"ssrf":{"allowRanges":["198.18.0.0/15"]}}`, "the extension reads the host's file where it looks for it");
+  assert.match(seen.write, /^refused: (EROFS|EACCES)$/, "and can't change it");
+  assert.equal(seen.beside, "undefined", "the rest of the session's home stays writable, for its caches");
+  const shell = (command: string) => sandbox.execute({ kind: "bash", command }, false, authorize, { allowTestShell: true });
+  assert.equal((await shell(`cat ${target} 2>/dev/null; echo "[end]"`)).trim(), "[end]", "the agent's own commands never see its contents");
+  await assert.rejects(sandbox.startService("true", authorize, { limits: serviceLimits(60, 1), unbounded: true, socketDirectory, onOutput: () => {}, files: [{ source: shared, target: join(sandbox.home, ".gitconfig") }] }),
+    /A service's file can't go to/);
+  await assert.rejects(sandbox.startService("true", authorize, { limits: serviceLimits(60, 1), unbounded: true, socketDirectory, onOutput: () => {}, files: [{ source: shared, target: "/etc/web-search.json" }] }),
+    /A service's file can't go to/);
+  await assert.rejects(sandbox.startService("true", authorize, { limits: serviceLimits(60, 1), unbounded: true, socketDirectory, onOutput: () => {}, files: [{ source: "/etc/shadow", target }] }),
+    /A service can't be given \/etc\/shadow/);
+});
+
 test("in the Linux sandbox, an installed extension is described without its code seeing the host: what it reads at load time isn't there", { skip: linuxSandboxMissing() }, async t => {
   const state = await realpath(await mkdtemp(join(homedir(), ".pikibun-describe-state-")));
   t.after(() => rm(state, { recursive: true, force: true }));

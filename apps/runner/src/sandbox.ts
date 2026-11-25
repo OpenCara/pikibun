@@ -56,7 +56,7 @@ export interface SandboxExecutionOptions {
   sender?: string;
 }
 
-interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; binds?: readonly string[]; sender?: string; service?: { socketDirectory: string; binds?: readonly string[] };
+interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; binds?: readonly string[]; sender?: string; service?: { socketDirectory: string; binds?: readonly string[]; files?: readonly { source: string; target: string }[] };
   onSpawn?: (hold: (held: boolean) => void) => void; caches?: readonly BuildCacheMount[] }
 
 export interface SandboxOptions {
@@ -329,6 +329,12 @@ const SERVICE_BIND_REFUSED_TREES = ["/etc", "/proc", "/dev", "/sys", "/run", SAN
 export function commandBindAllowed(path: string): boolean {
   if (!isAbsolute(path) || resolve(path) !== path || /[\x00-\x1f\x7f]/.test(path)) return false;
   return path.startsWith("/opt/") && path !== "/opt/pikibun" && !path.startsWith("/opt/pikibun/");
+}
+
+export function homeFileTarget(target: string, home: string): boolean {
+  if (!isAbsolute(target) || resolve(target) !== target || /[\x00-\x1f\x7f]/.test(target) || !target.startsWith(`${home}/`)) return false;
+  const first = target.slice(home.length + 1).split("/")[0];
+  return first !== ".gitconfig" && first !== ".tmp";
 }
 
 export function serviceBindAllowed(path: string, sessionRoot: string): boolean {
@@ -627,10 +633,14 @@ export class Sandbox implements IsolatedWorkspace {
   }
 
   async startService(command: string, authorize: SandboxAuthorize, options: { limits: CommandLimits; unbounded: boolean; gpu?: boolean; socketDirectory: string;
-    onOutput: (chunk: Buffer) => void; signal?: AbortSignal; binds?: readonly string[] }): Promise<ServiceProcess> {
+    onOutput: (chunk: Buffer) => void; signal?: AbortSignal; binds?: readonly string[]; files?: readonly { source: string; target: string }[] }): Promise<ServiceProcess> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
     if (!isAbsolute(options.socketDirectory)) throw new Error("Invalid service socket directory");
     for (const bind of options.binds ?? []) if (!serviceBindAllowed(bind, this.#root)) throw new Error(`A service can't be given ${bind}`);
+    for (const file of options.files ?? []) {
+      if (!serviceBindAllowed(file.source, this.#root)) throw new Error(`A service can't be given ${file.source}`);
+      if (!homeFileTarget(file.target, this.home)) throw new Error(`A service's file can't go to ${file.target}`);
+    }
     const bounded = !!this.#resources || !options.unbounded;
     if (bounded && !this.#resources) throw new Error("Commands can't run here: they need explicitly provisioned cgroup and bounded filesystem resources");
     await this.initialize();
@@ -647,7 +657,7 @@ export class Sandbox implements IsolatedWorkspace {
       const caches = await this.#cacheMounts(null);
       const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
         { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
-        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}) },
+        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory, ...(options.binds ? { binds: options.binds } : {}), ...(options.files?.length ? { files: options.files } : {}) },
           ...(caches.length ? { caches } : {}),
           onSpawn: hold => { holder = hold; } })
         .then((): ServiceExit => ({ code: 0, signal: null }), (error: unknown): ServiceExit => error instanceof SandboxProcessError
@@ -792,6 +802,7 @@ export class Sandbox implements IsolatedWorkspace {
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
       ...(request.kind === "bash" ? ["--ro-bind-try", join(this.#root, "desktop", "pikibun-desktop"), SANDBOX_DESKTOP_DRIVER] : []),
       ...(service?.binds ?? []).flatMap(bind => ["--ro-bind-try", bind, bind]),
+      ...(service?.files ?? []).flatMap(file => ["--ro-bind-try", file.source, file.target]),
       ...(request.kind === "bash" ? command.binds ?? [] : []).flatMap(bind => ["--ro-bind-try", bind, bind]),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
         ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),

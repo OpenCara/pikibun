@@ -41,6 +41,7 @@ import { ProviderReleases, sessionReleases } from "./session/provider-release.js
 import { defaultCacheWarmingMode, type SessionCacheWarming } from "../../../packages/shared/src/cache-warming.js";
 import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import { confinedLaunch, ProcessChannel, refusedChannel, sandboxLaunch } from "./extensions/process.js";
+import { extensionFileBinds, type FileBind } from "./extensions/files.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace, hostOwnersSession } from "./host-workspace.js";
@@ -1049,6 +1050,10 @@ export class RunnerSession {
     if (sandbox instanceof HelperWorkspace && sandbox.runsProcesses) {
       if (!sandbox.nodeBin) return () => refusedChannel("Extensions can't run in this session's sandbox: the host's Node.js can't be given to it.");
       return (warn, options) => new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path), launch: confinedLaunch(sandbox),
+        files: async source => {
+          if ((await this.sharedFiles(source, sandbox.home, warn)).length) warn(source, "the host's files shared with it reach extensions only in the Linux sandbox, so it runs without them here");
+          return [];
+        },
         ...(options?.complete ? { complete: options.complete } : {}), ...(options?.appended ? { appended: options.appended } : {}), ...(options?.entries ? { entries: options.entries } : {}) });
     }
     if (!(sandbox instanceof Sandbox)) return undefined;
@@ -1057,15 +1062,24 @@ export class RunnerSession {
     return (warn, options) => {
       const key = `${this.binding.session.id}\0extensions${options?.key ? `\0${options.key}` : ""}`;
       return new ProcessChannel({ directory: sandbox.worktree, warn, sandboxed: true, mountAllowed: path => sandbox.bindAllowed(path),
+        files: source => this.sharedFiles(source, sandbox.home, warn),
         ...(options?.complete ? { complete: options.complete } : {}), ...(options?.appended ? { appended: options.appended } : {}), ...(options?.entries ? { entries: options.entries } : {}),
         launch: sandboxLaunch({
       socketDirectory: serviceSocketDirectory(key, this.directory), nodeBin, worktree: sandbox.worktree,
-      start: async (command, binds, onOutput, signal) => {
+      start: async (command, binds, onOutput, signal, files) => {
         const config = await this.hostConfig();
         return sandbox.startService(command, async () => {}, { limits: serviceLimits(serviceLifetimeLimits.max, availableParallelism()), unbounded: true, gpu: config.gpu,
-          socketDirectory: serviceSocketDirectory(key, this.directory), onOutput, signal, binds });
+          socketDirectory: serviceSocketDirectory(key, this.directory), onOutput, signal, binds, ...(files?.length ? { files } : {}) });
       } }) });
     };
+  }
+
+  private async sharedFiles(source: string, home: string, warn: (source: string, message: string) => void): Promise<FileBind[]> {
+    const extensionFiles = (await this.hostConfig()).extensionFiles ?? [];
+    if (!extensionFiles.length) return [];
+    const { binds, missing } = extensionFileBinds(extensionFiles, source, home);
+    for (const path of missing) warn(source, `${path}, which the host's owner shares with it, isn't a file on the host, so it runs without it`);
+    return binds;
   }
 
   private sessionTunnel(): SessionTunnel {

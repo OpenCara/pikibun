@@ -1,6 +1,8 @@
 import { computed, effect, signal, untracked, View, type JSX } from "nsh";
 import type { ConnectorInfo } from "../../../../packages/shared/src/connector";
-import { builtinExtensions, hostConfigLimits, type BuiltinExtensionName, type RequiredExtension } from "../../../../packages/shared/src/host-config";
+import {
+  builtinExtensions, extensionFilePackage, hostConfigLimits, validExtensionFilePath, validExtensionFileTarget, type BuiltinExtensionName, type ExtensionFile, type RequiredExtension,
+} from "../../../../packages/shared/src/host-config";
 import {
   isPikiExtensionSource, missingRequiredExtensions, normalizeExtensionSource, type ExtensionAvailability, type ExtensionSettings, type HostExtensionsReport,
   type InstalledExtension,
@@ -274,6 +276,14 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
     void saveModelExtensions(on ? [...others, source] : others,
       on ? `${source} provides models once the host has loaded it, within a minute: they appear under Models. If none do, the host's log says why.` : `${source} no longer provides models: the host withdraws them within a minute.`);
   }
+  const sharedFiles = () => config()?.extensionFiles;
+  const sharing = signal(false);
+  const saveSharedFiles = (next: ExtensionFile[], message: string) => action.run(async () => { await patchConfig({ extensionFiles: next }); props.refresh(); }, message);
+  async function shareFile(file: ExtensionFile) {
+    if (!await confirm({ title: `Share ${file.path} with ${file.extension}?`, confirmLabel: "Share",
+      message: `In sandboxed sessions on ${props.connector.name}, in every workspace, ${file.extension}'s process can read this file, read-only, at ~/${file.target}, and so can the session's other installed extensions. The agent's own commands can't. Its contents stay on the host. Share only what that extension needs, never Pi's auth.json.` })) return;
+    if (await saveSharedFiles([...(sharedFiles() ?? []), file], `Shared: sandboxed sessions on this host give it to ${file.extension} from its next start, within a minute.`)) sharing.set(false);
+  }
   const installedSources = () => new Set(report()?.installed.map(item => item.source) ?? []);
   const strayModelExtensions = () => (report() ? (modelExtensions() ?? []).filter(source => !installedSources().has(source)) : []);
   const unavailable = () => (report() ? missingRequiredExtensions(required(), report()!.installed).flatMap(source => required().filter(item => item.source === source)) : []);
@@ -367,6 +377,20 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
                 onPress={() => void saveModelExtensions((modelExtensions() ?? []).filter(item => item !== source()), `${source()} is no longer marked to provide models.`)} />} />
           )}
         </Each>
+        <If when={owner() && sharedFiles() !== undefined}>
+          <Row testID="host-extension-files" leading={<Icon name="file" size={16} color={palette().muted} />} title="Files shared with extensions"
+            hint={sharedFiles()!.length ? "Each one, read-only, in that extension's process in sandboxed sessions on this host; never in the agent's commands"
+              : "An extension that reads its settings from a file, such as pi-web-access's web-search.json, gets it in sandboxed sessions only once you share it here"}
+            trailing={<Button small variant="outline" icon="plus" label="Share a file" testID="share-extension-file"
+              disabled={action.busy() || revoked() || sharedFiles()!.length >= hostConfigLimits.extensionFiles} onPress={() => sharing.set(true)} />} />
+          <Each of={sharedFiles() ?? []} key={file => `${file.extension} ${file.target}`}>
+            {file => (
+              <Row leading={<Icon name="file" size={16} color={palette().muted} />} title={file().path} hint={`To ${file().extension}, at ~/${file().target} in its sandbox`}
+                trailing={<Button small variant="ghost" label="Stop sharing" disabled={action.busy()}
+                  onPress={() => void saveSharedFiles((sharedFiles() ?? []).filter(other => other !== file()), `No longer shared: sandboxed sessions stop giving it to ${file().extension} as their extensions next start.`)} />} />
+            )}
+          </Each>
+        </If>
         <Each of={unavailable()} key={item => item.source}>
           {item => (
             <Row leading={<Icon name="alert" size={16} color={palette().muted} />} title={item().source}
@@ -436,6 +460,10 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
       </ResourceState>
       <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
       <If when={chat.error()}><CardBody><Feedback error={chat.error()} /></CardBody></If>
+      <If when={sharing()}>
+        <ShareFileSheet busy={action.busy()} error={action.error()} close={() => sharing.set(false)} taken={(sharedFiles() ?? []).map(file => file.target)}
+          suggest={[...(report()?.installed.map(item => item.source) ?? []), ...fetched().map(item => item.source)]} share={file => shareFile(file)} />
+      </If>
       <InstallSheet open={installing()} close={() => installing.set(false)} busy={action.busy()} error={action.error()}
         install={async source => { if (await request("install", source)) installing.set(false); }} />
       <If when={configuring()}>
@@ -464,6 +492,43 @@ function RequiredSettingsSheet(props: { extension: RequiredExtension; flags: Ins
       <If when={piki()}><Note>{piki()?.description}</Note></If>
       <ExtensionSettingsFields flags={props.flags} settings={settings()} onChange={value => settings.set(value)} busy={props.busy} multiline={["policy"]} />
       <Note>Every session on this host runs it with these settings, whatever its workspace set. Never put secrets here: they are in the host's audit log, which its admins can read.</Note>
+      <Feedback error={props.error} />
+    </FormSheet>
+  );
+}
+
+const WEB_ACCESS_FILE = { path: "~/.pi/agent/web-search.json", target: ".config/pi/web-search.json" };
+
+function ShareFileSheet(props: { close: () => void; share: (file: ExtensionFile) => Promise<void>; busy: boolean; error: string; taken: string[]; suggest: string[] }) {
+  const suggested = untracked(() => props.suggest.find(source => !isPikiExtensionSource(source) && source.startsWith("npm:pi-web-access@")));
+  const extension = signal(suggested ? suggested.slice(0, suggested.lastIndexOf("@")) : "");
+  const path = signal(suggested ? WEB_ACCESS_FILE.path : "");
+  const target = signal(suggested ? WEB_ACCESS_FILE.target : "");
+  const key = () => {
+    try { return { value: extension().trim() ? extensionFilePackage(extension()) : undefined, invalid: "" }; }
+    catch (reason) { return { value: undefined, invalid: reason instanceof Error ? reason.message : "Invalid extension" }; }
+  };
+  const pathError = () => (path().trim() && !validExtensionFilePath(path().trim()) ? "The file's absolute path on the host, or one from ~/, without .." : undefined);
+  const targetError = () => (!target().trim() ? undefined : !validExtensionFileTarget(target().trim()) ? "A path in the session's home, without a leading /, . or .., and not .gitconfig or .tmp"
+    : props.taken.includes(target().trim()) ? "Another shared file goes there" : undefined);
+  const ready = () => Boolean(key().value && path().trim() && target().trim() && !pathError() && !targetError());
+  return (
+    <FormSheet open title="Share a file with an extension" onClose={() => { if (!props.busy) props.close(); }}
+      footer={<>
+        <Button label="Cancel" disabled={props.busy} onPress={props.close} />
+        <Button variant="primary" label={props.busy ? "Sharing…" : "Share"} disabled={props.busy || !ready()}
+          onPress={() => { const value = key().value; if (value && ready()) void props.share({ extension: value, path: path().trim(), target: target().trim() }); }} />
+      </>}>
+      <Note>In a sandboxed session on Linux, the extension's process sees the host's file, read-only, at that place in the session's home: the agent's own commands don't. Elsewhere extensions run as you, outside the sandbox, and read your files themselves.</Note>
+      <Field label="Extension" hint="The npm: or Git package, any version: npm:pi-web-access" error={key().invalid}>
+        <TextField testID="extension-file-extension" monospace value={extension()} onChange={value => extension.set(value)} disabled={props.busy} maxLength={512} placeholder="npm:pi-web-access" autoFocus />
+      </Field>
+      <Field label="File on the host" hint="Its absolute path, or one from your home folder: ~/.pi/agent/web-search.json" error={pathError()}>
+        <TextField testID="extension-file-path" monospace value={path()} onChange={value => path.set(value)} disabled={props.busy} maxLength={hostConfigLimits.extensionFilePath} placeholder={WEB_ACCESS_FILE.path} />
+      </Field>
+      <Field label="Place in the session's home" hint={`Where the extension looks for it there. pi-web-access reads ${WEB_ACCESS_FILE.target}, as sessions set XDG_CONFIG_HOME`} error={targetError()}>
+        <TextField testID="extension-file-target" monospace value={target()} onChange={value => target.set(value)} disabled={props.busy} maxLength={hostConfigLimits.extensionFileTarget} placeholder={WEB_ACCESS_FILE.target} />
+      </Field>
       <Feedback error={props.error} />
     </FormSheet>
   );
