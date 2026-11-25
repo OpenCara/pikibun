@@ -7,21 +7,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fixWebSite } from "./nsh-web-fixes.mjs";
 
-export const NSH_VERSION = "v0.6.1";
-export const NSH_COMMIT = "2f51d8611677c8a6bbad937b39756e8d0cc45350";
+export const NSH_VERSION = "v0.7.0";
+export const NSH_COMMIT = "3f8ecd8b3c55ad6274c6babbf7ee55c4cd4ae359";
 export const NSH_ASSET_SHA256 = Object.freeze({
-  "nsh-linux-x86_64.tar.gz": "9a7ac692f1c229df476be8ff83a3c5912d271453b644e313f02cb19d18696070",
-  "nsh-macos-arm64.tar.gz": "ee1aed2a4d111fe90e6cceca4b9d5f834c9e11cfda525f8be984261a329c06de",
-  "nsh-windows-x86_64.zip": "7952c84b165e13515bd2ad2787ef22622e49ce88cb8d877825e40b40f3aff4be",
-  "nsh-web.tar.gz": "e509e35fbad261a4a5e27a9225c364ff0d9ddd202a638b02bbfd13fb5cd1b9f1",
-  "nsh-android.tar.gz": "aff949eaa53ec7a6d6b717dfa2c60cefc810e598913d33d2421976b8a474c21e",
-  "nsh-ios-macos-arm64.tar.gz": "168f7e71167556c5fa1ffd56bdf49db22add6d32cbba5b061ee8324d0cd8d88a",
-  "nsh-tui-linux-x86_64.tar.gz": "8bde6cf9c63a6ee7ce8f6f1bba5432bc556659bd747ad615c4beeffdf9a8877c",
-  "nsh-tui-linux-arm64.tar.gz": "b3f085c06b6f9fddef3adfeccf655500c35fac9c46a0390b34547506a8e8effc",
-  "nsh-tui-macos-arm64.tar.gz": "729a132b6ac72d7b69be24b02e3739b77454948df43e0961c4b07a399311b5e4",
-  "nsh-tui-macos-x86_64.tar.gz": "c8a1a703a80a8a1e0a2a794c42a9ebbff2b1f8ae4d4beed9834560a9de747d7d",
-  "nsh-tui-windows-x86_64.tar.gz": "c0fd1ce2246561f5c5c4a22922ec2961188224bb77786008f0d841ed8db90411",
-  "nsh-tui-windows-arm64.tar.gz": "f3a4b5058bf8b436ba4f87298031b1cd874c4e0b3508a4a471fcf45be6a2f1b4",
+  "nsh-linux-x86_64.tar.gz": "d281bfa3d93d84e9831e1a97dfdb63104329fcc87a0a48c78db5aeabb00c0073",
+  "nsh-macos-arm64.tar.gz": "5b2e5385e09a65ed63b178a8dd9cef03a9dcab204d2efc942300e0c5baea3853",
+  "nsh-windows-x86_64.zip": "1c6ef86afe754198209fd452625f20f32077ecfca3a4431f960a411b0e51d8f3",
+  "nsh-web.tar.gz": "e951e78966a65af4d7a0bbcd08a4a5eef4f3b6b4adaec3b4b502df7c4fe8b4e6",
+  "nsh-android.tar.gz": "8503e4d4ee853dfeadf0e5dc984811767da8bc2e9309031870b9309375b754fb",
+  "nsh-ios-macos-arm64.tar.gz": "4d3a45bd7c4a85f464cd05de775ae3d5d01dcc3a8abdf167f93ba94fd230cb97",
+  "nsh-tui-linux-x86_64.tar.gz": "f453fedfa7a93b22bf75e6c429ff6edfa158fda25d3896e0240171806a06a1e2",
+  "nsh-tui-linux-arm64.tar.gz": "b8615e3a3399c89e1b5d8d13447b374bc7b320add67687ca385c58b2e7bd97e9",
+  "nsh-tui-macos-arm64.tar.gz": "687201dbe46de47c4688775d8282df0582dba0412f6db268caa3988de1e4f524",
+  "nsh-tui-macos-x86_64.tar.gz": "0283f22e633d1643677c327e0ea3e07e0af677f0500c6b81507fb366a0be9613",
+  "nsh-tui-windows-x86_64.tar.gz": "03d3782d2409124ba93a1f092f182d111fde2a1a9a70724e5bedaf9c8f9e3b07",
+  "nsh-tui-windows-arm64.tar.gz": "4f470caa5692247836cfd09f0480d163bb97b30daa5163b479a179595b7db2ae",
 });
 
 export const NSH_TUI_HOSTS = Object.freeze({
