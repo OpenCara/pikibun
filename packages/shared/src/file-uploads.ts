@@ -78,6 +78,23 @@ export function formatBytes(bytes: number): string {
   return `${bytes} bytes`;
 }
 
+const ATTACHED_HEADER = /^Attached files?, uploaded into the session worktree:$/;
+const ATTACHED_LINE = /^- (attachments\/[^/\x00-\x1f\x7f]+) \(\d+(?:\.\d)? (?:bytes|KB|MB)\)$/;
+
+export function attachedFilePaths(text: string): string[] {
+  const lines = text.split("\n");
+  const paths: string[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    if (!ATTACHED_HEADER.test(lines[index]!)) continue;
+    for (let line = index + 1; line < lines.length; line++) {
+      const match = ATTACHED_LINE.exec(lines[line]!);
+      if (!match) break;
+      paths.push(match[1]!);
+    }
+  }
+  return paths;
+}
+
 export function attachedFilesNote(files: readonly { path: string; size: number }[]): string {
   if (!files.length) return "";
   return `Attached ${files.length === 1 ? "file" : "files"}, uploaded into the session worktree:\n`

@@ -250,6 +250,45 @@ describe("a session's panel", () => {
     await read.waitFor("label:Image 1 (image/png): show it whole");
   });
 
+  test("a reply's Markdown images of worktree files show in the chat: a video in its player, audio in one the app plays, through signed links", async () => {
+    const reply = { id: "0:m1", kind: "message", role: "assistant", conversationId: "0",
+      text: "Here is the demo:\n\n![Demo run](out/demo.mp4)\n\n![Theme](out/theme.mp3)\n\n![Elsewhere](../outside.mp4)" };
+    const link = (path: string, kind: string, mimeType: string) => ({ body: { media: { url: `/api/media/token-${kind}`, path, kind, mimeType, expiresAt: Date.now() + 3600000 } } });
+    const app = await open("../App.tsx", { network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, entries: [reply], approvals: [], busy: false, queue: [] }, revision: "r1" } },
+      [`POST ${ORIGIN}/api/sessions/s1/media`]: (request: { body?: string | null }) =>
+        JSON.parse(request.body ?? "{}").path === "out/demo.mp4" ? link("out/demo.mp4", "video", "video/mp4") : link("out/theme.mp3", "audio", "audio/mpeg"),
+    }), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:media-video");
+    await app.waitFor("id:media-audio");
+    const asked = app.requests().filter(item => item.method === "POST" && item.url === `${ORIGIN}/api/sessions/s1/media`).map(item => JSON.parse(item.body ?? "{}").path).sort();
+    expect(asked).toEqual(["out/demo.mp4", "out/theme.mp3"]);
+    expect(app.shows("text:Demo run")).toBe(true);
+    expect(app.shows("text:[image: Elsewhere]")).toBe(true);
+    await app.press("label:Play Theme");
+    await app.waitFor("label:Pause Theme");
+    const audio = app.audio();
+    expect(audio.some(call => call.command === "open" && call.src === `${ORIGIN}/api/media/token-audio`)).toBe(true);
+    expect(audio.some(call => call.command === "resume")).toBe(true);
+    await app.press("label:Pause Theme");
+    await app.waitFor("label:Play Theme");
+    expect(app.audio().some(call => call.command === "pause")).toBe(true);
+  });
+
+  test("a viewer sees a reply's worktree media as its path, without asking for a link", async () => {
+    const reply = { id: "0:m2", kind: "message", role: "assistant", conversationId: "0", text: "![Demo run](out/demo.mp4)" };
+    const app = await open("../App.tsx", { network: server({
+      [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [{ ...sessionRecord, permissions: ["read"] }] } },
+      [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, permissions: ["read"], viewable: true } } },
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, entries: [reply], approvals: [], busy: false, queue: [] }, revision: "r1" } },
+    }), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.press("id:session-row-s1");
+    await app.waitFor("text:out/demo.mp4");
+    expect(app.shows("text:Video in the session's worktree")).toBe(true);
+    expect(app.requests().some(item => item.url.endsWith("/media"))).toBe(false);
+  });
+
   test("Artifacts says when there are none, and when the host is too old to show them", async () => {
     const none = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/artifacts`]: { body: { artifacts: [] } } });
     await none.press("text:Artifacts");

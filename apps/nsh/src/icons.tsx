@@ -79,11 +79,15 @@ const outlines = {
   fold: "M7 20l5-5 5 5M7 4l5 5 5-5",
   commit: `${circle(12, 12, 3)}M3 12h6M15 12h6`,
   wrap: "M3 6h18M3 12h15a3 3 0 1 1 0 6h-4M16 16l-2 2 2 2M3 18h7",
+  music: `M9 18V5l12-2v13${circle(6, 18, 3)}${circle(18, 16, 3)}`,
+  video: `M16 13l5.22 3.48a.5.5 0 0 0 .78-.42V7.87a.5.5 0 0 0-.75-.43L16 10.5${rect(2, 6, 14, 12, 2)}`,
 } as const;
 
 const fills = {
   stop: rect(5, 5, 14, 14, 3),
   dot: circle(12, 12, 5),
+  play: "M7 4.6v14.8a1 1 0 0 0 1.52.85l11.9-7.4a1 1 0 0 0 0-1.7L8.52 3.75A1 1 0 0 0 7 4.6z",
+  pause: `${rect(5, 4, 5, 16, 1.5)}${rect(14, 4, 5, 16, 1.5)}`,
 } as const;
 
 export type IconName = keyof typeof outlines | keyof typeof fills;

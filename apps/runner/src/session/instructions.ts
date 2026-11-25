@@ -123,9 +123,10 @@ export function agentInstructions(input: InstructionsInput): string {
     + "with path, glob and context) and read with offset and limit (just the lines around a match) rather than reading whole files: "
     + "their output is already bounded.";
   if (input.tools.includes("find")) instructions += "\n\nTo find files by name, use find with a glob (*.ts, src/**/*.spec.ts) rather than listing directories one by one.";
-  if (input.tools.includes("show_image")) instructions += "\n\nTo show the person an image (a picture you made, a screenshot, a chart), call show_image "
-    + "with its file in the worktree: it appears in the chat. The chat doesn't load images from links, so Markdown such as ![...](https://...) shows only "
-    + "its text: download an image from a URL into the worktree first, then show_image it.";
+  if (input.tools.includes("show_image")) instructions += "\n\nTo show the person an image, a video or a sound file in the worktree, put it in your reply "
+    + "as Markdown with its worktree path, on a line of its own: ![What it shows](out/demo.mp4). The chat shows images (PNG, JPEG, GIF, WebP), and plays videos "
+    + "(MP4, MOV, WebM, Ogg) and audio (MP3, M4A, AAC, WAV, Ogg, Opus, FLAC) in a player. To look at an image yourself as well, call show_image with its file: "
+    + "it appears in the chat and reaches you as an image. An image from an https link may not load in the chat: download it into the worktree first.";
   if (mode !== "ask" && input.tools.includes("move_file")) instructions += "\n\nTo move, copy or delete files and directories, "
     + "use move_file, copy_file and delete_file (write makes the directories it needs).";
   if (mode !== "ask" && input.tools.includes("git") && !off.has("git")) instructions += "\n\nRun Git with the git tool: "

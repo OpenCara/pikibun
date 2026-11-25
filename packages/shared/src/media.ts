@@ -67,7 +67,7 @@ export function parseByteRange(header: string | undefined, size: number, chunk: 
     end = size - 1;
   } else {
     start = Number(match[1]);
-    end = match[2] ? Number(match[2]) : size - 1;
+    end = match[2] ? Number(match[2]) : Number.MAX_SAFE_INTEGER;
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start) return undefined;
   }
   if (start >= size) return "unsatisfiable";

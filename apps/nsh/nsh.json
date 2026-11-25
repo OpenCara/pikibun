@@ -10,6 +10,7 @@
     "network": { "hosts": ["*"] },
     "webview": { "hosts": ["*"] },
     "clipboard": true,
+    "audio": true,
     "picker": true,
     "openUrl": true,
     "statusBar": true,
