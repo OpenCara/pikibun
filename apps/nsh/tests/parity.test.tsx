@@ -440,6 +440,18 @@ describe("a file attached to a message", () => {
     expect(app.texts().join(" ")).toContain("can't be attached in this workspace");
   });
 
+  test("dropped on a desktop from outside the home folder, the app reads it, though it may read no folder on its own", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
+    }) });
+    await app.press("id:session-row-s1");
+    await app.waitFor("label:Attach files");
+    await app.dropFiles("id:composer", ["file:///etc/hosts"]);
+    await app.waitFor("id:attachment-file");
+    expect(app.shows("text:hosts")).toBe(true);
+    expect(app.shows("id:composer-notice")).toBe(false);
+  });
+
   test("on a phone, Files opens the document picker", async () => {
     const app = await open("../App.tsx", { storage: signedIn, network: server({
       [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
@@ -485,10 +497,9 @@ describe("local files a desktop hands over", () => {
     await app.waitFor("text:Couldn't read missing.txt.");
     await app.dropFiles("id:composer", ["file://server/share/notes.txt"]);
     await app.waitFor("text:Only files on this computer can be attached.");
-    await app.dropFiles("id:composer", ["file:///etc/hosts"]);
-    await app.waitFor("text:Only files in your home folder can be attached.");
     expect(app.shows("id:attachment-file")).toBe(false);
     await app.press("id:clean-up");
     await app.waitUntil(() => !app.shows("id:clean-up"));
   });
+
 });

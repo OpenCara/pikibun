@@ -1,5 +1,6 @@
-import { Clipboard, computed, List, signal, Text, untracked, View } from "nsh";
+import { computed, List, signal, Text, untracked, View } from "nsh";
 import { Button as BaseButton, Input } from "nsh/base";
+import { writeClipboard } from "../lib/clipboard";
 import { canCreateSessions, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord, type SideAskSummary } from "../shared";
 import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../components/PullRequest";
 import { createSessionMenu, RenameSheet, type SessionMenu } from "../components/SessionMenu";
@@ -208,7 +209,7 @@ function WorkspaceRow(props: {
     ...(props.row.archived > 0 ? [{ label: props.row.showArchived ? "Hide archived" : `Show archived (${props.row.archived})`, icon: "archive" as const,
       testID: `workspace-archived-${props.row.id}`, onSelect: () => props.onToggleArchived(props.row.id) }] : []),
     "separator",
-    { label: "Copy workspace ID", icon: "copy", testID: `workspace-copy-id-${props.row.id}`, onSelect: () => void props.action.run(() => Clipboard.writeText(props.row.id), "Workspace ID copied") },
+    { label: "Copy workspace ID", icon: "copy", testID: `workspace-copy-id-${props.row.id}`, onSelect: () => void props.action.run(() => writeClipboard(props.row.id), "Workspace ID copied") },
     ...(props.onSettings ? [{ label: "Workspace settings", icon: "settings" as const, testID: `workspace-settings-${props.row.id}`, onSelect: () => props.onSettings!(props.row.id) }] : []),
   ];
   return (

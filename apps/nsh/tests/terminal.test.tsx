@@ -18,7 +18,7 @@ async function cells(app: App, name?: string): Promise<Cells | null> {
 const screen = (drawn: Cells) => drawn.rows.map(row => row.map(cell => cell.symbol).join("")).join("\n");
 
 async function openProfile() {
-  const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "linux", width: 1280, height: 1600 });
+  const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "linux", width: 1280, height: 2400 });
   await app.waitFor("id:session-row-s1");
   await app.press("id:open-profile");
   await app.waitFor("id:app-platform");

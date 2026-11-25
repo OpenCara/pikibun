@@ -1,5 +1,6 @@
-import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
+import { cleanup, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
 import { Button as BaseButton, NavPage } from "nsh/base";
+import { writeClipboard } from "../lib/clipboard";
 import {
   activeStatuses, autoChatOptionsBody, browserUnavailableText, chatOptionsBody, compactRefusal, CONNECTOR_UPDATE_HINT, copyText, findModel,
   hostCommand, hostCommands, initialSelection, levelLabels, managesSession, messageCut, modelUnavailable, offeredLevels, pairToolResults, parseSlashDraft, preparingRepositories,
@@ -139,8 +140,8 @@ export function SessionView(props: { id: string; page: boolean; front?: () => bo
     return `This session is read-only. ${manages() ? "Unarchive it to continue the work." : "Only its owner, or the workspace's owner or an admin, can unarchive it."}`;
   };
 
-  const copyId = () => void action.run(() => Clipboard.writeText(props.id), "Session ID copied");
-  const copyLink = () => void action.run(() => Clipboard.writeText(sessionLink(props.id)), "Link copied");
+  const copyId = () => void action.run(() => writeClipboard(props.id), "Session ID copied");
+  const copyLink = () => void action.run(() => writeClipboard(sessionLink(props.id)), "Link copied");
 
   const sessionCommands = (): AppCommand[] => {
     const current = live.session();
@@ -505,7 +506,7 @@ function Conversation(props: {
 
   async function copyMessage(entry: EntryView) {
     commanding.clear();
-    if (!await copying.run(() => Clipboard.writeText(copyText(entry)), "Message copied")) throw new Error("Not copied");
+    if (!await copying.run(() => writeClipboard(copyText(entry)), "Message copied")) throw new Error("Not copied");
   }
 
   const messageActions: MessageActions = entry => {
@@ -627,7 +628,7 @@ function Conversation(props: {
     }
     add({ id: "chat-copy-reply", title: "Copy latest reply", group: "Chat", icon: "copy",
       disabled: latestReply() ? undefined : "The agent hasn't replied yet",
-      run: () => { const reply = latestReply(); if (reply) void copying.run(() => Clipboard.writeText(copyText(reply)), "Reply copied"); } });
+      run: () => { const reply = latestReply(); if (reply) void copying.run(() => writeClipboard(copyText(reply)), "Reply copied"); } });
     if (!readOnly() && (owner() || canWrite())) {
       add({ id: "chat-fork", title: "Fork from the latest reply", group: "Chat", icon: "git-fork", keywords: ["clone"],
         disabled: cloneRefusal() ?? (clonePoint() ? undefined : "The agent has no finished reply to fork from yet"),
@@ -692,7 +693,7 @@ function Conversation(props: {
       case "copy": {
         const reply = latestReply();
         if (!reply) return refuse("The agent hasn't replied yet.");
-        return void copying.run(() => Clipboard.writeText(copyText(reply)), "Reply copied").then(copied => { if (copied) ran(); });
+        return void copying.run(() => writeClipboard(copyText(reply)), "Reply copied").then(copied => { if (copied) ran(); });
       }
       case "session": ran(); return props.onDetails();
       case "settings": ran(); return props.go({ name: "settings" });
@@ -722,7 +723,7 @@ function Conversation(props: {
   const statusTone = () => (stopPending() ? "warning" : view().busy && view().activity === "waiting" ? "warning" : "running");
 
   return (
-    <>
+    <View style={{ flex: 1 }} captureKeys="text">
       <View style={{ flex: 1 }} onTouchStart={releaseChatBox}>
       <List each={entries()} keyExtractor={entry => entry.id} ref={list} style={{ flex: 1 }} contentStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 }}
         maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 80 }} testID="transcript"
@@ -853,7 +854,7 @@ function Conversation(props: {
             notice={withdrawNotice() || rewinding.notice() || copying.notice() || commanding.notice()} />
         </View>
       </View>
-    </>
+    </View>
   );
 }
 

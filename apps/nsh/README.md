@@ -5,10 +5,12 @@ web, iOS, Android, macOS, Windows and Linux. Its web build is every server's cli
 only one the Docker image and `pikibun serve` ship. It replaced the React web client and the Electron desktop app, which
 are removed, on the same backend, `@pikibun/client` and `packages/shared`. See [the web client](../../docs/self-hosting.md#the-web-client).
 
-What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
-(longbridge/nsh#1061), a system sign-in session (0.6 added `open_auth_session` for Rust apps only, not to TSX: native
+What NSH can't do yet isn't in the client: Keychain and Keystore storage
+(longbridge/nsh#1061), a system sign-in session (0.6 added `open_auth_session` for Rust apps only, and 0.7 still has none in TSX: native
 sign-in goes through the system browser and comes back as a `pikibun://` link instead), and bundling the `pikibun` connector inside the app (the
-desktop builds run the installed command instead: see [This Computer](#this-computer)).
+desktop builds run the installed command instead: see [This Computer](#this-computer)). Push notifications are
+NSH's since 0.7 (`nsh-extra`'s `push`, iOS and Android), but not yet the client's: the server sends no APNs or FCM
+pushes (see [Notifications while the app is closed](#what-the-react-client-had-that-this-client-doesnt)).
 
 ## Run it
 
@@ -57,7 +59,8 @@ needs a decision stand out:
   the chat box's pickers (shared or side ask, model, reasoning, access)
   along its bottom edge: on a phone one line of them, tighter, that scrolls sideways where it doesn't fit, and any hint
   but "Runs as … (you)" on a line under it; a `/` typed first lists its
-  [slash commands](../../docs/sessions.md#slash-commands) inside the box, above the text. Details (owner, host, visibility, ID) are in the session's panel.
+  [slash commands](../../docs/sessions.md#slash-commands) inside the box, above the text. On macOS and Linux, typing
+  while the transcript or a button has the keyboard goes into the chat box (NSH's `captureKeys="text"`). Details (owner, host, visibility, ID) are in the session's panel.
 - **Commands**: the [command palette](../../docs/sessions.md#command-palette) (Ctrl/⌘ K, Ctrl/⌘ O for Switch session…, a
   button in the session's header) lists every action by name. Screens contribute their commands as data to one
   registry (`src/lib/commands.ts`, `useCommands`) while they are in front, and `src/components/CommandPalette.tsx`
@@ -91,6 +94,17 @@ needs a decision stand out:
   it differs from the React client on purpose: the sidebar keeps a search box, tool rows
   name what they work on, and message actions open a sheet rather than
   appear on hover.
+
+## Files and the clipboard
+
+- **Attaching**: a file dropped on the chat box or pasted from a file manager is read wherever it is: since NSH 0.7
+  the person's drop or paste lets the app read that one path, so `nsh.json` grants no read of the home folder (only
+  the app's own `updates` and `cli` folders). In a browser NSH reads a dropped file itself and hands over its bytes
+  (`onFileDrop`'s `files`, `attachDropped` in `src/lib/attachments.ts`). A pasted file larger than the box takes
+  (`pasteMaxSize`, the workspace's file limit or 32 MiB for images) is left unread and only named, with the same notice
+  as a picked one. A refusal (`ERR_ACCESS_DENIED`) now comes only from a host that narrows what the app reads.
+- **Copying**: `Clipboard.writeText` says since 0.7 what became of the write; `writeClipboard` (`src/lib/clipboard.ts`)
+  fails only on `"failed"`, so `"requested"` (iOS, Android, Linux and terminals, which don't say) counts as copied.
 
 ## Test it
 
@@ -191,7 +205,8 @@ Administration). What is left out, and why:
 - **Notifications while the app is closed**: the native apps show the account's notifications with NSH's
   `Notifications` only while they run (`src/lib/notifications.ts` asks the server's feed every 20 seconds, as a browser
   tab without Web Push does; pressing one opens its session, and one about the session in front isn't shown). Pushed
-  ones wait for NSH's push notifications (longbridge/nsh#1058). The web build turns them on in the browser as the web
+  ones wait for the server to send them through APNs and FCM, which NSH 0.7's `nsh-extra` `push` would receive on
+  iPhone and Android (longbridge/nsh#1058). The web build turns them on in the browser as the web
   app does (Web Push through the `sw.js` the build ships, or while a tab is open), and every build manages the
   account's preferences and devices.
 - **Up** in an empty chat box takes back a queued message on the desktops and in desktop browsers; on phones the
@@ -322,16 +337,13 @@ isn't running and signs in to it, and **Add a server**.
 
 Each workaround below is on the [list of upstream workarounds](../../docs/design/upstream-workarounds.md), with what tracks it upstream and when to remove it.
 
-- **Text widths on the web**: NSH (0.4 to 0.6) lays text out with widths the browser's canvas measures and draws it as page
+- **Text widths on the web**: NSH (0.4 to 0.7) lays text out with widths the browser's canvas measures and draws it as page
   text, so where a browser's canvas measures a font otherwise (another face for the system font, a minimum font size,
   text-only zoom) each run overlaps the next: inline code over the words before it. `scripts/nsh-web-fixes.mjs` patches
   the built runtime to measure such a font as the page draws it; drop the patch once NSH measures so itself.
 - **Secure storage**: native sign-ins are kept in NSH's `Storage`, a plain file in the app's data, not the Keychain or
   Keystore ([nsh#1061](https://github.com/longbridge/nsh/issues/1061)).
-- **A session's menu on phones**: rows that slide open their menu from their own long press, so the app opens it; NSH
-  0.6's `ContextMenu` opened by the app moves the focus to its first item, and until the focus lands a tap on any item
-  chooses the first. `RowMenu` opens those menus as a `Menu` instead (`src/ui.tsx`).
-- **Types**: NSH (0.4 to 0.6) declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared
+- **Types**: NSH (0.4 to 0.7) declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared
   code names.
 - **Tests**: screenshots need `--target`. Since NSH 0.5 an app imports only files inside its directory, the nearest one
   up with an `nsh.json`: the harnesses in `tests/harness` build with the app's, but the attach test's, which writes
