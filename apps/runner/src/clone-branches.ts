@@ -12,7 +12,9 @@ const MAX_CLONES = 100;
 const MAX_METADATA_BYTES = 64 * 1024;
 const SKIPPED = new Set(["node_modules", "vendor", "target", "dist", "build"]);
 
-export interface CloneBranch { directory: string; origin: string; branch?: string }
+const MAX_PUSHED_ENTRIES = 200;
+
+export interface CloneBranch { directory: string; origin: string; branch?: string; pushed?: string[] }
 
 async function readSmall(path: string): Promise<string | undefined> {
   let handle;
@@ -70,6 +72,28 @@ function configValue(raw: string): string {
   return value.trim();
 }
 
+async function pushedBranches(git: string, defaultBranch: string | undefined): Promise<string[]> {
+  const root = join(git, "logs", "refs", "remotes", "origin");
+  const found: string[] = [];
+  let entries = 0;
+  const visit = async (directory: string, prefix: string, depth: number): Promise<void> => {
+    if (depth > 8) return;
+    let names: string[];
+    try { names = (await readdir(directory)).sort(); } catch { return; }
+    for (const name of names) {
+      if (entries++ >= MAX_PUSHED_ENTRIES || found.length >= MAX_CLONE_BRANCHES) return;
+      const path = join(directory, name);
+      const branch = prefix ? `${prefix}/${name}` : name;
+      const info = await lstat(path).catch(() => undefined);
+      if (info?.isDirectory()) await visit(path, branch, depth + 1);
+      else if (info?.isFile() && branch !== "HEAD" && branch !== defaultBranch && validPushBranch(branch)
+        && /\tupdate by push\s*$/m.test(await readSmall(path) ?? "")) found.push(branch);
+    }
+  };
+  await visit(root, "", 0);
+  return found;
+}
+
 export async function readCloneBranches(worktree: string): Promise<CloneBranch[]> {
   const found: CloneBranch[] = [];
   let visited = 0;
@@ -86,7 +110,8 @@ export async function readCloneBranches(worktree: string): Promise<CloneBranch[]
       const defaultBranch = headBranch(await readSmall(join(git, "refs", "remotes", "origin", "HEAD")), "refs/remotes/origin/");
       if (origin) {
         const own = branch && (defaultBranch ? branch !== defaultBranch : !["main", "master"].includes(branch));
-        found.push({ directory: relative, origin, ...(own ? { branch } : {}) });
+        const pushed = (await pushedBranches(git, defaultBranch)).filter(item => defaultBranch || !["main", "master"].includes(item));
+        found.push({ directory: relative, origin, ...(own ? { branch } : {}), ...(pushed.length ? { pushed } : {}) });
       }
       return;
     }
@@ -110,13 +135,17 @@ const byKey = (branches: Map<string, ReportedBranch>) => [...branches.entries()]
 export function reportedBranches(clones: readonly CloneBranch[], repositories: readonly EgressRepository[], sessionBranch?: string): ReportedBranch[] {
   const own = new Map<string, ReportedBranch>();
   const session = new Map<string, ReportedBranch>();
+  const pushedBranches = new Map<string, ReportedBranch>();
   const pushed = sessionBranch && validPushBranch(sessionBranch) ? sessionBranch : undefined;
   for (const clone of clones) {
     const repository = repositoryForRemote(repositories, clone.origin);
     if (!repository || !reportedForges.some(([provider, host]) => repository.provider === provider && repository.host === host)) continue;
     if (pushed) session.set(`${repository.fullName}\n${pushed}`, { repository: repository.fullName, branch: pushed });
     if (clone.branch) own.set(`${repository.fullName}\n${clone.branch}`, { repository: repository.fullName, branch: clone.branch });
+    for (const branch of clone.pushed ?? []) {
+      if (validPushBranch(branch)) pushedBranches.set(`${repository.fullName}\n${branch}`, { repository: repository.fullName, branch });
+    }
   }
-  const kept = new Map([...new Map([...byKey(session), ...byKey(own)])].slice(0, MAX_CLONE_BRANCHES));
+  const kept = new Map([...new Map([...byKey(session), ...byKey(own), ...byKey(pushedBranches)])].slice(0, MAX_CLONE_BRANCHES));
   return byKey(kept).map(([, value]) => value);
 }

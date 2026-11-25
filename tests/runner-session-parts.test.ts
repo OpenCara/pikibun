@@ -1271,6 +1271,7 @@ test("instructions: a clone session names its branch, repositories, LFS and the 
   const host = instructions({ clone: true, sandboxed: false, agentTools: ["git_push"], cloneRepositories: ["https://github.com/acme/app.git"] });
   assert.match(host, /This host runs without a sandbox/);
   assert.doesNotMatch(host, /git_push|PIKIBUN_SESSION_BRANCH/);
+  assert.match(host, /This session's own branch is pikibun\/work-1: push the work for a pull request to it, for example git push origin HEAD:pikibun\/work-1/);
   assert.equal(lfsInstructions([]), "");
 });
 
