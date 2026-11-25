@@ -39,6 +39,32 @@ describe("settings", () => {
     expect(bodyOf(app, "PATCH", `${ORIGIN}/api/me`)).toMatchObject({ displayName: "Countess Ada", gitName: "Ada", gitEmail: "ada@example.com", env: {} });
   });
 
+  test("Profile connects a remote MCP server once and uses the connection in a workspace whose server signs in with members' own accounts", async () => {
+    const at = "2026-11-20T10:00:00.000Z";
+    const mine = { id: "mc1", name: "Linear", url: "https://mcp.linear.app/mcp", headerNames: [], workspaces: [], offeredIn: [{ id: "w1", name: workspace.name }], createdAt: at, updatedAt: at };
+    let added = false;
+    let used = false;
+    const app = await openSettings("profile", {
+      [`GET ${ORIGIN}/api/mcp-connections`]: () => ({ body: { connections: !added ? [] : [used ? { ...mine, workspaces: [{ id: "w1", name: workspace.name }], offeredIn: [] } : mine] } }),
+      [`POST ${ORIGIN}/api/mcp-connections`]: () => { added = true; return { status: 201, body: { connection: mine } }; },
+      [`PUT ${ORIGIN}/api/mcp-connections/mc1/workspaces/w1`]: () => { used = true; return { body: { connection: mine } }; },
+    });
+    await app.waitFor("id:mcp-connections");
+    await app.waitFor("text:No connections");
+    await app.press("id:mcp-connection-add");
+    await app.waitFor("id:mcp-connection-name");
+    await app.type("id:mcp-connection-name", "Linear");
+    await app.type("id:mcp-connection-url", "https://mcp.linear.app/mcp");
+    await app.press("id:mcp-connection-connect");
+    await app.waitFor("id:mcp-connection-mc1");
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/mcp-connections`)).toEqual({ name: "Linear", url: "https://mcp.linear.app/mcp" });
+    await app.press("text:Linear");
+    await app.waitFor("id:mcp-connection-use-w1");
+    await app.press("id:mcp-connection-use-w1");
+    await app.waitFor(`text:${workspace.name} uses it for your requests from your next message.`);
+    await app.waitUntil(() => app.texts().join(" ").includes(`used in ${workspace.name}`));
+  });
+
   test("Password sets a first password where the server takes them", async () => {
     const app = await openSettings("password", {
       [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, passwordAuth: true, testMode: true } },
@@ -592,6 +618,28 @@ describe("settings", () => {
     await app.press("text:Many · many_");
     await app.waitUntil(() => app.texts().join(" ").includes("Some of its tools are left out"));
     expect(app.texts().join(" ")).toContain("Left out 6 tools past the 64 Pikibun offers from one server and 2 tools whose names or input schemas Pikibun can't offer.");
+  });
+
+  test("Workspaces lets an admin choose whose sign-in a remote MCP server calls with, and a member use their own connection there", async () => {
+    const at = "2026-01-01T00:00:00.000Z";
+    const tracker = { id: "m1", name: "Tracker", prefix: "tracker", url: "https://mcp.example.com/mcp", enabled: true, signInAs: "members", headerNames: [], readOnlyTools: [],
+      tools: [{ name: "search", toolName: "tracker_search", description: "Search.", inputSchema: { type: "object" }, readOnly: true }], updatedAt: at,
+      connection: { id: "mc1", name: "My tracker", using: false, signedIn: true } };
+    let using = false;
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/mcp-servers`]: () => ({ body: { servers: [{ ...tracker, connection: { ...tracker.connection, using } }], admin: true } }),
+      [`PUT ${ORIGIN}/api/mcp-connections/mc1/workspaces/w1`]: () => { using = true; return { body: { connection: {} } }; },
+      [`PATCH ${ORIGIN}/api/workspaces/w1/mcp-servers/m1`]: { body: { server: tracker } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("text:Tracker · tracker_");
+    expect(app.texts().join(" ")).toContain("each member's own");
+    await app.press("text:Tracker · tracker_");
+    await app.waitFor("id:mcp-use-connection-tracker");
+    expect(app.texts().join(" ")).toContain("You have a connection to it, My tracker, which this workspace doesn't use yet.");
+    await app.press("id:mcp-use-connection-tracker");
+    await app.waitUntil(() => app.texts().join(" ").includes("Your requests use your own connection, My tracker."));
+    expect(app.requests().some(item => item.method === "PUT" && item.url === `${ORIGIN}/api/mcp-connections/mc1/workspaces/w1`)).toBe(true);
   });
 
   test("Workspaces shows the workspace's memory and the notes agents proposed, and an admin adds one to the memory as they save it", async () => {

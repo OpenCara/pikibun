@@ -381,6 +381,10 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   Many servers offer no OAuth Pikibun can use (no dynamic client registration, say), and their errors now point there.
   A `PATCH` whose new headers hold an `Authorization` drops the OAuth sign-in, which would otherwise replace it, and
   audits `signedOut`; choosing another method without one signs out with `DELETE .../oauth`.
+- **Members' own sign-ins**: a server's `signInAs` chooses whose sign-in it calls with: the workspace's (the default),
+  each member's own, or each member's own else the workspace's. Members keep their own connections in their profile,
+  by any of the methods above, and bring each to the workspaces they choose; a call uses the requester's. See
+  [connections.md](connections.md). The credential and OAuth plumbing both share is `remote-mcp/credentials.ts`.
 
 ## Phase 4 as built
 

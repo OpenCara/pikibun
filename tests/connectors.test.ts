@@ -28,7 +28,8 @@ import { bundledCliDefinitions, parseCliDefinitions, withoutCliHints } from '../
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
 import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
-import type { RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
+import type { McpConnection, RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
+import { broughtConnection } from '../apps/server/src/authority/remote-mcp/connections.js';
 import { publicLookup, RemoteMcpRefused } from '../apps/server/src/authority/remote-mcp/transport.js';
 import { authorizationUrl, coversResource, discoverOAuth, registerClient } from '../apps/server/src/authority/remote-mcp/oauth.js';
 import { answersId, eventStreamMessages, RemoteMcpSession } from '../apps/server/src/authority/remote-mcp/client.js';
@@ -4636,6 +4637,215 @@ test('an app signs in to a remote MCP server through a system browser that isn\'
   await json(await s.admin.request('PATCH', path + '/' + server.id, { url: 'https://elsewhere.example.net/mcp', headers: {} }));
   await denied(await adminApp('POST', '/api/mcp-servers/oauth/app/finish', { code: late }), 409, 'mcp_server_changed');
   assert.equal((await listed()).oauth, undefined, 'a sign-in made for one address is never kept for another');
+});
+
+function tokensMcpFake(tokens: string[]) {
+  const calls: { method: string; url: string; token: string | undefined }[] = [];
+  const transport = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
+    const body = JSON.parse(request.body) as { id?: number; method: string; params?: { name?: string } };
+    const token = /^Bearer (.+)$/.exec(request.headers.Authorization ?? '')?.[1];
+    calls.push({ method: body.method, url: request.url, token });
+    if (!token || !tokens.includes(token)) return { status: 401, headers: { 'www-authenticate': 'Basic realm="mcp"' }, body: '' };
+    if (body.id === undefined) return { status: 202, headers: {}, body: '' };
+    const result = body.method === 'initialize' ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'tracker', version: '1' } }
+      : body.method === 'tools/list' ? { tools: [{ name: 'search', description: 'Search.', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] }
+      : { content: [{ type: 'text', text: `${body.params?.name} as ${token}` }] };
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: body.id, result }) };
+  };
+  return { calls, transport };
+}
+
+test('members bring their own remote MCP connections from their profile, and a workspace\'s server chooses whose sign-in each request uses', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const url = 'https://mcp.example.com/mcp';
+  const fake = tokensMcpFake(['workspace-token', 'creator-token-0123456789', 'admin-token']);
+  f.env.REMOTE_MCP_TRANSPORT = fake.transport;
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const { server } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path,
+    { name: 'Tracker', prefix: 'tracker', url, headers: { Authorization: 'Bearer workspace-token' }, readOnlyTools: ['search'] }), 201);
+  assert.equal(server.signInAs, 'workspace');
+  const answer = parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true })));
+  const route = answer.remoteTools![0]!.route;
+  const owner = s.session.ownerId;
+  const call = () => self(f, s.connector, route, { sessionId: s.session.id, actorId: owner, admissionId: admit(f, s.session.id, owner), callId: 'call-1', arguments: { query: 'bug' } });
+  const result = async () => (await json<{ result: string }>(await call())).result;
+  assert.equal(await result(), 'search as workspace-token');
+
+  const connections = '/api/mcp-connections';
+  await denied(await s.creator.request('POST', connections, { name: 'Tracker', url: 'http://mcp.example.com/mcp' }), 400, 'invalid_mcp_connection');
+  await denied(await s.creator.request('POST', connections, { name: 'Tracker', url, headers: { Host: 'evil' } }), 400, 'invalid_mcp_connection');
+  const { connection } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections,
+    { name: 'My tracker', url, headers: { Authorization: 'Bearer creator-token-0123456789' } }), 201);
+  assert.deepEqual([connection.name, connection.url, connection.headerNames, connection.error, connection.workspaces, connection.offeredIn],
+    ['My tracker', url, ['Authorization'], undefined, [], []], 'checked against the server, and offered nowhere while the workspace signs in for everyone');
+  await denied(await s.creator.request('POST', connections, { name: 'Again', url, headers: { Authorization: 'Bearer x' } }), 409, 'mcp_connection_exists');
+  const { connection: wrong } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections,
+    { name: 'Elsewhere', url: 'https://other.example.com/mcp', headers: { Authorization: 'Bearer nope' } }), 201);
+  assert.match(wrong.error ?? '', /HTTP 401/);
+  await denied(await s.creator.request('PUT', `${connections}/${wrong.id}/workspaces/${s.team.id}`), 409, 'mcp_server_not_in_workspace');
+  await denied(await s.admin.request('PUT', `${connections}/${connection.id}/workspaces/${s.team.id}`), 404, 'not_found');
+  await denied(await s.admin.request('DELETE', `${connections}/${connection.id}`), 404, 'not_found');
+  const outsider = await f.client('outsider');
+  const { connection: theirs } = await json<{ connection: McpConnection }>(await outsider.request('POST', connections, { name: 'Tracker', url, headers: { Authorization: 'Bearer admin-token' } }), 201);
+  await denied(await outsider.request('PUT', `${connections}/${theirs.id}/workspaces/${s.team.id}`), 404, 'not_found');
+  assert.deepEqual((await json<{ connections: McpConnection[] }>(await s.admin.request('GET', connections))).connections, [], 'each member sees only their own');
+
+  const brought = await json<{ connection: McpConnection }>(await s.creator.request('PUT', `${connections}/${connection.id}/workspaces/${s.team.id}`));
+  const team = { id: s.team.id, name: String(f.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(s.team.id)!.name) };
+  assert.deepEqual(brought.connection.workspaces, [team]);
+  assert.equal(await result(), 'search as workspace-token', 'a server that signs in as the workspace ignores members\' connections');
+
+  await denied(await s.creator.request('PATCH', path + '/' + server.id, { signInAs: 'members' }), 403, 'forbidden');
+  await denied(await s.admin.request('PATCH', path + '/' + server.id, { signInAs: 'mine' }), 400, 'invalid_mcp_server');
+  const { server: either } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { signInAs: 'members-then-workspace' }));
+  assert.equal(either.signInAs, 'members-then-workspace');
+  assert.equal(await result(), 'search as creator-token-0123456789', 'the requester\'s own connection is used where they brought it');
+  const listed = (await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers[0]!;
+  assert.deepEqual(listed.connection, { id: connection.id, name: 'My tracker', using: true, signedIn: true });
+  assert.equal((await json<{ servers: WorkspaceMcpServer[] }>(await s.admin.request('GET', path))).servers[0]!.connection, undefined);
+  const called = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.called'").all().map(row => JSON.parse(String(row.detail_json)));
+  assert.deepEqual(called.map(item => item.connection ?? null), [null, null, connection.id], 'the audit says whose connection a call used');
+
+  await json(await s.creator.request('DELETE', `${connections}/${connection.id}/workspaces/${s.team.id}`));
+  assert.equal(await result(), 'search as workspace-token', 'without it, the workspace\'s sign-in');
+  const { connection: offered } = await json<{ connection: McpConnection }>(await s.creator.request('PATCH', `${connections}/${connection.id}`, { name: 'Mine' }));
+  assert.deepEqual([offered.name, offered.workspaces, offered.offeredIn], ['Mine', [], [team]]);
+
+  await json(await s.admin.request('PATCH', path + '/' + server.id, { signInAs: 'members' }));
+  const reached = fake.calls.length;
+  const required = await json<{ code: string; error: string }>(await call(), 403);
+  assert.equal(required.code, 'mcp_connection_required');
+  assert.match(required.error, /Settings → Profile → Connected accounts/);
+  assert.equal(fake.calls.length, reached, 'nothing is sent with the workspace\'s sign-in instead');
+  await json(await s.creator.request('PUT', `${connections}/${connection.id}/workspaces/${s.team.id}`));
+  assert.equal(await result(), 'search as creator-token-0123456789');
+
+  const { connection: changed } = await json<{ connection: McpConnection }>(await s.creator.request('PATCH', `${connections}/${connection.id}`, { headers: { Authorization: 'Bearer revoked' } }));
+  assert.match(changed.error ?? '', /HTTP 401/);
+  const refused = await json<{ code: string; error: string }>(await call(), 502);
+  assert.equal(refused.code, 'mcp_call_failed');
+  await json(await s.creator.request('PATCH', `${connections}/${connection.id}`, { headers: { Authorization: 'Bearer creator-token-0123456789' } }));
+  assert.equal(await result(), 'search as creator-token-0123456789');
+
+  const stored = JSON.stringify(f.sqlite.prepare('SELECT * FROM mcp_connections').all()) + JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all())
+    + await (await s.creator.request('GET', connections)).text() + await (await s.creator.request('GET', path)).text();
+  assert.ok(!stored.includes('creator-token-0123456789'), 'a connection\'s headers are kept only encrypted, and never shown or audited');
+
+  f.sqlite.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(s.team.id, s.creator.user.id);
+  assert.equal(await broughtConnection(f.env, s.team.id, url, s.creator.user.id), null, 'a connection serves a workspace only while its member belongs to it');
+  f.sqlite.prepare('INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, ?, ?)').run(s.team.id, s.creator.user.id, 'member', new Date().toISOString());
+
+  await json(await s.creator.request('DELETE', `${connections}/${connection.id}`));
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM mcp_connection_workspaces').get()!.n, 0);
+  await denied(await call(), 403, 'mcp_connection_required');
+  const audits = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'user.mcp_connection.%' OR action LIKE 'workspace.mcp.connection_%'").all().map(row => row.action);
+  assert.ok(['user.mcp_connection.added', 'workspace.mcp.connection_brought', 'workspace.mcp.connection_withdrawn', 'user.mcp_connection.updated', 'user.mcp_connection.removed']
+    .every(action => audits.includes(action)));
+});
+
+test('a member signs in to their own remote MCP connection with OAuth from the web or the app, and bringing it lists a server\'s tools for members', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const fake = oauthMcpFake();
+  f.env.REMOTE_MCP_TRANSPORT = fake.transport;
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const { server } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path, { name: 'Gen', prefix: 'gen', url: fake.mcpUrl, signInAs: 'members' }), 201);
+  assert.deepEqual([server.signInAs, server.tools.length], ['members', 0]);
+  const connections = '/api/mcp-connections';
+  const { connection } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections, { name: 'Gen', url: fake.mcpUrl }), 201);
+  assert.match(connection.error ?? '', /needs a sign-in \(HTTP 401\): sign in to it with Sign in/);
+  assert.deepEqual(connection.offeredIn, [{ id: s.team.id, name: String(f.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(s.team.id)!.name) }]);
+
+  const start = `${connections}/${connection.id}/oauth/start`;
+  await denied(await s.admin.request('GET', start), 404, 'not_found');
+  const callbackUrl = `${origin}/api/mcp-servers/oauth/callback`;
+  const signIn = async () => {
+    const response = await s.creator.request('GET', start);
+    assert.equal(response.status, 302);
+    const location = new URL(response.headers.get('location')!);
+    assert.equal(`${location.origin}${location.pathname}`, 'https://auth.example.com/_clerk/oauth/authorize');
+    assert.deepEqual(['resource', 'redirect_uri'].map(name => location.searchParams.get(name)), [fake.mcpUrl, callbackUrl], 'the same callback, so the same OAuth clients');
+    const state = location.searchParams.get('state')!;
+    assert.equal(response.headers.get('set-cookie')!.match(/test-mcp-oauth=([^;]+)/)![1], state);
+    return { state, challenge: location.searchParams.get('code_challenge')! };
+  };
+  const callback = (client: typeof s.creator, state: string, query: Record<string, string>) =>
+    client.request('GET', `/api/mcp-servers/oauth/callback?${new URLSearchParams({ ...query, state })}`, undefined, { Cookie: `${client.cookie}; test-mcp-oauth=${state}` });
+
+  const stolen = await signIn();
+  fake.codes.set('code-1', { challenge: stolen.challenge, resource: fake.mcpUrl, redirect: callbackUrl });
+  await denied(await callback(s.admin, stolen.state, { code: 'code-1' }), 400, 'invalid_oauth_state');
+  assert.ok(fake.codes.has('code-1'), 'another member\'s callback exchanges nothing');
+  const flow = await signIn();
+  const { connection: other } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections, { name: 'Other', url: 'https://other.example.com/mcp' }), 201);
+  await json(await s.creator.request('POST', `${connections}/${other.id}/oauth/app`), 201);
+  fake.codes.set('code-2', { challenge: flow.challenge, resource: fake.mcpUrl, redirect: callbackUrl });
+  const done = await callback(s.creator, flow.state, { code: 'code-2', iss: 'https://auth.example.com/_clerk' });
+  assert.equal(done.status, 302, 'a sign-in started for another connection meanwhile leaves this one under way');
+  assert.equal(done.headers.get('location'), `${origin}/#/settings/profile`);
+  await json(await s.creator.request('DELETE', `${connections}/${other.id}`));
+  const mine = (await json<{ connections: McpConnection[] }>(await s.creator.request('GET', connections))).connections[0]!;
+  assert.ok(mine.oauth?.signedInAt);
+  assert.equal(mine.error, undefined);
+  assert.equal((await json<{ servers: WorkspaceMcpServer[] }>(await s.admin.request('GET', path))).servers[0]!.tools.length, 0, 'not brought yet: the workspace learns nothing');
+
+  await json(await s.creator.request('PUT', `${connections}/${connection.id}/workspaces/${s.team.id}`));
+  const listed = (await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers[0]!;
+  assert.deepEqual(listed.tools.map(tool => tool.toolName), ['gen_generate_video'], 'bringing a connection lists a members\' server that had no tools');
+  assert.equal(listed.error, undefined);
+  assert.deepEqual(listed.connection, { id: connection.id, name: 'Gen', using: true, signedIn: true });
+  const answer = parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true })));
+  const route = answer.remoteTools![0]!.route;
+  const call = () => self(f, s.connector, route, { sessionId: s.session.id, actorId: s.session.ownerId, admissionId: admit(f, s.session.id, s.session.ownerId), callId: 'call-1', arguments: { prompt: 'cat' } });
+  assert.equal((await json<{ result: string }>(await call())).result, 'generate_video as access-1');
+  fake.valid.delete('access-1');
+  assert.equal((await json<{ result: string }>(await call())).result, 'generate_video as access-2', 'a personal sign-in is renewed as a workspace\'s is');
+  const kept = String(f.sqlite.prepare('SELECT oauth_ciphertext FROM mcp_connections WHERE id = ?').get(connection.id)!.oauth_ciphertext);
+  const secret = JSON.parse(await decryptToken(f.env, `mcp-connection-oauth:${connection.id}`, kept));
+  assert.deepEqual([secret.accessToken, secret.refreshToken], ['access-2', 'refresh-2']);
+  const stored = JSON.stringify(f.sqlite.prepare('SELECT * FROM mcp_connections').all()) + JSON.stringify(f.sqlite.prepare('SELECT * FROM mcp_connection_sign_ins').all())
+    + JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all());
+  assert.ok(!/access-\d|refresh-\d/.test(stored), 'tokens are kept only encrypted and never audited');
+
+  const { connection: out } = await json<{ connection: McpConnection }>(await s.creator.request('DELETE', `${connections}/${connection.id}/oauth`));
+  assert.equal(out.oauth, undefined);
+  const signedOut = await json<{ code: string; error: string }>(await call(), 502);
+  assert.match(signedOut.error, /needs a sign-in \(HTTP 401\)/);
+
+  const native = async (name: string) => {
+    const { token: bearer } = await json<{ token: string }>(await f.request('POST', '/api/auth/test', { id: name, client: 'native', deviceName: 'Phone' }, { Authorization: `Bearer ${testSecret}` }));
+    return (method: string, route: string, body?: unknown) => f.request(method, route, body, { Authorization: `Bearer ${bearer}` });
+  };
+  const adminApp = await native('admin');
+  const hostApp = await native('host');
+  const { connection: adminConnection } = await json<{ connection: McpConnection }>(await adminApp('POST', connections, { name: 'Gen', url: fake.mcpUrl }), 201);
+  const appCallback = `${origin}/api/mcp-servers/oauth/app/callback`;
+  await denied(await hostApp('POST', `${connections}/${adminConnection.id}/oauth/app`), 404, 'not_found');
+  const { url } = await json<{ url: string }>(await adminApp('POST', `${connections}/${adminConnection.id}/oauth/app`), 201);
+  const begin = new URL(url);
+  const browser = await f.request('GET', begin.pathname + begin.search);
+  assert.equal(browser.status, 302);
+  const location = new URL(browser.headers.get('location')!);
+  assert.equal(location.searchParams.get('redirect_uri'), appCallback);
+  const state = location.searchParams.get('state')!;
+  fake.codes.set('code-3', { challenge: location.searchParams.get('code_challenge')!, resource: fake.mcpUrl, redirect: appCallback });
+  const page = await (await f.request('GET', `/api/mcp-servers/oauth/app/callback?${new URLSearchParams({ code: 'code-3', state })}`, undefined, { Cookie: `test-mcp-oauth-app=${state}` })).text();
+  const code = /code=([A-Za-z0-9_-]{43})/.exec(page)![1]!;
+  await denied(await hostApp('POST', '/api/mcp-servers/oauth/app/finish', { code }), 403, 'not_your_sign_in');
+  await denied(await adminApp('POST', '/api/mcp-servers/oauth/app/finish', { code }), 400, 'invalid_grant');
+
+  const { url: again } = await json<{ url: string }>(await adminApp('POST', `${connections}/${adminConnection.id}/oauth/app`), 201);
+  const second = new URL(again);
+  const redirected = new URL((await f.request('GET', second.pathname + second.search)).headers.get('location')!);
+  const secondState = redirected.searchParams.get('state')!;
+  fake.codes.set('code-4', { challenge: redirected.searchParams.get('code_challenge')!, resource: fake.mcpUrl, redirect: appCallback });
+  const secondPage = await (await f.request('GET', `/api/mcp-servers/oauth/app/callback?${new URLSearchParams({ code: 'code-4', state: secondState })}`, undefined,
+    { Cookie: `test-mcp-oauth-app=${secondState}` })).text();
+  const finished = await json<{ connection: McpConnection }>(await adminApp('POST', '/api/mcp-servers/oauth/app/finish', { code: /code=([A-Za-z0-9_-]{43})/.exec(secondPage)![1]! }));
+  assert.ok(finished.connection.oauth?.signedInAt);
+  assert.deepEqual([finished.connection.id, finished.connection.error], [adminConnection.id, undefined]);
+  assert.equal((await json<{ servers: WorkspaceMcpServer[] }>(await s.admin.request('GET', path))).servers[0]!.connection?.using, false, 'signed in, but not brought here');
+  const signedIn = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'user.mcp_connection.signed_in'").all().map(row => JSON.parse(String(row.detail_json)));
+  assert.deepEqual(signedIn.map(item => item.via ?? 'web'), ['web', 'app']);
 });
 
 test('a protected resource covers only its own origin and path, and an authorization server\'s metadata must name the issuer it was asked for', async () => {
