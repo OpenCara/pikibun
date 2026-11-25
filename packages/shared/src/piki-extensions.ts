@@ -278,10 +278,6 @@ export function sessionToolExtensionOn(workspace: readonly { source: string; ena
   return !!extension?.sessionTools && pikiExtensionOn(extension, workspace);
 }
 
-// In its owner's private workspace, a session runs on their own hosts, as them, so Pikibun's tools that run commands
-// and act as them aren't switched by extensions there: every session-tool extension that is neither core (on anyway),
-// retired, opt-in (a feature someone chooses) nor a document source (which needs a source), and the command-line tools
-// (gh, glab, az), are always on. Opt-in ones and other packages stay as the owner chose.
 export function privateWorkspaceTools(): PikiExtensionInfo[] {
   return pikiExtensions.filter(item => item.tool !== undefined
     || (item.sessionTools !== undefined && !item.core && !item.retired && !item.optIn && !item.documentKinds));
