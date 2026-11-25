@@ -72,22 +72,30 @@ export function registerMediaLinks(app: Hono<AppEnv>): void {
     await requireMediaHost(c.env, row);
     const { mimeType } = mediaType(claims.path)!;
     const header = c.req.header('range');
-    const first = await readRange(c, row, claims.path, 0, mediaLimits.chunkBytes);
+    const unsatisfiable = (size: number) => new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}`, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store' } });
+    const partial = (start: number, part: Uint8Array<ArrayBuffer>, size: number) => new Response(part, { status: 206,
+      headers: { ...mediaHeaders(mimeType, part.length), 'Content-Range': `bytes ${start}-${start + part.length - 1}/${size}` } });
+    const explicit = parseByteRange(header, Number.MAX_SAFE_INTEGER);
+    if (explicit && explicit !== 'unsatisfiable' && /^bytes=\d/.test(header!.trim())) {
+      const part = await readRange(c, row, claims.path, explicit.start, explicit.end - explicit.start + 1);
+      return explicit.start >= part.size ? unsatisfiable(part.size) : partial(explicit.start, part.bytes, part.size);
+    }
+    const first = await readRange(c, row, claims.path, 0, header !== undefined || c.req.method === 'HEAD' ? 1 : mediaLimits.chunkBytes);
     const size = first.size;
     const range = parseByteRange(header, size);
-    if (range === 'unsatisfiable') {
-      return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}`, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store' } });
-    }
+    if (range === 'unsatisfiable') return unsatisfiable(size);
     if (range) {
-      const part = range.start === 0 ? first.bytes.subarray(0, range.end + 1) : (await readRange(c, row, claims.path, range.start, range.end - range.start + 1)).bytes;
+      const part = (await readRange(c, row, claims.path, range.start, range.end - range.start + 1)).bytes;
       if (part.length !== range.end - range.start + 1) fail(409, 'media_changed', 'The file changed while it was read. Try again.');
-      return new Response(part, { status: 206, headers: { ...mediaHeaders(mimeType, part.length), 'Content-Range': `bytes ${range.start}-${range.end}/${size}` } });
+      return partial(range.start, part, size);
     }
     if (c.req.method === 'HEAD') return new Response(null, { status: 200, headers: mediaHeaders(mimeType, size) });
-    let offset = first.bytes.length;
+    const opening = first.bytes.length < Math.min(size, mediaLimits.chunkBytes) ? await readRange(c, row, claims.path, 0, mediaLimits.chunkBytes) : first;
+    if (opening.size !== size) fail(409, 'media_changed', 'The file changed while it was read. Try again.');
+    let offset = opening.bytes.length;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        if (first.bytes.length) controller.enqueue(first.bytes);
+        if (opening.bytes.length) controller.enqueue(opening.bytes);
         if (offset >= size) controller.close();
       },
       async pull(controller) {

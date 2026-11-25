@@ -3575,8 +3575,18 @@ test('media in the chat: a signed link to a worktree file, served in parts from 
   assert.deepEqual(read, [{ path: 'out/demo.mp4', offset: 0, length: mediaLimits.chunkBytes }, { path: 'out/demo.mp4', offset: mediaLimits.chunkBytes, length: 10 }]);
   assert.ok(requests.every(envelope => envelope.request.ticket.action === 'files' && envelope.request.ticket.actorId === s.creator.user.id));
 
+  const beforeSeek = requests.length;
   const part = await f.request('GET', media.url, undefined, { Range: `bytes=${mediaLimits.chunkBytes + 2}-` });
   assert.equal(part.status, 206);
+  assert.deepEqual(requests.slice(beforeSeek).map(envelope => JSON.parse(envelope.request.body)), [{ path: 'out/demo.mp4', offset: mediaLimits.chunkBytes + 2, length: mediaLimits.chunkBytes }],
+    'a seek reads only the part it asks for');
+  const beforeHead = requests.length;
+  const head = await f.request('HEAD', media.url);
+  assert.deepEqual([head.status, head.headers.get('content-length')], [200, String(file.length)]);
+  assert.deepEqual(requests.slice(beforeHead).map(envelope => JSON.parse(envelope.request.body).length), [1], 'HEAD reads one byte for the size');
+  const ignored = await f.request('GET', media.url, undefined, { Range: 'bytes=9-2' });
+  assert.equal(ignored.status, 200, 'an invalid range is ignored');
+  assert.ok(Buffer.from(await ignored.arrayBuffer()).equals(file));
   assert.equal(part.headers.get('content-range'), `bytes ${mediaLimits.chunkBytes + 2}-${file.length - 1}/${file.length}`);
   assert.ok(Buffer.from(await part.arrayBuffer()).equals(file.subarray(mediaLimits.chunkBytes + 2)));
   const start = await f.request('GET', media.url, undefined, { Range: 'bytes=0-' });
