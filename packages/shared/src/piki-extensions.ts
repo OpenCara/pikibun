@@ -278,6 +278,15 @@ export function sessionToolExtensionOn(workspace: readonly { source: string; ena
   return !!extension?.sessionTools && pikiExtensionOn(extension, workspace);
 }
 
+export function privateWorkspaceTools(): PikiExtensionInfo[] {
+  return pikiExtensions.filter(item => item.tool !== undefined
+    || (item.sessionTools !== undefined && !item.core && !item.retired && !item.optIn && !item.documentKinds));
+}
+
+export function isPrivateWorkspaceTool(source: string): boolean {
+  return privateWorkspaceTools().some(item => item.source === source);
+}
+
 export function pikiExtensionsFor(provider: string): PikiExtensionInfo[] {
   return pikiExtensions.filter(item => (item.providers as readonly string[]).includes(provider));
 }

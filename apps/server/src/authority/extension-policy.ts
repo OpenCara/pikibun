@@ -1,24 +1,29 @@
 import { documentSourceExtensionOf, neededExtensions, pikiExtensionsFor, pikiSessionToolExtensions } from '../../../../packages/shared/src/piki-extensions.js';
-import { defaultExtensionIntegrity, defaultWorkspaceExtensions, starterWorkspaceExtensions, extensionLimits, extensionPackageKey, isExtensionIntegrity, withSessionToolsListed, type ExtensionToolMode, type WorkspaceExtension } from '../../../../packages/shared/src/host-extensions.js';
+import { defaultExtensionIntegrity, defaultWorkspaceExtensions, starterWorkspaceExtensions, extensionLimits, extensionPackageKey, isExtensionIntegrity, withPrivateWorkspaceTools, withSessionToolsListed, type ExtensionToolMode, type WorkspaceExtension } from '../../../../packages/shared/src/host-extensions.js';
 import type { DocumentKind } from '../../../../packages/shared/src/sources.js';
 import type { Env } from '../types.js';
 import { now } from '../http.js';
 import { auditStatement } from './audit.js';
+import { isPersonalWorkspace } from './personal-workspaces.js';
 import { workspaceAdminSQL } from './access.js';
 import type { Database, Query } from '../db/types.js';
 
 interface ExtensionRow { source: string; enabled: number | string; tools_mode: ExtensionToolMode; settings_json: string; integrity: string | null }
 
 export async function workspaceExtensions(env: Env, workspaceId: string): Promise<WorkspaceExtension[]> {
-  const rows = await env.DB.query<ExtensionRow>(`SELECT source, enabled, tools_mode, settings_json, integrity FROM workspace_extensions
-    WHERE workspace_id = ? ORDER BY position, package_key`).bind(workspaceId).all();
-  return withSessionToolsListed(rows.map(row => ({
+  const [rows, personal] = await Promise.all([
+    env.DB.query<ExtensionRow>(`SELECT source, enabled, tools_mode, settings_json, integrity FROM workspace_extensions
+      WHERE workspace_id = ? ORDER BY position, package_key`).bind(workspaceId).all(),
+    isPersonalWorkspace(env, workspaceId),
+  ]);
+  const listed = withSessionToolsListed(rows.map(row => ({
     source: row.source,
     enabled: Number(row.enabled) === 1,
     tools: 'automatic' as const,
     settings: JSON.parse(row.settings_json),
     ...(row.source.startsWith('npm:') && isExtensionIntegrity(row.integrity) ? { integrity: row.integrity } : {}),
   })));
+  return personal ? withPrivateWorkspaceTools(listed) : listed;
 }
 
 export async function workspaceExtensionLock(env: Env, workspaceId: string, packageKey: string): Promise<{ source: string; integrity: string | null } | null> {
