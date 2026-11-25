@@ -206,6 +206,9 @@ function HostSection(props: Part) {
         <If when={props.current.hostEnvironment}>
           <Row leading={icon("server")} title="Runs on the host" hint="No sandbox: its commands run on the host owner's machine, as its user" trailing={<Badge>On host</Badge>} />
         </If>
+        <If when={props.current.hostEnvironment ? props.current.hostDirectory : undefined}>
+          {directory => <Row testID="session-host-directory" title="Working directory" hint={directory()} selectableHint />}
+        </If>
         <If when={host()}>{current => <CardBody><HostCapabilities connector={current()} /></CardBody>}</If>
         <If when={props.hosts() && !host()}>
           <Row title="Host not in your list" hint="It may be private to its owner, unshared, or revoked. Viewing a session doesn't let you use its host" />

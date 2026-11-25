@@ -133,6 +133,31 @@ describe("a new session", () => {
     expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ workspaceId: "w1", hostEnvironment: true });
   });
 
+  test("on its host works in the directory of the host its owner names, where the host lets them choose one", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [{ ...capableHost, capabilities: { ...capableHost.capabilities, hostDirectories: true } }] } },
+    }) });
+    await app.press("id:new-session");
+    await app.waitFor("id:new-host-directory-input");
+    await app.type("id:new-message", "Fix the flaky test");
+    await app.type("id:new-host-directory-input", "projects/app");
+    await app.waitUntil(() => app.texts().some(item => item.startsWith("The working directory is an absolute path")));
+    expect(app.enabled("id:new-start")).toBe(false);
+    await app.clear("id:new-host-directory-input");
+    await app.type("id:new-host-directory-input", "~/projects/app");
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.press("id:new-start");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions") !== undefined);
+    expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ workspaceId: "w1", hostEnvironment: true, hostDirectory: "~/projects/app" });
+    app.dispose();
+    const older = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
+    }) });
+    await older.press("id:new-session");
+    await older.waitFor("id:new-environment");
+    expect(older.shows("id:new-host-directory-input")).toBe(false);
+  });
+
   test("in a private workspace runs on its host by default too", async () => {
     const app = await open("../App.tsx", { storage: signedIn, network: server({
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, name: "Private", personal: true }] } },

@@ -4,7 +4,9 @@ import {
   autoChatOptionsBody, canCreateSessions, chatOptionsBody, fallbackTitle, preferredSelection, segment, type ChatSelection, type ConnectorInfo, type ModelDefinition,
   type SessionRecord, type Workspace, type WorkspaceRepositoryList,
 } from "../shared";
+import { hostDirectoryRule, validHostDirectory } from "../../../../packages/shared/src/host-directory";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
+import { TextField } from "../form";
 import { Composer } from "../components/Composer";
 import { NewWorkspaceSheet } from "../components/NewWorkspaceSheet";
 import { HostDetails, UnsandboxedHost } from "../hosts";
@@ -140,7 +142,11 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
   const hostSessions = () => Boolean(host()?.hostSessions);
   const runOnHost = () => hostSessions() && (onHost() ?? !data.sandboxChosen(host()?.id));
-  const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
+  const hostDirectory = signal("");
+  const choosesDirectory = () => runOnHost() && host()?.capabilities.hostDirectories === true;
+  const directory = () => (choosesDirectory() ? hostDirectory().trim() : "");
+  const directoryError = () => (directory() && !validHostDirectory(directory()) ? `The working directory is ${hostDirectoryRule}.` : "");
+  const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !directoryError() && !action.busy());
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
   let trustKey: string | undefined;
   effect(() => {
@@ -166,12 +172,14 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     const chosenByAuto = autoModel() && current.capabilities.chatOptions === true;
     const options = chosenByAuto ? autoChatOptionsBody(current, selection(), "submit") : chatOptionsBody(current, selection(), "submit");
     const hostEnvironment = runOnHost();
+    const chosenDirectory = hostEnvironment ? directory() : "";
     void action.run(async () => {
       const { api } = session();
       const images = await encodeImages(pasted);
       const result = await api<{ session: SessionRecord }>("/api/sessions", { method: "POST", body: {
         workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name), generateTitle: true,
         ...(foreign() ? { trustedConnectorId: current.id } : {}), ...(hostEnvironment ? { hostEnvironment: true } : {}),
+        ...(chosenDirectory ? { hostDirectory: chosenDirectory } : {}),
       } });
       const sessionId = result.session.id;
       data.setLastWorkspaceId(props.workspace.id);
@@ -290,6 +298,16 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
             </If>
           </View>
         </View>
+        <If when={choosesDirectory()}>
+          <View testID="new-host-directory" style={{ gap: 4, paddingHorizontal: 4 }}>
+            <TextField compact monospace testID="new-host-directory-input" value={hostDirectory()} onChange={value => hostDirectory.set(value)} disabled={action.busy()}
+              maxLength={1024} accessibilityLabel="Working directory on the host"
+              placeholder={`Working directory on ${host()?.name ?? "the host"} (optional), such as ~/projects/app`} />
+            <If when={directoryError()} else={<Small>{directory() ? "The session works in this directory of the host, with the files already in it" : "Left empty, the session works in a new, empty directory of its own"}</Small>}>
+              {error => <Text role="alert" style={{ fontSize: text.caption, color: palette().tones.danger.text }}>{error()}</Text>}
+            </If>
+          </View>
+        </If>
         <If when={showDetails() && !action.busy() ? host() : undefined}>
           {current => (
             <View testID="new-host-details-panel" style={{ gap: 10, padding: 16, borderWidth: 1, borderColor: palette().border, borderRadius: radius.large }}>

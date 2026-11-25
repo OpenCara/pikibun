@@ -434,7 +434,7 @@ export class RunnerService {
     const here = current.session.connectorId === this.config.connectorId;
     if (!entry && !here) throw new RunnerError(404, "Session not found");
     if (here && (current.owner?.id !== binding.owner.id || current.session.id !== id)) throw new RunnerError(403, "A portable session keeps its owner and ID on the same server");
-    if ((current.session.hostEnvironment === true) !== (binding.session.hostEnvironment === true)
+    if ((current.session.hostEnvironment === true) !== (binding.session.hostEnvironment === true) || current.session.hostDirectory !== binding.session.hostDirectory
       || current.session.repositoryMode !== binding.session.repositoryMode || (binding.session.repositories ?? []).length > 0) {
       throw new RunnerError(409, "The session's record doesn't match where it runs on this host");
     }

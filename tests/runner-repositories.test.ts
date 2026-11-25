@@ -207,6 +207,23 @@ test("a clone session's binding carries the branch named for its work, and only 
   assert.throws(() => validateBinding(pinned, id), runnerError(400, /Invalid session branch/));
 });
 
+test("a session's binding carries a working directory of its host only where it runs directly on the host, and only a well-formed one", () => {
+  const id = "1a2b3c4d-0000-4000-8000-000000000001";
+  const onHost = binding(id, []);
+  onHost.session.hostEnvironment = true;
+  for (const directory of ["/srv/app", "~", "~/projects/app", "C:\\work\\app"]) {
+    onHost.session.hostDirectory = directory;
+    assert.equal(validateBinding(onHost, id).session.hostDirectory, directory);
+  }
+  for (const directory of ["projects/app", "", " /srv/app", "/srv/\u0000app", "~alice/app"]) {
+    onHost.session.hostDirectory = directory;
+    assert.throws(() => validateBinding(onHost, id), runnerError(400, /working directory/), directory);
+  }
+  const sandboxed = binding(id, []);
+  sandboxed.session.hostDirectory = "/srv/app";
+  assert.throws(() => validateBinding(sandboxed, id), runnerError(400, /working directory/));
+});
+
 test("unsandboxed clone sessions clone and push with the host's own Git, so they offer no git_push", hostMode, async t => {
   const root = await directory(t);
   const clone = binding("host-clone", []);

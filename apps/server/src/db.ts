@@ -58,6 +58,7 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
     ...(row.repository_mode === 'clone' ? { repositoryMode: 'clone' as const } : {}),
     ...(row.repository_mode === 'clone' && row.branch ? { branch: row.branch } : {}),
     ...(Number(row.host_environment ?? 0) === 1 ? { hostEnvironment: true as const } : {}),
+    ...(Number(row.host_environment ?? 0) === 1 && row.host_directory ? { hostDirectory: row.host_directory } : {}),
     ...(row.portable_key ? { portable: true as const } : {}),
     ...(row.detached_at ? { detached: true as const } : {}),
     ...(frozenSession(row) ? { frozen: true as const } : {}),

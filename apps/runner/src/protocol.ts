@@ -6,6 +6,7 @@ import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, definedToolNamePatte
 import { knownDefinedProgramTool } from "./defined-tools.js";
 import { gitProviderHosts, gitProviders, repositoryPath, validCloneDirectory, validGitHost, validPushBranch, validPushTag, validRepositoryId, validRepositoryName, type SessionRepository, type TokenGitProvider } from "../../../packages/shared/src/repositories.js";
 import { validSessionBranch } from "../../../packages/shared/src/git-push.js";
+import { validHostDirectory } from "../../../packages/shared/src/host-directory.js";
 
 export class RunnerError extends Error {
   constructor(public readonly status: number, message: string) { super(message); }
@@ -99,6 +100,8 @@ export function validateBinding(value: unknown, id: string, allowNativeModels = 
     throw new RunnerError(400, "Invalid session repository mode");
   if (b.session.branch !== undefined && (b.session.repositoryMode !== "clone" || !validSessionBranch(b.session.branch, b.session.id)))
     throw new RunnerError(400, "Invalid session branch");
+  if (b.session.hostDirectory !== undefined && (b.session.hostEnvironment !== true || !validHostDirectory(b.session.hostDirectory)))
+    throw new RunnerError(400, "Invalid session working directory");
   b.owner.env = validateUserEnv(b.owner.env ?? {});
   return JSON.parse(JSON.stringify(b));
 }

@@ -17,6 +17,7 @@ import {
   audienceSharing, grantSessionStatement, revokeSessionGrantStatement,
 } from './authority/index.js';
 import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
+import { hostDirectoryRule, validHostDirectory } from '../../../packages/shared/src/host-directory.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { connectorUtf8Bytes } from './connector-transport.js';
@@ -196,6 +197,13 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   if (input.hostEnvironment !== undefined && typeof input.hostEnvironment !== 'boolean') fail(400, 'invalid_input', 'hostEnvironment must be true or false.');
   if (input.generateTitle !== undefined && typeof input.generateTitle !== 'boolean') fail(400, 'invalid_input', 'generateTitle must be true or false.');
   const onHost = input.hostEnvironment === true;
+  if (input.hostDirectory !== undefined && !validHostDirectory(input.hostDirectory)) {
+    fail(400, 'invalid_input', `hostDirectory is ${hostDirectoryRule}.`);
+  }
+  const hostDirectory = input.hostDirectory as string | undefined;
+  if (hostDirectory !== undefined && !onHost) {
+    fail(400, 'invalid_input', 'Only a session that runs directly on its host (hostEnvironment: true) works in a directory of the host.');
+  }
   const granted = session.connector_owner_id !== ownerId;
   const needsConsent = onHost && hostSessionsNeedConsent(capabilities, granted);
   if (onHost) {
@@ -209,11 +217,15 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     if (needsConsent && !(await connectorHostConfig(c.env, session.connector_id)).hostSessions) {
       fail(409, 'host_sessions_off', 'This host doesn\'t accept sessions that run directly on it. Turn that on under Settings → Hosts → the host → Configuration.');
     }
+    if (hostDirectory !== undefined && capabilities.hostDirectories !== true) {
+      fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to choose the directory a session works in on it.');
+    }
   }
   const resolved = await cloneRepositories(c.env, workspaceId, ownerId);
   const agent = await chatAgentVersion(c.env, ownerId, model, capabilities);
   const row: SessionRow & { repositories_json: string } = { ...session, agent_version_id: agent.id, repositories_json: '[]', repository_mode: 'clone',
     branch: capabilities.sessionBranches === true ? sessionBranchName(title, session.id) : null, host_environment: onHost ? 1 : 0,
+    host_directory: hostDirectory ?? null,
     tool_output: await newSessionToolOutput(c.env.DB, workspaceId) };
   const gitPush = row.connector_id && (JSON.parse(agent.tools_json) as unknown[]).includes('git_push') ? 1 : 0;
   const notice = row.connector_id ? await cloneUnavailable(c.env, capabilities, row, JSON.parse(agent.tools_json) as string[]) : undefined;
@@ -221,8 +233,8 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   if (row.connector_id) await requireConnectorSession(c.env, row.connector_id, row);
   const inserted = await c.env.DB.query(`INSERT INTO sessions
     (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id, connector_owner_id, repositories_json, visibility, repository_mode, branch,
-      host_environment, tool_output)
-    SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+      host_environment, host_directory, tool_output)
+    SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
     WHERE ${sessionCreatorSQL('?')}
     AND (SELECT json_group_array(id ORDER BY id) FROM workspace_sources WHERE workspace_id = ?) = json(?)
     AND EXISTS (SELECT 1 FROM users session_owner WHERE session_owner.id = ? AND session_owner.suspended_at IS NULL
@@ -250,7 +262,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     RETURNING id`)
     .bind(row.id, row.workspace_id, row.owner_id, row.agent_version_id, row.title, row.policy_version, row.status, row.created_at,
       row.connector_id ?? null, row.connector_owner_id ?? null, row.repositories_json, 'workspace', row.repository_mode ?? null, row.branch ?? null,
-      row.host_environment ?? 0, row.tool_output ?? 'full',
+      row.host_environment ?? 0, row.host_directory ?? null, row.tool_output ?? 'full',
       workspaceId, ownerId, workspaceId, resolved.sourceIds,
       ownerId, resolved.sourceIds === '[]' && !resolved.sourcesOptional ? 0 : 1, resolved.githubAuthority === null && testMode(c.env) ? 1 : 0,
       resolved.githubAuthority?.githubId ?? null, resolved.githubAuthority?.githubId ?? null, resolved.githubAuthority?.ciphertext ?? null,
@@ -270,6 +282,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     row.schedule_id = link.scheduleId ?? null;
   }
   await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}),
+    ...(hostDirectory !== undefined ? { hostDirectory } : {}),
     ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}), ...(link.scheduleId ? { scheduleId: link.scheduleId } : {}) }).run();
   try {
     const binding = await bindingForSession(c, row);
@@ -382,6 +395,7 @@ export async function forkSession(c: AppContext, source: SessionRow, entryId: st
   const { row } = await createSession(c, {
     workspaceId: source.workspace_id, title: title ?? `${fromAsk ? 'Side ask' : 'Fork'}: ${source.title}`.slice(0, 200),
     modelId, trustedConnectorId: source.connector_id, ...(source.host_environment ? { hostEnvironment: true } : {}),
+    ...(source.host_environment && source.host_directory ? { hostDirectory: source.host_directory } : {}),
   }, fromAsk ? { parentSessionId: source.id } : {});
   try {
     const result = await runnerJSON<{ conversationId: string; entries: number }>(

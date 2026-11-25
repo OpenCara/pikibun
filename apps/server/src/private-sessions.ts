@@ -12,6 +12,7 @@ import type { AppContext, AppEnv, SessionRow } from './types.js';
 const createBody = fields({
   provider: text('provider', 80), modelId: text('modelId', 200), title: z.string({ error: 'Invalid title.' }).max(200, 'Invalid title.').optional(),
   hostEnvironment: z.boolean({ error: 'hostEnvironment must be true or false.' }).optional(),
+  hostDirectory: z.string({ error: 'Invalid hostDirectory.' }).max(1024, 'Invalid hostDirectory.').optional(),
   generateTitle: z.boolean({ error: 'generateTitle must be true or false.' }).optional(),
 }, 'A private session starts from a provider, a model and, optionally, a title.', { required: ['provider', 'modelId'] });
 
