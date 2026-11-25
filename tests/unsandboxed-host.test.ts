@@ -62,7 +62,8 @@ test("a chosen working directory must already be a directory of the host, outsid
   const cases: [string, string, RegExp][] = [
     ["missing", join(directory, "missing"), /isn't usable on this host: no such file/],
     ["file", join(directory, "file.txt"), /isn't usable on this host/],
-    ["storage", join(directory, "data", "elsewhere"), /Pikibun's own storage/],
+    ["storage", join(directory, "data", "elsewhere"), /is in Pikibun's own storage/],
+    ["holds-storage", directory, /holds Pikibun's own storage/],
     ["own", join(directory, "session-own"), /Pikibun's own storage/],
   ];
   for (const [name, worktree, refusal] of cases) {

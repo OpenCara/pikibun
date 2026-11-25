@@ -406,10 +406,9 @@ export class HostWorkspace implements SessionWorkspace {
     if (real === resolve(real, "..")) throw new Error(`The session's working directory ${shown} is the filesystem's root`);
     for (const refused of this.#refused) {
       const storage = await realpath(refused).catch(() => refused);
-      const inside = relative(storage, real);
-      if (!inside || (!inside.startsWith("..") && !isAbsolute(inside))) {
-        throw new Error(`The session's working directory ${shown} is in Pikibun's own storage on this host`);
-      }
+      const within = (outer: string, inner: string) => { const path = relative(outer, inner); return !path || (!path.startsWith("..") && !isAbsolute(path)); };
+      if (within(storage, real)) throw new Error(`The session's working directory ${shown} is in Pikibun's own storage on this host`);
+      if (within(real, storage)) throw new Error(`The session's working directory ${shown} holds Pikibun's own storage on this host (${storage}): choose a directory beside it`);
     }
   }
 
