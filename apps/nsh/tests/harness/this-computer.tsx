@@ -1,7 +1,7 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection, LoginProvider } from "../../../../packages/shared/src/app-host-protocol";
 import {
-  appCliFolder, installCommand, localHosts, nativeEnvironment, resumeThisComputer, setCommandUpdate, setHostLauncher, setInstaller, setWslLister, thisComputerHostIds,
+  appCliFolder, checkCommandUpdates, installCommand, localHosts, nativeEnvironment, resumeThisComputer, setCommandUpdate, setHostLauncher, setInstaller, setWslLister, thisComputerHostIds,
   wslInstallCommand, type HostLink, type HostTarget, type InstallRun,
 } from "../../src/lib/this-computer";
 import { Button } from "../../src/ui";
@@ -10,7 +10,7 @@ import { HomeCommandUpdate } from "../../src/components/CommandUpdate";
 
 const params = embedder.params as {
   command?: unknown; wslCommand?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; servers?: unknown; npm?: unknown; npmMs?: unknown; appVersion?: unknown;
-  ownCopy?: unknown; pairedDirs?: unknown; distros?: unknown; id?: unknown; wslSandbox?: unknown; cliVersion?: unknown; reports?: unknown; probes?: unknown;
+  ownCopy?: unknown; pairedDirs?: unknown; distros?: unknown; id?: unknown; wslSandbox?: unknown; cliVersion?: unknown; reports?: unknown; probes?: unknown; latest?: unknown;
 };
 const SERVER = typeof params.server === "string" ? params.server : "https://pikibun.test";
 const SERVERS = Array.isArray(params.servers) ? params.servers as string[] : [SERVER];
@@ -23,14 +23,20 @@ let ownCopy: string | null = typeof params.ownCopy === "string" ? params.ownCopy
 const cliVersion = typeof params.cliVersion === "string" ? params.cliVersion : undefined;
 let reports = typeof params.reports === "string" ? params.reports : undefined;
 const probes = typeof params.probes === "string" ? params.probes : null;
+const latest = typeof params.latest === "string" ? params.latest : undefined;
 let distros: string[] | null = params.distros === null ? null : Array.isArray(params.distros) ? params.distros as string[] : ["Ubuntu"];
 setWslLister(async () => distros);
 const sent = signal<string[]>([]);
-if (typeof params.appVersion === "string" || cliVersion) {
+if (typeof params.appVersion === "string" || cliVersion || latest) {
   setCommandUpdate({ appVersion: typeof params.appVersion === "string" ? params.appVersion : "dev", ownCopy: async () => {
     if (ownCopy === "unreadable") throw new Error("filesystem read of `cli/node_modules/pikibun/package.json` is not granted by capabilities.fs.read");
     return ownCopy;
-  }, ...(cliVersion ? { cliVersion, commandVersion: async () => { sent.update(list => [...list, "pikibun --version"]); return probes; } } : {}) });
+  }, ...(cliVersion ? { cliVersion, commandVersion: async () => { sent.update(list => [...list, "pikibun --version"]); return probes; } } : {}),
+  ...(latest ? { latest: async () => {
+    sent.update(list => [...list, "npm latest"]);
+    if (latest === "offline") throw new Error("fetch failed");
+    return latest;
+  } } : {}) });
 }
 const DEFAULT_DIR = "/Users/ada/.local/share/pikibun/connector";
 const pairings = new Map<string, string>();
@@ -127,9 +133,9 @@ function fakeHost(args: string[], target: HostTarget): HostLink {
   };
 }
 
-function fakeInstall(target: HostTarget): InstallRun {
+function fakeInstall(target: HostTarget, version?: string): InstallRun {
   const place = wslPlace(target);
-  sent.update(list => [...list, place ? `install ${place}` : "install"]);
+  sent.update(list => [...list, `${place ? `install ${place}` : "install"}${version ? ` pikibun@${version}` : ""}`]);
   const output: ((line: string) => void)[] = [];
   const exits: ((result: { code?: number | null }) => void)[] = [];
   const global = npm === "elsewhere";
@@ -146,8 +152,8 @@ function fakeInstall(target: HostTarget): InstallRun {
       code = 243;
     } else {
       if (npm === "ok") { if (place) wslCommandState = "ok"; else command = "ok"; }
-      if (cliVersion) reports = cliVersion;
-      if (!global && !place) ownCopy = LATEST;
+      if (cliVersion) reports = version ?? cliVersion;
+      if (!global && !place) ownCopy = version ?? LATEST;
       say(["", "added 1 package in 2s"]);
     }
     for (const listener of exits) listener({ code });
@@ -178,6 +184,7 @@ mount(() => (
     <Text>{`this computer's hosts: ${thisComputerHostIds(SERVER).join(",") || "none"}`}</Text>
     <Text>{`hosts: ${localHosts().all().map(item => `${item.pairedWith() ?? "unpaired"}=${item.state()}`).join(" ")}`}</Text>
     <Button testID="fake-resume" label="Resume hosting" onPress={() => resumeThisComputer()} />
+    <Button testID="fake-auto-check" label="Scheduled check" onPress={() => void checkCommandUpdates()} />
     <Button testID="fake-read-session" label="Read a session" onPress={() => {
       const serving = localHosts().serving(SERVER);
       void (serving ? serving.host.readView("s1", { brief: false }) : Promise.resolve(null)).then(reply => localView.set(reply && "view" in reply ? reply.view.sessionId : "none"));
