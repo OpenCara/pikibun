@@ -28,7 +28,7 @@ import type { WorkspaceConnection } from '../packages/shared/src/workspace-conne
 import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import type { RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
-import { publicLookup } from '../apps/server/src/authority/remote-mcp/transport.js';
+import { publicLookup, RemoteMcpRefused } from '../apps/server/src/authority/remote-mcp/transport.js';
 import { coversResource, discoverOAuth } from '../apps/server/src/authority/remote-mcp/oauth.js';
 import { answersId, eventStreamMessages, RemoteMcpSession } from '../apps/server/src/authority/remote-mcp/client.js';
 
@@ -4218,6 +4218,55 @@ test('workspace remote MCP servers: admins register them with vault-held headers
   assert.deepEqual(wrong.tools.map(tool => tool.name), ['search_issues', 'create-issue'], 'a failed listing keeps the tools it had');
   await json(await s.admin.request('DELETE', path + '/' + server.id));
   assert.deepEqual((await json<{ servers: unknown[] }>(await s.creator.request('GET', path))).servers, []);
+});
+
+test('a remote MCP server listing over 1 MiB of tools unpaged is listed, and the tools Pikibun leaves out are counted and shown (#530)', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const secret = 'mcp-bearer-secret-0123456789';
+  const sizes: { method: string; maxBytes: number }[] = [];
+  const big = 'x'.repeat(2000);
+  const tools = [
+    ...Array.from({ length: 70 }, (_, index) => ({ name: `model_${index}`, description: big.repeat(10),
+      inputSchema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 8 }, (_, n) => [`p${n}`, { type: 'string', description: big }])) } })),
+    { name: 'recursive', inputSchema: { type: 'object', properties: { a: { $ref: '#/$defs/a' } } } },
+    { name: 'bad name!', inputSchema: { type: 'object' } },
+  ];
+  f.env.REMOTE_MCP_TRANSPORT = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
+    const body = JSON.parse(request.body) as { id?: number; method: string; params?: { name?: string } };
+    sizes.push({ method: body.method, maxBytes: request.maxBytes });
+    if (body.id === undefined) return { status: 202, headers: {}, body: '' };
+    const result = body.method === 'initialize' ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'gen', version: '1' } }
+      : body.method === 'tools/list' ? { tools }
+      : { content: [{ type: 'text', text: `${body.params?.name} ran` }] };
+    const answer = JSON.stringify({ jsonrpc: '2.0', id: body.id, result });
+    if (Buffer.byteLength(answer) > request.maxBytes) throw new RemoteMcpRefused(`The answer was larger than ${request.maxBytes} bytes`);
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: answer };
+  };
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const { server } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path,
+    { name: 'Gen', prefix: 'gen', url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer ' + secret } }), 201);
+  assert.ok(JSON.stringify({ tools }).length > 1024 * 1024, 'the fake lists more than 1 MiB in one answer');
+  assert.equal(server.error, undefined, 'tools/list over 1 MiB is no longer refused');
+  assert.equal(server.tools.length, 64);
+  assert.deepEqual(server.toolsLeftOut, { overLimit: 6, unusable: 2 }, 'the tools left out are counted, not dropped silently');
+  const listed = (await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers[0]!;
+  assert.deepEqual(listed.toolsLeftOut, { overLimit: 6, unusable: 2 });
+  const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.added'").all().map(row => JSON.parse(String(row.detail_json)));
+  assert.deepEqual([audit[0].tools, audit[0].toolsOverLimit, audit[0].toolsUnusable], [64, 6, 2]);
+
+  const answer = parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true })));
+  const route = answer.remoteTools![0]!.route;
+  const called = await json<{ result: string }>(await self(f, s.connector, route,
+    { sessionId: s.session.id, actorId: s.session.ownerId, admissionId: admit(f, s.session.id, s.session.ownerId), callId: 'call-1', arguments: {} }));
+  assert.equal(called.result, 'model_0 ran');
+  assert.ok(sizes.filter(item => item.method === 'tools/list').every(item => item.maxBytes > 1024 * 1024));
+  assert.ok(sizes.filter(item => item.method === 'tools/call').every(item => item.maxBytes === 1024 * 1024), 'a tool call\'s answer keeps its 1 MiB bound');
+
+  const { server: refreshed } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { headers: { Authorization: 'Bearer ' + secret } }));
+  assert.deepEqual(refreshed.toolsLeftOut, { overLimit: 6, unusable: 2 });
+  tools.splice(64);
+  const { server: fewer } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { refresh: true }));
+  assert.deepEqual([fewer.tools.length, fewer.toolsLeftOut], [64, undefined], 'listing again forgets what it left out before');
 });
 
 function oauthMcpFake() {

@@ -1,4 +1,4 @@
-import { remoteMcpLimits, remoteMcpToolList, type RemoteMcpTool, type RemoteMcpTransport } from '../../../../../packages/shared/src/remote-mcp.js';
+import { remoteMcpLimits, remoteMcpToolList, type RemoteMcpTool, type RemoteMcpToolsLeftOut, type RemoteMcpTransport } from '../../../../../packages/shared/src/remote-mcp.js';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 export const MCP_CLIENT = { name: 'pikibun', version: '1' };
@@ -71,7 +71,7 @@ export class RemoteMcpSession {
   #initialized = false;
 
   constructor(private readonly transport: RemoteMcpTransport, private readonly url: string, private readonly headers: Readonly<Record<string, string>>,
-    private readonly deadline: number) {}
+    private readonly deadline: number, private readonly maxBytes: number = remoteMcpLimits.responseBytes) {}
 
   private async post(payload: Record<string, unknown>, expectAnswer: boolean): Promise<JsonRpcAnswer | undefined> {
     const timeoutMs = this.deadline - Date.now();
@@ -84,7 +84,7 @@ export class RemoteMcpSession {
       },
       body: JSON.stringify({ jsonrpc: '2.0', ...payload }),
       timeoutMs,
-      maxBytes: remoteMcpLimits.responseBytes,
+      maxBytes: this.maxBytes,
       ...(expectAnswer ? { expectId: payload.id as number } : {}),
     });
     const session = response.headers['mcp-session-id'];
@@ -114,15 +114,17 @@ export class RemoteMcpSession {
   }
 }
 
-export async function discoverRemoteMcpTools(transport: RemoteMcpTransport, url: string, headers: Readonly<Record<string, string>>): Promise<RemoteMcpTool[]> {
-  const session = new RemoteMcpSession(transport, url, headers, Date.now() + remoteMcpLimits.discoverSeconds * 1000);
+export interface RemoteMcpDiscovery { tools: RemoteMcpTool[]; leftOut: RemoteMcpToolsLeftOut }
+
+export async function discoverRemoteMcpTools(transport: RemoteMcpTransport, url: string, headers: Readonly<Record<string, string>>): Promise<RemoteMcpDiscovery> {
+  const session = new RemoteMcpSession(transport, url, headers, Date.now() + remoteMcpLimits.discoverSeconds * 1000, remoteMcpLimits.listBytes);
   const listed: unknown[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
     const result = await session.call('tools/list', cursor ? { cursor } : {}) as { tools?: unknown; nextCursor?: unknown } | undefined;
     if (!result || !Array.isArray(result.tools)) throw new RemoteMcpError('tools/list answered without tools');
     listed.push(...result.tools);
-    if (typeof result.nextCursor !== 'string' || !result.nextCursor || listed.length >= remoteMcpLimits.tools) break;
+    if (typeof result.nextCursor !== 'string' || !result.nextCursor) break;
     cursor = result.nextCursor;
   }
   return remoteMcpToolList(listed);
