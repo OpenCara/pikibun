@@ -102,3 +102,32 @@ test("the worktree's clones report their checked-out branches of the workspace's
   assert.equal(kept.length, 20);
   assert.ok(kept.some(item => item.branch === "pikibun/fix-abc"), "the session's branch is kept within the limit");
 });
+
+test("a clone reports the branches it pushed to, from its remote-tracking reflogs, even once it left them", async t => {
+  const root = await mkdtemp(join(tmpdir(), "clone-branches-pushed-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await clone(root, "app", { branch: "main", url: "https://github.com/owner/repo" });
+  const logs = join(root, "app", ".git", "logs", "refs", "remotes", "origin");
+  const line = (message: string) => `${"0".repeat(40)} ${"a".repeat(40)} Someone <s@example.com> 1700000000 +0000\t${message}\n`;
+  await mkdir(join(logs, "fix"), { recursive: true });
+  await writeFile(join(logs, "host-session-directory"), line("update by push"));
+  await writeFile(join(logs, "fix", "login"), line("fetch: storing head") + line("update by push"));
+  await writeFile(join(logs, "fetched-only"), line("fetch: storing head"));
+  await writeFile(join(logs, "main"), line("update by push"));
+  await writeFile(join(logs, "HEAD"), line("update by push"));
+  assert.deepEqual(await readCloneBranches(root), [
+    { directory: "app", origin: "https://github.com/owner/repo", pushed: ["fix/login", "host-session-directory"] },
+  ], "pushed branches, not fetched ones, the default branch or HEAD");
+  const repositories: EgressRepository[] = [{ bindingId: "binding-1", provider: "github", host: "github.com", fullName: "owner/repo" }];
+  assert.deepEqual(reportedBranches(await readCloneBranches(root), repositories, "pikibun/fix-abc"), [
+    { repository: "owner/repo", branch: "fix/login" },
+    { repository: "owner/repo", branch: "host-session-directory" },
+    { repository: "owner/repo", branch: "pikibun/fix-abc" },
+  ]);
+  const many = [{ directory: "app", origin: "https://github.com/owner/repo", branch: "checked-out",
+    pushed: Array.from({ length: 25 }, (_, index) => `p${String(index).padStart(2, "0")}`) }];
+  const kept = reportedBranches(many, repositories, "pikibun/fix-abc");
+  assert.equal(kept.length, 20);
+  assert.ok(kept.some(item => item.branch === "pikibun/fix-abc") && kept.some(item => item.branch === "checked-out"),
+    "the session's and the checked-out branch come before pushed ones");
+});
