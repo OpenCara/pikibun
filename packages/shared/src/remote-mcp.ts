@@ -5,10 +5,9 @@ export const REMOTE_MCP_EXTENSION = "piki:remote-mcp";
 
 export const remoteMcpLimits = Object.freeze({
   servers: 8, tools: 64, headers: 8, headerName: 64, headerValue: 4096, url: 2048, name: 64, description: 2048,
-  discoverSeconds: 15, callSeconds: 60, responseBytes: 1024 * 1024, listBytes: 16 * 1024 * 1024, resultCharacters: 64 * 1024,
+  discoverSeconds: 15, callSeconds: 60, responseBytes: 1024 * 1024, listBytes: 8 * 1024 * 1024, resultCharacters: 64 * 1024,
 });
 
-/** The tools a server listed that Pikibun doesn't offer: those past remoteMcpLimits.tools, and those whose names or input schemas it can't take. */
 export interface RemoteMcpToolsLeftOut { overLimit: number; unusable: number }
 
 export interface RemoteMcpHttpRequest { url: string; method?: "GET" | "POST"; headers: Record<string, string>; body: string; timeoutMs: number; maxBytes: number; expectId?: number }

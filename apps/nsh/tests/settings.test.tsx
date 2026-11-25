@@ -539,6 +539,25 @@ describe("settings", () => {
     await app.waitUntil(() => !app.shows("id:mcp-app-sign-in"));
   });
 
+  test("Workspaces says a remote MCP server signed in with OAuth whose tools couldn't be listed is signed in, and counts the tools it left out (#530)", async () => {
+    const base = { url: "https://mcp.example.com/mcp", enabled: true, headerNames: [], readOnlyTools: [], updatedAt: "2026-01-01T00:00:00.000Z" };
+    const failed = { ...base, id: "m1", name: "Gen", prefix: "gen", tools: [], oauth: { signedInAt: "2026-01-01T00:00:00.000Z" },
+      error: "The answer was larger than 8388608 bytes" };
+    const partial = { ...base, id: "m2", name: "Many", prefix: "many", toolsLeftOut: { overLimit: 6, unusable: 2 },
+      tools: [{ name: "run", toolName: "many_run", description: "Run.", inputSchema: { type: "object" }, readOnly: false }] };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/mcp-servers`]: { body: { servers: [failed, partial], admin: true } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("text:Gen · gen_");
+    await app.press("text:Gen · gen_");
+    await app.waitUntil(() => app.texts().join(" ").includes("Signed in, but its tools couldn't be listed"));
+    expect(app.texts().join(" ")).not.toContain("It couldn't be signed in to");
+    await app.press("text:Many · many_");
+    await app.waitUntil(() => app.texts().join(" ").includes("Some of its tools are left out"));
+    expect(app.texts().join(" ")).toContain("Left out 6 tools past the 64 Pikibun offers from one server and 2 tools whose names or input schemas Pikibun can't offer.");
+  });
+
   test("Workspaces shows the workspace's memory and the notes agents proposed, and an admin adds one to the memory as they save it", async () => {
     const app = await openSettings("workspaces", {
       [`PUT ${ORIGIN}/api/workspaces/w1/memory`]: { body: { memory: { instructions: "Use pnpm.", memory: "- The login test races the cookie.\n- Retry the login test once before failing it.\n",
