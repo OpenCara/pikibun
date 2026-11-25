@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import { decryptToken, encryptToken, sessionAccess } from './authority/index.js';
 import { appOrigin, fail, identifier, jsonObject, now, randomToken, text } from './http.js';
+import { body as requestBody, fields } from './schemas.js';
 import { allowedPushEndpoint, encryptPushPayload, generateVapidKeys, validP256Point, vapidAuthorization, type VapidKeys } from './web-push.js';
 import {
-  defaultNotificationPreferences, NOTIFICATION_FEED_RETENTION_MS, notificationPath, type NotificationConfig, type NotificationDevice, type NotificationFeed,
+  defaultNotificationPreferences, MAX_HANDLED_NOTIFICATIONS, NOTIFICATION_FEED_POLL_MS, NOTIFICATION_FEED_RETENTION_MS, notificationPath, PHONE_PUSH_WAIT_MS,
+  type FeedNotification, type NotificationConfig, type NotificationDelivery, type NotificationDevice, type NotificationDeviceKind, type NotificationFeed,
   type NotificationKind, type NotificationPayload, type NotificationPreferences, type PikibunNotification,
 } from '../../../packages/shared/src/notifications.js';
 import type { SessionActivity } from '../../../packages/shared/src/types.js';
@@ -18,6 +21,10 @@ const PUSH_TIMEOUT_MS = 10_000;
 const MAX_CONCURRENT_PUSHES = 16;
 const VAPID_KEY_NAME = 'web-push-vapid';
 const VAPID_VAULT_IDENTITY = 'server:web-push';
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+const EXPO_TOKEN = /^Expo(?:nent)?PushToken\[[A-Za-z0-9_-]{10,200}\]$/;
+const EXPO_BATCH = 100;
+const FEED_LISTENING_MS = 3 * NOTIFICATION_FEED_POLL_MS;
 
 export function activityNotification(previous: SessionActivity | null | undefined, next: SessionActivity): Exclude<NotificationKind, 'test'> | null {
   if (previous === next) return null;
@@ -49,6 +56,7 @@ function notificationId(at: number): string {
 }
 const feedTime = (at: number) => Math.max(0, Math.floor(at)).toString(36).padStart(10, '0');
 const FEED_CURSOR = /^[0-9a-z]{10}-[A-Za-z0-9_-]{0,12}$/;
+const NOTIFICATION_ID = /^[0-9a-z]{10}-[A-Za-z0-9_-]{12}$/;
 
 export async function notificationPreferences(env: Env, userId: string): Promise<NotificationPreferences> {
   const row = await env.DB.query<{ approvals: number; finished: number; failed: number; details: number }>(
@@ -88,13 +96,26 @@ function webPushContact(env: Env): string {
   return env.APP_ORIGIN.startsWith('https://') ? env.APP_ORIGIN : 'mailto:webpush@localhost';
 }
 
-interface DeviceRow { id: string; user_id: string; endpoint: string; p256dh: string; auth: string }
+interface DeviceRow { id: string; user_id: string; kind: NotificationDeviceKind; endpoint: string; p256dh: string | null; auth: string | null }
+interface Push { device: DeviceRow; payload: NotificationPayload }
+interface Notified { userId: string; notification: PikibunNotification }
 
 async function liveDevices(env: Env, userIds: readonly string[]): Promise<DeviceRow[]> {
   if (!userIds.length) return [];
-  return env.DB.query<DeviceRow>(`SELECT d.id, d.user_id, d.endpoint, d.p256dh, d.auth FROM notification_devices d
+  return env.DB.query<DeviceRow>(`SELECT d.id, d.user_id, d.kind, d.endpoint, d.p256dh, d.auth FROM notification_devices d
     JOIN auth_sessions a ON a.token_hash = d.auth_token_hash AND a.user_id = d.user_id
-    WHERE d.kind = 'web' AND d.user_id IN (SELECT value FROM json_each(?)) AND a.expires_at > ?`).bind(JSON.stringify([...new Set(userIds)]), Date.now()).all();
+    WHERE d.user_id IN (SELECT value FROM json_each(?)) AND a.expires_at > ?`).bind(JSON.stringify([...new Set(userIds)]), Date.now()).all();
+}
+
+const feedReads = new WeakMap<object, Map<string, number>>();
+function heardFeed(env: Env, userId: string): void {
+  let reads = feedReads.get(env.DB);
+  if (!reads) feedReads.set(env.DB, reads = new Map());
+  reads.set(userId, Date.now());
+}
+function readsFeed(env: Env, userId: string, at: number): boolean {
+  const last = feedReads.get(env.DB)?.get(userId);
+  return last !== undefined && at - last < FEED_LISTENING_MS;
 }
 
 const inFlight = new Set<Promise<unknown>>();
@@ -122,43 +143,81 @@ function background(work: Promise<unknown>): void {
   inFlight.add(tracked);
 }
 
-export interface DeliveryCount { web: number }
-
-async function notify(env: Env, items: { userId: string; notification: PikibunNotification }[], options: { wait?: boolean; forwarded?: boolean } = {}): Promise<DeliveryCount> {
-  if (!items.length) return { web: 0 };
-  const cutoff = new Date(Date.now() - NOTIFICATION_FEED_RETENTION_MS).toISOString();
+async function notify(env: Env, items: Notified[], options: { everywhere?: boolean; forwarded?: boolean } = {}): Promise<NotificationDelivery> {
+  if (!items.length) return { web: 0, expo: 0 };
+  const at = Date.now();
+  const devices = await liveDevices(env, items.map(item => item.userId));
+  const has = (userId: string, kind: NotificationDeviceKind) => devices.some(device => device.user_id === userId && device.kind === kind);
+  const waits = (userId: string) => !options.everywhere && has(userId, 'expo') && (has(userId, 'web') || readsFeed(env, userId, at));
+  const cutoff = new Date(at - NOTIFICATION_FEED_RETENTION_MS).toISOString();
   await env.DB.batch(items.flatMap(({ userId, notification: n }) => [
     env.DB.query('DELETE FROM notifications WHERE user_id = ? AND created_at < ?').bind(userId, cutoff),
-    env.DB.query('INSERT INTO notifications (id, user_id, session_id, forwarded_session_id, kind, title, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(n.id, userId, options.forwarded ? null : n.sessionId ?? null, options.forwarded ? n.sessionId ?? null : null, n.kind, n.title, n.body, n.createdAt),
+    env.DB.query(`INSERT INTO notifications (id, user_id, session_id, forwarded_session_id, kind, title, body, created_at, push_at, pushed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(n.id, userId, options.forwarded ? null : n.sessionId ?? null, options.forwarded ? n.sessionId ?? null : null, n.kind, n.title, n.body, n.createdAt,
+        waits(userId) ? new Date(at + PHONE_PUSH_WAIT_MS).toISOString() : null, has(userId, 'expo') && !waits(userId) ? new Date(at).toISOString() : null),
   ]));
-  const delivery = deliver(env, items);
-  if (options.wait) return delivery;
+  const delivery = deliver(env, items, devices.filter(device => device.kind === 'web' || !waits(device.user_id)));
+  if (options.everywhere) return delivery;
   background(delivery);
-  return { web: 0 };
+  return { web: 0, expo: 0 };
 }
 
-async function deliver(env: Env, items: { userId: string; notification: PikibunNotification }[]): Promise<DeliveryCount> {
-  const devices = await liveDevices(env, items.map(item => item.userId));
-  if (!devices.length) return { web: 0 };
+function payloadsFrom(env: Env): ((notification: PikibunNotification) => NotificationPayload) | null {
   let origin: string;
-  try { origin = appOrigin(env); } catch { return { web: 0 }; }
-  const payloadFor = (notification: PikibunNotification): NotificationPayload => ({ ...notification, origin, path: notificationPath(notification) });
+  try { origin = appOrigin(env); } catch { return null; }
+  return notification => ({ ...notification, origin, path: notificationPath(notification) });
+}
+
+async function deliver(env: Env, items: Notified[], devices: DeviceRow[]): Promise<NotificationDelivery> {
+  const payloadFor = devices.length ? payloadsFrom(env) : null;
+  if (!payloadFor) return { web: 0, expo: 0 };
   const forUser = new Map(items.map(item => [item.userId, item.notification]));
-  return { web: await sendWebPushes(env, devices.map(device => ({ device, payload: payloadFor(forUser.get(device.user_id)!) }))) };
+  const pushes = devices.map(device => ({ device, payload: payloadFor(forUser.get(device.user_id)!) }));
+  const [web, expo] = await Promise.all([
+    sendWebPushes(env, pushes.filter(push => push.device.kind === 'web')),
+    sendExpoPushes(env, pushes.filter(push => push.device.kind === 'expo')),
+  ]);
+  return { web, expo };
+}
+
+interface DueRow { id: string; user_id: string; kind: NotificationKind; title: string; body: string; session_id: string | null; forwarded_session_id: string | null; created_at: string }
+
+async function sendDuePhonePushes(env: Env, at: number): Promise<number> {
+  const due = new Date(at).toISOString();
+  await env.DB.query(`UPDATE notifications SET push_at = NULL, handled_at = ? WHERE push_at IS NOT NULL AND push_at <= ? AND kind = 'approval' AND session_id IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = notifications.session_id AND s.activity = 'waiting')`).bind(due, due).run();
+  const rows = await env.DB.query<DueRow>(`UPDATE notifications SET push_at = NULL, pushed_at = ? WHERE push_at IS NOT NULL AND push_at <= ?
+    RETURNING id, user_id, kind, title, body, session_id, forwarded_session_id, created_at`).bind(due, due).all();
+  if (!rows.length) return 0;
+  const payloadFor = payloadsFrom(env);
+  if (!payloadFor) return 0;
+  const devices = (await liveDevices(env, rows.map(row => row.user_id))).filter(device => device.kind === 'expo');
+  return sendExpoPushes(env, rows.flatMap(row => {
+    const sessionId = row.session_id ?? row.forwarded_session_id;
+    const payload = payloadFor({ id: row.id, kind: row.kind, title: row.title, body: row.body, ...(sessionId ? { sessionId } : {}), createdAt: row.created_at });
+    return devices.filter(device => device.user_id === row.user_id).map(device => ({ device, payload }));
+  }));
+}
+
+export function runPhonePushes(env: Env, at = Date.now()): Promise<number> {
+  const work = sendDuePhonePushes(env, at);
+  background(work);
+  return work;
 }
 
 async function forgetDevices(env: Env, ids: string[]): Promise<void> {
   if (ids.length) await env.DB.query('DELETE FROM notification_devices WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).run();
 }
 
-async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: NotificationPayload }[]): Promise<number> {
+async function sendWebPushes(env: Env, pushes: Push[]): Promise<number> {
+  if (!pushes.length) return 0;
   const keys = await webPushKeys(env);
   if (!keys) return 0;
   const contact = webPushContact(env);
   const gone: string[] = [];
   const results = await Promise.allSettled(pushes.map(({ device, payload }) => withPushSlot(async () => {
-    if (!allowedPushEndpoint(device.endpoint)) { gone.push(device.id); return false; }
+    if (!allowedPushEndpoint(device.endpoint) || !device.p256dh || !device.auth) { gone.push(device.id); return false; }
     const body = encryptPushPayload(new TextEncoder().encode(JSON.stringify(payload)), device.p256dh, device.auth);
     const response = await fetch(device.endpoint, {
       method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(PUSH_TIMEOUT_MS), body,
@@ -176,6 +235,39 @@ async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: Not
   return results.filter(result => result.status === 'fulfilled' && result.value).length;
 }
 
+async function sendExpoPushes(env: Env, pushes: Push[]): Promise<number> {
+  const batches: Push[][] = [];
+  for (let start = 0; start < pushes.length; start += EXPO_BATCH) batches.push(pushes.slice(start, start + EXPO_BATCH));
+  const gone: string[] = [];
+  const sent = await Promise.all(batches.map(batch => withPushSlot(async () => {
+    try {
+      const response = await fetch(EXPO_PUSH_URL, {
+        method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(env.EXPO_ACCESS_TOKEN ? { Authorization: `Bearer ${env.EXPO_ACCESS_TOKEN}` } : {}) },
+        body: JSON.stringify(batch.map(({ device, payload }) => ({
+          to: device.endpoint, title: payload.title, body: payload.body, data: payload, sound: 'default',
+          priority: payload.kind === 'approval' ? 'high' : 'default', ttl: payload.kind === 'approval' ? 86400 : 14400,
+          ...(payload.sessionId ? { threadId: payload.sessionId } : {}),
+        }))),
+      });
+      if (!response.ok) { await response.body?.cancel().catch(() => {}); return 0; }
+      const tickets = (await response.json() as { data?: unknown }).data;
+      if (!Array.isArray(tickets)) return 0;
+      let accepted = 0;
+      batch.forEach(({ device }, index) => {
+        const ticket = tickets[index] as { status?: unknown; details?: { error?: unknown } } | null | undefined;
+        if (ticket?.status === 'ok') accepted++;
+        else if (ticket?.details?.error === 'DeviceNotRegistered') gone.push(device.id);
+      });
+      return accepted;
+    } catch {
+      return 0;
+    }
+  })));
+  await forgetDevices(env, gone);
+  return sent.reduce((total, accepted) => total + accepted, 0);
+}
+
 export async function notifySessionActivity(env: Env, row: Pick<SessionRow, 'id' | 'title' | 'owner_id' | 'workspace_id'>, previous: SessionActivity | null | undefined,
   activity: SessionActivity, forwarded = false): Promise<void> {
   const kind = activityNotification(previous, activity);
@@ -184,7 +276,7 @@ export async function notifySessionActivity(env: Env, row: Pick<SessionRow, 'id'
     ORDER BY created_at DESC LIMIT 1`).bind(row.id, new Date(Date.now() - SENDER_WINDOW_MS).toISOString()).first('actor_id');
   const candidates = [...new Set([row.owner_id, ...(sender ? [sender] : [])])];
   const workspace = await env.DB.query<{ name: string }>('SELECT name FROM workspaces WHERE id = ?').bind(row.workspace_id).first('name');
-  const items: { userId: string; notification: PikibunNotification }[] = [];
+  const items: Notified[] = [];
   const at = Date.now();
   for (const userId of candidates) {
     if (!forwarded && !await sessionAccess(env, row.id, userId)) continue;
@@ -210,25 +302,37 @@ function preferencesInput(input: Record<string, unknown>, current: NotificationP
 
 async function devicesOf(c: AppContext): Promise<NotificationDevice[]> {
   const auth = c.get('auth');
-  const rows = await c.env.DB.query<{ id: string; name: string | null; created_at: string; auth_token_hash: string }>(
-    `SELECT d.id, d.name, d.created_at, d.auth_token_hash FROM notification_devices d
+  const rows = await c.env.DB.query<{ id: string; kind: NotificationDeviceKind; name: string | null; created_at: string; auth_token_hash: string }>(
+    `SELECT d.id, d.kind, d.name, d.created_at, d.auth_token_hash FROM notification_devices d
     JOIN auth_sessions a ON a.token_hash = d.auth_token_hash AND a.user_id = d.user_id
-    WHERE d.kind = 'web' AND d.user_id = ? AND a.expires_at > ? ORDER BY d.created_at DESC, d.id`).bind(auth.userId, Date.now()).all();
-  return rows.map(row => ({ id: row.id, kind: 'web', name: row.name, createdAt: row.created_at, current: row.auth_token_hash === auth.tokenHash }));
+    WHERE d.user_id = ? AND a.expires_at > ? ORDER BY d.created_at DESC, d.id`).bind(auth.userId, Date.now()).all();
+  return rows.map(row => ({ id: row.id, kind: row.kind, name: row.name, createdAt: row.created_at, current: row.auth_token_hash === auth.tokenHash }));
 }
 
-function deviceInput(input: Record<string, unknown>): { endpoint: string; p256dh: string; auth: string; name: string | null } {
-  if (input.kind !== 'web') fail(400, 'invalid_input', 'Invalid device kind.');
-  if (Object.keys(input).some(key => !['kind', 'endpoint', 'keys', 'name'].includes(key))) fail(400, 'invalid_input', 'Invalid device.');
+interface DeviceInput { kind: NotificationDeviceKind; endpoint: string; p256dh: string | null; auth: string | null; name: string | null }
+
+function deviceInput(input: Record<string, unknown>): DeviceInput {
+  if (input.kind !== 'web' && input.kind !== 'expo') fail(400, 'invalid_input', 'Invalid device kind.');
+  if (Object.keys(input).some(key => !(input.kind === 'web' ? ['kind', 'endpoint', 'keys', 'name'] : ['kind', 'token', 'name']).includes(key))) fail(400, 'invalid_input', 'Invalid device.');
   const name = input.name === undefined || input.name === null ? null : oneLine(text(input.name, 'name', 100), 100) || null;
+  if (input.kind === 'expo') {
+    const token = text(input.token, 'token', 256);
+    if (!EXPO_TOKEN.test(token)) fail(400, 'invalid_input', 'Invalid push token.');
+    return { kind: 'expo', endpoint: token, p256dh: null, auth: null, name };
+  }
   const endpoint = text(input.endpoint, 'endpoint', 1024);
   if (!allowedPushEndpoint(endpoint)) fail(400, 'unsupported_push_service', 'This browser\'s push service isn\'t one Pikibun sends to.');
   const keys = input.keys as Record<string, unknown> | undefined;
   const p256dh = typeof keys?.p256dh === 'string' ? keys.p256dh.replace(/=+$/, '') : '';
   const auth = typeof keys?.auth === 'string' ? keys.auth.replace(/=+$/, '') : '';
   if (!validP256Point(p256dh) || !/^[A-Za-z0-9_-]{22}$/.test(auth)) fail(400, 'invalid_input', 'Invalid subscription keys.');
-  return { endpoint, p256dh, auth, name };
+  return { kind: 'web', endpoint, p256dh, auth, name };
 }
+
+const handledBody = fields({
+  ids: z.array(z.string().regex(NOTIFICATION_ID, 'Invalid notification.'), { error: 'Invalid notifications.' }).min(1, 'Invalid notifications.')
+    .max(MAX_HANDLED_NOTIFICATIONS, 'Too many notifications.'),
+}, 'Only ids is accepted.', { required: ['ids'] });
 
 export function registerNotifications(app: Hono<AppEnv>): void {
   app.get('/api/notifications/config', async c => {
@@ -251,12 +355,15 @@ export function registerNotifications(app: Hono<AppEnv>): void {
   app.post('/api/notifications/devices', async c => {
     const auth = c.get('auth');
     const device = deviceInput(await jsonObject(c, 4096));
-    if (!await webPushKeys(c.env)) fail(503, 'web_push_unavailable', 'This server can\'t send Web Push: it needs a VAULT_KEY.');
+    if (device.kind === 'web' && !await webPushKeys(c.env)) fail(503, 'web_push_unavailable', 'This server can\'t send Web Push: it needs a VAULT_KEY.');
     await c.env.DB.query(`INSERT INTO notification_devices (id, user_id, auth_token_hash, kind, endpoint, p256dh, auth, name, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, auth_token_hash = excluded.auth_token_hash, kind = excluded.kind,
         p256dh = excluded.p256dh, auth = excluded.auth, name = excluded.name, created_at = excluded.created_at`)
-      .bind(randomToken().slice(0, 24), auth.userId, auth.tokenHash, 'web', device.endpoint, device.p256dh, device.auth, device.name, now()).run();
+      .bind(randomToken().slice(0, 24), auth.userId, auth.tokenHash, device.kind, device.endpoint, device.p256dh, device.auth, device.name, now()).run();
+    if (device.kind === 'expo') {
+      await c.env.DB.query('DELETE FROM notification_devices WHERE kind = ? AND auth_token_hash = ? AND endpoint <> ?').bind('expo', auth.tokenHash, device.endpoint).run();
+    }
     await c.env.DB.query(`DELETE FROM notification_devices WHERE user_id = ? AND id NOT IN (
       SELECT id FROM notification_devices WHERE user_id = ? ORDER BY created_at DESC, id LIMIT ?)`).bind(auth.userId, auth.userId, MAX_DEVICES).run();
     const id = await c.env.DB.query<{ id: string }>('SELECT id FROM notification_devices WHERE endpoint = ? AND user_id = ?').bind(device.endpoint, auth.userId).first('id');
@@ -276,12 +383,21 @@ export function registerNotifications(app: Hono<AppEnv>): void {
     const userId = c.get('auth').userId;
     const at = Date.now();
     const notification: PikibunNotification = { id: notificationId(at), kind: 'test', ...notificationText('test', true), createdAt: new Date(at).toISOString() };
-    const delivered = await notify(c.env, [{ userId, notification }], { wait: true });
+    const delivered = await notify(c.env, [{ userId, notification }], { everywhere: true });
     return c.json({ notification, delivered });
+  });
+
+  app.post('/api/notifications/handled', async c => {
+    const { ids } = await requestBody(c, handledBody, { maxBytes: 4096 });
+    const taken = await c.env.DB.query<{ id: string }>(`UPDATE notifications SET handled_at = ?, push_at = NULL
+      WHERE user_id = ? AND id IN (SELECT value FROM json_each(?)) AND handled_at IS NULL AND pushed_at IS NULL RETURNING id`)
+      .bind(now(), c.get('auth').userId, JSON.stringify([...new Set(ids)])).all();
+    return c.json({ handled: taken.map(row => row.id) });
   });
 
   app.get('/api/notifications/feed', async c => {
     const userId = c.get('auth').userId;
+    heardFeed(c.env, userId);
     const after = c.req.query('after');
     if (after === undefined) {
       const latest = await c.env.DB.query<{ id: string }>('SELECT id FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 1').bind(userId).first('id');
@@ -289,11 +405,11 @@ export function registerNotifications(app: Hono<AppEnv>): void {
       return c.json(feed);
     }
     if (!FEED_CURSOR.test(after)) fail(400, 'invalid_input', 'Invalid cursor.');
-    const rows = await c.env.DB.query<{ id: string; kind: NotificationKind; title: string; body: string; session_id: string | null; created_at: string }>(
-      `SELECT id, kind, title, body, COALESCE(session_id, forwarded_session_id) AS session_id, created_at FROM notifications WHERE user_id = ? AND id > ? ORDER BY id LIMIT ?`)
+    const rows = await c.env.DB.query<{ id: string; kind: NotificationKind; title: string; body: string; session_id: string | null; created_at: string; pushed_at: string | null }>(
+      `SELECT id, kind, title, body, COALESCE(session_id, forwarded_session_id) AS session_id, created_at, pushed_at FROM notifications WHERE user_id = ? AND id > ? ORDER BY id LIMIT ?`)
       .bind(userId, after, FEED_LIMIT).all();
-    const notifications = rows.map(row => ({ id: row.id, kind: row.kind, title: row.title, body: row.body, ...(row.session_id ? { sessionId: row.session_id } : {}),
-      createdAt: row.created_at }));
+    const notifications = rows.map((row): FeedNotification => ({ id: row.id, kind: row.kind, title: row.title, body: row.body, ...(row.session_id ? { sessionId: row.session_id } : {}),
+      createdAt: row.created_at, ...(row.pushed_at ? { pushed: true } : {}) }));
     const feed: NotificationFeed = { notifications, cursor: notifications.at(-1)?.id ?? after };
     return c.json(feed);
   });

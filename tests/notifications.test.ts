@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { createDecipheriv, createECDH, createPublicKey, hkdfSync, randomBytes, verify, type ECDH } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
-import { activityNotification, notificationText, settleNotificationDeliveries } from '../apps/server/src/notifications.js';
+import { activityNotification, notificationText, runPhonePushes, settleNotificationDeliveries } from '../apps/server/src/notifications.js';
 import type { Env } from '../apps/server/src/types.js';
 import { allowedPushEndpoint, encryptPushPayload, generateVapidKeys, vapidAuthorization } from '../apps/server/src/web-push.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
-import type { NotificationConfig, NotificationDevice, NotificationFeed, NotificationPayload } from '../packages/shared/src/notifications.js';
+import { PHONE_PUSH_WAIT_MS, type NotificationConfig, type NotificationDelivery, type NotificationDevice, type NotificationFeed, type NotificationPayload } from '../packages/shared/src/notifications.js';
 import type { ModelDefinition, SessionActivity, SessionRecord } from '../packages/shared/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
 
@@ -96,6 +96,10 @@ const manifest = {
 type ApiRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<Response>;
 interface Client { user: { id: string }; cookie: string; request: ApiRequest }
 interface Push { url: string; headers: Headers; body: Uint8Array }
+interface ExpoMessage { to: string; title: string; body: string; data: NotificationPayload; sound: string; priority: string; ttl: number; threadId?: string }
+const expoUrl = 'https://exp.host/--/api/v2/push/send';
+const expoMessages = (push: Push) => JSON.parse(Buffer.from(push.body).toString()) as ExpoMessage[];
+const expoToken = (name: string) => `ExponentPushToken[${name.padEnd(22, 'x')}]`;
 
 async function json<T>(response: Response, status = 200): Promise<T> {
   const body = await response.json();
@@ -122,13 +126,15 @@ async function fixture(t: TestContext) {
     return { user, cookie, request: (method, path, body, headers = {}) => request(method, path, body, { Cookie: cookie, 'X-CSRF-Token': csrfToken, ...headers }) };
   }
   const pushes: Push[] = [];
-  let answer = (_url: string): Response => new Response(null, { status: 201 });
+  let answer = (url: string, sent: Push): Response => url === expoUrl ? Response.json({ data: expoMessages(sent).map(() => ({ status: 'ok', id: 'ticket' })) })
+    : new Response(null, { status: 201 });
   const previousFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = previousFetch; });
   globalThis.fetch = async (input, init) => {
     const url = String(input instanceof Request ? input.url : input);
-    pushes.push({ url, headers: new Headers(init?.headers), body: typeof init?.body === 'string' ? new TextEncoder().encode(init.body) : new Uint8Array(init?.body as Uint8Array) });
-    return answer(url);
+    const sent = { url, headers: new Headers(init?.headers), body: typeof init?.body === 'string' ? new TextEncoder().encode(init.body) : new Uint8Array(init?.body as Uint8Array) };
+    pushes.push(sent);
+    return answer(url, sent);
   };
 
   const alice = await client('alice'); const bob = await client('bob'); const carol = await client('carol');
@@ -157,7 +163,13 @@ async function fixture(t: TestContext) {
       VALUES (?, ?, ?, 'write', ?, ?, ?, ?)`).run(b64(randomBytes(32)).slice(0, 43), session.id, sender.user.id, b64(randomBytes(8)), 'h'.repeat(43),
       Math.floor(Date.now() / 1000) + 3600, new Date(sentAt).toISOString());
   }
-  return { env, sqlite, request, alice, bob, carol, session, workspace, pushes, report, reportAll, cursor, feed, sent, setAnswer(next: typeof answer) { answer = next; } };
+  const expo = () => pushes.filter(push => push.url === expoUrl);
+  const phone = async (client: Client, name: string) => (await json<{ device: NotificationDevice }>(await client.request('POST', '/api/notifications/devices',
+    { kind: 'expo', token: expoToken(name), name: `${name}'s iPhone` }), 201)).device;
+  const handled = async (client: Client, ids: string[]) => (await json<{ handled: string[] }>(await client.request('POST', '/api/notifications/handled', { ids }))).handled;
+  const afterTheWait = () => runPhonePushes(env, Date.now() + PHONE_PUSH_WAIT_MS + 1000);
+  return { env, sqlite, request, alice, bob, carol, session, workspace, pushes, expo, phone, handled, afterTheWait, report, reportAll, cursor, feed, sent,
+    setAnswer(next: typeof answer) { answer = next; } };
 }
 
 test('an approval to wait for, a finish and a failure reach the session\'s owner and its latest sender, on every device', async t => {
@@ -252,10 +264,10 @@ test('devices are checked, belong to their sign-in, and go when the push service
   assert.deepEqual((await json<NotificationConfig>(await f.bob.request('GET', '/api/notifications/config'))).devices, []);
 
   await json(await register(f.alice, valid), 201);
-  const tested = await json<{ delivered: { web: number } }>(await f.alice.request('POST', '/api/notifications/test'));
-  assert.deepEqual(tested.delivered, { web: 1 });
+  const tested = await json<{ delivered: NotificationDelivery }>(await f.alice.request('POST', '/api/notifications/test'));
+  assert.deepEqual(tested.delivered, { web: 1, expo: 0 });
   f.setAnswer(() => new Response(null, { status: 410 }));
-  assert.deepEqual((await json<{ delivered: { web: number } }>(await f.alice.request('POST', '/api/notifications/test'))).delivered, { web: 0 });
+  assert.deepEqual((await json<{ delivered: NotificationDelivery }>(await f.alice.request('POST', '/api/notifications/test'))).delivered, { web: 0, expo: 0 });
   assert.deepEqual((await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'))).devices, []);
 
   f.setAnswer(() => new Response(null, { status: 201 }));
@@ -278,4 +290,110 @@ test('the feed starts where a page opens and keeps a day of notifications', asyn
   f.sqlite.prepare('UPDATE notifications SET created_at = ?').run(new Date(Date.now() - 2 * 86400000).toISOString());
   await f.reportAll('working', 'done');
   assert.deepEqual((await f.feed(f.alice, start)).notifications.map(n => n.kind), ['finished']);
+});
+
+test('an iPhone gets a notification only once the wait passed and no other device took it', async t => {
+  const f = await fixture(t);
+  const browser = subscriber();
+  await json(await f.alice.request('POST', '/api/notifications/devices', { kind: 'web', endpoint: browser.endpoint, keys: { p256dh: browser.p256dh, auth: browser.auth } }), 201);
+  const iphone = await f.phone(f.alice, 'alice');
+  assert.deepEqual({ kind: iphone.kind, name: iphone.name, current: iphone.current }, { kind: 'expo', name: 'alice\'s iPhone', current: true });
+  const from = await f.cursor(f.alice);
+
+  await f.reportAll('working', 'waiting');
+  assert.equal(f.pushes.filter(push => push.url === browser.endpoint).length, 1, 'the browser is told at once');
+  assert.deepEqual(f.expo(), [], 'the phone waits for the other devices');
+  assert.equal(await runPhonePushes(f.env), 0, 'not before the wait is over');
+  assert.equal(await f.afterTheWait(), 1);
+  assert.equal(f.expo().length, 1);
+  assert.equal(f.expo()[0]!.headers.get('authorization'), null);
+  const [message] = expoMessages(f.expo()[0]!);
+  assert.deepEqual({ to: message!.to, title: message!.title, body: message!.body, sound: message!.sound, priority: message!.priority, ttl: message!.ttl, threadId: message!.threadId },
+    { to: expoToken('alice'), title: 'Fix the build', body: 'Waiting for you · Team', sound: 'default', priority: 'high', ttl: 86400, threadId: f.session.id });
+  assert.deepEqual({ kind: message!.data.kind, sessionId: message!.data.sessionId, origin: message!.data.origin, path: message!.data.path },
+    { kind: 'approval', sessionId: f.session.id, origin, path: `/#/s/${f.session.id}` });
+  assert.equal(await f.afterTheWait(), 0, 'once');
+  const [pushed] = (await f.feed(f.alice, from)).notifications;
+  assert.equal(pushed!.pushed, true, 'the feed says the phone has it');
+  assert.deepEqual(await f.handled(f.alice, [pushed!.id]), [], 'too late to take it');
+
+  f.pushes.length = 0;
+  await f.reportAll('working', 'done');
+  const finished = (await f.feed(f.alice, from)).notifications[1]!;
+  assert.deepEqual([finished.kind, finished.pushed], ['finished', undefined]);
+  for (const bad of [{}, { ids: [] }, { ids: ['../x'] }, { ids: [finished.id], more: 1 }, { ids: Array.from({ length: 51 }, () => finished.id) }]) {
+    assert.equal((await f.alice.request('POST', '/api/notifications/handled', bad)).status, 400, JSON.stringify(bad));
+  }
+  assert.deepEqual(await f.handled(f.bob, [finished.id]), [], 'only its own person takes it');
+  assert.deepEqual(await f.handled(f.alice, [finished.id]), [finished.id], 'the desktop app showed it');
+  assert.deepEqual(await f.handled(f.alice, [finished.id]), [], 'one device takes it');
+  assert.equal(await f.afterTheWait(), 0);
+  assert.deepEqual(f.expo(), [], 'the phone is left alone');
+
+  await f.reportAll('working', 'waiting', 'working');
+  assert.equal(await f.afterTheWait(), 0, 'answered on another device before the wait was over');
+  assert.deepEqual(f.expo(), []);
+  assert.deepEqual((await f.feed(f.alice, from)).notifications.map(n => [n.kind, n.pushed]), [['approval', true], ['finished', undefined], ['approval', undefined]]);
+});
+
+test('with no other device listening, the phone is told at once', async t => {
+  const f = await fixture(t);
+  await f.phone(f.alice, 'alice');
+  f.env.EXPO_ACCESS_TOKEN = 'expo-access-token';
+  await f.reportAll('working', 'done');
+  assert.equal(f.expo().length, 1);
+  assert.equal(f.expo()[0]!.headers.get('authorization'), 'Bearer expo-access-token');
+  const [message] = expoMessages(f.expo()[0]!);
+  assert.deepEqual([message!.priority, message!.ttl, message!.data.kind], ['default', 14400, 'finished']);
+  assert.deepEqual({ ...f.sqlite.prepare('SELECT push_at, pushed_at IS NOT NULL AS pushed FROM notifications').get()! }, { push_at: null, pushed: 1 });
+
+  await f.cursor(f.alice);
+  f.pushes.length = 0;
+  await f.reportAll('working', 'failed');
+  assert.deepEqual(f.expo(), [], 'an open app or page reads the feed: it may take it first');
+  assert.equal(await f.afterTheWait(), 1);
+  assert.deepEqual(expoMessages(f.expo()[0]!).map(sent => sent.data.kind), ['failed']);
+});
+
+test('a phone app registers its Expo push token, one a sign-in, and goes when Expo forgets it', async t => {
+  const f = await fixture(t);
+  const register = (client: Client, body: unknown) => client.request('POST', '/api/notifications/devices', body);
+  for (const bad of [{ kind: 'expo' }, { kind: 'expo', token: 'ExponentPushToken[short]' }, { kind: 'expo', token: expoUrl },
+    { kind: 'expo', token: expoToken('a'), endpoint: 'https://fcm.googleapis.com/fcm/send/x' }, { kind: 'expo', token: `${expoToken('a')}\n` }]) {
+    const response = await register(f.alice, bad);
+    assert.equal(response.status, 400, JSON.stringify(bad));
+    assert.equal((await response.json() as { code: string }).code, 'invalid_input', JSON.stringify(bad));
+  }
+  const first = await f.phone(f.alice, 'first');
+  const second = await f.phone(f.alice, 'second');
+  assert.notEqual(first.id, second.id);
+  assert.deepEqual((await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'))).devices.map(device => [device.id, device.kind, device.name]),
+    [[second.id, 'expo', 'second\'s iPhone']], 'a new token replaces the sign-in\'s last one');
+  await json(await register(f.bob, { kind: 'expo', token: `ExpoPushToken[${'b'.repeat(22)}]` }), 201);
+
+  const test = async () => (await json<{ delivered: NotificationDelivery }>(await f.alice.request('POST', '/api/notifications/test'))).delivered;
+  assert.deepEqual(await test(), { web: 0, expo: 1 });
+  assert.deepEqual(expoMessages(f.expo()[0]!).map(sent => [sent.to, sent.title, sent.threadId]), [[expoToken('second'), 'Pikibun', undefined]]);
+
+  const signIn = f.sqlite.prepare('SELECT auth_token_hash FROM notification_devices WHERE id = ?').get(second.id)!.auth_token_hash as string;
+  const add = f.sqlite.prepare(`INSERT INTO notification_devices (id, user_id, auth_token_hash, kind, endpoint, created_at) VALUES (?, ?, ?, 'expo', ?, ?)`);
+  for (let index = 0; index < 149; index++) add.run(`extra-${index}`, f.alice.user.id, signIn, expoToken(`extra${index}`), new Date().toISOString());
+  f.pushes.length = 0;
+  assert.deepEqual(await test(), { web: 0, expo: 150 });
+  assert.deepEqual(f.expo().map(push => expoMessages(push).length).sort(), [100, 50], 'a hundred a request');
+
+  f.setAnswer((_url, sent) => Response.json({ data: expoMessages(sent).map(message => message.to === expoToken('second')
+    ? { status: 'error', message: 'not registered', details: { error: 'DeviceNotRegistered' } } : { status: 'ok', id: 'ticket' }) }));
+  assert.deepEqual(await test(), { web: 0, expo: 149 });
+  const left = (await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'))).devices;
+  assert.deepEqual([left.length, left.some(device => device.id === second.id)], [149, false], 'the token Expo no longer knows is gone');
+
+  f.setAnswer(() => new Response('unavailable', { status: 503 }));
+  assert.deepEqual(await test(), { web: 0, expo: 0 });
+  f.setAnswer(() => Response.json({ errors: [{ code: 'PUSH_TOO_MANY_EXPERIENCE_IDS' }] }));
+  assert.deepEqual(await test(), { web: 0, expo: 0 });
+  assert.equal((await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'))).devices.length, 149, 'a failing Expo forgets nobody');
+
+  await json(await f.alice.request('POST', '/api/auth/logout'));
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM notification_devices WHERE user_id = ?').get(f.alice.user.id)!.n, 0);
 });

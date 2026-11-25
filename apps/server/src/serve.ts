@@ -6,7 +6,7 @@ import { connectorError } from './connector-transport.js';
 import { authenticateConnectorSocket, refreshPullRequestStates, settlePushCredentials } from './authority/index.js';
 import type { Database } from './db/types.js';
 import { lockInstance, type InstanceLock } from './db/index.js';
-import { settleNotificationDeliveries } from './notifications.js';
+import { runPhonePushes, settleNotificationDeliveries } from './notifications.js';
 import { requestUrl, trustForwardedHeaders } from './forwarded.js';
 import { app } from './index.js';
 import { createStaticHandler } from './static.js';
@@ -23,6 +23,7 @@ function errorCode(error: unknown): string | undefined {
 }
 
 const NOTIFICATION_DRAIN_MS = 15_000;
+const PHONE_PUSH_SWEEP_MS = 5_000;
 const transientDatabaseCodes = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', '57P03'];
 
 async function whenReachable<T>(provider: Database['provider'], work: () => Promise<T>): Promise<T> {
@@ -96,6 +97,7 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
       }
     }),
     sweep('cross-session notifications', 15_000, () => runCrossSessionNotifications(env)),
+    sweep('phone pushes', PHONE_PUSH_SWEEP_MS, () => runPhonePushes(env)),
     sweep('automatic packing', 5 * 60_000, async () => {
       for (const outcome of await runAutomaticPacking(env)) {
         if ('refused' in outcome) console.error(`pikibun: archived session ${outcome.sessionId} was not packed (${outcome.refused}); its files stay as they are.`);

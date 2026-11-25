@@ -24,9 +24,12 @@ export interface NotificationPayload extends PikibunNotification {
   path: string;
 }
 
+export const notificationDeviceKinds = ["web", "expo"] as const;
+export type NotificationDeviceKind = (typeof notificationDeviceKinds)[number];
+
 export interface NotificationDevice {
   id: string;
-  kind: "web";
+  kind: NotificationDeviceKind;
   name: string | null;
   createdAt: string;
   current: boolean;
@@ -38,12 +41,24 @@ export interface NotificationConfig {
   devices: NotificationDevice[];
 }
 
+export interface FeedNotification extends PikibunNotification {
+  pushed?: true;
+}
+
 export interface NotificationFeed {
-  notifications: PikibunNotification[];
+  notifications: FeedNotification[];
   cursor: string;
 }
 
+export interface NotificationDelivery {
+  web: number;
+  expo: number;
+}
+
 export const NOTIFICATION_FEED_RETENTION_MS = 24 * 60 * 60 * 1000;
+export const NOTIFICATION_FEED_POLL_MS = 20_000;
+export const PHONE_PUSH_WAIT_MS = 30_000;
+export const MAX_HANDLED_NOTIFICATIONS = 50;
 
 export function notificationPath(notification: Pick<PikibunNotification, "sessionId">): string {
   return notification.sessionId ? `/#/s/${encodeURIComponent(notification.sessionId)}` : "/#/settings/notifications";
