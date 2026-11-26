@@ -339,6 +339,41 @@ describe("settings", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/connectors/pairings`)).toEqual({ name: "Build box" });
   });
 
+  test("a host's sharing lists every workspace with a toggle that shares or, once confirmed, stops sharing it, and can't share one with no sources", async () => {
+    const second = { id: "w2", name: "Difference Engine", ownerId: "u1", role: "owner" };
+    const empty = { id: "w3", name: "Empty Room", ownerId: "u1", role: "owner" };
+    const app = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace, second, empty] } },
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w0", "w1"] }] } },
+      [`GET ${ORIGIN}/api/workspaces/w2/repositories`]: { body: { repositories: [], required: true, sources: 1 } },
+      [`GET ${ORIGIN}/api/workspaces/w3/repositories`]: { body: { repositories: [], required: true, sources: 0 } },
+      [`PUT ${ORIGIN}/api/connectors/c1/shares/w2`]: { body: { connector: host } },
+      [`DELETE ${ORIGIN}/api/connectors/c1/shares/w1`]: { status: 204, body: "" },
+    });
+    await app.press("id:host-row-c1");
+    await app.waitFor("id:host-sharing");
+    for (const id of ["w0", "w1", "w2", "w3"]) await app.waitFor(`id:host-share-${id}`);
+    await app.waitFor("text:Shared with 1 of 3");
+    expect(app.shows("id:host-share-toggle-w0")).toBe(false);
+    await app.waitFor("text:Off · No sources yet. Ask an owner or admin to add one before sharing");
+    await expect(app.press("id:host-share-toggle-w3")).rejects.toThrow(/is disabled/);
+
+    await app.waitFor("text:Off: your use only");
+    await app.press("id:host-share-toggle-w2");
+    await app.waitUntil(() => app.requests().some(item => item.method === "PUT" && item.url === `${ORIGIN}/api/connectors/c1/shares/w2`));
+    await app.waitFor("text:Shared with Difference Engine. Session permissions are unchanged; personal Pi history is not imported.");
+
+    const asked: string[] = [];
+    app.onDialog(dialog => { asked.push(dialog.title ?? ""); return asked.length === 1 ? "Cancel" : "Stop sharing"; });
+    await app.press("id:host-share-toggle-w1");
+    await app.waitUntil(() => asked.length === 1);
+    expect(asked[0]).toBe("Stop sharing with Analytical Engine?");
+    expect(app.requests().some(item => item.method === "DELETE")).toBe(false);
+    await app.press("id:host-share-toggle-w1");
+    await app.waitUntil(() => app.requests().some(item => item.method === "DELETE" && item.url === `${ORIGIN}/api/connectors/c1/shares/w1`));
+    await app.waitFor("text:Stopped sharing with Analytical Engine. Your private connection remains available.");
+  });
+
   test("a host without Chromium offers its owner a chat on it, in their private workspace, that installs one", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
       browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] };
