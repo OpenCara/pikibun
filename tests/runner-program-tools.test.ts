@@ -171,6 +171,54 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
   assert.equal((await records(session)).length, 1);
 });
 
+test("on the host's own machine, the host's owner runs commands that act on a registry as an account; another member's message in their session doesn't", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-account-commands-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("node", { program: "npm", args: ["publish", "--dry-run", "--registry", "http://127.0.0.1:9"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["-m", "twine", "upload", "dist/missing.whl"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Tried."),
+    fauxAssistantMessage([fauxToolCall("node", { program: "npm", args: ["publish"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Refused."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const asked: string[] = [];
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-account-commands-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => {
+      if (input.host) asked.push(input.actorId);
+      return { allowed: true, ownerId: input.ownerId, policyVersion: 1 };
+    },
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "account-commands-session";
+  const own = binding(id);
+  own.session.connectorOwnerId = "test:alice";
+  own.model.connectorOwnerId = "test:alice";
+  const session = await service.provision(own, await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Publish.", requestId: "own", admissionId: await sha256("account own") }, "write");
+  await idle(session);
+  assert.deepEqual((await records(session)).map(record => record.operation.kind === "program" ? record.operation.command : ""), [
+    "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true npm 'publish' '--dry-run' '--registry' 'http://127.0.0.1:9' </dev/null 2>&1",
+    "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1 python3 '-m' 'twine' 'upload' 'dist/missing.whl' </dev/null 2>&1",
+  ], "the host's owner's account commands ran, each as its exact command card");
+  assert.doesNotMatch((await session.view()).entries.map(entry => entry.text).join("\n"), /as an account/);
+
+  const now = Math.floor(Date.now() / 1000);
+  const bob = { aud: "runner" as const, sessionId: id, actorId: "test:bob", ownerId: "test:alice", action: "submit" as const, policyVersion: 1, iat: now, exp: now + 60,
+    jti: randomUUID(), bodyHash: await sha256("") };
+  await session.submit(bob, { content: "Publish too.", requestId: "bob", admissionId: await sha256("account bob") }, "write");
+  await idle(session);
+  assert.equal((await records(session)).length, 2, "the member's call ran nothing");
+  assert.match((await session.view()).entries.map(entry => entry.text).join("\n"),
+    /npm publish acts on a package registry as an account, which sessions don't have: the node tool doesn't run it here: on the host's own machine, with its user's own sign-in, it runs only in sessions of the host's owner and of members they granted host commands/);
+  assert.ok(asked.includes("test:bob"), "the member's host command grant was asked for");
+});
+
 test("a program call's timeout_seconds ends it sooner than the host's command time limit; one out of range runs nothing", { skip: process.platform === "win32" }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-call-timeout-")));
   t.after(() => rm(directory, { recursive: true, force: true }));

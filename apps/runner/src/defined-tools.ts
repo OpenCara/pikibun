@@ -82,14 +82,22 @@ export interface ProgramRequest {
   program: string;
   directory: string;
   args: string[];
+  accountCommand?: string;
 }
 
-export function programRequest(definition: ProgramToolDefinition, input: { program: unknown; args?: unknown; directory?: unknown }): ProgramRequest {
+export type AccountCommands = "refuse" | "keep";
+
+export function accountCommandRefusal(definition: Pick<ProgramToolDefinition, "name" | "refusal">, command: string): string {
+  return `${command} ${definition.refusal}: the ${definition.name} tool doesn't run it`;
+}
+
+export function programRequest(definition: ProgramToolDefinition, input: { program: unknown; args?: unknown; directory?: unknown },
+  accountCommands: AccountCommands = "refuse"): ProgramRequest {
   if (typeof input.program !== "string" || !definition.programs.includes(input.program)) throw new Error(`program is one of ${definition.programs.join(", ")}`);
   const args = programArguments(input.args ?? [], definition.example);
   const command = refusedCommand(definition, input.program, args);
-  if (command !== undefined) throw new Error(`${command} ${definition.refusal}: the ${definition.name} tool doesn't run it`);
-  return { tool: definition.name, program: input.program, directory: workDirectory(input.directory), args };
+  if (command !== undefined && accountCommands === "refuse") throw new Error(accountCommandRefusal(definition, command));
+  return { tool: definition.name, program: input.program, directory: workDirectory(input.directory), args, ...(command !== undefined ? { accountCommand: command } : {}) };
 }
 
 export interface ProgramHost {

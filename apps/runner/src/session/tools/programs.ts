@@ -7,7 +7,7 @@ import { programLimits } from "../../program-command.js";
 import type { StoredOperation } from "../../operation-record.js";
 import { callEnvironment, callEnvironmentLimits, defaultedTimeout, directoryHint, killedHint, LONG_RUN_DEFAULT_SECONDS, timedOutHint } from "../../program-defaults.js";
 import { RunnerError } from "../../protocol.js";
-import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "../../python-command.js";
+import { packageIndexRefusal, pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "../../python-command.js";
 import { commandText, type ToolContext } from "./context.js";
 
 export const callTimeoutParameter = () => opt(int({ minimum: 1, maximum: CALL_TIMEOUT_MAX_SECONDS,
@@ -44,7 +44,7 @@ export function programTools(context: ToolContext): ToolRegistration[] {
         const { unbounded } = await calls.check(api, "git", { write: true, shell: true });
         return commandText(context, await context.operations.run(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "git");
       } }),
-    ...(process.platform === "win32" && context.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It stops at the host's command time limit, or sooner at timeout_seconds: give one to a run that could wait forever, such as a test suite or a server it starts. Make Unix sockets in /tmp (TMPDIR): the worktree's path leaves too little of a socket path's 107 bytes.`,
+    ...(process.platform === "win32" && context.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken in the sandbox, which has no account; on the host's own machine they run with its user's own sign-in, for the host's owner and members they granted host commands. It stops at the host's command time limit, or sooner at timeout_seconds: give one to a run that could wait forever, such as a test suite or a server it starts. Make Unix sockets in /tmp (TMPDIR): the worktree's path leaves too little of a socket path's 107 bytes.`,
       executionMode: "sequential",
       parameters: obj({ program: StringEnum(pythonPrograms), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
         venv: opt(str()), timeout_seconds: callTimeoutParameter(), env: callEnvironmentParameter() }, { open: true }),
@@ -54,10 +54,13 @@ export function programTools(context: ToolContext): ToolRegistration[] {
         let command: string;
         let timeout: { seconds?: number; defaulted: boolean };
         try {
-          request = pythonRequest(args); command = pythonShellCommand(request, process.platform, callEnvironment(args.env));
+          request = pythonRequest(args, "keep"); command = pythonShellCommand(request, process.platform, callEnvironment(args.env));
           timeout = defaultedTimeout(request.program, request.args, callTimeout(args.timeout_seconds));
         }
         catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid python call"}. Nothing ran.`); }
+        if (request.accountCommand !== undefined) {
+          await hostCommands.requireAccountCommand((await calls.actor(api, true)).initiatedBy, packageIndexRefusal(request.accountCommand));
+        }
         const missing = request.venv ? undefined : context.programMissing({ programs: pythonPrograms, path: "/usr/local/bin" }, request.program);
         if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
         const attribution = await calls.actor(api, true);

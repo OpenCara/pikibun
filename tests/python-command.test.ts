@@ -34,6 +34,9 @@ test("the python tool refuses commands that act on a package index as an account
   ];
   for (const [program, args] of allowed) assert.doesNotThrow(() => pythonRequest({ program, args }), `${program} ${args.join(" ")}`);
   assert.equal(packageIndexAccountCommand("uvx", ["twine@5", "upload"]), "twine upload");
+  assert.deepEqual(pythonRequest({ program: "uv", args: ["publish"], directory: "app" }, "keep"), { program: "uv", directory: "app", args: ["publish"], accountCommand: "uv publish" },
+    "a session that may run account commands on its host keeps them, marked");
+  assert.deepEqual(pythonRequest({ program: "uv", args: ["build"] }, "keep"), { program: "uv", directory: ".", args: ["build"] });
 });
 
 test("the python tool's command quotes every argument, without colours or prompts, and runs a virtual environment's programs first", () => {

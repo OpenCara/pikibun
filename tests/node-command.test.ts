@@ -39,6 +39,20 @@ test("the node tool refuses package manager commands that act on a registry as a
   assert.equal(registryAccountCommand("corepack", ["pnpm@9", "publish"]), "pnpm publish");
 });
 
+test("a session that may run account commands on its host keeps them, marked with the command it found, and nothing else changes", async () => {
+  const { bundledToolDefinition } = await import("../packages/shared/src/tool-definitions.js");
+  const { programRequest } = await import("../apps/runner/src/defined-tools.js");
+  const node = bundledToolDefinition("node");
+  assert.equal(node?.kind, "program");
+  if (node?.kind !== "program") return;
+  assert.deepEqual(programRequest(node, { program: "npm", args: ["publish", "--access", "public"], directory: "app" }, "keep"),
+    { tool: "node", program: "npm", directory: "app", args: ["publish", "--access", "public"], accountCommand: "npm publish" });
+  assert.deepEqual(programRequest(node, { program: "npx", args: ["pnpm@9", "publish"] }, "keep").accountCommand, "pnpm publish");
+  assert.deepEqual(programRequest(node, { program: "npm", args: ["test"] }, "keep"), { tool: "node", program: "npm", directory: ".", args: ["test"] });
+  assert.throws(() => programRequest(node, { program: "npm", args: ["publish"], directory: "../other" }, "keep"), /within the session's worktree/);
+  assert.throws(() => programRequest(node, { program: "npm", args: ["publish"] }), /npm publish acts on a package registry as an account, which sessions don't have: the node tool doesn't run it/);
+});
+
 test("the node tool's command quotes every argument and runs without colours or prompts, finding Node in /usr/local/bin too", () => {
   assert.equal(nodeShellCommand({ program: "pnpm", directory: "app", args: ["test", "--", "it's"] }),
     "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true pnpm 'test' '--' 'it'\\''s' </dev/null 2>&1");

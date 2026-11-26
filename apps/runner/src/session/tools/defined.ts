@@ -2,7 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { arr, bool, compile, int, obj, opt, str, unsafe } from "@earendil-works/pi-schema";
 import type { ToolDefinition } from "../../../../../packages/shared/src/tool-definitions.js";
-import { brokeredArguments, programCommand, programRequest, type ProgramRequest } from "../../defined-tools.js";
+import { accountCommandRefusal, brokeredArguments, programCommand, programRequest, type ProgramRequest } from "../../defined-tools.js";
 import { callTimeout } from "../../host-config.js";
 import { programLimits } from "../../program-command.js";
 import { callEnvironment, defaultedTimeout } from "../../program-defaults.js";
@@ -22,11 +22,14 @@ export function definedTool(context: ToolContext, definition: ToolDefinition): T
         let command: string;
         let timeout: { seconds?: number; defaulted: boolean };
         try {
-          request = programRequest(definition, args);
+          request = programRequest(definition, args, "keep");
           command = programCommand(definition, request, { ...(sandbox.nodeBin ? { nodeBin: sandbox.nodeBin } : {}), environment: callEnvironment(args.env) });
           timeout = defaultedTimeout(request.program, request.args, callTimeout(args.timeout_seconds));
         }
         catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${definition.name} call`}. Nothing ran.`); }
+        if (request.accountCommand !== undefined) {
+          await hostCommands.requireAccountCommand((await calls.actor(api, true)).initiatedBy, accountCommandRefusal(definition, request.accountCommand));
+        }
         const missing = context.programMissing(definition, request.program);
         if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
         const attribution = await calls.actor(api, true);

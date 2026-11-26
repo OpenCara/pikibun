@@ -250,7 +250,9 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     activating it would: the host's Python can't be installed into, and a venv's interpreter isn't one of the programs.
     Refused: what acts on a package index as an account, `uv publish`, `poetry publish`, `poetry config` of
     `http-basic.*`, `pypi-token.*` or `certificates.*`, and twine's `upload` and `register`, followed through what
-    launches twine by name (`python3 -m twine`, `uvx`, `uv run`, `uv tool run`, `poetry run`). Python is the host's, in
+    launches twine by name (`python3 -m twine`, `uvx`, `uv run`, `uv tool run`, `poetry run`), except on the host's own
+    machine for the host's owner and members granted host commands, as every ecosystem tool's account commands
+    ([security rationale](security-rationale.md#account-commands-on-the-host)). Python is the host's, in
     `/usr`, which every sandbox sees; uv and poetry where the host installed them.
 
 28. **Code mode is core.** `pi:codemode` is the glue between tools that shell pipelines were: chaining calls, looping
