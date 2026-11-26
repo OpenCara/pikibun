@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { ConnectorCredentials, ConnectorRpcRequest, ConnectorRpcResponse } from "../../../../packages/shared/src/connector.js";
 import { connectorLimits, connectorRequestTimeoutMs } from "../../../../packages/shared/src/connector.js";
 import { parsePrivateForwardRequest, type PrivateForwardRequest, type PrivateForwardResponse } from "../../../../packages/shared/src/private-sessions.js";
+import { parseHostDirectoriesRequest, type HostDirectoriesRequest, type HostDirectoryListing } from "../../../../packages/shared/src/host-directory.js";
 import type { Generation } from "./generation.js";
 import { requestSchema, validateRelayRequest } from "./relay-request.js";
 import { boundedBody } from "./wire.js";
@@ -23,6 +24,7 @@ export interface RelayFramesOptions {
   restarting(): boolean;
   runtime(): RelayRuntime | undefined;
   privateForward?(request: PrivateForwardRequest, signal: AbortSignal): Promise<PrivateForwardResponse>;
+  hostDirectories?(request: HostDirectoriesRequest): Promise<HostDirectoryListing>;
   disconnect(generation: Generation, reason: string): void;
   requireGeneration(generation: Generation): void;
   log?: LogLine;
@@ -130,6 +132,7 @@ export class RelayFrames {
     const frame = (payload: string) => ({ payload, payloadSize: Buffer.byteLength(payload, "utf8") });
     const failed = (status: number, error: string) => this.#errorFrame(rpc, status, error);
     if (rpc.ticket.action === "private") return this.#forward(generation, rpc);
+    if (rpc.ticket.action === "directories") return this.#directories(generation, rpc);
     const runtime = this.options.runtime();
     if (!runtime) return failed(503, "The host's runner is restarting; try again.");
     let result: ConnectorRpcResponse;
@@ -155,6 +158,26 @@ export class RelayFrames {
     const reply = frame(JSON.stringify(result));
     if (reply.payloadSize > connectorLimits.frameBytes) return failed(502, "The host's reply is too large to relay.");
     return reply;
+  }
+
+  async #directories(generation: Generation, rpc: ConnectorRpcRequest): Promise<Frame> {
+    const list = this.options.hostDirectories;
+    let request: HostDirectoriesRequest | null = null;
+    try { request = parseHostDirectoriesRequest(JSON.parse(rpc.body)); } catch { request = null; }
+    if (!request) return this.#errorFrame(rpc, 400, "That isn't a directory of this host.");
+    if (!list) return this.#errorFrame(rpc, 503, "This host doesn't list its directories.");
+    let directories: HostDirectoryListing;
+    try { directories = await list(request); }
+    catch (error) {
+      this.options.requireGeneration(generation);
+      this.#failures.report("Listing a host directory failed", error);
+      return this.#errorFrame(rpc, 502, "The host could not list that directory.");
+    }
+    this.options.requireGeneration(generation);
+    const payload = JSON.stringify({ type: "response", id: rpc.id, status: 200, body: JSON.stringify({ directories }) } satisfies ConnectorRpcResponse);
+    const size = Buffer.byteLength(payload, "utf8");
+    if (size > connectorLimits.frameBytes) return this.#errorFrame(rpc, 502, "The reply is too large to relay.");
+    return { payload, payloadSize: size };
   }
 
   async #forward(generation: Generation, rpc: ConnectorRpcRequest): Promise<Frame> {

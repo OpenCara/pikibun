@@ -21,7 +21,7 @@ export interface HostDirectoryEntry {
 }
 
 export type HostDirectoryListing =
-  | { path: string; parent: string | null; home: string; entries: HostDirectoryEntry[]; truncated: boolean }
+  | { path: string; parent: string | null; home: string; entries: HostDirectoryEntry[]; truncated: boolean; usable: boolean }
   | { path: string; parent: string | null; home: string; problem: HostDirectoryProblem };
 
 export interface HostDirectoriesRequest {
@@ -55,7 +55,7 @@ export function checkHostDirectoryListing(value: unknown): HostDirectoryListing 
     if (keys !== "home,parent,path,problem" || !hostDirectoryProblems.includes(listing.problem as HostDirectoryProblem)) return null;
     return { ...base, problem: listing.problem as HostDirectoryProblem };
   }
-  if (Object.keys(listing).sort().join(",") !== "entries,home,parent,path,truncated" || typeof listing.truncated !== "boolean"
+  if (Object.keys(listing).sort().join(",") !== "entries,home,parent,path,truncated,usable" || typeof listing.truncated !== "boolean" || typeof listing.usable !== "boolean"
     || !Array.isArray(listing.entries) || listing.entries.length > HOST_DIRECTORIES_LIMIT) return null;
   const entries: HostDirectoryEntry[] = [];
   for (const entry of listing.entries as unknown[]) {
@@ -64,5 +64,5 @@ export function checkHostDirectoryListing(value: unknown): HostDirectoryListing 
     if (!listedName(name) || !listedPath(path)) return null;
     entries.push({ name, path });
   }
-  return { ...base, entries, truncated: listing.truncated };
+  return { ...base, entries, truncated: listing.truncated, usable: listing.usable };
 }

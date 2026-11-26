@@ -41,6 +41,7 @@ export interface ConnectorCapabilities {
   hostSessionGrants?: boolean;
   ownerHostSessions?: boolean;
   hostDirectories?: boolean;
+  hostDirectoryBrowser?: boolean;
   unboundedShellGrants?: boolean;
   fileBrowser?: boolean;
   fileUploads?: boolean;

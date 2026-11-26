@@ -16,7 +16,7 @@ export {
   workspaceOwnerStatement,
 } from './memberships.js';
 export { isPersonalWorkspace, ownHostsOnlySQL, personalWorkspaceName, personalWorkspaceSQL, requireSharedWorkspace } from './personal-workspaces.js';
-export { authorizeConnectorTicket, connectorPermissions, requireRunnerAccess } from './runner-access.js';
+export { authorizeConnectorTicket, connectorPermissions, hostDirectoriesAuthority, requireRunnerAccess } from './runner-access.js';
 export { authorizeSession } from './authorize.js';
 export {
   connectorAdmins, connectorHostGrants, hostAuthority, hostCommandSession, managedConnector, managedConnectorFor, managesConnectorSQL,

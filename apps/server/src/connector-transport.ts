@@ -2,6 +2,7 @@ import { HTTPException } from 'hono/http-exception';
 import { connectorLimits, type ConnectorRpcRequest } from '../../../packages/shared/src/connector.js';
 import { parsePrivateForwardResponse, PRIVATE_FORWARD_PATH, PRIVATE_TICKET_SESSION, type PrivateForwardRequest, type PrivateForwardResponse } from '../../../packages/shared/src/private-sessions.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
+import { checkHostDirectoryListing, HOST_DIRECTORIES_PATH, HOST_DIRECTORIES_TICKET_SESSION, type HostDirectoryListing } from '../../../packages/shared/src/host-directory.js';
 import { isRevision } from '../../../packages/shared/src/view-patch.js';
 import type { RunnerAction, RunnerTicket } from '../../../packages/shared/src/types.js';
 import { authorizeConnectorTicket, connectorPermissions } from './authority/index.js';
@@ -31,6 +32,9 @@ export function connectorPath(action: RunnerAction, sessionId: string, suffix = 
     case 'private':
       if (sessionId !== PRIVATE_TICKET_SESSION) fail(400, 'invalid_session', 'Invalid session identifier.');
       return PRIVATE_FORWARD_PATH;
+    case 'directories':
+      if (sessionId !== HOST_DIRECTORIES_TICKET_SESSION) fail(400, 'invalid_session', 'Invalid session identifier.');
+      return HOST_DIRECTORIES_PATH;
     case 'view':
       if (!suffix) return `${base}/view`;
       if (!isRevision(suffix)) fail(400, 'invalid_revision', 'Invalid view revision.');
@@ -160,6 +164,35 @@ export async function privateConnectorRequest(c: AppContext, connectorId: string
   try { answer = parsePrivateForwardResponse(JSON.parse(await response.text())); } catch { answer = null; }
   if (!answer) fail(502, 'invalid_runner_response', 'Your computer returned an invalid response.');
   return answer;
+}
+
+export async function hostDirectoriesConnectorRequest(c: AppContext, connectorId: string, ownerId: string, path: string): Promise<HostDirectoryListing> {
+  if (!c.env.CONNECTOR_HUB) fail(503, 'connector_unavailable', 'The connector transport is unavailable.');
+  const actorId = c.get('auth').userId;
+  const serialized = JSON.stringify({ path });
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const ticket: RunnerTicket = { aud: 'runner', sessionId: HOST_DIRECTORIES_TICKET_SESSION, actorId, ownerId, connectorId, action: 'directories', policyVersion: 1,
+    iat: issuedAt, exp: issuedAt + 60, jti: id(), bodyHash: await sha256(serialized) };
+  await authorizeConnectorTicket(c.env, ticket);
+  const connection = await currentConnector(c.env, connectorId);
+  if (!connection.connection_hash) fail(503, 'connector_offline', 'The host is offline.');
+  const envelope: ConnectorRelayEnvelope = { connectorId, credentialHash: connection.credential_hash, connectionHash: connection.connection_hash,
+    request: { type: 'request', id: ticket.jti, method: 'POST', path: HOST_DIRECTORIES_PATH, body: serialized, ticket } };
+  await validateConnectorRpc(envelope);
+  let response: Response;
+  try { response = await c.env.CONNECTOR_HUB.rpc(connectorId, envelope); }
+  catch { fail(503, 'connector_unavailable', 'The host didn\'t answer. Try again shortly.'); }
+  try {
+    await requireConnectorGeneration(c.env, connectorId, envelope.credentialHash, envelope.connectionHash);
+    await authorizeConnectorTicket(c.env, ticket, envelope.connectionHash);
+    if (!response.ok) fail(runnerFailureStatus(response.status), 'runner_error', 'The host could not list that directory. Try again shortly.');
+    let listing: HostDirectoryListing | null = null;
+    try { listing = checkHostDirectoryListing((JSON.parse(await response.text()) as { directories?: unknown } | null)?.directories); } catch { listing = null; }
+    if (!listing) fail(502, 'invalid_runner_response', 'The host returned an invalid directory listing.');
+    return listing;
+  } finally {
+    await response.body?.cancel().catch(() => {});
+  }
 }
 
 export function runnerFailureStatus(status: number): 400 | 403 | 404 | 409 | 410 | 413 | 422 | 429 | 500 | 503 | 504 {

@@ -163,7 +163,7 @@ test('pairing posts only to the fixed origin and strips extra model/capability s
   assert.equal(request.redirect, 'error');
   assert.equal(request.credentials, 'omit');
   assert.equal(request.headers.get('authorization'), null);
-  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, hostDirectories: true, unboundedShellGrants: true, fileBrowser: true, mediaFiles: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, modelCalls: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, hostDirectories: true, hostDirectoryBrowser: true, unboundedShellGrants: true, fileBrowser: true, mediaFiles: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, modelCalls: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   for (const secret of [providerSecret, credentials.token, 'fixture_pairing_code']) assert.equal(request.url.includes(secret), false);
 });
 
@@ -200,7 +200,7 @@ test('connector manifests reject duplicates, excessive catalogs and implicit fau
 });
 
 test('relay accepts exactly the supported action/method/path combinations and locally signs bound tickets', async t => {
-  const bodies: Record<Exclude<RunnerAction, 'events' | 'private'>, string> = {
+  const bodies: Record<Exclude<RunnerAction, 'events' | 'private' | 'directories'>, string> = {
     create: JSON.stringify(binding()), view: '', submit: '{}', ask: '{}',
     backup: '{}', restart: '{}', restore: JSON.stringify({ binding: binding() }), stop: '{}',
     files: JSON.stringify({ path: 'src' }), changes: '{}', revert: JSON.stringify({ entryId: '1:2' }),
@@ -239,6 +239,58 @@ test('relay accepts a private request only on its own path, for the owner, and o
   await assert.rejects(validateRelayRequest({ ...request, path: '/v1/sessions/private/private' }, credentials.connectorId, verifierSecret), /not allowed/);
   const refused = JSON.stringify({ method: 'POST', path: '/api/sessions/abc/link' });
   await assert.rejects(validateRelayRequest({ ...request, body: refused, ticket: { ...request.ticket, bodyHash: await sha256(refused) } }, credentials.connectorId, verifierSecret), /not allowed/);
+});
+
+test('relay accepts a directories request only on its own path and for a path on the host, from the owner or a member the server let through', async () => {
+  const body = JSON.stringify({ path: '~/projects' });
+  const base = await rpc('directories', body);
+  const request = { ...base, path: '/v1/directories', ticket: { ...base.ticket, sessionId: 'directories' } };
+  const result = await validateRelayRequest(request, credentials.connectorId, verifierSecret);
+  assert.deepEqual(await verifyRunnerTicket(result.authorization, verifierSecret, 'directories', 'directories', body), request.ticket);
+  const member = { ...request, ticket: { ...request.ticket, actorId: 'member' } };
+  assert.deepEqual((await validateRelayRequest(member, credentials.connectorId, verifierSecret)).rpc, member);
+  await assert.rejects(validateRelayRequest({ ...request, ticket: { ...request.ticket, sessionId: 'abc' } }, credentials.connectorId, verifierSecret), /Invalid directories request/);
+  await assert.rejects(validateRelayRequest({ ...request, ticket: { ...request.ticket, action: 'files' } }, credentials.connectorId, verifierSecret), /Invalid directories request/);
+  await assert.rejects(validateRelayRequest({ ...request, path: '/v1/sessions/directories/directories' }, credentials.connectorId, verifierSecret), /not allowed/);
+  for (const refused of [JSON.stringify({ path: 'relative/path' }), JSON.stringify({ path: '/tmp', extra: 1 }), JSON.stringify({})]) {
+    await assert.rejects(validateRelayRequest({ ...request, body: refused, ticket: { ...request.ticket, bodyHash: await sha256(refused) } }, credentials.connectorId, verifierSecret), /not allowed/);
+  }
+});
+
+test('a host lists only the folders of a directory, never its files or its own storage, and says which it can work in', { timeout: 10000 }, async t => {
+  const fixture = await connectorFixture(t);
+  const socket = await startFixture(fixture);
+  const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
+  assert.equal(JSON.parse(manifest.body).capabilities.hostDirectoryBrowser, true);
+  const root = await directory(t);
+  for (const name of ['alpha', 'Beta', '.hidden']) await mkdir(join(root, name));
+  await writeFile(join(root, 'notes.txt'), 'not a folder');
+  await symlink(join(root, 'alpha'), join(root, 'linked'));
+  await symlink(join(root, 'notes.txt'), join(root, 'linked-file'));
+  await symlink(fixture.dataDir, join(root, 'storage'));
+  let count = 0;
+  const list = async (path: string) => {
+    const body = JSON.stringify({ path });
+    const base = await rpc('directories', body, `directories-${++count}`);
+    socket.receive({ ...base, path: '/v1/directories', ticket: { ...base.ticket, sessionId: 'directories', actorId: 'member' } });
+    const reply = JSON.parse(await socket.messages.next()) as ConnectorRpcResponse;
+    assert.equal(reply.status, 200);
+    return (JSON.parse(reply.body) as { directories: unknown }).directories;
+  };
+  const listed = await list(root) as { home: string };
+  assert.ok(listed.home.startsWith('/'));
+  assert.deepEqual(listed, { path: root, parent: join(root, '..'), home: listed.home, usable: true, truncated: false,
+    entries: ['alpha', 'Beta', 'linked'].map(name => ({ name, path: join(root, name) })).concat([{ name: '.hidden', path: join(root, '.hidden') }]) });
+  assert.equal((await list(`${root}/missing`) as { problem: string }).problem, 'missing');
+  assert.equal((await list(join(root, 'notes.txt')) as { problem: string }).problem, 'not-directory');
+  assert.equal((await list(fixture.dataDir) as { problem: string }).problem, 'refused');
+  assert.equal((await list(join(root, 'storage')) as { problem: string }).problem, 'refused');
+  const above = await list(join(fixture.dataDir, '..')) as { usable: boolean; entries: { path: string }[] };
+  assert.equal(above.usable, false, 'a directory that holds the host\'s storage is listed, but no session works in it');
+  assert.ok(!above.entries.some(entry => entry.path === fixture.dataDir));
+  assert.equal((await list('/') as { usable: boolean; parent: string | null }).usable, false);
+  assert.equal((await list('/') as { parent: string | null }).parent, null);
+  assert.equal(fixture.runtimes[0]!.requests.length, 0, 'listing the host\'s directories never reaches a session');
 });
 
 test('relay accepts a view request for what changed since a revision', async () => {
@@ -582,7 +634,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   socket.welcome();
   const call = await fixture.workerCalls.next();
   assert.equal(call.request.url, `${origin}/api/connectors/self/manifest`);
-  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, hostDirectories: true, unboundedShellGrants: true, fileBrowser: true, mediaFiles: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, modelCalls: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, hostDirectories: true, hostDirectoryBrowser: true, unboundedShellGrants: true, fileBrowser: true, mediaFiles: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, modelCalls: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   assert.equal(call.request.headers.get('x-connection-token'), connectionToken);
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(ready, false);
@@ -610,7 +662,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.deepEqual(fixture.statuses, ['connecting', 'connected', 'stopped']);
 });
 
-const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, hostDirectories: true, unboundedShellGrants: true, fileBrowser: true, mediaFiles: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, modelCalls: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true };
+const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, packIgnoredFiles: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, hostDirectories: true, hostDirectoryBrowser: true, unboundedShellGrants: true, fileBrowser: true, mediaFiles: true, localChanges: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, gitSubdirectories: true, modelCalls: true, fakeIpTunnels: true, autoModel: true, sessionTitles: true, artifacts: true, sessionResources: true, ...hostMigration, hostConfig: true, compactionConfig: true };
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
