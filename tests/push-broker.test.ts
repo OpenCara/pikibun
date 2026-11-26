@@ -34,6 +34,8 @@ const azurePin = { bindingId: 'binding-az', commit: pinnedCommit, fullName: 'con
   path: 'dev.azure.com/contoso/Project/repo', provider: 'azure-devops', ref: 'main', repositoryId: azureRepositoryId };
 
 type Route = (url: URL, init: RequestInit) => Response | undefined;
+interface BranchPull { number: number; html_url: string; created_at: string; state?: string; head?: { ref: string; repo: { id?: number; full_name: string } | null } }
+const ownHead = (ref: string) => ({ ref, repo: { id: 101, full_name: 'owner/repo' } });
 interface Call { method: string; url: string; authorization: string | null; redirect?: RequestRedirect; body?: unknown }
 interface Host { owner: string; gitCredentials?: boolean }
 const connectorToken = 'connector-token'.padEnd(43, 'x');
@@ -99,7 +101,7 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
     githubBranch: null as Record<string, unknown> | null, gitlabBranch: null as Record<string, unknown> | null,
     giteaBranch: null as Record<string, unknown> | null, azureAllow: true, resetStatus: 200, resetToken: 'owner-oauth-token-2', resetLost: false, tokenAlive: true, userAlive: true,
     githubPulls: {} as Record<number, { state: string; merged: boolean; draft: boolean; reviews: unknown[]; checkRuns: unknown[]; statuses: unknown[] }>,
-    branchPulls: {} as Record<string, { number: number; html_url: string; created_at: string }[]>,
+    branchPulls: {} as Record<string, BranchPull[]>, openBranchPulls: {} as Record<string, BranchPull[]>,
     azurePulls: {} as Record<number, Record<string, unknown>>, azureBranchPulls: {} as Record<string, Record<string, unknown>[]> };
   const routes: Route[] = [
     (url, init) => {
@@ -147,6 +149,9 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
           : Response.json({ number: 5, html_url: 'https://github.com/owner/repo/pull/5' }, { status: 201 });
       }
       if (method === 'GET' && url.pathname === '/repos/owner/repo/pulls' && url.searchParams.get('state') === 'all') return Response.json(state.branchPulls[url.searchParams.get('head')!] ?? []);
+      if (method === 'GET' && url.pathname === '/repos/owner/repo/pulls' && state.openBranchPulls[url.searchParams.get('head')!]) {
+        return Response.json(state.openBranchPulls[url.searchParams.get('head')!]);
+      }
       if (method === 'GET' && url.pathname === '/repos/owner/repo/pulls') return Response.json([{ number: 4, html_url: 'https://github.com/owner/repo/pull/4' }]);
       return undefined;
     },
@@ -409,6 +414,77 @@ test('completion revokes the GitHub token, verifies the tip and opens the pull r
   const third = await (await f.post(credential, { sessionId: 'session', approvalId: 'tool-c-3', actorId: owner, operation: op2, admissionId: f.admit('auto') })).json() as { credentialId: string };
   const existing = await f.post(complete, { sessionId: 'session', approvalId: 'tool-c-3', credentialId: third.credentialId, outcome: 'up-to-date', tip });
   assert.deepEqual(await existing.json(), { pullRequest: { url: 'https://github.com/owner/repo/pull/4', number: 4, created: false } });
+});
+
+test('a push that asks for no pull request links the open one of its branch, opened before the session or not', async t => {
+  const f = await fixture(t);
+  const record = async () => sessionRecord((await sessionAccess(f.env, 'session', owner))!.row).pullRequest;
+  const push = async (approvalId: string, operation: Record<string, unknown>, rewrite?: { bindingId: string; operation: Record<string, unknown> }) => {
+    const issued = await (await f.post(credential, { sessionId: 'session', approvalId, actorId: owner, operation, admissionId: f.admit('auto') })).json() as { credentialId: string };
+    if (rewrite) f.sqlite.prepare('UPDATE push_credentials SET binding_id = ?, operation_json = ? WHERE id = ?').run(rewrite.bindingId, JSON.stringify(rewrite.operation), issued.credentialId);
+    const done = await f.post(complete, { sessionId: 'session', approvalId, credentialId: issued.credentialId, outcome: 'pushed', tip });
+    assert.equal(done.status, 200, approvalId);
+    return await done.json() as Record<string, unknown>;
+  };
+
+  assert.deepEqual(await push('tool-o-1', f.operation()), {}, 'no open pull request: nothing to link');
+  assert.equal(await record(), undefined);
+  const lookup = new URL(f.calls.find(call => call.url.startsWith('https://api.github.com/repos/owner/repo/pulls?state=open'))!.url);
+  assert.equal(lookup.searchParams.get('head'), 'owner:feature');
+  assert.equal(f.calls.find(call => call.url === lookup.href)!.authorization, 'Bearer owner-oauth-token', 'looked up as the session owner');
+  assert.ok(!f.calls.some(call => call.method === 'POST' && call.url.endsWith('/pulls')), 'none is opened');
+
+  let replaced = false;
+  const mocked = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(String(input));
+    if (url.origin === 'https://api.github.com' && url.pathname === '/repos/owner/repo/pulls' && url.searchParams.get('state') === 'open' && (init.method ?? 'GET') === 'GET') {
+      await mocked(input, init);
+      return Response.json([{ number: 10, html_url: 'https://github.com/owner/repo/pull/10', head: { ref: 'feature', repo: { id: 909, full_name: 'owner/repo-fork' } } },
+        { number: 9, html_url: 'https://github.com/owner/repo/pull/9', head: ownHead('other') },
+        { number: 8, html_url: 'https://github.com/owner/repo/pull/8', head: ownHead('feature') }]);
+    }
+    if (replaced && url.href === 'https://api.github.com/repos/owner/repo' && (init.method ?? 'GET') === 'GET') {
+      await mocked(input, init);
+      return Response.json({ id: 202, full_name: 'owner/repo', default_branch: 'main', private: true, permissions: { push: true } });
+    }
+    return mocked(input, init);
+  };
+  t.after(() => { globalThis.fetch = mocked; });
+  assert.deepEqual(await push('tool-o-2', f.operation()), { pullRequest: { url: 'https://github.com/owner/repo/pull/8', number: 8, created: false } });
+  assert.deepEqual(await record(), { url: 'https://github.com/owner/repo/pull/8', number: 8 });
+  assert.equal(f.audits('git.push.pull_request_linked').length, 1);
+  assert.equal(f.audits('git.push.pull_request').length, 0);
+
+  const issued = await (await f.post(credential, { sessionId: 'session', approvalId: 'tool-o-renamed', actorId: owner, operation: f.operation(), admissionId: f.admit('auto') })).json() as { credentialId: string };
+  replaced = true;
+  const openLookups = f.calls.filter(call => call.url.includes('/pulls?state=open')).length;
+  const renamed = await f.post(complete, { sessionId: 'session', approvalId: 'tool-o-renamed', credentialId: issued.credentialId, outcome: 'pushed', tip });
+  replaced = false;
+  assert.deepEqual([renamed.status, await renamed.json()], [200, {}], 'another repository under the bound name links nothing, and the push still completes');
+  assert.equal(f.calls.filter(call => call.url.includes('/pulls?state=open')).length, openLookups);
+  assert.equal(f.ledger().find(row => row.id === issued.credentialId)!.pull_request_url, null);
+
+  const azure = { kind: 'git.push', repository: azurePin.path, directory: 'repo', branch: 'feat/sprinting', commit: sessionCommit };
+  f.state.azureBranchPulls['refs/heads/feat/sprinting'] = [
+    { pullRequestId: 140, status: 'completed', creationDate: '2001-01-01T00:00:00Z', sourceRefName: 'refs/heads/feat/sprinting', repository: { id: azureRepositoryId } },
+    { pullRequestId: 139, status: 'active', creationDate: '2001-01-01T00:00:00Z', sourceRefName: 'refs/heads/feat/sprinting', repository: { id: 'another-repository' } },
+    { pullRequestId: 131, status: 'active', creationDate: '2000-01-01T00:00:00Z', sourceRefName: 'refs/heads/feat/sprinting', repository: { id: azureRepositoryId } }];
+  assert.deepEqual(await push('tool-o-3', f.operation(), { bindingId: 'binding-az', operation: azure }),
+    { pullRequest: { url: 'https://dev.azure.com/contoso/Project/_git/repo/pullrequest/131', number: 131, created: false } });
+  const azureLookup = f.calls.filter(call => call.url.includes('/pullrequests?')).at(-1)!;
+  assert.equal(new URL(azureLookup.url).searchParams.get('searchCriteria.status'), 'active');
+  assert.equal(azureLookup.authorization, basic('', 'owner-azure-devops-token'));
+  assert.deepEqual(await record(), { url: 'https://dev.azure.com/contoso/Project/_git/repo/pullrequest/131', number: 131 });
+
+  f.state.azureBranchPulls['refs/heads/feat/sprinting'] = [];
+  assert.deepEqual(await push('tool-o-4', f.operation(), { bindingId: 'binding-az', operation: azure }), {});
+  assert.deepEqual(await record(), { url: 'https://dev.azure.com/contoso/Project/_git/repo/pullrequest/131', number: 131 }, 'a later push with none keeps the link');
+
+  const tagged = { kind: 'git.push', repository: githubPin.path, directory: 'app', branch: 'main', tag: 'v1', commit: sessionCommit };
+  const lookups = f.calls.filter(call => call.url.includes('/pulls?')).length;
+  assert.deepEqual(await push('tool-o-5', tagged), {});
+  assert.equal(f.calls.filter(call => call.url.includes('/pulls?')).length, lookups, 'a tag push looks up no pull request');
 });
 
 test('session lists and reads show the newest pull request a push from the session opened, outside the runner binding', async t => {
@@ -1078,14 +1154,25 @@ test('a clone session with a branch named for its work pushes that branch, not p
     headers: { Authorization: `Bearer ${internalSecret}`, 'Content-Type': 'application/x-git-receive-pack-request' }, body }, f.env);
   const command = (ref: string) => pkt(`${'0'.repeat(40)} ${tip} ${ref}\0report-status side-band-64k agent=git/2.43.0\n`) + '0000';
 
+  const branches = () => f.sqlite.prepare('SELECT repository, branch, pull_request_url FROM session_branches WHERE session_id = ?').all('session')
+    .map(row => [row.repository, row.branch, row.pull_request_url]);
   const refused = await relay(command('refs/heads/pikibun/session'));
   assert.equal(refused.status, 403);
   assert.equal(await code(refused), 'session_branch_only');
+  assert.deepEqual(branches(), [], 'a refused push records no branch');
   const pushed = await relay(command('refs/heads/pikibun/fix-login-e00000000000') + 'PACK-DATA');
   assert.equal(pushed.status, 200);
   assert.deepEqual(forge, [command('refs/heads/pikibun/fix-login-e00000000000') + 'PACK-DATA']);
   const audit = f.audits('git.push.session_branch') as { detail_json: string }[];
   assert.equal(JSON.parse(audit.at(-1)!.detail_json).branch, 'pikibun/fix-login-e00000000000');
+  assert.deepEqual(branches(), [['owner/repo', 'pikibun/fix-login-e00000000000', null]], 'the pushed session branch is looked up for its pull request');
+
+  f.state.branchPulls['owner:pikibun/fix-login-e00000000000'] = [{ number: 7, html_url: 'https://github.com/owner/repo/pull/7', created_at: new Date(Date.now() + 1000).toISOString(),
+    head: ownHead('pikibun/fix-login-e00000000000') }];
+  f.state.githubPulls[7] = { state: 'open', merged: false, draft: false, reviews: [], checkRuns: [], statuses: [] };
+  await refreshPullRequestStates(f.env);
+  assert.deepEqual(sessionRecord((await sessionAccess(f.env, 'session', owner))!.row).pullRequest, { url: 'https://github.com/owner/repo/pull/7', number: 7, state: 'open' },
+    'a pull request gh opened for the branch shows in a sandboxed session too');
 });
 
 test('a session that pinned its repositories is read-only: it gets no push credential', async t => {
@@ -1128,9 +1215,14 @@ test('a session on a host shows the pull request GitHub has for a branch its hos
 
   const created = String(f.sqlite.prepare('SELECT created_at FROM sessions WHERE id = ?').get('session')!.created_at);
   f.state.branchPulls['owner:feature'] = [
-    { number: 6, html_url: 'https://github.com/owner/repo/pull/6', created_at: 'not a time' },
-    { number: 5, html_url: 'https://github.com/owner/repo/pull/5', created_at: new Date(Date.parse(created) + 1000).toISOString() },
-    { number: 3, html_url: 'https://github.com/owner/repo/pull/3', created_at: '2000-01-01T00:00:00Z' }];
+    { number: 9, html_url: 'https://github.com/owner/repo/pull/9', created_at: new Date(Date.parse(created) + 2000).toISOString(), state: 'open',
+      head: { ref: 'feature', repo: { id: 909, full_name: 'owner/repo-fork' } } },
+    { number: 8, html_url: 'https://github.com/owner/repo/pull/8', created_at: new Date(Date.parse(created) + 2000).toISOString(), state: 'open',
+      head: { ref: 'feature', repo: null } },
+    { number: 6, html_url: 'https://github.com/owner/repo/pull/6', created_at: 'not a time', head: ownHead('feature') },
+    { number: 5, html_url: 'https://github.com/owner/repo/pull/5', created_at: new Date(Date.parse(created) + 1000).toISOString(), head: ownHead('feature') },
+    { number: 3, html_url: 'https://github.com/owner/repo/pull/3', created_at: '2000-01-01T00:00:00Z', head: ownHead('feature') },
+    { number: 2, html_url: 'https://github.com/owner/repo/pull/2', created_at: '1999-01-01T00:00:00Z', state: 'open', head: ownHead('feature') }];
   f.state.githubPulls[5] = { state: 'open', merged: false, draft: false, reviews: [], checkRuns: [{ name: 'test', status: 'completed', conclusion: 'failure' }], statuses: [] };
   await refreshPullRequestStates(f.env);
   assert.equal(lookups(), 1, 'a fresh lookup is not repeated');
@@ -1156,6 +1248,21 @@ test('a session on a host shows the pull request GitHub has for a branch its hos
   assert.equal(lookups(), before, 'merged pull requests are not looked up again');
 });
 
+test('a branch with ten newer closed pull requests still finds the open one opened before the session', async t => {
+  const f = await fixture(t, { host: { owner } });
+  f.sqlite.prepare('UPDATE sessions SET host_environment = 1 WHERE id = ?').run('session');
+  assert.equal((await f.post('/api/internal/branches', { sessionId: 'session', branches: [{ repository: 'owner/repo', branch: 'busy' }] })).status, 200);
+  f.state.branchPulls['owner:busy'] = Array.from({ length: 10 }, (_, index) => ({ number: 40 - index, html_url: `https://github.com/owner/repo/pull/${40 - index}`,
+    created_at: '2001-01-01T00:00:00Z', state: 'closed', head: ownHead('busy') }));
+  f.state.openBranchPulls['owner:busy'] = [
+    { number: 12, html_url: 'https://github.com/owner/repo/pull/12', created_at: '2000-01-01T00:00:00Z', state: 'open', head: { ref: 'busy', repo: { full_name: 'owner/fork' } } },
+    { number: 11, html_url: 'https://github.com/owner/repo/pull/11', created_at: '2000-01-01T00:00:00Z', state: 'open', head: ownHead('busy') }];
+  f.state.githubPulls[11] = { state: 'open', merged: false, draft: false, reviews: [], checkRuns: [], statuses: [] };
+  await refreshPullRequestStates(f.env);
+  assert.deepEqual(sessionRecord((await sessionAccess(f.env, 'session', owner))!.row).pullRequest, { url: 'https://github.com/owner/repo/pull/11', number: 11, state: 'open' });
+  assert.deepEqual(f.calls.filter(call => call.url.startsWith('https://api.github.com/repos/owner/repo/pulls?')).map(call => new URL(call.url).searchParams.get('state')), ['all', 'open']);
+});
+
 test('a session on a host shows the pull request Azure DevOps has for a branch its host reported, with its state', async t => {
   const f = await fixture(t, { host: { owner } });
   f.sqlite.prepare('UPDATE sessions SET host_environment = 1 WHERE id = ?').run('session');
@@ -1177,7 +1284,15 @@ test('a session on a host shows the pull request Azure DevOps has for a branch i
   assert.equal(await record(), undefined);
 
   const created = Date.parse(String(f.sqlite.prepare('SELECT created_at FROM sessions WHERE id = ?').get('session')!.created_at));
-  f.state.azureBranchPulls['refs/heads/feature'] = [{ pullRequestId: 12, creationDate: new Date(created + 1000).toISOString(), sourceRefName: 'refs/heads/feature',
+  const older = [{ pullRequestId: 8, status: 'completed', creationDate: '2000-01-02T00:00:00Z', sourceRefName: 'refs/heads/feature', repository: { id: azureRepositoryId } },
+    { pullRequestId: 9, status: 'active', creationDate: '2000-01-01T00:00:00Z', sourceRefName: 'refs/heads/feature', repository: { id: azureRepositoryId } }];
+  f.state.azureBranchPulls['refs/heads/feature'] = older;
+  f.state.azurePulls[9] = { pullRequestId: 9, status: 'active', isDraft: false, repository: { id: azureRepositoryId, project: { id: azureProjectId } }, reviewers: [] };
+  stale(); await refreshPullRequestStates(f.env);
+  assert.deepEqual(await record(), { url: 'https://dev.azure.com/contoso/Project/_git/repo/pullrequest/9', number: 9, state: 'open' },
+    'one opened before the session counts while it is still open');
+
+  f.state.azureBranchPulls['refs/heads/feature'] = [...older, { pullRequestId: 12, creationDate: new Date(created + 1000).toISOString(), sourceRefName: 'refs/heads/feature',
     repository: { id: azureRepositoryId } }];
   f.state.azurePulls[12] = { pullRequestId: 12, status: 'active', isDraft: true, repository: { id: azureRepositoryId, project: { id: azureProjectId } }, reviewers: [] };
   stale(); await refreshPullRequestStates(f.env);
@@ -1257,6 +1372,8 @@ test('direct Git grants: the owner\'s own host reads with the owner\'s account w
   assert.equal((await direct(f, { access: 'push', command })).body.direct, true);
   const audit = f.audits('git.push.session_branch') as { detail_json: string }[];
   assert.deepEqual(JSON.parse(audit[0]!.detail_json), { bindingId: 'binding-gh', branch: 'pikibun/session', old: command.old, new: tip, kind: 'github-app', direct: true });
+  assert.deepEqual(f.sqlite.prepare('SELECT repository, branch FROM session_branches WHERE session_id = ?').all('session').map(row => [row.repository, row.branch]),
+    [['owner/repo', 'pikibun/session']], 'the session branch a direct push updates is looked up for its pull request');
   const other = await direct(f, { access: 'push', command: { ...command, ref: 'refs/heads/main' } });
   assert.deepEqual([other.status, other.body.code], [403, 'session_branch_only']);
   const deleted = await direct(f, { access: 'push', command: { ...command, new: '0'.repeat(40) } });

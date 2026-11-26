@@ -273,6 +273,64 @@ function withDraftPrefix(title: string, prefix: string): string {
   return draftPrefix.test(title) ? title : `${prefix} ${title}`;
 }
 
+export async function openBranchPullRequest(access: RepositoryAccess, pin: SessionRepository, head: string): Promise<{ url: string; number: number } | null> {
+  if (access.provider === 'git') return null;
+  const target = api(access, pin);
+  const id = encodeURIComponent(String(pin.repositoryId));
+  const list = async (url: string, pick: (body: unknown) => unknown): Promise<Record<string, unknown>[]> => {
+    const result = await call(target, url);
+    if (result.status !== 200) return [];
+    const items = pick(result.body);
+    return Array.isArray(items) ? items.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item)) : [];
+  };
+  const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const values = (body: unknown) => record(body).values;
+  const found = (url: unknown, number: unknown): { url: string; number: number } => ({ url: webURL(target, url), number: positive(target, number) });
+  switch (target.provider) {
+    case 'github':
+    case 'github-enterprise': {
+      const owner = pin.fullName.split('/')[0]!;
+      const pulls = await list(`${target.base}/repos/${pin.fullName}/pulls?state=open&sort=created&direction=desc&per_page=10&head=${encodeURIComponent(`${owner}:${head}`)}`, body => body);
+      const ours = (repository: Record<string, unknown>) => typeof pin.repositoryId === 'number' && typeof repository.id === 'number'
+        ? repository.id === pin.repositoryId : String(repository.full_name ?? '').toLowerCase() === pin.fullName.toLowerCase();
+      const pull = pulls.find(item => record(item.head).ref === head && ours(record(record(item.head).repo)));
+      return pull ? found(pull.html_url, pull.number) : null;
+    }
+    case 'gitlab': {
+      const requests = await list(`${target.base}/projects/${id}/merge_requests?state=opened&order_by=created_at&sort=desc&per_page=10&source_branch=${encodeURIComponent(head)}`, body => body);
+      const request = requests.find(item => item.source_branch === head && item.source_project_id === item.project_id);
+      return request ? found(request.web_url, request.iid) : null;
+    }
+    case 'gitea': {
+      const pulls = await list(`${target.base}/repos/${pin.fullName}/pulls?state=open&sort=newest&limit=50`, body => body);
+      const pull = pulls.find(item => record(item.head).ref === head && record(item.head).repo_id === record(item.base).repo_id);
+      return pull ? found(pull.html_url, pull.number) : null;
+    }
+    case 'bitbucket': {
+      const query = encodeURIComponent(`source.branch.name="${head.replace(/[\\"]/g, '\\$&')}" AND state="OPEN"`);
+      const pulls = await list(`${target.base}/repositories/${pin.fullName}/pullrequests?q=${query}&sort=-created_on`, values);
+      const pull = pulls.find(item => record(record(item.source).branch).name === head
+        && String(record(record(item.source).repository).full_name ?? pin.fullName).toLowerCase() === pin.fullName.toLowerCase());
+      return pull ? found(record(record(pull.links).html).href, pull.id) : null;
+    }
+    case 'azure-devops': {
+      const [organization, project, repository] = pin.fullName.split('/') as [string, string, string];
+      const ref = `refs/heads/${head}`;
+      const pulls = await list(`${target.base}/${encodeURIComponent(project)}/_apis/git/repositories/${id}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent(ref)}`
+        + '&searchCriteria.status=active&$top=10&api-version=7.1', body => record(body).value);
+      let best: { number: number; created: number } | undefined;
+      for (const item of pulls) {
+        const created = Date.parse(typeof item.creationDate === 'string' ? item.creationDate : '') || 0;
+        if (item.sourceRefName !== ref || item.forkSource || (item.status !== undefined && item.status !== 'active') || String(record(item.repository).id ?? '').toLowerCase() !== String(pin.repositoryId).toLowerCase()) continue;
+        const number = positive(target, item.pullRequestId);
+        if (!best || created > best.created || (created === best.created && number > best.number)) best = { number, created };
+      }
+      return best ? { url: `https://dev.azure.com/${organization}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repository)}/pullrequest/${best.number}`, number: best.number } : null;
+    }
+    case 'git': return null;
+  }
+}
+
 export async function openPullRequest(access: RepositoryAccess, pin: SessionRepository, input: PullRequestInput, azureProjectId?: string): Promise<OpenedPullRequest> {
   const target = api(access, pin);
   const id = encodeURIComponent(String(pin.repositoryId));

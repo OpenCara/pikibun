@@ -187,18 +187,24 @@ export async function readAzurePullRequestState(api: AzureRepositoryApi, number:
 
 export async function findAzureBranchPullRequest(api: AzureRepositoryApi, branch: string, since: string): Promise<{ url: string; number: number } | undefined> {
   const ref = `refs/heads/${branch}`;
-  const found = list((await json(api, versioned(`${locate(api).repository}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent(ref)}`
-    + '&searchCriteria.status=all&$top=10'))).value);
   const sinceMs = Date.parse(since);
-  let best: { number: number; created: number } | undefined;
-  for (const item of found) {
-    const number = integer(item.pullRequestId);
-    const created = Date.parse(string(item.creationDate));
-    if (number === null || number <= 0 || !(created >= sinceMs) || string(item.sourceRefName) !== ref || item.forkSource) continue;
-    if (string(optionalRecord(item.repository).id).toLowerCase() !== api.repositoryId.toLowerCase()) continue;
-    if (!best || created > best.created || (created === best.created && number > best.number)) best = { number, created };
-  }
-  return best && { url: azurePullRequestUrl(api.fullName, best.number), number: best.number };
+  const search = async (status: string) => list((await json(api, versioned(`${locate(api).repository}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent(ref)}`
+    + `&searchCriteria.status=${status}&$top=10`))).value);
+  const pick = (found: Record<string, unknown>[], accept: (created: number, item: Record<string, unknown>) => boolean) => {
+    let best: { number: number; created: number } | undefined;
+    for (const item of found) {
+      const number = integer(item.pullRequestId);
+      const created = Date.parse(string(item.creationDate));
+      if (number === null || number <= 0 || !accept(created, item) || string(item.sourceRefName) !== ref || item.forkSource) continue;
+      if (string(optionalRecord(item.repository).id).toLowerCase() !== api.repositoryId.toLowerCase()) continue;
+      if (!best || created > best.created || (created === best.created && number > best.number)) best = { number, created };
+    }
+    return best && { url: azurePullRequestUrl(api.fullName, best.number), number: best.number };
+  };
+  const recent = await search('all');
+  const found = pick(recent, (created, item) => created >= sinceMs || string(item.status) === 'active');
+  if (found || recent.length < 10) return found;
+  return pick(await search('active'), (_created, item) => string(item.status) === 'active');
 }
 
 const reviewVotes: Record<number, string> = { 10: 'APPROVED', 5: 'APPROVED', [-5]: 'CHANGES_REQUESTED', [-10]: 'REJECTED' };

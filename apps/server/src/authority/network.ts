@@ -17,7 +17,7 @@ import { grantSources } from './sources/sources.js';
 import { recheckAccess, repositoryAccess, repositorySettingsSelect, verifyRepository, type RepositoryAccess, type RepositorySettingsRow } from './repositories.js';
 import { lfsDisabled, lfsEnabled, lfsRelay, lfsRequestBytes } from './lfs.js';
 import { ownerGitAuthorization } from './push/targets.js';
-import { sessionBranchPush, sessionBranchTarget } from './push/session-branch.js';
+import { rememberSessionBranch, sessionBranchPush, sessionBranchTarget } from './push/session-branch.js';
 import { requireBinding } from './push/broker.js';
 import { mintPushToken, mintRepositoryReadToken, type MintedToken } from './push/mint.js';
 import { sessionApis } from './api-access.js';
@@ -236,6 +236,7 @@ export async function gitDirect(c: AppContext, connector: ConnectorRow | null): 
         direct: true,
       }).run();
     }
+    await rememberSessionBranch(c, session, binding, branch, command);
     return grant({ remote: target.remote, authorization: minted.authorization, kind: 'push-identity', expiresAt: new Date(minted.expiresAt * 1000).toISOString(),
       cacheSeconds: 0, ...(revoke ? { revoke } : {}) });
   }

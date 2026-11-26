@@ -127,18 +127,28 @@ export async function readPullRequestState(token: string, fullName: string, numb
 
 export async function findBranchPullRequest(token: string, fullName: string, branch: string, since: string): Promise<{ url: string; number: number } | undefined> {
   const owner = fullName.split('/')[0]!;
-  const list = await githubGet(token, `/repos/${fullName}/pulls?state=all&sort=created&direction=desc&per_page=10&head=${encodeURIComponent(`${owner}:${branch}`)}`);
-  if (!Array.isArray(list)) throw new ReadError('unexpected GitHub response');
   const sinceMs = Date.parse(since);
-  for (const item of list.map(object)) {
-    const number = item.number;
-    const url = string(item.html_url);
-    const created = Date.parse(string(item.created_at));
-    if (!Number.isSafeInteger(number) || !(created >= sinceMs)) continue;
-    const pull = githubPullRequest(url);
-    if (pull && pull.fullName.toLowerCase() === fullName.toLowerCase() && pull.number === number) return { url, number: number as number };
-  }
-  return undefined;
+  const ours = (item: Record<string, unknown>) => {
+    const head = item.head && typeof item.head === 'object' ? item.head as Record<string, unknown> : {};
+    const repository = head.repo && typeof head.repo === 'object' ? head.repo as Record<string, unknown> : {};
+    return head.ref === branch && string(repository.full_name).toLowerCase() === fullName.toLowerCase();
+  };
+  const pick = (list: unknown, accept: (item: Record<string, unknown>) => boolean) => {
+    if (!Array.isArray(list)) throw new ReadError('unexpected GitHub response');
+    for (const item of list.map(object)) {
+      const number = item.number;
+      const url = string(item.html_url);
+      if (!Number.isSafeInteger(number) || !ours(item) || !accept(item)) continue;
+      const pull = githubPullRequest(url);
+      if (pull && pull.fullName.toLowerCase() === fullName.toLowerCase() && pull.number === number) return { url, number: number as number };
+    }
+    return undefined;
+  };
+  const query = `/repos/${fullName}/pulls?sort=created&direction=desc&per_page=10&head=${encodeURIComponent(`${owner}:${branch}`)}`;
+  const recent = await githubGet(token, `${query}&state=all`);
+  const found = pick(recent, item => Date.parse(string(item.created_at)) >= sinceMs || item.state === 'open');
+  if (found || !Array.isArray(recent) || recent.length < 10) return found;
+  return pick(await githubGet(token, `${query}&state=open`), item => item.state === 'open');
 }
 
 interface StaleRow { id: string; pull_request_url: string; owner_id: string; ciphertext: string }
