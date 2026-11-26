@@ -91,6 +91,6 @@ export function sessionsTool(context: ToolContext): ToolRegistration {
       const { entries: _entries, ...shown } = result as Extract<SessionsToolResult, { entries: unknown }>;
       return text({ ...attribution, ...shown, ...(done ? {} : { timedOut: true }) });
     }
-    return { sleep: { checkpoint: { deadline }, until: api.now() + WAIT_POLL_MS } };
+    return { kind: "sleep", checkpoint: { deadline }, until: api.now() + WAIT_POLL_MS };
   } });
 }

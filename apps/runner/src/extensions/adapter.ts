@@ -557,7 +557,7 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
         if (!settings) return undefined;
         try {
           const result = await timed("agent_before_settle", () => ask("beforeSettle", { source, settings }));
-          return result.continue ? { continue: result.text || "Continue." } : undefined;
+          return result.continue ? { kind: "continue", continue: result.text || "Continue." } : undefined;
         } catch (error) {
           host.warn(source, `agent_before_settle: ${describe(error)}`);
           return undefined;
@@ -573,7 +573,7 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
         if (!settings) return undefined;
         try {
           const result = await timed("sendUserMessage", () => ask("beforeSettle", { source, settings }));
-          return result.continue && result.text ? { continue: result.text } : undefined;
+          return result.continue && result.text ? { kind: "continue", continue: result.text } : undefined;
         } catch (error) {
           host.warn(source, `sendUserMessage: ${describe(error)}`);
           return undefined;
@@ -589,8 +589,8 @@ function build(link: Link, dev: boolean, all: ExtensionToolDescription[], offere
         try {
           const result = await timed("session_before_compact", () => ask("compact", { source, settings, reason: compaction.reason,
             ...(compaction.instructions !== undefined ? { instructions: compaction.instructions } : {}), messages: compaction.messages as Message[] }));
-          if (result?.cancel) return { decline: true };
-          if (typeof result?.summary === "string" && result.summary.trim()) return { summary: result.summary };
+          if (result?.cancel) return { kind: "decline" };
+          if (typeof result?.summary === "string" && result.summary.trim()) return { kind: "summary", summary: result.summary };
         } catch (error) { host.warn(source, `session_before_compact: ${describe(error)}`); }
         return undefined;
       },
