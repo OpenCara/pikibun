@@ -49,7 +49,7 @@ its host has.
    (`HostConfig.builtinExtensions`, Host → Extensions), with nothing to install. Pikibun runs pi-durable's own versions,
    because Pi's call other tools through the coding agent's loop (`ctx.executeTool`), which Pikibun doesn't run. Today
    that is **code mode** (`pi:codemode`, from `@earendil-works/pi-durable/codemode`) and **tool search**
-   (`pi:tool-search`, from `@earendil-works/pi-durable/tool-search`, off unless the host turns it on; see
+   (`pi:tool-search`, from `@earendil-works/pi-durable/tool-search`, on by default but a host can turn it off; see
    [Built-in extensions](#built-in-extensions)). Pi's others have no counterpart: `mcp` and `llama.cpp` register MCP
    servers and providers (ignored, see below).
 11. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
@@ -118,7 +118,9 @@ options and lifecycle), so a workspace can't name one. Pikibun wraps the useful 
 
 - `HostConfig.builtinExtensions` lists the names the host runs (`pi:<name>`, beside Pikibun's own `piki:<name>`; reads
   also take the bare names saved before, which migrations `0048`/`0041` rename), in the catalog's order (`builtinExtensions` in
-  `packages/shared/src/host-config.ts`); the default is none. It is saved as `connector_configs.builtin_extensions_json`
+  `packages/shared/src/host-config.ts`). A host with no saved configuration runs `newHostBuiltinExtensions` (tool search),
+  and migrations sqlite `0097`/postgres `0090` added tool search to the hosts configured before; a connector without a
+  configuration from the control plane (`defaultHostConfig`) runs none. It is saved as `connector_configs.builtin_extensions_json`
   (sqlite `0047`, postgres `0040`) and read by the connector with the rest of the configuration, every 30 seconds. A
   connector drops names it doesn't ship rather than the whole configuration, and so does the control plane for stored
   names it no longer ships. Connectors that run them advertise `builtinExtensions`.
@@ -137,9 +139,8 @@ options and lifecycle), so a workspace can't name one. Pikibun wraps the useful 
   refused in Read-only messages exactly as the model's own call would be. Scripts survive a restart (pi-durable's
   journal). The script itself runs outside the OS sandbox, in a worker thread of the connector, but QuickJS gives it no
   Node, file system, network or timers.
-- **Tool search** (`pi:tool-search`, issue #343 step 3): the switch for tool deferral, off by default and not `core`,
-  so a host turns it on under Host → Extensions like any built-in. It waits for the eval of pull request #506 before
-  anyone considers it as a default.
+- **Tool search** (`pi:tool-search`, issue #343 step 3): the switch for tool deferral, on by default and not `core`,
+  so a host's owner or admins can turn it off under Host → Extensions like any built-in.
   - *Off*, nothing changes: the extension isn't installed in the session's registry, no tool is marked deferred, and a
     message's tools, extensions and instructions are what they were, so the request's tool list and system prompt are
     byte for byte the same (`tests/tool-deferral.test.ts`).
@@ -325,4 +326,3 @@ key, so two directories of one repository are two extensions, and another commit
   [extension-loading.md](extension-loading.md).
 - `registerMcpServer` as tools; virtual models (`registerVirtualModel`) among the host's models, and provider code in a process of its own ([extension models](extension-models.md), "Left out").
 - `ctx.ui.confirm`/`select` as cards; asking the session owner instead of refusing tools in Read-only messages.
-- Tool search on by default, once the eval of pull request #506 says deferral is worth it.
