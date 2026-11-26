@@ -129,13 +129,13 @@ const off: HostConfig = { ...defaultHostConfig, builtinExtensions: [] };
 const on: HostConfig = { ...defaultHostConfig, builtinExtensions: parseBuiltinExtensions([TOOL_SEARCH]) };
 const scheduleCreate = `call:schedule:${JSON.stringify({ action: "create", message: "nightly", cron: "0 3 * * *" })}`;
 
-test("tool search is a built-in of its own, off unless the host turns it on, and defers all but the tools every session uses", t => {
+test("tool search is a built-in of its own, on by default but a host can turn it off, and defers all but the tools every session uses", t => {
   const builtins = new SessionBuiltins();
   t.after(() => builtins.close());
   const item = builtinExtensions.find(candidate => candidate.name === TOOL_SEARCH)!;
   assert.deepEqual(item.tools, ["tool_search"]);
-  assert.ok(!("core" in item), "never on by default");
-  assert.deepEqual(defaultHostConfig.builtinExtensions, []);
+  assert.ok(!("core" in item), "a host can turn it off");
+  assert.deepEqual(defaultHostConfig.builtinExtensions, [TOOL_SEARCH], "on for hosts that haven't chosen");
   assert.deepEqual(builtins.select([], new Set()).map(entry => entry.name), ["pi:codemode"]);
   assert.deepEqual(builtins.select([TOOL_SEARCH], new Set()).map(entry => entry.name), ["pi:codemode", TOOL_SEARCH]);
   assert.deepEqual(builtins.select([TOOL_SEARCH], new Set(["tool_search"])).map(entry => entry.name), ["pi:codemode"], "a workspace's extension offering tool_search replaces it");

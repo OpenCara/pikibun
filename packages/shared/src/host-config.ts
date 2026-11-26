@@ -89,7 +89,7 @@ export function commandSeconds(config: Pick<HostConfig, "commandTimeoutSeconds" 
 
 export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   commandTimeoutSeconds: 3600, commandTimeoutUnlimited: false, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
-  builtinExtensions: Object.freeze([]) as unknown as BuiltinExtensionName[],
+  builtinExtensions: Object.freeze(["pi:tool-search"]) as unknown as BuiltinExtensionName[],
   requiredExtensions: Object.freeze([]) as unknown as RequiredExtension[],
   browser: defaultHostBrowserConfig as HostBrowserConfig,
   serviceLifetimeSeconds: serviceLifetimeLimits.default,
