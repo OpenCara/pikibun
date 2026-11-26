@@ -1134,14 +1134,24 @@ test('a clone session with a branch named for its work pushes that branch, not p
     headers: { Authorization: `Bearer ${internalSecret}`, 'Content-Type': 'application/x-git-receive-pack-request' }, body }, f.env);
   const command = (ref: string) => pkt(`${'0'.repeat(40)} ${tip} ${ref}\0report-status side-band-64k agent=git/2.43.0\n`) + '0000';
 
+  const branches = () => f.sqlite.prepare('SELECT repository, branch, pull_request_url FROM session_branches WHERE session_id = ?').all('session')
+    .map(row => [row.repository, row.branch, row.pull_request_url]);
   const refused = await relay(command('refs/heads/pikibun/session'));
   assert.equal(refused.status, 403);
   assert.equal(await code(refused), 'session_branch_only');
+  assert.deepEqual(branches(), [], 'a refused push records no branch');
   const pushed = await relay(command('refs/heads/pikibun/fix-login-e00000000000') + 'PACK-DATA');
   assert.equal(pushed.status, 200);
   assert.deepEqual(forge, [command('refs/heads/pikibun/fix-login-e00000000000') + 'PACK-DATA']);
   const audit = f.audits('git.push.session_branch') as { detail_json: string }[];
   assert.equal(JSON.parse(audit.at(-1)!.detail_json).branch, 'pikibun/fix-login-e00000000000');
+  assert.deepEqual(branches(), [['owner/repo', 'pikibun/fix-login-e00000000000', null]], 'the pushed session branch is looked up for its pull request');
+
+  f.state.branchPulls['owner:pikibun/fix-login-e00000000000'] = [{ number: 7, html_url: 'https://github.com/owner/repo/pull/7', created_at: new Date(Date.now() + 1000).toISOString() }];
+  f.state.githubPulls[7] = { state: 'open', merged: false, draft: false, reviews: [], checkRuns: [], statuses: [] };
+  await refreshPullRequestStates(f.env);
+  assert.deepEqual(sessionRecord((await sessionAccess(f.env, 'session', owner))!.row).pullRequest, { url: 'https://github.com/owner/repo/pull/7', number: 7, state: 'open' },
+    'a pull request gh opened for the branch shows in a sandboxed session too');
 });
 
 test('a session that pinned its repositories is read-only: it gets no push credential', async t => {
@@ -1322,6 +1332,8 @@ test('direct Git grants: the owner\'s own host reads with the owner\'s account w
   assert.equal((await direct(f, { access: 'push', command })).body.direct, true);
   const audit = f.audits('git.push.session_branch') as { detail_json: string }[];
   assert.deepEqual(JSON.parse(audit[0]!.detail_json), { bindingId: 'binding-gh', branch: 'pikibun/session', old: command.old, new: tip, kind: 'github-app', direct: true });
+  assert.deepEqual(f.sqlite.prepare('SELECT repository, branch FROM session_branches WHERE session_id = ?').all('session').map(row => [row.repository, row.branch]),
+    [['owner/repo', 'pikibun/session']], 'the session branch a direct push updates is looked up for its pull request');
   const other = await direct(f, { access: 'push', command: { ...command, ref: 'refs/heads/main' } });
   assert.deepEqual([other.status, other.body.code], [403, 'session_branch_only']);
   const deleted = await direct(f, { access: 'push', command: { ...command, new: '0'.repeat(40) } });

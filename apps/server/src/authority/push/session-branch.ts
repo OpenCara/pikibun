@@ -4,7 +4,7 @@ import { boundedStream, drainStream, PUSH_REQUEST_BYTES, PushRequestError, readP
 import { fetchGit, gitServiceTypes, gitUpstreamHeaders } from '../../../../../packages/shared/src/git-transfer.js';
 import type { AppContext, RepositoryRow, SessionRow } from '../../types.js';
 import { auditStatement } from '../audit.js';
-import { fail, failTransfer } from '../../http.js';
+import { fail, failTransfer, now } from '../../http.js';
 import { cloneSessionRepository, recheckAccess, type RepositoryAccess } from '../repositories.js';
 import { requireBinding, requireNoRestore } from './broker.js';
 import { mintPushToken, revokePushToken } from './mint.js';
@@ -25,6 +25,15 @@ export async function sessionBranchTarget(c: AppContext, session: SessionRow, bi
     fail(403, 'default_branch_push_forbidden', 'This workspace forbids pushes to the repository default branch.');
   }
   return { branch, pin, target };
+}
+
+export async function rememberSessionBranch(c: AppContext, session: SessionRow, binding: RepositoryRow, branch: string, command?: PushCommand): Promise<void> {
+  if (command && /^0+$/.test(command.new)) return;
+  if (!((binding.provider === 'github' && binding.host === 'github.com') || (binding.provider === 'azure-devops' && binding.host === 'dev.azure.com'))) return;
+  await c.env.DB.query(`INSERT INTO session_branches (session_id, repository, branch, reported_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (session_id, repository, branch) DO UPDATE SET reported_at = excluded.reported_at,
+      pull_request_checked_at = CASE WHEN session_branches.pull_request_url IS NULL THEN NULL ELSE session_branches.pull_request_checked_at END`)
+    .bind(session.id, binding.full_name, branch, now()).run();
 }
 
 function settled(body: ReadableStream<Uint8Array>, done: () => void): ReadableStream<Uint8Array> {
@@ -99,6 +108,7 @@ export async function sessionBranchPush(c: AppContext, input: {
       await auditStatement(c.env, session.owner_id, 'git.push.session_branch', session.workspace_id, session.id, {
         bindingId: binding.id, branch, old: command.old, new: command.new, kind: minted.kind, ...(minted.identityId ? { identityId: minted.identityId } : {}),
       }).run();
+      await rememberSessionBranch(c, session, binding, branch, command);
     }
     const headers = gitUpstreamHeaders(service, { userAgent: c.req.header('user-agent'), contentType: body ? 'application/x-git-receive-pack-request' : undefined });
     upstream = await fetchGit({ remote: target.remote, service, authorization: minted.authorization, headers, body, provider, fullName: binding.full_name, identity: 'push' });
