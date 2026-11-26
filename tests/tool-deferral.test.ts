@@ -13,7 +13,7 @@ import { DEFERRED_TOOLS, deferredToolsExtension, loadedToolNames, SessionBuiltin
 import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
 import { COMPACTED } from "../apps/runner/src/session/commands.js";
-import { builtinExtensions, defaultHostConfig, parseBuiltinExtensions, type HostConfig } from "../packages/shared/src/host-config.js";
+import { builtinExtensions, defaultHostConfig, newHostBuiltinExtensions, parseBuiltinExtensions, type HostConfig } from "../packages/shared/src/host-config.js";
 import type { AuthorizationRequest, EntryView, RunnerAction, RunnerBinding, RunnerTicket, SessionView, SubmitInput } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 
@@ -129,13 +129,14 @@ const off: HostConfig = { ...defaultHostConfig, builtinExtensions: [] };
 const on: HostConfig = { ...defaultHostConfig, builtinExtensions: parseBuiltinExtensions([TOOL_SEARCH]) };
 const scheduleCreate = `call:schedule:${JSON.stringify({ action: "create", message: "nightly", cron: "0 3 * * *" })}`;
 
-test("tool search is a built-in of its own, off unless the host turns it on, and defers all but the tools every session uses", t => {
+test("tool search is a built-in of its own, on by default but a host can turn it off, and defers all but the tools every session uses", t => {
   const builtins = new SessionBuiltins();
   t.after(() => builtins.close());
   const item = builtinExtensions.find(candidate => candidate.name === TOOL_SEARCH)!;
   assert.deepEqual(item.tools, ["tool_search"]);
-  assert.ok(!("core" in item), "never on by default");
-  assert.deepEqual(defaultHostConfig.builtinExtensions, []);
+  assert.ok(!("core" in item), "a host can turn it off");
+  assert.deepEqual(newHostBuiltinExtensions, [TOOL_SEARCH], "the control plane turns it on for hosts that haven't chosen");
+  assert.deepEqual(defaultHostConfig.builtinExtensions, [], "a connector without a configuration from the control plane runs without it");
   assert.deepEqual(builtins.select([], new Set()).map(entry => entry.name), ["pi:codemode"]);
   assert.deepEqual(builtins.select([TOOL_SEARCH], new Set()).map(entry => entry.name), ["pi:codemode", TOOL_SEARCH]);
   assert.deepEqual(builtins.select([TOOL_SEARCH], new Set(["tool_search"])).map(entry => entry.name), ["pi:codemode"], "a workspace's extension offering tool_search replaces it");

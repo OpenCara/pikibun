@@ -22,6 +22,8 @@ export const builtinExtensions = Object.freeze([
 export type BuiltinExtensionName = (typeof builtinExtensions)[number]["name"];
 export const builtinExtensionNames: readonly BuiltinExtensionName[] = Object.freeze(builtinExtensions.map(item => item.name));
 
+export const newHostBuiltinExtensions: readonly BuiltinExtensionName[] = Object.freeze(["pi:tool-search"]);
+
 export function normalizeBuiltinExtensionNames(names: readonly unknown[]): unknown[] {
   return names.map(name => typeof name === "string" && !name.includes(":") ? `pi:${name}` : name);
 }
