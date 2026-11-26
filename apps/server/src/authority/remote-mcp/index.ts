@@ -7,7 +7,7 @@ import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import { extensionSwitchOn } from '../../../../../packages/shared/src/piki-extensions.js';
 import {
   isRemoteMcpSignInAs, REMOTE_MCP_EXTENSION, remoteMcpAppLink, remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl,
-  validRemoteMcpPrefix, type RemoteMcpServerSummary, type RemoteMcpSignInAs, type RemoteMcpTool, type WorkspaceMcpServer,
+  validRemoteMcpPrefix, type McpServerSharer, type RemoteMcpServerSummary, type RemoteMcpSignInAs, type RemoteMcpTool, type WorkspaceMcpServer,
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
 import type { AppContext, AppEnv, Env, SessionRow } from '../../types.js';
@@ -24,7 +24,7 @@ import { assertVaultConfigured, decryptToken, encryptToken } from '../vault.js';
 import { callRemoteMcpTool } from './client.js';
 import {
   broughtConnection, connectionAppBegin, connectionAppCallback, connectionAppFinish, connectionCredentials, connectionWebCallback, registerMcpConnections,
-  viewerConnections, type ConnectionRow,
+  sharedConnection, viewerConnections, type ConnectionRow,
 } from './connections.js';
 import {
   APP_BEGIN_PATH, APP_CALLBACK_PATH, APP_EXPIRED, appPage, appRedirectUri, callbackCode, callbackState, discover, discoveredDetail, exchangeCode, failure,
@@ -37,7 +37,25 @@ interface ServerRow {
   id: string; workspace_id: string; prefix: string; name: string; url: string; headers_ciphertext: string | null; header_names_json: string;
   read_only_tools_json: string; tools_json: string; enabled: number | string; discovered_at: string | null; error: string | null; updated_at: string;
   oauth_ciphertext: string | null; oauth_by: string | null; oauth_at: string | null;
-  tools_over_limit: number | string | null; tools_unusable: number | string | null; sign_in_as: RemoteMcpSignInAs;
+  tools_over_limit: number | string | null; tools_unusable: number | string | null; sign_in_as: RemoteMcpSignInAs; shared_connection_id: string | null;
+}
+
+const activeShareSQL = (server: string) => `(${server}.shared_connection_id IS NULL OR EXISTS (SELECT 1 FROM mcp_connections sc
+  JOIN workspace_members sm ON sm.user_id = sc.user_id AND sm.workspace_id = ${server}.workspace_id WHERE sc.id = ${server}.shared_connection_id))`;
+
+async function sharers(env: Env, workspaceId: string, viewer: string): Promise<Map<string, McpServerSharer>> {
+  const rows = await env.DB.query<{ id: string; user_id: string; display_name: string; member: number | string | null }>(`SELECT c.id, c.user_id, u.display_name,
+      (SELECT 1 FROM workspace_members m WHERE m.workspace_id = s.workspace_id AND m.user_id = c.user_id) AS member
+    FROM workspace_mcp_servers s JOIN mcp_connections c ON c.id = s.shared_connection_id JOIN users u ON u.id = c.user_id
+    WHERE s.workspace_id = ?`).bind(workspaceId).all();
+  return new Map(rows.map(row => [row.id, { userId: row.user_id, name: row.display_name, mine: row.user_id === viewer, active: Number(row.member) === 1 }]));
+}
+
+function notShared(row: ServerRow): void {
+  if (row.shared_connection_id) {
+    fail(409, 'mcp_server_shared', 'This server calls with the connection a member shared with this workspace: its address and sign-in are theirs, changed in their profile.'
+      + ' Remove it here, or they stop sharing it, to use another sign-in.');
+  }
 }
 
 const callBody = fields({ sessionId: z.unknown(), actorId: z.unknown(), admissionId: z.unknown(), callId: z.unknown(), arguments: z.unknown() },
@@ -54,7 +72,8 @@ const oauthContext = (serverId: string) => `remote-mcp-oauth:${serverId}`;
 const stateContext = (serverId: string) => `remote-mcp-oauth-state:${serverId}`;
 const appSecretContext = (signInId: string) => `remote-mcp-oauth-app:${signInId}`;
 
-function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }): WorkspaceMcpServer {
+function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sharedBy?: Map<string, McpServerSharer>): WorkspaceMcpServer {
+  const sharer = row.shared_connection_id ? sharedBy?.get(row.shared_connection_id) : undefined;
   const readOnlyTools = parsedList(row.read_only_tools_json);
   const tools = parsedTools(row.tools_json).flatMap(tool => {
     const toolName = remoteMcpToolName(row.prefix, tool.name);
@@ -66,6 +85,7 @@ function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }): Wo
     ...(row.oauth_ciphertext && row.oauth_at ? { oauth: { signedInAt: row.oauth_at } } : {}),
     ...(mine ? { connection: { id: mine.row.id, name: mine.row.name, using: mine.using, signedIn: !!(mine.row.oauth_ciphertext || mine.row.headers_ciphertext),
       ...(mine.row.error ? { error: mine.row.error } : {}) } } : {}),
+    ...(sharer ? { sharedBy: sharer } : {}),
     readOnlyTools, tools,
     ...(leftOut.overLimit || leftOut.unusable ? { toolsLeftOut: leftOut } : {}), ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
 }
@@ -94,7 +114,13 @@ const hasSignIn = (credentials: Credentials) => !!credentials.oauth || Object.ke
 
 interface Chosen { credentials: Credentials; owner: SignInOwner; connection?: string }
 
+async function sharedCredentials(env: Env, row: ServerRow): Promise<Chosen | null> {
+  const connection = row.shared_connection_id ? await sharedConnection(env, row.workspace_id, row.shared_connection_id) : null;
+  return connection ? { credentials: await connectionCredentials(env, connection, 'sharer'), owner: 'sharer', connection: connection.id } : null;
+}
+
 async function chooseCredentials(env: Env, row: ServerRow, userId: string): Promise<Chosen | null> {
+  if (row.shared_connection_id) return sharedCredentials(env, row);
   const shared = (): Promise<Chosen> => headersOf(env, row).then(headers => ({ credentials: workspaceCredentials(env, row.id, headers, row.oauth_ciphertext), owner: 'workspace' }));
   if (row.sign_in_as === 'workspace') return shared();
   const connection = await broughtConnection(env, row.workspace_id, row.url, userId);
@@ -159,12 +185,12 @@ async function serverRow(env: Env, workspaceId: string, serverId: string): Promi
 
 async function serverView(env: Env, workspaceId: string, serverId: string, viewer: string): Promise<WorkspaceMcpServer> {
   const row = await serverRow(env, workspaceId, serverId);
-  return view(row, (await viewerConnections(env, workspaceId, viewer)).get(row.url));
+  return view(row, (await viewerConnections(env, workspaceId, viewer)).get(row.url), await sharers(env, workspaceId, viewer));
 }
 
 export async function workspaceRemoteTools(env: Env, workspaceId: string): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[] }> {
-  const rows = await env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE workspace_id = ? AND enabled = 1 ORDER BY created_at, prefix')
-    .bind(workspaceId).all();
+  const rows = await env.DB.query<ServerRow>(`SELECT * FROM workspace_mcp_servers s WHERE s.workspace_id = ? AND s.enabled = 1 AND ${activeShareSQL('s')}
+    ORDER BY s.created_at, s.prefix`).bind(workspaceId).all();
   const definitions: BrokeredToolDefinition[] = [];
   const servers: RemoteMcpServerSummary[] = [];
   for (const row of rows) {
@@ -219,6 +245,9 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
     fail(400, 'invalid_arguments', `${toolName}: ${errors.slice(0, 3).map(error => `${error.path || 'arguments'} ${error.message}`).join('; ').slice(0, 500)}. Nothing ran.`);
   }
   const chosen = await chooseCredentials(c.env, server, actorId);
+  if (!chosen && server.shared_connection_id) {
+    fail(403, 'mcp_share_ended', `${server.name} calls with the connection a member shared with this workspace, and they no longer belong to it. Nothing ran.`);
+  }
   if (!chosen) {
     fail(403, 'mcp_connection_required', `${server.name} signs in with each member's own account, and the requester brought none to this workspace: they connect it under`
       + ' Settings → Profile → Connected accounts, then use it in this workspace. Nothing ran.');
@@ -246,7 +275,8 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const member = await requireMember(c.env, workspaceId, actor);
     const rows = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE workspace_id = ? ORDER BY created_at, prefix').bind(workspaceId).all();
     const mine = await viewerConnections(c.env, workspaceId, actor);
-    return c.json({ servers: rows.map(row => view(row, mine.get(row.url))), admin: member.role === 'owner' || member.role === 'admin' });
+    const sharedBy = await sharers(c.env, workspaceId, actor);
+    return c.json({ servers: rows.map(row => view(row, mine.get(row.url), sharedBy)), admin: member.role === 'owner' || member.role === 'admin' });
   });
 
   app.post('/api/workspaces/:id/mcp-servers', async c => {
@@ -293,6 +323,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     if (input.enabled !== undefined && typeof input.enabled !== 'boolean') fail(400, 'invalid_mcp_server', 'enabled must be true or false.');
     if (input.refresh !== undefined && input.refresh !== true) fail(400, 'invalid_mcp_server', 'refresh must be true.');
     const row = await serverRow(c.env, workspaceId, serverId);
+    if (input.url !== undefined || input.headers !== undefined || input.signInAs !== undefined) notShared(row);
     const name = input.name === undefined ? row.name : nameOf(input.name);
     const url = input.url === undefined ? row.url : checked(() => remoteMcpUrl(input.url));
     if (url !== row.url && input.headers === undefined) {
@@ -308,7 +339,11 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const reach = input.refresh === true || input.url !== undefined || input.headers !== undefined || (input.signInAs !== undefined && signInAs !== row.sign_in_as);
     let lister = workspaceCredentials(c.env, serverId, headers, signOut ? null : row.oauth_ciphertext);
     let listedBy: SignInOwner = 'workspace';
-    if (reach && signInAs !== 'workspace' && !hasSignIn(lister)) {
+    if (reach && row.shared_connection_id) {
+      const sharer = await sharedCredentials(c.env, row)
+        ?? fail(409, 'mcp_share_ended', 'The member who shared this server\'s connection no longer belongs to this workspace, so its tools can\'t be listed: remove it.');
+      lister = sharer.credentials; listedBy = 'sharer';
+    } else if (reach && signInAs !== 'workspace' && !hasSignIn(lister)) {
       const own = await broughtConnection(c.env, workspaceId, url, actor);
       if (own) { lister = await connectionCredentials(c.env, own); listedBy = 'member'; }
     }
@@ -359,6 +394,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
     await assertVaultConfigured(c.env);
     const row = await serverRow(c.env, workspaceId, serverId);
+    notShared(row);
     let client: McpOAuthClient;
     try { client = await signInClient(c.env, row.url, oauthRedirectUri(c.env)); }
     catch (error) {
@@ -415,6 +451,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
     await assertVaultConfigured(c.env);
     const row = await serverRow(c.env, workspaceId, serverId);
+    notShared(row);
     const begin = randomToken();
     const expiresAt = Date.now() + STATE_TTL;
     await c.env.DB.batch([
@@ -452,6 +489,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const serverId = identifier(c.req.param('serverId'), 'serverId');
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
     const row = await serverRow(c.env, workspaceId, serverId);
+    notShared(row);
     const at = now();
     await c.env.DB.batch([
       c.env.DB.query(`UPDATE workspace_mcp_servers SET oauth_ciphertext = NULL, oauth_by = NULL, oauth_at = NULL, updated_by = ?, updated_at = ?

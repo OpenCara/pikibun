@@ -1,16 +1,18 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import { sha256 } from '../../../../../packages/shared/src/crypto.js';
-import { remoteMcpAppLink, remoteMcpHeaders, remoteMcpLimits, remoteMcpUrl, type McpConnection } from '../../../../../packages/shared/src/remote-mcp.js';
+import {
+  remoteMcpAppLink, remoteMcpHeaders, remoteMcpLimits, remoteMcpSharedPrefix, remoteMcpUrl, type McpConnection, type McpConnectionShare,
+} from '../../../../../packages/shared/src/remote-mcp.js';
 import type { AppContext, AppEnv, Env } from '../../types.js';
 import { appOrigin, fail, id, identifier, now, randomToken, requireOrigin } from '../../http.js';
 import { body, fields } from '../../schemas.js';
-import { requireMember } from '../access.js';
+import { requireMember, workspaceAdminSQL, workspaceManagerRolesSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
 import { assertVaultConfigured, decryptToken, encryptToken } from '../vault.js';
 import {
-  APP_EXPIRED, appPage, appRedirectUri, callbackCode, discover, exchangeCode, failure, oauthRedirectUri, setStateCookie, signInClient, STATE_TTL,
-  type Credentials, type Discovered, type OAuthKeeper,
+  APP_EXPIRED, appPage, appRedirectUri, callbackCode, discover, discoveredDetail, exchangeCode, failure, oauthRedirectUri, setStateCookie, signInClient, STATE_TTL,
+  type Credentials, type Discovered, type OAuthKeeper, type SignInOwner,
 } from './credentials.js';
 import { authorizationUrl, parseOAuthSecret, type McpOAuthClient, type McpOAuthSecret } from './oauth.js';
 
@@ -35,10 +37,10 @@ const addBody = fields({ name: z.unknown(), url: z.unknown(), headers: z.unknown
 const changeBody = fields({ name: z.unknown(), headers: z.unknown(), refresh: z.unknown() },
   'Change name or headers, or set refresh to true.', { code: 'invalid_mcp_connection', some: true });
 
-export function connectionKeeper(env: Env, connectionId: string): OAuthKeeper {
+export function connectionKeeper(env: Env, connectionId: string, owner: SignInOwner = 'member'): OAuthKeeper {
   return {
     context: oauthContext(connectionId),
-    owner: 'member',
+    owner,
     read: async () => (await env.DB.query<{ oauth_ciphertext: string | null }>('SELECT oauth_ciphertext FROM mcp_connections WHERE id = ?')
       .bind(connectionId).first())?.oauth_ciphertext ?? null,
     swap: async (next, current) => !!await env.DB.query('UPDATE mcp_connections SET oauth_ciphertext = ? WHERE id = ? AND oauth_ciphertext = ? RETURNING id')
@@ -46,9 +48,16 @@ export function connectionKeeper(env: Env, connectionId: string): OAuthKeeper {
   };
 }
 
-export async function connectionCredentials(env: Env, row: Pick<ConnectionRow, 'id' | 'headers_ciphertext' | 'oauth_ciphertext'>): Promise<Credentials> {
+export async function connectionCredentials(env: Env, row: Pick<ConnectionRow, 'id' | 'headers_ciphertext' | 'oauth_ciphertext'>,
+  owner: SignInOwner = 'member'): Promise<Credentials> {
   const headers = row.headers_ciphertext ? JSON.parse(await decryptToken(env, headersContext(row.id), row.headers_ciphertext)) as Record<string, string> : {};
-  return { headers, oauth: row.oauth_ciphertext ? { keeper: connectionKeeper(env, row.id), ciphertext: row.oauth_ciphertext } : null };
+  return { headers, oauth: row.oauth_ciphertext ? { keeper: connectionKeeper(env, row.id, owner), ciphertext: row.oauth_ciphertext } : null };
+}
+
+export async function sharedConnection(env: Env, workspaceId: string, connectionId: string): Promise<ConnectionRow | null> {
+  return await env.DB.query<ConnectionRow>(`SELECT c.* FROM mcp_connections c
+      JOIN workspace_members m ON m.workspace_id = ? AND m.user_id = c.user_id
+    WHERE c.id = ?`).bind(workspaceId, connectionId).first() ?? null;
 }
 
 export async function broughtConnection(env: Env, workspaceId: string, url: string, userId: string): Promise<ConnectionRow | null> {
@@ -91,6 +100,34 @@ async function views(env: Env, userId: string, rows: ConnectionRow[]): Promise<M
   const offered = await env.DB.query<{ url: string; id: string; name: string }>(`SELECT DISTINCT s.url, ws.id, ws.name
       FROM workspace_mcp_servers s JOIN workspaces ws ON ws.id = s.workspace_id JOIN workspace_members m ON m.workspace_id = ws.id AND m.user_id = ?
     WHERE s.sign_in_as <> 'workspace' AND ${notDeleted('ws.id')} ORDER BY ws.name, ws.id`).bind(userId).all();
+  const managed = await env.DB.query<{ id: string; name: string }>(`SELECT ws.id, ws.name
+      FROM workspaces ws JOIN workspace_members m ON m.workspace_id = ws.id AND m.user_id = ? AND m.role IN (${workspaceManagerRolesSQL})
+    WHERE ${notDeleted('ws.id')} ORDER BY ws.name, ws.id`).bind(userId).all();
+  const servers = await env.DB.query<{ id: string; workspace_id: string; prefix: string; url: string; shared_connection_id: string | null }>(`SELECT s.id, s.workspace_id,
+      s.prefix, s.url, s.shared_connection_id
+    FROM workspace_mcp_servers s JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = ? AND m.role IN (${workspaceManagerRolesSQL})`)
+    .bind(userId).all();
+  const shared = await env.DB.query<{ id: string; workspace_id: string; name: string; prefix: string; shared_connection_id: string }>(`SELECT s.id, s.workspace_id,
+      ws.name, s.prefix, s.shared_connection_id
+    FROM workspace_mcp_servers s JOIN mcp_connections c ON c.id = s.shared_connection_id JOIN workspaces ws ON ws.id = s.workspace_id
+    WHERE c.user_id = ? AND ${notDeleted('ws.id')} ORDER BY ws.name, ws.id`).bind(userId).all();
+  const sharesOf = (row: ConnectionRow): McpConnectionShare[] => {
+    const mine = shared.filter(item => item.shared_connection_id === row.id);
+    const listed: McpConnectionShare[] = managed.map(workspace => {
+      const server = mine.find(item => item.workspace_id === workspace.id);
+      if (server) return { id: workspace.id, name: workspace.name, shared: true, server: { id: server.id, prefix: server.prefix } };
+      const there = servers.filter(item => item.workspace_id === workspace.id);
+      const unavailable = there.some(item => item.url === row.url) ? 'It already has a remote MCP server at this address.'
+        : there.length >= remoteMcpLimits.servers ? `It already has the ${remoteMcpLimits.servers} remote MCP servers a workspace can have.` : undefined;
+      return { id: workspace.id, name: workspace.name, shared: false, ...(unavailable ? { unavailable } : {}) };
+    });
+    for (const server of mine) {
+      if (!listed.some(item => item.id === server.workspace_id)) {
+        listed.push({ id: server.workspace_id, name: server.name, shared: true, server: { id: server.id, prefix: server.prefix } });
+      }
+    }
+    return listed;
+  };
   return rows.map(row => {
     const workspaces = brought.filter(item => item.connection_id === row.id).map(item => ({ id: item.id, name: item.name }));
     const offeredIn = offered.filter(item => item.url === row.url && !workspaces.some(used => used.id === item.id))
@@ -98,7 +135,7 @@ async function views(env: Env, userId: string, rows: ConnectionRow[]): Promise<M
     return {
       id: row.id, name: row.name, url: row.url, headerNames: parsedNames(row.header_names_json),
       ...(row.oauth_ciphertext && row.oauth_at ? { oauth: { signedInAt: row.oauth_at } } : {}),
-      ...(row.error ? { error: row.error } : {}), workspaces, offeredIn, createdAt: row.created_at, updatedAt: row.updated_at,
+      ...(row.error ? { error: row.error } : {}), workspaces, offeredIn, shares: sharesOf(row), createdAt: row.created_at, updatedAt: row.updated_at,
     };
   });
 }
@@ -125,12 +162,23 @@ async function listForWorkspaces(env: Env, row: ConnectionRow, found: Discovered
     .bind(JSON.stringify(found.tools), found.leftOut.overLimit, found.leftOut.unusable, at, row.url, row.user_id, row.id, ...(workspaceId === undefined ? [] : [workspaceId])).run();
 }
 
+async function listForShares(env: Env, connectionId: string, found: Discovered): Promise<void> {
+  if (found.error) {
+    await env.DB.query('UPDATE workspace_mcp_servers SET error = ? WHERE shared_connection_id = ?').bind(found.error.slice(0, 500), connectionId).run();
+    return;
+  }
+  await env.DB.query(`UPDATE workspace_mcp_servers SET tools_json = ?, tools_over_limit = ?, tools_unusable = ?, discovered_at = ?, error = NULL
+    WHERE shared_connection_id = ?`)
+    .bind(JSON.stringify(found.tools), found.leftOut.overLimit, found.leftOut.unusable, now(), connectionId).run();
+}
+
 async function checkConnection(env: Env, connectionId: string): Promise<Discovered> {
   const row = await env.DB.query<ConnectionRow>('SELECT * FROM mcp_connections WHERE id = ?').bind(connectionId).first();
   if (!row) return { tools: [], leftOut: { overLimit: 0, unusable: 0 }, error: 'Connection not found' };
   const found = await listTools(env, row);
   await noteError(env, row.id, found.error);
   await listForWorkspaces(env, row, found);
+  await listForShares(env, row.id, found);
   return found;
 }
 
@@ -315,7 +363,7 @@ export function registerMcpConnections(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('workspaceId'), 'workspaceId');
     const row = await ownRow(c.env, actor, connectionId);
     await requireMember(c.env, workspaceId, actor);
-    if (!await c.env.DB.query('SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND url = ?').bind(workspaceId, row.url).first()) {
+    if (!await c.env.DB.query('SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND url = ? AND shared_connection_id IS NULL').bind(workspaceId, row.url).first()) {
       fail(409, 'mcp_server_not_in_workspace', 'This workspace has no remote MCP server at this connection\'s address.');
     }
     const added = await c.env.DB.query('INSERT INTO mcp_connection_workspaces (connection_id, workspace_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING RETURNING connection_id')
@@ -335,6 +383,54 @@ export function registerMcpConnections(app: Hono<AppEnv>): void {
     const removed = await c.env.DB.query('DELETE FROM mcp_connection_workspaces WHERE connection_id = ? AND workspace_id = ? RETURNING connection_id')
       .bind(connectionId, workspaceId).first();
     if (removed) await auditStatement(c.env, actor, 'workspace.mcp.connection_withdrawn', workspaceId, null, { connection: connectionId, url: row.url }).run();
+    return c.json({ connection: await viewOf(c.env, actor, connectionId) });
+  });
+
+  app.put('/api/mcp-connections/:connectionId/shares/:workspaceId', async c => {
+    const actor = c.get('auth').userId;
+    const connectionId = identifier(c.req.param('connectionId'), 'connectionId');
+    const workspaceId = identifier(c.req.param('workspaceId'), 'workspaceId');
+    const row = await ownRow(c.env, actor, connectionId);
+    await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
+    if (await c.env.DB.query('SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND shared_connection_id = ?').bind(workspaceId, connectionId).first()) {
+      return c.json({ connection: await viewOf(c.env, actor, connectionId) });
+    }
+    const there = await c.env.DB.query<{ prefix: string; url: string }>('SELECT prefix, url FROM workspace_mcp_servers WHERE workspace_id = ?').bind(workspaceId).all();
+    if (there.some(item => item.url === row.url)) {
+      fail(409, 'mcp_server_at_address', 'This workspace already has a remote MCP server at this connection\'s address.');
+    }
+    if (there.length >= remoteMcpLimits.servers) fail(409, 'mcp_server_limit', `A workspace has at most ${remoteMcpLimits.servers} remote MCP servers.`);
+    const prefix = remoteMcpSharedPrefix(row.name, there.map(item => item.prefix));
+    const found = await listTools(c.env, row);
+    await noteError(c.env, row.id, found.error);
+    const serverId = id(); const at = now();
+    const saved = await c.env.DB.query<{ id: string }>(`INSERT INTO workspace_mcp_servers (id, workspace_id, prefix, name, url, headers_ciphertext, header_names_json,
+        read_only_tools_json, tools_json, tools_over_limit, tools_unusable, enabled, sign_in_as, shared_connection_id, discovered_at, error, created_by, updated_by,
+        created_at, updated_at)
+      SELECT ?, ?, ?, ?, ?, NULL, '[]', '[]', ?, ?, ?, 1, 'workspace', ?, ?, ?, ?, ?, ?, ? WHERE ${workspaceAdminSQL}
+        AND (SELECT COUNT(*) FROM workspace_mcp_servers WHERE workspace_id = ?) < ?
+        AND NOT EXISTS (SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND (prefix = ? OR url = ? OR shared_connection_id = ?))
+        AND EXISTS (SELECT 1 FROM mcp_connections WHERE id = ? AND user_id = ? AND url = ?)
+      RETURNING id`)
+      .bind(serverId, workspaceId, prefix, row.name, row.url, JSON.stringify(found.tools), found.leftOut.overLimit, found.leftOut.unusable, connectionId,
+        found.error ? null : at, found.error, actor, actor, at, at, workspaceId, actor, workspaceId, remoteMcpLimits.servers,
+        workspaceId, prefix, row.url, connectionId, connectionId, actor, row.url).first();
+    if (!saved) fail(409, 'mcp_connection_share_conflict', 'The workspace, your role in it or the connection changed meanwhile: look again and retry.');
+    await auditStatement(c.env, actor, 'workspace.mcp.connection_shared', workspaceId, null,
+      { connection: connectionId, server: serverId, prefix, url: row.url, ...discoveredDetail(found) }).run();
+    return c.json({ connection: await viewOf(c.env, actor, connectionId) });
+  });
+
+  app.delete('/api/mcp-connections/:connectionId/shares/:workspaceId', async c => {
+    const actor = c.get('auth').userId;
+    const connectionId = identifier(c.req.param('connectionId'), 'connectionId');
+    const workspaceId = identifier(c.req.param('workspaceId'), 'workspaceId');
+    const row = await ownRow(c.env, actor, connectionId);
+    const removed = await c.env.DB.query<{ id: string }>('DELETE FROM workspace_mcp_servers WHERE workspace_id = ? AND shared_connection_id = ? RETURNING id')
+      .bind(workspaceId, connectionId).first();
+    if (removed) {
+      await auditStatement(c.env, actor, 'workspace.mcp.connection_unshared', workspaceId, null, { connection: connectionId, server: removed.id, url: row.url }).run();
+    }
     return c.json({ connection: await viewOf(c.env, actor, connectionId) });
   });
 
