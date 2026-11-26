@@ -6,6 +6,7 @@ import {
 } from "../shared";
 import { hostDirectoryRule, validHostDirectory } from "../../../../packages/shared/src/host-directory";
 import { ChatOptionsBar } from "../components/ChatOptionsBar";
+import { HostDirectoryPicker } from "../components/HostDirectoryPicker";
 import { TextField } from "../form";
 import { Composer } from "../components/Composer";
 import { NewWorkspaceSheet } from "../components/NewWorkspaceSheet";
@@ -145,6 +146,8 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const hostDirectory = signal("");
   const choosesDirectory = () => runOnHost() && host()?.capabilities.hostDirectories === true;
   const directory = () => (choosesDirectory() ? hostDirectory().trim() : "");
+  const browsesDirectories = () => choosesDirectory() && host()?.capabilities.hostDirectoryBrowser === true && host()?.online === true;
+  const browsing = signal(false);
   const directoryError = () => (directory() && !validHostDirectory(directory()) ? `The working directory is ${hostDirectoryRule}.` : "");
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !directoryError() && !action.busy());
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
@@ -300,9 +303,22 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         </View>
         <If when={choosesDirectory()}>
           <View testID="new-host-directory" style={{ gap: 4, paddingHorizontal: 4 }}>
-            <TextField compact monospace testID="new-host-directory-input" value={hostDirectory()} onChange={value => hostDirectory.set(value)} disabled={action.busy()}
-              maxLength={1024} accessibilityLabel="Working directory on the host"
-              placeholder={`Working directory on ${host()?.name ?? "the host"} (optional), such as ~/projects/app`} />
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <TextField compact monospace testID="new-host-directory-input" value={hostDirectory()} onChange={value => hostDirectory.set(value)} disabled={action.busy()}
+                  maxLength={1024} accessibilityLabel="Working directory on the host"
+                  placeholder={`Working directory on ${host()?.name ?? "the host"} (optional), such as ~/projects/app`} />
+              </View>
+              <If when={browsesDirectories()}>
+                <Button testID="new-host-directory-browse" small variant="outline" icon="folder" label="Browse" disabled={action.busy()} onPress={() => browsing.set(true)} />
+              </If>
+            </View>
+            <If when={browsing() && browsesDirectories() ? host() : undefined}>
+              {current => (
+                <HostDirectoryPicker host={current()} start={directory()} onClose={() => browsing.set(false)}
+                  onChoose={path => { hostDirectory.set(path); browsing.set(false); }} />
+              )}
+            </If>
             <If when={directoryError()} else={<Small>{directory() ? "The session works in this directory of the host, with the files already in it" : "Left empty, the session works in a new, empty directory of its own"}</Small>}>
               {error => <Text role="alert" style={{ fontSize: text.caption, color: palette().tones.danger.text }}>{error()}</Text>}
             </If>

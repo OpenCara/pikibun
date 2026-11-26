@@ -52,6 +52,19 @@ export async function hostAuthority(env: Env, row: Pick<SessionRow, 'connector_i
   return { level: 'auto', sessions: grants.some(grant => Number(grant.host_sessions) === 1) };
 }
 
+export async function hostSessionsGrantedAnywhere(env: Env, connectorId: string, connectorOwnerId: string, userId: string): Promise<boolean> {
+  return !!await env.DB.query<{ granted: number }>(`SELECT 1 AS granted FROM connector_host_grants g
+    JOIN connectors c ON c.id = g.connector_id
+    JOIN workspace_members m ON m.workspace_id = g.workspace_id AND m.user_id = ?
+    JOIN users u ON u.id = m.user_id
+    WHERE g.connector_id = ? AND c.owner_id = ? AND (g.user_id = ? OR g.user_id = '') AND g.host_sessions = 1
+      AND (g.expires_at IS NULL OR g.expires_at > ?) AND c.revoked_at IS NULL AND c.removed_at IS NULL
+      AND u.suspended_at IS NULL AND m.role NOT IN (${sqlList(readOnlyRoles)})
+      AND EXISTS (SELECT 1 FROM connector_shares sh WHERE sh.connector_id = c.id AND sh.workspace_id = g.workspace_id)
+    LIMIT 1`)
+    .bind(userId, connectorId, connectorOwnerId, userId, Math.floor(Date.now() / 1000)).first();
+}
+
 export async function hostCommandAuthority(env: Env, row: Pick<SessionRow, 'connector_id' | 'connector_owner_id' | 'workspace_id'>,
   userId: string): Promise<'owner' | HostCommandLevel | undefined> {
   return (await hostAuthority(env, row, userId))?.level;

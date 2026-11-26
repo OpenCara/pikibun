@@ -3768,6 +3768,60 @@ test('a session directly on its host works in the directory of the host its owne
   assert.equal((JSON.parse(s.hub.requests.at(-1)!.request.body) as RunnerBinding).session.hostDirectory, undefined);
 });
 
+test('a host\'s folders are listed for choosing a session\'s directory only to its owner and members granted sessions on it, through a host-level ticket', async t => {
+  const f = await fixture(t); const s = await sharedHost(f);
+  const id = s.connector.connectorId; const path = `/api/connectors/${id}/directories`;
+  const listing = { path: '/home/host', parent: '/home', home: '/home/host', entries: [{ name: 'app', path: '/home/host/app' }], truncated: false, usable: true };
+  let reply: unknown = { directories: listing };
+  const relayed = rpcHub(f, s.connector, () => Response.json(reply));
+  const capabilities = { ...manifest.capabilities, hostConfig: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, hostDirectories: true };
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities }));
+  await denied(await s.host.request('GET', path), 409, 'connector_update_required');
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostDirectoryBrowser: true } }));
+
+  assert.deepEqual(await json(await s.host.request('GET', path)), { directories: listing });
+  const envelope = relayed.at(-1)!;
+  assert.equal(envelope.request.path, '/v1/directories');
+  assert.equal(envelope.request.method, 'POST');
+  assert.deepEqual(JSON.parse(envelope.request.body), { path: '~' }, 'it starts in the home of the host\'s user');
+  assert.equal(envelope.request.ticket.action, 'directories');
+  assert.equal(envelope.request.ticket.sessionId, 'directories');
+  assert.equal(envelope.request.ticket.actorId, s.host.user.id);
+  assert.equal(envelope.request.ticket.ownerId, s.host.user.id);
+  await json(await s.host.request('GET', `${path}?path=${encodeURIComponent('/srv/app')}`));
+  assert.deepEqual(JSON.parse(relayed.at(-1)!.request.body), { path: '/srv/app' });
+  for (const refused of ['relative/path', ' /srv', '/srv/\napp', 'x'.repeat(1025)]) {
+    await denied(await s.host.request('GET', `${path}?path=${encodeURIComponent(refused)}`), 400, 'invalid_path');
+  }
+  const asked = relayed.length;
+
+  await denied(await s.creator.request('GET', path), 403, 'host_owner_required');
+  await denied(await s.admin.request('GET', path), 403, 'host_owner_required');
+  const grants = `/api/connectors/${id}/host-grants/${s.team.id}`;
+  await json(await s.host.request('PUT', grants, { level: 'auto', userId: s.creator.user.id }));
+  await denied(await s.creator.request('GET', path), 403, 'host_owner_required');
+  await json(await s.host.request('PUT', grants, { level: 'auto', userId: s.creator.user.id, hostSessions: true }));
+  await denied(await s.creator.request('GET', path), 409, 'host_sessions_off');
+  assert.equal(relayed.length, asked, 'the host never hears of a request the server refused');
+  await json(await s.host.request('PATCH', `/api/connectors/${id}/config`, { hostSessions: true }));
+  assert.deepEqual(await json(await s.creator.request('GET', path)), { directories: listing });
+  assert.equal(relayed.at(-1)!.request.ticket.actorId, s.creator.user.id);
+  assert.equal(relayed.at(-1)!.request.ticket.ownerId, s.host.user.id);
+
+  reply = { directories: { ...listing, path: 'relative' } };
+  await denied(await s.creator.request('GET', path), 502, 'invalid_runner_response');
+  reply = { directories: { path: '/nope', parent: '/', home: '/home/host', problem: 'missing' } };
+  assert.deepEqual(await json(await s.creator.request('GET', path)), reply);
+
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostDirectoryBrowser: true, hostSessionGrants: false } }));
+  await denied(await s.creator.request('GET', path), 409, 'host_sessions_unavailable');
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostDirectoryBrowser: true } }));
+  const removed = await s.host.request('DELETE', `${grants}?userId=${s.creator.user.id}`);
+  assert.equal(removed.status, 204);
+  await denied(await s.creator.request('GET', path), 403, 'host_owner_required');
+  await denied(await s.creator.request('GET', '/api/connectors/missing-host/directories'), 403, 'permission_revoked');
+});
+
 test('a member it is shared with starts sessions directly on a host only with a grant from its owner that includes them', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const id = s.connector.connectorId; const grants = `/api/connectors/${id}/host-grants/${s.team.id}`;

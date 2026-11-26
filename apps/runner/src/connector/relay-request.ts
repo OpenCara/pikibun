@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ConnectorRpcRequest } from "../../../../packages/shared/src/connector.js";
 import { connectorLimits } from "../../../../packages/shared/src/connector.js";
 import { parsePrivateForwardRequest, PRIVATE_FORWARD_PATH, PRIVATE_TICKET_SESSION } from "../../../../packages/shared/src/private-sessions.js";
+import { HOST_DIRECTORIES_PATH, HOST_DIRECTORIES_TICKET_SESSION, parseHostDirectoriesRequest } from "../../../../packages/shared/src/host-directory.js";
 import { signToken } from "../../../../packages/shared/src/crypto.js";
 import type { RunnerAction, RunnerBinding } from "../../../../packages/shared/src/types.js";
 import { assertId, verifyRunnerTicket } from "../protocol.js";
@@ -9,7 +10,7 @@ import { actorSchema, decodeJson, encoder, IDENTIFIER } from "./wire.js";
 
 export const ticketSchema = z.object({
   aud: z.literal("runner"), sessionId: z.string().regex(IDENTIFIER), actorId: actorSchema, ownerId: actorSchema,
-  action: z.enum(["create", "view", "events", "submit", "ask", "backup", "restart", "restore", "stop", "files", "changes", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image", "sudo", "attach", "portable", "artifacts", "title", "resources", "private"]),
+  action: z.enum(["create", "view", "events", "submit", "ask", "backup", "restart", "restore", "stop", "files", "changes", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image", "sudo", "attach", "portable", "artifacts", "title", "resources", "private", "directories"]),
   policyVersion: z.number().int().positive(), iat: z.number().int(), exp: z.number().int(),
   jti: z.string().regex(IDENTIFIER), bodyHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/), connectorId: z.string().regex(IDENTIFIER),
 }).strict();
@@ -28,6 +29,13 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
     action = "private";
     sessionId = PRIVATE_TICKET_SESSION;
     if (!parsePrivateForwardRequest(decodeJson(encoder.encode(rpc.body)))) throw new Error("Private request is not allowed");
+  } else if (rpc.path === HOST_DIRECTORIES_PATH) {
+    if (rpc.method !== "POST" || rpc.ticket.action !== "directories" || rpc.ticket.sessionId !== HOST_DIRECTORIES_TICKET_SESSION || rpc.ticket.policyVersion !== 1) {
+      throw new Error("Invalid directories request");
+    }
+    action = "directories";
+    sessionId = HOST_DIRECTORIES_TICKET_SESSION;
+    if (!parseHostDirectoriesRequest(decodeJson(encoder.encode(rpc.body)))) throw new Error("Directories request is not allowed");
   } else if (rpc.path === "/v1/sessions" && rpc.method === "POST") {
     action = "create";
     let binding: RunnerBinding;

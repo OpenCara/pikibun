@@ -14,6 +14,7 @@ import type { LocalModels } from "./local-pi.js";
 import { modelSummary } from "./local-pi.js";
 import { assertId, ConnectorSetupError } from "./protocol.js";
 import { withHostToolCapabilities } from "./host-capabilities.js";
+import { listHostDirectories } from "./host-directories.js";
 import { detectGpu, HostConfigSource } from "./host-config.js";
 import type { GpuKind, RepositoryCacheMode } from "../../../packages/shared/src/host-config.js";
 import { probeBuildCacheStorage, recoverResourceOrphans } from "./resources.js";
@@ -275,6 +276,7 @@ export class LocalConnector {
     const home = options.privateHome;
     this.frames = new RelayFrames({ secret: this.secret, state: () => this.state, restarting: () => this.restarting, runtime: () => this.runtime?.value,
       ...(home ? { privateForward: (request, signal) => home.forward(request, AbortSignal.any([signal, this.lifetime.signal])) } : {}),
+      hostDirectories: request => listHostDirectories(request.path, { refused: [this.options.dataDir, ...(this.directory ? [this.directory] : [])] }),
       disconnect: (generation, reason) => this.disconnect(generation, reason),
       requireGeneration: generation => this.requireGeneration(generation) });
     const gpu = options.unsandboxed ? undefined : options.gpu === undefined ? detectGpu() : options.gpu;
