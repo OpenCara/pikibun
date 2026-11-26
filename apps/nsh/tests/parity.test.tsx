@@ -158,6 +158,42 @@ describe("a new session", () => {
     expect(older.shows("id:new-host-directory-input")).toBe(false);
   });
 
+  test("on its host browses the host's folders to choose its directory, where the host lists them", async () => {
+    const at = (path: string) => `GET ${ORIGIN}/api/connectors/c1/directories?path=${encodeURIComponent(path)}`;
+    const home = { path: "/home/ada", parent: "/home", home: "/home/ada", truncated: false, usable: false,
+      entries: [{ name: "projects", path: "/home/ada/projects" }] };
+    const projects = { path: "/home/ada/projects", parent: "/home/ada", home: "/home/ada", truncated: false, usable: true,
+      entries: [{ name: "app", path: "/home/ada/projects/app" }] };
+    const app = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [{ ...capableHost, capabilities: { ...capableHost.capabilities, hostDirectories: true, hostDirectoryBrowser: true } }] } },
+      [at("~")]: { body: { directories: home } },
+      [at("/home/ada/projects")]: { body: { directories: projects } },
+    }) });
+    await app.press("id:new-session");
+    await app.waitFor("id:new-host-directory-browse");
+    await app.press("id:new-host-directory-browse");
+    await app.waitFor("id:host-directory-projects");
+    expect(app.enabled("id:host-directory-choose")).toBe(false);
+    expect(app.texts().join(" ")).toContain("holds Pikibun's own storage");
+    await app.press("id:host-directory-projects");
+    await app.waitFor("id:host-directory-app");
+    await app.waitUntil(() => app.enabled("id:host-directory-choose"));
+    await app.press("id:host-directory-choose");
+    await app.waitUntil(() => !app.shows("id:host-directory-picker"));
+    await app.type("id:new-message", "Fix the flaky test");
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.press("id:new-start");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions") !== undefined);
+    expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ hostEnvironment: true, hostDirectory: "/home/ada/projects" });
+    app.dispose();
+    const older = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [{ ...capableHost, capabilities: { ...capableHost.capabilities, hostDirectories: true } }] } },
+    }) });
+    await older.press("id:new-session");
+    await older.waitFor("id:new-host-directory-input");
+    expect(older.shows("id:new-host-directory-browse")).toBe(false);
+  });
+
   test("in a private workspace runs on its host by default too", async () => {
     const app = await open("../App.tsx", { storage: signedIn, network: server({
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, name: "Private", personal: true }] } },
