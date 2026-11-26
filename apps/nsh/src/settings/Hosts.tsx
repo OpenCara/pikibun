@@ -1,4 +1,4 @@
-import { effect, signal, untracked, View } from "nsh";
+import { computed, effect, signal, untracked, View } from "nsh";
 import type { ConnectorInfo, ConnectorPairing } from "../../../../packages/shared/src/connector";
 import type { WorkspaceRepositoryList } from "../../../../packages/shared/src/repositories";
 import { modelKey, segment, type Workspace } from "../shared";
@@ -182,6 +182,7 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
   const owner = () => connector().role !== "admin";
   const associated = () => [...new Set([...(connector().connectedWorkspaceIds ?? []), ...connector().workspaceIds])];
   const sharingRows = (): ShareTarget[] => {
+    if (data.workspacesLoading()) return [];
     const listed = data.workspaces().filter(workspace => !workspace.personal || associated().includes(workspace.id));
     const known = new Set(listed.map(workspace => workspace.id));
     return [
@@ -233,8 +234,9 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
       <Section title="Sharing" testID="host-sharing" info="Turn sharing on for a workspace to let its members run their own sessions on this host; you will see their prompts and repository snapshots. Turn it off to stop them: the host stays connected for your own use and existing session records are unchanged. Agents, session permissions and GitHub credentials are not shared, and personal Pi history is never imported."
         action={shareable() ? <Badge testID="host-sharing-summary" tone={sharedCount() ? "success" : "neutral"}>{sharedCount() ? `Shared with ${sharedCount()} of ${shareable()}` : "Private"}</Badge> : undefined}>
         <If when={sharingRows().length > 0}
-          else={<Row title="No workspaces yet" hint="Create or join a workspace and add a source to it to share this host with its members" chevron
-            onPress={() => props.go({ name: "settings", section: "workspaces" })} />}>
+          else={data.workspacesLoading() ? <Row title="Loading workspaces…" />
+            : <Row title="No workspaces yet" hint="Create or join a workspace and add a source to it to share this host with its members" chevron
+              onPress={() => props.go({ name: "settings", section: "workspaces" })} />}>
           <Each of={sharingRows()} key={row => row.id}>
             {row => <ShareToggleRow connector={connector()} target={row()} owner={owner()} busy={share.busy()} run={share.run} refresh={props.refresh} />}
           </Each>
@@ -283,11 +285,11 @@ function ShareToggleRow(props: { connector: ConnectorInfo; target: ShareTarget; 
   const shared = () => props.connector.workspaceIds.includes(props.target.id);
   const revoked = () => Boolean(props.connector.revokedAt);
   const checked = () => pending() ?? shared();
-  const repositories = createResource<WorkspaceRepositoryList>(() => (shared() || revoked() || props.target.personal ? null
-    : `/api/workspaces/${segment(props.target.id)}/repositories`));
-  const listed = () => (!repositories.loading() && !repositories.error() ? repositories.data() : null);
+  const sourcesPath = computed(() => (shared() || revoked() || props.target.personal ? null : `/api/workspaces/${segment(props.target.id)}/repositories`));
+  const repositories = createResource<WorkspaceRepositoryList>(sourcesPath);
+  const listed = () => (repositories.error() ? null : repositories.data());
   const configured = () => Boolean(listed() && (listed()!.repositories.length || listed()!.sources || !listed()!.required));
-  const blocked = () => !shared() && (repositories.loading() || Boolean(repositories.error()) || !configured());
+  const blocked = () => !shared() && !configured();
   async function change(on: boolean) {
     if (props.busy || on === shared()) return;
     const name = props.target.name;
@@ -320,7 +322,7 @@ function ShareToggleRow(props: { connector: ConnectorInfo; target: ShareTarget; 
   return (
     <Row testID={`host-share-${props.target.id}`} title={props.target.name} hint={hint()}
       trailing={props.target.personal ? <Badge>Private</Badge> : <>
-        <If when={!shared() && !revoked() && !repositories.loading() && (repositories.error() || !configured())}>
+        <If when={!shared() && !revoked() && (repositories.error() || (listed() && !configured()))}>
           <IconButton icon="refresh" label={`Check ${props.target.name}'s sources again`} size={28} disabled={props.busy} onPress={repositories.refresh} />
         </If>
         <CheckControl testID={`host-share-toggle-${props.target.id}`} label={`Share this host with ${props.target.name}`} checked={checked()}

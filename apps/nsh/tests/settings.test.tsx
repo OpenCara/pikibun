@@ -8,8 +8,8 @@ const bodyOf = (app: { requests(): { method: string; url: string; body?: string 
   return request?.body ? JSON.parse(request.body) : undefined;
 };
 
-async function openSettings(section: string, overrides: Record<string, unknown> = {}) {
-  const app = await open("../App.tsx", { network: server(overrides), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+async function openSettings(section: string, overrides: Record<string, unknown> = {}, options: { clock?: Record<string, never> } = {}) {
+  const app = await open("../App.tsx", { network: server(overrides), storage: signedIn, platform: "macos", width: 1280, height: 820, ...options });
   await app.waitFor("id:session-row-s1");
   await app.press("id:open-settings");
   await app.press(`id:settings-section-${section}`);
@@ -349,7 +349,7 @@ describe("settings", () => {
       [`GET ${ORIGIN}/api/workspaces/w3/repositories`]: { body: { repositories: [], required: true, sources: 0 } },
       [`PUT ${ORIGIN}/api/connectors/c1/shares/w2`]: { body: { connector: host } },
       [`DELETE ${ORIGIN}/api/connectors/c1/shares/w1`]: { status: 204, body: "" },
-    });
+    }, { clock: {} });
     await app.press("id:host-row-c1");
     await app.waitFor("id:host-sharing");
     for (const id of ["w0", "w1", "w2", "w3"]) await app.waitFor(`id:host-share-${id}`);
@@ -359,6 +359,13 @@ describe("settings", () => {
     await expect(app.press("id:host-share-toggle-w3")).rejects.toThrow(/is disabled/);
 
     await app.waitFor("text:Off: your use only");
+    const sourceChecks = () => app.requests().filter(item => item.method === "GET" && item.url === `${ORIGIN}/api/workspaces/w2/repositories`).length;
+    const polls = () => app.requests().filter(item => item.method === "GET" && item.url === `${ORIGIN}/api/connectors`).length;
+    const before = polls();
+    await app.clock!.runFor(25_000);
+    await app.waitUntil(() => polls() > before);
+    expect(sourceChecks()).toBe(1);
+    expect(app.shows("text:Off: your use only")).toBe(true);
     await app.press("id:host-share-toggle-w2");
     await app.waitUntil(() => app.requests().some(item => item.method === "PUT" && item.url === `${ORIGIN}/api/connectors/c1/shares/w2`));
     await app.waitFor("text:Shared with Difference Engine. Session permissions are unchanged; personal Pi history is not imported.");
