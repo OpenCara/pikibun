@@ -56,6 +56,39 @@ someone else's session spends their own account, never the owner's, and nobody n
 Scheduled runs act as the owner, so they use the owner's. Every call's audit (`workspace.mcp.called`) names the
 connection it used, so owners and admins still see what ran with whose account even though they don't manage it.
 
+## Sharing a connection with a whole workspace
+
+Bringing a connection serves only its member's own requests. A member can also **share** a connection with a whole
+workspace, so that every member's requests there call the server with that one account, as a workspace's own sign-in
+would, without anyone typing its secret into the workspace. It is managed in **Settings → MCP sharing**, which lists
+each of the member's connections with the workspaces they could share it with and a switch for each.
+
+- **Who**: only an owner or admin of the workspace shares with it (`PUT /api/mcp-connections/:id/shares/:workspace`,
+  `forbidden` otherwise), since sharing adds a server, and so tools, to every session there, which only they do
+  otherwise. The page lists only the workspaces the member owns or administers (`McpConnection.shares`), plus any
+  they shared with before and no longer administer, so they can still withdraw it.
+- **What**: sharing adds a server to the workspace (`workspace_mcp_servers.shared_connection_id`, unique per workspace
+  and connection) with the connection's name and address, a prefix made from its name (`remoteMcpSharedPrefix`), no
+  headers or OAuth sign-in of its own, `sign_in_as = 'workspace'`, and its tools listed with the connection. It counts
+  toward the workspace's 8 servers, and a workspace that already has a server at the address can't take it
+  (`mcp_server_at_address`): members bring their own connections to that one instead.
+- **Its sign-in stays the member's**: the connection's secret is never copied into the workspace. A call
+  (`chooseCredentials`) decrypts the connection's own headers or OAuth sign-in, and only while the member who shared it
+  still belongs to the workspace (`sharedConnection` joins `workspace_members`); once they leave, its tools aren't
+  offered (`workspaceRemoteTools`) and a call is refused (`mcp_share_ended`, nothing sent). Every call's audit names
+  the connection.
+- **What the workspace's owners and admins still do**: rename it, turn it off, mark its read-only tools, list its
+  tools again (with the shared connection) and remove it. They can't change its address, headers, OAuth sign-in or
+  `signInAs` (`mcp_server_shared`), since any of those would send the member's account somewhere else or replace it.
+- **Ending it**: the member withdraws it from the page (`DELETE …/shares/:workspace`, whatever their role there now),
+  removes the connection (the server goes with it, `ON DELETE CASCADE`), or leaves the workspace. An owner or admin
+  removing the server ends it too. Checking the connection (changing its sign-in, signing in, **Check again**) lists
+  the tools again for every workspace it is shared with, or notes the error there.
+
+Both are audited in the workspace (`workspace.mcp.connection_shared`, `workspace.mcp.connection_unshared`). Sharing
+asks the member to confirm, because what members do with the server is done as them and may spend what their account
+pays for.
+
 ## The tool list
 
 A workspace offers one list of tools per server (`tools_json`), whoever calls it. A server set to `members` often has

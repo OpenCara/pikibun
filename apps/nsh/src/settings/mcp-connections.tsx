@@ -19,7 +19,12 @@ const base = "/api/mcp-connections";
 function connectionHint(connection: McpConnection): string {
   const how = connection.oauth ? "signed in with OAuth" : connection.headerNames.length ? `headers: ${connection.headerNames.join(", ")}` : "no sign-in";
   const used = connection.workspaces.length ? `used in ${connection.workspaces.map(item => item.name).join(", ")}` : "used in no workspace";
-  return `${connection.url}\n${connection.error ? connection.error : `${how} · ${used}`}`;
+  const shared = sharedIn(connection);
+  return `${connection.url}\n${connection.error ? connection.error : `${how} · ${used}${shared.length ? ` · shared with ${shared.join(", ")}` : ""}`}`;
+}
+
+function sharedIn(connection: McpConnection): string[] {
+  return (connection.shares ?? []).filter(item => item.shared).map(item => item.name);
 }
 
 export function appSignInFinisher(done: () => void) {
@@ -101,7 +106,8 @@ export function McpConnectionsGroup() {
     : void app.start(connection.name, `${base}/${segment(connection.id)}/oauth/app`));
   async function remove(connection: McpConnection) {
     if (!await confirm({ title: `Remove ${connection.name}?`, confirmLabel: "Remove", destructive: true,
-      message: `Pikibun deletes its sign-in, and ${connection.workspaces.length ? `${connection.workspaces.map(item => item.name).join(", ")} stop using it at once` : "no workspace uses it"}.` })) return;
+      message: `Pikibun deletes its sign-in, and ${[...connection.workspaces.map(item => item.name), ...sharedIn(connection)].length
+        ? `${[...new Set([...connection.workspaces.map(item => item.name), ...sharedIn(connection)])].join(", ")} stop using it at once` : "no workspace uses it"}.` })) return;
     await run(() => session().api(`${base}/${segment(connection.id)}`, { method: "DELETE" }), "Connection removed.");
   }
   async function signOut(connection: McpConnection) {
@@ -132,8 +138,8 @@ export function McpConnectionsGroup() {
               {connection => (
                 <CollapsibleRow testID={`mcp-connection-${connection().id}`} leading={<Icon name="sparkles" size={16} color={palette().muted} />} title={connection().name}
                   hint={connectionHint(connection())}
-                  trailing={<Badge tone={connection().error ? "danger" : connection().workspaces.length ? "success" : "neutral"}>
-                    {connection().error ? "Error" : connection().workspaces.length ? "In use" : "Connected"}</Badge>}>
+                  trailing={<Badge tone={connection().error ? "danger" : connection().workspaces.length || sharedIn(connection()).length ? "success" : "neutral"}>
+                    {connection().error ? "Error" : sharedIn(connection()).length ? "Shared" : connection().workspaces.length ? "In use" : "Connected"}</Badge>}>
                   <If when={connection().error}><Banner tone="danger" title="The server didn't take its sign-in">{connection().error!}</Banner></If>
                   <Each of={connection().workspaces} key={item => item.id}>
                     {item => (

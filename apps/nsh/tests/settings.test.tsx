@@ -65,6 +65,36 @@ describe("settings", () => {
     await app.waitUntil(() => app.texts().join(" ").includes(`used in ${workspace.name}`));
   });
 
+  test("MCP sharing lists the workspaces a member can share each remote MCP server with, and shares it with a whole workspace once confirmed", async () => {
+    const at = "2026-11-20T10:00:00.000Z";
+    let shared = false;
+    const mine = () => ({ id: "mc1", name: "Linear", url: "https://mcp.linear.app/mcp", headerNames: ["Authorization"], workspaces: [], offeredIn: [], createdAt: at, updatedAt: at,
+      shares: [
+        shared ? { id: "w1", name: workspace.name, shared: true, server: { id: "srv1", prefix: "linear" } } : { id: "w1", name: workspace.name, shared: false },
+        { id: "w2", name: "Full house", shared: false, unavailable: "It already has the 8 remote MCP servers a workspace can have." },
+      ] });
+    const app = await openSettings("mcp-sharing", {
+      [`GET ${ORIGIN}/api/mcp-connections`]: () => ({ body: { connections: [mine()] } }),
+      [`PUT ${ORIGIN}/api/mcp-connections/mc1/shares/w1`]: () => { shared = true; return { body: { connection: mine() } }; },
+      [`DELETE ${ORIGIN}/api/mcp-connections/mc1/shares/w1`]: () => { shared = false; return { body: { connection: mine() } }; },
+    });
+    await app.waitFor("id:settings-mcp-sharing");
+    await app.waitFor("id:mcp-share-mc1-w1");
+    await app.waitFor("text:It already has the 8 remote MCP servers a workspace can have.");
+    const asked: string[] = [];
+    app.onDialog(dialog => { asked.push(dialog.title ?? ""); return dialog.title?.startsWith("Share ") ? "Share" : null; });
+    await app.press("id:mcp-share-toggle-mc1-w1");
+    await app.waitFor(`text:${workspace.name} offers Linear's tools to every member from their next message.`);
+    expect(asked).toEqual([`Share Linear with ${workspace.name}?`]);
+    expect(app.requests().some(item => item.method === "PUT" && item.url === `${ORIGIN}/api/mcp-connections/mc1/shares/w1`)).toBe(true);
+    await app.waitUntil(() => app.texts().join(" ").includes("(linear_*)"));
+    await app.press("id:mcp-share-toggle-mc1-w1");
+    await app.waitFor(`text:${workspace.name} no longer uses Linear.`);
+    expect(asked.length).toBe(1);
+    expect(app.requests().some(item => item.method === "DELETE" && item.url === `${ORIGIN}/api/mcp-connections/mc1/shares/w1`)).toBe(true);
+    expect(app.requests().some(item => item.url === `${ORIGIN}/api/mcp-connections/mc1/shares/w2`)).toBe(false);
+  });
+
   test("Password sets a first password where the server takes them", async () => {
     const app = await openSettings("password", {
       [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, passwordAuth: true, testMode: true } },
@@ -640,6 +670,25 @@ describe("settings", () => {
     await app.press("id:mcp-use-connection-tracker");
     await app.waitUntil(() => app.texts().join(" ").includes("Your requests use your own connection, My tracker."));
     expect(app.requests().some(item => item.method === "PUT" && item.url === `${ORIGIN}/api/mcp-connections/mc1/workspaces/w1`)).toBe(true);
+  });
+
+  test("Workspaces says who shared a remote MCP server's connection with the workspace, and offers no sign-in to change on it", async () => {
+    const at = "2026-01-01T00:00:00.000Z";
+    const shared = { id: "m2", name: "Linear", prefix: "linear", url: "https://mcp.linear.app/mcp", enabled: true, signInAs: "workspace", headerNames: [], readOnlyTools: [],
+      tools: [{ name: "search", toolName: "linear_search", description: "Search.", inputSchema: { type: "object" }, readOnly: false }], updatedAt: at,
+      sharedBy: { userId: "u2", name: "Grace", mine: false, active: true } };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/mcp-servers`]: { body: { servers: [shared], admin: true } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("text:Linear · linear_");
+    await app.press("text:Linear · linear_");
+    await app.waitFor("id:mcp-shared-by-linear");
+    const shown = app.texts().join(" ");
+    expect(shown).toContain("Grace shared their own connection to it with this workspace: every member's requests call it with Grace's account.");
+    expect(shown).not.toContain("Change sign-in");
+    expect(app.shows("id:mcp-sign-in-linear")).toBe(false);
+    expect(shown).toContain("List tools again");
   });
 
   test("Workspaces shows the workspace's memory and the notes agents proposed, and an admin adds one to the memory as they save it", async () => {

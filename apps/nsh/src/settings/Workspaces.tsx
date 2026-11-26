@@ -203,7 +203,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
       <WorkspaceMemorySettings workspace={workspace()} />
       <WorkspaceExtensions workspace={workspace()} />
       <WorkspaceAutoModels workspace={workspace()} />
-      <WorkspaceMcpServers workspace={workspace()} />
+      <WorkspaceMcpServers workspace={workspace()} go={props.go} />
       <ToolGroups workspace={workspace()} owner={role() === "owner"} />
     </>
   );

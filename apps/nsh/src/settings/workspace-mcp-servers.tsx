@@ -5,6 +5,7 @@ import {
 } from "../../../../packages/shared/src/remote-mcp";
 import { descriptionSummary } from "../../../../packages/shared/src/workspace-tools";
 import { segment, type Workspace } from "../shared";
+import type { PageRoute } from "../lib/page";
 import { session } from "../lib/auth";
 import { openServerLink, opensServerPages } from "../lib/links";
 import { currentOrigin, displayOrigin } from "../lib/server";
@@ -27,7 +28,7 @@ function mcpErrorTitle(server: WorkspaceMcpServer): string {
   return server.oauth ? "Signed in, but its tools couldn't be listed" : "Its tools couldn't be listed";
 }
 
-export function WorkspaceMcpServers(props: { workspace: Workspace }) {
+export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: PageRoute) => void }) {
   const path = () => `/api/workspaces/${segment(props.workspace.id)}/mcp-servers`;
   const resource = createResource<McpServersResponse>(path);
   const action = createAction();
@@ -61,7 +62,8 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
   }
   async function remove(server: WorkspaceMcpServer) {
     if (!await confirm({ title: `Remove ${server.name}?`, confirmLabel: "Remove", destructive: true,
-      message: "Sessions stop offering its tools from their next message, and Pikibun deletes the headers it kept for it." })) return;
+      message: server.sharedBy ? `Sessions stop offering its tools from their next message. ${server.sharedBy.mine ? "Your" : `${server.sharedBy.name}'s`} connection to it stays, no longer shared here.`
+        : "Sessions stop offering its tools from their next message, and Pikibun deletes the headers it kept for it." })) return;
     if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}`, { method: "DELETE" }); }, "Removed.")) resource.refresh();
   }
   async function signOut(server: WorkspaceMcpServer) {
@@ -154,6 +156,20 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
                       )}
                     </Each>
                     <If when={!server().tools.length && !server().error}><Small>It offers no tools.</Small></If>
+                    <If when={server().sharedBy}>
+                      {sharer => (
+                        <View testID={`mcp-shared-by-${server().prefix}`} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                          <View style={{ flex: 1, minWidth: 180 }}>
+                            <Small>{sharer().active
+                              ? `${sharer().mine ? "You" : sharer().name} shared ${sharer().mine ? "your" : "their"} own connection to it with this workspace: every member's requests call it with ${sharer().mine ? "your" : `${sharer().name}'s`} account.`
+                              : `${sharer().name}, who shared their connection to it, no longer belongs to this workspace: its tools aren't offered. Remove it.`}</Small>
+                          </View>
+                          <If when={sharer().mine && sharer().active}>
+                            <Button small variant="outline" label="Manage sharing" onPress={() => props.go?.({ name: "settings", section: "mcp-sharing" })} />
+                          </If>
+                        </View>
+                      )}
+                    </If>
                     <If when={signInAsOf(server()) !== "workspace"}>
                       <View testID={`mcp-own-connection-${server().prefix}`} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
                         <View style={{ flex: 1, minWidth: 180 }}>
@@ -168,7 +184,7 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
                         </If>
                       </View>
                     </If>
-                    <If when={admin()}>
+                    <If when={admin() && !server().sharedBy}>
                       <Field label="Whose sign-in">
                         <Select<RemoteMcpSignInAs> label="Whose sign-in" value={signInAsOf(server())} disabled={action.busy()}
                           onChange={value => void patch(server(), { signInAs: value }, `It now calls with ${signInAsLabel(value).toLowerCase()}.`)}
@@ -180,14 +196,16 @@ export function WorkspaceMcpServers(props: { workspace: Workspace }) {
                         <Checkbox label="Enabled" checked={server().enabled} disabled={action.busy()}
                           onChange={on => void patch(server(), { enabled: on }, on ? "Sessions offer its tools from their next message." : "Sessions stop offering its tools from their next message.")} />
                         <View style={{ flex: 1 }} />
-                        <If when={server().oauth || !server().headerNames.length}>
+                        <If when={!server().sharedBy && (server().oauth || !server().headerNames.length)}>
                           <Button small variant="outline" label={server().oauth ? "Sign in again" : "Sign in"} testID={`mcp-sign-in-${server().prefix}`} disabled={action.busy()}
                             onPress={() => (opensServerPages ? signIn(server()) : void signInFromApp(server()))} />
                         </If>
-                        <If when={server().oauth}>
+                        <If when={!server().sharedBy && server().oauth}>
                           <Button small variant="ghost" label="Sign out" disabled={action.busy()} onPress={() => void signOut(server())} />
                         </If>
-                        <Button small variant="outline" label="Change sign-in" disabled={action.busy()} onPress={() => changing.set(server())} />
+                        <If when={!server().sharedBy}>
+                          <Button small variant="outline" label="Change sign-in" disabled={action.busy()} onPress={() => changing.set(server())} />
+                        </If>
                         <Button small variant="outline" icon="refresh" label="List tools again" disabled={action.busy()} onPress={() => void patch(server(), { refresh: true }, "Listed its tools again.")} />
                         <Button small variant="ghost" icon="trash" label="Remove" disabled={action.busy()} onPress={() => void remove(server())} />
                       </View>
