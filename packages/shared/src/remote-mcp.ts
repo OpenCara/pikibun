@@ -46,12 +46,28 @@ export interface WorkspaceMcpServer {
   headerNames: string[];
   oauth?: { signedInAt: string };
   connection?: McpConnectionUse;
+  sharedBy?: McpServerSharer;
   readOnlyTools: string[];
   tools: (RemoteMcpTool & { toolName: string; readOnly: boolean })[];
   toolsLeftOut?: RemoteMcpToolsLeftOut;
   discoveredAt?: string;
   error?: string;
   updatedAt: string;
+}
+
+export interface McpServerSharer {
+  userId: string;
+  name: string;
+  mine: boolean;
+  active: boolean;
+}
+
+export interface McpConnectionShare {
+  id: string;
+  name: string;
+  shared: boolean;
+  server?: { id: string; prefix: string };
+  unavailable?: string;
 }
 
 export interface McpConnection {
@@ -63,8 +79,18 @@ export interface McpConnection {
   error?: string;
   workspaces: { id: string; name: string }[];
   offeredIn: { id: string; name: string }[];
+  shares: McpConnectionShare[];
   createdAt: string;
   updatedAt: string;
+}
+
+export function remoteMcpSharedPrefix(name: string, taken: readonly string[]): string {
+  const base = (name.toLowerCase().replace(/[^a-z0-9]+/g, "").replace(/^[0-9]+/, "") || "mcp").slice(0, 16);
+  if (!taken.includes(base)) return base;
+  for (let suffix = 2; ; suffix++) {
+    const candidate = `${base.slice(0, 16 - String(suffix).length)}${suffix}`;
+    if (!taken.includes(candidate)) return candidate;
+  }
 }
 
 export interface RemoteMcpServerSummary {

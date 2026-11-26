@@ -27,11 +27,12 @@ export function transport(env: Env): RemoteMcpTransport {
 export const parsedList = (json: string): string[] => { try { const value = JSON.parse(json); return Array.isArray(value) ? value.filter(item => typeof item === 'string') : []; } catch { return []; } };
 export const parsedTools = (json: string): RemoteMcpTool[] => { try { const value = JSON.parse(json); return Array.isArray(value) ? value as RemoteMcpTool[] : []; } catch { return []; } };
 
-export type SignInOwner = 'workspace' | 'member';
+export type SignInOwner = 'workspace' | 'member' | 'sharer';
 
 const again: Record<SignInOwner, string> = {
   workspace: 'an owner or admin signs in to it again',
   member: 'sign in to it again under Settings → Profile → Connected accounts',
+  sharer: 'the member who shared it with this workspace signs in to it again in their profile',
 };
 
 export function failure(error: unknown, signedIn = false, owner: SignInOwner = 'workspace'): string {

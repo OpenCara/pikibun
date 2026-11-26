@@ -4743,6 +4743,110 @@ test('members bring their own remote MCP connections from their profile, and a w
     .every(action => audits.includes(action)));
 });
 
+test('an owner or admin shares their own remote MCP connection with a whole workspace, and every member\'s requests use it while they still own or administer it', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const url = 'https://mcp.example.com/mcp';
+  const secret = 'admin-token-0123456789';
+  const fake = tokensMcpFake([secret, 'creator-token']);
+  f.env.REMOTE_MCP_TRANSPORT = fake.transport;
+  const connections = '/api/mcp-connections';
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const teamName = String(f.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(s.team.id)!.name);
+  const teamShare = (item: McpConnection) => item.shares.find(share => share.id === s.team.id);
+  const serverRows = () => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_mcp_servers WHERE workspace_id = ?').get(s.team.id)!.n);
+
+  const { connection } = await json<{ connection: McpConnection }>(await s.admin.request('POST', connections,
+    { name: 'My Tracker', url, headers: { Authorization: `Bearer ${secret}` } }), 201);
+  assert.deepEqual(teamShare(connection), { id: s.team.id, name: teamName, shared: false }, 'listed where its member is an owner or admin');
+  const { connection: theirs } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections,
+    { name: 'Tracker', url, headers: { Authorization: 'Bearer creator-token' } }), 201);
+  assert.equal(teamShare(theirs), undefined, 'a plain member has no workspace here to share with');
+  await denied(await s.creator.request('PUT', `${connections}/${theirs.id}/shares/${s.team.id}`), 403, 'forbidden');
+  await denied(await s.creator.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`), 404, 'not_found');
+  assert.equal(serverRows(), 0);
+
+  const shared = (await json<{ connection: McpConnection }>(await s.admin.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`))).connection;
+  const share = teamShare(shared)!;
+  assert.equal(share.shared, true);
+  assert.equal(share.server?.prefix, 'mytracker');
+  await json(await s.admin.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`));
+  assert.equal(serverRows(), 1, 'sharing again changes nothing');
+
+  const listed = (await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers;
+  assert.equal(listed.length, 1);
+  const server = listed[0]!;
+  const adminName = String(f.sqlite.prepare('SELECT display_name FROM users WHERE id = ?').get(s.admin.user.id)!.display_name);
+  assert.deepEqual([server.name, server.prefix, server.signInAs, server.headerNames, server.tools.map(tool => tool.toolName), server.sharedBy],
+    ['My Tracker', 'mytracker', 'workspace', [], ['mytracker_search'], { userId: s.admin.user.id, name: adminName, mine: false, active: true }]);
+  assert.equal((await json<{ servers: WorkspaceMcpServer[] }>(await s.admin.request('GET', path))).servers[0]!.sharedBy?.mine, true);
+
+  const offered = async () => parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true }))).remoteTools ?? [];
+  const route = (await offered())[0]!.route;
+  const owner = s.session.ownerId;
+  const call = () => self(f, s.connector, route, { sessionId: s.session.id, actorId: owner, admissionId: admit(f, s.session.id, owner), callId: 'call-1', arguments: { query: 'bug' } });
+  const result = async () => (await json<{ result: string }>(await call())).result;
+  assert.equal(await result(), `search as ${secret}`, 'another member\'s request uses the shared connection');
+  const called = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.called'").all().map(row => JSON.parse(String(row.detail_json)));
+  assert.deepEqual(called.map(item => item.connection), [connection.id], 'the audit names the shared connection');
+
+  await denied(await s.admin.request('PATCH', `${path}/${server.id}`, { url: 'https://evil.example.com/mcp', headers: {} }), 409, 'mcp_server_shared');
+  await denied(await s.admin.request('PATCH', `${path}/${server.id}`, { headers: { Authorization: 'Bearer other' } }), 409, 'mcp_server_shared');
+  await denied(await s.admin.request('PATCH', `${path}/${server.id}`, { signInAs: 'members' }), 409, 'mcp_server_shared');
+  await denied(await s.admin.request('DELETE', `${path}/${server.id}/oauth`), 409, 'mcp_server_shared');
+  await denied(await s.admin.request('POST', `${path}/${server.id}/oauth/app`), 409, 'mcp_server_shared');
+  assert.ok(!fake.calls.some(item => item.url !== url), 'its connection is never sent anywhere else');
+  const { server: marked } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', `${path}/${server.id}`, { readOnlyTools: ['search'], refresh: true }));
+  assert.deepEqual([marked.readOnlyTools, marked.error], [['search'], undefined], 'its owners still mark its tools and list them again, with the shared connection');
+  await denied(await s.creator.request('PUT', `${connections}/${theirs.id}/workspaces/${s.team.id}`), 409, 'mcp_server_not_in_workspace');
+
+  const { connection: revoked } = await json<{ connection: McpConnection }>(await s.admin.request('PATCH', `${connections}/${connection.id}`, { headers: { Authorization: 'Bearer revoked' } }));
+  assert.match(revoked.error ?? '', /HTTP 401/);
+  assert.match((await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers[0]!.error ?? '', /HTTP 401/, 'checking the connection checks its shares');
+  await denied(await call(), 502, 'mcp_call_failed');
+  await json(await s.admin.request('PATCH', `${connections}/${connection.id}`, { headers: { Authorization: `Bearer ${secret}` } }));
+  assert.equal(await result(), `search as ${secret}`);
+
+  const membership = f.sqlite.prepare('SELECT * FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(s.team.id, s.admin.user.id)!;
+  f.sqlite.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(s.team.id, s.admin.user.id);
+  assert.deepEqual(await offered(), [], 'its tools aren\'t offered once its member left the workspace');
+  const reached = fake.calls.length;
+  await denied(await call(), 403, 'mcp_share_ended');
+  assert.equal(fake.calls.length, reached);
+  const left = (await json<{ connections: McpConnection[] }>(await s.admin.request('GET', connections))).connections[0]!;
+  assert.equal(teamShare(left)?.shared, true, 'still listed for its member, to withdraw');
+  f.sqlite.prepare('INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, ?, ?)')
+    .run(s.team.id, s.admin.user.id, 'member', String(membership.created_at));
+  assert.deepEqual(await offered(), [], 'rejoining as a plain member doesn\'t turn the share back on');
+  await denied(await call(), 403, 'mcp_share_ended');
+  assert.equal((await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers[0]!.sharedBy?.active, false);
+  assert.equal(fake.calls.length, reached);
+  f.sqlite.prepare('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?').run(String(membership.role), s.team.id, s.admin.user.id);
+  assert.equal(await result(), `search as ${secret}`);
+
+  const withdrawn = (await json<{ connection: McpConnection }>(await s.admin.request('DELETE', `${connections}/${connection.id}/shares/${s.team.id}`))).connection;
+  assert.deepEqual(teamShare(withdrawn), { id: s.team.id, name: teamName, shared: false });
+  assert.equal(serverRows(), 0);
+  await denied(await call(), 404, 'mcp_tool_not_found');
+
+  await json(await s.admin.request('POST', path, { name: 'Tracker', prefix: 'tracker', url, headers: { Authorization: 'Bearer creator-token' } }), 201);
+  const blocked = (await json<{ connections: McpConnection[] }>(await s.admin.request('GET', connections))).connections[0]!;
+  assert.match(teamShare(blocked)?.unavailable ?? '', /already has a remote MCP server at this address/);
+  await denied(await s.admin.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`), 409, 'mcp_server_at_address');
+  const { servers: [plain] } = await json<{ servers: WorkspaceMcpServer[] }>(await s.admin.request('GET', path));
+  await json(await s.admin.request('DELETE', `${path}/${plain!.id}`));
+
+  await json(await s.admin.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`));
+  assert.equal(serverRows(), 1);
+  await json(await s.admin.request('DELETE', `${connections}/${connection.id}`));
+  assert.equal(serverRows(), 0, 'removing the connection removes the servers sharing it');
+
+  const stored = JSON.stringify(f.sqlite.prepare('SELECT * FROM workspace_mcp_servers').all()) + JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all())
+    + await (await s.creator.request('GET', path)).text() + await (await s.admin.request('GET', connections)).text();
+  assert.ok(!stored.includes(secret), 'the shared connection\'s headers are never copied, shown or audited');
+  const audits = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.mcp.connection_%'").all().map(row => row.action);
+  assert.ok(['workspace.mcp.connection_shared', 'workspace.mcp.connection_unshared'].every(action => audits.includes(action)));
+});
+
 test('a member signs in to their own remote MCP connection with OAuth from the web or the app, and bringing it lists a server\'s tools for members', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
   const fake = oauthMcpFake();

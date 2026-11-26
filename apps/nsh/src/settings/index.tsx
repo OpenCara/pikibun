@@ -8,6 +8,7 @@ import { NavItem, Row } from "../ui";
 import { Administration } from "./Administration";
 import { Appearance } from "./Appearance";
 import { Hosts } from "./Hosts";
+import { McpSharing } from "./McpSharing";
 import { Notifications } from "./Notifications";
 import { Password } from "./Password";
 import type { SectionProps } from "./parts";
@@ -53,6 +54,7 @@ export const settingsSections: readonly SettingsSection[] = [
   { id: "notifications", label: "Notifications", icon: "bell", scope: "server", Component: Notifications },
   { id: "hosts", label: "Hosts", icon: "server", scope: "server", Component: Hosts },
   { id: "workspaces", label: "Workspaces", icon: "users", scope: "server", Component: Workspaces },
+  { id: "mcp-sharing", label: "MCP sharing", icon: "sparkles", scope: "server", keywords: ["remote MCP", "share", "connections"], Component: McpSharing },
   { id: "admin", label: "Administration", icon: "shield", scope: "server", admin: true, Component: Administration },
   { id: "desktop", label: "Local hosts", icon: "monitor", scope: "device", keywords: [computerTitle, "pair", "sandbox", "WSL"], desktop: true, Component: ThisComputer },
   { id: "self-host", label: "Self host", icon: "database", scope: "device", desktop: true, Component: SelfHost },
