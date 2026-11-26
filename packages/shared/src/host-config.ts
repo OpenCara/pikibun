@@ -22,6 +22,8 @@ export const builtinExtensions = Object.freeze([
 export type BuiltinExtensionName = (typeof builtinExtensions)[number]["name"];
 export const builtinExtensionNames: readonly BuiltinExtensionName[] = Object.freeze(builtinExtensions.map(item => item.name));
 
+export const newHostBuiltinExtensions: readonly BuiltinExtensionName[] = Object.freeze(["pi:tool-search"]);
+
 export function normalizeBuiltinExtensionNames(names: readonly unknown[]): unknown[] {
   return names.map(name => typeof name === "string" && !name.includes(":") ? `pi:${name}` : name);
 }
@@ -89,7 +91,7 @@ export function commandSeconds(config: Pick<HostConfig, "commandTimeoutSeconds" 
 
 export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   commandTimeoutSeconds: 3600, commandTimeoutUnlimited: false, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
-  builtinExtensions: Object.freeze(["pi:tool-search"]) as unknown as BuiltinExtensionName[],
+  builtinExtensions: Object.freeze([]) as unknown as BuiltinExtensionName[],
   requiredExtensions: Object.freeze([]) as unknown as RequiredExtension[],
   browser: defaultHostBrowserConfig as HostBrowserConfig,
   serviceLifetimeSeconds: serviceLifetimeLimits.default,

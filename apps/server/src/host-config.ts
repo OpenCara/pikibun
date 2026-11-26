@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { builtinExtensionNames, defaultHostConfig, hostConfigLimits, normalizeBuiltinExtensionNames, ownerOnlyHostConfig, parseBuiltinExtensions, parseHostCompaction,
+import { builtinExtensionNames, defaultHostConfig, hostConfigLimits, newHostBuiltinExtensions, normalizeBuiltinExtensionNames, ownerOnlyHostConfig, parseBuiltinExtensions, parseHostCompaction,
   parseExtensionFiles, parseHostConfigChange, parseModelExtensions, parseRequiredExtensions, type HostConfig, type RepositoryCacheMode } from '../../../packages/shared/src/host-config.js';
 import { buildCacheLimits, buildCacheModes, type BuildCacheMode } from '../../../packages/shared/src/build-caches.js';
 import { isPikiExtensionSource } from '../../../packages/shared/src/host-extensions.js';
@@ -17,7 +17,7 @@ interface ConfigRow { command_timeout_seconds: number; command_timeout_unlimited
 export async function connectorHostConfig(env: Env, connectorId: string): Promise<HostConfig> {
   const row = await env.DB.query<ConfigRow>(`SELECT command_timeout_seconds, command_timeout_unlimited, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
     builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json, fake_ip_tunnels, build_caches, build_cache_gib, model_extensions_json, cache_warming, extension_files_json FROM connector_configs WHERE connector_id = ?`).bind(connectorId).first();
-  if (!row) return { ...defaultHostConfig, builtinExtensions: [...defaultHostConfig.builtinExtensions], requiredExtensions: [], browser: { ...defaultHostBrowserConfig }, tunnel: { ...defaultHostTunnelConfig }, modelExtensions: [], extensionFiles: [] };
+  if (!row) return { ...defaultHostConfig, builtinExtensions: [...newHostBuiltinExtensions], requiredExtensions: [], browser: { ...defaultHostBrowserConfig }, tunnel: { ...defaultHostTunnelConfig }, modelExtensions: [], extensionFiles: [] };
   return { commandTimeoutSeconds: Number(row.command_timeout_seconds), commandTimeoutUnlimited: Number(row.command_timeout_unlimited) === 1, gpu: Number(row.gpu) === 1,
     gitCredentials: Number(row.git_credentials) === 1, repositoryCache: row.repository_cache, hostSessions: Number(row.host_sessions) === 1,
     compaction: storedCompaction(row.compaction_json), builtinExtensions: storedBuiltinExtensions(row.builtin_extensions_json),

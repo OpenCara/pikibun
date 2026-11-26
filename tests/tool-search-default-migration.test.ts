@@ -2,15 +2,13 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { defaultHostConfig, readHostConfig } from "../packages/shared/src/host-config.js";
+import { newHostBuiltinExtensions } from "../packages/shared/src/host-config.js";
 
 const migrations = new URL("../apps/server/migrations/sqlite/", import.meta.url);
 const migration = "0097_tool_search_default.sql";
 
-test("tool search is on for new hosts and for a control plane that sends no built-in extensions", () => {
-  assert.deepEqual(defaultHostConfig.builtinExtensions, ["pi:tool-search"]);
-  assert.deepEqual(readHostConfig({ commandTimeoutSeconds: 120, gpu: false, gitCredentials: false, repositoryCache: "off" }).builtinExtensions, ["pi:tool-search"]);
-  assert.deepEqual(readHostConfig({ ...defaultHostConfig, builtinExtensions: [] }).builtinExtensions, [], "a host that turned it off keeps it off");
+test("tool search is what a host not yet configured runs", () => {
+  assert.deepEqual(newHostBuiltinExtensions, ["pi:tool-search"]);
 });
 
 test("hosts configured before get tool search added to what they run, once, keeping code mode and its order", () => {
