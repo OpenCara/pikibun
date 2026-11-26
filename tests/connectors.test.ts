@@ -4743,7 +4743,7 @@ test('members bring their own remote MCP connections from their profile, and a w
     .every(action => audits.includes(action)));
 });
 
-test('an owner or admin shares their own remote MCP connection with a whole workspace, and every member\'s requests use it while they belong there', async t => {
+test('an owner or admin shares their own remote MCP connection with a whole workspace, and every member\'s requests use it while they still own or administer it', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
   const url = 'https://mcp.example.com/mcp';
   const secret = 'admin-token-0123456789';
@@ -4815,7 +4815,12 @@ test('an owner or admin shares their own remote MCP connection with a whole work
   const left = (await json<{ connections: McpConnection[] }>(await s.admin.request('GET', connections))).connections[0]!;
   assert.equal(teamShare(left)?.shared, true, 'still listed for its member, to withdraw');
   f.sqlite.prepare('INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, ?, ?)')
-    .run(s.team.id, s.admin.user.id, String(membership.role), String(membership.created_at));
+    .run(s.team.id, s.admin.user.id, 'member', String(membership.created_at));
+  assert.deepEqual(await offered(), [], 'rejoining as a plain member doesn\'t turn the share back on');
+  await denied(await call(), 403, 'mcp_share_ended');
+  assert.equal((await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers[0]!.sharedBy?.active, false);
+  assert.equal(fake.calls.length, reached);
+  f.sqlite.prepare('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?').run(String(membership.role), s.team.id, s.admin.user.id);
   assert.equal(await result(), `search as ${secret}`);
 
   const withdrawn = (await json<{ connection: McpConnection }>(await s.admin.request('DELETE', `${connections}/${connection.id}/shares/${s.team.id}`))).connection;

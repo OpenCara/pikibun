@@ -23,7 +23,7 @@ function About() {
     <View style={{ gap: 8 }}>
       <Note>Sharing one of your remote MCP servers with a workspace adds it to that workspace: every member's sessions there offer its tools and call them with your own account, whoever asks. What they do with it is done as you, and may spend what your account pays for.</Note>
       <Note>Its sign-in stays yours, kept encrypted, never shown to anyone. The workspace's owners and admins choose which of its tools only read, and can turn it off or remove it, but can't change its address or sign-in.</Note>
-      <Note>Sharing stops at once when you turn it off here, remove the connection from your profile, or leave the workspace. Only the workspaces you own or administer are listed.</Note>
+      <Note>Sharing stops at once when you turn it off here, remove the connection from your profile, or leave the workspace or stop being one of its owners or admins. Only the workspaces you own or administer are listed.</Note>
     </View>
   );
 }

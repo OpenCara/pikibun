@@ -162,7 +162,7 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
                           <View style={{ flex: 1, minWidth: 180 }}>
                             <Small>{sharer().active
                               ? `${sharer().mine ? "You" : sharer().name} shared ${sharer().mine ? "your" : "their"} own connection to it with this workspace: every member's requests call it with ${sharer().mine ? "your" : `${sharer().name}'s`} account.`
-                              : `${sharer().name}, who shared their connection to it, no longer belongs to this workspace: its tools aren't offered. Remove it.`}</Small>
+                              : `${sharer().mine ? "You" : sharer().name}, who shared ${sharer().mine ? "your" : "their"} connection to it, ${sharer().mine ? "are" : "is"} no longer an owner or admin here: its tools aren't offered. Remove it.`}</Small>
                           </View>
                           <If when={sharer().mine && sharer().active}>
                             <Button small variant="outline" label="Manage sharing" onPress={() => props.go?.({ name: "settings", section: "mcp-sharing" })} />

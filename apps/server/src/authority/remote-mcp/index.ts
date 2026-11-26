@@ -13,7 +13,7 @@ import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/
 import type { AppContext, AppEnv, Env, SessionRow } from '../../types.js';
 import { appOrigin, fail, id, identifier, now, randomToken, requireOrigin, text, userIdentifier } from '../../http.js';
 import { body, fields } from '../../schemas.js';
-import { requireMember, sessionAccess, workspaceAdminSQL } from '../access.js';
+import { requireMember, sessionAccess, workspaceAdminSQL, workspaceManagerRolesSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
 import { privateResponse } from '../auth.js';
 import { workspaceExtensions } from '../extension-policy.js';
@@ -41,11 +41,12 @@ interface ServerRow {
 }
 
 const activeShareSQL = (server: string) => `(${server}.shared_connection_id IS NULL OR EXISTS (SELECT 1 FROM mcp_connections sc
-  JOIN workspace_members sm ON sm.user_id = sc.user_id AND sm.workspace_id = ${server}.workspace_id WHERE sc.id = ${server}.shared_connection_id))`;
+  JOIN workspace_members sm ON sm.user_id = sc.user_id AND sm.workspace_id = ${server}.workspace_id AND sm.role IN (${workspaceManagerRolesSQL})
+  WHERE sc.id = ${server}.shared_connection_id))`;
 
 async function sharers(env: Env, workspaceId: string, viewer: string): Promise<Map<string, McpServerSharer>> {
   const rows = await env.DB.query<{ id: string; user_id: string; display_name: string; member: number | string | null }>(`SELECT c.id, c.user_id, u.display_name,
-      (SELECT 1 FROM workspace_members m WHERE m.workspace_id = s.workspace_id AND m.user_id = c.user_id) AS member
+      (SELECT 1 FROM workspace_members m WHERE m.workspace_id = s.workspace_id AND m.user_id = c.user_id AND m.role IN (${workspaceManagerRolesSQL})) AS member
     FROM workspace_mcp_servers s JOIN mcp_connections c ON c.id = s.shared_connection_id JOIN users u ON u.id = c.user_id
     WHERE s.workspace_id = ?`).bind(workspaceId).all();
   return new Map(rows.map(row => [row.id, { userId: row.user_id, name: row.display_name, mine: row.user_id === viewer, active: Number(row.member) === 1 }]));
@@ -246,7 +247,7 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
   }
   const chosen = await chooseCredentials(c.env, server, actorId);
   if (!chosen && server.shared_connection_id) {
-    fail(403, 'mcp_share_ended', `${server.name} calls with the connection a member shared with this workspace, and they no longer belong to it. Nothing ran.`);
+    fail(403, 'mcp_share_ended', `${server.name} calls with the connection a member shared with this workspace, and they are no longer one of its owners or admins. Nothing ran.`);
   }
   if (!chosen) {
     fail(403, 'mcp_connection_required', `${server.name} signs in with each member's own account, and the requester brought none to this workspace: they connect it under`
@@ -341,7 +342,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     let listedBy: SignInOwner = 'workspace';
     if (reach && row.shared_connection_id) {
       const sharer = await sharedCredentials(c.env, row)
-        ?? fail(409, 'mcp_share_ended', 'The member who shared this server\'s connection no longer belongs to this workspace, so its tools can\'t be listed: remove it.');
+        ?? fail(409, 'mcp_share_ended', 'The member who shared this server\'s connection is no longer an owner or admin of this workspace, so its tools can\'t be listed: remove it.');
       lister = sharer.credentials; listedBy = 'sharer';
     } else if (reach && signInAs !== 'workspace' && !hasSignIn(lister)) {
       const own = await broughtConnection(c.env, workspaceId, url, actor);

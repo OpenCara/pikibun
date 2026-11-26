@@ -74,14 +74,17 @@ each of the member's connections with the workspaces they could share it with an
   (`mcp_server_at_address`): members bring their own connections to that one instead.
 - **Its sign-in stays the member's**: the connection's secret is never copied into the workspace. A call
   (`chooseCredentials`) decrypts the connection's own headers or OAuth sign-in, and only while the member who shared it
-  still belongs to the workspace (`sharedConnection` joins `workspace_members`); once they leave, its tools aren't
-  offered (`workspaceRemoteTools`) and a call is refused (`mcp_share_ended`, nothing sent). Every call's audit names
-  the connection.
+  is still an owner or admin of the workspace (`sharedConnection` joins `workspace_members` on a manager role). Once
+  they leave or lose that role, its tools aren't offered (`workspaceRemoteTools`) and a call is refused
+  (`mcp_share_ended`, nothing sent). Rejoining as a plain member doesn't turn it back on, since no owner or admin
+  would have agreed to it this time; only being an owner or admin again does, which could share it anew anyway.
+  Every call's audit names the connection.
 - **What the workspace's owners and admins still do**: rename it, turn it off, mark its read-only tools, list its
   tools again (with the shared connection) and remove it. They can't change its address, headers, OAuth sign-in or
   `signInAs` (`mcp_server_shared`), since any of those would send the member's account somewhere else or replace it.
 - **Ending it**: the member withdraws it from the page (`DELETE …/shares/:workspace`, whatever their role there now),
-  removes the connection (the server goes with it, `ON DELETE CASCADE`), or leaves the workspace. An owner or admin
+  removes the connection (the server goes with it, `ON DELETE CASCADE`), or leaves the workspace or stops being one of
+  its owners or admins (the server stays, inactive, for its owners and admins to remove). An owner or admin
   removing the server ends it too. Checking the connection (changing its sign-in, signing in, **Check again**) lists
   the tools again for every workspace it is shared with, or notes the error there.
 

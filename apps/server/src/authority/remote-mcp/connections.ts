@@ -56,7 +56,7 @@ export async function connectionCredentials(env: Env, row: Pick<ConnectionRow, '
 
 export async function sharedConnection(env: Env, workspaceId: string, connectionId: string): Promise<ConnectionRow | null> {
   return await env.DB.query<ConnectionRow>(`SELECT c.* FROM mcp_connections c
-      JOIN workspace_members m ON m.workspace_id = ? AND m.user_id = c.user_id
+      JOIN workspace_members m ON m.workspace_id = ? AND m.user_id = c.user_id AND m.role IN (${workspaceManagerRolesSQL})
     WHERE c.id = ?`).bind(workspaceId, connectionId).first() ?? null;
 }
 
