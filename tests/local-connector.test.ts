@@ -284,6 +284,9 @@ test('a host lists only the folders of a directory, never its files or its own s
   assert.equal((await list(`${root}/missing`) as { problem: string }).problem, 'missing');
   assert.equal((await list(join(root, 'notes.txt')) as { problem: string }).problem, 'not-directory');
   assert.equal((await list(fixture.dataDir) as { problem: string }).problem, 'refused');
+  for (const inside of [join(fixture.dataDir, 'no-such-name'), join(fixture.dataDir, 'connector.json', 'deeper')]) {
+    assert.equal((await list(inside) as { problem: string }).problem, 'refused', 'nothing tells what is or isn\'t inside the host\'s storage');
+  }
   assert.equal((await list(join(root, 'storage')) as { problem: string }).problem, 'refused');
   const above = await list(join(fixture.dataDir, '..')) as { usable: boolean; entries: { path: string }[] };
   assert.equal(above.usable, false, 'a directory that holds the host\'s storage is listed, but no session works in it');

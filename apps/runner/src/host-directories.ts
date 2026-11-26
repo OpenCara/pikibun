@@ -39,10 +39,9 @@ export async function listHostDirectories(path: string, options: HostDirectories
   const target = chosenWorktree(path, home);
   const up = dirname(target);
   const base = { path: target, parent: up === target ? null : up, home };
-  const refused = await Promise.all(options.refused.map(async item => {
-    const resolved = resolve(item);
-    return realpath(resolved).catch(() => resolved);
-  }));
+  const named = options.refused.map(item => resolve(item));
+  const refused = await Promise.all(named.map(resolved => realpath(resolved).catch(() => resolved)));
+  if ([...named, ...refused].some(storage => within(storage, target))) return { ...base, problem: "refused" };
   let real: string;
   try {
     real = await realpath(target);
