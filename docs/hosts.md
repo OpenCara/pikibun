@@ -58,7 +58,7 @@ The connector reads these when it starts; restart it after changing them.
 
 ## Sharing a host
 
-A paired host is private: only you can start sessions on it, in any of your workspaces. Under **Settings → Hosts →** the host **→ Sharing**, **Share** it with a workspace you belong to (one with a bound repository) to let its members run their own sessions on it; **Unshare** stops that at once.
+A paired host is private: only you can start sessions on it, in any of your workspaces. Under **Settings → Hosts →** the host **→ Sharing**, every workspace you belong to is listed with a toggle: turn it on for a workspace (one with a bound repository) to let its members run their own sessions on it; turn it off, once you confirm, to stop that at once.
 
 This is how a team shares one model subscription or set of API keys. Sign Pi in once on one machine and share that machine, and everyone in the workspace can pick its models when they start a session. The provider's credentials stay on that machine, and teammates never see or copy them. Revoking the host or unsharing it cuts everyone off at once. Check that your provider's terms allow sharing your plan this way.
 

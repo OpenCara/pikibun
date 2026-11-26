@@ -1,4 +1,4 @@
-import { effect, signal, untracked, View } from "nsh";
+import { computed, effect, signal, untracked, View } from "nsh";
 import type { ConnectorInfo, ConnectorPairing } from "../../../../packages/shared/src/connector";
 import type { WorkspaceRepositoryList } from "../../../../packages/shared/src/repositories";
 import { modelKey, segment, type Workspace } from "../shared";
@@ -7,9 +7,9 @@ import { session } from "../lib/auth";
 import { timestamp } from "../lib/format";
 import { createAction, createResource } from "../lib/resource";
 import { ConnectionStatus, createConnections, HostCapabilities, hostTone } from "../hosts";
-import { Field, Select, TextField } from "../form";
+import { CheckControl, Field, TextField } from "../form";
 import {
-  Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, EmptyState, Feedback, FormSheet, IconButton, Note, ResourceState, Row, Section, Small, StatusDot,
+  Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, EmptyState, Feedback, FormSheet, IconButton, Note, ResourceState, Row, Section, Small, StatusDot,
 } from "../ui";
 import { Card } from "./accounts";
 import { HostAdminsSection, HostCommandGrantsSection, HostCompactionSection, HostConfigSection, ModelsSection } from "./host-sections";
@@ -180,17 +180,18 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
   const reconnecting = signal(false);
   const pairing = signal(false);
   const owner = () => connector().role !== "admin";
-  const names = () => new Map(data.workspaces().map(workspace => [workspace.id, workspace.name]));
   const associated = () => [...new Set([...(connector().connectedWorkspaceIds ?? []), ...connector().workspaceIds])];
-  const available = () => data.workspaces().filter(workspace => !connector().workspaceIds.includes(workspace.id));
-  async function unshare(workspaceId: string) {
-    if (!await confirm({ title: "Stop sharing this host?", confirmLabel: "Unshare",
-      message: "Other members' sessions can no longer run work on it in this workspace. It stays connected for your own use; existing session records are unchanged." })) return;
-    await share.run(async () => {
-      await session().api(`/api/connectors/${segment(connector().id)}/shares/${segment(workspaceId)}`, { method: "DELETE" });
-      props.refresh();
-    }, "Host sharing stopped. Your private connection remains available.");
-  }
+  const sharingRows = (): ShareTarget[] => {
+    if (data.workspacesLoading()) return [];
+    const listed = data.workspaces().filter(workspace => !workspace.personal || associated().includes(workspace.id));
+    const known = new Set(listed.map(workspace => workspace.id));
+    return [
+      ...listed.map(workspace => ({ id: workspace.id, name: workspace.name, personal: Boolean(workspace.personal) })),
+      ...associated().filter(id => !known.has(id)).map(id => ({ id, name: id, personal: false })),
+    ];
+  };
+  const sharedCount = () => sharingRows().filter(row => connector().workspaceIds.includes(row.id)).length;
+  const shareable = () => sharingRows().filter(row => !row.personal).length;
   async function remove() {
     if (!await confirm({ title: `Permanently remove ${connector().name}?`, confirmLabel: "Remove permanently", destructive: true,
       message: "This permanently removes the host from your list, invalidates its credentials and stops sharing it in all workspaces. Existing sessions and their historical host references remain, but cannot run on this host. Local files are not deleted. To use this machine again, pair it as a new host." })) return;
@@ -230,24 +231,15 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
         </View>
       </Section>
       <ModelsSection connector={connector()} refresh={props.refresh} modelKey={modelKey} />
-      <Section title="Sharing" testID="host-sharing" info="Sharing with a workspace is optional and lets its members run their own sessions on this host; you will see their prompts and repository snapshots. Agents, session permissions and GitHub credentials are not shared, and personal Pi history is never imported.">
-        <If when={associated().length > 0} else={<Row title="Not in any workspace yet" hint="Create or join a workspace to use this host there" />}>
-          <Each of={associated()}>
-            {workspaceId => {
-              const shared = () => connector().workspaceIds.includes(workspaceId());
-              return (
-                <Row title={names().get(workspaceId()) ?? workspaceId()} hint={shared() ? "Shared with members" : owner() ? "Private: your use only" : "Private: the owner's use only"}
-                  trailing={shared() && !connector().revokedAt ? <Button small variant="outline" label="Unshare" disabled={share.busy()} onPress={() => void unshare(workspaceId())} /> : undefined} />
-              );
-            }}
+      <Section title="Sharing" testID="host-sharing" info="Turn sharing on for a workspace to let its members run their own sessions on this host; you will see their prompts and repository snapshots. Turn it off to stop them: the host stays connected for your own use and existing session records are unchanged. Agents, session permissions and GitHub credentials are not shared, and personal Pi history is never imported."
+        action={shareable() ? <Badge testID="host-sharing-summary" tone={sharedCount() ? "success" : "neutral"}>{sharedCount() ? `Shared with ${sharedCount()} of ${shareable()}` : "Private"}</Badge> : undefined}>
+        <If when={sharingRows().length > 0}
+          else={data.workspacesLoading() ? <Row title="Loading workspaces…" />
+            : <Row title="No workspaces yet" hint="Create or join a workspace and add a source to it to share this host with its members" chevron
+              onPress={() => props.go({ name: "settings", section: "workspaces" })} />}>
+          <Each of={sharingRows()} key={row => row.id}>
+            {row => <ShareToggleRow connector={connector()} target={row()} owner={owner()} busy={share.busy()} run={share.run} refresh={props.refresh} />}
           </Each>
-        </If>
-        <If when={!connector().revokedAt}>
-          <If when={available().length > 0}
-            else={<If when={!data.workspaces().length}><Row title="Share with workspace" hint="Create or join a workspace and configure its repositories before sharing" chevron
-              onPress={() => props.go({ name: "settings", section: "workspaces" })} /></If>}>
-            <ShareRow connector={connector()} available={available()} busy={share.busy()} run={share.run} refresh={props.refresh} go={props.go} />
-          </If>
         </If>
         <If when={share.error() || share.notice()}><CardBody><Feedback error={share.error()} notice={share.notice()} /></CardBody></If>
       </Section>
@@ -285,32 +277,56 @@ function HostSections(props: { connector: ConnectorInfo; connectorOf: () => Conn
   );
 }
 
-function ShareRow(props: { connector: ConnectorInfo; available: Workspace[]; busy: boolean; run: (task: () => Promise<void>, notice?: string) => Promise<boolean>; refresh: () => void; go: SectionProps["go"] }) {
-  const workspaceId = signal("");
-  const target = () => props.available.find(workspace => workspace.id === workspaceId()) ?? props.available[0]!;
-  const repositories = createResource<WorkspaceRepositoryList>(() => `/api/workspaces/${segment(target().id)}/repositories`);
-  const listed = () => (!repositories.loading() && !repositories.error() ? repositories.data() : null);
+interface ShareTarget { id: string; name: string; personal: boolean }
+
+function ShareToggleRow(props: { connector: ConnectorInfo; target: ShareTarget; owner: boolean; busy: boolean;
+  run: (task: () => Promise<void>, notice?: string) => Promise<boolean>; refresh: () => void | Promise<void> }) {
+  const pending = signal<boolean | null>(null);
+  const shared = () => props.connector.workspaceIds.includes(props.target.id);
+  const revoked = () => Boolean(props.connector.revokedAt);
+  const checked = () => pending() ?? shared();
+  const sourcesPath = computed(() => (shared() || revoked() || props.target.personal ? null : `/api/workspaces/${segment(props.target.id)}/repositories`));
+  const repositories = createResource<WorkspaceRepositoryList>(sourcesPath);
+  const listed = () => (repositories.error() ? null : repositories.data());
   const configured = () => Boolean(listed() && (listed()!.repositories.length || listed()!.sources || !listed()!.required));
-  async function share() {
-    if (!configured() || props.busy) return;
-    if (props.connector.capabilities.unsandboxed && !await confirm({ title: "Share an unsandboxed host?", confirmLabel: "Share host", destructive: true,
-      message: `Share an unsandboxed Pi with ${target().name}? Commands of members you grant host commands will run directly on your machine as your user, with access to your files, credentials and network, and no resource limits.` })) return;
-    await props.run(async () => {
-      await session().api(`/api/connectors/${segment(props.connector.id)}/shares/${segment(target().id)}`, { method: "PUT", body: {} });
-      props.refresh();
-    }, "Host shared with workspace. Session permissions are unchanged; personal Pi history is not imported.");
+  const blocked = () => !shared() && !configured();
+  async function change(on: boolean) {
+    if (props.busy || on === shared()) return;
+    const name = props.target.name;
+    if (on) {
+      if (!configured()) return;
+      if (props.connector.capabilities.unsandboxed && !await confirm({ title: "Share an unsandboxed host?", confirmLabel: "Share host", destructive: true,
+        message: `Share an unsandboxed Pi with ${name}? Commands of members you grant host commands will run directly on your machine as your user, with access to your files, credentials and network, and no resource limits.` })) return;
+    } else if (!await confirm({ title: `Stop sharing with ${name}?`, confirmLabel: "Stop sharing",
+      message: `Other members' sessions can no longer run work on this host in ${name}. It stays connected for ${props.owner ? "your" : "its owner's"} own use; existing session records are unchanged.` })) return;
+    pending.set(on);
+    try {
+      await props.run(async () => {
+        await session().api(`/api/connectors/${segment(props.connector.id)}/shares/${segment(props.target.id)}`, on ? { method: "PUT", body: {} } : { method: "DELETE" });
+        await props.refresh();
+      }, on ? `Shared with ${name}. Session permissions are unchanged; personal Pi history is not imported.`
+        : `Stopped sharing with ${name}. ${props.owner ? "Your" : "The owner's"} private connection remains available.`);
+    } finally {
+      pending.set(null);
+    }
   }
-  const hint = () => (repositories.loading() ? "Checking repositories…" : repositories.error() ? repositories.error()
-    : !configured() ? `No repositories configured for ${target().name}. Ask an owner or admin to bind one before sharing`
-    : `Members of ${target().name} can run their own sessions on this host`);
+  const hint = () => {
+    if (props.target.personal) return `Private workspace: only ${props.owner ? "you use" : "its owner uses"} this host here`;
+    if (shared()) return "On: members can run their own sessions on this host";
+    if (revoked()) return "Off: revoked hosts can't be shared";
+    if (repositories.loading() && !repositories.data()) return "Off · Checking sources…";
+    if (repositories.error()) return `Off · ${repositories.error()}`;
+    if (!configured()) return "Off · No sources yet. Ask an owner or admin to add one before sharing";
+    return `Off: ${props.owner ? "your" : "the owner's"} use only`;
+  };
   return (
-    <Row title="Share with workspace" hint={hint()} trailing={<>
-      <Select<string> compact label="Workspace to share with" value={target().id} options={props.available.map(workspace => ({ value: workspace.id, label: workspace.name }))}
-        onChange={value => workspaceId.set(value)} disabled={props.busy} />
-      <If when={(repositories.error() || !configured()) && !repositories.loading()}>
-        <IconButton icon="refresh" label="Refresh repositories" size={28} disabled={props.busy} onPress={repositories.refresh} />
-      </If>
-      <Button small variant="outline" label={props.busy ? "Saving…" : "Share"} disabled={props.busy || !configured()} onPress={() => void share()} />
-    </>} />
+    <Row testID={`host-share-${props.target.id}`} title={props.target.name} hint={hint()}
+      trailing={props.target.personal ? <Badge>Private</Badge> : <>
+        <If when={!shared() && !revoked() && (repositories.error() || (listed() && !configured()))}>
+          <IconButton icon="refresh" label={`Check ${props.target.name}'s sources again`} size={28} disabled={props.busy} onPress={repositories.refresh} />
+        </If>
+        <CheckControl testID={`host-share-toggle-${props.target.id}`} label={`Share this host with ${props.target.name}`} checked={checked()}
+          disabled={props.busy || (revoked() && !shared()) || (!checked() && blocked())} onChange={value => void change(value)} />
+      </>} />
   );
 }

@@ -68,7 +68,7 @@ On a Mac, a host's page also changes its sandbox between **No sandbox** and **ma
 ## 6. Run sessions on it
 
 - **Your own sessions:** in your **Private** workspace, a new session picks one of this computer's hosts for that server while it's online. There it runs [directly on the host](../hosts.md#sessions-on-the-host) by default, as you, with your files. To isolate a session, choose **Where it runs → Sandbox**. Pick another of your hosts, or one in other workspaces, under **Host**.
-- **Teammates' sessions:** under the server's **Settings → Hosts →** this host **→ Sharing**, choose **Share** for a workspace (one with a bound repository). Its members can then pick your models, and their sessions run as them, not as you. As the host's operator, you can see the prompts and files of every session that runs on it. **Unshare** stops sharing at once. See [Sharing a host](../hosts.md#sharing-a-host).
+- **Teammates' sessions:** under the server's **Settings → Hosts →** this host **→ Sharing**, turn on the toggle of a workspace (one with a bound repository). Its members can then pick your models, and their sessions run as them, not as you. As the host's operator, you can see the prompts and files of every session that runs on it. Turning it off stops sharing at once. See [Sharing a host](../hosts.md#sharing-a-host).
 
 ## WSL2
 
