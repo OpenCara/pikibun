@@ -155,7 +155,8 @@ test("an Azure DevOps pull request's state: merged, closed, draft, changes reque
 test("an Azure DevOps branch's pull request is the newest one from the branch since the session started, or still open, in the repository itself", async t => {
   const query = `${base}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent("refs/heads/pikibun/fix")}&searchCriteria.status=all&$top=10&api-version=7.1`;
   let value: unknown[] = [];
-  mock(t, { [query]: () => Response.json({ value }) });
+  let active: unknown[] = [];
+  mock(t, { [query]: () => Response.json({ value }), [query.replace("status=all", "status=active")]: () => Response.json({ value: active }) });
   assert.equal(await findAzureBranchPullRequest(api, "pikibun/fix", "2026-11-01T00:00:00Z"), undefined);
   const item = (id: number, creationDate: string, extra: Record<string, unknown> = {}) =>
     ({ pullRequestId: id, creationDate, sourceRefName: "refs/heads/pikibun/fix", repository: { id: repositoryId }, ...extra });
@@ -167,6 +168,10 @@ test("an Azure DevOps branch's pull request is the newest one from the branch si
     item(1, "2026-09-01T00:00:00Z", { status: "active", repository: { id: "other" } })];
   assert.deepEqual(await findAzureBranchPullRequest(api, "pikibun/fix", "2026-11-01T00:00:00Z"),
     { url: "https://dev.azure.com/contoso/My%20Project/_git/app/pullrequest/2", number: 2 }, "one opened before the session counts while it is still open");
+  value = Array.from({ length: 10 }, (_, index) => item(30 - index, "2026-10-05T00:00:00Z", { status: "completed" }));
+  active = [item(12, "2026-09-01T00:00:00Z", { status: "active", forkSource: { repository: {} } }), item(11, "2026-09-01T00:00:00Z", { status: "active" })];
+  assert.deepEqual(await findAzureBranchPullRequest(api, "pikibun/fix", "2026-11-01T00:00:00Z"),
+    { url: "https://dev.azure.com/contoso/My%20Project/_git/app/pullrequest/11", number: 11 }, "behind ten newer closed ones, the open one is asked for");
 });
 
 test("the Review tab reads an Azure DevOps pull request: files with diffs Pikibun works out, commits, reviews, threads and checks", async t => {

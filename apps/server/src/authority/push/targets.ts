@@ -291,7 +291,9 @@ export async function openBranchPullRequest(access: RepositoryAccess, pin: Sessi
     case 'github-enterprise': {
       const owner = pin.fullName.split('/')[0]!;
       const pulls = await list(`${target.base}/repos/${pin.fullName}/pulls?state=open&sort=created&direction=desc&per_page=10&head=${encodeURIComponent(`${owner}:${head}`)}`, body => body);
-      const pull = pulls.find(item => record(item.head).ref === head);
+      const ours = (repository: Record<string, unknown>) => typeof pin.repositoryId === 'number' && typeof repository.id === 'number'
+        ? repository.id === pin.repositoryId : String(repository.full_name ?? '').toLowerCase() === pin.fullName.toLowerCase();
+      const pull = pulls.find(item => record(item.head).ref === head && ours(record(record(item.head).repo)));
       return pull ? found(pull.html_url, pull.number) : null;
     }
     case 'gitlab': {
@@ -305,7 +307,7 @@ export async function openBranchPullRequest(access: RepositoryAccess, pin: Sessi
       return pull ? found(pull.html_url, pull.number) : null;
     }
     case 'bitbucket': {
-      const query = encodeURIComponent(`source.branch.name="${head}" AND state="OPEN"`);
+      const query = encodeURIComponent(`source.branch.name="${head.replace(/[\\"]/g, '\\$&')}" AND state="OPEN"`);
       const pulls = await list(`${target.base}/repositories/${pin.fullName}/pullrequests?q=${query}&sort=-created_on`, values);
       const pull = pulls.find(item => record(record(item.source).branch).name === head
         && String(record(record(item.source).repository).full_name ?? pin.fullName).toLowerCase() === pin.fullName.toLowerCase());

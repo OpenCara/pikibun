@@ -13,7 +13,7 @@ import { parseOperation } from '../operations.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { requireCallbackScope } from '../hosts.js';
 import { requireOperationTool } from '../tool-checks.js';
-import { cloneSessionRepository, recheckAccess, repositoryAccess } from '../repositories.js';
+import { cloneSessionRepository, recheckAccess, repositoryAccess, verifyRepository } from '../repositories.js';
 import { mintPushToken, revokePushToken, type MintedToken, type PushRevocation } from './mint.js';
 import { branchTip, openBranchPullRequest, openPullRequest, pushTarget } from './targets.js';
 
@@ -295,6 +295,7 @@ async function linkOpenPullRequest(c: AppContext, session: SessionRow, ledger: P
   const { provider, host } = pinProvider(pin);
   if (provider === 'git') return null;
   const access = await repositoryAccess(c.env, owner.row.owner_id, provider, host, pin.fullName);
+  await verifyRepository(access, { repositoryId: String(pin.repositoryId), fullName: pin.fullName });
   const pull = await openBranchPullRequest(access, pin, operation.branch);
   if (!pull) return null;
   await recordPullRequest(c.env, session.id, ledger.id, pull.url);
