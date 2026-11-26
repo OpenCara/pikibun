@@ -7,7 +7,7 @@ import { programLimits } from "../../program-command.js";
 import type { StoredOperation } from "../../operation-record.js";
 import { callEnvironment, callEnvironmentLimits, defaultedTimeout, directoryHint, killedHint, LONG_RUN_DEFAULT_SECONDS, timedOutHint } from "../../program-defaults.js";
 import { RunnerError } from "../../protocol.js";
-import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "../../python-command.js";
+import { packageIndexRefusal, pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "../../python-command.js";
 import { commandText, type ToolContext } from "./context.js";
 
 export const callTimeoutParameter = () => opt(int({ minimum: 1, maximum: CALL_TIMEOUT_MAX_SECONDS,
@@ -54,10 +54,13 @@ export function programTools(context: ToolContext): ToolRegistration[] {
         let command: string;
         let timeout: { seconds?: number; defaulted: boolean };
         try {
-          request = pythonRequest(args); command = pythonShellCommand(request, process.platform, callEnvironment(args.env));
+          request = pythonRequest(args, "keep"); command = pythonShellCommand(request, process.platform, callEnvironment(args.env));
           timeout = defaultedTimeout(request.program, request.args, callTimeout(args.timeout_seconds));
         }
         catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid python call"}. Nothing ran.`); }
+        if (request.accountCommand !== undefined) {
+          await hostCommands.requireAccountCommand((await calls.actor(api, true)).initiatedBy, request.accountCommand, packageIndexRefusal(request.accountCommand));
+        }
         const missing = request.venv ? undefined : context.programMissing({ programs: pythonPrograms, path: "/usr/local/bin" }, request.program);
         if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
         const attribution = await calls.actor(api, true);

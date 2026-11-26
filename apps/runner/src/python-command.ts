@@ -87,22 +87,27 @@ export interface PythonRequest {
   directory: string;
   args: string[];
   venv?: string;
+  accountCommand?: string;
 }
 
-export function pythonRequest(input: { program: unknown; args?: unknown; directory?: unknown; venv?: unknown }): PythonRequest {
+export function packageIndexRefusal(command: string): string {
+  return `${command} acts on a package index as an account, which sessions don't have: the python tool doesn't run it`;
+}
+
+export function pythonRequest(input: { program: unknown; args?: unknown; directory?: unknown; venv?: unknown }, accountCommands: "refuse" | "keep" = "refuse"): PythonRequest {
   if (typeof input.program !== "string" || !(pythonPrograms as readonly string[]).includes(input.program)) {
     throw new Error(`program is one of ${pythonPrograms.join(", ")}`);
   }
   const program = input.program as PythonProgram;
   const args = programArguments(input.args ?? [], '["-m", "pytest"]');
   const command = packageIndexAccountCommand(program, args);
-  if (command !== undefined) throw new Error(`${command} acts on a package index as an account, which sessions don't have: the python tool doesn't run it`);
+  if (command !== undefined && accountCommands === "refuse") throw new Error(packageIndexRefusal(command));
   let venv: string | undefined;
   if (input.venv !== undefined) {
     try { venv = workDirectory(input.venv); } catch { throw new Error("venv is a virtual environment's directory where it runs, such as .venv"); }
     if (venv === ".") throw new Error("venv is a virtual environment's directory where it runs, such as .venv");
   }
-  return { program, directory: workDirectory(input.directory), args, ...(venv ? { venv } : {}) };
+  return { program, directory: workDirectory(input.directory), args, ...(venv ? { venv } : {}), ...(command !== undefined ? { accountCommand: command } : {}) };
 }
 
 export function pythonShellCommand(request: PythonRequest, platform: NodeJS.Platform = process.platform, environment = ""): string {
