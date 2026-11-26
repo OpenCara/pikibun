@@ -692,6 +692,24 @@ describe("settings", () => {
     expect(app.texts().join(" ")).toContain("Left out 6 tools past the 64 Pikibun offers from one server and 2 tools whose names or input schemas Pikibun can't offer.");
   });
 
+  test("Workspaces says how many of a remote MCP server's tools sessions don't get, sharing their 64 with the other servers", async () => {
+    const base = { url: "https://mcp.example.com/mcp", enabled: true, headerNames: [], readOnlyTools: [], updatedAt: "2026-01-01T00:00:00.000Z" };
+    const tool = (prefix: string) => ({ name: "run", toolName: `${prefix}_run`, description: "Run.", inputSchema: { type: "object" }, readOnly: false });
+    const big = { ...base, id: "m1", name: "ElevenLabs", prefix: "eleven", toolsNotOffered: 13, tools: [tool("eleven")] };
+    const small = { ...base, id: "m2", name: "Runway", prefix: "runway", tools: [tool("runway")] };
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/mcp-servers`]: { body: { servers: [big, small], admin: true } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("text:ElevenLabs · eleven_");
+    expect(app.texts().join(" ")).toContain("13 not offered to sessions");
+    await app.press("text:ElevenLabs · eleven_");
+    await app.waitUntil(() => app.texts().join(" ").includes("Sessions get only some of its tools"));
+    expect(app.texts().join(" ")).toContain("Sessions don't get 13 of its tools: a session takes at most 64 remote MCP tools in all, shared evenly between the workspace's servers that are on. An owner or admin makes room by turning off a server its sessions don't need.");
+    await app.press("text:Runway · runway_");
+    expect(app.texts().filter(line => line.includes("Sessions get only some of its tools")).length).toBe(1);
+  });
+
   test("Workspaces lets an admin choose whose sign-in a remote MCP server calls with, and a member use their own connection there", async () => {
     const at = "2026-01-01T00:00:00.000Z";
     const tracker = { id: "m1", name: "Tracker", prefix: "tracker", url: "https://mcp.example.com/mcp", enabled: true, signInAs: "members", headerNames: [], readOnlyTools: [],

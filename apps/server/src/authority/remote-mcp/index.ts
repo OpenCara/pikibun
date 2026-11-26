@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import { extensionSwitchOn } from '../../../../../packages/shared/src/piki-extensions.js';
 import {
-  isRemoteMcpSignInAs, REMOTE_MCP_EXTENSION, remoteMcpAppLink, remoteMcpDefinitions, remoteMcpHeaders, remoteMcpLimits, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl,
+  isRemoteMcpSignInAs, REMOTE_MCP_EXTENSION, remoteMcpAppLink, remoteMcpHeaders, remoteMcpLimits, remoteMcpSessionTools, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl,
   validRemoteMcpPrefix, type McpServerSharer, type RemoteMcpServerSummary, type RemoteMcpSignInAs, type RemoteMcpTool, type WorkspaceMcpServer,
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
@@ -73,7 +73,7 @@ const oauthContext = (serverId: string) => `remote-mcp-oauth:${serverId}`;
 const stateContext = (serverId: string) => `remote-mcp-oauth-state:${serverId}`;
 const appSecretContext = (signInId: string) => `remote-mcp-oauth-app:${signInId}`;
 
-function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sharedBy?: Map<string, McpServerSharer>): WorkspaceMcpServer {
+function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sharedBy?: Map<string, McpServerSharer>, notOffered?: number): WorkspaceMcpServer {
   const sharer = row.shared_connection_id ? sharedBy?.get(row.shared_connection_id) : undefined;
   const readOnlyTools = parsedList(row.read_only_tools_json);
   const tools = parsedTools(row.tools_json).flatMap(tool => {
@@ -88,7 +88,7 @@ function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sha
       ...(mine.row.error ? { error: mine.row.error } : {}) } } : {}),
     ...(sharer ? { sharedBy: sharer } : {}),
     readOnlyTools, tools,
-    ...(leftOut.overLimit || leftOut.unusable ? { toolsLeftOut: leftOut } : {}), ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
+    ...(leftOut.overLimit || leftOut.unusable ? { toolsLeftOut: leftOut } : {}), ...(notOffered ? { toolsNotOffered: notOffered } : {}), ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
 }
 
 function serverKeeper(env: Env, serverId: string): OAuthKeeper {
@@ -186,22 +186,24 @@ async function serverRow(env: Env, workspaceId: string, serverId: string): Promi
 
 async function serverView(env: Env, workspaceId: string, serverId: string, viewer: string): Promise<WorkspaceMcpServer> {
   const row = await serverRow(env, workspaceId, serverId);
-  return view(row, (await viewerConnections(env, workspaceId, viewer)).get(row.url), await sharers(env, workspaceId, viewer));
+  return view(row, (await viewerConnections(env, workspaceId, viewer)).get(row.url), await sharers(env, workspaceId, viewer),
+    (await sessionShares(env, workspaceId)).notOffered.get(row.id));
+}
+
+async function sessionShares(env: Env, workspaceId: string): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[]; notOffered: Map<string, number> }> {
+  const rows = await env.DB.query<ServerRow>(`SELECT * FROM workspace_mcp_servers s WHERE s.workspace_id = ? AND s.enabled = 1 AND ${activeShareSQL('s')}
+    ORDER BY s.created_at, s.prefix`).bind(workspaceId).all();
+  const shared = remoteMcpSessionTools(rows.map(row => ({ name: row.name, prefix: row.prefix, readOnlyTools: parsedList(row.read_only_tools_json), tools: parsedTools(row.tools_json) })));
+  return {
+    tools: shared.definitions,
+    servers: rows.flatMap((row, index) => shared.offered[index] ? [{ prefix: row.prefix, name: row.name }] : []),
+    notOffered: new Map(rows.flatMap((row, index) => shared.notOffered[index] ? [[row.id, shared.notOffered[index]!] as const] : [])),
+  };
 }
 
 export async function workspaceRemoteTools(env: Env, workspaceId: string): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[] }> {
-  const rows = await env.DB.query<ServerRow>(`SELECT * FROM workspace_mcp_servers s WHERE s.workspace_id = ? AND s.enabled = 1 AND ${activeShareSQL('s')}
-    ORDER BY s.created_at, s.prefix`).bind(workspaceId).all();
-  const definitions: BrokeredToolDefinition[] = [];
-  const servers: RemoteMcpServerSummary[] = [];
-  for (const row of rows) {
-    let offered = false;
-    for (const definition of remoteMcpDefinitions({ name: row.name, prefix: row.prefix, readOnlyTools: parsedList(row.read_only_tools_json), tools: parsedTools(row.tools_json) })) {
-      if (definitions.length < 64 && !definitions.some(other => other.name === definition.name)) { definitions.push(definition); offered = true; }
-    }
-    if (offered) servers.push({ prefix: row.prefix, name: row.name });
-  }
-  return { tools: definitions, servers };
+  const { tools, servers } = await sessionShares(env, workspaceId);
+  return { tools, servers };
 }
 
 export async function remoteMcpCall(c: AppContext, connectorId: string): Promise<Response> {
@@ -277,7 +279,8 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const rows = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE workspace_id = ? ORDER BY created_at, prefix').bind(workspaceId).all();
     const mine = await viewerConnections(c.env, workspaceId, actor);
     const sharedBy = await sharers(c.env, workspaceId, actor);
-    return c.json({ servers: rows.map(row => view(row, mine.get(row.url), sharedBy)), admin: member.role === 'owner' || member.role === 'admin' });
+    const { notOffered } = await sessionShares(c.env, workspaceId);
+    return c.json({ servers: rows.map(row => view(row, mine.get(row.url), sharedBy, notOffered.get(row.id))), admin: member.role === 'owner' || member.role === 'admin' });
   });
 
   app.post('/api/workspaces/:id/mcp-servers', async c => {

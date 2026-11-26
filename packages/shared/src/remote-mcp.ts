@@ -1,5 +1,5 @@
 import { sanitizeInputSchema, type InputSchema } from "./input-schema.js";
-import { reservedToolNames, type BrokeredToolDefinition } from "./tool-definitions.js";
+import { reservedToolNames, toolDefinitionLimits, type BrokeredToolDefinition } from "./tool-definitions.js";
 
 export const REMOTE_MCP_EXTENSION = "piki:remote-mcp";
 
@@ -7,6 +7,8 @@ export const remoteMcpLimits = Object.freeze({
   servers: 8, connections: 32, tools: 64, headers: 8, headerName: 64, headerValue: 4096, url: 2048, name: 64, description: 2048,
   discoverSeconds: 15, callSeconds: 60, responseBytes: 1024 * 1024, listBytes: 8 * 1024 * 1024, resultCharacters: 64 * 1024,
 });
+
+export const REMOTE_MCP_SESSION_TOOLS = toolDefinitionLimits.definitions;
 
 export interface RemoteMcpToolsLeftOut { overLimit: number; unusable: number }
 
@@ -50,6 +52,7 @@ export interface WorkspaceMcpServer {
   readOnlyTools: string[];
   tools: (RemoteMcpTool & { toolName: string; readOnly: boolean })[];
   toolsLeftOut?: RemoteMcpToolsLeftOut;
+  toolsNotOffered?: number;
   discoveredAt?: string;
   error?: string;
   updatedAt: string;
@@ -249,6 +252,12 @@ export function remoteMcpLeftOutNote(leftOut: RemoteMcpToolsLeftOut | undefined)
   return `Left out ${parts.join(" and ")}.`;
 }
 
+export function remoteMcpNotOfferedNote(count: number | undefined): string {
+  if (!count) return "";
+  return `Sessions don't get ${count} of its tools: a session takes at most ${REMOTE_MCP_SESSION_TOOLS} remote MCP tools in all,`
+    + " shared evenly between the workspace's servers that are on. An owner or admin makes room by turning off a server its sessions don't need.";
+}
+
 export function remoteMcpToolKey(name: string): string {
   let a = 0x811c9dc5;
   let b = 0x01000193;
@@ -281,4 +290,29 @@ export function remoteMcpDefinitions(server: { name: string; prefix: string; rea
     });
   }
   return definitions;
+}
+
+export interface RemoteMcpSessionServer { name: string; prefix: string; readOnlyTools: readonly string[]; tools: readonly RemoteMcpTool[] }
+
+export function remoteMcpSessionTools(servers: readonly RemoteMcpSessionServer[], limit: number = REMOTE_MCP_SESSION_TOOLS):
+  { definitions: BrokeredToolDefinition[]; offered: number[]; notOffered: number[] } {
+  const taken = new Set<string>();
+  const candidates = servers.map(server => remoteMcpDefinitions(server).filter(definition => {
+    if (taken.has(definition.name)) return false;
+    taken.add(definition.name);
+    return true;
+  }));
+  const offered = candidates.map(() => 0);
+  let total = 0;
+  for (let progressed = true; progressed && total < limit;) {
+    progressed = false;
+    for (let index = 0; index < candidates.length && total < limit; index++) {
+      if (offered[index]! < candidates[index]!.length) { offered[index]!++; total++; progressed = true; }
+    }
+  }
+  return {
+    definitions: candidates.flatMap((list, index) => list.slice(0, offered[index])),
+    offered,
+    notOffered: candidates.map((list, index) => list.length - offered[index]!),
+  };
 }

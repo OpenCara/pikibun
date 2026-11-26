@@ -312,6 +312,19 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   `arguments`. The session validates `arguments` against the schema before forwarding, and the Pikibun server again
   (pi-schema `compile`) before calling. That route checks `piki:remote-mcp` itself too (`extensionSwitchOn`, as the
   host does), and answers `mcp_tools_off` where the workspace turned it off.
+- **64 remote tools a session, shared evenly** (`remoteMcpSessionTools`, `REMOTE_MCP_SESSION_TOOLS`). The 64 is not a
+  prompt budget: a connector refuses a whole workspace extensions answer whose `remoteTools` lists more than
+  `toolDefinitionLimits.definitions` (64, `parseRemoteTools`), so sending more would take every remote tool, and every
+  extension the answer carries, from connectors of this release and older. It is tied to that limit rather than written
+  out again. Until #550 the 64 went first come, first served in the order servers were added, so one server with 64
+  tools (ElevenLabs lists more) left none for the servers added after it, which then had no tools and no namespace in
+  sessions while their settings rows looked fine. Now the enabled, still-shared servers take turns, one tool each,
+  until the 64 are taken or every tool is: max-min fair, a server with fewer tools than its share gets all of them, and
+  what doesn't divide goes to the earlier servers. Each server keeps its own first tools and its tools stay together in
+  the answer, in the servers' order, so the definitions only change when the servers do (the prompt cache). A name two
+  servers' tools both come to (`remoteMcpToolName` cuts names at 64 characters) is the earlier server's, before the
+  turns, so it costs the later one no turn. The settings list and every server view carry `toolsNotOffered`, the
+  tools of that server sessions don't get, shown on its row with what to do about it; a server that is off has none.
 - **Untrusted `readOnlyHint`**: every tool is `write: true` unless its name is in the registration's `readOnlyTools`;
   a write tool is refused for a Read-only message's admission (`run_admissions.access = 'read'`), and every call is
   audited as `workspace.mcp.called` with the server, tool and whether it may write.
