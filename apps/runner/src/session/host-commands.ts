@@ -6,8 +6,8 @@ import { RunnerError } from "../protocol.js";
 export const HOST_COMMANDS_RULE = "runs on the host's own machine, outside the sandbox: only in sessions of the host's owner and of members they granted host "
   + "commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran.";
 
-export const ACCOUNT_COMMANDS_ON_HOST_RULE = "acts on a package registry as an account, so it runs only on the host's own machine, with its user's own sign-in: "
-  + "in sessions of the host's owner and of members they granted host commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran.";
+export const ACCOUNT_COMMANDS_ON_HOST_RULE = "here: on the host's own machine, with its user's own sign-in, it runs only in sessions of the host's owner and of members "
+  + "they granted host commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran.";
 
 export interface HostCommandPolicyOptions {
   ownerId: string;
@@ -58,9 +58,9 @@ export class HostCommandPolicy {
     return this.options.onHost && await this.allowed(actorId);
   }
 
-  async requireAccountCommand(actorId: string, command: string, sandboxRefusal: string): Promise<void> {
+  async requireAccountCommand(actorId: string, refusal: string): Promise<void> {
     if (await this.accountCommandsAllowed(actorId)) return;
-    throw this.options.onHost ? new RunnerError(403, `${command} ${ACCOUNT_COMMANDS_ON_HOST_RULE}`) : new RunnerError(400, `${sandboxRefusal}. Nothing ran.`);
+    throw this.options.onHost ? new RunnerError(403, `${refusal} ${ACCOUNT_COMMANDS_ON_HOST_RULE}`) : new RunnerError(400, `${refusal}. Nothing ran.`);
   }
 
   async require(actorId: string, what: string): Promise<void> {

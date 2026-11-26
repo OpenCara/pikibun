@@ -28,7 +28,7 @@ export function definedTool(context: ToolContext, definition: ToolDefinition): T
         }
         catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${definition.name} call`}. Nothing ran.`); }
         if (request.accountCommand !== undefined) {
-          await hostCommands.requireAccountCommand((await calls.actor(api, true)).initiatedBy, request.accountCommand, accountCommandRefusal(definition, request.accountCommand));
+          await hostCommands.requireAccountCommand((await calls.actor(api, true)).initiatedBy, accountCommandRefusal(definition, request.accountCommand));
         }
         const missing = context.programMissing(definition, request.program);
         if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);

@@ -11,7 +11,7 @@ import { MIRROR_ROOT } from "../apps/runner/src/sandbox.js";
 import { WholeResults, boundedResult } from "../apps/runner/src/session/whole-results.js";
 import { BranchReports } from "../apps/runner/src/session/branch-reports.js";
 import { CRASHED_TEXT, endView, refusedView } from "../apps/runner/src/session/entries.js";
-import { HOST_COMMANDS_RULE, HostCommandPolicy, type HostCommandPolicyOptions } from "../apps/runner/src/session/host-commands.js";
+import { ACCOUNT_COMMANDS_ON_HOST_RULE, HOST_COMMANDS_RULE, HostCommandPolicy, type HostCommandPolicyOptions } from "../apps/runner/src/session/host-commands.js";
 import { defaultHostConfig } from "../packages/shared/src/host-config.js";
 import { MessageInputs } from "../apps/runner/src/session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "../apps/runner/src/session/mirrors.js";
@@ -270,6 +270,29 @@ test("the shell needs a limited sandbox, the host, a Windows sandbox or a test s
     assert.equal(hostPolicy(options).policy.shellAllowed(), true);
   }
   assert.equal(hostPolicy({ onHost: true, windowsSandbox: true }).policy.shellAllowed(), true);
+});
+
+test("commands that act on a registry as an account run only on the host's own machine, for the host's owner and members granted host commands", async () => {
+  const refusal = "npm publish acts on a package registry as an account, which sessions don't have: the node tool doesn't run it";
+  const sandboxed = hostPolicy({ ownerId: "github:1" });
+  assert.equal(await sandboxed.policy.accountCommandsAllowed("github:1"), false);
+  await assert.rejects(sandboxed.policy.requireAccountCommand("github:1", refusal), (error: unknown) =>
+    error instanceof RunnerError && error.status === 400 && error.message === `${refusal}. Nothing ran.`);
+  assert.deepEqual(sandboxed.asked, [], "in the sandbox, nobody is asked: there is no account to act as");
+
+  for (const options of [{ hostSession: true, onHost: true }, { onHost: true }]) {
+    const own = hostPolicy({ ownerId: "github:1", ...options });
+    assert.equal(await own.policy.accountCommandsAllowed("github:1"), true, "the host's owner, in their own session on it");
+    await own.policy.requireAccountCommand("github:1", refusal);
+    const member = hostPolicy(options, { "github:2": { hostCommands: "auto" }, "github:3": {} });
+    assert.equal(await member.policy.accountCommandsAllowed("github:2"), true, "a member granted host commands, in their own session");
+    assert.equal(await member.policy.accountCommandsAllowed("github:3"), false, "another member's message in it");
+    await assert.rejects(member.policy.requireAccountCommand("github:3", refusal), (error: unknown) =>
+      error instanceof RunnerError && error.status === 403 && error.message === `${refusal} ${ACCOUNT_COMMANDS_ON_HOST_RULE}`);
+    const ungranted = hostPolicy(options);
+    assert.equal(await ungranted.policy.accountCommandsAllowed("github:2"), false, "a member without the grant, even in their own session");
+    assert.equal(await hostPolicy(options).policy.accountCommandsAllowed("github:1"), false, "the host's owner in a session of a member without the grant");
+  }
 });
 
 test("a member's host session runs while the host allows host sessions and their grant lasts", async () => {

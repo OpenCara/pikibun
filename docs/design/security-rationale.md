@@ -93,6 +93,19 @@ In the private workspace's sessions of the host's owner, `sudo -A` asks the owne
 
 What it doesn't protect against: text the agent reads (a repository's files, a web page, a cloned repository's `AGENTS.md` through `extensions/context-files`) can steer what it runs, and on the host that runs as the owner. Use **Where it runs → Sandbox** for work on code or pages you don't trust. A session on the host runs its extensions on the host too, in a process of their own as the owner's user (`apps/runner/src/extensions/`), so there a workspace's extensions are trusted code; in a sandboxed session on Linux or macOS they run in its sandbox ([extension isolation](extension-isolation.md)).
 
+## Account commands on the host
+
+The program tools refuse commands that act on a package registry or index as an account (`npm publish`, `npm token`, `pnpm publish`, `uv publish`, `twine upload`, `cargo publish`, `dotnet nuget push`, a workspace-defined tool's `refuse` rules, and the same through `npx`, `corepack`, `exec`, `dlx`, `uv run` and the like). They came with the first ecosystem tool (#177, issue #163), for the sandbox: it has no registry sign-in, so such a command could only fail or act with a token someone pasted into the session, and in a shared workspace other members' messages, and text the agent reads, steer what runs.
+
+On the host's own machine that reason doesn't hold, and the refusal left a gap. A session on the host, or any session of an unsandboxed host, runs as the host's user with their `~/.npmrc`, `~/.cargo/credentials.toml` and other sign-ins, and since `host_bash` was removed (#193) the program tools are the only way to run anything there, so the host's owner couldn't publish from their own private workspace at all. Since #549 the refusal applies only where the reason does (`HostCommandPolicy.requireAccountCommand` in `apps/runner/src/session/host-commands.ts`, called by the program tools before anything is recorded):
+
+- **Only on the host's own machine.** The policy's `onHost`: a session on the host, or one on a host without the sandbox. A sandboxed session is refused as before, with no one asked.
+- **Only for the people who already run anything there.** The session's owner and the message's sender must both hold host commands (`HostCommandPolicy.allowed`): the host's owner always does, a member only with an unexpired grant. Those people could already run any program as the host's user, including a `node -e` script that reads `~/.npmrc` and calls the registry itself, so the refusal protected nothing from them; it only stopped the exact command they meant. Anyone else's message in such a session is refused, saying who may run it.
+- **Whose sign-in.** In the host's owner's own sessions commands run with the owner's environment ([The owner's own environment](#sessions-on-the-host)), so a publish uses their registry sign-in. A member's session keeps its own `HOME`, so a member granted host commands publishes only with a sign-in their own session holds.
+- **Still an exact, recorded command.** The call is a command card like any other, with the exact command, its sender and its output, and nothing prompts: a one-time code goes in the call (`--otp`), or the sign-in is a token that publishes without one.
+
+What it doesn't protect against: as with every command on the host, text the agent reads can steer it, and a publish is public and hard to take back. Use **Where it runs → Sandbox** for work on code or pages you don't trust; there these commands stay refused.
+
 ## Open defaults
 
 A new workspace used to start closed: network access **Off**, each member's GitHub reach off, none of Pikibun's session tools but the file tools, and (outside the private workspace) sessions in the sandbox. Each was safe, and together they made a first session that could clone a repository and do little else until its owner had found four settings. The defaults now favour work getting done, and the settings narrow them:
