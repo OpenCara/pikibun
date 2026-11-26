@@ -15,9 +15,15 @@ import { requireCallbackScope } from '../hosts.js';
 import { requireOperationTool } from '../tool-checks.js';
 import { cloneSessionRepository, recheckAccess, repositoryAccess } from '../repositories.js';
 import { mintPushToken, revokePushToken, type MintedToken, type PushRevocation } from './mint.js';
-import { branchTip, openPullRequest, pushTarget } from './targets.js';
+import { branchTip, openBranchPullRequest, openPullRequest, pushTarget } from './targets.js';
 
 const outcomes: readonly PushOutcome[] = ['pushed', 'up-to-date', 'failed', 'unknown'];
+
+const recordPullRequest = (env: Env, sessionId: string, credentialId: string, url: string) => env.DB.query(`UPDATE push_credentials SET pull_request_url = ?,
+  pull_request_checked_at = NULL, pull_request_state = (SELECT p.pull_request_state
+  FROM push_credentials p WHERE p.session_id = ? AND p.pull_request_url = ? AND p.pull_request_state IS NOT NULL
+    AND p.pull_request_state NOT IN ('merged', 'closed')
+  ORDER BY p.completed_at DESC, p.created_at DESC, p.id DESC LIMIT 1) WHERE id = ?`).bind(url, sessionId, url, credentialId).run();
 const automaticPushesPerAdmission = 20;
 
 export async function requireNoRestore(c: AppContext, sessionId: string): Promise<void> {
@@ -227,7 +233,14 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
 
   const operation = parseOperation(JSON.parse(ledger.operation_json)) as GitPushOperation;
   const result: PushCompletionResult = {};
-  if ((outcome !== 'pushed' && outcome !== 'up-to-date') || !operation.pullRequest || !tip) return c.json(result);
+  if ((outcome !== 'pushed' && outcome !== 'up-to-date') || !tip) return c.json(result);
+  if (!operation.pullRequest) {
+    if (operation.tag === undefined) {
+      const linked = await linkOpenPullRequest(c, session, ledger, operation).catch(() => null);
+      if (linked) result.pullRequest = { ...linked, created: false };
+    }
+    return c.json(result);
+  }
   const pullRequestInput = operation.pullRequest;
   const authorize = async (): Promise<SessionRow> => {
     const owner = await sessionAccess(c.env, sessionId, session.owner_id);
@@ -255,10 +268,7 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
     await requireBinding(c, row.workspace_id, pin);
     const pullRequest = await openPullRequest(access, pin, { head: operation.branch, base, title: pullRequestInput.title, body: pullRequestInput.body,
       ...(pullRequestInput.draft === undefined ? {} : { draft: pullRequestInput.draft }) }, target.azureProjectId);
-    await c.env.DB.query(`UPDATE push_credentials SET pull_request_url = ?, pull_request_checked_at = NULL, pull_request_state = (SELECT p.pull_request_state
-      FROM push_credentials p WHERE p.session_id = ? AND p.pull_request_url = ? AND p.pull_request_state IS NOT NULL
-        AND p.pull_request_state NOT IN ('merged', 'closed')
-      ORDER BY p.completed_at DESC, p.created_at DESC, p.id DESC LIMIT 1) WHERE id = ?`).bind(pullRequest.url, sessionId, pullRequest.url, credentialId).run();
+    await recordPullRequest(c.env, sessionId, credentialId, pullRequest.url);
     await auditStatement(c.env, ledger.requested_by, 'git.push.pull_request', session.workspace_id, sessionId, {
       approvalId, credentialId, url: pullRequest.url, number: pullRequest.number, created: pullRequest.created, actingAs: row.owner_id,
       ...(pullRequestInput.draft === undefined ? {} : { draft: pullRequest.draft }),
@@ -274,4 +284,22 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
     throw error;
   }
   return c.json(result);
+}
+
+async function linkOpenPullRequest(c: AppContext, session: SessionRow, ledger: PushCredentialRow, operation: GitPushOperation): Promise<{ url: string; number: number } | null> {
+  const owner = await sessionAccess(c.env, session.id, session.owner_id);
+  if (!owner || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write')) return null;
+  const pin = await pushPin(c.env, owner.row, operation);
+  if (pin.bindingId !== ledger.binding_id) return null;
+  await requireBinding(c, owner.row.workspace_id, pin);
+  const { provider, host } = pinProvider(pin);
+  if (provider === 'git') return null;
+  const access = await repositoryAccess(c.env, owner.row.owner_id, provider, host, pin.fullName);
+  const pull = await openBranchPullRequest(access, pin, operation.branch);
+  if (!pull) return null;
+  await recordPullRequest(c.env, session.id, ledger.id, pull.url);
+  await auditStatement(c.env, ledger.requested_by, 'git.push.pull_request_linked', session.workspace_id, session.id, {
+    approvalId: ledger.approval_id, credentialId: ledger.id, url: pull.url, number: pull.number, actingAs: owner.row.owner_id,
+  }).run();
+  return pull;
 }

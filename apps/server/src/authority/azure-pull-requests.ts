@@ -194,7 +194,7 @@ export async function findAzureBranchPullRequest(api: AzureRepositoryApi, branch
   for (const item of found) {
     const number = integer(item.pullRequestId);
     const created = Date.parse(string(item.creationDate));
-    if (number === null || number <= 0 || !(created >= sinceMs) || string(item.sourceRefName) !== ref || item.forkSource) continue;
+    if (number === null || number <= 0 || !(created >= sinceMs || string(item.status) === 'active') || string(item.sourceRefName) !== ref || item.forkSource) continue;
     if (string(optionalRecord(item.repository).id).toLowerCase() !== api.repositoryId.toLowerCase()) continue;
     if (!best || created > best.created || (created === best.created && number > best.number)) best = { number, created };
   }
