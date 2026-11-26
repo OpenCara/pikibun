@@ -149,7 +149,7 @@ test("a tool that parks keeps parking through wholeForScripts: the Harness sleep
   const later = wholeForScripts(defineTool({ name: "later", description: "Answers after a wake.", parameters: obj({}, { open: true }),
     execute: async (_args, api) => {
       runs.push(api.wake?.reason);
-      return api.wake === undefined ? { sleep: { until: api.now() + 1000 } } : { output: [{ type: "text", text: long }] };
+      return api.wake === undefined ? { kind: "sleep", until: api.now() + 1000 } : { output: [{ type: "text", text: long }] };
     } }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([fauxAssistantMessage(fauxToolCall("later", {}), { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
@@ -190,7 +190,7 @@ test("a script's call of a tool that parks waits for its wake and gets its resul
   const later = wholeForScripts(defineTool({ name: "later", description: "Answers after a wake.", parameters: obj({}, { open: true }),
     execute: async (_args, api) => {
       runs.push(api.wake?.reason);
-      return api.wake === undefined ? { sleep: { checkpoint: { started: true }, until: api.now() + 50 } } : { output: [{ type: "text", text: `woke with ${JSON.stringify(api.checkpoint)}` }] };
+      return api.wake === undefined ? { kind: "sleep", checkpoint: { started: true }, until: api.now() + 50 } : { output: [{ type: "text", text: `woke with ${JSON.stringify(api.checkpoint)}` }] };
     } }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: "return await tools.later({});" }), { stopReason: "toolUse" }), fauxAssistantMessage("done")]);

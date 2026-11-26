@@ -37,7 +37,7 @@ export function githubTools(context: ToolContext): ToolRegistration[] {
         const started = startGitHubWait(args.wait, first, api.now(), (args.timeout_seconds ?? githubWaitLimits.defaultSeconds) * 1000);
         const turn = githubWaitTurn(started, first, api.now(), await own(), pollMs);
         if (turn.kind === "done") return text({ ...attribution, ...first, waited: turn.waited });
-        return { sleep: { checkpoint: turn.state as never, until: turn.at } };
+        return { kind: "sleep", checkpoint: turn.state as never, until: turn.at };
       }
       if (!isGitHubWaitState(api.checkpoint)) throw new RunnerError(500, "This wait lost its place; call github_read again");
       const waiting: GitHubWaitState = api.checkpoint;
@@ -46,7 +46,7 @@ export function githubTools(context: ToolContext): ToolRegistration[] {
       catch (error) { return text({ ...attribution, repository, number: args.issue, waited: githubWaitStopped(waiting, api.now(), error) }); }
       const turn = githubWaitTurn(waiting, view, api.now(), await own(), pollMs);
       if (turn.kind === "done") return text({ ...attribution, ...view, waited: turn.waited });
-      return { sleep: { checkpoint: turn.state as never, until: turn.at } };
+      return { kind: "sleep", checkpoint: turn.state as never, until: turn.at };
     } }),
     defineTool({ name: "github_comment", description: "Post an exact GitHub comment on an issue or pull request of one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker. Use this where the gh tool can't write (gh pr comment, gh issue comment). " + ownerReach + " The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, _call) => {
       await context.requireSessionTool("github_comment");

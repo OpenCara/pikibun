@@ -12,7 +12,7 @@ export const SCRIPT_OUTPUT_LIMITS = { maxBytes: SAVED_OUTPUT_BYTES + 1024, maxLi
 const scriptCalls = new AsyncLocalStorage<boolean>();
 
 export function isToolPark(returned: ToolExecutionResult | ToolPark): returned is ToolPark {
-  return "sleep" in returned || "wait" in returned;
+  return "kind" in returned;
 }
 
 export function inScriptCall(): boolean {
