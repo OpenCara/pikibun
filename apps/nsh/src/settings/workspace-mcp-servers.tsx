@@ -1,6 +1,6 @@
 import { cleanup, openUrl, signal, Text, untracked, UrlScheme, View } from "nsh";
 import {
-  parseRemoteMcpAppCode, REMOTE_MCP_APP_LINK, remoteMcpLeftOutNote, remoteMcpLimits, remoteMcpSignInAsOptions, remoteMcpSignInHeaders, remoteMcpSignInMethods, remoteMcpSignInOf,
+  parseRemoteMcpAppCode, REMOTE_MCP_APP_LINK, remoteMcpLeftOutNote, remoteMcpLimits, remoteMcpNotOfferedNote, remoteMcpSignInAsOptions, remoteMcpSignInHeaders, remoteMcpSignInMethods, remoteMcpSignInOf,
   type McpConnection, type RemoteMcpSignInAs, type RemoteMcpSignInMethod, type WorkspaceMcpServer,
 } from "../../../../packages/shared/src/remote-mcp";
 import { descriptionSummary } from "../../../../packages/shared/src/workspace-tools";
@@ -135,10 +135,11 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
               <Each of={current().servers} key={server => server.id}>
                 {server => (
                   <CollapsibleRow leading={<Icon name="sparkles" size={16} color={palette().muted} />} title={`${server().name} · ${server().prefix}_`}
-                    hint={server().error ? `${server().url}\n${server().oauth && !signInFailed(server()) ? "Signed in · " : ""}${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().toolsLeftOut ? " (some left out)" : ""}${server().oauth ? " · signed in" : ""}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}${signInAsOf(server()) !== "workspace" ? ` · ${signInAsLabel(signInAsOf(server())).toLowerCase()}` : ""}`}
+                    hint={server().error ? `${server().url}\n${server().oauth && !signInFailed(server()) ? "Signed in · " : ""}${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().toolsLeftOut ? " (some left out)" : ""}${server().toolsNotOffered ? ` · ${server().toolsNotOffered} not offered to sessions` : ""}${server().oauth ? " · signed in" : ""}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}${signInAsOf(server()) !== "workspace" ? ` · ${signInAsLabel(signInAsOf(server())).toLowerCase()}` : ""}`}
                     trailing={<Badge tone={server().error ? "danger" : server().enabled ? "success" : "neutral"}>{server().error ? "Error" : server().enabled ? "On" : "Off"}</Badge>}>
                     <If when={server().error}><Banner tone="danger" title={mcpErrorTitle(server())}>{server().error!}</Banner></If>
                     <If when={server().toolsLeftOut}><Banner tone="warning" title="Some of its tools are left out">{remoteMcpLeftOutNote(server().toolsLeftOut)}</Banner></If>
+                    <If when={server().toolsNotOffered}><Banner tone="warning" title="Sessions get only some of its tools">{remoteMcpNotOfferedNote(server().toolsNotOffered)}</Banner></If>
                     <If when={server().oauth}><Small>{`Signed in with OAuth on ${new Date(server().oauth!.signedInAt).toLocaleString()}.`}</Small></If>
                     <Each of={server().tools} key={tool => tool.name}>
                       {(tool, index) => (
