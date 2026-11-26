@@ -705,7 +705,7 @@ describe("settings", () => {
     expect(app.texts().join(" ")).toContain("13 not offered to sessions");
     await app.press("text:ElevenLabs · eleven_");
     await app.waitUntil(() => app.texts().join(" ").includes("Sessions get only some of its tools"));
-    expect(app.texts().join(" ")).toContain("Sessions don't get 13 of its tools: a session takes at most 64 remote MCP tools in all, shared evenly between the workspace's servers that are on.");
+    expect(app.texts().join(" ")).toContain("Sessions don't get 13 of its tools: a session takes at most 64 remote MCP tools in all, shared evenly between the workspace's servers that are on. An owner or admin makes room by turning off a server its sessions don't need.");
     await app.press("text:Runway · runway_");
     expect(app.texts().filter(line => line.includes("Sessions get only some of its tools")).length).toBe(1);
   });

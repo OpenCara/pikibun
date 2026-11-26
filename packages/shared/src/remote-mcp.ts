@@ -255,7 +255,7 @@ export function remoteMcpLeftOutNote(leftOut: RemoteMcpToolsLeftOut | undefined)
 export function remoteMcpNotOfferedNote(count: number | undefined): string {
   if (!count) return "";
   return `Sessions don't get ${count} of its tools: a session takes at most ${REMOTE_MCP_SESSION_TOOLS} remote MCP tools in all,`
-    + " shared evenly between the workspace's servers that are on. Turn off a server its sessions don't need to make room.";
+    + " shared evenly between the workspace's servers that are on. An owner or admin makes room by turning off a server its sessions don't need.";
 }
 
 export function remoteMcpToolKey(name: string): string {
