@@ -47,6 +47,20 @@ and runs it with `--bundle <app/bundle.js>` and its log in the system's place fo
 own options on (`--no-mouse`, `--points-per-cell`, `--fps`, `--log-file`, `--data-dir`). It refuses to start where its
 input or output isn't a terminal, and returns the host's exit status.
 
+### The host's own session
+
+On macOS and Linux the launcher starts the host in a session of its own (`detached`, `hostInOwnSession`): the host draws
+and reads through the terminal it inherits, but the terminal is not its controlling terminal. The commands the app
+starts need that. This Computer, Self host and installs run `pikibun` through the owner's interactive login shell
+(`$SHELL -ilc`), and NSH starts each command in a process group of its own. Under a host that kept the terminal, that
+shell is a background job of it: zsh and bash 5, being interactive, wait to be given the terminal (`SIGTTIN`), so the
+shell stops before it runs anything. Self host's first start then never ends, the welcome screen's buttons stay disabled,
+and nothing on it takes the keyboard. Detached, the host's commands find no terminal, as under a desktop window, and run
+as they do there. The terminal now signals the launcher, its foreground job, rather than the host, so the launcher passes
+on what the host needs: `SIGWINCH` (resizes), `SIGINT`, `SIGTERM` and `SIGHUP`. On Windows the host stays attached, as a
+detached process there gets a console of its own. `tests/tui.test.ts` runs the launcher in a pseudo-terminal with a
+stand-in host that starts zsh and bash as NSH does.
+
 `nsh package` has no terminal target (Native Shell 0.7.0), so the package is put together from `nsh build`'s output
 and the prebuilt host. The host loads `bundle.js` as source: it refuses bytecode (`bundle.nshc`) from a file anyone could
 replace, so the build leaves that out.
