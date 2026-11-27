@@ -86,8 +86,8 @@ jobs:
       - run: pnpm python:check
 
   # The tests and the end-to-end suite, in the Linux sandbox and against Postgres, split over parallel jobs: the tests
-  # were one job of 8-11 minutes, the run's critical path (docs/design/ci-tests.md). Three shards share tests/*.test.ts
-  # (Node's --test-shard takes every third file), and `sandbox` runs the sandboxes' shared cases and the end-to-end suite.
+  # were one job of 8-11 minutes, the run's critical path (docs/design/ci-tests.md). Four shards share tests/*.test.ts
+  # (Node's --test-shard takes every fourth file), and `sandbox` runs the sandboxes' shared cases and the end-to-end suite.
   # The two tests the `checks` job runs (no comments, pinned dependencies) aren't run again here.
   tests:
     needs: changes
@@ -96,9 +96,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { part: shard-1, shard: 1/3 }
-          - { part: shard-2, shard: 2/3 }
-          - { part: shard-3, shard: 3/3 }
+          - { part: shard-1, shard: 1/4 }
+          - { part: shard-2, shard: 2/4 }
+          - { part: shard-3, shard: 3/4 }
+          - { part: shard-4, shard: 4/4 }
           - { part: sandbox }
     name: tests (${{ matrix.part }})
     runs-on: ubuntu-latest
@@ -149,19 +150,6 @@ jobs:
             --test-coverage-include='packages/**' --test-coverage-include='extensions/**' \
             --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=lcov --test-reporter-destination="lcov-$PART.info" $files
-      - name: MEASURE (temporary) the same tests without coverage
-        env:
-          PART: ${{ matrix.part }}
-          SHARD: ${{ matrix.shard }}
-        run: |
-          shard=""
-          if [ "$PART" = sandbox ]; then
-            files=tests/sandbox-conformance.test.ts
-          else
-            files=$(ls tests/*.test.ts | grep -vxE 'tests/(sandbox-conformance|no-comments|pinned-dependencies)\.test\.ts')
-            shard="--test-shard=$SHARD"
-          fi
-          node --import tsx --test $shard --test-reporter=dot $files
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         with:
@@ -191,7 +179,9 @@ jobs:
           merge-multiple: true
       - run: node scripts/merge-lcov.mjs lcov.info coverage/*.info
       - name: Coverage summary
-        run: node scripts/coverage-summary.mjs lcov.info >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          node scripts/coverage-summary.mjs lcov.info >> "$GITHUB_STEP_SUMMARY"
+          echo "Merged from the test jobs' reports: lines within a tenth of a point of one run's count, branches about a point lower (docs/design/ci-tests.md)." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-lcov
