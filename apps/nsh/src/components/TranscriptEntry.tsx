@@ -1,5 +1,5 @@
 import { computed, effect, platform, signal, Text, View, type JSX } from "nsh";
-import { Button as BaseButton, TextView, Tooltip, type TextViewImage } from "nsh/base";
+import { Button as BaseButton, TextView, Tooltip, type TextViewCodeAction, type TextViewImage } from "nsh/base";
 import {
   callHeadline, COMPACTION_FAILED_TITLE, compactionFailureText, copyText, publishedArtifact, resultOutcome, resultOutput, shownImages, splitToolCalls, textBesideImages, toolCallRows,
   type ArtifactSource, type EntryView,
@@ -177,6 +177,9 @@ export function messageImage(image: TextViewImage, sessionId: string | undefined
   return <Text style={{ fontSize: text.small, color: palette().muted }}>{`[image${image.alt ? `: ${image.alt}` : ""}]`}</Text>;
 }
 
+/** The buttons over each code block of a reply: NSH's built-in copy, which copies the code and shows a check for a moment. */
+export const messageCodeBlockActions: TextViewCodeAction[] = [{ id: "copy", label: "Copy code" }];
+
 export type MessageAction = { label: string; run: () => void; disabled?: boolean };
 export type MessageActions = (entry: EntryView) => { revert?: MessageAction; fork?: MessageAction };
 
@@ -321,7 +324,7 @@ export function TranscriptEntry(props: {
           <>
             <If when={assistant().prose.trim()}>
               <TextView markdown={assistant().prose} selectable options={{ streaming: true }} onLinkPress={event => openMessageLink(event.url)}
-                renderImage={image => messageImage(image, props.imagesOf)} />
+                codeBlockActions={messageCodeBlockActions} renderImage={image => messageImage(image, props.imagesOf)} />
             </If>
             <If when={assistant().tools.length}>
               <View style={{ gap: 8 }}>{toolRows()}</View>
