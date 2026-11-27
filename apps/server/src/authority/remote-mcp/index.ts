@@ -4,7 +4,6 @@ import { compile } from '@earendil-works/pi-schema';
 import { sha256 } from '../../../../../packages/shared/src/crypto.js';
 import { z } from 'zod';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
-import { parseCapabilities } from '../../../../../packages/shared/src/connector.js';
 import { extensionSwitchOn } from '../../../../../packages/shared/src/piki-extensions.js';
 import {
   isRemoteMcpSignInAs, REMOTE_MCP_ALL_TOOLS, REMOTE_MCP_EXTENSION, REMOTE_MCP_SESSION_TOOLS, remoteMcpAppLink, remoteMcpHeaders, remoteMcpLimits, remoteMcpSessionTools, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl,
@@ -76,7 +75,7 @@ const oauthContext = (serverId: string) => `remote-mcp-oauth:${serverId}`;
 const stateContext = (serverId: string) => `remote-mcp-oauth-state:${serverId}`;
 const appSecretContext = (signInId: string) => `remote-mcp-oauth-app:${signInId}`;
 
-function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sharedBy?: Map<string, McpServerSharer>, notOffered?: number): WorkspaceMcpServer {
+function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sharedBy?: Map<string, McpServerSharer>): WorkspaceMcpServer {
   const sharer = row.shared_connection_id ? sharedBy?.get(row.shared_connection_id) : undefined;
   const readOnlyTools = parsedList(row.read_only_tools_json);
   const offTools = parsedList(row.off_tools_json ?? '[]');
@@ -94,7 +93,7 @@ function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sha
       ...(mine.row.error ? { error: mine.row.error } : {}) } } : {}),
     ...(sharer ? { sharedBy: sharer } : {}),
     readOnlyTools, offTools, tools,
-    ...(leftOut.overLimit || leftOut.unusable ? { toolsLeftOut: leftOut } : {}), ...(notOffered ? { toolsNotOffered: notOffered } : {}), ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
+    ...(leftOut.overLimit || leftOut.unusable ? { toolsLeftOut: leftOut } : {}), ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
 }
 
 function serverKeeper(env: Env, serverId: string): OAuthKeeper {
@@ -196,23 +195,11 @@ async function serverRow(env: Env, workspaceId: string, serverId: string): Promi
 
 async function serverView(env: Env, workspaceId: string, serverId: string, viewer: string): Promise<WorkspaceMcpServer> {
   const row = await serverRow(env, workspaceId, serverId);
-  return view(row, (await viewerConnections(env, workspaceId, viewer)).get(row.url), await sharers(env, workspaceId, viewer),
-    (await settingsNotOffered(env, workspaceId)).get(row.id));
+  return view(row, (await viewerConnections(env, workspaceId, viewer)).get(row.url), await sharers(env, workspaceId, viewer));
 }
 
-async function olderHosts(env: Env, workspaceId: string): Promise<boolean> {
-  const hosts = await env.DB.query<{ capabilities_json: string | null }>(`SELECT c.capabilities_json FROM connector_workspaces cw JOIN connectors c ON c.id = cw.connector_id
-    WHERE cw.workspace_id = ? AND c.revoked_at IS NULL AND c.removed_at IS NULL AND c.connection_hash IS NOT NULL`).bind(workspaceId).all();
-  return hosts.some(host => {
-    try { return parseCapabilities(host.capabilities_json ?? '{}').allRemoteTools !== true; } catch { return true; }
-  });
-}
-
-async function settingsNotOffered(env: Env, workspaceId: string): Promise<Map<string, number>> {
-  return await olderHosts(env, workspaceId) ? (await sessionShares(env, workspaceId, REMOTE_MCP_SESSION_TOOLS)).notOffered : new Map();
-}
-
-async function sessionShares(env: Env, workspaceId: string, limit: number): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[]; notOffered: Map<string, number> }> {
+export async function workspaceRemoteTools(env: Env, workspaceId: string, all = false): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[] }> {
+  const limit = all ? REMOTE_MCP_ALL_TOOLS : REMOTE_MCP_SESSION_TOOLS;
   const rows = await env.DB.query<ServerRow>(`SELECT * FROM workspace_mcp_servers s WHERE s.workspace_id = ? AND s.enabled = 1 AND ${activeShareSQL('s')}
     ORDER BY s.created_at, s.prefix`).bind(workspaceId).all();
   const shared = remoteMcpSessionTools(rows.map(row => ({ name: row.name, prefix: row.prefix, readOnlyTools: parsedList(row.read_only_tools_json),
@@ -220,13 +207,7 @@ async function sessionShares(env: Env, workspaceId: string, limit: number): Prom
   return {
     tools: shared.definitions,
     servers: rows.flatMap((row, index) => shared.offered[index] ? [{ prefix: row.prefix, name: row.name }] : []),
-    notOffered: new Map(rows.flatMap((row, index) => shared.notOffered[index] ? [[row.id, shared.notOffered[index]!] as const] : [])),
   };
-}
-
-export async function workspaceRemoteTools(env: Env, workspaceId: string, all = false): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[] }> {
-  const { tools, servers } = await sessionShares(env, workspaceId, all ? REMOTE_MCP_ALL_TOOLS : REMOTE_MCP_SESSION_TOOLS);
-  return { tools, servers };
 }
 
 export async function remoteMcpCall(c: AppContext, connectorId: string): Promise<Response> {
@@ -305,8 +286,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const rows = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE workspace_id = ? ORDER BY created_at, prefix').bind(workspaceId).all();
     const mine = await viewerConnections(c.env, workspaceId, actor);
     const sharedBy = await sharers(c.env, workspaceId, actor);
-    const notOffered = await settingsNotOffered(c.env, workspaceId);
-    return c.json({ servers: rows.map(row => view(row, mine.get(row.url), sharedBy, notOffered.get(row.id))), admin: member.role === 'owner' || member.role === 'admin' });
+    return c.json({ servers: rows.map(row => view(row, mine.get(row.url), sharedBy)), admin: member.role === 'owner' || member.role === 'admin' });
   });
 
   app.post('/api/workspaces/:id/mcp-servers', async c => {

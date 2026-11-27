@@ -57,7 +57,6 @@ export interface WorkspaceMcpServer {
   offTools: string[];
   tools: (RemoteMcpTool & { toolName: string; readOnly: boolean; off: boolean })[];
   toolsLeftOut?: RemoteMcpToolsLeftOut;
-  toolsNotOffered?: number;
   discoveredAt?: string;
   error?: string;
   updatedAt: string;
@@ -261,13 +260,6 @@ export function remoteMcpLeftOutNote(leftOut: RemoteMcpToolsLeftOut | undefined)
     ...(leftOut.unusable ? [`${count(leftOut.unusable)} whose names or input schemas Pikibun can't offer`] : []),
   ];
   return `Left out ${parts.join(" and ")}.`;
-}
-
-export function remoteMcpNotOfferedNote(count: number | undefined): string {
-  if (!count) return "";
-  return `Sessions on hosts with an older connector don't get ${count} of its tools: they take at most ${REMOTE_MCP_SESSION_TOOLS} remote MCP tools in all,`
-    + " shared evenly between the workspace's servers that are on. Updating those hosts' connector (npx pikibun@latest connect) gives their sessions every tool;"
-    + " until then an owner or admin makes room by turning off tools or servers its sessions don't need.";
 }
 
 export function remoteMcpToolKey(name: string): string {
