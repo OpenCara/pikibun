@@ -86,9 +86,10 @@ jobs:
       - run: pnpm python:check
 
   # The tests and the end-to-end suite, in the Linux sandbox and against Postgres, split over parallel jobs: the tests
-  # were one job of 8-11 minutes, the run's critical path (docs/design/ci-tests.md). Four shards share tests/*.test.ts
-  # (Node's --test-shard takes every fourth file), and `sandbox` runs the sandboxes' shared cases and the end-to-end suite.
-  # The two tests the `checks` job runs (no comments, pinned dependencies) aren't run again here.
+  # were one job of 8-11 minutes, the run's critical path (docs/design/ci-tests.md). Four shards share tests/*.test.ts by
+  # the time each file took (tests/timings.json, through scripts/test-shards.mjs), and `sandbox` runs the sandboxes' shared
+  # cases and the end-to-end suite. The two tests the `checks` job runs (no comments, pinned dependencies) aren't run
+  # again here.
   tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -133,35 +134,38 @@ jobs:
             --symlink usr/bin /bin --proc /proc --dev /dev -- /usr/bin/true
       - run: pnpm install --frozen-lockfile
       # The part's tests with Node's own coverage of apps, packages and extensions, as `pnpm test:coverage` runs them all:
-      # each part's lcov goes to the `coverage` job, which merges them.
+      # each part's lcov, and the time each of its files took, go to the `coverage` job, which merges them.
       - name: Tests with coverage
         env:
           PART: ${{ matrix.part }}
           SHARD: ${{ matrix.shard }}
         run: |
-          shard=""
           if [ "$PART" = sandbox ]; then
             files=tests/sandbox-conformance.test.ts
           else
-            files=$(ls tests/*.test.ts | grep -vxE 'tests/(sandbox-conformance|no-comments|pinned-dependencies)\.test\.ts')
-            shard="--test-shard=$SHARD"
+            files=$(node scripts/test-shards.mjs pick "$SHARD" \
+              $(ls tests/*.test.ts | grep -vxE 'tests/(sandbox-conformance|no-comments|pinned-dependencies)\.test\.ts'))
           fi
-          node --import tsx --test $shard --experimental-test-coverage --test-coverage-include='apps/**' \
+          echo "$files"
+          node --import tsx --test --experimental-test-coverage --test-coverage-include='apps/**' \
             --test-coverage-include='packages/**' --test-coverage-include='extensions/**' \
             --test-reporter=spec --test-reporter-destination=stdout \
-            --test-reporter=lcov --test-reporter-destination="lcov-$PART.info" $files
+            --test-reporter=lcov --test-reporter-destination="lcov-$PART.info" \
+            --test-reporter=./scripts/test-times-reporter.mjs --test-reporter-destination="times-$PART.json" $files
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         with:
-          name: coverage-lcov-${{ matrix.part }}
-          path: lcov-${{ matrix.part }}.info
+          name: test-reports-${{ matrix.part }}
+          path: |
+            lcov-${{ matrix.part }}.info
+            times-${{ matrix.part }}.json
           if-no-files-found: ignore
           retention-days: 1
       - if: matrix.part == 'sandbox'
         run: pnpm test:connected
 
   # The test parts' coverage merged into one lcov.info: its table goes to the run's summary, and the file to an artifact
-  # for editors and coverage services.
+  # for editors and coverage services. Their files' times merge into test-timings, tests/timings.json's next version.
   coverage:
     needs: [changes, tests]
     if: ${{ !cancelled() && needs.changes.outputs.code == 'true' }}
@@ -174,10 +178,11 @@ jobs:
           node-version-file: .node-version
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: coverage-lcov-*
-          path: coverage
+          pattern: test-reports-*
+          path: reports
           merge-multiple: true
-      - run: node scripts/merge-lcov.mjs lcov.info coverage/*.info
+      - run: node scripts/merge-lcov.mjs lcov.info reports/*.info
+      - run: node scripts/test-shards.mjs timings timings.json reports/*.json
       - name: Coverage summary
         run: |
           node scripts/coverage-summary.mjs lcov.info >> "$GITHUB_STEP_SUMMARY"
@@ -187,6 +192,11 @@ jobs:
           name: coverage-lcov
           path: lcov.info
           if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: test-timings
+          path: timings.json
           retention-days: 14
 
   # The client on Native Shell and in a browser, the web build and the published CLI.
