@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { server, signedIn } from "./fixtures";
+import { ORIGIN, server, signedIn, view } from "./fixtures";
 
 const sizes: [string, { width?: number; height?: number }][] = [
   ["phone", {}],
@@ -24,6 +24,28 @@ describe("pages' headers on an iPhone", () => {
     await app.press("id:session-copy-id");
     await app.press("id:header-back");
     await app.waitFor("id:session-row-s1");
+  });
+});
+
+describe("a session's panel", () => {
+  test("says which account a session on its host reaches the workspace's repositories with", async () => {
+    for (const [access, badge] of [["owner", "Pikibun account"], ["host", "Host's credentials"]] as const) {
+      const app = await open("../App.tsx", { network: server({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, forgeAccess: access }, revision: "r1" } } }),
+        storage: signedIn, platform: "ios" });
+      await app.press("id:session-row-s1");
+      await app.waitFor("id:session-details");
+      await app.press("id:session-details");
+      await app.waitFor("id:session-forge-access");
+      expect(app.texts().join(" ")).toContain(badge);
+      app.dispose();
+    }
+    const plain = await open("../App.tsx", { network: server(), storage: signedIn, platform: "ios" });
+    await plain.press("id:session-row-s1");
+    await plain.waitFor("id:session-details");
+    await plain.press("id:session-details");
+    await plain.waitFor("id:panel-details");
+    expect(plain.shows("id:session-forge-access")).toBe(false);
+    plain.dispose();
   });
 });
 

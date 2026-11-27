@@ -23,9 +23,10 @@ export function mirrorRepository(repository: EgressRepository): MirrorRepository
   return { bindingId: repository.bindingId, provider: repository.provider, host: repository.host, repositoryId: repository.repositoryId, fullName: repository.fullName };
 }
 
-export function cacheFailure(error: unknown, repository: EgressRepository, credential?: HostCredentialError): RunnerError {
+export function cacheFailure(error: unknown, repository: EgressRepository, credential?: HostCredentialError, owner = false): RunnerError {
   if (error instanceof RunnerError) return error;
   if (error instanceof GitRemoteError && error.status !== undefined && [401, 403, 404].includes(error.status)) {
+    if (owner) return new RunnerError(502, `Pikibun could not read ${repository.fullName} with the session owner's account to fill this host's cache`);
     if (credential) {
       return new RunnerError(502, `This host's Git gave no credentials for ${repository.host} without asking, and ${repository.fullName} can't be read without one;`
         + " its owner can set one up, or sign in again where its credential helper asks to");
@@ -44,6 +45,7 @@ export interface SessionMirrorsOptions {
   grant(): Promise<EgressGrant>;
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   hostPaths?: boolean;
+  ownerFill?: () => Promise<boolean>;
 }
 
 export class SessionMirrors {
@@ -64,13 +66,15 @@ export class SessionMirrors {
     const refs = await this.#ownerRefs(value);
     const confirmedAt = Date.now();
     let credential: HostCredentialError | undefined;
+    let owner = false;
     try {
       const cache = await this.#cacheRemote(value);
       credential = cache.credential;
+      owner = cache.owner === true;
       const target = { repository, ownerId: this.options.ownerId, sessionId: this.options.sessionId, remote: cache.remote, refs };
       await this.options.cache.ready(target, { ...(onProgress ? { onProgress } : {}), wait: MIRROR_REFRESH_WAIT_MS });
     } catch (error) {
-      throw cacheFailure(error, value, credential);
+      throw cacheFailure(error, value, credential, owner);
     }
     return this.#allow(repository, confirmedAt);
   }
@@ -91,8 +95,9 @@ export class SessionMirrors {
     }
   }
 
-  async #cacheRemote(repository: EgressRepository): Promise<{ remote: GitRemote; credential?: HostCredentialError }> {
+  async #cacheRemote(repository: EgressRepository): Promise<{ remote: GitRemote; credential?: HostCredentialError; owner?: true }> {
     if (this.options.cacheRemote) return { remote: await this.options.cacheRemote(repository) };
+    if (await this.options.ownerFill?.().catch(() => false)) return { remote: this.#relayRemote(repository), owner: true };
     const url = bindingRemote(repository);
     let authorization: string | undefined;
     let credential: HostCredentialError | undefined;

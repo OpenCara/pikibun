@@ -47,6 +47,7 @@ export interface ToolContext {
   tunnel(): SessionTunnel | undefined;
   startTunnel(): SessionTunnel;
   grant(): Promise<EgressGrant>;
+  forgeAccess?(): Promise<"owner" | "host" | undefined>;
   buildCaches?(sender: string): Promise<readonly BuildCacheMount[]>;
 }
 

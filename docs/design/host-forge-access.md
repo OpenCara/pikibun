@@ -1,6 +1,6 @@
 # Design: forge access with the session owner's account on the host
 
-Status: phase 1 implemented (Git and `gh`/`glab`/`az` through a per-session proxy). Tracking issue: #554.
+Status: implemented (see Plan below). Tracking issue: #554.
 
 ## Problem
 
@@ -42,8 +42,7 @@ environment.
   configuration, which can change), and the tools run through `SessionPiki`'s `#runCommand` on the host workspace with
   `hostForgeApiEnvironment`: `HTTPS_PROXY` with the token, the placeholder tokens, and the CA bundle variables naming
   `forge-ca.pem` in the session's directory, the host's trusted certificates plus the proxy's interception authority
-  (`sandboxCertificates`). Only these runs get `HTTPS_PROXY` and the bundle; other commands keep the host's network and
-  certificates (see phase 3). A read-only run can't use the host workspace's read-only mode, which refuses commands; the
+  (`sandboxCertificates`). Since step 3, every command gets the same environment. A read-only run can't use the host workspace's read-only mode, which refuses commands; the
   proxy still refuses its writes, since a read-only run never gets a lease, and the tool's own rules refuse writing
   commands.
 - **Failure.** If the proxy or the grant can't be had for a command, the command runs without the rewrites (the host's
@@ -57,13 +56,39 @@ environment.
 
 ## Plan
 
-1. **Git and the CLI tools through a per-session proxy** (this change): the proxy (`#forge` in `session.ts`) for clone
-   sessions on the host; `HostWorkspaceOptions.forgeEnvironment` adds `hostForgeEnvironment` to each command; `gh`,
-   `glab` and `az` through it; `HostConfig.ownerForgeAccess`.
-2. **`git_push` on the host**, run by the runner so the token never enters the session's processes; then one set of session
-   instructions for both kinds of session.
-3. **Every command**: `HTTPS_PROXY` and the CA bundle for all of a session's commands, so package managers and scripts reach
-   the workspace's repositories through the API and Git as the owner too.
-4. **Repository cache** filled with the owner's account in this mode, so the host needs no forge credentials at all.
-5. **Visibility**: `identity` and the session panel say which account a session uses.
-6. Later: GitHub Packages and ghcr.io, which take different tokens; flipping the default for the owner's own sessions.
+All implemented (#556, #558) but the last step, which was decided against for now.
+
+1. **Git and the CLI tools through a per-session proxy**: the proxy (`#forge` in `session.ts`) for clone sessions on the
+   host; `HostWorkspaceOptions.forgeEnvironment` adds `hostForgeEnvironment` to each command; `gh`, `glab` and `az`
+   through it; `HostConfig.ownerForgeAccess`.
+2. **`git_push` on the host.** `HostWorkspace` implements `cloneHead`, `clonePushPrepare` and `clonePushPack` (the
+   node helper's steps, with the host's Git, hardened as the helper's: no hooks, fsmonitor, credential helper or SSH, no
+   global or system configuration, `--git-dir` of a clone the worktree holds, not a link), and `pushWorkspace` takes any
+   workspace that has them. The runner fetches the credential per push and speaks to the forge itself
+   (`performClonePush`), so it never enters a command's environment or the clone's configuration. Every clone session on the
+   host offers it, whichever credentials its Git uses: it pushes with the workspace's push access, as in the sandbox, and the
+   session instructions describe it for both kinds of session (`gitPushInstructions`).
+3. **Every command.** `forgeEnvironment` adds `hostForgeApiEnvironment` to every command: `HTTPS_PROXY` (no
+   `HTTP_PROXY`: plain HTTP stays the host's), the placeholder tokens, and the CA variables naming `forge-ca.pem`, now the
+   host's store, the proxy's authority and any certificates in the bundles those variables already named
+   (`hostSessionCertificates`), so a corporate bundle stays trusted. `NODE_USE_ENV_PROXY` makes Node's own `fetch` and `https` take the proxy, as in the
+   sandbox. `NO_PROXY` keeps the host's own entries but those that would bypass the proxy for a credentialed API (`*`,
+   `api.github.com`, `.github.com`, …), since those clients would then send the placeholder to the forge (`hostNoProxy`). An
+   unconfined proxy tunnels any host and any port, except the credentialed APIs on 443, straight through (`#passThrough`),
+   and its `ApiAccess` sees an open policy, so a request carrying its own credential (Git to gitlab.com with the host's
+   helper) goes on. Where the host's environment already names a proxy (`proxyConfigured`), commands keep it: chaining
+   through the host's proxy isn't done, so only Git's rewrites and the CLI tools use Pikibun's there, and `NO_PROXY` gains the
+   loopback addresses so Git reaches the rewritten loopback URLs directly rather than through the host's proxy.
+4. **Repository cache.** `SessionMirrors`' `ownerFill` fills the mirror through the relay (the owner's access, or the
+   workspace's connection, through direct grants where the server gives them) instead of the host's credential helpers,
+   for host sessions the proxy applies to. The owner check before borrowing is unchanged.
+5. **Visibility.** `identity` returns `forgeAccess` (`owner` or `host`) with a note; the session view carries
+   `forgeAccess` for clone sessions on the host, as the setting stands when it is read, and the session panel shows it.
+6. **Not done, by decision:**
+   - *GitHub Packages and ghcr.io.* They accept only a classic personal access token (or Actions' `GITHUB_TOKEN`); GitHub
+     App installation tokens and fine-grained tokens are refused. Pikibun holds neither kind, and a classic token reaches
+     every repository its owner can, which Pikibun's push and read rules can't limit. Those registries' hosts pass through the
+     proxy untouched, so the host's own sign-ins (`~/.npmrc`, `docker login`) keep working. Doing better needs a new kind of
+     account credential, a product decision of its own.
+   - *Default for the owner's own sessions.* Stays off. Turning it on by default would change, without asking, which
+     account every existing host owner's sessions act as; it is worth doing once the setting has been used for a while.

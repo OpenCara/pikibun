@@ -11,7 +11,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { hostGitEnvironment } from "./host-git-shim.js";
 import type { Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
 import {
-  fileRange, importRequest, MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, SNAPSHOT_SKIPPED_HOME, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
+  fileRange, importRequest, MAX_FILE_BYTES, OID, MAX_OUTPUT_BYTES, SandboxProcessError, SNAPSHOT_SKIPPED_HOME, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
   type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SnapshotFile,
 } from "./sandbox.js";
 import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
@@ -22,6 +22,8 @@ import { bashPath, CREATE_FILE, hostBashArgs, killTree, OPEN_DIRECTORY, OPEN_FIL
 import { readCloneBranches, type CloneBranch } from "./clone-branches.js";
 import { fileOperationInWorker, type FileOperationRequest, type FileOperationResult, type ResolvedFileOperation } from "./file-operations.js";
 import { ATTACHMENT_CANDIDATES, attachmentCandidate } from "../../../packages/shared/src/file-uploads.js";
+import { validCloneDirectory } from "../../../packages/shared/src/repositories.js";
+import type { ClonePushPreparation } from "./push.js";
 
 const MAX_ENTRIES = 10_000;
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
@@ -29,6 +31,7 @@ const FILE_FLAGS = OPEN_FILE;
 const HOST_FILE_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
 const DIRECTORY_FLAGS = OPEN_DIRECTORY;
 const queues = new Map<string, Promise<void>>();
+const CLONE_GIT_ENVIRONMENT: Readonly<Record<string, string>> = Object.freeze({ GIT_CONFIG_GLOBAL: windows ? "NUL" : "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" });
 
 type Captured = { code: number | null; stdout: string; stderr: string };
 type SpawnOptions = { env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal; hostCommand?: string; isolated?: boolean };
@@ -142,6 +145,7 @@ export class HostWorkspace implements SessionWorkspace {
   get worktree(): string { return this.#identity.worktree; }
   get hostWorktree(): string { return this.worktree; }
   get activeCommand(): string | undefined { return this.#activeCommand; }
+  get commandEnvironment(): Readonly<Record<string, string>> { return this.#environment; }
   get chosenDirectory(): boolean { return this.#chosen; }
 
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
@@ -383,6 +387,86 @@ export class HostWorkspace implements SessionWorkspace {
 
   cloneBranches(authorize: SandboxAuthorize): Promise<CloneBranch[]> {
     return this.#operation(authorize, () => readCloneBranches(this.worktree));
+  }
+
+  async #cloneDirectory(path: string): Promise<string> {
+    if (!validCloneDirectory(path)) throw hostError("invalid clone directory");
+    const parts = await this.#parts(path, false);
+    const directory = join(await realpath(this.worktree), ...parts);
+    let ok = false;
+    try { ok = parts.length > 0 && (await lstat(directory)).isDirectory() && !(await lstat(join(directory, ".git"))).isSymbolicLink(); } catch {}
+    if (!ok) throw hostError("the clone directory is not a Git clone in the worktree");
+    return directory;
+  }
+
+  #cloneGitArgs(directory: string, args: string[]): string[] {
+    return ["--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "protocol.allow=never",
+      "-c", "core.sshCommand=/usr/bin/false", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", `safe.directory=${directory}`,
+      "--literal-pathspecs", `--git-dir=${join(directory, ".git")}`, ...args];
+  }
+
+  #cloneGit(directory: string, args: string[], input?: string): Promise<Captured> {
+    return this.#spawn("git", this.#cloneGitArgs(directory, args), input, { isolated: true, env: CLONE_GIT_ENVIRONMENT });
+  }
+
+  cloneHead(path: string, authorize: SandboxAuthorize): Promise<{ commit: string; origin: string | null }> {
+    return this.#operation(authorize, async () => {
+      const directory = await this.#cloneDirectory(path);
+      const head = await this.#cloneGit(directory, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+      const commit = head.stdout.trim();
+      if (head.code || !OID.test(commit)) throw hostError("the clone has no commit to push");
+      const remote = await this.#cloneGit(directory, ["config", "--get", "remote.origin.url"]);
+      const origin = remote.code ? "" : remote.stdout.trim();
+      return { commit, origin: origin ? origin.slice(0, 2048) : null };
+    });
+  }
+
+  clonePushPrepare(path: string, input: { commit: string; old: string | null; tips: string[] }, authorize: SandboxAuthorize): Promise<ClonePushPreparation> {
+    if (!validCloneDirectory(path) || !OID.test(input.commit) || (input.old !== null && !OID.test(input.old))
+      || input.tips.length > 1024 || !input.tips.every(tip => OID.test(tip))) return Promise.reject(new Error("Invalid push request"));
+    return this.#operation(authorize, async () => {
+      const directory = await this.#cloneDirectory(path);
+      const names = [input.commit, ...input.tips];
+      const kinds = (await this.#cloneGit(directory, ["cat-file", "--batch-check=%(objecttype)"], names.map(name => `${name}^{commit}\n`).join("")))
+        .stdout.split(/\r?\n/).filter(Boolean);
+      if (kinds.length !== names.length || kinds[0] !== "commit") throw hostError("the commit to push is not in the clone");
+      const present = input.tips.filter((_, index) => kinds[index + 1] === "commit");
+      const ancestor = input.old === null ? null
+        : present.includes(input.old) && (await this.#cloneGit(directory, ["merge-base", "--is-ancestor", input.old, input.commit])).code === 0;
+      const revisions = `${input.commit}\n${present.map(tip => `^${tip}\n`).join("")}`;
+      const total = Number((await this.#cloneGit(directory, ["rev-list", "--count", "--stdin"], revisions)).stdout.trim() || "0");
+      const commits: ClonePushPreparation["commits"] = [];
+      for (const line of (await this.#cloneGit(directory, ["log", "--stdin", "--max-count=100", "--format=%H%x00%s"], revisions)).stdout.split(/\r?\n/)) {
+        const [source = "", subject = ""] = line.split("\0");
+        if (OID.test(source)) commits.push({ source, subject: subject.slice(0, 200) });
+      }
+      return { present, ancestor, commits, total: Math.max(total, commits.length) };
+    });
+  }
+
+  async clonePushPack(path: string, input: { commit: string; exclude: string[] }, authorize: SandboxAuthorize): Promise<AsyncIterable<Uint8Array>> {
+    if (!validCloneDirectory(path) || !OID.test(input.commit) || input.exclude.length > 1024 || !input.exclude.every(oid => OID.test(oid))) throw new Error("Invalid push request");
+    const child = await this.#operation(authorize, async () => {
+      const directory = await this.#cloneDirectory(path);
+      const spawned = spawn("git", this.#cloneGitArgs(directory, ["-c", "core.bigFileThreshold=64m", "pack-objects", "--stdout", "--revs", "--delta-base-offset", "-q"]),
+        { cwd: directory, env: { ...this.#isolated, ...CLONE_GIT_ENVIRONMENT }, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+      spawned.stdin.on("error", () => {});
+      spawned.stdin.end(`${input.commit}\n${input.exclude.map(oid => `^${oid}\n`).join("")}`);
+      return spawned;
+    });
+    const untrack = this.processes.add(child.pid);
+    const ended = new Promise<number | null>(resolveEnd => { child.once("error", () => resolveEnd(127)); child.once("close", code => resolveEnd(code)); });
+    return (async function* () {
+      let complete = false;
+      try {
+        for await (const chunk of child.stdout) yield chunk as Uint8Array;
+        if (await ended) throw hostError("push pack failed");
+        complete = true;
+      } finally {
+        if (!complete) { child.kill(); await ended; }
+        untrack();
+      }
+    })();
   }
 
   async executeHost(operation: HostCommandOperation, authorize: SandboxAuthorize, signal: AbortSignal): Promise<string> {

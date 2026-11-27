@@ -46,7 +46,7 @@ import { extensionFileBinds, type FileBind } from "./extensions/files.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace, hostOwnersSession } from "./host-workspace.js";
-import { sandboxCertificates } from "./trust-store.js";
+import { hostSessionCertificates, proxyConfigured } from "./trust-store.js";
 import { HostGitShim } from "./host-git-shim.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
@@ -297,6 +297,7 @@ export class RunnerSession {
       cache: config.repositoryCache, ownerId: binding.owner.id, sessionId: binding.session.id, relay: request => this.relay(request),
       grant: () => this.#egress ? this.#egress.grant() : this.requestGrant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
       ...(hostPaths ? { hostPaths: true } : {}),
+      ...(this.#onHost ? { ownerFill: () => this.forgeApplies() } : {}),
     }) : undefined;
     this.#hostGit = this.#onHost && this.#mirrors ? new HostGitShim({ mirror: (remote, onProgress) => this.hostMirror(remote, onProgress),
       ...(config.repositoryCache ? { lfs: config.repositoryCache.lfsObjects(binding.owner.id) } : {}) }) : undefined;
@@ -325,6 +326,7 @@ export class RunnerSession {
       command: () => (this.sandbox instanceof HostWorkspace ? this.sandbox.activeCommand : undefined),
     }) : undefined;
     this.#forge = this.#onHost && this.#clone ? this.egressProxy(egressSocketPath(`${binding.session.id}:forge`, directory), randomBytes(24).toString("base64url"), true) : undefined;
+    this.#forgeAccess = !!this.#forge && !hostOwnersSession(binding);
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
       { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment, ...(this.#sudo ? { sudo: this.#sudo } : {}),
         ...(this.#hostSession && binding.session.hostDirectory ? { worktree: binding.session.hostDirectory, refused: [config.dataDir] } : {}),
@@ -359,7 +361,7 @@ export class RunnerSession {
       authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig(),
       requireOwnerTool: tool => this.#availability.requireOwnerTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
     this.#operations = new SessionOperations({
-      binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, wholeResults: this.#wholeResults,
+      binding, config, clone: this.#clone, sandboxed: !!this.#egress, pushesOnHost: !!this.#forge, sandbox: this.sandbox, hostCommands: this.hostCommands, wholeResults: this.#wholeResults,
       requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
       metadata: () => this.metadata(), mutate: change => this.mutate(change), commandOptions: timeoutSeconds => this.#calls.commandOptions(timeoutSeconds),
       testShell: () => this.testShell(), controlPlane: <T>(path: string, body: unknown) => this.controlPlane<T>(path, body),
@@ -372,7 +374,8 @@ export class RunnerSession {
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
       ...(this.#buildCaches ? { buildCaches: (sender: string) => this.#buildCaches!.mounts(sender) } : {}),
       programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
-      tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
+      tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => (this.#egress ?? this.#forge)!.grant(),
+      forgeAccess: () => this.forgeAccessNow(),
     };
     this.#defined = new SessionDefinitions({
       sessionId: binding.session.id, workspaceId: binding.session.workspaceId, windows: process.platform === "win32" && this.sandbox.isolated, config,
@@ -485,6 +488,13 @@ export class RunnerSession {
     });
   }
 
+  private async forgeAccessNow(): Promise<"owner" | "host" | undefined> {
+    if (this.#egress) return "owner";
+    if (!this.#onHost) return undefined;
+    this.#forgeAccess = await this.forgeApplies().catch(() => false);
+    return this.#forgeAccess ? "owner" : "host";
+  }
+
   private async forgeApplies(): Promise<boolean> {
     if (!this.#forge) return false;
     return !hostOwnersSession(this.binding) || (await this.hostConfig()).ownerForgeAccess;
@@ -501,18 +511,25 @@ export class RunnerSession {
   private async forgeEnvironment(): Promise<Record<string, string> | undefined> {
     const endpoint = await this.forgeEndpoint();
     if (!endpoint) return undefined;
-    return hostForgeEnvironment((await this.#forge!.grant()).repositories, endpoint, sessionBranch(this.binding.session));
+    const git = hostForgeEnvironment((await this.#forge!.grant()).repositories, endpoint, sessionBranch(this.binding.session));
+    const base = this.sandbox instanceof HostWorkspace ? this.sandbox.commandEnvironment : {};
+    if (proxyConfigured(base)) {
+      const local = [...new Set(["localhost", "127.0.0.1", "::1", ...(base.NO_PROXY ?? base.no_proxy ?? "").split(",").map(item => item.trim()).filter(Boolean)])].join(",");
+      return { ...git, NO_PROXY: local, no_proxy: local };
+    }
+    return { ...await this.forgeApiEnvironment(endpoint), ...git };
   }
 
-  private async forgeApiEnvironment(): Promise<Record<string, string> | undefined> {
-    const endpoint = await this.forgeEndpoint();
+  private async forgeApiEnvironment(given?: EgressEndpoint): Promise<Record<string, string> | undefined> {
+    const endpoint = given ?? await this.forgeEndpoint();
     if (!endpoint) return undefined;
+    const base = this.sandbox instanceof HostWorkspace ? this.sandbox.commandEnvironment : {};
     this.#forgeCa ??= (async () => {
       const path = join(this.directory, "forge-ca.pem");
-      await writeFile(path, sandboxCertificates(), { mode: 0o600 });
+      await writeFile(path, await hostSessionCertificates(base), { mode: 0o600 });
       return path;
     })().catch((error: unknown) => { this.#forgeCa = undefined; throw error; });
-    return hostForgeApiEnvironment(endpoint, await this.#forgeCa);
+    return hostForgeApiEnvironment(endpoint, await this.#forgeCa, base.NO_PROXY ?? base.no_proxy ?? "");
   }
 
   private async relay(request: RelayRequest): Promise<Response> {
@@ -1486,7 +1503,7 @@ export class RunnerSession {
   }
 
   private buildTools(): ToolRegistration[] {
-    return buildTools(this.#toolContext, this.#clone && !!this.#egress);
+    return buildTools(this.#toolContext, this.#clone && (!!this.#egress || !!this.#forge));
   }
 
   runOperation(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredOperation> {
@@ -1622,7 +1639,7 @@ export class RunnerSession {
 
   view(): Promise<SessionView> {
     return sessionView({
-      binding: this.binding, tunnel: () => this.#tunnel?.view(), sudo: () => this.#sudo?.view(), metadata: () => this.metadata(),
+      binding: this.binding, tunnel: () => this.#tunnel?.view(), sudo: () => this.#sudo?.view(), forgeAccess: async () => (this.#onHost && this.#clone ? this.forgeAccessNow() : undefined), metadata: () => this.metadata(),
       conversation: id => this.harness.conversation(id as ConversationId, context), agent: () => this.#shared.agent(context),
       context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),

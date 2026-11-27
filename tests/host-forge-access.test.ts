@@ -104,8 +104,11 @@ test("host commands rewrite only the workspace's repositories to the proxy, in e
 });
 
 test("the CLI tools reach the forge through the proxy, with placeholder tokens and the session's certificates", () => {
-  const env = hostForgeApiEnvironment(endpoint, "/session/forge-ca.pem");
+  const env = hostForgeApiEnvironment(endpoint, "/session/forge-ca.pem", "corp.example, localhost, *, api.github.com, .github.com, gitlab.com:443, *.azure.com");
   assert.equal(env.HTTPS_PROXY, endpointUrl(endpoint));
+  assert.equal(env.NODE_USE_ENV_PROXY, "1", "Node's fetch and https take the proxy too");
+  assert.equal(env.HTTP_PROXY, undefined, "plain HTTP stays on the host's own network");
+  assert.equal(env.NO_PROXY, "localhost,127.0.0.1,::1,corp.example", "the host's own exceptions are kept, but none that would send the placeholder to a forge's API");
   assert.equal(env.https_proxy, endpointUrl(endpoint));
   for (const name of CA_BUNDLE_VARIABLES) assert.equal(env[name], "/session/forge-ca.pem");
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "AZURE_DEVOPS_EXT_PAT"]) assert.equal(env[name], API_TOKEN_PLACEHOLDER);
@@ -126,6 +129,9 @@ test("an unconfined proxy leaves hosts and other repositories to the host's own 
   assert.equal(reply, "ping");
   open.socket!.destroy();
   assert.deepEqual(reached, ["objects.githubusercontent.com:443"], "the host resolves the name itself");
+  const other443 = await tunnel(own.port, token, "registry.example.com:8443");
+  assert.equal(other443.status, 200, "any port: a host session's commands weren't limited to HTTPS before");
+  other443.socket!.destroy();
   const other = await get(own.port, token, "/git/github.com/acme/app-other/info/refs?service=git-upload-pack");
   assert.equal(other.status, 302, "a repository that only shares a workspace repository's prefix goes back to the forge, for the host's credentials");
   assert.equal(other.headers.location, "https://github.com/acme/app-other/info/refs?service=git-upload-pack");
@@ -187,6 +193,58 @@ test("a host session's git clones and pushes the workspace's repositories throug
   assert.equal((await shell("echo ${GIT_CONFIG_COUNT:-none} ${PIKIBUN_SESSION_BRANCH:-none}")).trim(), "none none", "without the setting, commands keep the host's own Git");
 });
 
+test("git_push on the host: the runner pushes a clone's commit as it is, fast-forward only, without the session's Git ever holding the credential", hostMode, async t => {
+  const { performClonePush, PushError } = await import("../apps/runner/src/push.js");
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "host-forge-push-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const projects = join(directory, "projects");
+  await mkdir(join(projects, "acme"), { recursive: true });
+  const work = join(directory, "upstream");
+  const environment = { ...process.env, GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@example.test", GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@example.test" };
+  const git = (args: string[], cwd: string) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", env: environment });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const bare = join(projects, "acme", "app.git");
+  await mkdir(work);
+  git(["init", "-q", "-b", "main"], work);
+  await writeFile(join(work, "README.md"), "from upstream\n");
+  git(["add", "README.md"], work);
+  git(["commit", "-q", "-m", "initial"], work);
+  git(["clone", "-q", "--bare", work, bare], directory);
+  const server = await startGitHttpServer(projects, { authorization: "Basic dXNlcjpzZWNyZXQ=" });
+  t.after(() => server.close());
+  const workspace = new HostWorkspace(binding("host-push"), join(directory, "session"));
+  t.after(() => workspace.close());
+  await workspace.initialize();
+  git(["clone", "-q", bare, join(workspace.worktree, "app")], directory);
+  git(["remote", "set-url", "origin", "https://github.com/acme/app.git"], join(workspace.worktree, "app"));
+  await workspace.execute({ kind: "bash", command: "cd app && git switch -q -c feature && echo change > change.txt && git add change.txt && git commit -q -m 'Add a change'" }, false, authorize);
+  const head = await workspace.cloneHead("app", authorize);
+  assert.equal(head.origin, "https://github.com/acme/app.git");
+  const operation = { kind: "git.push" as const, repository: "acme/app", directory: "app", branch: "feature", commit: head.commit };
+  const credential = { remote: server.url("acme/app.git"), authorization: "Basic dXNlcjpzZWNyZXQ=" };
+  const pushed = await performClonePush({ workspace, operation, credential, authorize });
+  assert.equal(pushed.outcome, "pushed");
+  assert.deepEqual(pushed.commits.map(commit => commit.subject), ["Add a change"]);
+  assert.equal(git(["rev-parse", "refs/heads/feature"], bare), head.commit);
+  assert.equal((await performClonePush({ workspace, operation, credential, authorize })).outcome, "up-to-date");
+  git(["fetch", "-q", bare, "feature:feature"], work);
+  git(["switch", "-q", "feature"], work);
+  await writeFile(join(work, "other.txt"), "other\n");
+  git(["add", "other.txt"], work);
+  git(["commit", "-q", "-m", "Elsewhere"], work);
+  git(["push", "-q", bare, "feature"], work);
+  await workspace.execute({ kind: "bash", command: "cd app && echo more >> change.txt && git commit -q -am 'More'" }, false, authorize);
+  const next = await workspace.cloneHead("app", authorize);
+  await assert.rejects(performClonePush({ workspace, operation: { ...operation, commit: next.commit }, credential, authorize }),
+    (error: Error) => error instanceof PushError && /fetch and merge or rebase/.test(error.message));
+  await assert.rejects(workspace.cloneHead("missing", authorize), /not a Git clone/);
+  await assert.rejects(workspace.cloneHead("../escape", authorize), /invalid clone directory/);
+  assert.doesNotMatch(await workspace.execute({ kind: "bash", command: "cd app && git config --list --show-origin" }, false, authorize), /secret|dXNlcjpzZWNyZXQ/);
+});
+
 test("members' clone sessions on the host always use their own account; the host owner's only once they turn it on", hostMode, async t => {
   const { RunnerService } = await import("../apps/runner/src/server.js");
   const { sha256 } = await import("../packages/shared/src/crypto.js");
@@ -210,17 +268,45 @@ test("members' clone sessions on the host always use their own account; the host
     const now = Math.floor(Date.now() / 1000);
     const session = await service.provision(value, { aud: "runner", sessionId: id, actorId: "test:alice", ownerId: "test:alice", action: "create", policyVersion: 1,
       iat: now, exp: now + 60, jti: randomUUID(), bodyHash: await sha256("") });
-    return async () => (await session.sandbox.execute({ kind: "bash", command: 'echo "${GIT_CONFIG_COUNT:-none} ${GIT_CONFIG_VALUE_0:-none} ${PIKIBUN_SESSION_BRANCH:-none}"' },
+    sessions.set(id, session);
+    return async () => (await session.sandbox.execute({ kind: "bash", command: 'echo "${GIT_CONFIG_COUNT:-none} ${GIT_CONFIG_VALUE_0:-none} ${PIKIBUN_SESSION_BRANCH:-none}${HTTPS_PROXY:+ proxied}${GH_TOKEN:+ token}"' },
       false, async () => {})).trim();
   };
+  const sessions = new Map<string, Awaited<ReturnType<typeof service.provision>>>();
   const member = await open("forge-member", "test:host");
-  assert.equal(await member(), "3 https://github.com/acme/app pikibun/forge-member", "a member's session on someone else's host reads as the member");
+  assert.equal(await member(), "3 https://github.com/acme/app pikibun/forge-member proxied token", "a member's session on someone else's host reads as the member, in every command");
   const own = await open("forge-owner", "test:alice");
   assert.equal(await own(), "none none none", "the host owner's own session keeps the host's credentials by default");
   ownerForgeAccess = true;
-  assert.equal(await own(), "3 https://github.com/acme/app pikibun/forge-owner");
+  assert.match(await own(), /^3 https:\/\/github\.com\/acme\/app pikibun\/forge-owner/);
   ownerForgeAccess = false;
-  assert.equal(await member(), "3 https://github.com/acme/app pikibun/forge-member", "the owner's setting is only about their own sessions");
+  assert.equal(await member(), "3 https://github.com/acme/app pikibun/forge-member proxied token", "the owner's setting is only about their own sessions");
+  assert.equal((await sessions.get("forge-member")!.view()).forgeAccess, "owner", "the session panel says whose account it uses");
+  assert.equal((await sessions.get("forge-owner")!.view()).forgeAccess, "host");
+  ownerForgeAccess = true;
+  assert.equal((await sessions.get("forge-owner")!.view()).forgeAccess, "owner", "as the setting stands now");
+  const saved = process.env.ALL_PROXY;
+  process.env.ALL_PROXY = "socks5://corp.example:1080";
+  t.after(() => { if (saved === undefined) delete process.env.ALL_PROXY; else process.env.ALL_PROXY = saved; });
+  await open("forge-proxied", "test:alice");
+  const proxied = (await sessions.get("forge-proxied")!.sandbox.execute({ kind: "bash", command: 'echo "$ALL_PROXY ${HTTPS_PROXY:-none} $NO_PROXY ${GIT_CONFIG_COUNT:-none}"' }, false, async () => {})).trim();
+  assert.match(proxied, /^socks5:\/\/corp\.example:1080 none localhost,127\.0\.0\.1,::1\S* 3$/,
+    "a host with its own proxy keeps it, Git's rewrites still apply, and the loopback proxy bypasses the host's");
+});
+
+test("every command trusts the session's proxy alongside the host's own certificates, and a host that has its own proxy keeps it", async t => {
+  const { hostSessionCertificates, proxyConfigured, sandboxCertificates } = await import("../apps/runner/src/trust-store.js");
+  const directory = await mkdtemp(join(tmpdir(), "host-forge-ca-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const own = "-----BEGIN CERTIFICATE-----\nMIIcompany\n-----END CERTIFICATE-----";
+  await writeFile(join(directory, "company.pem"), `${own}\n`);
+  const bundle = await hostSessionCertificates({ SSL_CERT_FILE: join(directory, "company.pem"), NODE_EXTRA_CA_CERTS: join(directory, "missing.pem") });
+  assert.ok(bundle.startsWith(sandboxCertificates()), "the host's store and the proxy's authority");
+  assert.ok(bundle.includes(own), "a bundle the host's environment names stays trusted");
+  assert.equal(await hostSessionCertificates({}), sandboxCertificates());
+  assert.equal(proxyConfigured({ https_proxy: "http://corp:3128" }), true);
+  assert.equal(proxyConfigured({ ALL_PROXY: "socks5://corp" }), true);
+  assert.equal(proxyConfigured({ HTTP_PROXY: "http://corp:3128" }), false, "plain HTTP alone doesn't reach HTTPS");
 });
 
 test("the owner decides whether their own host sessions use their Pikibun account, off by default", () => {
