@@ -33,7 +33,7 @@ import { WorkspaceMcpServers } from "./workspace-mcp-servers";
 import { WorkspaceSchedules } from "./workspace-schedules";
 import { ToolGroups } from "./workspace-tool-groups";
 import { BuildCaches } from "./workspace-build-caches";
-import { AttachmentSettings, CacheWarmingSettings, ChildSessionSettings, GitHubReachSettings, NetworkAccess, PackingSettings, TranscriptSettings } from "./workspace-options";
+import { AttachmentSettings, CacheWarmingSettings, ChildSessionSettings, GitHubReachSettings, HostAccountSettings, NetworkAccess, PackingSettings, TranscriptSettings } from "./workspace-options";
 import { WorkspaceMemorySettings } from "./workspace-memory";
 import {
   connectionLabel, createWorkspaceConnections, DocumentSources, gitConnectionFor, gitProviderLabel, PushAccess, ReadAsControl, WorkspaceConnections,
@@ -199,6 +199,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
     <>
       <NetworkAccess workspace={workspace()} admin={admin()} />
       <GitHubReachSettings workspace={workspace()} />
+      <HostAccountSettings workspace={workspace()} />
       <ChildSessionSettings workspace={workspace()} admin={admin()} />
       <WorkspaceMemorySettings workspace={workspace()} />
       <WorkspaceExtensions workspace={workspace()} />

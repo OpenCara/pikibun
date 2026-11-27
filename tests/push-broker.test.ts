@@ -1000,6 +1000,31 @@ test('the owner\'s account and the host\'s Git credentials push only from the se
   assert.equal(await code(response), 'push_identity_own_host_required');
 });
 
+test('a session owner who lets their account serve others\' hosts pushes with it there; the host\'s Git credentials still serve only its owner', async t => {
+  const shared = await fixture(t, { host: { owner: approver, gitCredentials: true } });
+  shared.pushIdentity('github', 'github.com', '', 'owner-account');
+  const optIn = (value: number) => shared.sqlite.prepare(`INSERT INTO member_host_account (workspace_id, user_id, others_hosts, updated_at) VALUES (?,?,?,?)
+    ON CONFLICT (workspace_id, user_id) DO UPDATE SET others_hosts = excluded.others_hosts`).run('workspace', owner, value, new Date().toISOString());
+  const push = (approvalId: string) => shared.post(credential, { sessionId: 'session', approvalId, actorId: owner, operation: shared.operation(), admissionId: shared.admit('auto') });
+  optIn(0);
+  const refused = await push('tool-others-off');
+  assert.equal(refused.status, 409);
+  assert.match(await refused.text(), /Your account on others' hosts/);
+  optIn(1);
+  const allowed = await push('tool-others-on');
+  assert.equal(allowed.status, 200);
+  assert.equal((await allowed.json() as { authorization: string }).authorization, basic('x-access-token', 'owner-oauth-token'));
+  assert.equal(shared.ledger().find(row => row.approval_id === 'tool-others-on')!.kind, 'owner-account');
+  assert.notEqual(shared.ledger().find(row => row.approval_id === 'tool-others-on')!.revocation_ciphertext, null, 'the GitHub token is still reset after the push');
+  shared.pushIdentity('github', 'github.com', '', 'host-credentials');
+  assert.equal(await code(await push('tool-others-host')), 'push_identity_own_host_required');
+  const another = await fixture(t, { host: { owner: approver } });
+  another.pushIdentity('github', 'github.com', '', 'owner-account');
+  another.sqlite.prepare('INSERT INTO member_host_account (workspace_id, user_id, others_hosts, updated_at) VALUES (?,?,?,?)').run('workspace', approver, 1, new Date().toISOString());
+  const notTheirs = await another.post(credential, { sessionId: 'session', approvalId: 'tool-others-member', actorId: owner, operation: another.operation(), admissionId: another.admit('auto') });
+  assert.equal(await code(notTheirs), 'push_identity_own_host_required', 'only the session owner\'s own choice counts');
+});
+
 test('push access with the host\'s Git credentials needs its owner\'s opt-in, then issues no token', async t => {
   const f = await fixture(t, { host: { owner } });
   f.pushIdentity('github', 'github.com', '', 'host-credentials');
@@ -1546,4 +1571,13 @@ test('the session owner\'s own credentials: writes and personal access tokens go
   assert.equal((await apiCredential(shared, { host: 'dev.azure.com' })).body.available, false);
   assert.doesNotMatch(JSON.stringify(shared.calls), /owner-gitlab-token|owner-azure-devops-token/);
   assert.equal((await apiCredential(shared)).body.available, true, 'reads of api.github.com still get installation tokens');
+
+  shared.sqlite.prepare('INSERT INTO member_host_account (workspace_id, user_id, others_hosts, updated_at) VALUES (?,?,?,?)')
+    .run('workspace', owner, 1, new Date().toISOString());
+  const optedIn = await apiCredential(shared, { access: 'write', reach: 'any' });
+  assert.equal(optedIn.status, 200, JSON.stringify(optedIn.body));
+  assert.deepEqual(optedIn.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization, item.repositories, item.anyRepository]),
+    [['session-owner', 'Bearer owner-oauth-token', ['owner/repo'], undefined]],
+    'an owner who lets their account serve others\' hosts writes there, but only in the workspace\'s repositories, since that host vouches for the sender');
+  assert.equal((await apiCredential(shared, { host: 'dev.azure.com', access: 'write' })).body.available, true);
 });

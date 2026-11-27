@@ -76,7 +76,7 @@ export const ghDefinition: CliDefinition = {
     "Use it rather than github_read, which spends the session owner's own GitHub rate limit: to read issues and pull requests (issue view, pr view --comments, pr checks),",
     "and to wait for a pull request's CI (pr checks <n> --watch, run watch <id>, with a timeout_seconds long enough); github_read with wait: \"change\" still waits for any other change (a comment, review or push).",
     `A watch reads again every ${GH_WATCH_INTERVAL_SECONDS} seconds unless it names its own --interval: don't make it shorter, and don't poll in a loop instead, since every read counts against a GitHub rate limit that all of the owner's sessions share.`,
-    "It reads the workspace's repositories always. It writes (comments, pull requests, merges, reruns) only on the session owner's own host, outside read-only;",
+    "It reads the workspace's repositories always. It writes (comments, pull requests, merges, reruns) only on the session owner's own host, or on any host once the owner lets their account serve others' hosts, outside read-only;",
     "where it refuses a write, comment, open issues and merge with github_comment, github_issue and github_merge.",
     "Where it may write, its GraphQL and API paths that name no repository (user/repos, search) go as the owner, beyond the workspace's repositories.",
     "Where the workspace set it read-only, only commands that read run.",

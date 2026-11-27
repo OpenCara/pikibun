@@ -5,6 +5,7 @@ import { transcriptPage, type ToolOutput } from "../../../../packages/shared/src
 import type { ChildSessionSettings as ChildSettings } from "../../../../packages/shared/src/cross-session";
 import { cacheWarmingModes, type CacheWarmingMode, type CacheWarmingSettings as CacheWarming } from "../../../../packages/shared/src/cache-warming";
 import type { GitHubReachSettings as GitHubReach } from "../../../../packages/shared/src/github-reach";
+import type { HostAccountSettings as HostAccount } from "../../../../packages/shared/src/host-account";
 import { automaticPackingDays, type PackingSettings as Packing } from "../../../../packages/shared/src/packing";
 import { fileUploadLimits, formatBytes } from "../../../../packages/shared/src/file-uploads";
 import { defaultNetworkPolicy, networkLimits, type NetworkMode, type NetworkPolicy } from "../../../../packages/shared/src/network";
@@ -147,6 +148,33 @@ export function GitHubReachSettings(props: { workspace: Workspace }) {
               onChange={next => put(path(), action, resource.refresh, { anyRepository: next }, next
                 ? "Your own messages in your sessions here may now act on any GitHub repository you can access."
                 : "Your sessions here now act only on this workspace's repositories.")} />
+          )}
+        </If>
+      </ResourceState>
+      <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+    </Section>
+  );
+}
+
+export function HostAccountSettings(props: { workspace: Workspace }) {
+  const path = () => `/api/workspaces/${segment(props.workspace.id)}/host-account`;
+  const resource = createResource<{ settings: HostAccount }>(path);
+  const action = createAction();
+  return (
+    <Section title="Your account on others' hosts" testID="workspace-host-account" info={<View style={{ gap: 8 }}>
+      <Note>Your own choice, in this workspace; each member makes theirs. It starts off.</Note>
+      <Note>Some things act with your own account: pushes, where the workspace's push access uses the session owner's account, and gh, glab and az writes (pull requests, comments, merges). Normally they work only in your sessions on your own hosts. With this on, they also work in your sessions on hosts other members own.</Note>
+      <Note>Your token is then sent to that host. Its owner can read it while it is valid and act as you anywhere your account reaches, not only in this workspace's repositories. Pikibun resets a GitHub sign-in's token after each push, but tokens for gh writes, and other providers' tokens, stay valid. Turn this on only where you trust the owners of this workspace's hosts.</Note>
+    </View>}>
+      <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>
+        <If when={resource.data()}>
+          {data => (
+            <Toggle title="Use my account on others' hosts" testID="host-account-others" label="Let my sessions on other members' hosts push and write with my own account" admin busy={action.busy()}
+              value={data().settings.othersHosts}
+              hint={data().settings.othersHosts ? "Your sessions on any host here push and write with your account" : "Only your sessions on your own hosts push and write with your account"}
+              onChange={next => put(path(), action, resource.refresh, { othersHosts: next }, next
+                ? "Your sessions on other members' hosts here may now push and write with your account."
+                : "Only your sessions on your own hosts here push and write with your account now.")} />
           )}
         </If>
       </ResourceState>

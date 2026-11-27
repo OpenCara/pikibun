@@ -535,7 +535,7 @@ describe("settings", () => {
     const tabs: Record<string, string[]> = {
       overview: ["workspace-members", "workspace-invite"],
       sources: ["workspace-sources", "workspace-connections", "workspace-push-access"],
-      agents: ["workspace-extensions", "workspace-tool-groups", "workspace-network", "workspace-github-reach", "workspace-memory"],
+      agents: ["workspace-extensions", "workspace-tool-groups", "workspace-network", "workspace-github-reach", "workspace-host-account", "workspace-memory"],
       sessions: ["workspace-schedules", "workspace-cache-warming", "workspace-database"],
     };
     const everyPart = Object.values(tabs).flat();
@@ -628,6 +628,18 @@ describe("settings", () => {
     await app.press("id:github-reach-any");
     await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`) !== undefined);
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`)).toEqual({ anyRepository: false });
+  });
+
+  test("Workspaces lets each member let their own account serve their sessions on others' hosts, which starts off", async () => {
+    const app = await openSettings("workspaces", {
+      [`PUT ${ORIGIN}/api/workspaces/w1/host-account`]: { body: { settings: { othersHosts: true } } },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("id:host-account-others");
+    expect(app.texts().join(" ")).toContain("Only your sessions on your own hosts push and write with your account");
+    await app.press("id:host-account-others");
+    await app.waitUntil(() => bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/host-account`) !== undefined);
+    expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/host-account`)).toEqual({ othersHosts: true });
   });
 
   test("Workspaces signs an app in to a remote MCP server with OAuth through the system browser, finished by the link it opens or a pasted code", async () => {
