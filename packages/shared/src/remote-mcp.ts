@@ -1,14 +1,18 @@
-import { sanitizeInputSchema, type InputSchema } from "./input-schema.js";
+import { fitInputSchema, type InputSchema } from "./input-schema.js";
 import { reservedToolNames, toolDefinitionLimits, type BrokeredToolDefinition } from "./tool-definitions.js";
 
 export const REMOTE_MCP_EXTENSION = "piki:remote-mcp";
 
 export const remoteMcpLimits = Object.freeze({
-  servers: 8, connections: 32, tools: 64, headers: 8, headerName: 64, headerValue: 4096, url: 2048, name: 64, description: 2048,
+  servers: 8, connections: 32, tools: 1024, toolsBytes: 2 * 1024 * 1024, headers: 8, headerName: 64, headerValue: 4096, url: 2048, name: 64, description: 2048,
   discoverSeconds: 15, callSeconds: 60, responseBytes: 1024 * 1024, listBytes: 8 * 1024 * 1024, resultCharacters: 64 * 1024,
 });
 
 export const REMOTE_MCP_SESSION_TOOLS = toolDefinitionLimits.definitions;
+
+export const REMOTE_MCP_ALL_TOOLS = remoteMcpLimits.servers * remoteMcpLimits.tools;
+
+export const remoteMcpAnswerBytes = 1024 * 1024 + remoteMcpLimits.servers * (remoteMcpLimits.toolsBytes + remoteMcpLimits.tools * 1024);
 
 export interface RemoteMcpToolsLeftOut { overLimit: number; unusable: number }
 
@@ -50,7 +54,8 @@ export interface WorkspaceMcpServer {
   connection?: McpConnectionUse;
   sharedBy?: McpServerSharer;
   readOnlyTools: string[];
-  tools: (RemoteMcpTool & { toolName: string; readOnly: boolean })[];
+  offTools: string[];
+  tools: (RemoteMcpTool & { toolName: string; readOnly: boolean; off: boolean })[];
   toolsLeftOut?: RemoteMcpToolsLeftOut;
   toolsNotOffered?: number;
   discoveredAt?: string;
@@ -227,17 +232,23 @@ export function remoteMcpToolList(value: unknown): { tools: RemoteMcpTool[]; lef
   if (!Array.isArray(value)) throw new Error("tools/list answered without tools");
   const tools: RemoteMcpTool[] = [];
   const leftOut: RemoteMcpToolsLeftOut = { overLimit: 0, unusable: 0 };
+  let bytes = 0;
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) { leftOut.unusable++; continue; }
     const tool = item as { name?: unknown; description?: unknown; inputSchema?: unknown; annotations?: { readOnlyHint?: unknown } };
     if (typeof tool.name === "string" && tools.some(other => other.name === tool.name)) continue;
     if (typeof tool.name !== "string" || !MCP_TOOL.test(tool.name)) { leftOut.unusable++; continue; }
-    const inputSchema = sanitizeInputSchema(tool.inputSchema ?? { type: "object" });
+    let inputSchema: InputSchema | undefined;
+    try { inputSchema = fitInputSchema(tool.inputSchema ?? { type: "object" }); } catch { inputSchema = undefined; }
     if (!inputSchema) { leftOut.unusable++; continue; }
     if (tools.length >= remoteMcpLimits.tools) { leftOut.overLimit++; continue; }
     const description = typeof tool.description === "string" ? tool.description.slice(0, remoteMcpLimits.description) : "";
-    tools.push({ name: tool.name, description, inputSchema,
-      ...(typeof tool.annotations?.readOnlyHint === "boolean" ? { readOnlyHint: tool.annotations.readOnlyHint } : {}) });
+    const kept: RemoteMcpTool = { name: tool.name, description, inputSchema,
+      ...(typeof tool.annotations?.readOnlyHint === "boolean" ? { readOnlyHint: tool.annotations.readOnlyHint } : {}) };
+    const size = new TextEncoder().encode(JSON.stringify(kept)).length;
+    if (bytes + size > remoteMcpLimits.toolsBytes) { leftOut.overLimit++; continue; }
+    bytes += size;
+    tools.push(kept);
   }
   return { tools, leftOut };
 }
@@ -246,7 +257,7 @@ export function remoteMcpLeftOutNote(leftOut: RemoteMcpToolsLeftOut | undefined)
   if (!leftOut || (!leftOut.overLimit && !leftOut.unusable)) return "";
   const count = (n: number) => `${n} ${n === 1 ? "tool" : "tools"}`;
   const parts = [
-    ...(leftOut.overLimit ? [`${count(leftOut.overLimit)} past the ${remoteMcpLimits.tools} Pikibun offers from one server`] : []),
+    ...(leftOut.overLimit ? [`${count(leftOut.overLimit)} past what Pikibun keeps from one server (${remoteMcpLimits.tools} tools, ${remoteMcpLimits.toolsBytes / 1024 / 1024} MB)`] : []),
     ...(leftOut.unusable ? [`${count(leftOut.unusable)} whose names or input schemas Pikibun can't offer`] : []),
   ];
   return `Left out ${parts.join(" and ")}.`;
@@ -254,8 +265,9 @@ export function remoteMcpLeftOutNote(leftOut: RemoteMcpToolsLeftOut | undefined)
 
 export function remoteMcpNotOfferedNote(count: number | undefined): string {
   if (!count) return "";
-  return `Sessions don't get ${count} of its tools: a session takes at most ${REMOTE_MCP_SESSION_TOOLS} remote MCP tools in all,`
-    + " shared evenly between the workspace's servers that are on. An owner or admin makes room by turning off a server its sessions don't need.";
+  return `Sessions on hosts with an older connector don't get ${count} of its tools: they take at most ${REMOTE_MCP_SESSION_TOOLS} remote MCP tools in all,`
+    + " shared evenly between the workspace's servers that are on. Updating those hosts' connector (npx pikibun@latest connect) gives their sessions every tool;"
+    + " until then an owner or admin makes room by turning off tools or servers its sessions don't need.";
 }
 
 export function remoteMcpToolKey(name: string): string {
@@ -275,9 +287,11 @@ export function remoteMcpToolName(prefix: string, tool: string): string | undefi
   return /^[a-z][a-z0-9_]{0,63}$/.test(name) && tail && !reservedToolNames.includes(name) ? name : undefined;
 }
 
-export function remoteMcpDefinitions(server: { name: string; prefix: string; readOnlyTools: readonly string[]; tools: readonly RemoteMcpTool[] }): BrokeredToolDefinition[] {
+export function remoteMcpDefinitions(server: { name: string; prefix: string; readOnlyTools: readonly string[]; offTools?: readonly string[]; tools: readonly RemoteMcpTool[] }): BrokeredToolDefinition[] {
   const definitions: BrokeredToolDefinition[] = [];
+  const off = new Set(server.offTools ?? []);
   for (const tool of server.tools) {
+    if (off.has(tool.name)) continue;
     const name = remoteMcpToolName(server.prefix, tool.name);
     if (!name || definitions.some(other => other.name === name)) continue;
     const readOnly = server.readOnlyTools.includes(tool.name);
@@ -292,7 +306,7 @@ export function remoteMcpDefinitions(server: { name: string; prefix: string; rea
   return definitions;
 }
 
-export interface RemoteMcpSessionServer { name: string; prefix: string; readOnlyTools: readonly string[]; tools: readonly RemoteMcpTool[] }
+export interface RemoteMcpSessionServer { name: string; prefix: string; readOnlyTools: readonly string[]; offTools?: readonly string[]; tools: readonly RemoteMcpTool[] }
 
 export function remoteMcpSessionTools(servers: readonly RemoteMcpSessionServer[], limit: number = REMOTE_MCP_SESSION_TOOLS):
   { definitions: BrokeredToolDefinition[]; offered: number[]; notOffered: number[] } {
