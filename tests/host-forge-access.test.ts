@@ -184,6 +184,42 @@ test("a host session's git clones and pushes the workspace's repositories throug
   assert.equal((await shell("echo ${GIT_CONFIG_COUNT:-none} ${PIKIBUN_SESSION_BRANCH:-none}")).trim(), "none none", "without the setting, commands keep the host's own Git");
 });
 
+test("members' clone sessions on the host always use their own account; the host owner's only once they turn it on", hostMode, async t => {
+  const { RunnerService } = await import("../apps/runner/src/server.js");
+  const { sha256 } = await import("../packages/shared/src/crypto.js");
+  const { randomUUID } = await import("node:crypto");
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "host-forge-session-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let ownerForgeAccess = false;
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "host-forge-session-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async input => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    egressGrant: async () => ({ policy: { mode: "off", domains: [], packageRegistries: false }, repositories: [app] }),
+    hostConfig: async () => ({ ...defaultHostConfig, ownerForgeAccess }),
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const open = async (id: string, connectorOwnerId: string) => {
+    const value = binding(id);
+    value.session.repositoryMode = "clone";
+    value.session.connectorOwnerId = connectorOwnerId;
+    value.model = { ...value.model, provider: "faux", modelId: "faux-1", connectorOwnerId };
+    const now = Math.floor(Date.now() / 1000);
+    const session = await service.provision(value, { aud: "runner", sessionId: id, actorId: "test:alice", ownerId: "test:alice", action: "create", policyVersion: 1,
+      iat: now, exp: now + 60, jti: randomUUID(), bodyHash: await sha256("") });
+    return async () => (await session.sandbox.execute({ kind: "bash", command: 'echo "${GIT_CONFIG_COUNT:-none} ${GIT_CONFIG_VALUE_0:-none} ${PIKIBUN_SESSION_BRANCH:-none}"' },
+      false, async () => {})).trim();
+  };
+  const member = await open("forge-member", "test:host");
+  assert.equal(await member(), "3 https://github.com/acme/app pikibun/forge-member", "a member's session on someone else's host reads as the member");
+  const own = await open("forge-owner", "test:alice");
+  assert.equal(await own(), "none none none", "the host owner's own session keeps the host's credentials by default");
+  ownerForgeAccess = true;
+  assert.equal(await own(), "3 https://github.com/acme/app pikibun/forge-owner");
+  ownerForgeAccess = false;
+  assert.equal(await member(), "3 https://github.com/acme/app pikibun/forge-member", "the owner's setting is only about their own sessions");
+});
+
 test("the owner decides whether their own host sessions use their Pikibun account, off by default", () => {
   assert.equal(defaultHostConfig.ownerForgeAccess, false);
   assert.ok(ownerOnlyHostConfig.includes("ownerForgeAccess"));

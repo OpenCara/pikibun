@@ -259,6 +259,7 @@ export class RunnerSession {
   readonly #egress: EgressProxy | undefined;
   readonly #forge: EgressProxy | undefined;
   #forgeStart: Promise<void> | undefined;
+  #forgeAccess = false;
   #forgeCa: Promise<string> | undefined;
   readonly #direct: DirectGit | undefined;
   readonly #clone: boolean;
@@ -484,10 +485,14 @@ export class RunnerSession {
     });
   }
 
+  private async forgeApplies(): Promise<boolean> {
+    if (!this.#forge) return false;
+    return !hostOwnersSession(this.binding) || (await this.hostConfig()).ownerForgeAccess;
+  }
+
   private async forgeEndpoint(): Promise<EgressEndpoint | undefined> {
     const forge = this.#forge;
-    if (!forge || this.closing) return undefined;
-    if (hostOwnersSession(this.binding) && !(await this.hostConfig()).ownerForgeAccess) return undefined;
+    if (!forge || this.closing || !await this.forgeApplies()) return undefined;
     this.#forgeStart ??= forge.start().catch((error: unknown) => { this.#forgeStart = undefined; throw error; });
     await this.#forgeStart;
     return forge.endpoint;
@@ -681,7 +686,7 @@ export class RunnerSession {
     tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set(),
     skills: readonly Skill[] = [], memory?: WorkspaceMemoryPrompt): string {
     return agentInstructions({ base: this.binding.agent.instructions, agentTools: sessionToolNames(this.binding.agent.tools), mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
-      extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
+      extensionTools, clone: this.#clone, sandboxed: !!this.#egress, forgeAccess: this.#forgeAccess, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
       linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser,
@@ -1001,6 +1006,7 @@ export class RunnerSession {
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
     if (run.mode === "write") await this.#sudo?.prepare();
+    if (run.mode === "write") this.#forgeAccess = await this.forgeApplies().catch(() => false);
     const skills = run.mode === "write" ? await this.listedSkills(options.access !== "read") : [];
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();

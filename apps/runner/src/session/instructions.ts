@@ -22,6 +22,7 @@ export interface InstructionsInput {
   extensionTools: ReadonlySet<string>;
   clone: boolean;
   sandboxed: boolean;
+  forgeAccess?: boolean;
   branch: string;
   cloneRepositories: readonly string[];
   lfsRepositories: readonly string[];
@@ -68,7 +69,11 @@ export function agentInstructions(input: InstructionsInput): string {
           + "so look before you change or delete anything there. File-tool paths are relative to it. This host runs without a sandbox: "
         : "The execution root is the session worktree, which starts empty; file-tool paths are relative to it. This host runs without a sandbox: ")
       + "clone the repositories you need into the worktree with plain Git (for example git clone https://github.com/<owner>/<name>), "
-      + "and fetch, switch, commit and push as usual. Git uses this host's own network and credentials. "
+      + "and fetch, switch, commit and push as usual. "
+      + (input.forgeAccess
+        ? "Git uses this host's own network. This workspace's repositories go through Pikibun as the session's owner: it reads them with their access, "
+          + "and a push to one of them goes only to this session's own branch (other branches and tags are refused). Other repositories use this host's own credentials. "
+        : "Git uses this host's own network and credentials. ")
       + `This session's own branch is ${input.branch}: push the work for a pull request to it, for example git push origin HEAD:${input.branch}, `
       + "and open the pull request from it, so the session links to that pull request."
       + (input.cloneRepositories.length ? `\nThis workspace's repositories: ${input.cloneRepositories.join(", ")}.` : "");

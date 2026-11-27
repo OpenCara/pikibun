@@ -138,7 +138,7 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
       <Row title="Pikibun account on the host" testID="host-owner-forge-access" hint={owner()
         ? "Your own sessions that run on this host (not in the sandbox) reach the workspace's repositories, in git and gh, glab and az, with your Pikibun account instead of this machine's credentials; other remotes keep this machine's. Members' sessions on the host always use their own account. Applies to sessions' next commands"
         : "Only the host's owner changes this"}
-        trailing={owner() ? <Checkbox label="Use in my host sessions" checked={config().ownerForgeAccess} disabled={!editable()} onChange={ownerForgeAccess => set({ ownerForgeAccess })} />
+        trailing={owner() ? <Checkbox label="Use in my host sessions" testID="host-owner-forge-access-use" checked={config().ownerForgeAccess} disabled={!editable()} onChange={ownerForgeAccess => set({ ownerForgeAccess })} />
           : <Badge tone={saved().ownerForgeAccess ? "success" : "neutral"}>{saved().ownerForgeAccess ? "On" : "Off"}</Badge>} />
       <Row title="Repository cache" hint={owner() ? `${cacheHints[config().repositoryCache]}. Applies when the host next connects.` : "Only the host's owner changes this"}
         trailing={owner() && editable()
