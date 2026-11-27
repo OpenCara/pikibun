@@ -9,7 +9,7 @@ line for each, naming the mechanism, so an agent that meets the refusal knows wh
 
 | Lesson | Now |
 |---|---|
-| Sources carry no comments; run `tests/no-comments.test.ts` before pushing | CI's fast `checks` job runs it (`pnpm check:comments`) besides the `tests` job, so it fails within minutes; `pnpm check:fast` runs it with lint locally; `piki:pr-flow`'s `pre-push-check` can refuse a push before it passed |
+| Sources carry no comments; run `tests/no-comments.test.ts` before pushing | CI's fast `checks` job runs it (`pnpm check:comments`), so it fails within minutes (the `tests` jobs leave it to `checks`); `pnpm check:fast` runs it with lint locally; `piki:pr-flow`'s `pre-push-check` can refuse a push before it passed |
 | The `@earendil-works` packages pin each other exactly: upgrade them together, in both manifests and both lockfiles | `tests/pinned-dependencies.test.ts`, in `checks` too |
 | `pnpm --filter pikibun run shrinkwrap` fails under npm 12 | `packages/cli/scripts/shrinkwrap.mjs` copies `package-lock.json` to `npm-shrinkwrap.json` instead of running `npm shrinkwrap`, which npm 12 dropped. The two are the same file under another name since npm 7 |
 | Release the connector before the server that raises `MINIMUM_CONNECTOR_VERSION`; pin only an extension version npm has | `release-server.yml`'s `prerequisites` job (`scripts/release-prerequisites.ts`) fails the release while npm lacks either, before the image is built |
