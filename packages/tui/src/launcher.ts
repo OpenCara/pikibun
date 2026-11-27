@@ -108,11 +108,12 @@ export async function main(args: string[], root: string): Promise<number> {
     process.stderr.write(`Pikibun's terminal app can't start: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
-  const child = spawn(found.path, hostArguments(args, path.join(root, "app", "bundle.js"), log), { stdio: "inherit" });
+  const ownSession = hostInOwnSession();
+  const child = spawn(found.path, hostArguments(args, path.join(root, "app", "bundle.js"), log), { stdio: "inherit", detached: ownSession });
   const ignore = () => {};
   const forward = (signal: NodeJS.Signals) => () => { child.kill(signal); };
-  const forwarded = (["SIGTERM", "SIGHUP"] as const).map(signal => [signal, forward(signal)] as const);
-  process.on("SIGINT", ignore);
+  const forwarded = forwardedSignals(ownSession).map(signal => [signal, forward(signal)] as const);
+  if (!ownSession) process.on("SIGINT", ignore);
   for (const [signal, handler] of forwarded) process.on(signal, handler);
   try {
     return await new Promise<number>(resolve => {
@@ -126,4 +127,12 @@ export async function main(args: string[], root: string): Promise<number> {
     process.off("SIGINT", ignore);
     for (const [signal, handler] of forwarded) process.off(signal, handler);
   }
+}
+
+export function hostInOwnSession(platform: string = process.platform): boolean {
+  return platform !== "win32";
+}
+
+export function forwardedSignals(ownSession: boolean): NodeJS.Signals[] {
+  return ownSession ? ["SIGTERM", "SIGHUP", "SIGINT", "SIGWINCH"] : ["SIGTERM", "SIGHUP"];
 }

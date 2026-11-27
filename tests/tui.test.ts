@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { NSH_TUI_HOSTS } from "../scripts/nsh.mjs";
-import { exitCode, findHost, hostArguments, hostBinary, hostKey, hostPackage, logFile, TUI_HOSTS } from "../packages/tui/src/launcher.js";
+import { exitCode, findHost, forwardedSignals, hostArguments, hostBinary, hostInOwnSession, hostKey, hostPackage, logFile, TUI_HOSTS } from "../packages/tui/src/launcher.js";
 import { findOnPath, TUI_COMMAND, tuiLaunch } from "../packages/cli/src/tui.js";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
@@ -46,6 +46,66 @@ test("the host runs the bundled app, with its log where each system keeps logs u
   assert.equal(exitCode(3, null), 3);
   assert.equal(exitCode(null, "SIGTERM"), 143);
   assert.equal(exitCode(null, null), 1);
+});
+
+test("the host runs in a session of its own outside Windows, so the commands it starts have no terminal to take, and hears the terminal's signals through the launcher", () => {
+  assert.equal(hostInOwnSession("darwin"), true);
+  assert.equal(hostInOwnSession("linux"), true);
+  assert.equal(hostInOwnSession("win32"), false);
+  assert.deepEqual(forwardedSignals(true), ["SIGTERM", "SIGHUP", "SIGINT", "SIGWINCH"]);
+  assert.deepEqual(forwardedSignals(false), ["SIGTERM", "SIGHUP"]);
+});
+
+const IN_A_TERMINAL = String.raw`
+import os, pty, select, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out = b""
+while True:
+    ready, _, _ = select.select([fd], [], [], 30)
+    if not ready:
+        break
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(out.decode("utf-8", "replace"))
+sys.exit(os.waitstatus_to_exitcode(status))
+`;
+
+const hasPty = process.platform !== "win32" && spawnSync("python3", ["-c", "import pty"], { stdio: "ignore" }).status === 0;
+const loginShells = ["bash", "zsh"].filter(shell => spawnSync(shell, ["-c", "exit 0"], { stdio: "ignore" }).status === 0);
+
+test("in a terminal, the interactive login shells the app starts run their commands rather than stop for the terminal", { skip: (!hasPty && "no python3 pty here") || (!loginShells.length && "no bash or zsh") }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "pikibun-tui-session-"));
+  try {
+    const report = path.join(dir, "report");
+    const host = path.join(dir, "stand-in-host");
+    writeFileSync(host, [
+      "#!/bin/sh",
+      "set -m 2>/dev/null",
+      `report='${report}'`,
+      "if (: < /dev/tty) 2>/dev/null; then echo terminal=controlling >> \"$report\"; else echo terminal=none >> \"$report\"; fi",
+      ...loginShells.map(shell => `${shell} -ilc 'echo ${shell}=ran' < /dev/null >> "$report" 2>/dev/null & sleep 3; kill -9 $! 2>/dev/null`),
+      "exit 0",
+      "",
+    ].join("\n"), { mode: 0o755 });
+    for (const rc of [".bashrc", ".bash_profile", ".zshrc"]) writeFileSync(path.join(dir, rc), "");
+    const result = spawnSync("python3", ["-c", IN_A_TERMINAL, process.execPath, "--import", "tsx", path.join(repository, "packages/tui/src/bin.ts"), "--log-file", path.join(dir, "tui.log")], {
+      encoding: "utf8", timeout: 60_000, cwd: repository,
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: dir, ZDOTDIR: dir, TERM: "xterm-256color", PIKIBUN_TUI_HOST: host },
+    });
+    assert.equal(result.status, 0, `${result.stdout} ${result.stderr}`);
+    const lines = readFileSync(report, "utf8").trim().split("\n").sort();
+    assert.deepEqual(lines, [...loginShells.map(shell => `${shell}=ran`), "terminal=none"].sort());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("pikibun tui starts the pikibun-tui on the PATH, as Windows names it too, or runs @pikibun/tui from npm", () => {
