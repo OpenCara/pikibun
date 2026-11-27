@@ -214,7 +214,7 @@ export interface PikiSandboxRun {
 
 export interface PikiSession {
   sandbox?: (run: PikiSandboxRun) => Promise<CliRun>;
-  hostSignIn: boolean;
+  hostSignIn: boolean | (() => Promise<boolean>);
   forgeWrites?: (callId: string) => boolean;
   saveOutput?: (callId: string, tool: string, output: string) => Promise<string>;
   fromScript?: (callId: string) => boolean;
@@ -289,7 +289,8 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
           if (status) throw new Error(`${status}.\n${text}`);
           return { content: [{ type: "text" as const, text }], details: { exitCode: 0 } };
         };
-        if (!session.hostSignIn) {
+        const hostSignIn = typeof session.hostSignIn === "function" ? await session.hostSignIn() : session.hostSignIn;
+        if (!hostSignIn) {
           if (!session.sandbox) {
             throw new Error(`${spec.command} can't run in this session: it runs in a session's sandbox, as the session owner, and this session has none that reaches `
               + `the API through Pikibun; on the host it runs only in the host owner's own sessions, where the host's owner allows that. Nothing ran.`);

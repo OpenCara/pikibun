@@ -68,7 +68,8 @@ const glabReads: Record<string, readonly string[] | true> = {
 export const ghDefinition: CliDefinition = {
   kind: "cli", name: "gh", extension: "piki:gh", command: "gh", windowsCommand: { file: "gh.exe", shim: false },
   description: [
-    "Run the GitHub CLI (gh) as the session owner: in the session's sandbox, where Pikibun adds the session owner's access to the workspace's github.com repositories to its GitHub API requests.",
+    "Run the GitHub CLI (gh) as the session owner: in the session's sandbox, or through Pikibun's proxy in a clone session on its host that uses the owner's Pikibun account, where Pikibun adds the session owner's access to the workspace's github.com repositories to its GitHub API requests.",
+    "In other sessions on a host, it runs with the host's own gh sign-in.",
     "Give the arguments after gh as a list, as they are passed (no shell, no quoting), such as {\"args\": [\"pr\", \"checks\", \"42\", \"--repo\", \"acme/app\"]}.",
     "Use it for what the sandbox can't reach: GitHub Actions runs and their logs (run list, run view <id> --log-failed), pull request checks and reviews, releases, repository settings, and the REST and GraphQL APIs (api repos/acme/app/...).",
     "Name the repository with --repo owner/name: it runs in the session's worktree, or in directory, a clone in it.",

@@ -42,6 +42,7 @@ export interface HostSudo {
 export type HostWorkspaceOptions = {
   ownerEnvironment?: boolean; privateEnvironment?: readonly string[]; sudo?: HostSudo;
   gitShim?: () => Promise<string | undefined>;
+  forgeEnvironment?: () => Promise<Record<string, string> | undefined>;
   worktree?: string; refused?: readonly string[];
 };
 
@@ -99,6 +100,7 @@ export class HostWorkspace implements SessionWorkspace {
   #cancelActive: (() => void) | undefined;
   readonly #sudo: HostSudo | undefined;
   readonly #gitShim: (() => Promise<string | undefined>) | undefined;
+  readonly #forgeEnvironment: (() => Promise<Record<string, string> | undefined>) | undefined;
   #activeCommand: string | undefined;
 
   constructor(binding: RunnerBinding, root: string, options: HostWorkspaceOptions = {}) {
@@ -126,6 +128,7 @@ export class HostWorkspace implements SessionWorkspace {
     this.ownerEnvironment = options.ownerEnvironment === true;
     this.#sudo = windows ? undefined : options.sudo;
     this.#gitShim = options.gitShim;
+    this.#forgeEnvironment = options.forgeEnvironment;
     this.#isolated = Object.freeze({
       ...(windows ? windowsSystemEnvironment() : {}),
       ...sessionEnvironment(this.#identity, { path: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin", gitConfig: join(this.#root, "owner.gitconfig") }),
@@ -327,9 +330,11 @@ export class HostWorkspace implements SessionWorkspace {
           const bash = bashPath();
           if (!bash) throw hostError(windows ? "bash commands need Git for Windows' bash.exe" : "bash commands need /bin/bash");
           const git = await this.#gitShim?.().catch(() => undefined);
+          const forge = await this.#forgeEnvironment?.().catch(() => undefined);
+          const env = { ...forge, ...(git ? hostGitEnvironment(git, this.#environment) : {}) };
           return output(checked(await this.#spawn(bash, hostBashArgs(command), undefined,
             { timeoutMs: (options.limits?.seconds ?? TIMEOUT_MS / 1000) * 1000, signal: options.signal, hostCommand: command,
-              ...(git ? { env: hostGitEnvironment(git, this.#environment) } : {}) })));
+              ...(Object.keys(env).length ? { env } : {}) })));
         });
       }
       case "github.comment":

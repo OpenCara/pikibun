@@ -449,6 +449,19 @@ test('in the sandbox: the command runs as the session owner, through the session
   assert.equal(runs.length, 5, 'refusals never reach the sandbox');
 });
 
+test('on a host session that uses the owner\'s Pikibun account, gh runs through the session; without it, with the host\'s own sign-in', async t => {
+  const runs: PikiSandboxRun[] = [];
+  let forge = true;
+  const { call } = await ghTool(t, false, { hostSignIn: async () => !forge, forgeWrites: () => true,
+    sandbox: async run => { runs.push(run); return { exitCode: 0, signal: null, output: 'through the proxy' }; } });
+  assert.equal(await call({ args: ['pr', 'list', '--repo', 'acme/app'] }), 'through the proxy');
+  assert.deepEqual(runs.map(run => run.args), [['pr', 'list', '--repo', 'acme/app']]);
+  assert.deepEqual(runs[0]!.tokenEnv, ['GH_TOKEN', 'GITHUB_TOKEN'], 'an approved call\'s write lease replaces the placeholder');
+  forge = false;
+  assert.match(await call({ args: ['pr', 'list', '--repo', 'acme/app'] }), /arg=list/, 'the host\'s own gh, as before');
+  assert.equal(runs.length, 1);
+});
+
 test('az: the sandbox also sees the CLI\'s own install under /opt, which its /usr/bin script starts, and a wrapper whose program it lacks says so', () => {
   assert.deepEqual(azureCliSpec.sandboxRoots, ['/opt/az', '/opt/azure-cli']);
   assert.equal(sandboxMissingFile('az', '/usr/bin/az: line 2: /opt/azure-cli/bin/python: No such file or directory'), '/opt/azure-cli/bin/python', 'bash');

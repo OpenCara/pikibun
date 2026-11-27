@@ -135,6 +135,11 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
       <Row title="Git credentials" hint={owner() ? "Pushes in your own sessions may use this machine's Git credential helpers, where a workspace's push access chooses the host's Git credentials" : "Only the host's owner changes this"}
         trailing={owner() ? <Checkbox label="Use for my pushes" checked={config().gitCredentials} disabled={!editable()} onChange={gitCredentials => set({ gitCredentials })} />
           : <Badge tone={saved().gitCredentials ? "warning" : "neutral"}>{saved().gitCredentials ? "On" : "Off"}</Badge>} />
+      <Row title="Pikibun account on the host" testID="host-owner-forge-access" hint={owner()
+        ? "Your own sessions that run on this host (not in the sandbox) reach the workspace's repositories, in git and gh, glab and az, with your Pikibun account instead of this machine's credentials; other remotes keep this machine's. Members' sessions on the host always use their own account. Applies to sessions' next commands"
+        : "Only the host's owner changes this"}
+        trailing={owner() ? <Checkbox label="Use in my host sessions" checked={config().ownerForgeAccess} disabled={!editable()} onChange={ownerForgeAccess => set({ ownerForgeAccess })} />
+          : <Badge tone={saved().ownerForgeAccess ? "success" : "neutral"}>{saved().ownerForgeAccess ? "On" : "Off"}</Badge>} />
       <Row title="Repository cache" hint={owner() ? `${cacheHints[config().repositoryCache]}. Applies when the host next connects.` : "Only the host's owner changes this"}
         trailing={owner() && editable()
           ? <Segmented small value={config().repositoryCache} onChange={repositoryCache => set({ repositoryCache })}
