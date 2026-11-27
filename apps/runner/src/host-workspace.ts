@@ -145,6 +145,7 @@ export class HostWorkspace implements SessionWorkspace {
   get worktree(): string { return this.#identity.worktree; }
   get hostWorktree(): string { return this.worktree; }
   get activeCommand(): string | undefined { return this.#activeCommand; }
+  get commandEnvironment(): Readonly<Record<string, string>> { return this.#environment; }
   get chosenDirectory(): boolean { return this.#chosen; }
 
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {

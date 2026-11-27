@@ -114,11 +114,13 @@ export function hostForgeEnvironment(repositories: readonly EgressRepository[], 
   };
 }
 
-export function hostForgeApiEnvironment(endpoint: EgressEndpoint, caBundle: string): Record<string, string> {
+export function hostForgeApiEnvironment(endpoint: EgressEndpoint, caBundle: string, noProxy = ""): Record<string, string> {
   const proxy = endpointUrl(endpoint);
+  const local = ["localhost", "127.0.0.1", "::1", ...noProxy.split(",").map(item => item.trim()).filter(Boolean)];
+  const bypass = [...new Set(local)].join(",");
   return {
-    HTTPS_PROXY: proxy, https_proxy: proxy, HTTP_PROXY: proxy, http_proxy: proxy,
-    NO_PROXY: "localhost,127.0.0.1,::1", no_proxy: "localhost,127.0.0.1,::1",
+    HTTPS_PROXY: proxy, https_proxy: proxy,
+    NO_PROXY: bypass, no_proxy: bypass,
     ...Object.fromEntries(CA_BUNDLE_VARIABLES.map(name => [name, caBundle])),
     GH_TOKEN: API_TOKEN_PLACEHOLDER, GITHUB_TOKEN: API_TOKEN_PLACEHOLDER, GITLAB_TOKEN: API_TOKEN_PLACEHOLDER, AZURE_DEVOPS_EXT_PAT: API_TOKEN_PLACEHOLDER,
   };
@@ -340,7 +342,7 @@ export class EgressProxy {
     this.#options = options;
     const credential = options.apiCredential;
     this.#api = credential && new ApiAccess({
-      credential, grant: () => this.#currentGrant(),
+      credential, grant: options.unconfined ? async () => ({ ...await this.#currentGrant(), policy: { mode: "open", domains: [], packageRegistries: true } }) : () => this.#currentGrant(),
       record: entry => this.#record({ kind: "api", ...entry }),
       ...(options.apiAuthority ? { authority: options.apiAuthority } : {}),
       ...(options.apiUpstream ? { upstream: options.apiUpstream } : {}),
@@ -528,6 +530,7 @@ export class EgressProxy {
     };
     try {
       if (!target) return deny(403, "Invalid tunnel target");
+      if (this.#options.unconfined && (target.port !== 443 || !this.#api?.handles(target.host))) return await this.#passThrough(target, client, head, deny);
       if (target.port !== 443) return deny(403, `Only HTTPS on port 443 is allowed, not port ${target.port}`);
       const grant = await this.#currentGrant();
       if (this.#api?.handles(target.host)) {
@@ -537,7 +540,6 @@ export class EgressProxy {
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         return this.#api!.intercept(client, head, target.host);
       }
-      if (this.#options.unconfined) return await this.#passThrough(target, client, head, deny);
       if (!hostAllowed(grant.policy, target.host)) {
         return deny(403, grant.policy.mode === "off"
           ? `${target.host} is not reachable: this workspace's network access is off`

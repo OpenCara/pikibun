@@ -46,7 +46,7 @@ import { extensionFileBinds, type FileBind } from "./extensions/files.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace, hostOwnersSession } from "./host-workspace.js";
-import { sandboxCertificates } from "./trust-store.js";
+import { hostSessionCertificates, proxyConfigured } from "./trust-store.js";
 import { HostGitShim } from "./host-git-shim.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
@@ -501,18 +501,22 @@ export class RunnerSession {
   private async forgeEnvironment(): Promise<Record<string, string> | undefined> {
     const endpoint = await this.forgeEndpoint();
     if (!endpoint) return undefined;
-    return hostForgeEnvironment((await this.#forge!.grant()).repositories, endpoint, sessionBranch(this.binding.session));
+    const git = hostForgeEnvironment((await this.#forge!.grant()).repositories, endpoint, sessionBranch(this.binding.session));
+    const base = this.sandbox instanceof HostWorkspace ? this.sandbox.commandEnvironment : {};
+    if (proxyConfigured(base)) return git;
+    return { ...await this.forgeApiEnvironment(endpoint), ...git };
   }
 
-  private async forgeApiEnvironment(): Promise<Record<string, string> | undefined> {
-    const endpoint = await this.forgeEndpoint();
+  private async forgeApiEnvironment(given?: EgressEndpoint): Promise<Record<string, string> | undefined> {
+    const endpoint = given ?? await this.forgeEndpoint();
     if (!endpoint) return undefined;
+    const base = this.sandbox instanceof HostWorkspace ? this.sandbox.commandEnvironment : {};
     this.#forgeCa ??= (async () => {
       const path = join(this.directory, "forge-ca.pem");
-      await writeFile(path, sandboxCertificates(), { mode: 0o600 });
+      await writeFile(path, await hostSessionCertificates(base), { mode: 0o600 });
       return path;
     })().catch((error: unknown) => { this.#forgeCa = undefined; throw error; });
-    return hostForgeApiEnvironment(endpoint, await this.#forgeCa);
+    return hostForgeApiEnvironment(endpoint, await this.#forgeCa, base.NO_PROXY ?? base.no_proxy ?? "");
   }
 
   private async relay(request: RelayRequest): Promise<Response> {
