@@ -6,7 +6,7 @@ import type { CommandLimits } from "../host-config.js";
 import { RunnerError, validateOperation } from "../protocol.js";
 import { performClonePush, PushError, pushSummary, type PushResult } from "../push.js";
 import { SandboxProcessError, type SandboxAuthorize } from "../sandbox.js";
-import { isolatedWorkspace, type SessionWorkspace } from "../workspace.js";
+import { pushWorkspace, type SessionWorkspace } from "../workspace.js";
 import type { WholeResults } from "./whole-results.js";
 import type { HostCommandPolicy } from "./host-commands.js";
 import type { Metadata } from "./state.js";
@@ -36,6 +36,7 @@ export interface SessionOperationsOptions {
   config: OperationsConfig;
   clone: boolean;
   sandboxed: boolean;
+  pushesOnHost?: boolean;
   sandbox: SessionWorkspace;
   hostCommands: HostCommandPolicy;
   wholeResults: WholeResults;
@@ -111,7 +112,7 @@ export class SessionOperations {
       throw new RunnerError(403, "Host commands require a connected host with a known owner");
     }
     if (operation.kind === "git.push" && !this.options.clone) throw new RunnerError(400, "Only clone sessions push a clone's directory");
-    if (operation.kind === "git.push" && !this.options.sandboxed) throw new RunnerError(400, "On a host without the sandbox, push with the git tool");
+    if (operation.kind === "git.push" && !this.options.sandboxed && !this.options.pushesOnHost) throw new RunnerError(400, "On a host without the sandbox, push with the git tool");
     await this.options.authorize(actorId, "write");
     const state = await this.options.metadata();
     const attribution = state.toolActors[toolTaskId];
@@ -209,7 +210,7 @@ export class SessionOperations {
     let failure: { status: "failed" | "interrupted"; result: string } | undefined;
     try {
       const authorization = "hostCredentials" in credential ? await this.#hostAuthorization(credential.remote, signal) : credential.authorization;
-      pushed = await performClonePush({ workspace: isolatedWorkspace(this.options.sandbox), operation, credential: { remote: credential.remote, authorization }, authorize: recheck, signal });
+      pushed = await performClonePush({ workspace: pushWorkspace(this.options.sandbox), operation, credential: { remote: credential.remote, authorization }, authorize: recheck, signal });
     } catch (error) {
       failure = error instanceof PushError && !signal?.aborted
         ? { status: "failed", result: `Push failed: ${error.message}. Nothing was pushed.` }

@@ -59,6 +59,19 @@ export function lfsInstructions(lfsRepositories: readonly string[]): string {
     + "LFS objects are never uploaded from this session, so don't add or change LFS-tracked files in commits you push.";
 }
 
+export function gitPushInstructions(branch: string, plainTagsRefused: boolean): string {
+  return "\ngit_push publishes a clone's checked-out commit, as it is, to another branch of the workspace repository it was cloned from, "
+    + "git_push {directory, branch}, where directory is the clone's path in the worktree. Pushes are fast-forward only (never forced); "
+    + "if the branch moved, fetch and merge or rebase first. It pushes with the workspace's push access, never with a credential in the session. "
+    + "Optionally request a pull request with pull_request {title, body, base?, draft?}; "
+    + `to open one from the session branch once you pushed it, call git_push with branch ${branch}. `
+    + "With draft: true it opens as a draft; with draft: false it opens ready for review, or marks the branch's open draft ready for review, "
+    + "with that title and body. "
+    + "To tag a commit that is already on a branch (a release tag on main, say), check it out in the clone and call "
+    + "git_push {directory, branch, tag}: it creates that tag at the commit and moves no branch. Tags are never moved"
+    + (plainTagsRefused ? "; plain git push of tags is refused." : ".");
+}
+
 export function agentInstructions(input: InstructionsInput): string {
   const { mode, off, browserUnavailable, tunnelUnavailable, kindsOff, extensionTools } = input;
   let instructions = input.base;
@@ -74,9 +87,11 @@ export function agentInstructions(input: InstructionsInput): string {
         ? "Git uses this host's own network. This workspace's repositories go through Pikibun as the session's owner: it reads them with their access, "
           + "and a push to one of them goes only to this session's own branch (other branches and tags are refused). Other repositories use this host's own credentials. "
         : "Git uses this host's own network and credentials. ")
-      + `This session's own branch is ${input.branch}: push the work for a pull request to it, for example git push origin HEAD:${input.branch}, `
+      + `This session's own branch is ${input.branch}${input.forgeAccess ? " (also in $PIKIBUN_SESSION_BRANCH)" : ""}: push the work for a pull request to it, for example git push origin HEAD:${input.branch}, `
       + "and open the pull request from it, so the session links to that pull request."
       + (input.cloneRepositories.length ? `\nThis workspace's repositories: ${input.cloneRepositories.join(", ")}.` : "");
+    if (input.agentTools.includes("git_push") && !off.has("git_push") && input.tools.includes("git_push"))
+      instructions += gitPushInstructions(input.branch, input.forgeAccess === true);
   } else if (input.clone) {
     const branch = input.branch;
     instructions += "\n\nTrusted runtime repository context:\n"
@@ -94,16 +109,7 @@ export function agentInstructions(input: InstructionsInput): string {
         + input.cloneFailures.map(failure => `${failure.path} (${failure.reason})`).join(", ")
         + ". Their backed-up work (branches, and the working tree as a commit) is in Git bundles under .git/pikibun-clones, listed in its "
         + "manifest.json; Pikibun tries again when the session next opens, as long as nothing else is at their paths." : "");
-    if (input.agentTools.includes("git_push") && !off.has("git_push"))
-      instructions += "\ngit_push publishes a clone's checked-out commit, as it is, to another branch of the workspace repository it was cloned from, "
-        + "git_push {directory, branch}, where directory is the clone's path in the worktree. Pushes are fast-forward only (never forced); "
-        + "if the branch moved, fetch and merge or rebase first. Optionally request a pull request with pull_request {title, body, base?, draft?}; "
-        + `to open one from the session branch once you pushed it, call git_push with branch ${branch}. `
-        + "With draft: true it opens as a draft; with draft: false it opens ready for review, or marks the branch's open draft ready for review, "
-        + "with that title and body. "
-        + "To tag a commit that is already on a branch (a release tag on main, say), check it out in the clone and call "
-        + "git_push {directory, branch, tag}: it creates that tag at the commit and moves no branch. Tags are never moved; "
-        + "plain git push of tags is refused.";
+    if (input.agentTools.includes("git_push") && !off.has("git_push")) instructions += gitPushInstructions(branch, true);
   }
   if (input.memory) {
     const offered = (name: string) => mode !== "ask" && input.agentTools.includes(name) && !off.has(name);

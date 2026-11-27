@@ -1326,6 +1326,14 @@ test("instructions: a clone session names its branch, repositories, LFS and the 
   assert.match(forge, /This workspace's repositories go through Pikibun as the session's owner/);
   assert.match(forge, /Other repositories use this host's own credentials\./);
   assert.doesNotMatch(forge, /own network and credentials/);
+  assert.doesNotMatch(forge, /git_push \{directory/, "no git_push lines where the session doesn't offer it");
+  const pushing = instructions({ clone: true, sandboxed: false, forgeAccess: true, agentTools: ["git_push"], tools: ["git_push"] });
+  assert.match(pushing, /git_push \{directory, branch\}/);
+  assert.match(pushing, /plain git push of tags is refused/);
+  assert.match(pushing, /\$PIKIBUN_SESSION_BRANCH/);
+  const hostOwn = instructions({ clone: true, sandboxed: false, agentTools: ["git_push"], tools: ["git_push"] });
+  assert.match(hostOwn, /git_push \{directory, branch\}/);
+  assert.doesNotMatch(hostOwn, /plain git push of tags is refused|PIKIBUN_SESSION_BRANCH/, "with the host's own credentials, plain git pushes anything");
   assert.equal(lfsInstructions([]), "");
 });
 

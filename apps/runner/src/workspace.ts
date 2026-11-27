@@ -44,9 +44,19 @@ export interface SessionWorkspace {
   close(): Promise<void>;
 }
 
-export interface IsolatedWorkspace extends SessionWorkspace, ClonePushWorkspace {
-  readonly isolated: true;
+export interface PushWorkspace extends ClonePushWorkspace {
   cloneHead(path: string, authorize: SandboxAuthorize): Promise<{ commit: string; origin: string | null }>;
+}
+
+export function pushWorkspace(workspace: SessionWorkspace): PushWorkspace {
+  const candidate = workspace as Partial<PushWorkspace>;
+  if (typeof candidate.cloneHead !== "function" || typeof candidate.clonePushPrepare !== "function" || typeof candidate.clonePushPack !== "function")
+    throw new Error("This session's workspace can't push clones");
+  return workspace as unknown as PushWorkspace;
+}
+
+export interface IsolatedWorkspace extends SessionWorkspace, PushWorkspace {
+  readonly isolated: true;
   cloneBackup(authorize: SandboxAuthorize): Promise<{ clones: CloneBackup[]; found: string[] }>;
   clonePending(authorize: SandboxAuthorize): Promise<{ path: string; origin: string | null }[]>;
   cloneRestore(path: string, url: string, reference: string | null, authorize: SandboxAuthorize): Promise<void>;

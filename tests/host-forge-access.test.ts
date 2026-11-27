@@ -187,6 +187,58 @@ test("a host session's git clones and pushes the workspace's repositories throug
   assert.equal((await shell("echo ${GIT_CONFIG_COUNT:-none} ${PIKIBUN_SESSION_BRANCH:-none}")).trim(), "none none", "without the setting, commands keep the host's own Git");
 });
 
+test("git_push on the host: the runner pushes a clone's commit as it is, fast-forward only, without the session's Git ever holding the credential", hostMode, async t => {
+  const { performClonePush, PushError } = await import("../apps/runner/src/push.js");
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "host-forge-push-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const projects = join(directory, "projects");
+  await mkdir(join(projects, "acme"), { recursive: true });
+  const work = join(directory, "upstream");
+  const environment = { ...process.env, GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@example.test", GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@example.test" };
+  const git = (args: string[], cwd: string) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", env: environment });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const bare = join(projects, "acme", "app.git");
+  await mkdir(work);
+  git(["init", "-q", "-b", "main"], work);
+  await writeFile(join(work, "README.md"), "from upstream\n");
+  git(["add", "README.md"], work);
+  git(["commit", "-q", "-m", "initial"], work);
+  git(["clone", "-q", "--bare", work, bare], directory);
+  const server = await startGitHttpServer(projects, { authorization: "Basic dXNlcjpzZWNyZXQ=" });
+  t.after(() => server.close());
+  const workspace = new HostWorkspace(binding("host-push"), join(directory, "session"));
+  t.after(() => workspace.close());
+  await workspace.initialize();
+  git(["clone", "-q", bare, join(workspace.worktree, "app")], directory);
+  git(["remote", "set-url", "origin", "https://github.com/acme/app.git"], join(workspace.worktree, "app"));
+  await workspace.execute({ kind: "bash", command: "cd app && git switch -q -c feature && echo change > change.txt && git add change.txt && git commit -q -m 'Add a change'" }, false, authorize);
+  const head = await workspace.cloneHead("app", authorize);
+  assert.equal(head.origin, "https://github.com/acme/app.git");
+  const operation = { kind: "git.push" as const, repository: "acme/app", directory: "app", branch: "feature", commit: head.commit };
+  const credential = { remote: server.url("acme/app.git"), authorization: "Basic dXNlcjpzZWNyZXQ=" };
+  const pushed = await performClonePush({ workspace, operation, credential, authorize });
+  assert.equal(pushed.outcome, "pushed");
+  assert.deepEqual(pushed.commits.map(commit => commit.subject), ["Add a change"]);
+  assert.equal(git(["rev-parse", "refs/heads/feature"], bare), head.commit);
+  assert.equal((await performClonePush({ workspace, operation, credential, authorize })).outcome, "up-to-date");
+  git(["fetch", "-q", bare, "feature:feature"], work);
+  git(["switch", "-q", "feature"], work);
+  await writeFile(join(work, "other.txt"), "other\n");
+  git(["add", "other.txt"], work);
+  git(["commit", "-q", "-m", "Elsewhere"], work);
+  git(["push", "-q", bare, "feature"], work);
+  await workspace.execute({ kind: "bash", command: "cd app && echo more >> change.txt && git commit -q -am 'More'" }, false, authorize);
+  const next = await workspace.cloneHead("app", authorize);
+  await assert.rejects(performClonePush({ workspace, operation: { ...operation, commit: next.commit }, credential, authorize }),
+    (error: Error) => error instanceof PushError && /fetch and merge or rebase/.test(error.message));
+  await assert.rejects(workspace.cloneHead("missing", authorize), /not a Git clone/);
+  await assert.rejects(workspace.cloneHead("../escape", authorize), /invalid clone directory/);
+  assert.doesNotMatch(await workspace.execute({ kind: "bash", command: "cd app && git config --list --show-origin" }, false, authorize), /secret|dXNlcjpzZWNyZXQ/);
+});
+
 test("members' clone sessions on the host always use their own account; the host owner's only once they turn it on", hostMode, async t => {
   const { RunnerService } = await import("../apps/runner/src/server.js");
   const { sha256 } = await import("../packages/shared/src/crypto.js");

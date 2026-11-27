@@ -4,7 +4,7 @@ import { repositoryPath, validCloneDirectory, validPushTag } from "../../../../.
 import type { GitPushOperation } from "../../../../../packages/shared/src/types.js";
 import { repositoryForRemote } from "../../egress.js";
 import { RunnerError } from "../../protocol.js";
-import { isolatedWorkspace } from "../../workspace.js";
+import { pushWorkspace } from "../../workspace.js";
 import { text, type ToolContext } from "./context.js";
 
 export function clonePushTool(context: ToolContext): ToolRegistration {
@@ -19,7 +19,7 @@ export function clonePushTool(context: ToolContext): ToolRegistration {
     if (!validCloneDirectory(args.directory)) throw new RunnerError(400, "directory must be a clone's path in the worktree, such as app or src/app");
     if (args.tag !== undefined && !validPushTag(args.tag)) throw new RunnerError(400, "tag must be a plain tag name, such as v1.2.3, not refs/tags/v1.2.3");
     if (args.tag !== undefined && args.pull_request) throw new RunnerError(400, "a tag push opens no pull request");
-    const head = await isolatedWorkspace(context.sandbox).cloneHead(args.directory, () => calls.recheck(attribution));
+    const head = await pushWorkspace(context.sandbox).cloneHead(args.directory, () => calls.recheck(attribution));
     if (!head.origin) throw new RunnerError(400, `${args.directory} has no origin remote; push only clones of this workspace's repositories`);
     const repository = repositoryForRemote((await context.grant()).repositories, head.origin);
     if (!repository) throw new RunnerError(403, `${args.directory} was cloned from ${head.origin.slice(0, 200)}, which is not one of this workspace's repositories`);

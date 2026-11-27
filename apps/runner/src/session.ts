@@ -359,7 +359,7 @@ export class RunnerSession {
       authorize: (actorId, permission) => this.authorize(actorId, permission), metadata: () => this.metadata(), hostConfig: () => this.hostConfig(),
       requireOwnerTool: tool => this.#availability.requireOwnerTool(tool), requireSenderTool: (tool, senderId) => this.#availability.requireSenderTool(tool, senderId) });
     this.#operations = new SessionOperations({
-      binding, config, clone: this.#clone, sandboxed: !!this.#egress, sandbox: this.sandbox, hostCommands: this.hostCommands, wholeResults: this.#wholeResults,
+      binding, config, clone: this.#clone, sandboxed: !!this.#egress, pushesOnHost: !!this.#forge, sandbox: this.sandbox, hostCommands: this.hostCommands, wholeResults: this.#wholeResults,
       requireUnfrozen: () => this.requireUnfrozen(), authorize: (actorId, permission) => this.authorize(actorId, permission),
       metadata: () => this.metadata(), mutate: change => this.mutate(change), commandOptions: timeoutSeconds => this.#calls.commandOptions(timeoutSeconds),
       testShell: () => this.testShell(), controlPlane: <T>(path: string, body: unknown) => this.controlPlane<T>(path, body),
@@ -372,7 +372,7 @@ export class RunnerSession {
       authorize: (actorId, permission) => this.authorize(actorId, permission), hostConfig: () => this.hostConfig(),
       ...(this.#buildCaches ? { buildCaches: (sender: string) => this.#buildCaches!.mounts(sender) } : {}),
       programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
-      tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => this.#egress!.grant(),
+      tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => (this.#egress ?? this.#forge)!.grant(),
     };
     this.#defined = new SessionDefinitions({
       sessionId: binding.session.id, workspaceId: binding.session.workspaceId, windows: process.platform === "win32" && this.sandbox.isolated, config,
@@ -1486,7 +1486,7 @@ export class RunnerSession {
   }
 
   private buildTools(): ToolRegistration[] {
-    return buildTools(this.#toolContext, this.#clone && !!this.#egress);
+    return buildTools(this.#toolContext, this.#clone && (!!this.#egress || !!this.#forge));
   }
 
   runOperation(actorId: string, input: Operation, toolTaskId: string, consent: OperationConsent = {}, signal?: AbortSignal): Promise<StoredOperation> {
