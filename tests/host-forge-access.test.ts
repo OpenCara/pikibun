@@ -267,9 +267,11 @@ test("members' clone sessions on the host always use their own account; the host
     const now = Math.floor(Date.now() / 1000);
     const session = await service.provision(value, { aud: "runner", sessionId: id, actorId: "test:alice", ownerId: "test:alice", action: "create", policyVersion: 1,
       iat: now, exp: now + 60, jti: randomUUID(), bodyHash: await sha256("") });
+    sessions.set(id, session);
     return async () => (await session.sandbox.execute({ kind: "bash", command: 'echo "${GIT_CONFIG_COUNT:-none} ${GIT_CONFIG_VALUE_0:-none} ${PIKIBUN_SESSION_BRANCH:-none}${HTTPS_PROXY:+ proxied}${GH_TOKEN:+ token}"' },
       false, async () => {})).trim();
   };
+  const sessions = new Map<string, Awaited<ReturnType<typeof service.provision>>>();
   const member = await open("forge-member", "test:host");
   assert.equal(await member(), "3 https://github.com/acme/app pikibun/forge-member proxied token", "a member's session on someone else's host reads as the member, in every command");
   const own = await open("forge-owner", "test:alice");
@@ -278,6 +280,10 @@ test("members' clone sessions on the host always use their own account; the host
   assert.match(await own(), /^3 https:\/\/github\.com\/acme\/app pikibun\/forge-owner/);
   ownerForgeAccess = false;
   assert.equal(await member(), "3 https://github.com/acme/app pikibun/forge-member proxied token", "the owner's setting is only about their own sessions");
+  assert.equal((await sessions.get("forge-member")!.view()).forgeAccess, "owner", "the session panel says whose account it uses");
+  assert.equal((await sessions.get("forge-owner")!.view()).forgeAccess, "host");
+  ownerForgeAccess = true;
+  assert.equal((await sessions.get("forge-owner")!.view()).forgeAccess, "owner", "as the setting stands now");
 });
 
 test("every command trusts the session's proxy alongside the host's own certificates, and a host that has its own proxy keeps it", async t => {

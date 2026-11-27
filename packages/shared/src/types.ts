@@ -668,6 +668,7 @@ export interface SessionView {
     unavailable?: { source: string; tools: string[]; reason: string; programs?: string[] }[] };
   tunnel?: SessionTunnelView;
   sudo?: SudoPromptView;
+  forgeAccess?: "owner" | "host";
 }
 export interface SudoPromptView {
   id: string;

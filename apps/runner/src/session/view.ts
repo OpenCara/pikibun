@@ -29,6 +29,7 @@ export interface ViewSource {
   binding: RunnerBinding;
   tunnel(): SessionView["tunnel"] | undefined;
   sudo?(): SudoPromptView | undefined;
+  forgeAccess?(): Promise<SessionView["forgeAccess"]>;
   metadata(): Promise<Metadata>;
   conversation(id: number): ReturnType<Harness["conversation"]>;
   agent(): ReturnType<Conversation["agent"]>;
@@ -42,6 +43,7 @@ export interface ViewSource {
 export async function sessionView(source: ViewSource): Promise<SessionView> {
   const tunnel = source.tunnel();
   const sudo = source.sudo?.();
+  const forgeAccess = await source.forgeAccess?.().catch(() => undefined);
   const initial = await source.metadata();
   const snapshots: { branch: Branch; entries: readonly EntryRecord[]; messages: readonly Message[] }[] = [];
   for (const branch of initial.branches.filter(item => !item.superseded)) {
@@ -110,6 +112,7 @@ export async function sessionView(source: ViewSource): Promise<SessionView> {
     ...await source.extensions(),
     ...(tunnel ? { tunnel } : {}),
     ...(sudo ? { sudo } : {}),
+    ...(forgeAccess ? { forgeAccess } : {}),
   };
 }
 

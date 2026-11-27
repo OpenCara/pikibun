@@ -206,6 +206,12 @@ function HostSection(props: Part) {
         <If when={props.current.hostEnvironment}>
           <Row leading={icon("server")} title="Runs on the host" hint="No sandbox: its commands run on the host owner's machine, as its user" trailing={<Badge>On host</Badge>} />
         </If>
+        <If when={props.view()?.forgeAccess}>
+          {access => <Row leading={icon("key")} testID="session-forge-access" title="Repository access"
+            hint={access() === "owner" ? `The workspace's repositories are reached through Pikibun as ${name(props.current.ownerId)}, in Git and gh, glab and az`
+              : "Git and gh, glab and az use the host's own credentials; git_push uses the workspace's push access"}
+            trailing={<Badge tone={access() === "owner" ? "success" : "neutral"}>{access() === "owner" ? "Pikibun account" : "Host's credentials"}</Badge>} />}
+        </If>
         <If when={props.current.hostEnvironment ? props.current.hostDirectory : undefined}>
           {directory => <Row testID="session-host-directory" title="Working directory" hint={directory()} selectableHint />}
         </If>

@@ -326,6 +326,7 @@ export class RunnerSession {
       command: () => (this.sandbox instanceof HostWorkspace ? this.sandbox.activeCommand : undefined),
     }) : undefined;
     this.#forge = this.#onHost && this.#clone ? this.egressProxy(egressSocketPath(`${binding.session.id}:forge`, directory), randomBytes(24).toString("base64url"), true) : undefined;
+    this.#forgeAccess = !!this.#forge && !hostOwnersSession(binding);
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
       { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment, ...(this.#sudo ? { sudo: this.#sudo } : {}),
         ...(this.#hostSession && binding.session.hostDirectory ? { worktree: binding.session.hostDirectory, refused: [config.dataDir] } : {}),
@@ -374,6 +375,7 @@ export class RunnerSession {
       ...(this.#buildCaches ? { buildCaches: (sender: string) => this.#buildCaches!.mounts(sender) } : {}),
       programMissing: (tool, program) => this.#availability.programMissing(tool, program), browserUnavailable: () => this.#availability.browserUnavailable(),
       tunnelUnavailable: () => this.#availability.tunnelUnavailable(), tunnel: () => this.#tunnel, startTunnel: () => this.sessionTunnel(), grant: () => (this.#egress ?? this.#forge)!.grant(),
+      forgeAccess: () => this.forgeAccessNow(),
     };
     this.#defined = new SessionDefinitions({
       sessionId: binding.session.id, workspaceId: binding.session.workspaceId, windows: process.platform === "win32" && this.sandbox.isolated, config,
@@ -484,6 +486,13 @@ export class RunnerSession {
       ...(this.config.repositoryCache ? { lfsCache: this.config.repositoryCache.lfsObjects(this.binding.owner.id) } : {}),
       fakeIpTunnels: async () => (await this.hostConfig()).fakeIpTunnels,
     });
+  }
+
+  private async forgeAccessNow(): Promise<"owner" | "host" | undefined> {
+    if (this.#egress) return "owner";
+    if (!this.#onHost) return undefined;
+    this.#forgeAccess = await this.forgeApplies().catch(() => false);
+    return this.#forgeAccess ? "owner" : "host";
   }
 
   private async forgeApplies(): Promise<boolean> {
@@ -1627,7 +1636,7 @@ export class RunnerSession {
 
   view(): Promise<SessionView> {
     return sessionView({
-      binding: this.binding, tunnel: () => this.#tunnel?.view(), sudo: () => this.#sudo?.view(), metadata: () => this.metadata(),
+      binding: this.binding, tunnel: () => this.#tunnel?.view(), sudo: () => this.#sudo?.view(), forgeAccess: async () => (this.#onHost && this.#clone ? this.forgeAccessNow() : undefined), metadata: () => this.metadata(),
       conversation: id => this.harness.conversation(id as ConversationId, context), agent: () => this.#shared.agent(context),
       context: (messages, model) => contextView(messages, model, { fallback: this.modelRef, models: this.models, compaction: this.#compaction }),
       repositories: () => this.#repositories.view(), extensions: () => this.extensionView(),

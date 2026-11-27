@@ -41,6 +41,11 @@ export function showImageText(path: string, mimeType: string): string {
   return `Shown in the chat: ${path} [${mimeType}]`;
 }
 
+export const FORGE_ACCESS_NOTES: Readonly<Record<"owner" | "host", string>> = Object.freeze({
+  owner: "This workspace's repositories (Git, gh, glab, az and the forges' APIs) are reached through Pikibun as the session's owner, never with a credential in the session.",
+  host: "This session runs on its host with the host's own Git and forge credentials; git_push still pushes with the workspace's push access.",
+});
+
 export const BUILD_CACHES_NOTE = "Each cache's entries are named by their inputs and nobody checks their content. A shared cache holds what commands in other people's sessions "
   + "wrote, and what this session's commands write to it runs later in theirs with their credentials, like a shared CI cache: whatever a command runs "
   + "(a dependency's install script, the tests of a repository from outside the workspace) writes it too. Don't point a build of code you have no reason to "
@@ -72,7 +77,8 @@ export function fileTools(context: ToolContext): ToolRegistration[] {
         ...(context.onHost ? { onHost: true } : {}),
         ...(caches.length ? { buildCaches: caches.map(cache => ({ name: cache.name, env: cache.env, path: cache.target, scope: cache.scope,
           access: cache.readOnly ? "read" : "write" })), buildCachesNote: BUILD_CACHES_NOTE } : {}) };
-      return text({ ...await sandbox.identity(() => calls.recheck(attribution)), commands, ...attribution });
+      const forgeAccess = await context.forgeAccess?.().catch(() => undefined);
+      return text({ ...await sandbox.identity(() => calls.recheck(attribution)), commands, ...(forgeAccess ? { forgeAccess, forgeAccessNote: FORGE_ACCESS_NOTES[forgeAccess] } : {}), ...attribution });
     } }),
     defineTool({ name: "read", parameters: piParameters.read, outputLimits: PI_OUTPUT_LIMITS,
       description: `${hostReads ? READ_ON_HOST : "Read a confined worktree file."} A text file comes as it is, cut at ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB, whichever comes first, with a note that says where to continue; offset (the first line, from 1) and limit (how many lines) read only part of it. PNG, JPEG, GIF and WebP images are returned as images, scaled to fit. Use grep to find where to look, then read around it.`,
