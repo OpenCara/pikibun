@@ -713,7 +713,7 @@ describe("settings", () => {
   test("Workspaces lets an admin turn a remote MCP server's tools off and on, one at a time or all at once, and shows members which are off", async () => {
     const base = { url: "https://mcp.example.com/mcp", enabled: true, headerNames: [], readOnlyTools: [], updatedAt: "2026-01-01T00:00:00.000Z" };
     const tool = (name: string, off: boolean) => ({ name, toolName: `eleven_${name}`, description: `${name}.`, inputSchema: { type: "object" }, readOnly: false, off });
-    let offTools = ["delete"];
+    let offTools = ["delete", "gone"];
     const server = () => ({ ...base, id: "m1", name: "ElevenLabs", prefix: "eleven", offTools, tools: ["get", "list", "delete"].map(name => tool(name, offTools.includes(name))) });
     let admin = true;
     const app = await openSettings("workspaces", {

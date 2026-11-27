@@ -67,7 +67,7 @@ const addBody = fields({ name: z.unknown(), prefix: z.unknown(), url: z.unknown(
 const changeBody = fields({ name: z.unknown(), url: z.unknown(), headers: z.unknown(), readOnlyTools: z.unknown(), offTools: z.unknown(), enabled: z.unknown(), signInAs: z.unknown(), refresh: z.unknown() },
   'Change name, url, headers, readOnlyTools, offTools, enabled or signInAs, or set refresh to true.', { code: 'invalid_mcp_server', some: true });
 
-const changeBytes = 64 * 1024 + 2 * remoteMcpLimits.tools * 132;
+const changeBytes = 64 * 1024 + 4 * remoteMcpLimits.tools * 132;
 
 const finishBody = fields({ code: z.unknown() }, 'Only code is accepted.');
 
@@ -162,14 +162,16 @@ function settingsPage(c: AppContext, workspaceId: string): Response {
   return c.redirect(`${appOrigin(c.env)}/#/settings/workspaces/${encodeURIComponent(workspaceId)}`, 302);
 }
 
-function toolList(value: unknown, field: 'readOnlyTools' | 'offTools'): string[] {
-  if (!Array.isArray(value) || value.length > remoteMcpLimits.tools || value.some(item => typeof item !== 'string' || !item || item.length > 128)) {
-    fail(400, 'invalid_mcp_server', `${field} must list at most ${remoteMcpLimits.tools} tool names.`);
+function toolList(value: unknown, field: 'readOnlyTools' | 'offTools', limit: number = remoteMcpLimits.tools): string[] {
+  if (!Array.isArray(value) || value.length > limit || value.some(item => typeof item !== 'string' || !item || item.length > 128)) {
+    fail(400, 'invalid_mcp_server', `${field} must list at most ${limit} tool names.`);
   }
   return [...new Set(value as string[])];
 }
 
 const readOnlyList = (value: unknown) => toolList(value, 'readOnlyTools');
+
+const sentToolList = (value: unknown, field: 'readOnlyTools' | 'offTools') => value === undefined ? undefined : toolList(value, field, 2 * remoteMcpLimits.tools);
 
 function nameOf(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > remoteMcpLimits.name || /[\r\n\0]/.test(value)) {
@@ -358,8 +360,8 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
       fail(400, 'mcp_headers_required', 'Give this server\'s headers again with its new address, or an empty set to send none: Pikibun never sends the headers it keeps for one address to another.');
     }
     const headers = input.headers === undefined ? await headersOf(c.env, row) : input.headers === null ? {} : checked(() => remoteMcpHeaders(input.headers));
-    const readOnlyTools = input.readOnlyTools === undefined ? parsedList(row.read_only_tools_json) : readOnlyList(input.readOnlyTools);
-    const offTools = input.offTools === undefined ? parsedList(row.off_tools_json ?? '[]') : toolList(input.offTools, 'offTools');
+    const sentReadOnly = sentToolList(input.readOnlyTools, 'readOnlyTools');
+    const sentOff = sentToolList(input.offTools, 'offTools');
     const enabled = input.enabled === undefined ? Number(row.enabled) === 1 : input.enabled as boolean;
     const signInAs = input.signInAs === undefined ? row.sign_in_as : signInAsOf(input.signInAs);
     const moved = url !== row.url;
@@ -377,6 +379,9 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
       if (own) { lister = await connectionCredentials(c.env, own); listedBy = 'member'; }
     }
     const found = reach ? await discover(c.env, url, lister, listedBy) : undefined;
+    const listed = new Set((found && !found.error ? found.tools : parsedTools(row.tools_json)).map(tool => tool.name));
+    const readOnlyTools = sentReadOnly?.filter(item => listed.has(item)) ?? parsedList(row.read_only_tools_json);
+    const offTools = sentOff?.filter(item => listed.has(item)) ?? parsedList(row.off_tools_json ?? '[]');
     const at = now();
     const ciphertext = input.headers === undefined ? row.headers_ciphertext
       : Object.keys(headers).length ? await encryptToken(c.env, secretContext(serverId), JSON.stringify(headers)) : null;

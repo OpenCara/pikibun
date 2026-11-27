@@ -87,4 +87,8 @@ test('Pikibun keeps up to 1024 tools and 2 MB from one server, and counts the re
   assert.ok(JSON.stringify(large.tools).length <= remoteMcpLimits.toolsBytes + large.tools.length);
   assert.equal(large.leftOut.overLimit, 1200 - large.tools.length);
   assert.equal(remoteMcpLeftOutNote(many.leftOut), 'Left out 6 tools past what Pikibun keeps from one server (1024 tools, 2 MB).');
+  const wide = remoteMcpToolList(listed(1000, '音'.repeat(2000)));
+  const bytes = new TextEncoder().encode(JSON.stringify(wide.tools)).length;
+  assert.ok(bytes <= remoteMcpLimits.toolsBytes + wide.tools.length, 'the 2 MB are UTF-8 bytes, not characters (review of #557)');
+  assert.ok(wide.tools.length < 400 && wide.leftOut.overLimit === 1000 - wide.tools.length);
 });

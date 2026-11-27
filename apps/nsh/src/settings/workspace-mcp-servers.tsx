@@ -22,6 +22,8 @@ const signInFailed = (server: WorkspaceMcpServer) => !!server.error?.startsWith(
 
 const offCount = (server: WorkspaceMcpServer) => server.tools.filter(tool => tool.off).length;
 
+const listedNames = (server: WorkspaceMcpServer, names: readonly string[] | undefined) => (names ?? []).filter(name => server.tools.some(tool => tool.name === name));
+
 const signInAsOf = (server: WorkspaceMcpServer): RemoteMcpSignInAs => server.signInAs ?? "workspace";
 const signInAsLabel = (value: RemoteMcpSignInAs) => remoteMcpSignInAsOptions.find(option => option.value === value)?.label ?? value;
 
@@ -151,7 +153,7 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
                         <Button small variant="outline" label="All on" testID={`mcp-all-on-${server().prefix}`} disabled={action.busy() || !offCount(server())}
                           onPress={() => void patch(server(), { offTools: [] }, "Sessions get all of its tools from their next message.")} />
                         <Button small variant="outline" label="All off" testID={`mcp-all-off-${server().prefix}`} disabled={action.busy() || offCount(server()) === server().tools.length}
-                          onPress={() => void patch(server(), { offTools: [...new Set([...server().offTools ?? [], ...server().tools.map(tool => tool.name)])] },
+                          onPress={() => void patch(server(), { offTools: server().tools.map(tool => tool.name) },
                             "Sessions get none of its tools from their next message.")} />
                       </View>
                     </If>
@@ -164,12 +166,12 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
                           </View>
                           <If when={admin()} else={<Badge tone={tool().off ? "neutral" : "success"}>{tool().off ? "Off" : "On"}</Badge>}>
                             <Checkbox label="On" testID={`mcp-tool-on-${tool().toolName}`} checked={!tool().off} disabled={action.busy()}
-                              onChange={on => void patch(server(), { offTools: on ? (server().offTools ?? []).filter(item => item !== tool().name) : [...(server().offTools ?? []), tool().name] },
+                              onChange={on => void patch(server(), { offTools: on ? listedNames(server(), server().offTools).filter(item => item !== tool().name) : [...listedNames(server(), server().offTools), tool().name] },
                                 on ? `Sessions get ${tool().toolName} from their next message.` : `Sessions no longer get ${tool().toolName} from their next message.`)} />
                           </If>
                           <If when={admin()} else={<Badge tone={tool().readOnly ? "success" : "warning"}>{tool().readOnly ? "Read-only" : "May write"}</Badge>}>
                             <Checkbox label="Read-only" checked={tool().readOnly} disabled={action.busy()}
-                              onChange={on => void patch(server(), { readOnlyTools: on ? [...server().readOnlyTools, tool().name] : server().readOnlyTools.filter(item => item !== tool().name) },
+                              onChange={on => void patch(server(), { readOnlyTools: on ? [...listedNames(server(), server().readOnlyTools), tool().name] : listedNames(server(), server().readOnlyTools).filter(item => item !== tool().name) },
                                 on ? `${tool().toolName} now runs in Read-only messages too.` : `${tool().toolName} no longer runs in Read-only messages.`)} />
                           </If>
                         </View>

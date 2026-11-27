@@ -4492,6 +4492,12 @@ test('a current host\'s sessions get every remote MCP tool, an older host\'s the
   assert.match(refusal.error, /^eleven_tool_0 is turned off in this workspace/, 'a tool turned off is never called, whatever a session still holds');
   await s.admin.request('PATCH', path + '/' + eleven.id, { refresh: true });
   assert.equal((await listed())[0]!.offTools.length, 60, 'listing its tools again keeps the ones turned off');
+  const stale = Array.from({ length: 1500 }, (_, index) => `gone_${index}`);
+  const { server: pruned } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + eleven.id,
+    { offTools: [...stale, ...turnedOff], readOnlyTools: [...stale, 'tool_61'] }));
+  assert.deepEqual([pruned.offTools, pruned.readOnlyTools], [turnedOff, ['tool_61']],
+    'names the server no longer lists are dropped as a list is saved, so they never crowd out its own tools (review of #557)');
+  await denied(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: Array.from({ length: 2049 }, (_, index) => `gone_${index}`) }), 400, 'invalid_mcp_server');
 
   const { server: off } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + eleven.id, { enabled: false }));
   assert.equal(off.toolsNotOffered, undefined, 'a server that is off isn\'t counted as losing tools');

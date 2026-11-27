@@ -245,7 +245,7 @@ export function remoteMcpToolList(value: unknown): { tools: RemoteMcpTool[]; lef
     const description = typeof tool.description === "string" ? tool.description.slice(0, remoteMcpLimits.description) : "";
     const kept: RemoteMcpTool = { name: tool.name, description, inputSchema,
       ...(typeof tool.annotations?.readOnlyHint === "boolean" ? { readOnlyHint: tool.annotations.readOnlyHint } : {}) };
-    const size = JSON.stringify(kept).length;
+    const size = new TextEncoder().encode(JSON.stringify(kept)).length;
     if (bytes + size > remoteMcpLimits.toolsBytes) { leftOut.overLimit++; continue; }
     bytes += size;
     tools.push(kept);

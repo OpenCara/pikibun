@@ -350,12 +350,16 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   (`offTools`, `workspace_mcp_servers.off_tools_json`, audited in `workspace.mcp.updated`): a list of tools off rather
   than of tools on, so a tool a server adds later is on like the rest. Sessions don't get a tool that is off, and the
   call route refuses it (`mcp_tool_not_found`) even for a session that still holds its definition. Listing the tools
-  again keeps the list.
+  again keeps the list, so a tool a server leaves out for a while doesn't come back on by itself; saving `offTools` or
+  `readOnlyTools` keeps only the names the server lists now (a request may name up to twice the 1,024 it keeps), and
+  the settings page sends only those, so names a server has dropped never fill the list and block turning its own tools
+  off (review of #557). The 2 MB a server's tools may take are UTF-8 bytes, which is what the answer to a connector is
+  measured in.
 - **64 remote tools a session on an older host, shared evenly** (`remoteMcpSessionTools`, `REMOTE_MCP_SESSION_TOOLS`).
   A connector that doesn't ask for every tool gets at most 64. The 64 is not a
-  prompt budget: a connector refuses a whole workspace extensions answer whose `remoteTools` lists more than
-  `toolDefinitionLimits.definitions` (64, `parseRemoteTools`), so sending more would take every remote tool, and every
-  extension the answer carries, from connectors of this release and older. It is tied to that limit rather than written
+  prompt budget: a connector that predates `allRemoteTools` refuses a whole workspace extensions answer whose
+  `remoteTools` lists more than `toolDefinitionLimits.definitions` (64, its `parseRemoteTools`), so sending it more would
+  take every remote tool, and every extension the answer carries, from it. It is tied to that limit rather than written
   out again. Until #550 the 64 went first come, first served in the order servers were added, so one server with 64
   tools (ElevenLabs lists more) left none for the servers added after it, which then had no tools and no namespace in
   sessions while their settings rows looked fine. Now the enabled, still-shared servers take turns, one tool each,
