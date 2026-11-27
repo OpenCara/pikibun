@@ -4472,6 +4472,13 @@ test('a current host\'s sessions get every remote MCP tool, an older host\'s the
   capabilities({ ...before, allRemoteTools: true });
   assert.deepEqual((await listed()).map(server => server.toolsNotOffered), [undefined, undefined, undefined], 'with only current hosts, sessions lose nothing');
   capabilities(before);
+  const connection = (f.sqlite.prepare('SELECT connection_hash FROM connectors WHERE id = ?').get(s.connector.connectorId) as { connection_hash: string | null }).connection_hash;
+  assert.ok(connection, 'the fixture\'s host is connected');
+  f.sqlite.prepare('UPDATE connectors SET connection_hash = NULL WHERE id = ?').run(s.connector.connectorId);
+  assert.deepEqual((await listed()).map(server => server.toolsNotOffered), [undefined, undefined, undefined],
+    'an older host that is offline runs no sessions, so it doesn\'t count until it connects again and reports its connector');
+  f.sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(connection, s.connector.connectorId);
+  assert.equal((await listed())[0]!.toolsNotOffered, 19, 'connected again, it counts');
 
   await denied(await s.creator.request('PATCH', path + '/' + eleven.id, { offTools: ['tool_0'] }), 403, 'forbidden');
   await denied(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: [''] }), 400, 'invalid_mcp_server');

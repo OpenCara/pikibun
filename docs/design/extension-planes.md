@@ -370,8 +370,10 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   turns, so it costs the later one no turn. Tools turned off take no turn either. The settings list and every server
   view carry `toolsNotOffered`, the tools of that server sessions on an older host don't get, shown on its row with what
   to do about it (update those hosts' connector, or turn tools or servers off). It is counted only while one of the hosts
-  that serve the workspace (`connector_workspaces`, not revoked or removed) lacks `allRemoteTools`; a server that is off
-  has none.
+  that serve the workspace (`connector_workspaces`, not revoked or removed, and connected now: `connection_hash`, which
+  the hub clears as a connection ends) lacks `allRemoteTools`; a server that is off has none. An offline host runs no
+  sessions, and its capabilities are those of the connector it last ran, so counting it kept the warning up for a host
+  left behind weeks ago; once it connects again it reports its connector and counts as what it is.
 - **Untrusted `readOnlyHint`**: every tool is `write: true` unless its name is in the registration's `readOnlyTools`;
   a write tool is refused for a Read-only message's admission (`run_admissions.access = 'read'`), and every call is
   audited as `workspace.mcp.called` with the server, tool and whether it may write.

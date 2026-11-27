@@ -202,7 +202,7 @@ async function serverView(env: Env, workspaceId: string, serverId: string, viewe
 
 async function olderHosts(env: Env, workspaceId: string): Promise<boolean> {
   const hosts = await env.DB.query<{ capabilities_json: string | null }>(`SELECT c.capabilities_json FROM connector_workspaces cw JOIN connectors c ON c.id = cw.connector_id
-    WHERE cw.workspace_id = ? AND c.revoked_at IS NULL AND c.removed_at IS NULL`).bind(workspaceId).all();
+    WHERE cw.workspace_id = ? AND c.revoked_at IS NULL AND c.removed_at IS NULL AND c.connection_hash IS NOT NULL`).bind(workspaceId).all();
   return hosts.some(host => {
     try { return parseCapabilities(host.capabilities_json ?? '{}').allRemoteTools !== true; } catch { return true; }
   });
