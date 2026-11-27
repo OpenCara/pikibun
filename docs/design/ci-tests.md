@@ -11,14 +11,24 @@ every file alike, the runner's variance rather than a test's.
 
 `tests` is a matrix of five jobs, each with the Linux sandbox's prerequisites and Postgres as before:
 
-- `shard-1` to `shard-4` run `tests/*.test.ts` with Node's own `--test-shard=N/4`, which takes every fourth file of
-  the sorted list. It balances by count, not by time; a slow file can make one shard the longest, which is the job to
-  look at when the shards drift apart.
+- `shard-1` to `shard-4` split `tests/*.test.ts` by the time each file took (`scripts/test-shards.mjs pick N/4`): the
+  slowest first, each to the shard with the least time so far. A file `tests/timings.json` doesn't name, such as a new
+  one, weighs as the median.
 - `sandbox` runs `tests/sandbox-conformance.test.ts` (each sandbox's implementation of a session's files against one
   table of cases, about 35 seconds) and then `pnpm test:connected` (the end-to-end suite, about 45 seconds), the two
   that need a working bubblewrap the most, out of the shards' way.
 - `tests/no-comments.test.ts` and `tests/pinned-dependencies.test.ts` run in the `checks` job only: they ran in both,
   and `no-comments` alone took 19-27 seconds.
+
+Node's own `--test-shard` was tried first: it takes every Nth file of the sorted list, balancing by count, and the slow
+files fell together. Four shards took 77, 93, 143 and 193 seconds of tests, the longest worse than three shards; split by
+time, the same files add up to about 360 seconds in each.
+
+`tests/timings.json` holds each file's own time in seconds, as Node's runner reports its `test:complete` (the process
+with its imports and its tests), recorded by `scripts/test-times-reporter.mjs` in every test job. The `coverage` job
+merges them into the run's `test-timings` artifact. The table only balances the shards, so a stale one costs time,
+not correctness: when the shards' times drift apart, replace it with `test-timings` from a recent run on `main`.
+`tests/test-shards.test.ts` fails while it names a file that no longer exists.
 
 Per-file selection from a pull request's diff was considered and left out: the slow files depend on
 `packages/shared`, so a typical pull request still selected 150-185 of the 233 files, and tests that spawn processes,
