@@ -177,7 +177,6 @@ export function messageImage(image: TextViewImage, sessionId: string | undefined
   return <Text style={{ fontSize: text.small, color: palette().muted }}>{`[image${image.alt ? `: ${image.alt}` : ""}]`}</Text>;
 }
 
-/** The buttons over each code block of a reply: NSH's built-in copy, which copies the code and shows a check for a moment. */
 export const messageCodeBlockActions: TextViewCodeAction[] = [{ id: "copy", label: "Copy code" }];
 
 export type MessageAction = { label: string; run: () => void; disabled?: boolean };
