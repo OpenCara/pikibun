@@ -1000,6 +1000,32 @@ test('the owner\'s account and the host\'s Git credentials push only from the se
   assert.equal(await code(response), 'push_identity_own_host_required');
 });
 
+test('a session owner who trusts a host with their account pushes with it there; the host\'s Git credentials still serve only its owner', async t => {
+  const shared = await fixture(t, { host: { owner: approver, gitCredentials: true } });
+  shared.pushIdentity('github', 'github.com', '', 'owner-account');
+  const trust = (userId: string, hostOwnerId: string) => shared.sqlite.prepare(`INSERT INTO member_trusted_hosts (user_id, connector_id, host_owner_id, created_at) VALUES (?,?,?,?)
+    ON CONFLICT (user_id, connector_id) DO UPDATE SET host_owner_id = excluded.host_owner_id`).run(userId, 'connector', hostOwnerId, new Date().toISOString());
+  const push = (approvalId: string) => shared.post(credential, { sessionId: 'session', approvalId, actorId: owner, operation: shared.operation(), admissionId: shared.admit('auto') });
+  const refused = await push('tool-others-off');
+  assert.equal(refused.status, 409);
+  assert.match(await refused.text(), /hosts they trust with their account \(Settings → Hosts → Shared with you → the host → Trust with my account\)/);
+  trust(viewer, approver);
+  assert.equal(await code(await push('tool-others-member')), 'push_identity_own_host_required', 'only the session owner\'s own trust counts');
+  trust(owner, viewer);
+  assert.equal(await code(await push('tool-others-owner')), 'push_identity_own_host_required', 'a trust given while the host had another owner doesn\'t count');
+  trust(owner, approver);
+  const allowed = await push('tool-others-on');
+  assert.equal(allowed.status, 200);
+  assert.equal((await allowed.json() as { authorization: string }).authorization, basic('x-access-token', 'owner-oauth-token'));
+  assert.equal(shared.ledger().find(row => row.approval_id === 'tool-others-on')!.kind, 'owner-account');
+  assert.notEqual(shared.ledger().find(row => row.approval_id === 'tool-others-on')!.revocation_ciphertext, null, 'the GitHub token is still reset after the push');
+  shared.pushIdentity('github', 'github.com', '', 'host-credentials');
+  assert.equal(await code(await push('tool-others-host')), 'push_identity_own_host_required');
+  shared.pushIdentity('github', 'github.com', '', 'owner-account');
+  shared.sqlite.prepare('DELETE FROM member_trusted_hosts WHERE user_id = ?').run(owner);
+  assert.equal(await code(await push('tool-others-untrusted')), 'push_identity_own_host_required', 'taking the trust back stops the next push');
+});
+
 test('push access with the host\'s Git credentials needs its owner\'s opt-in, then issues no token', async t => {
   const f = await fixture(t, { host: { owner } });
   f.pushIdentity('github', 'github.com', '', 'host-credentials');
@@ -1541,9 +1567,18 @@ test('the session owner\'s own credentials: writes and personal access tokens go
   const shared = await fixture(t, { host: { owner: approver } });
   const refused = await apiCredential(shared, { access: 'write' });
   assert.equal(refused.body.available, false);
-  assert.match(refused.body.reason, /only on the session owner's own hosts; on this one, use github_comment/);
+  assert.match(refused.body.reason, /only on the session owner's own hosts and hosts they trust with their account; on this one, use github_comment/);
   assert.match((await apiCredential(shared, { host: 'gitlab.com' })).body.reason, /personal access token, which can't be limited to the workspace's repositories/);
   assert.equal((await apiCredential(shared, { host: 'dev.azure.com' })).body.available, false);
   assert.doesNotMatch(JSON.stringify(shared.calls), /owner-gitlab-token|owner-azure-devops-token/);
   assert.equal((await apiCredential(shared)).body.available, true, 'reads of api.github.com still get installation tokens');
+
+  shared.sqlite.prepare('INSERT INTO member_trusted_hosts (user_id, connector_id, host_owner_id, created_at) VALUES (?,?,?,?)')
+    .run(owner, 'connector', approver, new Date().toISOString());
+  const optedIn = await apiCredential(shared, { access: 'write', reach: 'any' });
+  assert.equal(optedIn.status, 200, JSON.stringify(optedIn.body));
+  assert.deepEqual(optedIn.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization, item.repositories, item.anyRepository]),
+    [['session-owner', 'Bearer owner-oauth-token', ['owner/repo'], undefined]],
+    'an owner who trusts this host with their account writes there, but only in the workspace\'s repositories, since that host vouches for the sender');
+  assert.equal((await apiCredential(shared, { host: 'dev.azure.com', access: 'write' })).body.available, true);
 });

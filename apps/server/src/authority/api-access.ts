@@ -13,6 +13,8 @@ import { rateLimitedUntil, rateLimitText } from './github-reads.js';
 import { memberToolGroup } from './tool-groups.js';
 import { forgeWriteTools } from '../../../../packages/shared/src/tool-groups.js';
 import { ownerReachesAnyGitHubRepository } from './github-reach.js';
+import { ownerTrustsHost } from './trusted-hosts.js';
+import { trustedHostsLocation } from '../../../../packages/shared/src/trusted-hosts.js';
 
 export function sandboxGitHubApiMode(env: Env): 'on' | 'own-hosts' | 'off' {
   const value = env.SANDBOX_GITHUB_API?.trim().toLowerCase();
@@ -72,10 +74,12 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
   const ownHost = connector === null || (connector.owner_id === original.owner_id && original.connector_owner_id === original.owner_id);
   if (mode === 'own-hosts' && !ownHost) return unavailable(`This Pikibun server gives ${name} API credentials only to session owners' own hosts`);
   const ownCredential = access === 'write' || provider !== 'github';
-  if (ownCredential && !ownHost) {
+  if (ownCredential && !ownHost && !await ownerTrustsHost(c.env.DB, original.owner_id, connector?.id, original.connector_owner_id)) {
     return unavailable(access === 'write'
-      ? 'Writes through the API act as the session owner, so Pikibun allows them only on the session owner\'s own hosts; on this one, use github_comment, github_issue, github_merge and git_push'
-      : `Pikibun reads the ${name} API with the session owner's personal access token, which can't be limited to the workspace's repositories, so only on the session owner's own hosts`);
+      ? 'Writes through the API act as the session owner, so Pikibun allows them only on the session owner\'s own hosts and hosts they trust with their account; '
+        + `on this one, use github_comment, github_issue, github_merge and git_push, or the owner trusts this host (${trustedHostsLocation})`
+      : `Pikibun reads the ${name} API with the session owner's personal access token, which can't be limited to the workspace's repositories, `
+        + `so only on the session owner's own hosts and hosts they trust with their account (${trustedHostsLocation})`);
   }
   if (access === 'write') {
     const group = await memberToolGroup(c.env, original.workspace_id, original.owner_id);
@@ -134,7 +138,7 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
   await authorize();
   if (access === 'write') {
     if (owner.provider !== 'github') return unavailable('The session owner has no GitHub connection');
-    const anyRepository = input.reach === 'any' && await ownerReachesAnyGitHubRepository(c.env.DB, original);
+    const anyRepository = input.reach === 'any' && ownHost && await ownerReachesAnyGitHubRepository(c.env.DB, original);
     return answer([{ account: 'session-owner', authorization: `Bearer ${owner.github.token}`, repositories: readable.map(item => item.fullName),
       ...(anyRepository ? { anyRepository: true as const } : {}), expiresAt: expiresAt() }]);
   }

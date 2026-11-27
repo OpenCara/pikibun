@@ -243,6 +243,6 @@ export function unshareHostStatements(db: Pick<Database, 'query'>, connectorId: 
 }
 
 export function removedHostStatements(db: Pick<Database, 'query'>, connectorId: string): Query<never>[] {
-  return ['connector_shares', 'connector_workspaces', 'connector_host_grants', 'connector_admins']
+  return ['connector_shares', 'connector_workspaces', 'connector_host_grants', 'connector_admins', 'member_trusted_hosts']
     .map(table => db.query<never>(`DELETE FROM ${table} WHERE connector_id = ?`).bind(connectorId));
 }

@@ -76,7 +76,7 @@ export const ghDefinition: CliDefinition = {
     "Use it rather than github_read, which spends the session owner's own GitHub rate limit: to read issues and pull requests (issue view, pr view --comments, pr checks),",
     "and to wait for a pull request's CI (pr checks <n> --watch, run watch <id>, with a timeout_seconds long enough); github_read with wait: \"change\" still waits for any other change (a comment, review or push).",
     `A watch reads again every ${GH_WATCH_INTERVAL_SECONDS} seconds unless it names its own --interval: don't make it shorter, and don't poll in a loop instead, since every read counts against a GitHub rate limit that all of the owner's sessions share.`,
-    "It reads the workspace's repositories always. It writes (comments, pull requests, merges, reruns) only on the session owner's own host, outside read-only;",
+    "It reads the workspace's repositories always. It writes (comments, pull requests, merges, reruns) only on the session owner's own host, or on a host the owner trusts with their account, outside read-only;",
     "where it refuses a write, comment, open issues and merge with github_comment, github_issue and github_merge.",
     "Where it may write, its GraphQL and API paths that name no repository (user/repos, search) go as the owner, beyond the workspace's repositories.",
     "Where the workspace set it read-only, only commands that read run.",
@@ -112,7 +112,7 @@ export const ghDefinition: CliDefinition = {
 export const glabDefinition: CliDefinition = {
   kind: "cli", name: "glab", extension: "piki:glab", command: "glab", windowsCommand: { file: "glab.exe", shim: false },
   description: [
-    "Run the GitLab CLI (glab) as the session owner: in the session's sandbox, where Pikibun adds the session owner's GitLab (gitlab.com) access token to its API requests, on the session owner's own host.",
+    "Run the GitLab CLI (glab) as the session owner: in the session's sandbox, where Pikibun adds the session owner's GitLab (gitlab.com) access token to its API requests, on the session owner's own host, or on a host the owner trusts with their account.",
     "Give the arguments after glab as a list, as they are passed (no shell, no quoting), such as {\"args\": [\"ci\", \"list\", \"--repo\", \"group/project\"]}.",
     "Use it for what the sandbox can't reach: merge requests and their discussions, CI/CD pipelines and job logs (ci list, ci trace <job id>), releases, and the API (api projects/:id/...).",
     "Name the project with --repo group/project: it runs in the session's worktree, or in directory, a clone in it. Only gitlab.com is reached this way, not self-managed GitLab.",
@@ -133,7 +133,7 @@ export const glabDefinition: CliDefinition = {
 export const azureCliDefinition: CliDefinition = {
   kind: "cli", name: "azure-cli", extension: "piki:azure-cli", command: "az", windowsCommand: { file: "az.cmd", shim: true },
   description: [
-    "Run the Azure CLI (az) as the session owner: in the session's sandbox, where Pikibun adds the session owner's Azure DevOps personal access token (for the organization a request names) to its requests to dev.azure.com, on the session owner's own host.",
+    "Run the Azure CLI (az) as the session owner: in the session's sandbox, where Pikibun adds the session owner's Azure DevOps personal access token (for the organization a request names) to its requests to dev.azure.com, on the session owner's own host, or on a host the owner trusts with their account.",
     "Give the arguments after az as a list, as they are passed (no shell, no quoting), such as {\"args\": [\"repos\", \"pr\", \"list\", \"--organization\", \"https://dev.azure.com/acme\", \"--project\", \"App\"]}.",
     "Use it for Azure DevOps: pull requests, pipelines and their runs, and work items (az repos, az pipelines, az boards, with the azure-devops extension), and their REST API (az devops invoke). Azure resources (az vm, az storage, ...) need an Azure sign-in, which only the host owner's own sessions have, where the host's owner allows that.",
     "Pass --organization https://dev.azure.com/<organization> and --project; it runs in the session's worktree, or in directory, a clone in it. Add --output json for output to read.",

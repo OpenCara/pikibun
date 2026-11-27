@@ -17,8 +17,8 @@ The rules this keeps from today:
 
 - **No credential enters the sandbox.** A sandboxed process can read and send anything it holds, so it holds none.
 - **Session owners read with their own accounts.** On a shared host the host owner's credentials never serve other
-  members' sessions, and owners' tokens never reach other people's hosts. (Since direct transfers, below, the control plane may give
-  a host a token that can only read one repository; the owner's own account still reaches only the owner's own hosts.)
+  members' sessions, and owners' tokens never reach other people's hosts, except a host its owner chose to trust with their account (**Trust with my account**). (Since direct transfers, below, the control plane may give
+  a host a token that can only read one repository; the owner's own account still reaches only the owner's own hosts and those they trust.)
 - **Policy is enforced where the agent can't change it:** in the runner, outside the sandbox, and in the control plane.
 
 ## Phases
@@ -290,7 +290,8 @@ pushed it). Pinned sessions push only with `git_push`.
   `git_push` and its approval.
 - **The owner's account** as push identity still serves only sessions on the owner's own hosts, although its token stays
   on the control plane: on another person's host, that host's owner decides what the session pushes under the member's
-  name.
+  name. A member who trusts a host with their account (`member_trusted_hosts`) accepts that for that host, and their
+  sessions' relayed pushes there go ahead ([security rationale](security-rationale.md#the-owners-account-on-other-peoples-hosts)).
 
 ### Not yet
 

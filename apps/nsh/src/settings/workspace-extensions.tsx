@@ -291,7 +291,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                       </Each>
                       <If when={!current().hosts.length && !controlPlane()}><Small>No host is connected to this workspace yet</Small></If>
                       <If when={cli()?.tool && cli()?.install && cli()?.account}>
-                        <Small>{`Each host needs ${cli()?.tool} installed (${cli()?.install}) where its sandbox finds it. It acts as the session's owner, with ${cli()?.account} in Pikibun: it reads the workspace's repositories, and writes only outside Read only, on the session owner's own host. Turn on read-only under Edit to keep it from writing.`}</Small>
+                        <Small>{`Each host needs ${cli()?.tool} installed (${cli()?.install}) where its sandbox finds it. It acts as the session's owner, with ${cli()?.account} in Pikibun: it reads the workspace's repositories, and writes only outside Read only, on the session owner's own host, or on a host the owner trusts with their account (Settings → Hosts). Turn on read-only under Edit to keep it from writing.`}</Small>
                         <View style={{ flexDirection: "row" }}><Button small variant="ghost" icon="external-link" label="How to install it" onPress={() => openExternal(cli()!.install!)} /></View>
                       </If>
                       <If when={admin()}>

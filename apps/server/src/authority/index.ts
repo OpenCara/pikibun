@@ -42,6 +42,7 @@ export { registerWorkspaceConnections } from './workspace-connections.js';
 export { egressGrant, gitDirect, gitRelay, registerNetworkPolicies, workspaceNetworkPolicy } from './network.js';
 export { apiCredential } from './api-access.js';
 export { registerGitHubReach } from './github-reach.js';
+export { registerTrustedHosts } from './trusted-hosts.js';
 export { newWorkspacePresetStatements, presetInput, registerWorkspacePresets } from './workspace-presets.js';
 export { pushComplete, pushCredential, settlePushCredentials } from './push/broker.js';
 export { publicIdentity, registerPushIdentities } from './push/identities.js';

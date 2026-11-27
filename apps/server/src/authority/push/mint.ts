@@ -10,6 +10,8 @@ import type { RepositoryAccess } from '../repositories.js';
 import { importRsaPrivateKey, signJwt } from './jwt.js';
 import { issuerAssertion, workspaceSubject } from './oidc.js';
 import { ownerGitAuthorization } from './targets.js';
+import { ownerTrustsHost } from '../trusted-hosts.js';
+import { trustedHostsLocation } from '../../../../../packages/shared/src/trusted-hosts.js';
 
 export interface MintTarget {
   workspaceId: string; sessionId: string;
@@ -136,12 +138,15 @@ function identityRequired(target: MintTarget, scope: string): never {
   return fail(409, 'push_identity_required', `No push identity is configured for ${gitProviderNames[target.provider]} (${target.host}${scope ? `, ${scope}` : ''}). ` +
     'A workspace owner or admin can add one in Settings → Workspaces → Push access: an app or bot identity, the session owner\'s account, or the host\'s Git credentials.');
 }
-function requireOwnHost(target: MintTarget, kind: 'owner-account' | 'host-credentials'): void {
+async function requireOwnHost(env: Env, target: MintTarget, kind: 'owner-account' | 'host-credentials'): Promise<void> {
   if (target.connectorId && target.hostOwnerId === target.ownerId) return;
-  fail(409, 'push_identity_own_host_required', `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use ${kind === 'owner-account'
-    ? 'the session owner\'s account, so they run only in sessions on the owner\'s own hosts'
-    : 'the host\'s Git credentials, so they run only in sessions the host\'s owner starts on it'}. ` +
-    'Start the session on one of your hosts, or ask a workspace owner or admin to change the push identity in Settings → Workspaces.');
+  if (kind === 'owner-account' && await ownerTrustsHost(env.DB, target.ownerId, target.connectorId, target.hostOwnerId)) return;
+  fail(409, 'push_identity_own_host_required', kind === 'owner-account'
+    ? `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use the session owner's account, so they run only in sessions on the owner's own hosts ` +
+      `and on hosts they trust with their account (${trustedHostsLocation}). ` +
+      'Start the session on one of your hosts, trust this one, or ask a workspace owner or admin to change the push identity in Settings → Workspaces.'
+    : `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use the host's Git credentials, so they run only in sessions the host's owner starts on it. ` +
+      'Start the session on one of your hosts, or ask a workspace owner or admin to change the push identity in Settings → Workspaces.');
 }
 function reauthorize(provider: GitProvider, host: string): never {
   return fail(409, 'push_identity_reauthorize', `The ${gitProviderNames[provider]} (${host}) push identity must be authorized again in Settings → Workspaces.`);
@@ -297,7 +302,7 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
       return { kind: row.kind, identityId: row.id, authorization: `Bearer ${jwt}`, expiresAt: expiry };
     }
     case 'owner-account': {
-      requireOwnHost(target, row.kind);
+      await requireOwnHost(env, target, row.kind);
       const minted = { kind: row.kind, identityId: row.id, authorization: ownerGitAuthorization(target.owner), expiresAt: expiresAt(undefined, 3600) };
       if (target.owner.provider !== 'github' || target.relay) return minted;
       if ((!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) && !ownerTokenOutlivesPush(env)) {
@@ -311,7 +316,7 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
         fail(409, 'host_git_credentials_relay', `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use the host's Git credentials, which the session's ` +
           'egress proxy can\'t use. Push with the git_push tool instead, or ask a workspace owner or admin to change the push identity in Settings → Workspaces.');
       }
-      requireOwnHost(target, row.kind);
+      await requireOwnHost(env, target, row.kind);
       const host = await env.DB.query<{ capabilities_json: string; git_credentials: number | null }>(`SELECT c.capabilities_json, cfg.git_credentials
         FROM connectors c LEFT JOIN connector_configs cfg ON cfg.connector_id = c.id WHERE c.id = ? AND c.owner_id = ?`)
         .bind(target.connectorId, target.ownerId).first();

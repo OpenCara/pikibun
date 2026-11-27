@@ -291,7 +291,7 @@ export function PushAccess(props: { workspace: Workspace; admin: boolean }) {
   return (
     <Section title="Push access" testID="workspace-push-access" info={<View style={{ gap: 8 }}>
       <If when={!props.admin}><Note>Only workspace owners and admins can manage push identities.</Note></If>
-      <Note>Agents push with short-lived credentials minted from these workspace app or bot identities, held only in the host's memory. An identity can instead push with the session owner's own account or the host's own Git credentials, for sessions on the owner's own hosts. The session owner must also be able to push to the repository, and to the branch where the Git host reports branch permissions; pull requests are opened as the session owner.</Note>
+      <Note>Agents push with short-lived credentials minted from these workspace app or bot identities, held only in the host's memory. An identity can instead push with the session owner's own account or the host's own Git credentials, for sessions on the owner's own hosts (with the owner's account, also on other members' hosts the owner trusts with it, under Settings → Hosts). The session owner must also be able to push to the repository, and to the branch where the Git host reports branch permissions; pull requests are opened as the session owner.</Note>
       <Note>Except for GitHub, the minted token carries everything the identity can reach until it expires, and the host running the session receives it. Give bot accounts, OAuth consumers, service principals and integrations access only to this workspace's repositories.</Note>
       <Note>Secrets are write-only: they are never shown again after saving.</Note>
     </View>} action={props.admin ? <Button small variant="outline" icon="plus" label="Add identity" onPress={() => editing.set({ provider: "github" })} /> : undefined}>
@@ -448,7 +448,7 @@ function PushIdentitySheet(props: { path: string; oidc: PushIdentitiesResponse["
           {text("audience", "Audience")}
         </If>
         <If when={kind() === "owner-account"}>
-          <Note>{`Agents push as the session owner, with ${ownerAccount[provider()]} (Settings → Profile → Connected accounts). Only sessions on the owner's own hosts push this way: the token is sent to that host for each push and held only in its memory. ${provider() === "github" ? "Pikibun resets it when the push ends, so the host's copy stops working while the owner stays connected." : "It stays valid after the push: these tokens can't be reset."}`}</Note>
+          <Note>{`Agents push as the session owner, with ${ownerAccount[provider()]} (Settings → Profile → Connected accounts). Only sessions on the owner's own hosts push this way, and on other members' hosts the owner trusts with their account (Settings → Hosts → Shared with you): the token is sent to that host for each push and held only in its memory. ${provider() === "github" ? "Pikibun resets it when the push ends, so the host's copy stops working while the owner stays connected." : "It stays valid after the push: these tokens can't be reset."}`}</Note>
         </If>
         <If when={kind() === "host-credentials"}>
           <Note>Agents push with the Git credentials set up on the host running the session, read through its Git credential helpers (for example gh auth setup-git, the macOS keychain or Git Credential Manager). Only the host's owner pushes this way, in sessions on their own host, once they turn on Git credentials in its configuration (Settings → Hosts).</Note>

@@ -105,7 +105,8 @@ export function apiRule(rules: Pick<ApiRules, "graphql">, method: string, pathna
 }
 
 function unleasedWrite(rules: ApiRules, what: string): string {
-  const where = `on the session owner's own host, in a message whose sender and owner both have ${forgeWriteTools.join(", ")} in their tool groups`;
+  const where = `on the session owner's own host (or a host the owner trusts with their account), `
+    + `in a message whose sender and owner both have ${forgeWriteTools.join(", ")} in their tool groups`;
   if (rules.provider === "github") return `${what}: ${READ_ONLY}, or the gh tool (piki:gh), ${where}`;
   const tool = rules.provider === "gitlab" ? "the glab tool (piki:glab)" : "the az tool (piki:azure-cli)";
   return `${what}: sandboxed commands only read through the ${rules.name} API; it writes only with ${tool}, ${where}`;

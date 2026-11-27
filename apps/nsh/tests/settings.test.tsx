@@ -630,6 +630,40 @@ describe("settings", () => {
     expect(bodyOf(app, "PUT", `${ORIGIN}/api/workspaces/w1/github-reach`)).toEqual({ anyRepository: false });
   });
 
+  test("Hosts lets a member trust a host another member shared with their own account, once they confirm, and take that back", async () => {
+    const theirs = { ...host, id: "c2", ownerId: "u2", ownerName: "grace", name: "grace-box", capabilities: { ...host.capabilities, unsandboxed: true } };
+    let trusted = false;
+    const app = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [host, theirs] } },
+      [`GET ${ORIGIN}/api/trusted-hosts`]: () => ({ body: { hosts: trusted ? [{ connectorId: "c2", trustedAt: "2026-11-27T10:00:00.000Z" }] : [] } }),
+      [`PUT ${ORIGIN}/api/trusted-hosts/c2`]: () => { trusted = true; return { body: { hosts: [{ connectorId: "c2", trustedAt: "2026-11-27T10:00:00.000Z" }] } }; },
+      [`DELETE ${ORIGIN}/api/trusted-hosts/c2`]: () => { trusted = false; return { body: { hosts: [] } }; },
+    });
+    await app.waitFor("id:hosts-shared");
+    await app.press("label:grace-box");
+    await app.waitFor("id:host-trust-c2");
+    expect(app.shows("id:host-trust-c1")).toBe(false);
+    await app.waitFor("text:Off: your account's tokens never reach this host");
+
+    const asked: string[] = [];
+    app.onDialog(dialog => { asked.push(`${dialog.title}: ${dialog.message}`); return asked.length === 1 ? "Cancel" : "Trust host"; });
+    await app.press("id:host-trust-toggle-c2");
+    await app.waitUntil(() => asked.length === 1);
+    expect(asked[0]).toContain("Trust grace-box with your account?");
+    expect(asked[0]).toContain("grace can read it while it is valid");
+    expect(asked[0]).toContain("This host runs without a sandbox.");
+    expect(app.requests().some(item => item.method === "PUT")).toBe(false);
+    await app.press("id:host-trust-toggle-c2");
+    await app.waitUntil(() => app.requests().some(item => item.method === "PUT" && item.url === `${ORIGIN}/api/trusted-hosts/c2`));
+    await app.waitFor("text:Your sessions on grace-box now push and write with your account.");
+    await app.waitFor("text:Your sessions here push and write with your account");
+
+    await app.press("id:host-trust-toggle-c2");
+    await app.waitUntil(() => app.requests().some(item => item.method === "DELETE" && item.url === `${ORIGIN}/api/trusted-hosts/c2`));
+    await app.waitFor("text:grace-box no longer receives your account's tokens.");
+    expect(asked.length).toBe(2);
+  });
+
   test("Workspaces signs an app in to a remote MCP server with OAuth through the system browser, finished by the link it opens or a pasted code", async () => {
     const mcp = { id: "m1", name: "Gen", prefix: "gen", url: "https://mcp.example.com/mcp", enabled: true, headerNames: [], readOnlyTools: [], tools: [],
       error: "The server needs a sign-in (HTTP 401)", updatedAt: "2026-01-01T00:00:00.000Z" };
