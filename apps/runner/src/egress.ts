@@ -114,12 +114,20 @@ export function hostForgeEnvironment(repositories: readonly EgressRepository[], 
   };
 }
 
+export function hostNoProxy(noProxy = ""): string {
+  const reachesApi = (entry: string) => {
+    const name = entry.toLowerCase().replace(/^\*?\./, "").replace(/:\d+$/, "");
+    return name === "*" || credentialedApiHosts.some(host => host === name || host.endsWith(`.${name}`));
+  };
+  const own = noProxy.split(",").map(item => item.trim()).filter(item => item && !reachesApi(item));
+  return [...new Set(["localhost", "127.0.0.1", "::1", ...own])].join(",");
+}
+
 export function hostForgeApiEnvironment(endpoint: EgressEndpoint, caBundle: string, noProxy = ""): Record<string, string> {
   const proxy = endpointUrl(endpoint);
-  const local = ["localhost", "127.0.0.1", "::1", ...noProxy.split(",").map(item => item.trim()).filter(Boolean)];
-  const bypass = [...new Set(local)].join(",");
+  const bypass = hostNoProxy(noProxy);
   return {
-    HTTPS_PROXY: proxy, https_proxy: proxy,
+    HTTPS_PROXY: proxy, https_proxy: proxy, NODE_USE_ENV_PROXY: "1",
     NO_PROXY: bypass, no_proxy: bypass,
     ...Object.fromEntries(CA_BUNDLE_VARIABLES.map(name => [name, caBundle])),
     GH_TOKEN: API_TOKEN_PLACEHOLDER, GITHUB_TOKEN: API_TOKEN_PLACEHOLDER, GITLAB_TOKEN: API_TOKEN_PLACEHOLDER, AZURE_DEVOPS_EXT_PAT: API_TOKEN_PLACEHOLDER,

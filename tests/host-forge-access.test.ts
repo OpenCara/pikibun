@@ -104,10 +104,11 @@ test("host commands rewrite only the workspace's repositories to the proxy, in e
 });
 
 test("the CLI tools reach the forge through the proxy, with placeholder tokens and the session's certificates", () => {
-  const env = hostForgeApiEnvironment(endpoint, "/session/forge-ca.pem", "corp.example, localhost");
+  const env = hostForgeApiEnvironment(endpoint, "/session/forge-ca.pem", "corp.example, localhost, *, api.github.com, .github.com, gitlab.com:443, *.azure.com");
   assert.equal(env.HTTPS_PROXY, endpointUrl(endpoint));
+  assert.equal(env.NODE_USE_ENV_PROXY, "1", "Node's fetch and https take the proxy too");
   assert.equal(env.HTTP_PROXY, undefined, "plain HTTP stays on the host's own network");
-  assert.equal(env.NO_PROXY, "localhost,127.0.0.1,::1,corp.example", "the host's own exceptions are kept");
+  assert.equal(env.NO_PROXY, "localhost,127.0.0.1,::1,corp.example", "the host's own exceptions are kept, but none that would send the placeholder to a forge's API");
   assert.equal(env.https_proxy, endpointUrl(endpoint));
   for (const name of CA_BUNDLE_VARIABLES) assert.equal(env[name], "/session/forge-ca.pem");
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "AZURE_DEVOPS_EXT_PAT"]) assert.equal(env[name], API_TOKEN_PLACEHOLDER);
@@ -284,6 +285,13 @@ test("members' clone sessions on the host always use their own account; the host
   assert.equal((await sessions.get("forge-owner")!.view()).forgeAccess, "host");
   ownerForgeAccess = true;
   assert.equal((await sessions.get("forge-owner")!.view()).forgeAccess, "owner", "as the setting stands now");
+  const saved = process.env.ALL_PROXY;
+  process.env.ALL_PROXY = "socks5://corp.example:1080";
+  t.after(() => { if (saved === undefined) delete process.env.ALL_PROXY; else process.env.ALL_PROXY = saved; });
+  await open("forge-proxied", "test:alice");
+  const proxied = (await sessions.get("forge-proxied")!.sandbox.execute({ kind: "bash", command: 'echo "$ALL_PROXY ${HTTPS_PROXY:-none} $NO_PROXY ${GIT_CONFIG_COUNT:-none}"' }, false, async () => {})).trim();
+  assert.match(proxied, /^socks5:\/\/corp\.example:1080 none localhost,127\.0\.0\.1,::1\S* 3$/,
+    "a host with its own proxy keeps it, Git's rewrites still apply, and the loopback proxy bypasses the host's");
 });
 
 test("every command trusts the session's proxy alongside the host's own certificates, and a host that has its own proxy keeps it", async t => {

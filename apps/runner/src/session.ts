@@ -513,7 +513,10 @@ export class RunnerSession {
     if (!endpoint) return undefined;
     const git = hostForgeEnvironment((await this.#forge!.grant()).repositories, endpoint, sessionBranch(this.binding.session));
     const base = this.sandbox instanceof HostWorkspace ? this.sandbox.commandEnvironment : {};
-    if (proxyConfigured(base)) return git;
+    if (proxyConfigured(base)) {
+      const local = [...new Set(["localhost", "127.0.0.1", "::1", ...(base.NO_PROXY ?? base.no_proxy ?? "").split(",").map(item => item.trim()).filter(Boolean)])].join(",");
+      return { ...git, NO_PROXY: local, no_proxy: local };
+    }
     return { ...await this.forgeApiEnvironment(endpoint), ...git };
   }
 

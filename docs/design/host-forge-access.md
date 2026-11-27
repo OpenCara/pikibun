@@ -71,11 +71,14 @@ All implemented (#556, #558) but the last step, which was decided against for no
 3. **Every command.** `forgeEnvironment` adds `hostForgeApiEnvironment` to every command: `HTTPS_PROXY` (no
    `HTTP_PROXY`: plain HTTP stays the host's), the placeholder tokens, and the CA variables naming `forge-ca.pem`, now the
    host's store, the proxy's authority and any certificates in the bundles those variables already named
-   (`hostSessionCertificates`), so a corporate bundle stays trusted. `NO_PROXY` keeps the host's own entries. An
+   (`hostSessionCertificates`), so a corporate bundle stays trusted. `NODE_USE_ENV_PROXY` makes Node's own `fetch` and `https` take the proxy, as in the
+   sandbox. `NO_PROXY` keeps the host's own entries but those that would bypass the proxy for a credentialed API (`*`,
+   `api.github.com`, `.github.com`, …), since those clients would then send the placeholder to the forge (`hostNoProxy`). An
    unconfined proxy tunnels any host and any port, except the credentialed APIs on 443, straight through (`#passThrough`),
    and its `ApiAccess` sees an open policy, so a request carrying its own credential (Git to gitlab.com with the host's
    helper) goes on. Where the host's environment already names a proxy (`proxyConfigured`), commands keep it: chaining
-   through the host's proxy isn't done, so only Git's rewrites and the CLI tools use Pikibun's there.
+   through the host's proxy isn't done, so only Git's rewrites and the CLI tools use Pikibun's there, and `NO_PROXY` gains the
+   loopback addresses so Git reaches the rewritten loopback URLs directly rather than through the host's proxy.
 4. **Repository cache.** `SessionMirrors`' `ownerFill` fills the mirror through the relay (the owner's access, or the
    workspace's connection, through direct grants where the server gives them) instead of the host's credential helpers,
    for host sessions the proxy applies to. The owner check before borrowing is unchanged.
