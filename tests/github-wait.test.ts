@@ -170,5 +170,5 @@ test("with the gh tool, the instructions read and wait for checks with gh, keepi
   assert.match(both, /gh pr checks <n> --watch/);
   assert.match(both, /github_read only to wait for anything else .* wait: "change"/);
   assert.doesNotMatch(both, /wait: "checks"/);
-  assert.match(both, /github_comment, github_issue and github_merge only where gh refuses to write: on a host that isn't the session owner's own, where the workspace set gh read-only/);
+  assert.match(both, /github_comment, github_issue and github_merge only where gh refuses to write: on a host that isn't the session owner's own \(unless the owner lets their account serve others' hosts\), where the workspace set gh read-only/);
 });
