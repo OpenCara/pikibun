@@ -34,6 +34,17 @@ describe("a message's actions", () => {
     expect(app.clipboard()).toBe("The test races the session cookie.");
   });
 
+  test("copy a code block of a reply with its own button", async () => {
+    const coded = { ...idle, entries: [idle.entries[0], { ...idle.entries[1], text: "Wait for the cookie:\n\n```ts\nawait page.waitForResponse(\"/login\");\n```\n\nThen read it." }] };
+    const app = await desktop({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: coded, revision: "r1" } } });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:message-copy-0-2");
+    await app.hover('text:await page.waitForResponse("/login");');
+    await app.waitFor("label:Copy code");
+    await app.press("label:Copy code");
+    await app.waitUntil(() => app.clipboard() === 'await page.waitForResponse("/login");');
+  });
+
   test("go back to before a message, which returns to the chat box", async () => {
     const app = await desktop({ [`POST ${ORIGIN}/api/sessions/s1/revert`]: { body: { ok: true } } });
     app.onDialog(dialog => (dialog.title === "Go back to before this message?" ? "Go back" : null));
