@@ -224,7 +224,7 @@ test("a session's binding carries a working directory of its host only where it 
   assert.throws(() => validateBinding(sandboxed, id), runnerError(400, /working directory/));
 });
 
-test("unsandboxed clone sessions clone and push with the host's own Git, so they offer no git_push", hostMode, async t => {
+test("unsandboxed clone sessions clone with the host's own Git, and git_push pushes with the workspace's push access, as in the sandbox", hostMode, async t => {
   const root = await directory(t);
   const clone = binding("host-clone", []);
   clone.session.repositoryMode = "clone";
@@ -235,13 +235,11 @@ test("unsandboxed clone sessions clone and push with the host's own Git, so they
   t.after(() => session.sandbox.close());
   await assert.rejects(session.open(), error => error === MODEL_BOUNDARY);
   const internals = session as unknown as { buildTools(): { name: string }[]; agentInstructions(mode: string): string };
-  assert.ok(!internals.buildTools().some(tool => tool.name === "git_push"));
+  assert.ok(internals.buildTools().some(tool => tool.name === "git_push"));
   const instructions = internals.agentInstructions("write");
   assert.match(instructions, /starts empty/);
   assert.match(instructions, /https:\/\/github\.com\/acme\/project-1\.git/);
-  assert.doesNotMatch(instructions, /git_push/);
-  await assert.rejects(session.runOperation(OWNER, { kind: "git.push", repository: "acme/project-1", directory: "app", branch: "feature", commit: "a".repeat(40) }, "none"),
-    /push with the git tool/);
+  assert.match(instructions, /git_push \{directory, branch\}/);
 });
 
 test("clone sessions pin nothing, commit with Git and push a clone's directory", linux, async t => {
