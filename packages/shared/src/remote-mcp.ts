@@ -1,4 +1,4 @@
-import { sanitizeInputSchema, type InputSchema } from "./input-schema.js";
+import { fitInputSchema, type InputSchema } from "./input-schema.js";
 import { reservedToolNames, toolDefinitionLimits, type BrokeredToolDefinition } from "./tool-definitions.js";
 
 export const REMOTE_MCP_EXTENSION = "piki:remote-mcp";
@@ -232,7 +232,8 @@ export function remoteMcpToolList(value: unknown): { tools: RemoteMcpTool[]; lef
     const tool = item as { name?: unknown; description?: unknown; inputSchema?: unknown; annotations?: { readOnlyHint?: unknown } };
     if (typeof tool.name === "string" && tools.some(other => other.name === tool.name)) continue;
     if (typeof tool.name !== "string" || !MCP_TOOL.test(tool.name)) { leftOut.unusable++; continue; }
-    const inputSchema = sanitizeInputSchema(tool.inputSchema ?? { type: "object" });
+    let inputSchema: InputSchema | undefined;
+    try { inputSchema = fitInputSchema(tool.inputSchema ?? { type: "object" }); } catch { inputSchema = undefined; }
     if (!inputSchema) { leftOut.unusable++; continue; }
     if (tools.length >= remoteMcpLimits.tools) { leftOut.overLimit++; continue; }
     const description = typeof tool.description === "string" ? tool.description.slice(0, remoteMcpLimits.description) : "";

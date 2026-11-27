@@ -4268,7 +4268,7 @@ function mcpFake(token: string) {
       inputSchema: { type: 'object', properties: { query: { type: 'string', maxLength: 100 } }, required: ['query'], $schema: 'https://json-schema.org/draft/2020-12/schema' } },
     { name: 'create-issue', description: 'Create an issue.', annotations: { readOnlyHint: true },
       inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] } },
-    { name: 'recursive', description: 'Refused: it uses $ref.', inputSchema: { type: 'object', properties: { a: { $ref: '#/$defs/a' } } } },
+    { name: 'listing', description: 'Refused: its arguments are not an object.', inputSchema: { type: 'array' } },
   ];
   const transport = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
     const body = JSON.parse(request.body) as { id?: number; method: string; params?: Record<string, unknown> };
@@ -4301,7 +4301,7 @@ test('workspace remote MCP servers: admins register them with vault-held headers
   await denied(await s.admin.request('POST', path, { ...body, headers: { Host: 'evil' } }), 400, 'invalid_mcp_server');
   const { server } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path, body), 201);
   assert.deepEqual(server.tools.map(tool => [tool.name, tool.toolName, tool.readOnly]), [['search_issues', 'tracker_search_issues', true], ['create-issue', 'tracker_create_issue', false]],
-    'a tool whose schema uses $ref is left out, and a server\'s readOnlyHint counts for nothing');
+    'a tool whose arguments are not an object is left out, and a server\'s readOnlyHint counts for nothing');
   assert.deepEqual(server.headerNames, ['Authorization']);
   await denied(await s.admin.request('POST', path, body), 409, 'mcp_prefix_taken');
   const listedText = await (await s.creator.request('GET', path)).text();
@@ -4388,7 +4388,7 @@ test('a remote MCP server listing over 1 MiB of tools unpaged is listed, and the
   const tools = [
     ...Array.from({ length: 70 }, (_, index) => ({ name: `model_${index}`, description: big.repeat(10),
       inputSchema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 8 }, (_, n) => [`p${n}`, { type: 'string', description: big }])) } })),
-    { name: 'recursive', inputSchema: { type: 'object', properties: { a: { $ref: '#/$defs/a' } } } },
+    { name: 'listing', inputSchema: { type: 'array' } },
     { name: 'bad name!', inputSchema: { type: 'object' } },
   ];
   f.env.REMOTE_MCP_TRANSPORT = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {

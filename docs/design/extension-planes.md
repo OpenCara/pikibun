@@ -290,6 +290,29 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   the schema, a `pattern` must compile and be at most 256 characters, and keywords outside the bounded set (`$schema`,
   `examples`, vendor keys) are dropped. Such a definition has empty `parameters` and `target`. Older connectors skip a
   definition with a key they don't know (`parseToolDefinitions` passes over what fails to parse), so they never see one.
+- **A remote MCP server's schemas are fitted to those bounds, not refused** (`fitInputSchema`, used by
+  `remoteMcpToolList`). Servers built on Pydantic (ElevenLabs, for one) write their arguments with `$defs` and `$ref`,
+  `oneOf`, enums of a hundred languages, Python regular expressions (`(?P<name>...)`) and agent configurations nested past
+  six levels, and the strict check left 80 of ElevenLabs' tools out. The Pikibun server now inlines local references
+  (`#/...` JSON pointers; a `$ref` beside annotations only merges them, beside constraints joins them with `allOf`), and
+  everything the bounds can't say is loosened, never tightened: a reference that cycles, points nowhere, leaves the
+  document or follows 32 others in a chain allows any value there (a `$ref` resolves at the same depth, so without that
+  cap a long chain of distinct references overflowed the stack; review of #555); `oneOf` becomes `anyOf` (loosened
+  branches could all match, which `oneOf` would refuse); an enum too long, an unknown type, `items` as a list and a
+  pattern that isn't a JavaScript `u` regular expression are dropped, and so is a pattern with a class escape (`\d`,
+  `\w`, `\s`, `\b` or their negations), which in JavaScript matches ASCII only where Python matches any Unicode digit,
+  letter or space, so keeping it could refuse what the server takes; `patternProperties` and `prefixItems` drop the `additionalProperties: false` and `items: false` that
+  would otherwise refuse what they allowed; `nullable: true` adds `null` to the type. A schema too deep, with more than
+  64 properties in all or over 32 KB is fitted again with its descriptions cut (512, then 128 characters) and its
+  objects left open from a shallower level each time (6 down to 2): a part left open keeps its type and description but
+  not what is inside, so the model still sees every top-level argument. Fitting reads at most 1 MB of a schema and
+  makes at most 20,000 nodes a pass, so references that multiply can't run away, and `remoteMcpToolList` counts a tool
+  whose fitting throws anyway as left out, so one schema never takes its server's other tools with it. Only a schema whose arguments aren't an
+  object, or with more than 64 top-level arguments or one named past 128 characters, is still left out. Loosening is
+  safe here because the schema checks arguments for the model's sake, not for anyone's protection: the remote server,
+  which already holds the credentials, checks its own arguments. The result always passes `sanitizeInputSchema`, which
+  connectors keep strict when they read a definition, so connectors of any release take it. Tools listed before this
+  are fitted at their next **List tools again**.
 - **`readOnlySafe` is the existing `write` flag.** A brokered tool with `write: false` already runs in Read-only messages
   (`ToolCalls.check` refuses only write effects there), so no second flag was added. Side questions (`mode: "ask"`) have
   no run admission and still can't call brokered tools; the Pikibun server checks the admission as for `source_read`.
