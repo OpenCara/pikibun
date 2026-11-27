@@ -367,13 +367,9 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   what doesn't divide goes to the earlier servers. Each server keeps its own first tools and its tools stay together in
   the answer, in the servers' order, so the definitions only change when the servers do (the prompt cache). A name two
   servers' tools both come to (`remoteMcpToolName` cuts names at 64 characters) is the earlier server's, before the
-  turns, so it costs the later one no turn. Tools turned off take no turn either. The settings list and every server
-  view carry `toolsNotOffered`, the tools of that server sessions on an older host don't get, shown on its row with what
-  to do about it (update those hosts' connector, or turn tools or servers off). It is counted only while one of the hosts
-  that serve the workspace (`connector_workspaces`, not revoked or removed, and connected now: `connection_hash`, which
-  the hub clears as a connection ends) lacks `allRemoteTools`; a server that is off has none. An offline host runs no
-  sessions, and its capabilities are those of the connector it last ran, so counting it kept the warning up for a host
-  left behind weeks ago; once it connects again it reports its connector and counts as what it is.
+  turns, so it costs the later one no turn. Tools turned off take no turn either. Settings used to carry
+  `toolsNotOffered` and warn on a server's row ("Sessions get only some of its tools") while a connected host lacked
+  `allRemoteTools`; that warning is gone, since hosts are expected to run a current connector, which gets every tool.
 - **Untrusted `readOnlyHint`**: every tool is `write: true` unless its name is in the registration's `readOnlyTools`;
   a write tool is refused for a Read-only message's admission (`run_admissions.access = 'read'`), and every call is
   audited as `workspace.mcp.called` with the server, tool and whether it may write.

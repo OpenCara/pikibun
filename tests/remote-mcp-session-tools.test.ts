@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import {
-  REMOTE_MCP_ALL_TOOLS, REMOTE_MCP_SESSION_TOOLS, remoteMcpAnswerBytes, remoteMcpLeftOutNote, remoteMcpLimits, remoteMcpNotOfferedNote, remoteMcpSessionTools, remoteMcpToolList,
+  REMOTE_MCP_ALL_TOOLS, REMOTE_MCP_SESSION_TOOLS, remoteMcpAnswerBytes, remoteMcpLeftOutNote, remoteMcpLimits, remoteMcpSessionTools, remoteMcpToolList,
   type RemoteMcpSessionServer,
 } from '../packages/shared/src/remote-mcp.js';
 import { toolDefinitionLimits } from '../packages/shared/src/tool-definitions.js';
@@ -45,13 +45,6 @@ test('a name two servers\' tools both come to stays with the earlier server and 
   assert.deepEqual(shared.offered, [1, 0], 'the later server\'s tools all come to the name the earlier one took');
   assert.deepEqual(shared.notOffered, [0, 0]);
   assert.equal(shared.definitions.length, 1);
-});
-
-test('settings say how many of a server\'s tools sessions don\'t get, and why', () => {
-  assert.equal(remoteMcpNotOfferedNote(undefined), '');
-  assert.equal(remoteMcpNotOfferedNote(0), '');
-  assert.match(remoteMcpNotOfferedNote(13), /^Sessions on hosts with an older connector don't get 13 of its tools: they take at most 64 remote MCP tools in all, shared evenly/);
-  assert.match(remoteMcpNotOfferedNote(13), /npx pikibun@latest connect/);
 });
 
 test('a current host takes every tool of every server: nothing is shared out', () => {

@@ -4448,10 +4448,8 @@ test('a current host\'s sessions get every remote MCP tool, an older host\'s the
     { name, prefix, url: `https://${prefix}.example.com/mcp`, headers: { Authorization: 'Bearer secret-0123456789' } }), 201)).server;
   const eleven = await add('ElevenLabs', 'eleven');
   assert.equal(eleven.tools.length, 70, 'a server\'s tools past 64 are kept');
-  assert.equal(eleven.toolsNotOffered, 6, 'alone, it fills an older host\'s 64');
   await add('Higgsfield', 'higgs');
-  const runway = await add('Runway', 'runway');
-  assert.equal(runway.toolsNotOffered, undefined, 'a server with fewer tools than its share is offered all of them');
+  await add('Runway', 'runway');
 
   const offered = async (all = false) => parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace',
     { workspaceId: s.team.id, remoteTools: true, ...(all ? { allRemoteTools: true } : {}) })));
@@ -4465,20 +4463,9 @@ test('a current host\'s sessions get every remote MCP tool, an older host\'s the
   assert.deepEqual([every.remoteTools!.length, per(every, 'eleven'), per(every, 'higgs'), per(every, 'runway')], [83, 70, 10, 3], 'a current host gets every tool');
 
   const listed = async () => (await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers;
-  assert.deepEqual((await listed()).map(server => [server.prefix, server.tools.length, server.toolsNotOffered]), [['eleven', 70, 19], ['higgs', 10, undefined], ['runway', 3, undefined]],
-    'settings say what sessions on an older host lose');
-  const capabilities = (value: Record<string, unknown>) => f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify(value), s.connector.connectorId);
-  const before = JSON.parse(String((f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(s.connector.connectorId) as { capabilities_json: string }).capabilities_json));
-  capabilities({ ...before, allRemoteTools: true });
-  assert.deepEqual((await listed()).map(server => server.toolsNotOffered), [undefined, undefined, undefined], 'with only current hosts, sessions lose nothing');
-  capabilities(before);
-  const connection = (f.sqlite.prepare('SELECT connection_hash FROM connectors WHERE id = ?').get(s.connector.connectorId) as { connection_hash: string | null }).connection_hash;
-  assert.ok(connection, 'the fixture\'s host is connected');
-  f.sqlite.prepare('UPDATE connectors SET connection_hash = NULL WHERE id = ?').run(s.connector.connectorId);
-  assert.deepEqual((await listed()).map(server => server.toolsNotOffered), [undefined, undefined, undefined],
-    'an older host that is offline runs no sessions, so it doesn\'t count until it connects again and reports its connector');
-  f.sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(connection, s.connector.connectorId);
-  assert.equal((await listed())[0]!.toolsNotOffered, 19, 'connected again, it counts');
+  assert.deepEqual((await listed()).map(server => [server.prefix, server.tools.length]), [['eleven', 70], ['higgs', 10], ['runway', 3]],
+    'settings list every server\'s tools');
+  assert.ok((await listed()).every(server => !('toolsNotOffered' in server)), 'settings no longer warn about what sessions on an older host lose');
 
   await denied(await s.creator.request('PATCH', path + '/' + eleven.id, { offTools: ['tool_0'] }), 403, 'forbidden');
   await denied(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: [''] }), 400, 'invalid_mcp_server');
@@ -4487,7 +4474,6 @@ test('a current host\'s sessions get every remote MCP tool, an older host\'s the
   const { server: trimmed } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: turnedOff }));
   assert.deepEqual(trimmed.offTools, turnedOff);
   assert.deepEqual([trimmed.tools.filter(tool => tool.off).length, trimmed.tools.find(tool => tool.name === 'tool_60')?.off], [60, false]);
-  assert.equal(trimmed.toolsNotOffered, undefined, 'its 10 tools still on fit an older host\'s share');
   const fewer = await offered(true);
   assert.deepEqual([fewer.remoteTools!.length, per(fewer, 'eleven')], [23, 10], 'sessions don\'t get the tools turned off');
   const audited = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.updated' ORDER BY rowid DESC LIMIT 1").get() as { detail_json: string };
@@ -4506,8 +4492,7 @@ test('a current host\'s sessions get every remote MCP tool, an older host\'s the
     'names the server no longer lists are dropped as a list is saved, so they never crowd out its own tools (review of #557)');
   await denied(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: Array.from({ length: 2049 }, (_, index) => `gone_${index}`) }), 400, 'invalid_mcp_server');
 
-  const { server: off } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + eleven.id, { enabled: false }));
-  assert.equal(off.toolsNotOffered, undefined, 'a server that is off isn\'t counted as losing tools');
+  await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + eleven.id, { enabled: false }));
   const without = await offered();
   assert.deepEqual([without.remoteTools!.length, without.remoteServers?.map(server => server.prefix)], [13, ['higgs', 'runway']]);
 });
