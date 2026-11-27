@@ -10,6 +10,9 @@ const LAST_CHAT_KEY = "pikibun.lastChat";
 const LAST_AUTO_KEY = "pikibun.lastAuto";
 const SANDBOXED_HOSTS_KEY = "pikibun.sandboxedHosts";
 const SANDBOXED_HOSTS_KEPT = 50;
+const ON_HOST_HOSTS_KEY = "pikibun.onHostHosts";
+
+export type EnvironmentChoice = "host" | "sandbox";
 
 function parseSandboxedHosts(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -63,7 +66,8 @@ export interface AppData {
   rememberChat: (host: ConnectorInfo | undefined, selection: ChatSelection, current?: Parameters<typeof chatPreference>[2]) => void;
   lastAuto: Accessor<AutoPreference>;
   rememberAuto: (value: AutoPreference) => void;
-  sandboxChosen: (hostId: string | undefined) => boolean;
+  /** The environment last chosen for a host's new sessions, if any. */
+  environmentChosen: (hostId: string | undefined) => EnvironmentChoice | undefined;
   rememberEnvironment: (hostId: string, onHost: boolean) => void;
   liveActivity: Accessor<LiveActivity | null>;
   setLiveActivity: (value: LiveActivity | null) => void;
@@ -90,6 +94,8 @@ export function createAppData(): AppData {
   Storage.getItem(LAST_AUTO_KEY).then(raw => { if (!lastAuto()) lastAuto.set(parseAutoPreference(raw)); }, () => undefined);
   const sandboxedHosts = signal<string[] | undefined>(undefined);
   Storage.getItem(SANDBOXED_HOSTS_KEY).then(raw => { if (!sandboxedHosts()) sandboxedHosts.set(parseSandboxedHosts(raw)); }, () => undefined);
+  const onHostHosts = signal<string[] | undefined>(undefined);
+  Storage.getItem(ON_HOST_HOSTS_KEY).then(raw => { if (!onHostHosts()) onHostHosts.set(parseSandboxedHosts(raw)); }, () => undefined);
   return {
     sessions: sorted,
     sessionsLoading: () => sessions.loading() && !sessions.data(),
@@ -113,12 +119,16 @@ export function createAppData(): AppData {
       lastAuto.set(value);
       Storage.setItem(LAST_AUTO_KEY, JSON.stringify(value)).catch(() => undefined);
     },
-    sandboxChosen: hostId => Boolean(hostId && sandboxedHosts()?.includes(hostId)),
+    environmentChosen: hostId => !hostId ? undefined : sandboxedHosts()?.includes(hostId) ? "sandbox" : onHostHosts()?.includes(hostId) ? "host" : undefined,
     rememberEnvironment(hostId, onHost) {
-      const others = (sandboxedHosts() ?? []).filter(id => id !== hostId);
-      const next = onHost ? others : [hostId, ...others].slice(0, SANDBOXED_HOSTS_KEPT);
-      sandboxedHosts.set(next);
-      Storage.setItem(SANDBOXED_HOSTS_KEY, JSON.stringify(next)).catch(() => undefined);
+      const update = (list: typeof sandboxedHosts, key: string, add: boolean) => {
+        const others = (list() ?? []).filter(id => id !== hostId);
+        const next = add ? [hostId, ...others].slice(0, SANDBOXED_HOSTS_KEPT) : others;
+        list.set(next);
+        Storage.setItem(key, JSON.stringify(next)).catch(() => undefined);
+      };
+      update(sandboxedHosts, SANDBOXED_HOSTS_KEY, !onHost);
+      update(onHostHosts, ON_HOST_HOSTS_KEY, onHost);
     },
     liveActivity,
     setLiveActivity: value => liveActivity.set(value),
