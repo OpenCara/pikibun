@@ -20,6 +20,8 @@ interface McpServersResponse { servers: WorkspaceMcpServer[]; admin: boolean }
 
 const signInFailed = (server: WorkspaceMcpServer) => !!server.error?.startsWith("Signing in failed");
 
+const offCount = (server: WorkspaceMcpServer) => server.tools.filter(tool => tool.off).length;
+
 const signInAsOf = (server: WorkspaceMcpServer): RemoteMcpSignInAs => server.signInAs ?? "workspace";
 const signInAsLabel = (value: RemoteMcpSignInAs) => remoteMcpSignInAsOptions.find(option => option.value === value)?.label ?? value;
 
@@ -122,7 +124,7 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
       <Note>Remote MCP servers add tools to this workspace's sessions without anything installed on hosts: Pikibun itself calls each server's https:// address, with headers (an API key, say) it keeps encrypted, which no session or host ever sees.</Note>
       <Note>Each server signs in one way, chosen when it's added and changed with Change sign-in: OAuth, a token, a username and password, a custom header, or none. With OAuth, an owner or admin signs in to it once with Sign in, as the account the workspace's sessions use, and Pikibun keeps and renews the sign-in. A server whose OAuth sign-in fails takes a token or a password instead.</Note>
       <Note>Owners and admins also choose whose sign-in it calls with: the workspace's, each member's own, or each member's own else the workspace's. Members connect their own account once in their profile, or here with Connect my account, and choose the workspaces that use it; a request then uses the requester's own account, never anyone else's.</Note>
-      <Note>Each tool's name starts with its server's prefix. Tools may change things unless an owner or admin marks them read-only here: only those run in Read-only messages. A server's own claim that a tool only reads counts for nothing.</Note>
+      <Note>Each tool's name starts with its server's prefix. Sessions get every tool a server lists until an owner or admin turns it off here, which also stops Pikibun from calling it. Tools may change things unless an owner or admin marks them read-only here: only those run in Read-only messages. A server's own claim that a tool only reads counts for nothing.</Note>
       <Note>A server's answers were written by whoever runs it: sessions treat them as information, not as instructions.</Note>
     </View>} action={admin() && (data()?.servers.length ?? 0) < remoteMcpLimits.servers ? <Button small variant="outline" icon="plus" label="Add server" onPress={() => adding.set(true)} /> : undefined}>
       <ResourceState inline loading={resource.loading() && !data()} error={resource.error()} retry={resource.refresh}>
@@ -135,12 +137,24 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
               <Each of={current().servers} key={server => server.id}>
                 {server => (
                   <CollapsibleRow leading={<Icon name="sparkles" size={16} color={palette().muted} />} title={`${server().name} · ${server().prefix}_`}
-                    hint={server().error ? `${server().url}\n${server().oauth && !signInFailed(server()) ? "Signed in · " : ""}${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().toolsLeftOut ? " (some left out)" : ""}${server().toolsNotOffered ? ` · ${server().toolsNotOffered} not offered to sessions` : ""}${server().oauth ? " · signed in" : ""}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}${signInAsOf(server()) !== "workspace" ? ` · ${signInAsLabel(signInAsOf(server())).toLowerCase()}` : ""}`}
+                    hint={server().error ? `${server().url}\n${server().oauth && !signInFailed(server()) ? "Signed in · " : ""}${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().toolsLeftOut ? " (some left out)" : ""}${offCount(server()) ? ` · ${offCount(server())} off` : ""}${server().toolsNotOffered ? ` · ${server().toolsNotOffered} not offered to sessions` : ""}${server().oauth ? " · signed in" : ""}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}${signInAsOf(server()) !== "workspace" ? ` · ${signInAsLabel(signInAsOf(server())).toLowerCase()}` : ""}`}
                     trailing={<Badge tone={server().error ? "danger" : server().enabled ? "success" : "neutral"}>{server().error ? "Error" : server().enabled ? "On" : "Off"}</Badge>}>
                     <If when={server().error}><Banner tone="danger" title={mcpErrorTitle(server())}>{server().error!}</Banner></If>
                     <If when={server().toolsLeftOut}><Banner tone="warning" title="Some of its tools are left out">{remoteMcpLeftOutNote(server().toolsLeftOut)}</Banner></If>
                     <If when={server().toolsNotOffered}><Banner tone="warning" title="Sessions get only some of its tools">{remoteMcpNotOfferedNote(server().toolsNotOffered)}</Banner></If>
                     <If when={server().oauth}><Small>{`Signed in with OAuth on ${new Date(server().oauth!.signedInAt).toLocaleString()}.`}</Small></If>
+                    <If when={admin() && server().tools.length > 1}>
+                      <View testID={`mcp-tools-${server().prefix}`} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                        <View style={{ flex: 1, minWidth: 180 }}>
+                          <Small>{`Sessions get ${server().tools.length - offCount(server())} of its ${server().tools.length} tools. Turn off the ones they don't need.`}</Small>
+                        </View>
+                        <Button small variant="outline" label="All on" testID={`mcp-all-on-${server().prefix}`} disabled={action.busy() || !offCount(server())}
+                          onPress={() => void patch(server(), { offTools: [] }, "Sessions get all of its tools from their next message.")} />
+                        <Button small variant="outline" label="All off" testID={`mcp-all-off-${server().prefix}`} disabled={action.busy() || offCount(server()) === server().tools.length}
+                          onPress={() => void patch(server(), { offTools: [...new Set([...server().offTools ?? [], ...server().tools.map(tool => tool.name)])] },
+                            "Sessions get none of its tools from their next message.")} />
+                      </View>
+                    </If>
                     <Each of={server().tools} key={tool => tool.name}>
                       {(tool, index) => (
                         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 4, paddingVertical: 8, borderTopWidth: index() ? 1 : 0, borderColor: palette().border }}>
@@ -148,6 +162,11 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
                             <Text style={{ fontFamily: monospace, fontSize: text.small, color: palette().text }}>{tool().toolName}</Text>
                             <Small>{descriptionSummary(tool().description, 200) || "No description"}</Small>
                           </View>
+                          <If when={admin()} else={<Badge tone={tool().off ? "neutral" : "success"}>{tool().off ? "Off" : "On"}</Badge>}>
+                            <Checkbox label="On" testID={`mcp-tool-on-${tool().toolName}`} checked={!tool().off} disabled={action.busy()}
+                              onChange={on => void patch(server(), { offTools: on ? (server().offTools ?? []).filter(item => item !== tool().name) : [...(server().offTools ?? []), tool().name] },
+                                on ? `Sessions get ${tool().toolName} from their next message.` : `Sessions no longer get ${tool().toolName} from their next message.`)} />
+                          </If>
                           <If when={admin()} else={<Badge tone={tool().readOnly ? "success" : "warning"}>{tool().readOnly ? "Read-only" : "May write"}</Badge>}>
                             <Checkbox label="Read-only" checked={tool().readOnly} disabled={action.busy()}
                               onChange={on => void patch(server(), { readOnlyTools: on ? [...server().readOnlyTools, tool().name] : server().readOnlyTools.filter(item => item !== tool().name) },

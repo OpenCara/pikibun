@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { REMOTE_MCP_SESSION_TOOLS, remoteMcpNotOfferedNote, remoteMcpSessionTools, type RemoteMcpSessionServer } from '../packages/shared/src/remote-mcp.js';
+import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
+import {
+  REMOTE_MCP_ALL_TOOLS, REMOTE_MCP_SESSION_TOOLS, remoteMcpAnswerBytes, remoteMcpLeftOutNote, remoteMcpLimits, remoteMcpNotOfferedNote, remoteMcpSessionTools, remoteMcpToolList,
+  type RemoteMcpSessionServer,
+} from '../packages/shared/src/remote-mcp.js';
 import { toolDefinitionLimits } from '../packages/shared/src/tool-definitions.js';
 
 const server = (prefix: string, count: number, names: (index: number) => string = index => `tool_${index}`): RemoteMcpSessionServer => ({
@@ -46,5 +50,41 @@ test('a name two servers\' tools both come to stays with the earlier server and 
 test('settings say how many of a server\'s tools sessions don\'t get, and why', () => {
   assert.equal(remoteMcpNotOfferedNote(undefined), '');
   assert.equal(remoteMcpNotOfferedNote(0), '');
-  assert.match(remoteMcpNotOfferedNote(13), /^Sessions don't get 13 of its tools: a session takes at most 64 remote MCP tools in all, shared evenly/);
+  assert.match(remoteMcpNotOfferedNote(13), /^Sessions on hosts with an older connector don't get 13 of its tools: they take at most 64 remote MCP tools in all, shared evenly/);
+  assert.match(remoteMcpNotOfferedNote(13), /npx pikibun@latest connect/);
+});
+
+test('a current host takes every tool of every server: nothing is shared out', () => {
+  const servers = [server('eleven', 247), server('higgs', 30), server('runway', 20)];
+  const all = remoteMcpSessionTools(servers, REMOTE_MCP_ALL_TOOLS);
+  assert.deepEqual([all.offered, all.notOffered, all.definitions.length], [[247, 30, 20], [0, 0, 0], 297]);
+  assert.deepEqual(remoteMcpSessionTools(servers).offered, [22, 22, 20], 'an older host still gets the 64 it accepts, shared evenly');
+  assert.equal(REMOTE_MCP_ALL_TOOLS, remoteMcpLimits.servers * remoteMcpLimits.tools);
+});
+
+test('a host parses an answer with more than 64 remote tools, up to every tool of every server', () => {
+  const definitions = remoteMcpSessionTools([server('eleven', 200)], REMOTE_MCP_ALL_TOOLS).definitions;
+  const answer = (remoteTools: unknown[]) => parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: true, remoteTools });
+  assert.equal(answer(definitions).remoteTools!.length, 200);
+  assert.throws(() => answer(Array.from({ length: REMOTE_MCP_ALL_TOOLS + 1 }, () => definitions[0])), /Invalid workspace extensions/);
+  assert.ok(remoteMcpAnswerBytes > remoteMcpLimits.servers * remoteMcpLimits.toolsBytes, 'the answer may carry every server\'s tools');
+});
+
+test('tools an owner or admin turned off are never offered, and don\'t count against an older host\'s share', () => {
+  const eleven = { ...server('eleven', 64), offTools: Array.from({ length: 60 }, (_, index) => `tool_${index}`) };
+  const all = remoteMcpSessionTools([eleven, server('higgs', 3)], REMOTE_MCP_ALL_TOOLS);
+  assert.deepEqual(all.definitions.map(definition => definition.name), ['eleven_tool_60', 'eleven_tool_61', 'eleven_tool_62', 'eleven_tool_63', 'higgs_tool_0', 'higgs_tool_1', 'higgs_tool_2']);
+  const older = remoteMcpSessionTools([eleven, server('higgs', 64)]);
+  assert.deepEqual([older.offered, older.notOffered], [[4, 60], [0, 4]], 'the share a server doesn\'t use goes to the others');
+});
+
+test('Pikibun keeps up to 1024 tools and 2 MB from one server, and counts the rest as left out', () => {
+  const listed = (count: number, description = '') => Array.from({ length: count }, (_, index) => ({ name: `tool_${index}`, description, inputSchema: { type: 'object' } }));
+  const many = remoteMcpToolList(listed(1030));
+  assert.deepEqual([many.tools.length, many.leftOut], [1024, { overLimit: 6, unusable: 0 }]);
+  const large = remoteMcpToolList(listed(1200, 'd'.repeat(2000)));
+  assert.ok(large.tools.length < 1200 && large.tools.length > 900);
+  assert.ok(JSON.stringify(large.tools).length <= remoteMcpLimits.toolsBytes + large.tools.length);
+  assert.equal(large.leftOut.overLimit, 1200 - large.tools.length);
+  assert.equal(remoteMcpLeftOutNote(many.leftOut), 'Left out 6 tools past what Pikibun keeps from one server (1024 tools, 2 MB).');
 });

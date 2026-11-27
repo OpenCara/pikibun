@@ -140,7 +140,7 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     const settings = await connectorExtensionSettings(c.env, row.id);
     const toolGroups = await memberToolGroups(c.env, workspaceId);
     const ownerPrivate = await isPersonalWorkspace(c.env, workspaceId, row.owner_id);
-    const remote = remoteTools ? await workspaceRemoteTools(c.env, workspaceId) : undefined;
+    const remote = remoteTools ? await workspaceRemoteTools(c.env, workspaceId, input.allRemoteTools === true) : undefined;
     const memory = input.memory === true ? await workspaceMemoryPrompt(c.env, workspaceId) : undefined;
     return c.json({
       extensions: shown,

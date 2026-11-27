@@ -192,7 +192,7 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
      (`https://` URL on a public address, refused against `non-public-addresses.ts`, with optional Bearer / header
      secret stored encrypted in the Pikibun server's vault) under **Workspace → Extensions → Remote MCP**. The Pikibun
      server connects over Streamable HTTP (bounded at 15 seconds and 8 MB per answer for `tools/list`, which a server listing many large input schemas
-     unpaged passes 1 MB with, 60 seconds and 1 MB per `tools/call`; the tools it leaves out, past 64 or with names or
+     unpaged passes 1 MB with, 60 seconds and 1 MB per `tools/call`; the tools it leaves out, past 1,024 or 2 MB, or with names or
      schemas it can't offer, are counted and shown on the settings page rather than dropped silently),
      prefixes or namespaces colliding tool names, enforces `tool_groups`, audits calls, and serves the discovered tools
      to connectors in `POST /api/connectors/self/tools` as `BrokeredToolDefinition`s routing to
@@ -335,7 +335,24 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   `arguments`. The session validates `arguments` against the schema before forwarding, and the Pikibun server again
   (pi-schema `compile`) before calling. That route checks `piki:remote-mcp` itself too (`extensionSwitchOn`, as the
   host does), and answers `mcp_tools_off` where the workspace turned it off.
-- **64 remote tools a session, shared evenly** (`remoteMcpSessionTools`, `REMOTE_MCP_SESSION_TOOLS`). The 64 is not a
+- **Every remote tool to a current host; 64, shared evenly, to an older one.** A workspace's sessions aren't limited in how
+  many remote tools they get. A connector of this release announces `allRemoteTools` in its capabilities and asks with
+  `allRemoteTools: true` on `/api/connectors/self/extensions/workspace`; the Pikibun server then sends every tool of every
+  enabled, still-shared server but the ones turned off (`remoteMcpSessionTools` with `REMOTE_MCP_ALL_TOOLS`). Such a
+  connector parses up to `REMOTE_MCP_ALL_TOOLS` (8 servers × 1,024 tools) and an answer of up to `remoteMcpAnswerBytes`
+  (what every server's kept tools come to, with room for each definition's label and route), so the answer, not a count,
+  is what bounds it. What a server's tools cost the model is tool search's to keep down, which is on by default (#553) and
+  defers remote tools until the agent loads them; a host that turns it off sends every one in the prompt, and a provider
+  with a cap on tools a request (OpenAI's 128) refuses past it, which its owner fixes by turning tool search on or tools
+  off. Pikibun keeps up to 1,024 tools and 2 MB of them from one server (`remoteMcpLimits.tools`, `toolsBytes`, counted
+  in `toolsLeftOut.overLimit` past either), which bounds the stored row, the settings page and the answer above, rather
+  than the 64 it kept before. Each workspace's owners and admins turn tools off on its row, one at a time or all at once
+  (`offTools`, `workspace_mcp_servers.off_tools_json`, audited in `workspace.mcp.updated`): a list of tools off rather
+  than of tools on, so a tool a server adds later is on like the rest. Sessions don't get a tool that is off, and the
+  call route refuses it (`mcp_tool_not_found`) even for a session that still holds its definition. Listing the tools
+  again keeps the list.
+- **64 remote tools a session on an older host, shared evenly** (`remoteMcpSessionTools`, `REMOTE_MCP_SESSION_TOOLS`).
+  A connector that doesn't ask for every tool gets at most 64. The 64 is not a
   prompt budget: a connector refuses a whole workspace extensions answer whose `remoteTools` lists more than
   `toolDefinitionLimits.definitions` (64, `parseRemoteTools`), so sending more would take every remote tool, and every
   extension the answer carries, from connectors of this release and older. It is tied to that limit rather than written
@@ -346,8 +363,11 @@ owner installed it in `ExtensionStore`) on an unsandboxed host, an on-host sessi
   what doesn't divide goes to the earlier servers. Each server keeps its own first tools and its tools stay together in
   the answer, in the servers' order, so the definitions only change when the servers do (the prompt cache). A name two
   servers' tools both come to (`remoteMcpToolName` cuts names at 64 characters) is the earlier server's, before the
-  turns, so it costs the later one no turn. The settings list and every server view carry `toolsNotOffered`, the
-  tools of that server sessions don't get, shown on its row with what to do about it; a server that is off has none.
+  turns, so it costs the later one no turn. Tools turned off take no turn either. The settings list and every server
+  view carry `toolsNotOffered`, the tools of that server sessions on an older host don't get, shown on its row with what
+  to do about it (update those hosts' connector, or turn tools or servers off). It is counted only while one of the hosts
+  that serve the workspace (`connector_workspaces`, not revoked or removed) lacks `allRemoteTools`; a server that is off
+  has none.
 - **Untrusted `readOnlyHint`**: every tool is `write: true` unless its name is in the registration's `readOnlyTools`;
   a write tool is refused for a Read-only message's admission (`run_admissions.access = 'read'`), and every call is
   audited as `workspace.mcp.called` with the server, tool and whether it may write.

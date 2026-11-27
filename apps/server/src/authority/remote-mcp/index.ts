@@ -4,9 +4,10 @@ import { compile } from '@earendil-works/pi-schema';
 import { sha256 } from '../../../../../packages/shared/src/crypto.js';
 import { z } from 'zod';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
+import { parseCapabilities } from '../../../../../packages/shared/src/connector.js';
 import { extensionSwitchOn } from '../../../../../packages/shared/src/piki-extensions.js';
 import {
-  isRemoteMcpSignInAs, REMOTE_MCP_EXTENSION, remoteMcpAppLink, remoteMcpHeaders, remoteMcpLimits, remoteMcpSessionTools, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl,
+  isRemoteMcpSignInAs, REMOTE_MCP_ALL_TOOLS, REMOTE_MCP_EXTENSION, REMOTE_MCP_SESSION_TOOLS, remoteMcpAppLink, remoteMcpHeaders, remoteMcpLimits, remoteMcpSessionTools, remoteMcpToolKey, remoteMcpToolName, remoteMcpUrl,
   validRemoteMcpPrefix, type McpServerSharer, type RemoteMcpServerSummary, type RemoteMcpSignInAs, type RemoteMcpTool, type WorkspaceMcpServer,
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/tool-definitions.js';
@@ -35,7 +36,7 @@ import { authorizationUrl, clientMetadataDocument, clientMetadataDocumentUrl, MC
 
 interface ServerRow {
   id: string; workspace_id: string; prefix: string; name: string; url: string; headers_ciphertext: string | null; header_names_json: string;
-  read_only_tools_json: string; tools_json: string; enabled: number | string; discovered_at: string | null; error: string | null; updated_at: string;
+  read_only_tools_json: string; off_tools_json: string | null; tools_json: string; enabled: number | string; discovered_at: string | null; error: string | null; updated_at: string;
   oauth_ciphertext: string | null; oauth_by: string | null; oauth_at: string | null;
   tools_over_limit: number | string | null; tools_unusable: number | string | null; sign_in_as: RemoteMcpSignInAs; shared_connection_id: string | null;
 }
@@ -63,8 +64,10 @@ const callBody = fields({ sessionId: z.unknown(), actorId: z.unknown(), admissio
   'Unexpected remote MCP call field.');
 const addBody = fields({ name: z.unknown(), prefix: z.unknown(), url: z.unknown(), headers: z.unknown(), readOnlyTools: z.unknown(), signInAs: z.unknown() },
   'Only name, prefix, url, headers, readOnlyTools and signInAs are accepted.', { code: 'invalid_mcp_server' });
-const changeBody = fields({ name: z.unknown(), url: z.unknown(), headers: z.unknown(), readOnlyTools: z.unknown(), enabled: z.unknown(), signInAs: z.unknown(), refresh: z.unknown() },
-  'Change name, url, headers, readOnlyTools, enabled or signInAs, or set refresh to true.', { code: 'invalid_mcp_server', some: true });
+const changeBody = fields({ name: z.unknown(), url: z.unknown(), headers: z.unknown(), readOnlyTools: z.unknown(), offTools: z.unknown(), enabled: z.unknown(), signInAs: z.unknown(), refresh: z.unknown() },
+  'Change name, url, headers, readOnlyTools, offTools, enabled or signInAs, or set refresh to true.', { code: 'invalid_mcp_server', some: true });
+
+const changeBytes = 64 * 1024 + 2 * remoteMcpLimits.tools * 132;
 
 const finishBody = fields({ code: z.unknown() }, 'Only code is accepted.');
 
@@ -76,9 +79,12 @@ const appSecretContext = (signInId: string) => `remote-mcp-oauth-app:${signInId}
 function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sharedBy?: Map<string, McpServerSharer>, notOffered?: number): WorkspaceMcpServer {
   const sharer = row.shared_connection_id ? sharedBy?.get(row.shared_connection_id) : undefined;
   const readOnlyTools = parsedList(row.read_only_tools_json);
+  const offTools = parsedList(row.off_tools_json ?? '[]');
+  const readOnly = new Set(readOnlyTools);
+  const off = new Set(offTools);
   const tools = parsedTools(row.tools_json).flatMap(tool => {
     const toolName = remoteMcpToolName(row.prefix, tool.name);
-    return toolName ? [{ ...tool, toolName, readOnly: readOnlyTools.includes(tool.name) }] : [];
+    return toolName ? [{ ...tool, toolName, readOnly: readOnly.has(tool.name), off: off.has(tool.name) }] : [];
   });
   const leftOut = { overLimit: Number(row.tools_over_limit) || 0, unusable: Number(row.tools_unusable) || 0 };
   return { id: row.id, name: row.name, prefix: row.prefix, url: row.url, enabled: Number(row.enabled) === 1, signInAs: row.sign_in_as ?? 'workspace',
@@ -87,7 +93,7 @@ function view(row: ServerRow, mine?: { row: ConnectionRow; using: boolean }, sha
     ...(mine ? { connection: { id: mine.row.id, name: mine.row.name, using: mine.using, signedIn: !!(mine.row.oauth_ciphertext || mine.row.headers_ciphertext),
       ...(mine.row.error ? { error: mine.row.error } : {}) } } : {}),
     ...(sharer ? { sharedBy: sharer } : {}),
-    readOnlyTools, tools,
+    readOnlyTools, offTools, tools,
     ...(leftOut.overLimit || leftOut.unusable ? { toolsLeftOut: leftOut } : {}), ...(notOffered ? { toolsNotOffered: notOffered } : {}), ...(row.discovered_at ? { discoveredAt: row.discovered_at } : {}), ...(row.error ? { error: row.error } : {}), updatedAt: row.updated_at };
 }
 
@@ -156,12 +162,14 @@ function settingsPage(c: AppContext, workspaceId: string): Response {
   return c.redirect(`${appOrigin(c.env)}/#/settings/workspaces/${encodeURIComponent(workspaceId)}`, 302);
 }
 
-function readOnlyList(value: unknown): string[] {
+function toolList(value: unknown, field: 'readOnlyTools' | 'offTools'): string[] {
   if (!Array.isArray(value) || value.length > remoteMcpLimits.tools || value.some(item => typeof item !== 'string' || !item || item.length > 128)) {
-    fail(400, 'invalid_mcp_server', `readOnlyTools must list at most ${remoteMcpLimits.tools} tool names.`);
+    fail(400, 'invalid_mcp_server', `${field} must list at most ${remoteMcpLimits.tools} tool names.`);
   }
   return [...new Set(value as string[])];
 }
+
+const readOnlyList = (value: unknown) => toolList(value, 'readOnlyTools');
 
 function nameOf(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > remoteMcpLimits.name || /[\r\n\0]/.test(value)) {
@@ -187,13 +195,26 @@ async function serverRow(env: Env, workspaceId: string, serverId: string): Promi
 async function serverView(env: Env, workspaceId: string, serverId: string, viewer: string): Promise<WorkspaceMcpServer> {
   const row = await serverRow(env, workspaceId, serverId);
   return view(row, (await viewerConnections(env, workspaceId, viewer)).get(row.url), await sharers(env, workspaceId, viewer),
-    (await sessionShares(env, workspaceId)).notOffered.get(row.id));
+    (await settingsNotOffered(env, workspaceId)).get(row.id));
 }
 
-async function sessionShares(env: Env, workspaceId: string): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[]; notOffered: Map<string, number> }> {
+async function olderHosts(env: Env, workspaceId: string): Promise<boolean> {
+  const hosts = await env.DB.query<{ capabilities_json: string | null }>(`SELECT c.capabilities_json FROM connector_workspaces cw JOIN connectors c ON c.id = cw.connector_id
+    WHERE cw.workspace_id = ? AND c.revoked_at IS NULL AND c.removed_at IS NULL`).bind(workspaceId).all();
+  return hosts.some(host => {
+    try { return parseCapabilities(host.capabilities_json ?? '{}').allRemoteTools !== true; } catch { return true; }
+  });
+}
+
+async function settingsNotOffered(env: Env, workspaceId: string): Promise<Map<string, number>> {
+  return await olderHosts(env, workspaceId) ? (await sessionShares(env, workspaceId, REMOTE_MCP_SESSION_TOOLS)).notOffered : new Map();
+}
+
+async function sessionShares(env: Env, workspaceId: string, limit: number): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[]; notOffered: Map<string, number> }> {
   const rows = await env.DB.query<ServerRow>(`SELECT * FROM workspace_mcp_servers s WHERE s.workspace_id = ? AND s.enabled = 1 AND ${activeShareSQL('s')}
     ORDER BY s.created_at, s.prefix`).bind(workspaceId).all();
-  const shared = remoteMcpSessionTools(rows.map(row => ({ name: row.name, prefix: row.prefix, readOnlyTools: parsedList(row.read_only_tools_json), tools: parsedTools(row.tools_json) })));
+  const shared = remoteMcpSessionTools(rows.map(row => ({ name: row.name, prefix: row.prefix, readOnlyTools: parsedList(row.read_only_tools_json),
+    offTools: parsedList(row.off_tools_json ?? '[]'), tools: parsedTools(row.tools_json) })), limit);
   return {
     tools: shared.definitions,
     servers: rows.flatMap((row, index) => shared.offered[index] ? [{ prefix: row.prefix, name: row.name }] : []),
@@ -201,8 +222,8 @@ async function sessionShares(env: Env, workspaceId: string): Promise<{ tools: Br
   };
 }
 
-export async function workspaceRemoteTools(env: Env, workspaceId: string): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[] }> {
-  const { tools, servers } = await sessionShares(env, workspaceId);
+export async function workspaceRemoteTools(env: Env, workspaceId: string, all = false): Promise<{ tools: BrokeredToolDefinition[]; servers: RemoteMcpServerSummary[] }> {
+  const { tools, servers } = await sessionShares(env, workspaceId, all ? REMOTE_MCP_ALL_TOOLS : REMOTE_MCP_SESSION_TOOLS);
   return { tools, servers };
 }
 
@@ -234,6 +255,9 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
     const tool = server ? parsedTools(server.tools_json).find(item => remoteMcpToolKey(item.name) === key) : undefined;
     const toolName = server && tool ? remoteMcpToolName(server.prefix, tool.name) : undefined;
     if (!server || !tool || !toolName) fail(404, 'mcp_tool_not_found', 'This workspace has no such remote MCP tool now, or its server is turned off.');
+    if (parsedList(server.off_tools_json ?? '[]').includes(tool.name)) {
+      fail(404, 'mcp_tool_not_found', `${toolName} is turned off in this workspace: its owners and admins turn it on again on the settings page. Nothing ran.`);
+    }
     const write = !readOnlyTools.includes(tool.name);
     if (write && admission.access === 'read') {
       fail(403, 'mcp_tool_writes', `${toolName} may change things, which a Read-only message doesn't do: its workspace's owners mark the tools that only read. Nothing ran.`);
@@ -279,7 +303,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const rows = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE workspace_id = ? ORDER BY created_at, prefix').bind(workspaceId).all();
     const mine = await viewerConnections(c.env, workspaceId, actor);
     const sharedBy = await sharers(c.env, workspaceId, actor);
-    const { notOffered } = await sessionShares(c.env, workspaceId);
+    const notOffered = await settingsNotOffered(c.env, workspaceId);
     return c.json({ servers: rows.map(row => view(row, mine.get(row.url), sharedBy, notOffered.get(row.id))), admin: member.role === 'owner' || member.role === 'admin' });
   });
 
@@ -322,7 +346,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     const serverId = identifier(c.req.param('serverId'), 'serverId');
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    const input = await body(c, changeBody, { maxBytes: 64 * 1024 });
+    const input = await body(c, changeBody, { maxBytes: changeBytes });
     const keys = Object.keys(input).filter(name => input[name as keyof typeof input] !== undefined);
     if (input.enabled !== undefined && typeof input.enabled !== 'boolean') fail(400, 'invalid_mcp_server', 'enabled must be true or false.');
     if (input.refresh !== undefined && input.refresh !== true) fail(400, 'invalid_mcp_server', 'refresh must be true.');
@@ -335,6 +359,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     }
     const headers = input.headers === undefined ? await headersOf(c.env, row) : input.headers === null ? {} : checked(() => remoteMcpHeaders(input.headers));
     const readOnlyTools = input.readOnlyTools === undefined ? parsedList(row.read_only_tools_json) : readOnlyList(input.readOnlyTools);
+    const offTools = input.offTools === undefined ? parsedList(row.off_tools_json ?? '[]') : toolList(input.offTools, 'offTools');
     const enabled = input.enabled === undefined ? Number(row.enabled) === 1 : input.enabled as boolean;
     const signInAs = input.signInAs === undefined ? row.sign_in_as : signInAsOf(input.signInAs);
     const moved = url !== row.url;
@@ -356,11 +381,11 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const ciphertext = input.headers === undefined ? row.headers_ciphertext
       : Object.keys(headers).length ? await encryptToken(c.env, secretContext(serverId), JSON.stringify(headers)) : null;
     const saved = await c.env.DB.query<{ id: string }>(`UPDATE workspace_mcp_servers SET name = ?, url = ?, headers_ciphertext = ?, header_names_json = ?,
-        read_only_tools_json = ?, tools_json = ?, tools_over_limit = ?, tools_unusable = ?, enabled = ?, sign_in_as = ?, discovered_at = ?, error = ?, updated_by = ?, updated_at = ?,
+        read_only_tools_json = ?, off_tools_json = ?, tools_json = ?, tools_over_limit = ?, tools_unusable = ?, enabled = ?, sign_in_as = ?, discovered_at = ?, error = ?, updated_by = ?, updated_at = ?,
         oauth_ciphertext = CASE WHEN ? = 1 THEN NULL ELSE oauth_ciphertext END, oauth_by = CASE WHEN ? = 1 THEN NULL ELSE oauth_by END,
         oauth_at = CASE WHEN ? = 1 THEN NULL ELSE oauth_at END
       WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
-      .bind(name, url, ciphertext, JSON.stringify(Object.keys(headers)), JSON.stringify(readOnlyTools),
+      .bind(name, url, ciphertext, JSON.stringify(Object.keys(headers)), JSON.stringify(readOnlyTools), JSON.stringify(offTools),
         found && !found.error ? JSON.stringify(found.tools) : row.tools_json,
         found && !found.error ? found.leftOut.overLimit : Number(row.tools_over_limit) || 0, found && !found.error ? found.leftOut.unusable : Number(row.tools_unusable) || 0,
         enabled ? 1 : 0, signInAs,
@@ -372,7 +397,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     }
     await auditStatement(c.env, actor, 'workspace.mcp.updated', workspaceId, null, {
       server: serverId, changed: keys.filter(item => item !== 'refresh'), ...(input.url !== undefined ? { url } : {}), ...(input.headers !== undefined ? { headers: Object.keys(headers) } : {}),
-      ...(input.readOnlyTools !== undefined ? { readOnlyTools } : {}), ...(input.enabled !== undefined ? { enabled } : {}),
+      ...(input.readOnlyTools !== undefined ? { readOnlyTools } : {}), ...(input.offTools !== undefined ? { offTools } : {}), ...(input.enabled !== undefined ? { enabled } : {}),
       ...(input.signInAs !== undefined ? { signInAs } : {}), ...(signOut && row.oauth_ciphertext ? { signedOut: true } : {}),
       ...(found ? { ...discoveredDetail(found), ...(listedBy === 'member' ? { listedWithOwnConnection: true } : {}) } : {}),
     }).run();
