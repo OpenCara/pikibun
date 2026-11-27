@@ -10,8 +10,8 @@ import type { RepositoryAccess } from '../repositories.js';
 import { importRsaPrivateKey, signJwt } from './jwt.js';
 import { issuerAssertion, workspaceSubject } from './oidc.js';
 import { ownerGitAuthorization } from './targets.js';
-import { ownerAccountServesOthersHosts } from '../host-account.js';
-import { hostAccountLocation } from '../../../../../packages/shared/src/host-account.js';
+import { ownerTrustsHost } from '../trusted-hosts.js';
+import { trustedHostsLocation } from '../../../../../packages/shared/src/trusted-hosts.js';
 
 export interface MintTarget {
   workspaceId: string; sessionId: string;
@@ -140,11 +140,11 @@ function identityRequired(target: MintTarget, scope: string): never {
 }
 async function requireOwnHost(env: Env, target: MintTarget, kind: 'owner-account' | 'host-credentials'): Promise<void> {
   if (target.connectorId && target.hostOwnerId === target.ownerId) return;
-  if (kind === 'owner-account' && await ownerAccountServesOthersHosts(env.DB, target.workspaceId, target.ownerId)) return;
+  if (kind === 'owner-account' && await ownerTrustsHost(env.DB, target.ownerId, target.connectorId, target.hostOwnerId)) return;
   fail(409, 'push_identity_own_host_required', kind === 'owner-account'
-    ? `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use the session owner's account, so they run only in sessions on the owner's own hosts, ` +
-      `unless the owner lets their account serve their sessions on others' hosts (${hostAccountLocation}). ` +
-      'Start the session on one of your hosts, turn that on, or ask a workspace owner or admin to change the push identity in Settings → Workspaces.'
+    ? `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use the session owner's account, so they run only in sessions on the owner's own hosts ` +
+      `and on hosts they trust with their account (${trustedHostsLocation}). ` +
+      'Start the session on one of your hosts, trust this one, or ask a workspace owner or admin to change the push identity in Settings → Workspaces.'
     : `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use the host's Git credentials, so they run only in sessions the host's owner starts on it. ` +
       'Start the session on one of your hosts, or ask a workspace owner or admin to change the push identity in Settings → Workspaces.');
 }

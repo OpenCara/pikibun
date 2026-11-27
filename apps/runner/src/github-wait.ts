@@ -22,7 +22,7 @@ export function githubInstructions(tools: { github: boolean; gh: boolean }): str
     + "every read counts against GitHub rate limits that all of the owner's sessions share. "
     + "Use github_read only to wait for anything else on a pull request (a comment, review or push), with wait: \"change\", "
     + "and github_comment, github_issue and github_merge only where gh refuses to write: on a host that isn't the session owner's own "
-    + "(unless the owner lets their account serve others' hosts), where the workspace set gh read-only, or in a call no person decided.";
+    + "(unless the owner trusts that host with their account), where the workspace set gh read-only, or in a call no person decided.";
 }
 
 export type GitHubWaitOutcome = "checks-completed" | "no-checks" | "changed" | "closed" | "timeout" | "stopped";

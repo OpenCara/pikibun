@@ -364,7 +364,6 @@ export function registerCatalog(app: Hono<AppEnv>): void {
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, targetId, auditId),
       removal.toolGroup,
-      removal.hostAccount,
       c.env.DB.query(`DELETE FROM connector_workspaces WHERE workspace_id = ?
         AND connector_id IN (SELECT id FROM connectors WHERE owner_id = ?)
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)

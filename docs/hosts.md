@@ -64,10 +64,14 @@ This is how a team shares one model subscription or set of API keys. Sign Pi in 
 
 - Sessions on a shared host still belong to the members who start them: they run as those members, with their Git accounts, not yours. Agents, session permissions and Git credentials are not shared, and your Pi history is never imported.
 - As the host's operator, you can see the prompts and repository files of every session that runs on it. Members starting a session on someone else's host confirm they trust it (**I trust …'s host**).
-- **Settings → Hosts → Shared with you** lists the hosts others shared into your workspaces.
+- **Settings → Hosts → Shared with you** lists the hosts others shared into your workspaces ([below](#hosts-shared-with-you)).
 - To guard what lies on your machine from members' messages, require the [prompt audit](extensions.md#prompt-audit-pikiprompt-audit) of every session on it: a model on the host checks each of their messages before it reaches the agent. You can require any extension of every session on your host the same way, such as a tool-call guard ([required extensions](extensions.md)).
 
 The host's page shows its **Status** (online or offline, owner, capabilities), **Models** (where its owner and admins [enable or disable](#models) each one), **Sharing**, **[Configuration](#host-configuration)**, **Host command access**, **Admins**, **Details** (the connection ID) and **Danger zone**. **Revoke host** disconnects it and blocks work in every workspace, your own sessions included; session records are kept, and the machine needs a new pairing to come back.
+
+### Hosts shared with you
+
+**Settings → Hosts → Shared with you** lists, for each of your workspaces, the hosts other members shared there; open one to see what it can do and the models it offers. Pushes with [your own account](pushes.md#push-access) and `gh`, `glab` and `az` writes act as you, so by default they work only in your sessions on your own hosts. To let them work in your sessions on one of these hosts too, turn on **Trust with my account** on it and confirm. The host then receives your token for them, and its owner can read it while it is valid and act as you anywhere your account reaches ([why](design/security-rationale.md#the-owners-account-on-other-peoples-hosts)): trust only hosts whose owners you trust. Nothing is trusted until you trust it, only you choose, one host at a time, and the trust holds in every workspace the host is shared into until you turn it off, or the host is removed. Turning it off stops the next token, not one the host already holds.
 
 ## Hardware
 

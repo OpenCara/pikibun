@@ -1,6 +1,7 @@
 import { computed, effect, signal, untracked, View } from "nsh";
 import type { ConnectorInfo, ConnectorPairing } from "../../../../packages/shared/src/connector";
 import type { WorkspaceRepositoryList } from "../../../../packages/shared/src/repositories";
+import type { TrustedHostsResponse } from "../../../../packages/shared/src/trusted-hosts";
 import { modelKey, segment, type Workspace } from "../shared";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
@@ -60,18 +61,42 @@ function HostList(props: { connectors: ConnectorInfo[]; loading: boolean; error:
   );
 }
 
+const sharedInfo = <View style={{ gap: 8 }}>
+  <Note>Hosts other members shared into your workspaces. You can run your own sessions on them; their operator sees your prompts and repository files. Agents, session permissions and its owner's credentials are not shared.</Note>
+  <Note>Some things act with your own account: pushes, where a workspace's push access uses the session owner's account, and gh, glab and az writes (pull requests, comments, merges). They work in your sessions on your own hosts, and on a host here only once you trust it with your account. It starts off, and only you choose it, for each host.</Note>
+  <Note>A host you trust receives your token. Its owner can read it while it is valid and act as you anywhere your account reaches, not only in the workspace's repositories. Pikibun resets a GitHub sign-in's token after each push, but tokens for gh writes, and other providers' tokens, stay valid. Trust only hosts whose owners you trust.</Note>
+</View>;
+
+type Trust = { trusted: (connectorId: string) => boolean; busy: () => boolean; change: (connector: ConnectorInfo, on: boolean) => void };
+
 function SharedWithYou() {
   const data = useAppData();
+  const trusted = createResource<TrustedHostsResponse>(() => "/api/trusted-hosts");
+  const action = createAction();
+  const trust: Trust = {
+    trusted: connectorId => (trusted.data()?.hosts ?? []).some(host => host.connectorId === connectorId),
+    busy: () => action.busy() || !trusted.data(),
+    async change(connector, on) {
+      if (action.busy() || on === trust.trusted(connector.id)) return;
+      if (on && !await confirm({ title: `Trust ${connector.name} with your account?`, confirmLabel: "Trust host", destructive: true,
+        message: `Your sessions on ${connector.ownerName}'s host will push and write with your own account, so the host receives your token. ${connector.ownerName} can read it while it is valid and act as you anywhere your account reaches.${connector.capabilities.unsandboxed ? " This host runs without a sandbox." : ""}` })) return;
+      await action.run(async () => {
+        await session().api(`/api/trusted-hosts/${segment(connector.id)}`, { method: on ? "PUT" : "DELETE" });
+        trusted.refresh();
+      }, on ? `Your sessions on ${connector.name} now push and write with your account.` : `${connector.name} no longer receives your account's tokens.`);
+    },
+  };
   return (
-    <Section title="Shared with you" testID="hosts-shared" info="Hosts other members shared into your workspaces. You can run your own sessions on them; their operator sees your prompts and repository files. Agents, session permissions and GitHub credentials are not shared.">
+    <Section title="Shared with you" testID="hosts-shared" info={sharedInfo}>
       <If when={data.workspaces().length > 0} else={<Row title="Nothing shared with you" hint="Hosts members share into your workspaces appear here" />}>
-        <Each of={data.workspaces()} key={workspace => workspace.id}>{workspace => <WorkspaceSharedHosts workspace={workspace()} />}</Each>
+        <Each of={data.workspaces()} key={workspace => workspace.id}>{workspace => <WorkspaceSharedHosts workspace={workspace()} trust={trust} />}</Each>
       </If>
+      <If when={trusted.error() || action.error() || action.notice()}><CardBody><Feedback error={trusted.error() || action.error()} notice={action.notice()} /></CardBody></If>
     </Section>
   );
 }
 
-function WorkspaceSharedHosts(props: { workspace: Workspace }) {
+function WorkspaceSharedHosts(props: { workspace: Workspace; trust: Trust }) {
   const { user } = untracked(session);
   const resource = createConnections(() => `/api/workspaces/${segment(props.workspace.id)}/connectors`);
   const shared = () => (resource.data()?.connectors ?? []).filter(connector => connector.ownerId !== user.id);
@@ -86,6 +111,10 @@ function WorkspaceSharedHosts(props: { workspace: Workspace }) {
             trailing={<ConnectionStatus connector={connector()} />}>
             <HostCapabilities connector={connector()} />
             <Small>{connector().models.length ? connector().models.map(model => model.name).join(", ") : "No models offered"}</Small>
+            <Row title="Trust with my account" testID={`host-trust-${connector().id}`}
+              hint={props.trust.trusted(connector().id) ? "Your sessions here push and write with your account" : "Off: your account's tokens never reach this host"}
+              trailing={<CheckControl testID={`host-trust-toggle-${connector().id}`} label={`Trust ${connector().name} with my account`} checked={props.trust.trusted(connector().id)}
+                disabled={props.trust.busy()} onChange={value => props.trust.change(connector(), value)} />} />
           </CollapsibleRow>
         )}
       </Each>
