@@ -29,6 +29,7 @@ import type { WorkspaceConnection } from '../packages/shared/src/workspace-conne
 import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import type { McpConnection, RemoteMcpHttpRequest, RemoteMcpHttpResponse, WorkspaceMcpServer } from '../packages/shared/src/remote-mcp.js';
+import { remoteMcpLimits, remoteMcpToolKey } from '../packages/shared/src/remote-mcp.js';
 import { broughtConnection } from '../apps/server/src/authority/remote-mcp/connections.js';
 import { publicLookup, RemoteMcpRefused } from '../apps/server/src/authority/remote-mcp/transport.js';
 import { authorizationUrl, coversResource, discoverOAuth, registerClient } from '../apps/server/src/authority/remote-mcp/oauth.js';
@@ -4386,7 +4387,7 @@ test('a remote MCP server listing over 1 MiB of tools unpaged is listed, and the
   const sizes: { method: string; maxBytes: number }[] = [];
   const big = 'x'.repeat(2000);
   const tools = [
-    ...Array.from({ length: 70 }, (_, index) => ({ name: `model_${index}`, description: big.repeat(10),
+    ...Array.from({ length: 130 }, (_, index) => ({ name: `model_${index}`, description: big.repeat(10),
       inputSchema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 8 }, (_, n) => [`p${n}`, { type: 'string', description: big }])) } })),
     { name: 'listing', inputSchema: { type: 'array' } },
     { name: 'bad name!', inputSchema: { type: 'object' } },
@@ -4407,12 +4408,15 @@ test('a remote MCP server listing over 1 MiB of tools unpaged is listed, and the
     { name: 'Gen', prefix: 'gen', url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer ' + secret } }), 201);
   assert.ok(JSON.stringify({ tools }).length > 1024 * 1024, 'the fake lists more than 1 MiB in one answer');
   assert.equal(server.error, undefined, 'tools/list over 1 MiB is no longer refused');
-  assert.equal(server.tools.length, 64);
-  assert.deepEqual(server.toolsLeftOut, { overLimit: 6, unusable: 2 }, 'the tools left out are counted, not dropped silently');
+  const kept = server.tools.length;
+  assert.ok(kept > 64 && kept < 130, 'more than 64 tools are kept, up to the 2 MB Pikibun keeps from one server');
+  assert.ok(JSON.stringify(server.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length <= remoteMcpLimits.toolsBytes + kept);
+  const leftOut = { overLimit: 130 - kept, unusable: 2 };
+  assert.deepEqual(server.toolsLeftOut, leftOut, 'the tools left out are counted, not dropped silently');
   const listed = (await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers[0]!;
-  assert.deepEqual(listed.toolsLeftOut, { overLimit: 6, unusable: 2 });
+  assert.deepEqual(listed.toolsLeftOut, leftOut);
   const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.added'").all().map(row => JSON.parse(String(row.detail_json)));
-  assert.deepEqual([audit[0].tools, audit[0].toolsOverLimit, audit[0].toolsUnusable], [64, 6, 2]);
+  assert.deepEqual([audit[0].tools, audit[0].toolsOverLimit, audit[0].toolsUnusable], [kept, leftOut.overLimit, 2]);
 
   const answer = parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true })));
   const route = answer.remoteTools![0]!.route;
@@ -4423,13 +4427,13 @@ test('a remote MCP server listing over 1 MiB of tools unpaged is listed, and the
   assert.ok(sizes.filter(item => item.method === 'tools/call').every(item => item.maxBytes === 1024 * 1024), 'a tool call\'s answer keeps its 1 MiB bound');
 
   const { server: refreshed } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { headers: { Authorization: 'Bearer ' + secret } }));
-  assert.deepEqual(refreshed.toolsLeftOut, { overLimit: 6, unusable: 2 });
+  assert.deepEqual(refreshed.toolsLeftOut, leftOut);
   tools.splice(64);
   const { server: fewer } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + server.id, { refresh: true }));
   assert.deepEqual([fewer.tools.length, fewer.toolsLeftOut], [64, undefined], 'listing again forgets what it left out before');
 });
 
-test('a session\'s 64 remote MCP tools are shared evenly between the workspace\'s servers, and settings say what each one loses', async t => {
+test('a current host\'s sessions get every remote MCP tool, an older host\'s the 64 it takes shared evenly, and settings say what those lose', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
   const counts: Record<string, number> = { 'eleven.example.com': 70, 'higgs.example.com': 10, 'runway.example.com': 3 };
   f.env.REMOTE_MCP_TRANSPORT = async (request: RemoteMcpHttpRequest): Promise<RemoteMcpHttpResponse> => {
@@ -4443,22 +4447,57 @@ test('a session\'s 64 remote MCP tools are shared evenly between the workspace\'
   const add = async (name: string, prefix: string) => (await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', path,
     { name, prefix, url: `https://${prefix}.example.com/mcp`, headers: { Authorization: 'Bearer secret-0123456789' } }), 201)).server;
   const eleven = await add('ElevenLabs', 'eleven');
-  assert.equal(eleven.tools.length, 64);
-  assert.equal(eleven.toolsNotOffered, undefined, 'alone, it fills the session\'s 64');
+  assert.equal(eleven.tools.length, 70, 'a server\'s tools past 64 are kept');
+  assert.equal(eleven.toolsNotOffered, 6, 'alone, it fills an older host\'s 64');
   await add('Higgsfield', 'higgs');
   const runway = await add('Runway', 'runway');
   assert.equal(runway.toolsNotOffered, undefined, 'a server with fewer tools than its share is offered all of them');
 
-  const offered = async () => parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true })));
+  const offered = async (all = false) => parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace',
+    { workspaceId: s.team.id, remoteTools: true, ...(all ? { allRemoteTools: true } : {}) })));
   const answer = await offered();
-  const per = (prefix: string) => answer.remoteTools!.filter(tool => tool.name.startsWith(prefix + '_')).length;
-  assert.equal(answer.remoteTools!.length, 64);
-  assert.deepEqual([per('eleven'), per('higgs'), per('runway')], [51, 10, 3], 'the servers added later are no longer shut out by the first one');
+  const per = (found: typeof answer, prefix: string) => found.remoteTools!.filter(tool => tool.name.startsWith(prefix + '_')).length;
+  assert.equal(answer.remoteTools!.length, 64, 'an older host gets the 64 it accepts');
+  assert.deepEqual([per(answer, 'eleven'), per(answer, 'higgs'), per(answer, 'runway')], [51, 10, 3], 'the servers added later are no longer shut out by the first one');
   assert.deepEqual(answer.remoteServers?.map(server => server.prefix), ['eleven', 'higgs', 'runway']);
   assert.deepEqual(answer.remoteTools!.slice(0, 2).map(tool => tool.name), ['eleven_tool_0', 'eleven_tool_1'], 'each server\'s tools stay together, in its own order');
+  const every = await offered(true);
+  assert.deepEqual([every.remoteTools!.length, per(every, 'eleven'), per(every, 'higgs'), per(every, 'runway')], [83, 70, 10, 3], 'a current host gets every tool');
 
-  const listed = (await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers;
-  assert.deepEqual(listed.map(server => [server.prefix, server.tools.length, server.toolsNotOffered]), [['eleven', 64, 13], ['higgs', 10, undefined], ['runway', 3, undefined]]);
+  const listed = async () => (await json<{ servers: WorkspaceMcpServer[] }>(await s.creator.request('GET', path))).servers;
+  assert.deepEqual((await listed()).map(server => [server.prefix, server.tools.length, server.toolsNotOffered]), [['eleven', 70, 19], ['higgs', 10, undefined], ['runway', 3, undefined]],
+    'settings say what sessions on an older host lose');
+  const capabilities = (value: Record<string, unknown>) => f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify(value), s.connector.connectorId);
+  const before = JSON.parse(String((f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(s.connector.connectorId) as { capabilities_json: string }).capabilities_json));
+  capabilities({ ...before, allRemoteTools: true });
+  assert.deepEqual((await listed()).map(server => server.toolsNotOffered), [undefined, undefined, undefined], 'with only current hosts, sessions lose nothing');
+  capabilities(before);
+
+  await denied(await s.creator.request('PATCH', path + '/' + eleven.id, { offTools: ['tool_0'] }), 403, 'forbidden');
+  await denied(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: [''] }), 400, 'invalid_mcp_server');
+  await denied(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: 'tool_0' }), 400, 'invalid_mcp_server');
+  const turnedOff = Array.from({ length: 60 }, (_, index) => `tool_${index}`);
+  const { server: trimmed } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: turnedOff }));
+  assert.deepEqual(trimmed.offTools, turnedOff);
+  assert.deepEqual([trimmed.tools.filter(tool => tool.off).length, trimmed.tools.find(tool => tool.name === 'tool_60')?.off], [60, false]);
+  assert.equal(trimmed.toolsNotOffered, undefined, 'its 10 tools still on fit an older host\'s share');
+  const fewer = await offered(true);
+  assert.deepEqual([fewer.remoteTools!.length, per(fewer, 'eleven')], [23, 10], 'sessions don\'t get the tools turned off');
+  const audited = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.mcp.updated' ORDER BY rowid DESC LIMIT 1").get() as { detail_json: string };
+  assert.deepEqual(JSON.parse(audited.detail_json).offTools, turnedOff);
+  const refused = await self(f, s.connector, `mcp/eleven/${remoteMcpToolKey('tool_0')}`,
+    { sessionId: s.session.id, actorId: s.session.ownerId, admissionId: admit(f, s.session.id, s.session.ownerId), callId: 'call-off', arguments: {} });
+  const refusal = await json<{ code: string; error: string }>(refused, 404);
+  assert.equal(refusal.code, 'mcp_tool_not_found');
+  assert.match(refusal.error, /^eleven_tool_0 is turned off in this workspace/, 'a tool turned off is never called, whatever a session still holds');
+  await s.admin.request('PATCH', path + '/' + eleven.id, { refresh: true });
+  assert.equal((await listed())[0]!.offTools.length, 60, 'listing its tools again keeps the ones turned off');
+  const stale = Array.from({ length: 1500 }, (_, index) => `gone_${index}`);
+  const { server: pruned } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + eleven.id,
+    { offTools: [...stale, ...turnedOff], readOnlyTools: [...stale, 'tool_61'] }));
+  assert.deepEqual([pruned.offTools, pruned.readOnlyTools], [turnedOff, ['tool_61']],
+    'names the server no longer lists are dropped as a list is saved, so they never crowd out its own tools (review of #557)');
+  await denied(await s.admin.request('PATCH', path + '/' + eleven.id, { offTools: Array.from({ length: 2049 }, (_, index) => `gone_${index}`) }), 400, 'invalid_mcp_server');
 
   const { server: off } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', path + '/' + eleven.id, { enabled: false }));
   assert.equal(off.toolsNotOffered, undefined, 'a server that is off isn\'t counted as losing tools');

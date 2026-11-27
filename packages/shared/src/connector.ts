@@ -61,6 +61,7 @@ export interface ConnectorCapabilities {
   sessionResources?: boolean;
   buildCaches?: boolean;
   extensionModels?: boolean;
+  allRemoteTools?: boolean;
   gpu?: GpuKind;
 }
 

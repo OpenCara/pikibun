@@ -5,7 +5,7 @@ import { parseSessionBuildCaches } from "../../../../packages/shared/src/build-c
 import type { BuildCacheStore } from "../build-caches.js";
 import type { ConnectorCredentials } from "../../../../packages/shared/src/connector.js";
 import type { SessionsToolResult } from "../../../../packages/shared/src/cross-session.js";
-import { remoteMcpLimits } from "../../../../packages/shared/src/remote-mcp.js";
+import { remoteMcpAnswerBytes, remoteMcpLimits } from "../../../../packages/shared/src/remote-mcp.js";
 import type { GitHubEffectAuthority, GitHubIssueView, ScheduleToolResult } from "../../../../packages/shared/src/types.js";
 import type { HostBrowserSource } from "../browser-host.js";
 import { parseEgressGrant, relayGitRequest, relayPath } from "../egress.js";
@@ -22,7 +22,7 @@ import type { HostTunnels, HostTunnelSource, TunnelAccess } from "../tunnel-host
 import type { ControlPlaneCalls } from "./control-plane.js";
 import type { Generation } from "./generation.js";
 
-const WORKSPACE_EXTENSIONS_LIMIT = 1024 * 1024;
+const WORKSPACE_EXTENSIONS_LIMIT = remoteMcpAnswerBytes;
 const GITHUB_READ_LIMIT = 128 * 1024;
 const BROKERED_LIMIT = 1024 * 1024;
 const BROKERED_ROUTE = /^[a-z0-9-]+(?:\/[a-z0-9-]+){0,3}$/;
@@ -62,7 +62,7 @@ function runnerExtensions(source: RunnerConfigSource, extensions: HostExtensions
     peekCached: (items, autoCache) => extensions.peekCached(items, autoCache),
     workspace: workspaceId => extensions.workspace(workspaceId, async () =>
       source.calls.callback(await source.connection(), "/api/connectors/self/extensions/workspace",
-        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true, memory: true }, WORKSPACE_EXTENSIONS_LIMIT)),
+        { workspaceId, toolDefinitions: true, sessionToolSwitches: true, extensionLocks: true, remoteTools: true, allRemoteTools: true, memory: true }, WORKSPACE_EXTENSIONS_LIMIT)),
     lastKnown: workspaceId => extensions.lastKnown(workspaceId),
     ...(source.options.localModels.modelRegistry ? { modelRegistry: source.options.localModels.modelRegistry } : {}),
     ...(source.options.extensionModelCalls === false ? { modelCallsRefused: true as const } : {}),

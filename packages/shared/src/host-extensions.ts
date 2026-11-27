@@ -3,8 +3,8 @@ import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
 import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 import { parseMemberToolGroups, type MemberToolGroup } from "./tool-groups.js";
 import { parseManagedExtensions, type ManagedExtensionPin } from "./managed-extensions.js";
-import { parseToolDefinition, toolDefinitionLimits, type BrokeredToolDefinition } from "./tool-definitions.js";
-import { parseRemoteMcpServers, type RemoteMcpServerSummary } from "./remote-mcp.js";
+import { parseToolDefinition, type BrokeredToolDefinition } from "./tool-definitions.js";
+import { parseRemoteMcpServers, REMOTE_MCP_ALL_TOOLS, type RemoteMcpServerSummary } from "./remote-mcp.js";
 import { parseWorkspaceMemoryPrompt, type WorkspaceMemoryPrompt } from "./workspace-memory.js";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -399,7 +399,7 @@ export interface WorkspaceExtensionsAnswer {
 }
 
 function parseRemoteTools(value: unknown): BrokeredToolDefinition[] {
-  if (!Array.isArray(value) || value.length > toolDefinitionLimits.definitions) throw new Error("Invalid workspace extensions");
+  if (!Array.isArray(value) || value.length > REMOTE_MCP_ALL_TOOLS) throw new Error("Invalid workspace extensions");
   const tools: BrokeredToolDefinition[] = [];
   for (const item of value) {
     let definition;

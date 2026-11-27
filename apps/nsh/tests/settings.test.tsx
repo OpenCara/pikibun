@@ -689,10 +689,10 @@ describe("settings", () => {
     expect(app.texts().join(" ")).not.toContain("It couldn't be signed in to");
     await app.press("text:Many · many_");
     await app.waitUntil(() => app.texts().join(" ").includes("Some of its tools are left out"));
-    expect(app.texts().join(" ")).toContain("Left out 6 tools past the 64 Pikibun offers from one server and 2 tools whose names or input schemas Pikibun can't offer.");
+    expect(app.texts().join(" ")).toContain("Left out 6 tools past what Pikibun keeps from one server (1024 tools, 2 MB) and 2 tools whose names or input schemas Pikibun can't offer.");
   });
 
-  test("Workspaces says how many of a remote MCP server's tools sessions don't get, sharing their 64 with the other servers", async () => {
+  test("Workspaces says how many of a remote MCP server's tools sessions on older hosts don't get, sharing their 64 with the other servers", async () => {
     const base = { url: "https://mcp.example.com/mcp", enabled: true, headerNames: [], readOnlyTools: [], updatedAt: "2026-01-01T00:00:00.000Z" };
     const tool = (prefix: string) => ({ name: "run", toolName: `${prefix}_run`, description: "Run.", inputSchema: { type: "object" }, readOnly: false });
     const big = { ...base, id: "m1", name: "ElevenLabs", prefix: "eleven", toolsNotOffered: 13, tools: [tool("eleven")] };
@@ -705,9 +705,50 @@ describe("settings", () => {
     expect(app.texts().join(" ")).toContain("13 not offered to sessions");
     await app.press("text:ElevenLabs · eleven_");
     await app.waitUntil(() => app.texts().join(" ").includes("Sessions get only some of its tools"));
-    expect(app.texts().join(" ")).toContain("Sessions don't get 13 of its tools: a session takes at most 64 remote MCP tools in all, shared evenly between the workspace's servers that are on. An owner or admin makes room by turning off a server its sessions don't need.");
+    expect(app.texts().join(" ")).toContain("Sessions on hosts with an older connector don't get 13 of its tools: they take at most 64 remote MCP tools in all, shared evenly between the workspace's servers that are on. Updating those hosts' connector (npx pikibun@latest connect) gives their sessions every tool; until then an owner or admin makes room by turning off tools or servers its sessions don't need.");
     await app.press("text:Runway · runway_");
     expect(app.texts().filter(line => line.includes("Sessions get only some of its tools")).length).toBe(1);
+  });
+
+  test("Workspaces lets an admin turn a remote MCP server's tools off and on, one at a time or all at once, and shows members which are off", async () => {
+    const base = { url: "https://mcp.example.com/mcp", enabled: true, headerNames: [], readOnlyTools: [], updatedAt: "2026-01-01T00:00:00.000Z" };
+    const tool = (name: string, off: boolean) => ({ name, toolName: `eleven_${name}`, description: `${name}.`, inputSchema: { type: "object" }, readOnly: false, off });
+    let offTools = ["delete", "gone"];
+    const server = () => ({ ...base, id: "m1", name: "ElevenLabs", prefix: "eleven", offTools, tools: ["get", "list", "delete"].map(name => tool(name, offTools.includes(name))) });
+    let admin = true;
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/mcp-servers`]: () => ({ body: { servers: [server()], admin } }),
+      [`PATCH ${ORIGIN}/api/workspaces/w1/mcp-servers/m1`]: (request: { body?: string }) => { offTools = (JSON.parse(request.body!) as { offTools: string[] }).offTools; return { body: { server: server() } }; },
+    });
+    const patches = () => app.requests().filter(item => item.method === "PATCH").map(item => JSON.parse(item.body!) as Record<string, unknown>);
+    await openWorkspace(app, "agents");
+    await app.waitFor("text:ElevenLabs · eleven_");
+    expect(app.texts().join(" ")).toContain("3 tools · 1 off");
+    await app.press("text:ElevenLabs · eleven_");
+    await app.waitFor("id:mcp-tools-eleven");
+    expect(app.texts().join(" ")).toContain("Sessions get 2 of its 3 tools.");
+    await app.press("id:mcp-tool-on-eleven_get");
+    await app.waitUntil(() => patches().length === 1);
+    expect(patches()[0]).toEqual({ offTools: ["delete", "get"] });
+    await app.waitUntil(() => app.texts().join(" ").includes("Sessions get 1 of its 3 tools."));
+    await app.press("id:mcp-all-on-eleven");
+    await app.waitUntil(() => patches().length === 2);
+    expect(patches()[1]).toEqual({ offTools: [] });
+    await app.waitUntil(() => app.texts().join(" ").includes("Sessions get 3 of its 3 tools."));
+    await app.press("id:mcp-all-off-eleven");
+    await app.waitUntil(() => patches().length === 3);
+    expect(patches()[2]).toEqual({ offTools: ["get", "list", "delete"] });
+
+    admin = false;
+    offTools = ["delete"];
+    const member = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/mcp-servers`]: () => ({ body: { servers: [server()], admin } }),
+    });
+    await openWorkspace(member, "agents");
+    await member.press("text:ElevenLabs · eleven_");
+    await member.waitUntil(() => member.texts().includes("Off"));
+    expect(member.shows("id:mcp-tools-eleven")).toBe(false);
+    expect(member.shows("id:mcp-tool-on-eleven_get")).toBe(false);
   });
 
   test("Workspaces lets an admin choose whose sign-in a remote MCP server calls with, and a member use their own connection there", async () => {
