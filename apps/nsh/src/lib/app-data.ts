@@ -66,7 +66,6 @@ export interface AppData {
   rememberChat: (host: ConnectorInfo | undefined, selection: ChatSelection, current?: Parameters<typeof chatPreference>[2]) => void;
   lastAuto: Accessor<AutoPreference>;
   rememberAuto: (value: AutoPreference) => void;
-  /** The environment last chosen for a host's new sessions, if any. */
   environmentChosen: (hostId: string | undefined) => EnvironmentChoice | undefined;
   rememberEnvironment: (hostId: string, onHost: boolean) => void;
   liveActivity: Accessor<LiveActivity | null>;

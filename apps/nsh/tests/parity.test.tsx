@@ -269,6 +269,34 @@ describe("a new session", () => {
     }
   });
 
+  test("on someone else's host runs in the sandbox by default, until its host is chosen for it", async () => {
+    const theirs = { ...capableHost, ownerId: "u2", ownerName: "grace", name: "grace-box" };
+    const hosts = { [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [theirs] } } };
+    const app = await open("../App.tsx", { storage: signedIn, network: server(hosts) });
+    await app.press("id:new-session");
+    await app.waitFor("id:new-environment");
+    expect(environment(app)).toBe("sandbox");
+    await app.press("id:new-trust");
+    await app.type("id:new-message", "Profile the GPU build");
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.press("id:new-start");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions") !== undefined);
+    expect(bodyOf(app, "POST", "/api/sessions").hostEnvironment).toBeUndefined();
+    app.dispose();
+    const chosen = await open("../App.tsx", { storage: signedIn, network: server(hosts) });
+    await chosen.press("id:new-session");
+    await chosen.waitFor("id:new-environment");
+    await chosen.press("id:new-environment");
+    await chosen.press("text:On this host");
+    await chosen.waitUntil(() => environment(chosen) === "host");
+    await chosen.waitUntil(() => chosen.storage()["pikibun.onHostHosts"] === JSON.stringify(["c1"]));
+    chosen.dispose();
+    const remembered = await open("../App.tsx", { storage: { ...signedIn, "pikibun.onHostHosts": JSON.stringify(["c1"]) }, network: server(hosts) });
+    await remembered.press("id:new-session");
+    await remembered.waitFor("id:new-environment");
+    await remembered.waitUntil(() => environment(remembered) === "host");
+  });
+
   test("remembers the sandbox for a host it was chosen on, until the host is chosen again", async () => {
     const hosts = { [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } } };
     const first = await open("../App.tsx", { storage: signedIn, network: server(hosts) });

@@ -142,7 +142,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const repositoriesReady = () => Boolean(repositories() && !repos.error() && !repos.loading() && (sourceCount() || !repositoriesRequired()));
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
   const hostSessions = () => Boolean(host()?.hostSessions);
-  // A host of your own runs new sessions on it by default; someone else's host runs them in its sandbox unless you chose it for that host.
   const runOnHost = () => hostSessions() && (onHost() ?? (data.environmentChosen(host()?.id) ?? (foreign() ? "sandbox" : "host")) === "host");
   const hostDirectory = signal("");
   const choosesDirectory = () => runOnHost() && host()?.capabilities.hostDirectories === true;
