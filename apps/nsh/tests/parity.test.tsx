@@ -314,6 +314,7 @@ describe("a new session", () => {
     await next.press("text:On this host");
     await next.waitUntil(() => environment(next) === "host");
     await next.waitUntil(() => next.storage()["pikibun.sandboxedHosts"] === JSON.stringify(["another-host"]));
+    expect(next.storage()["pikibun.onHostHosts"]).toBe(JSON.stringify([]));
   });
 
   test("keeps the sandbox chosen while the host listing refreshes", async () => {

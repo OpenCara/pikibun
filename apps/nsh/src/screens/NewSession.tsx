@@ -252,7 +252,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   } : undefined);
   const environmentPicker = () => (
     <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} placement="bottom"
-      onSelect={value => { onHost.set(value === "host"); const current = host(); if (current) data.rememberEnvironment(current.id, value === "host"); }}
+      onSelect={value => { onHost.set(value === "host"); const current = host(); if (current) data.rememberEnvironment(current.id, value === "host", foreign()); }}
       trigger={<Chip small testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} disabled={action.busy()} />}
       options={[
         { value: "host", label: "On this host", icon: "server", hint: `No sandbox: runs on ${host()?.name ?? "the host"} as its user, with its files, credentials and network` },

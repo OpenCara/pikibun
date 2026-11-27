@@ -67,7 +67,7 @@ export interface AppData {
   lastAuto: Accessor<AutoPreference>;
   rememberAuto: (value: AutoPreference) => void;
   environmentChosen: (hostId: string | undefined) => EnvironmentChoice | undefined;
-  rememberEnvironment: (hostId: string, onHost: boolean) => void;
+  rememberEnvironment: (hostId: string, onHost: boolean, foreign: boolean) => void;
   liveActivity: Accessor<LiveActivity | null>;
   setLiveActivity: (value: LiveActivity | null) => void;
   sideAskRequest: Accessor<SideAskRequest | null>;
@@ -119,7 +119,7 @@ export function createAppData(): AppData {
       Storage.setItem(LAST_AUTO_KEY, JSON.stringify(value)).catch(() => undefined);
     },
     environmentChosen: hostId => !hostId ? undefined : sandboxedHosts()?.includes(hostId) ? "sandbox" : onHostHosts()?.includes(hostId) ? "host" : undefined,
-    rememberEnvironment(hostId, onHost) {
+    rememberEnvironment(hostId, onHost, foreign) {
       const update = (list: typeof sandboxedHosts, key: string, add: boolean) => {
         const others = (list() ?? []).filter(id => id !== hostId);
         const next = add ? [hostId, ...others].slice(0, SANDBOXED_HOSTS_KEPT) : others;
@@ -127,7 +127,7 @@ export function createAppData(): AppData {
         Storage.setItem(key, JSON.stringify(next)).catch(() => undefined);
       };
       update(sandboxedHosts, SANDBOXED_HOSTS_KEY, !onHost);
-      update(onHostHosts, ON_HOST_HOSTS_KEY, onHost);
+      update(onHostHosts, ON_HOST_HOSTS_KEY, onHost && foreign);
     },
     liveActivity,
     setLiveActivity: value => liveActivity.set(value),
