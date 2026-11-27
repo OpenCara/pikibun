@@ -108,6 +108,26 @@ test('references that multiply are bounded, and what can never fit is still refu
   ] as const) assert.equal(fitInputSchema(schema), undefined, why);
 });
 
+test('a long chain of distinct references is cut like a cycle, and never takes the server\'s other tools with it (review of #555)', () => {
+  const hops = 15_000;
+  const $defs = Object.fromEntries(Array.from({ length: hops }, (_, index) => [`n${index}`, index + 1 < hops ? { $ref: `#/$defs/n${index + 1}` } : { type: 'string' }]));
+  const chain = { type: 'object', properties: { a: { $ref: '#/$defs/n0' } }, $defs };
+  assert.ok(JSON.stringify(chain).length < 1024 * 1024, 'the chain fits in what fitting reads');
+  assert.deepEqual(fits(chain), { type: 'object', properties: { a: {} } });
+  const { tools, leftOut } = remoteMcpToolList([{ name: 'chain', inputSchema: chain }, { name: 'plain', inputSchema: { type: 'object' } }]);
+  assert.deepEqual(tools.map(tool => tool.name), ['chain', 'plain']);
+  assert.deepEqual(leftOut, { overLimit: 0, unusable: 0 });
+});
+
+test('a pattern whose classes match other characters in the server\'s language than in JavaScript is dropped (review of #555)', () => {
+  const fitted = fits({ type: 'object', properties: {
+    word: { type: 'string', pattern: '^\\w+$' }, digits: { type: 'string', pattern: '\\d{3}' }, edge: { type: 'string', pattern: 'a\\b' }, spaces: { type: 'string', pattern: '\\S' },
+    slash: { type: 'string', pattern: '^\\\\d$' }, letters: { type: 'string', pattern: '^[a-z]+\\.[0-9]$' },
+  } });
+  assert.deepEqual(Object.fromEntries(Object.entries(fitted.properties as Record<string, { pattern?: string }>).map(([name, schema]) => [name, schema.pattern])),
+    { word: undefined, digits: undefined, edge: undefined, spaces: undefined, slash: '^\\\\d$', letters: '^[a-z]+\\.[0-9]$' });
+});
+
 test('a listed tool whose schema uses $ref is offered, not counted among those left out', () => {
   const { tools, leftOut } = remoteMcpToolList([
     { name: 'agents_create', inputSchema: { type: 'object', properties: { voice: { $ref: '#/$defs/V' } }, $defs: { V: { type: 'string' } } } },

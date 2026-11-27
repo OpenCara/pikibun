@@ -94,15 +94,18 @@ function sanitize(value: unknown, depth: number, counted: { properties: number }
   return result;
 }
 
-export const fitInputSchemaLimits = Object.freeze({ bytes: 1024 * 1024, nodes: 20_000, texts: [inputSchemaLimits.text, 512, 128], shallowest: 2 });
+export const fitInputSchemaLimits = Object.freeze({ bytes: 1024 * 1024, nodes: 20_000, refs: 32, texts: [inputSchemaLimits.text, 512, 128], shallowest: 2 });
 
 const annotationKeys = new Set(["title", "description", "default", "examples", "deprecated", "readOnly", "writeOnly", "$comment", "$schema", "$id", "$defs", "definitions"]);
 
-function compiles(pattern: string): boolean {
+const CLASS_ESCAPE = /(?:^|[^\\])(?:\\\\)*\\[dDwWsSbB]/;
+
+function portablePattern(pattern: string): boolean {
+  if (CLASS_ESCAPE.test(pattern)) return false;
   try { new RegExp(pattern, "u"); return true; } catch { return false; }
 }
 
-interface Fitting { root: Record<string, unknown>; collapseAt: number; text: number; nodes: number; properties: number; refs: string[] }
+interface Fitting { root: Record<string, unknown>; collapseAt: number; text: number; nodes: number; properties: number; refs: Set<string> }
 
 class Unfit extends Error {
   constructor(readonly reason: "bytes" | "size" | "never") { super(reason); }
@@ -147,13 +150,13 @@ function fitNode(value: unknown, depth: number, fitting: Fitting): Record<string
   if (!isObject(value)) return {};
   if (typeof value.$ref === "string") {
     const { $ref, ...rest } = value;
-    const target = fitting.refs.includes($ref) ? undefined : pointer(fitting.root, $ref);
+    const target = fitting.refs.has($ref) || fitting.refs.size >= fitInputSchemaLimits.refs ? undefined : pointer(fitting.root, $ref);
     if (!isObject(target)) return fitNode(rest, depth, fitting);
-    fitting.refs.push($ref);
+    fitting.refs.add($ref);
     try {
       const merged = Object.keys(rest).every(key => annotationKeys.has(key)) ? { ...target, ...rest } : { ...rest, allOf: [target, ...(Array.isArray(rest.allOf) ? rest.allOf : [])] };
       return fitNode(merged, depth, fitting);
-    } finally { fitting.refs.pop(); }
+    } finally { fitting.refs.delete($ref); }
   }
   if (depth >= fitting.collapseAt && structureKeys.some(key => isObject(value[key]) || Array.isArray(value[key]))) return opaque(value, fitting);
   const result: Record<string, unknown> = {};
@@ -164,7 +167,7 @@ function fitNode(value: unknown, depth: number, fitting: Fitting): Record<string
   for (const key of numberKeys) if (typeof value[key] === "number" && Number.isFinite(value[key])) result[key] = value[key];
   for (const key of countKeys) if (Number.isSafeInteger(value[key]) && (value[key] as number) >= 0) result[key] = value[key];
   if (typeof value.uniqueItems === "boolean") result.uniqueItems = value.uniqueItems;
-  if (typeof value.pattern === "string" && value.pattern.length <= inputSchemaLimits.pattern && compiles(value.pattern)) result.pattern = value.pattern;
+  if (typeof value.pattern === "string" && value.pattern.length <= inputSchemaLimits.pattern && portablePattern(value.pattern)) result.pattern = value.pattern;
   if (Array.isArray(value.enum) && value.enum.length && value.enum.length <= inputSchemaLimits.enum && value.enum.every(scalar)) result.enum = [...value.enum];
   if (value.const !== undefined && scalar(value.const)) result.const = value.const;
   if (value.default !== undefined && plainJson(value.default, depth)) result.default = value.default;
@@ -211,7 +214,7 @@ export function fitInputSchema(value: unknown): InputSchema | undefined {
   let collapseAt = inputSchemaLimits.depth;
   let texts = 0;
   for (;;) {
-    const fitting: Fitting = { root: value, collapseAt, text: fitInputSchemaLimits.texts[texts]!, nodes: 0, properties: 0, refs: [] };
+    const fitting: Fitting = { root: value, collapseAt, text: fitInputSchemaLimits.texts[texts]!, nodes: 0, properties: 0, refs: new Set() };
     let reason: Unfit["reason"] = "bytes";
     try {
       const fitted = fitNode(value, 1, fitting);
