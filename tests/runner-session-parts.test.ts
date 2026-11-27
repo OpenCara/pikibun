@@ -180,6 +180,29 @@ test("mirrors: borrowed only while the grant names the repository and the relay 
   assert.ok(refused(new RunnerError(404, "gone")) && !refused(new RunnerError(429, "slow")) && !refused(new RunnerError(408, "late")));
 });
 
+test("mirrors: a host session that uses its owner's Pikibun account fills the host's cache through Pikibun, not the host's Git credentials", async () => {
+  const repository: EgressRepository = { bindingId: "b1", provider: "github", host: "github.com", repositoryId: "101", fullName: "acme/app" };
+  const oid = "a".repeat(40);
+  const pkt = (text: string) => (Buffer.byteLength(text) + 4).toString(16).padStart(4, "0") + text;
+  const advertisement = () => new Response(`${pkt("# service=git-upload-pack\n")}0000${pkt(`${oid} HEAD\0side-band-64k\n`)}${pkt(`${oid} refs/heads/main\n`)}0000`,
+    { headers: { "content-type": "application/x-git-upload-pack-advertisement" } });
+  const services: string[] = [];
+  const owner = true;
+  let filledFrom: string | undefined;
+  const mirrors = new SessionMirrors({
+    cache: {
+      mirrorDirectory: () => "/cache/acme-app.git", prepare: async () => "/cache/acme-app.git", touch: async () => {},
+      ready: async target => { const before = services.length; await target.remote.listRefs(); filledFrom = services.length > before ? "pikibun" : "host"; return { directory: "/cache/acme-app.git", fresh: true }; },
+    },
+    ownerId: "alice", sessionId: "s", hostPaths: true, ownerFill: async () => owner,
+    relay: async request => { services.push(request.service); if (request.service !== "info-refs") throw new RunnerError(403, "refused"); return advertisement(); },
+    grant: async () => ({ policy: { mode: "off", domains: [], packageRegistries: false }, repositories: [repository] }),
+  });
+  assert.equal(await mirrors.mirror(repository), "/cache/acme-app.git");
+  assert.equal(filledFrom, "pikibun", "the fill reads through the relay, as the session's owner");
+  assert.deepEqual(services, ["info-refs", "info-refs"], "the owner check, then the fill");
+});
+
 test("branch reports send each change once, fold reports asked for meanwhile into one more, and stop when the session closes", async () => {
   const repository = { bindingId: "b1", provider: "github", host: "github.com", owner: "acme", name: "app", repositoryId: "1", fullName: "acme/app" } as unknown as EgressRepository;
   const sent: string[][] = [];

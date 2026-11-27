@@ -297,6 +297,7 @@ export class RunnerSession {
       cache: config.repositoryCache, ownerId: binding.owner.id, sessionId: binding.session.id, relay: request => this.relay(request),
       grant: () => this.#egress ? this.#egress.grant() : this.requestGrant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
       ...(hostPaths ? { hostPaths: true } : {}),
+      ...(this.#onHost ? { ownerFill: () => this.forgeApplies() } : {}),
     }) : undefined;
     this.#hostGit = this.#onHost && this.#mirrors ? new HostGitShim({ mirror: (remote, onProgress) => this.hostMirror(remote, onProgress),
       ...(config.repositoryCache ? { lfs: config.repositoryCache.lfsObjects(binding.owner.id) } : {}) }) : undefined;
