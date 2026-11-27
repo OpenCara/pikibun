@@ -803,6 +803,32 @@ test("piki: a CLI runs in the sandbox only inside a call the session admitted, w
   assert.ok(limited.events.some(event => event.startsWith("execute PATH") && !event.includes("lease-token")));
 });
 
+test("piki: on the host, where the owner's Pikibun account applies, a CLI runs through the session's proxy, and never falls back to the host's sign-in", async () => {
+  const state = toolState();
+  state.approvals["tool-1"] = { id: "tool-1", status: "executing" } as never;
+  let forge: () => Promise<Record<string, string> | undefined> = async () => ({ HTTPS_PROXY: "http://pikibun:t@127.0.0.1:1", GH_TOKEN: "placeholder" });
+  const { host, events } = pikiFixture(state, { onHost: true, sandboxed: false, forgeApiEnvironment: () => forge() });
+  const piki = host.piki!;
+  assert.equal(typeof piki.hostSignIn, "function");
+  const signIn = piki.hostSignIn as () => Promise<boolean>;
+  assert.equal(await signIn(), false);
+  events.length = 0;
+  await host.runTool({ source: "npm:ext", tool: "gh", arguments: {}, api: toolApi(state), signal: new AbortController().signal, context: {} as never }, async () => {
+    await piki.sandbox!(pikiRun("call-1"));
+    await piki.sandbox!(pikiRun("call-1", true));
+    return { output: [] };
+  });
+  const executed = events.filter(event => event.startsWith("execute"));
+  assert.deepEqual(executed, [
+    `execute PATH="$PATH:/usr/local/bin" && export PATH && exec env 'HTTPS_PROXY=http://pikibun:t@127.0.0.1:1' 'GH_TOKEN=lease-token' 'gh' 'pr' 'view' </dev/null 2>&1`,
+    `execute PATH="$PATH:/usr/local/bin" && export PATH && exec env 'HTTPS_PROXY=http://pikibun:t@127.0.0.1:1' 'GH_TOKEN=placeholder' 'gh' 'pr' 'view' </dev/null 2>&1`,
+  ], "a write lease replaces the placeholder; a read-only run keeps it, and the host workspace runs it as a command");
+  forge = async () => undefined;
+  assert.equal(await signIn(), true, "with the setting off, the host's own sign-in");
+  forge = async () => { throw new Error("listen EADDRINUSE"); };
+  await assert.rejects(signIn(), /failed just now \(listen EADDRINUSE\); it doesn't fall back to the host's own sign-in/);
+});
+
 test("piki: a gh call in a message the session owner sent asks for a lease that may reach any repository; anyone else's keeps to the workspace's", async () => {
   const leases = async (initiatedBy: string) => {
     const state = toolState({ initiatedBy });
@@ -1295,6 +1321,11 @@ test("instructions: a clone session names its branch, repositories, LFS and the 
   assert.match(host, /This host runs without a sandbox/);
   assert.doesNotMatch(host, /git_push|PIKIBUN_SESSION_BRANCH/);
   assert.match(host, /This session's own branch is pikibun\/work-1: push the work for a pull request to it, for example git push origin HEAD:pikibun\/work-1/);
+  assert.match(host, /Git uses this host's own network and credentials\./);
+  const forge = instructions({ clone: true, sandboxed: false, forgeAccess: true, cloneRepositories: ["https://github.com/acme/app.git"] });
+  assert.match(forge, /This workspace's repositories go through Pikibun as the session's owner/);
+  assert.match(forge, /Other repositories use this host's own credentials\./);
+  assert.doesNotMatch(forge, /own network and credentials/);
   assert.equal(lfsInstructions([]), "");
 });
 

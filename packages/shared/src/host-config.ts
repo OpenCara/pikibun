@@ -56,6 +56,7 @@ export interface HostConfig {
   modelExtensions: string[];
   cacheWarming: boolean;
   extensionFiles: ExtensionFile[];
+  ownerForgeAccess: boolean;
 }
 
 export interface ExtensionFile {
@@ -102,6 +103,7 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   modelExtensions: Object.freeze([]) as unknown as string[],
   cacheWarming: true,
   extensionFiles: Object.freeze([]) as unknown as ExtensionFile[],
+  ownerForgeAccess: false,
 });
 
 const ZERO_COMMIT = "0".repeat(40);
@@ -247,7 +249,7 @@ export function parseHostCompaction(value: unknown): HostCompaction {
   return Object.keys(overrides).length ? { ...compaction, modelOverrides: overrides } : compaction;
 }
 
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB", "modelExtensions", "cacheWarming", "extensionFiles"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels", "buildCaches", "buildCacheGiB", "modelExtensions", "cacheWarming", "extensionFiles", "ownerForgeAccess"]);
 
 export function parseHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
@@ -268,6 +270,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
   if (typeof input.fakeIpTunnels !== "boolean") throw new Error("Invalid fake-IP tunnels setting");
   if (typeof input.cacheWarming !== "boolean") throw new Error("Invalid prompt cache warming setting");
+  if (typeof input.ownerForgeAccess !== "boolean") throw new Error("Invalid forge access setting");
   if (!buildCacheModes.includes(input.buildCaches as BuildCacheMode)) throw new Error("Invalid build caches setting");
   const gib = input.buildCacheGiB;
   if (typeof gib !== "number" || !Number.isSafeInteger(gib) || gib < buildCacheLimits.gib.min || gib > buildCacheLimits.gib.max) {
@@ -283,7 +286,7 @@ export function parseHostConfig(value: unknown): HostConfig {
     requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser),
     serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel), fakeIpTunnels: input.fakeIpTunnels,
     buildCaches: input.buildCaches as BuildCacheMode, buildCacheGiB: gib, modelExtensions: parseModelExtensions(input.modelExtensions), cacheWarming: input.cacheWarming,
-    extensionFiles: parseExtensionFiles(input.extensionFiles) };
+    extensionFiles: parseExtensionFiles(input.extensionFiles), ownerForgeAccess: input.ownerForgeAccess };
 }
 
 export function parseHostConfigChange(value: unknown): Partial<HostConfig> {

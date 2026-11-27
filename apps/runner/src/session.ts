@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, readFile, rm } from "node:fs/promises";
+import { lstat, open, readFile, rm, writeFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
@@ -46,6 +46,7 @@ import { extensionFileBinds, type FileBind } from "./extensions/files.js";
 import type { QuickTunnel, TunnelAccess } from "./tunnel-host.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace, hostOwnersSession } from "./host-workspace.js";
+import { sandboxCertificates } from "./trust-store.js";
 import { HostGitShim } from "./host-git-shim.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
@@ -100,7 +101,7 @@ import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { configuredCompaction, hostCompaction } from "./compaction.js";
 import { ActivityReporter, sessionActivity } from "./activity.js";
 import type { StoredOperation } from "./operation-record.js";
-import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
+import { EgressProxy, egressEnvironment, egressSocketPath, hostForgeApiEnvironment, hostForgeEnvironment, parseEgressGrant, type EgressEndpoint, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
 import { egressReadServices, type ApiAccessKind, type ApiReach, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
@@ -256,6 +257,10 @@ export class RunnerSession {
   #resumed = false;
   readonly #activity: ActivityReporter | undefined;
   readonly #egress: EgressProxy | undefined;
+  readonly #forge: EgressProxy | undefined;
+  #forgeStart: Promise<void> | undefined;
+  #forgeAccess = false;
+  #forgeCa: Promise<string> | undefined;
   readonly #direct: DirectGit | undefined;
   readonly #clone: boolean;
   readonly #frozen: boolean;
@@ -319,10 +324,12 @@ export class RunnerSession {
       allowed: () => this.sudoAllowed(), changed: () => this.#activity?.changed(),
       command: () => (this.sandbox instanceof HostWorkspace ? this.sandbox.activeCommand : undefined),
     }) : undefined;
+    this.#forge = this.#onHost && this.#clone ? this.egressProxy(egressSocketPath(`${binding.session.id}:forge`, directory), randomBytes(24).toString("base64url"), true) : undefined;
     if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"),
       { ownerEnvironment: hostOwnersSession(binding), privateEnvironment: config.privateEnvironment, ...(this.#sudo ? { sudo: this.#sudo } : {}),
         ...(this.#hostSession && binding.session.hostDirectory ? { worktree: binding.session.hostDirectory, refused: [config.dataDir] } : {}),
-        ...(this.#hostGit ? { gitShim: () => this.hostGitBin() } : {}) });
+        ...(this.#hostGit ? { gitShim: () => this.hostGitBin() } : {}),
+        ...(this.#forge ? { forgeEnvironment: () => this.forgeEnvironment() } : {}) });
     else if (config.sandboxBackend) {
       const egress = this.egressProxy(egressSocketPath(binding.session.id, directory), randomBytes(24).toString("base64url"));
       this.#egress = egress;
@@ -422,7 +429,8 @@ export class RunnerSession {
     });
     this.#piki = new SessionPiki({
       binding, config, sandbox: this.sandbox, onHost: this.#onHost, sandboxed: !!this.#egress, calls: this.#calls, hostCommands: this.hostCommands,
-      wholeResults: this.#wholeResults, operations: this.#operations, apiLease: options => this.#egress?.apiLease(options), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
+      wholeResults: this.#wholeResults, operations: this.#operations, apiLease: options => (this.#egress ?? this.#forge)?.apiLease(options),
+      ...(this.#forge ? { forgeApiEnvironment: () => this.forgeApiEnvironment() } : {}), forgeWrites: senderId => this.#availability.forgeWrites(senderId), model: () => this.#currentModel ?? this.modelRef,
       thinkingLevel: () => this.#currentModel?.thinkingLevel, extensionChoice: () => this.extensionChoice(), metadata: () => this.metadata(),
       mutate: change => this.mutate(change), hostConfig: () => this.hostConfig(), extensionProcess: this.extensionProcess(),
       extensionEntries: {
@@ -460,9 +468,10 @@ export class RunnerSession {
     return parseEgressGrant(this.config.egressGrant ? await this.config.egressGrant(sessionId) : await this.controlPlane("/api/internal/network", { sessionId }));
   }
 
-  private egressProxy(socketPath: string, token?: string): EgressProxy {
+  private egressProxy(socketPath: string, token?: string, unconfined = false): EgressProxy {
     return new EgressProxy({
       socketPath,
+      ...(unconfined ? { unconfined: true as const } : {}),
       ...(token ? { tcp: { token } } : {}),
       grant: () => this.requestGrant(),
       relay: request => this.relay(request),
@@ -474,6 +483,36 @@ export class RunnerSession {
       ...(this.config.repositoryCache ? { lfsCache: this.config.repositoryCache.lfsObjects(this.binding.owner.id) } : {}),
       fakeIpTunnels: async () => (await this.hostConfig()).fakeIpTunnels,
     });
+  }
+
+  private async forgeApplies(): Promise<boolean> {
+    if (!this.#forge) return false;
+    return !hostOwnersSession(this.binding) || (await this.hostConfig()).ownerForgeAccess;
+  }
+
+  private async forgeEndpoint(): Promise<EgressEndpoint | undefined> {
+    const forge = this.#forge;
+    if (!forge || this.closing || !await this.forgeApplies()) return undefined;
+    this.#forgeStart ??= forge.start().catch((error: unknown) => { this.#forgeStart = undefined; throw error; });
+    await this.#forgeStart;
+    return forge.endpoint;
+  }
+
+  private async forgeEnvironment(): Promise<Record<string, string> | undefined> {
+    const endpoint = await this.forgeEndpoint();
+    if (!endpoint) return undefined;
+    return hostForgeEnvironment((await this.#forge!.grant()).repositories, endpoint, sessionBranch(this.binding.session));
+  }
+
+  private async forgeApiEnvironment(): Promise<Record<string, string> | undefined> {
+    const endpoint = await this.forgeEndpoint();
+    if (!endpoint) return undefined;
+    this.#forgeCa ??= (async () => {
+      const path = join(this.directory, "forge-ca.pem");
+      await writeFile(path, sandboxCertificates(), { mode: 0o600 });
+      return path;
+    })().catch((error: unknown) => { this.#forgeCa = undefined; throw error; });
+    return hostForgeApiEnvironment(endpoint, await this.#forgeCa);
   }
 
   private async relay(request: RelayRequest): Promise<Response> {
@@ -647,7 +686,7 @@ export class RunnerSession {
     tunnelUnavailable?: TunnelUnavailableReason, kindsOff: ReadonlySet<DocumentKind> = new Set(), extensionTools: ReadonlySet<string> = new Set(),
     skills: readonly Skill[] = [], memory?: WorkspaceMemoryPrompt): string {
     return agentInstructions({ base: this.binding.agent.instructions, agentTools: sessionToolNames(this.binding.agent.tools), mode, off, browserUnavailable, tunnelUnavailable, kindsOff,
-      extensionTools, clone: this.#clone, sandboxed: !!this.#egress, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
+      extensionTools, clone: this.#clone, sandboxed: !!this.#egress, forgeAccess: this.#forgeAccess, branch: sessionBranch(this.binding.session), cloneRepositories: this.#cloneRepositories,
       lfsRepositories: this.#lfsRepositories, cloneFailures: this.#repositories.cloneFailures, definitions: this.#defined.definitions, sources: this.#sources,
       conversationOnlyRestore: this.#conversationOnlyRestore, tools: this.tools.map(tool => tool.name), missing: mode !== "ask" ? this.#availability.missingPrograms(off) : [],
       linuxSandbox: !!this.#availability.linuxSandbox(), nodeBin: !!this.sandbox.nodeBin, codemode: !!this.#builtins, browser: !!this.sandbox.browser,
@@ -967,6 +1006,7 @@ export class RunnerSession {
     if (run.mode === "write") await this.#defined.refresh(extensions.flatMap(extension => extension.tools.map(tool => tool.name)));
     const off = run.mode === "write" ? await this.#availability.sessionToolsOff(run.initiatedBy) : new Set<string>();
     if (run.mode === "write") await this.#sudo?.prepare();
+    if (run.mode === "write") this.#forgeAccess = await this.forgeApplies().catch(() => false);
     const skills = run.mode === "write" ? await this.listedSkills(options.access !== "read") : [];
     const own = new Set(this.tools.map(tool => tool.name));
     const kindsOff = run.mode === "write" ? await this.#availability.documentKindsOff() : new Set<DocumentKind>();
@@ -1816,6 +1856,8 @@ export class RunnerSession {
     this.#builtins = undefined;
     try {
       await this.#egress?.close();
+      this.#forgeStart = undefined;
+      await this.#forge?.close();
       await this.harness.close(context).catch((error: unknown) => { if (!failed) throw error; });
     } finally {
       await builtins?.close().catch(() => {});

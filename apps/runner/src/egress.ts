@@ -62,6 +62,7 @@ export interface EgressOptions {
   fakeIpTunnels?: () => Promise<boolean>;
   publicFetch?: typeof fetch;
   lfsCache?: Pick<LfsObjectCache, "open" | "writer" | "discard">;
+  unconfined?: true;
 }
 
 export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpoint, caBundle = CA_BUNDLE): Record<string, string> {
@@ -83,6 +84,43 @@ export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpo
     GH_TOKEN: API_TOKEN_PLACEHOLDER, GITHUB_TOKEN: API_TOKEN_PLACEHOLDER, GITLAB_TOKEN: API_TOKEN_PLACEHOLDER, AZURE_DEVOPS_EXT_PAT: API_TOKEN_PLACEHOLDER,
     ...(sessionBranch ? { PIKIBUN_SESSION_BRANCH: sessionBranch } : {}),
     ...config,
+  };
+}
+
+export function hostGitRewrites(repositories: readonly EgressRepository[], endpoint: EgressEndpoint): [string, string][] {
+  const base = `${endpointUrl(endpoint)}/git/`;
+  return repositories.flatMap((repository): [string, string][] => {
+    const remote = bindingRemote(repository).replace(/\.git$/, "");
+    if (!remote.startsWith("https://")) return [];
+    const target = remote.slice("https://".length);
+    const host = target.split("/")[0]!;
+    const path = target.slice(host.length + 1);
+    const to = `${base}${target}`;
+    return [[remote, to], ...(SSH_HOSTS.includes(host) ? [[`git@${host}:${path}`, to], [`ssh://git@${host}/${path}`, to]] as [string, string][] : [])];
+  });
+}
+
+export function hostForgeEnvironment(repositories: readonly EgressRepository[], endpoint: EgressEndpoint, sessionBranch?: string): Record<string, string> {
+  const rewrites = hostGitRewrites(repositories, endpoint);
+  const config: Record<string, string> = { GIT_CONFIG_COUNT: String(rewrites.length) };
+  rewrites.forEach(([from, to], index) => {
+    config[`GIT_CONFIG_KEY_${index}`] = `url.${to}.insteadOf`;
+    config[`GIT_CONFIG_VALUE_${index}`] = from;
+  });
+  return {
+    PIKIBUN_EGRESS_STATUS: `${endpointUrl(endpoint)}/__pikibun/status`,
+    ...(sessionBranch ? { PIKIBUN_SESSION_BRANCH: sessionBranch } : {}),
+    ...config,
+  };
+}
+
+export function hostForgeApiEnvironment(endpoint: EgressEndpoint, caBundle: string): Record<string, string> {
+  const proxy = endpointUrl(endpoint);
+  return {
+    HTTPS_PROXY: proxy, https_proxy: proxy, HTTP_PROXY: proxy, http_proxy: proxy,
+    NO_PROXY: "localhost,127.0.0.1,::1", no_proxy: "localhost,127.0.0.1,::1",
+    ...Object.fromEntries(CA_BUNDLE_VARIABLES.map(name => [name, caBundle])),
+    GH_TOKEN: API_TOKEN_PLACEHOLDER, GITHUB_TOKEN: API_TOKEN_PLACEHOLDER, GITLAB_TOKEN: API_TOKEN_PLACEHOLDER, AZURE_DEVOPS_EXT_PAT: API_TOKEN_PLACEHOLDER,
   };
 }
 
@@ -457,6 +495,29 @@ export class EgressProxy {
     throw failure;
   }
 
+  async #passThrough(target: { host: string; port: number }, client: Duplex, head: Buffer, deny: (status: number, reason: string) => void): Promise<void> {
+    if (client.destroyed) return;
+    this.#sockets.add(client);
+    let upstream: Duplex;
+    try { upstream = await this.#open(target.port, [target.host]); }
+    catch {
+      this.#sockets.delete(client);
+      return deny(502, `${target.host} could not be reached`);
+    }
+    this.#sockets.add(upstream);
+    const cleanup = () => { upstream.destroy(); client.destroy(); this.#sockets.delete(upstream); this.#sockets.delete(client); };
+    for (const socket of [upstream, client]) {
+      socket.once("error", cleanup);
+      socket.once("close", cleanup);
+    }
+    if (client.destroyed) return cleanup();
+    this.#record({ kind: "connect", target: `${target.host}:${target.port}`, outcome: "allowed", reason: "the host's own network" });
+    client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    if (head.length) upstream.write(head);
+    upstream.pipe(client);
+    client.pipe(upstream);
+  }
+
   async #tunnel(request: IncomingMessage, client: Duplex, head: Buffer): Promise<void> {
     client.on("error", () => client.destroy());
     const target = authority(request.url);
@@ -476,6 +537,7 @@ export class EgressProxy {
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         return this.#api!.intercept(client, head, target.host);
       }
+      if (this.#options.unconfined) return await this.#passThrough(target, client, head, deny);
       if (!hostAllowed(grant.policy, target.host)) {
         return deny(403, grant.policy.mode === "off"
           ? `${target.host} is not reachable: this workspace's network access is off`
@@ -600,6 +662,12 @@ export class EgressProxy {
     const key = repositoryKey(target);
     const label = key.slice(0, 300);
     const push = egressPushService(parsed.service);
+    if (this.#options.unconfined && (parsed.service === "info-refs" || parsed.service === "receive-refs")
+      && !findRepository((await this.#currentGrant()).repositories, target)) {
+      this.#record({ kind: "git", target: label, outcome: "allowed", reason: "not a workspace repository: left to the host's own Git and credentials" });
+      response.writeHead(302, { Location: `https://${target}/info/refs${url.search}`, "Cache-Control": "no-store" });
+      return void response.end();
+    }
     if (push && !this.#options.sessionBranch) {
       this.#record({ kind: "git", target: label, outcome: "refused", reason: "push" });
       return refuse(response, 403, "Pushes don't go through the egress proxy in this session: commit, then use the git_push tool");
@@ -612,7 +680,7 @@ export class EgressProxy {
       return refuse(response, 403, `${target.slice(0, 300)} is not one of this workspace's repositories; pushes go only to them`);
     }
     const host = key.split("/")[0]!;
-    const remote = hostAllowed(grant.policy, host) ? publicGitRemote(target) : undefined;
+    const remote = hostAllowed(grant.policy, host) && !this.#options.unconfined ? publicGitRemote(target) : undefined;
     if (remote && (parsed.service === "info-refs" || parsed.service === "upload-pack")) return this.#relayPublic(request, response, parsed.service, remote, label);
     if (parsed.service === "info-refs" && hostAllowed(grant.policy, host)) {
       this.#record({ kind: "git", target: label, outcome: "allowed", reason: "not a workspace repository: fetched directly, without credentials" });

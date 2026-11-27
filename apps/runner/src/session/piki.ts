@@ -36,6 +36,7 @@ export interface SessionPikiOptions {
   wholeResults: WholeResults;
   operations: Pick<SessionOperations, "run">;
   apiLease(options?: { reach?: ApiReach }): { token: string; release(): void } | undefined;
+  forgeApiEnvironment?(): Promise<Record<string, string> | undefined>;
   forgeWrites(senderId: string): Promise<boolean>;
   model(): { provider: string; modelId: string } | undefined;
   thinkingLevel(): string | undefined;
@@ -122,9 +123,16 @@ export class SessionPiki {
     const { binding, config, onHost } = this.options;
     const hostOwner = binding.session.connectorOwnerId;
     const ownSession = !!hostOwner && hostOwner === binding.owner.id;
+    const forge = onHost ? this.options.forgeApiEnvironment : undefined;
     return {
-      hostSignIn: onHost || (ownSession && config.pikiHostSignIn === true),
-      ...(this.options.sandboxed && !onHost ? { sandbox: (run: PikiSandboxRun) => this.#runCommand(run) } : {}),
+      hostSignIn: forge ? async () => {
+        try { return !await forge(); }
+        catch (error) {
+          throw new RunnerError(503, `This session reaches the forge through Pikibun as its owner, which failed just now (${error instanceof Error ? error.message.slice(0, 300) : "unavailable"}); `
+            + "it doesn't fall back to the host's own sign-in. Nothing ran.");
+        }
+      } : onHost || (ownSession && config.pikiHostSignIn === true),
+      ...((this.options.sandboxed && !onHost) || forge ? { sandbox: (run: PikiSandboxRun) => this.#runCommand(run) } : {}),
       saveOutput: (callId, tool, output) => this.#saveOutput(callId, tool, output),
       fromScript: callId => this.#pikiCalls.get(callId)?.script === true,
       ...(config.cliDefinitions ? { servedRules: async (name: string) => {
@@ -147,12 +155,15 @@ export class SessionPiki {
     const call = this.#pikiCalls.get(run.callId);
     if (!call) throw new RunnerError(403, `${run.command} runs only in a call of its tool this session admitted. Nothing ran.`);
     const ownerSent = call.attribution.initiatedBy === this.options.binding.owner.id;
+    const { onHost } = this.options;
+    const forge = onHost ? await this.options.forgeApiEnvironment?.() : undefined;
+    if (onHost && !forge) throw new RunnerError(409, `${run.command} no longer reaches the forge through Pikibun in this session: run it again. Nothing ran.`);
     const lease = call.write && !run.readOnly ? this.options.apiLease(ownerSent ? { reach: "any" } : {}) : undefined;
     try {
-      const env = { ...run.env };
+      const env = { ...forge, ...run.env };
       if (lease) for (const name of run.tokenEnv) env[name] = lease.token;
       const command = sandboxShellCommand(run.command, run.args, env, run.directory);
-      const output = await this.options.sandbox.execute({ kind: "bash", command }, run.readOnly, () => this.options.calls.recheck(call.attribution), {
+      const output = await this.options.sandbox.execute({ kind: "bash", command }, run.readOnly && !onHost, () => this.options.calls.recheck(call.attribution), {
         unbounded: true, sender: call.attribution.initiatedBy, ...await this.options.calls.commandOptions(), ...(run.binds.length ? { binds: run.binds } : {}), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
       return { exitCode: 0, signal: null, output };
     } catch (error) {

@@ -413,7 +413,7 @@ describe("settings", () => {
 
   test("a host without Chromium offers its owner a chat on it, in their private workspace, that installs one", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "off", buildCacheGiB: 20, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [], ownerForgeAccess: false };
     const browser = { source: "piki:browser", dev: false, description: "A headless Chromium", modules: [] };
     const app = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true }, workspace] } },
@@ -898,6 +898,29 @@ describe("settings", () => {
     expect(admin.texts().join(" ")).toContain("Only the host's owner changes this");
   });
 
+  test("Hosts let their owner use their Pikibun account in their own host sessions, and show admins the owner's choice read-only", async () => {
+    const app = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0",
+        capabilities: { ...host.capabilities, hostConfig: true } }] } },
+      [`PATCH ${ORIGIN}/api/connectors/c1/config`]: { body: { ok: true } },
+    });
+    await app.press("id:host-row-c1");
+    await app.waitFor("id:host-owner-forge-access-use");
+    await app.press("id:host-owner-forge-access-use");
+    await app.press("id:host-config-save");
+    await app.waitUntil(() => bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`) !== undefined);
+    expect(bodyOf(app, "PATCH", `${ORIGIN}/api/connectors/c1/config`)).toEqual({ ownerForgeAccess: true });
+    app.dispose();
+
+    const admin = await openSettings("hosts", {
+      [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, ownerId: "u9", ownerName: "grace", role: "admin", connectedWorkspaceIds: ["w1"], version: "0.40.0",
+        config: { ...defaultHostConfig, ownerForgeAccess: true }, capabilities: { ...host.capabilities, hostConfig: true } }] } },
+    });
+    await admin.press("id:host-row-c1");
+    await admin.waitFor("id:host-owner-forge-access");
+    expect(admin.shows("id:host-owner-forge-access-use")).toBe(false);
+  });
+
   test("a new workspace starts as the preset chosen for it, and an existing one takes a preset once confirmed", async () => {
     const app = await openSettings("workspaces", {
       [`POST ${ORIGIN}/api/workspaces/w1/preset`]: { body: { preset: "locked" } },
@@ -962,7 +985,7 @@ describe("settings", () => {
 
   test("Hosts says a connector predates build caches, and shows admins the owner's choice read-only", async () => {
     const config = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [],
-      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [] };
+      browser: { source: "auto" }, serviceLifetimeSeconds: 3600, tunnel: { source: "auto" }, fakeIpTunnels: false, buildCaches: "owner", buildCacheGiB: 64, commandTimeoutUnlimited: false, modelExtensions: [], cacheWarming: true, extensionFiles: [], ownerForgeAccess: false };
     const older = await openSettings("hosts", {
       [`GET ${ORIGIN}/api/connectors`]: { body: { connectors: [{ ...host, role: "owner", connectedWorkspaceIds: ["w1"], version: "0.40.0", capabilities: { ...host.capabilities, hostConfig: true } }] } },
     });
