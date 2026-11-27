@@ -26,9 +26,9 @@ environment.
   `https://<host>/<path>` (and, on the forges that take SSH, `git@<host>:<path>` and `ssh://git@<host>/<path>`), through
   `GIT_CONFIG_COUNT` in the environment of the session's commands, never in a file. Other remotes reach their server
   directly and ask the host's credential helpers, as before. `insteadOf` matches prefixes, so `https://github.com/o/app`
-  also catches `https://github.com/o/app-other`; the proxy answers a reference listing of a repository that isn't the
-  workspace's with a redirect to its real URL, where Git then asks the host's credential helpers, so such a repository
-  still reads as before. The remote's URL in `.git/config` stays the forge's: only Git's runtime view is rewritten.
+  also catches `https://github.com/o/app-other`; the unconfined proxy answers a reference listing of a repository that
+  isn't the workspace's, for a fetch or a push, with a redirect to its real URL, where Git then asks the host's credential
+  helpers, so such a repository still reads and pushes as before. The remote's URL in `.git/config` stays the forge's: only Git's runtime view is rewritten.
 - **One proxy, unconfined.** The proxy is the sandbox's `EgressProxy`, listening on the host's loopback with a token
   (`tcp`), as the macOS and Windows sandboxes use it, plus `unconfined`: a host session's network isn't confined, so the
   workspace's network policy doesn't apply to it. Tunnels to hosts other than the credentialed APIs go out on the host's own
@@ -48,7 +48,8 @@ environment.
   commands.
 - **Failure.** If the proxy or the grant can't be had for a command, the command runs without the rewrites (the host's
   Git, as before) rather than not at all; a CLI tool's run refuses instead, since it would otherwise go out with the host's
-  sign-in in a session that shouldn't use it.
+  sign-in in a session that shouldn't use it: only a definite "doesn't apply" (the setting off, the session closing)
+  means the host's sign-in, and a failure to set the proxy up is an error the tool reports.
 - **Who can reach the proxy.** Its token is in the session's commands' environment and in the rewritten URLs Git may print
   (`git remote get-url`, errors), as in the sandbox. Another process of the same OS user could use it while the session is
   open; that user can already read the session's files and the host's credentials, so this grants nothing beyond what

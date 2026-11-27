@@ -125,7 +125,13 @@ export class SessionPiki {
     const ownSession = !!hostOwner && hostOwner === binding.owner.id;
     const forge = onHost ? this.options.forgeApiEnvironment : undefined;
     return {
-      hostSignIn: forge ? async () => !await forge().catch(() => undefined) : onHost || (ownSession && config.pikiHostSignIn === true),
+      hostSignIn: forge ? async () => {
+        try { return !await forge(); }
+        catch (error) {
+          throw new RunnerError(503, `This session reaches the forge through Pikibun as its owner, which failed just now (${error instanceof Error ? error.message.slice(0, 300) : "unavailable"}); `
+            + "it doesn't fall back to the host's own sign-in. Nothing ran.");
+        }
+      } : onHost || (ownSession && config.pikiHostSignIn === true),
       ...((this.options.sandboxed && !onHost) || forge ? { sandbox: (run: PikiSandboxRun) => this.#runCommand(run) } : {}),
       saveOutput: (callId, tool, output) => this.#saveOutput(callId, tool, output),
       fromScript: callId => this.#pikiCalls.get(callId)?.script === true,

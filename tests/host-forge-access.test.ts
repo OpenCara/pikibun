@@ -129,6 +129,9 @@ test("an unconfined proxy leaves hosts and other repositories to the host's own 
   const other = await get(own.port, token, "/git/github.com/acme/app-other/info/refs?service=git-upload-pack");
   assert.equal(other.status, 302, "a repository that only shares a workspace repository's prefix goes back to the forge, for the host's credentials");
   assert.equal(other.headers.location, "https://github.com/acme/app-other/info/refs?service=git-upload-pack");
+  const push = await get(own.port, token, "/git/github.com/acme/app-other/info/refs?service=git-receive-pack");
+  assert.equal(push.status, 302, "so is a push to it");
+  assert.equal(push.headers.location, "https://github.com/acme/app-other/info/refs?service=git-receive-pack");
   assert.equal(relayed.length, 0);
   assert.equal((await get(own.port, "x".repeat(32), "/__pikibun/status")).status, 401, "other processes on the host need the session's token");
 });

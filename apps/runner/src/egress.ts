@@ -662,6 +662,12 @@ export class EgressProxy {
     const key = repositoryKey(target);
     const label = key.slice(0, 300);
     const push = egressPushService(parsed.service);
+    if (this.#options.unconfined && (parsed.service === "info-refs" || parsed.service === "receive-refs")
+      && !findRepository((await this.#currentGrant()).repositories, target)) {
+      this.#record({ kind: "git", target: label, outcome: "allowed", reason: "not a workspace repository: left to the host's own Git and credentials" });
+      response.writeHead(302, { Location: `https://${target}/info/refs${url.search}`, "Cache-Control": "no-store" });
+      return void response.end();
+    }
     if (push && !this.#options.sessionBranch) {
       this.#record({ kind: "git", target: label, outcome: "refused", reason: "push" });
       return refuse(response, 403, "Pushes don't go through the egress proxy in this session: commit, then use the git_push tool");
@@ -674,10 +680,9 @@ export class EgressProxy {
       return refuse(response, 403, `${target.slice(0, 300)} is not one of this workspace's repositories; pushes go only to them`);
     }
     const host = key.split("/")[0]!;
-    const allowed = this.#options.unconfined === true || hostAllowed(grant.policy, host);
-    const remote = allowed && !this.#options.unconfined ? publicGitRemote(target) : undefined;
+    const remote = hostAllowed(grant.policy, host) && !this.#options.unconfined ? publicGitRemote(target) : undefined;
     if (remote && (parsed.service === "info-refs" || parsed.service === "upload-pack")) return this.#relayPublic(request, response, parsed.service, remote, label);
-    if (parsed.service === "info-refs" && allowed) {
+    if (parsed.service === "info-refs" && hostAllowed(grant.policy, host)) {
       this.#record({ kind: "git", target: label, outcome: "allowed", reason: "not a workspace repository: fetched directly, without credentials" });
       response.writeHead(302, { Location: `https://${target}/info/refs${url.search}`, "Cache-Control": "no-store" });
       return void response.end();
