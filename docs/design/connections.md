@@ -75,7 +75,10 @@ each of the member's connections with the workspaces they could share it with an
   the member's connection, which they can list again and mark read-only or off before deciding), and accepts it
   (`POST /api/workspaces/:id/mcp-servers/:server/accept`, audited `workspace.mcp.connection_share_accepted`, which
   keeps `accepted_by` and `accepted_at`) or declines it by removing it (audited `workspace.mcp.connection_share_declined`).
-  Accepting refuses a share whose member has left (`mcp_share_ended`).
+  Accepting refuses a share whose member has left (`mcp_share_ended`). A pending share doesn't count toward the
+  workspace's 8 servers, so members asking can't fill them; accepting one needs room (`mcp_server_limit`).
+  Becoming an owner or admin doesn't revive a share another owner or admin accepted for an earlier membership: the
+  role counts only for a share its member made themselves.
 - **What**: sharing adds a server to the workspace (`workspace_mcp_servers.shared_connection_id`, unique per workspace
   and connection) with the connection's name and address, a prefix made from its name (`remoteMcpSharedPrefix`), no
   headers or OAuth sign-in of its own, `sign_in_as = 'workspace'`, and its tools listed with the connection. It counts

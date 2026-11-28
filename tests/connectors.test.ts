@@ -5016,6 +5016,8 @@ test('any member shares their own remote MCP connection with a workspace, which 
     .run(s.team.id, s.creator.user.id, 'member', new Date(Date.now() + 60_000).toISOString());
   assert.deepEqual(await offered(), [], 'rejoining doesn\'t turn it back on: nobody accepted it for this membership');
   assert.equal((await listed(s.admin))[0]!.sharedBy?.active, false);
+  f.sqlite.prepare('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?').run('admin', s.team.id, s.creator.user.id);
+  assert.deepEqual(await offered(), [], 'nor does becoming an admin after rejoining: an accepted share needs the membership it was accepted for');
   f.sqlite.prepare('UPDATE workspace_members SET created_at = ?, role = ? WHERE workspace_id = ? AND user_id = ?')
     .run(String(membership.created_at), String(membership.role), s.team.id, s.creator.user.id);
   assert.equal((await offered()).length, 1);
@@ -5033,6 +5035,13 @@ test('any member shares their own remote MCP connection with a workspace, which 
   assert.equal(teamShare((await json<{ connections: McpConnection[] }>(await s.creator.request('GET', connections))).connections[0]!)?.shared, false);
 
   await json(await s.creator.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`));
+  const [waiting] = await listed(s.admin);
+  for (let index = 0; index < 8; index++) {
+    await json(await s.admin.request('POST', path, { name: `Full ${index}`, prefix: `full${index}`, url: `https://full${index}.example.com/mcp` }), 201);
+  }
+  assert.equal(serverRows(), 9, 'a pending share takes none of the workspace\'s servers');
+  await denied(await s.admin.request('POST', `${path}/${waiting!.id}/accept`), 409, 'mcp_server_limit');
+  for (const server of (await listed(s.admin)).filter(item => item.prefix.startsWith('full'))) await json(await s.admin.request('DELETE', `${path}/${server.id}`));
   const [left] = await listed(s.admin);
   f.sqlite.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(s.team.id, s.creator.user.id);
   await denied(await s.admin.request('POST', `${path}/${left!.id}/accept`), 409, 'mcp_share_ended');

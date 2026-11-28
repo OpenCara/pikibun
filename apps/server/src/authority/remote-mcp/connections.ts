@@ -56,8 +56,10 @@ export async function connectionCredentials(env: Env, row: Pick<ConnectionRow, '
 }
 
 export const shareLiveSQL = (server: string, connection: string, member: string) => `(${server}.share_status = 'accepted'
-  AND (${member}.role IN (${workspaceManagerRolesSQL})
+  AND (((${server}.accepted_by IS NULL OR ${server}.accepted_by = ${connection}.user_id) AND ${member}.role IN (${workspaceManagerRolesSQL}))
     OR (${server}.accepted_by IS NOT NULL AND ${server}.accepted_by <> ${connection}.user_id AND ${member}.created_at <= ${server}.accepted_at)))`;
+
+export const acceptedServersSQL = `(SELECT COUNT(*) FROM workspace_mcp_servers WHERE workspace_id = ? AND share_status = 'accepted')`;
 
 export async function sharedConnection(env: Env, workspaceId: string, connectionId: string, pending = false): Promise<ConnectionRow | null> {
   return await env.DB.query<ConnectionRow>(`SELECT c.* FROM mcp_connections c
@@ -109,8 +111,8 @@ async function views(env: Env, userId: string, rows: ConnectionRow[]): Promise<M
   const memberOf = await env.DB.query<{ id: string; name: string; role: string }>(`SELECT ws.id, ws.name, m.role
       FROM workspaces ws JOIN workspace_members m ON m.workspace_id = ws.id AND m.user_id = ?
     WHERE ${notDeleted('ws.id')} ORDER BY ws.name, ws.id`).bind(userId).all();
-  const servers = await env.DB.query<{ id: string; workspace_id: string; prefix: string; url: string; shared_connection_id: string | null }>(`SELECT s.id, s.workspace_id,
-      s.prefix, s.url, s.shared_connection_id
+  const servers = await env.DB.query<{ id: string; workspace_id: string; prefix: string; url: string; shared_connection_id: string | null; share_status: string }>(`SELECT s.id,
+      s.workspace_id, s.prefix, s.url, s.shared_connection_id, s.share_status
     FROM workspace_mcp_servers s JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = ?`)
     .bind(userId).all();
   const shared = await env.DB.query<{ id: string; workspace_id: string; name: string; prefix: string; shared_connection_id: string; share_status: string }>(`SELECT s.id,
@@ -127,7 +129,7 @@ async function views(env: Env, userId: string, rows: ConnectionRow[]): Promise<M
       if (server) return sharedView(server, workspace);
       const there = servers.filter(item => item.workspace_id === workspace.id);
       const unavailable = there.some(item => item.url === row.url) ? 'It already has a remote MCP server at this address.'
-        : there.length >= remoteMcpLimits.servers ? `It already has the ${remoteMcpLimits.servers} remote MCP servers a workspace can have.` : undefined;
+        : there.filter(item => item.share_status === 'accepted').length >= remoteMcpLimits.servers ? `It already has the ${remoteMcpLimits.servers} remote MCP servers a workspace can have.` : undefined;
       const needsApproval = !(workspaceManagerRoles as readonly string[]).includes(workspace.role);
       return { id: workspace.id, name: workspace.name, shared: false, ...(needsApproval ? { needsApproval: true } : {}), ...(unavailable ? { unavailable } : {}) };
     });
@@ -404,11 +406,14 @@ export function registerMcpConnections(app: Hono<AppEnv>): void {
     if (await c.env.DB.query('SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND shared_connection_id = ?').bind(workspaceId, connectionId).first()) {
       return c.json({ connection: await viewOf(c.env, actor, connectionId) });
     }
-    const there = await c.env.DB.query<{ prefix: string; url: string }>('SELECT prefix, url FROM workspace_mcp_servers WHERE workspace_id = ?').bind(workspaceId).all();
+    const there = await c.env.DB.query<{ prefix: string; url: string; share_status: string }>('SELECT prefix, url, share_status FROM workspace_mcp_servers WHERE workspace_id = ?')
+      .bind(workspaceId).all();
     if (there.some(item => item.url === row.url)) {
       fail(409, 'mcp_server_at_address', 'This workspace already has a remote MCP server at this connection\'s address.');
     }
-    if (there.length >= remoteMcpLimits.servers) fail(409, 'mcp_server_limit', `A workspace has at most ${remoteMcpLimits.servers} remote MCP servers.`);
+    if (there.filter(item => item.share_status === 'accepted').length >= remoteMcpLimits.servers) {
+      fail(409, 'mcp_server_limit', `A workspace has at most ${remoteMcpLimits.servers} remote MCP servers.`);
+    }
     const prefix = remoteMcpSharedPrefix(row.name, there.map(item => item.prefix));
     const found = await listTools(c.env, row);
     await noteError(c.env, row.id, found.error);
@@ -418,7 +423,7 @@ export function registerMcpConnections(app: Hono<AppEnv>): void {
         discovered_at, error, created_by, updated_by, created_at, updated_at)
       SELECT ?, ?, ?, ?, ?, NULL, '[]', '[]', ?, ?, ?, 1, 'workspace', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND (? = 1 OR role IN (${workspaceManagerRolesSQL})))
-        AND (SELECT COUNT(*) FROM workspace_mcp_servers WHERE workspace_id = ?) < ?
+        AND ${acceptedServersSQL} < ?
         AND NOT EXISTS (SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND (prefix = ? OR url = ? OR shared_connection_id = ?))
         AND EXISTS (SELECT 1 FROM mcp_connections WHERE id = ? AND user_id = ? AND url = ?)
       RETURNING id`)

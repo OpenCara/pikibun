@@ -24,7 +24,7 @@ import { assertVaultConfigured, decryptToken, encryptToken } from '../vault.js';
 import { callRemoteMcpTool } from './client.js';
 import {
   broughtConnection, connectionAppBegin, connectionAppCallback, connectionAppFinish, connectionCredentials, connectionWebCallback, registerMcpConnections,
-  sharedConnection, shareLiveSQL, viewerConnections, type ConnectionRow,
+  acceptedServersSQL, sharedConnection, shareLiveSQL, viewerConnections, type ConnectionRow,
 } from './connections.js';
 import {
   APP_BEGIN_PATH, APP_CALLBACK_PATH, APP_EXPIRED, appPage, appRedirectUri, callbackCode, callbackState, discover, discoveredDetail, exchangeCode, failure,
@@ -308,15 +308,18 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     if (!pendingShare(row)) return c.json({ server: await serverView(c.env, workspaceId, serverId, actor) });
     const at = now();
     const accepted = await c.env.DB.query<{ id: string }>(`UPDATE workspace_mcp_servers SET share_status = 'accepted', accepted_by = ?, accepted_at = ?, updated_by = ?, updated_at = ?
-      WHERE id = ? AND workspace_id = ? AND share_status = 'pending' AND ${workspaceAdminSQL}
+      WHERE id = ? AND workspace_id = ? AND share_status = 'pending' AND ${workspaceAdminSQL} AND ${acceptedServersSQL} < ?
         AND EXISTS (SELECT 1 FROM mcp_connections sc JOIN workspace_members sm ON sm.user_id = sc.user_id AND sm.workspace_id = workspace_mcp_servers.workspace_id
           WHERE sc.id = workspace_mcp_servers.shared_connection_id)
       RETURNING id`)
-      .bind(actor, at, actor, at, serverId, workspaceId, workspaceId, actor).first();
+      .bind(actor, at, actor, at, serverId, workspaceId, workspaceId, actor, workspaceId, remoteMcpLimits.servers).first();
     if (!accepted) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
       const current = await serverRow(c.env, workspaceId, serverId);
-      if (pendingShare(current)) fail(409, 'mcp_share_ended', 'The member who shared it no longer belongs to this workspace: remove it.');
+      if (pendingShare(current)) {
+        if (!await sharedCredentials(c.env, current, true)) fail(409, 'mcp_share_ended', 'The member who shared it no longer belongs to this workspace: remove it.');
+        fail(409, 'mcp_server_limit', `A workspace has at most ${remoteMcpLimits.servers} remote MCP servers: remove one to accept this one.`);
+      }
       return c.json({ server: await serverView(c.env, workspaceId, serverId, actor) });
     }
     await auditStatement(c.env, actor, 'workspace.mcp.connection_share_accepted', workspaceId, null,
@@ -341,7 +344,7 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const saved = await c.env.DB.query<{ id: string }>(`INSERT INTO workspace_mcp_servers (id, workspace_id, prefix, name, url, headers_ciphertext, header_names_json,
         read_only_tools_json, tools_json, tools_over_limit, tools_unusable, enabled, sign_in_as, discovered_at, error, created_by, updated_by, created_at, updated_at)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ? WHERE ${workspaceAdminSQL}
-        AND (SELECT COUNT(*) FROM workspace_mcp_servers WHERE workspace_id = ?) < ?
+        AND ${acceptedServersSQL} < ?
         AND NOT EXISTS (SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND prefix = ?)
       RETURNING id`)
       .bind(serverId, workspaceId, prefix, name, url, ciphertext, JSON.stringify(Object.keys(headers)), JSON.stringify(readOnlyTools), JSON.stringify(found.tools),

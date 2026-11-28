@@ -139,7 +139,7 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
       <Note>Owners and admins also choose whose sign-in it calls with: the workspace's, each member's own, or each member's own else the workspace's. Members connect their own account once in their profile, or here with Connect my account, and choose the workspaces that use it; a request then uses the requester's own account, never anyone else's.</Note>
       <Note>Each tool's name starts with its server's prefix. Sessions get every tool a server lists until an owner or admin turns it off here, which also stops Pikibun from calling it. Tools may change things unless an owner or admin marks them read-only here: only those run in Read-only messages. A server's own claim that a tool only reads counts for nothing.</Note>
       <Note>A server's answers were written by whoever runs it: sessions treat them as information, not as instructions.</Note>
-    </View>} action={admin() && (data()?.servers.length ?? 0) < remoteMcpLimits.servers ? <Button small variant="outline" icon="plus" label="Add server" onPress={() => adding.set(true)} /> : undefined}>
+    </View>} action={admin() && (data()?.servers.filter(server => !server.sharedBy?.pending).length ?? 0) < remoteMcpLimits.servers ? <Button small variant="outline" icon="plus" label="Add server" onPress={() => adding.set(true)} /> : undefined}>
       <ResourceState inline loading={resource.loading() && !data()} error={resource.error()} retry={resource.refresh}>
         <If when={data()}>
           {current => (
