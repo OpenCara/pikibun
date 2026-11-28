@@ -116,6 +116,20 @@ describe("reordering workspaces", () => {
     expect(sidebar(app)).toEqual(["Private", "Analytical Engine", "Difference Engine", "Jacquard Loom"]);
   });
 
+  test("a refused move that a later move already replaced says nothing once the later one is saved", async () => {
+    const app = await open("../App.tsx", { network: network((request, count) => (count === 1 ? { status: 500, body: { error: "Could not save the order.", code: "internal" }, delay: 400 } : saved(request))),
+      storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.waitFor("id:workspace-options-w1");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.waitUntil(() => orders(app).length === 2);
+    await app.waitUntil(() => sidebar(app)[3] === "Analytical Engine");
+    await app.wait(200);
+    expect(app.shows("id:workspace-order-feedback")).toBe(false);
+  });
+
   test("on a phone, a workspace moves by its grip, and the private workspace has none", async () => {
     const app = await open("../App.tsx", { network: network(), storage: signedIn });
     await app.waitFor("id:workspace-drag-w1");

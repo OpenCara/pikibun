@@ -113,10 +113,9 @@ export function createAppData(): AppData {
       workspaces.replace(result);
       settle();
     } catch (reason) {
-      if (write === writes) {
-        settle();
-        void workspaces.refresh();
-      }
+      if (write !== writes) return;
+      settle();
+      void workspaces.refresh();
       throw reason;
     }
   }
