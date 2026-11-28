@@ -66,7 +66,7 @@ This is how a team shares one model subscription or set of API keys. Sign Pi in 
 - **Settings → Hosts → Shared with you** lists the hosts others shared into your workspaces ([below](#hosts-shared-with-you)).
 - To guard what lies on your machine from members' messages, require the [prompt audit](extensions.md#prompt-audit-pikiprompt-audit) of every session on it: a model on the host checks each of their messages before it reaches the agent. You can require any extension of every session on your host the same way, such as a tool-call guard ([required extensions](extensions.md)).
 
-The host's page shows its **Status** (online or offline, owner, capabilities), **Models** (where its owner and admins [enable or disable](#models) each one), **Sharing**, **[Configuration](#host-configuration)**, **Host command access**, **Admins**, **Details** (the connection ID) and **Danger zone**. **Revoke host** disconnects it and blocks work in every workspace, your own sessions included; session records are kept, and the machine needs a new pairing to come back.
+The host's page shows its **Status** (online or offline, owner, capabilities), **Models** (where its owner and admins [enable or disable](#models) each one), **Sharing**, **[Configuration](#host-configuration)**, **Host command access**, **Admins**, **Details** (the connection ID) and **Danger zone**. Its owner can **Rename** it beside its **Name** under **Status**: a name chosen at pairing, such as the desktop app's *My Mac* or *My computer*, isn't final, and everyone it is shared with sees the new one. **Revoke host** disconnects it and blocks work in every workspace, your own sessions included; session records are kept, and the machine needs a new pairing to come back.
 
 ### Hosts shared with you
 

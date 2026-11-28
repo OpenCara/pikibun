@@ -800,6 +800,48 @@ describe("Local hosts", () => {
     expect(app.dialogs().length).toBe(0);
   });
 
+  test("the default host is renamed here and on its server", async () => {
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, id: "default" }, {
+      [HOSTS_KEY]: JSON.stringify([{ id: "default", server: SERVER, name: "My Mac", sandbox: "none", connectorIds: ["c9"] }]),
+    });
+    await app.waitFor("id:this-computer-rename");
+    await app.press("id:this-computer-rename");
+    await app.waitFor("id:this-computer-rename-name");
+    await app.clear("id:this-computer-rename-name");
+    await app.type("id:this-computer-rename-name", "  Studio Mac ");
+    await app.press("id:this-computer-rename-save");
+    await app.waitUntil(() => showsText("Renamed to Studio Mac, here and on pikibun.test."));
+    expect(sent()).toContain("rename c9 to Studio Mac");
+    expect(showsText("Studio Mac is a host of pikibun.test")).toBe(true);
+    expect(JSON.parse(app.storage()[HOSTS_KEY]!)[0].name).toBe("Studio Mac");
+
+    await app.press("id:this-computer-rename");
+    await app.clear("id:this-computer-rename-name");
+    await app.type("id:this-computer-rename-name", "Server down");
+    await app.press("id:this-computer-rename-save");
+    await app.waitUntil(() => showsText("The server is unavailable."));
+    expect(JSON.parse(app.storage()[HOSTS_KEY]!)[0].name).toBe("Studio Mac");
+    await app.clear("id:this-computer-rename-name");
+    await app.type("id:this-computer-rename-name", "Removed there");
+    await app.press("id:this-computer-rename-save");
+    await app.waitUntil(() => showsText("Renamed to Removed there here. Rename it on pikibun.test too, under Settings › Hosts."));
+    expect(JSON.parse(app.storage()[HOSTS_KEY]!)[0].name).toBe("Removed there");
+  });
+
+  test("a rename under Settings › Hosts follows here only for the host that connects as that connector now", async () => {
+    const { app } = await openPanel({ paired: SERVER }, {
+      [HOSTS_KEY]: JSON.stringify([{ id: "default", server: SERVER, name: "My Mac", sandbox: "none", connectorIds: ["c8", "c9"] }]),
+    });
+    await app.waitFor("id:local-host-default");
+    await app.press("id:fake-renamed-old");
+    await app.waitFor("id:local-host-default");
+    expect(app.shows("text:Old pairing")).toBe(false);
+    expect(app.shows("text:My Mac")).toBe(true);
+    await app.press("id:fake-renamed-current");
+    await app.waitUntil(() => JSON.parse(app.storage()[HOSTS_KEY]!)[0].name === "Renamed elsewhere");
+    await app.waitFor("text:Renamed elsewhere");
+  });
+
   test("unchecking every model isn't saved as a choice: the host would offer them all", async () => {
     const { app, showsText } = await openPanel({ paired: SERVER, id: "default" }, { [HOSTS_KEY]: JSON.stringify([{ id: "default", server: SERVER, name: "My Mac", sandbox: "none" }]) });
     await app.waitFor("id:this-computer-model-anthropic/claude-opus");

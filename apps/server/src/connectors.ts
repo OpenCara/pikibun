@@ -34,6 +34,10 @@ import { reportSessionBranches } from './session-branches.js';
 import { reportSessionTunnel } from './session-tunnels.js';
 import { notifySessionActivityQuietly } from './notifications.js';
 
+const renameBody = z.strictObject({
+  name: z.string().trim().min(1).max(120).refine(value => !/[\x00-\x1f\x7f]/.test(value)),
+});
+
 function onlyFields(value: Record<string, unknown>, fields: string[]): void {
   if (Object.keys(value).some(key => !fields.includes(key))) fail(400, 'invalid_metadata', 'Only model and capability metadata is accepted.');
 }
@@ -438,6 +442,12 @@ export function registerConnectors(app: Hono<AppEnv>): void {
         WHERE connector_id = ? AND workspace_id = ? AND owner_id <> ?`).bind(row.id, workspaceId, row.owner_id),
     ]);
     return c.body(null, 204);
+  });
+  app.patch('/api/connectors/:id', async c => {
+    const row = await ownedConnector(c);
+    const { name } = await body(c, renameBody, { maxBytes: 4096, message: 'A host\'s name is 1 to 120 characters, without control characters, and nothing else changes here.' });
+    await c.env.DB.query('UPDATE connectors SET name = ? WHERE id = ? AND removed_at IS NULL').bind(name, row.id).run();
+    return c.json({ connector: await connectorInfo(c.env, { ...row, name }) });
   });
   app.delete('/api/connectors/:id/permanent', async c => {
     const row = await ownedConnector(c);
