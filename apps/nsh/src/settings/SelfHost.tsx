@@ -6,7 +6,8 @@ import { displayOrigin } from "../lib/server";
 import { computerName, computerTitle, INSTALL_COMMAND, nativeEnvironment } from "../lib/this-computer";
 import { setServerConsent, thisServer, type ThisServer } from "../lib/this-server";
 import { type Tone } from "../theme";
-import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, Feedback, Note, Row, Section, Small, Value } from "../ui";
+import { Select } from "../form";
+import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, Feedback, Note, Row, Section, Small, Value, type Option } from "../ui";
 import { SectionPage, type SectionProps } from "./parts";
 
 const stateLabels: Record<ServerState, string> = { stopped: "Stopped", starting: "Starting", running: "Running", stopping: "Stopping" };
@@ -130,10 +131,32 @@ function ServerSection(props: { server: ThisServer; signedInTo?: string; onUse: 
       if (!outcome.ok) throw new Error(outcome.error ?? "Pikibun didn't stop.");
     });
   }
+  function listen(choice: string) {
+    void action.run(async () => {
+      const outcome = await server.chooseListen(choice.split(","));
+      if (!outcome.ok) throw new Error(outcome.error ?? "Pikibun didn't start again.");
+    });
+  }
+  const listenKey = () => server.listening().join(",");
+  const listenOptions = (): Option<string>[] => {
+    const options: Option<string>[] = [
+      { value: "all", label: "Every network interface", hint: "Other devices on your networks reach it too" },
+      { value: "loopback", label: `${computerTitle} only`, hint: "Nothing else on the network reaches it" },
+      ...(server.inspection()?.interfaces ?? []).map(item => ({ value: item.name, label: item.name, hint: `${item.addresses.join(", ")}, and ${computerName} itself` })),
+    ];
+    return options.some(option => option.value === listenKey()) ? options : [...options, { value: listenKey(), label: server.listening().join(", "), hint: "Chosen with pikibun serve --listen" }];
+  };
+  const listenHint = () => {
+    const status = server.status();
+    return status.state === "running" && status.listening?.length ? `Listening on ${status.listening.join(", ")}; changing it starts Pikibun again` : `Where port ${port()} is open`;
+  };
   return (
     <Section title={`Pikibun on ${computerName}`} testID="self-host-server"
-      info={`Runs Pikibun's server on ${computerName} for you alone, as pikibun serve does in a terminal: reachable from this computer only, with ${computerName} as the host that runs your sessions. This app signs you in to it as its owner, with no GitHub or other account. It runs while this app is open, and starts again at the next launch if it was running when the app quit.`}>
-      <Row title="Your own Pikibun" hint={origin() ? displayOrigin(origin()!) : `Serves 127.0.0.1:${port()} on ${computerName}`} trailing={stateBadge(server)} />
+      info={`Runs Pikibun's server on ${computerName} for you alone, as pikibun serve does in a terminal, with ${computerName} as the host that runs your sessions. It listens on every network interface unless you choose otherwise under Listens on. This app signs you in to it as its owner, with no GitHub or other account. It runs while this app is open, and starts again at the next launch if it was running when the app quit.`}>
+      <Row title="Your own Pikibun" hint={origin() ? displayOrigin(origin()!) : `Serves port ${port()} on ${computerName}`} trailing={stateBadge(server)} />
+      <Row title="Listens on" hint={listenHint()} testID="self-host-listen"
+        trailing={<Select<string> compact testID="self-host-listen-choice" label="Listens on" value={listenKey()} options={listenOptions()}
+          disabled={action.busy() || server.status().state === "starting" || server.status().state === "stopping"} onChange={listen} />} />
       <Row title={`${computerTitle} as its host`} hint={hostHint()} testID="self-host-host" />
       <CardBody>
         <If when={server.error() && server.status().state === "stopped"}><Banner tone="danger" testID="self-host-error">{server.error()}</Banner></If>

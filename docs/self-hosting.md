@@ -91,7 +91,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `APP_ORIGIN` | required | Public origin of the server (scheme and host, no path); HTTPS outside local test mode and `LOCAL_MODE` |
 | `SESSION_SECRET` | required | Random string of at least 32 characters |
 | `VAULT_KEY` | required | Base64url 32-byte key that encrypts stored tokens and secrets; keep it stable, since secrets stored with one key can't be read with another |
-| `HOST`, `PORT` | `0.0.0.0` (`127.0.0.1` with `LOCAL_MODE`), `8787` | Listening address |
+| `HOST`, `PORT` | `0.0.0.0` (`127.0.0.1` with `LOCAL_MODE`), `8787` | Listening address, or several separated by commas (`127.0.0.1,100.64.1.2`), all on the same port |
 | `TRUST_PROXY` | `false` | Honor `X-Forwarded-Proto`/`X-Forwarded-Host` from a trusted proxy |
 | `STATIC_DIR` | `dist/client` | The web client's build (Native Shell) |
 | `PREVIEW_ORIGIN` | none | A second exact HTTPS origin serving NSH with the same backend; register its OAuth callbacks too |
@@ -116,7 +116,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `PIKIBUN_VERSION` | the release image's version | The version `/api/health` reports and **Settings** shows; release images set it, and a local server (`pikibun serve`) reports its package's |
 | `PASSWORD_AUTH` | off (`true` in the Docker image) | `true` offers sign-in with a username and password (see [Username and password](accounts.md#username-and-password)); not with `LOCAL_MODE` |
 | `SIGNUP` | GitHub `open`, passwords `invite` (`invite` in the Docker image) | Who can create an account, with GitHub and with a password: `open` (anyone who reaches the server), `invite` (only through a workspace's invite link) or `off` (only the operator's: `ADMIN_USER_IDS` and `--create-admin`); see [Who can create an account](accounts.md#who-can-create-an-account). Not for `LOCAL_MODE`, which admits only its owner |
-| `LOCAL_MODE`, `LOCAL_CLAIM_SECRET` | off | A server for one person on their own computer, as `pikibun serve` runs it: plain HTTP on loopback only, no GitHub sign-in (the owner connects github.com afterwards, with GitHub's device flow, `POST /api/git/accounts/github/device`, or a personal access token, `PUT /api/git/accounts/github`), and one owner, who signs in with `/api/auth/local?token=LOCAL_CLAIM_SECRET` (a base64url 32-byte value; apps post it to `/api/auth/native/local`). The first sign-in makes their account, `password:` and `LOCAL_OWNER_NAME` (`owner` unset), with no password; `LOCAL_OWNER_ID` pins an existing account instead |
+| `LOCAL_MODE`, `LOCAL_CLAIM_SECRET` | off | A server for one person on their own computer, as `pikibun serve` runs it: plain HTTP at a loopback `APP_ORIGIN` (its `HOST` must include `127.0.0.1` or `0.0.0.0`), no GitHub sign-in (the owner connects github.com afterwards, with GitHub's device flow, `POST /api/git/accounts/github/device`, or a personal access token, `PUT /api/git/accounts/github`), and one owner, who signs in with `/api/auth/local?token=LOCAL_CLAIM_SECRET` (a base64url 32-byte value; apps post it to `/api/auth/native/local`). The first sign-in makes their account, `password:` and `LOCAL_OWNER_NAME` (`owner` unset), with no password; `LOCAL_OWNER_ID` pins an existing account instead |
 
 ## Logs
 

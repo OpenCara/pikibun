@@ -47,7 +47,7 @@ forwarding to it, and a message sent from any of them is queued in the one sessi
 - **Started or found by every host.** `pikibun connect` and the app's host process (`pikibun host --stdio`) make a
   private home (`apps/server/src/local/home.ts`, behind `apps/runner/src/private-home.ts` so the connector doesn't load
   the server unless it is used) that tries to take the state's lease every five seconds. Whichever process gets it runs
-  the local server **headless**: loopback only, no sign-in link printed, no web app needed, its owner's account
+  the local server **headless**: on the interfaces its state chooses (every one by default, as `pikibun serve`'s `--listen`), no sign-in link printed, no web app needed, its owner's account
   (`password:<user>`) and private workspace made at start rather than at the first sign-in. Every other process finds
   the running one.
 - **Found through its discovery file.** A local server writes `local.json` in its state directory once it listens
