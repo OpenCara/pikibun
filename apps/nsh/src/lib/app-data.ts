@@ -119,9 +119,14 @@ export function createAppData(): AppData {
       pendingOrder.set([...ids]);
       try {
         const result = await untracked(session).api<{ workspaces: Workspace[] }>("/api/workspaces/order", { method: "PUT", body: { workspaceIds: ids } });
-        if (reorder === reorders) workspaces.replace(result);
-      } finally {
-        if (reorder === reorders) pendingOrder.set(null);
+        if (reorder !== reorders) return;
+        workspaces.replace(result);
+        pendingOrder.set(null);
+      } catch (reason) {
+        if (reorder !== reorders) return;
+        pendingOrder.set(null);
+        void workspaces.refresh();
+        throw reason;
       }
     },
     lastWorkspaceId,

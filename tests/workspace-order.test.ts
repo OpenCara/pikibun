@@ -65,11 +65,16 @@ test('each member orders their own workspaces, the private one staying first and
 
   const later = await create(alice, 'Later');
   assert.deepEqual((await list(alice)).map(item => item.name), ['Private', 'Team', 'Second', 'First', 'Later']);
-  await json(await alice.request('PUT', '/api/workspaces/order', { workspaceIds: [later.id, first.id] }));
-  assert.deepEqual((await list(alice)).map(item => item.name), ['Private', 'Later', 'First', 'Second', 'Team']);
+  await json(await alice.request('PUT', '/api/workspaces/order', { workspaceIds: [later.id, first.id, team.id] }));
+  assert.deepEqual((await list(alice)).map(item => item.name), ['Private', 'Later', 'First', 'Team', 'Second']);
 
   assert.ok((await bob.request('DELETE', `/api/workspaces/${team.id}/members/${encodeURIComponent(alice.user.id)}`)).ok);
   assert.deepEqual((await list(alice)).map(item => item.name), ['Private', 'Later', 'First', 'Second']);
+  assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_order WHERE user_id = ? AND workspace_id = ?').get(alice.user.id, team.id) as { n: number }).n, 0);
+
+  await json(await alice.request('PUT', '/api/workspaces/order', { workspaceIds: [first.id, later.id, second.id] }));
+  await json(await bob.request('POST', `/api/workspaces/${team.id}/members`, { userId: alice.user.id, role: 'member' }));
+  assert.deepEqual((await list(alice)).map(item => item.name), ['Private', 'First', 'Later', 'Second', 'Team']);
 });
 
 test('the order is checked: a list of distinct workspace IDs and nothing else', async t => {

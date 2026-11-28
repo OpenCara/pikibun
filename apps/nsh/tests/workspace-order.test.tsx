@@ -7,13 +7,18 @@ const third = { id: "w3", name: "Jacquard Loom", ownerId: "u2", role: "member" }
 const listed = [personal, workspace, second, third];
 type Request = { method: string; url: string; body?: string | null };
 
-const network = () => server({
-  [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: listed } },
-  [`PUT ${ORIGIN}/api/workspaces/order`]: (request: Request) => {
-    const ids: string[] = JSON.parse(request.body ?? "{}").workspaceIds;
-    return { body: { workspaces: [personal, ...ids.map(id => listed.find(item => item.id === id)!)] } };
-  },
-});
+const saved = (request: Request) => {
+  const ids: string[] = JSON.parse(request.body ?? "{}").workspaceIds;
+  return { body: { workspaces: [personal, ...ids.map(id => listed.find(item => item.id === id)!)] } };
+};
+
+const network = (put: (request: Request, count: number) => Record<string, unknown> = saved) => {
+  let count = 0;
+  return server({
+    [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: listed } },
+    [`PUT ${ORIGIN}/api/workspaces/order`]: (request: Request) => put(request, ++count),
+  });
+};
 
 type App = Awaited<ReturnType<typeof open>>;
 const orders = (app: App) => app.requests().filter(item => item.method === "PUT" && item.url === `${ORIGIN}/api/workspaces/order`)
@@ -56,6 +61,32 @@ describe("reordering workspaces", () => {
     await app.waitFor("id:workspace-copy-id-w0");
     expect(app.shows("id:workspace-move-up-w0")).toBe(false);
     expect(app.shows("id:workspace-move-down-w0")).toBe(false);
+  });
+
+  test("a second move while the first is still saving wins, whichever answer comes last", async () => {
+    const app = await open("../App.tsx", { network: network((request, count) => ({ ...saved(request), ...(count === 1 ? { delay: 600 } : {}) })),
+      storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.waitFor("id:workspace-options-w1");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.waitUntil(() => sidebar(app)[2] === "Analytical Engine");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.waitUntil(() => orders(app).length === 2);
+    expect(orders(app)).toEqual([["w2", "w1", "w3"], ["w2", "w3", "w1"]]);
+    await app.waitUntil(() => sidebar(app)[3] === "Analytical Engine");
+    await app.wait(800);
+    expect(sidebar(app)).toEqual(["Private", "Difference Engine", "Jacquard Loom", "Analytical Engine"]);
+  });
+
+  test("a move the server refuses says why, and the sidebar goes back to the order it has", async () => {
+    const app = await open("../App.tsx", { network: network(() => ({ status: 500, body: { error: "Could not save the order.", code: "internal" } })),
+      storage: signedIn, platform: "macos", width: 1280, height: 820 });
+    await app.waitFor("id:workspace-options-w1");
+    await app.press("id:workspace-options-w1");
+    await app.press("id:workspace-move-down-w1");
+    await app.waitFor("id:workspace-order-feedback");
+    expect(sidebar(app)).toEqual(["Private", "Analytical Engine", "Difference Engine", "Jacquard Loom"]);
   });
 
   test("on a phone, a workspace moves by its grip, and the private workspace has none", async () => {

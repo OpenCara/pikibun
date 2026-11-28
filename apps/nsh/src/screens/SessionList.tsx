@@ -1,7 +1,7 @@
 import { cleanup, computed, createAnimatedValue, List, signal, Text, untracked, View, type AnimatedValue, type PanEvent, type ViewRef } from "nsh";
 import { Button as BaseButton, Input } from "nsh/base";
 import { writeClipboard } from "../lib/clipboard";
-import { canCreateSessions, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord, type SideAskSummary } from "../shared";
+import { canCreateSessions, errorMessage, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord, type SideAskSummary } from "../shared";
 import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../components/PullRequest";
 import { createSessionMenu, RenameSheet, type SessionMenu } from "../components/SessionMenu";
 import { useAppData } from "../lib/app-data";
@@ -105,7 +105,12 @@ export function SessionList(props: {
   let places: Promise<HeaderPlace[]> = Promise.resolve([]);
   let watch: ReturnType<typeof setInterval> | undefined;
   cleanup(() => clearInterval(watch));
-  const reorder = (next: string[] | null) => { if (next) void menu.action.run(() => data.reorderWorkspaces(next)); };
+  const orderError = signal("");
+  const reorder = (next: string[] | null) => {
+    if (!next) return;
+    orderError.set("");
+    data.reorderWorkspaces(next).catch(reason => orderError.set(errorMessage(reason)));
+  };
   const header = (id: string, ref: ViewRef | null) => { if (ref) headers.set(id, ref); else headers.delete(id); };
   const measure = async (): Promise<HeaderPlace[]> => {
     const found = await Promise.all(untracked(order).map(async id => {
@@ -174,6 +179,9 @@ export function SessionList(props: {
             </View>
             <If when={data.sessionsError()}>
               <Banner tone="danger" title="Could not load sessions" actions={<Button small variant="outline" label="Try again" onPress={data.refreshSessions} />}>{data.sessionsError()}</Banner>
+            </If>
+            <If when={orderError()}>
+              <View testID="workspace-order-feedback" style={{ paddingHorizontal: 4 }}><Feedback error={orderError()} /></View>
             </If>
             <If when={!menu.renaming() && (menu.action.error() || menu.action.notice())}>
               <View testID="session-list-feedback" style={{ paddingHorizontal: 4 }}><Feedback error={menu.action.error()} notice={menu.action.notice()} /></View>
