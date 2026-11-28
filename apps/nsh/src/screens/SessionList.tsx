@@ -1,4 +1,4 @@
-import { cleanup, computed, createAnimatedValue, List, signal, Text, untracked, View, type AnimatedValue, type PanEvent, type ViewRef } from "nsh";
+import { cleanup, computed, createAnimatedValue, effect, List, signal, Text, untracked, View, type AnimatedValue, type PanEvent, type ViewRef } from "nsh";
 import { Button as BaseButton } from "nsh/base";
 import { writeClipboard } from "../lib/clipboard";
 import { canCreateSessions, errorMessage, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord, type SideAskSummary } from "../shared";
@@ -101,7 +101,7 @@ export function SessionList(props: {
   const keep = stableRows<Row>();
   const rows = computed<Row[]>(() => keep(groupedRows()));
   const order = computed(() => (query().trim() ? [] : movableIds(data.workspaces())));
-  const headers = new Map<string, ViewRef>();
+  const headers = new Map<ViewRef, string>();
   const dragging = signal<string | null>(null);
   const landing = signal<number | null>(null);
   let places: Promise<HeaderPlace[]> = Promise.resolve([]);
@@ -113,13 +113,15 @@ export function SessionList(props: {
     orderError.set("");
     data.reorderWorkspaces(next).catch(reason => orderError.set(errorMessage(reason)));
   };
-  const header = (id: string, ref: ViewRef | null) => { if (ref) headers.set(id, ref); else headers.delete(id); };
+  const header = (ref: ViewRef, id: string | null) => { if (id) headers.set(ref, id); else headers.delete(ref); };
   const measure = async (): Promise<HeaderPlace[]> => {
-    const found = await Promise.all(untracked(order).map(async id => {
-      const place = await headers.get(id)?.measure().catch(() => null);
-      return place ? { id, top: place.pagePosition.y, height: place.bounds.size.height } : null;
+    const found = await Promise.all([...headers].map(async ([ref, id]) => {
+      const place = await ref.measure().catch(() => null);
+      return { ref, id, place: place ? { top: place.pagePosition.y, height: place.bounds.size.height } : null };
     }));
-    return found.filter((place): place is HeaderPlace => place !== null);
+    const shown = new Set(found.filter(item => item.place).map(item => item.id));
+    for (const item of found) if (!item.place && shown.has(item.id)) headers.delete(item.ref);
+    return found.flatMap(item => (item.place ? [{ id: item.id, ...item.place }] : []));
   };
   const drag: WorkspaceDrag = {
     start(id, value, event) {
@@ -266,12 +268,18 @@ interface WorkspaceDrag {
 function WorkspaceRow(props: {
   row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; onToggleArchived: (id: string) => void; compact?: boolean;
   onNewIn?: (workspaceId: string) => void; onSettings?: (workspaceId: string) => void; action: Action;
-  order: readonly string[]; dragging: boolean; dropLine: boolean; drag: WorkspaceDrag; onHeader: (id: string, ref: ViewRef | null) => void;
+  order: readonly string[]; dragging: boolean; dropLine: boolean; drag: WorkspaceDrag; onHeader: (ref: ViewRef, id: string | null) => void;
   onMove: (id: string, step: number) => void;
 }) {
   const y = createAnimatedValue(0);
-  const registered = props.row.id;
-  cleanup(() => props.onHeader(registered, null));
+  const header = signal<ViewRef | null>(null);
+  effect(() => {
+    const ref = header();
+    const id = props.row.id;
+    if (!ref) return;
+    props.onHeader(ref, id);
+    return () => props.onHeader(ref, null);
+  });
   const index = () => props.order.indexOf(props.row.id);
   const movable = () => index() >= 0 && props.order.length > 1;
   const wholeRow = () => movable() && !swipesRows;
@@ -291,7 +299,7 @@ function WorkspaceRow(props: {
   ];
   return (
     <RowMenu items={options} testID={`workspace-menu-${props.row.id}`}>
-      <View ref={ref => props.onHeader(registered, ref)} testID={`workspace-header-${props.row.id}`} pan={wholeRow() ? { y } : undefined}
+      <View ref={ref => header.set(ref)} testID={`workspace-header-${props.row.id}`} pan={wholeRow() ? { y } : undefined}
         panActivation={{ activeOffsetY: 6, failOffsetX: 24 }} onPanStart={start} onPanEnd={end}
         style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 8, borderRadius: radius.medium, zIndex: props.dragging ? 1 : 0, opacity: props.dragging ? 0.85 : 1,
           backgroundColor: props.dragging ? palette().surface : "transparent", transform: [{ translateY: movable() ? y : 0 }] }}>
