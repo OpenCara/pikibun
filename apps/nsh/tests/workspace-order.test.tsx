@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { ORIGIN, server, signedIn, workspace } from "./fixtures";
+import { ORIGIN, server, sessionRecord, signedIn, workspace } from "./fixtures";
 
 const personal = { id: "w0", name: "Private", ownerId: "u1", role: "owner", personal: true };
 const second = { id: "w2", name: "Difference Engine", ownerId: "u1", role: "owner" };
@@ -44,6 +44,33 @@ describe("reordering workspaces", () => {
     await app.drag("id:workspace-row-w2", { y: 4 });
     expect(orders(app).length).toBe(1);
     expect(sidebar(app)[0]).toBe("Private");
+  });
+
+  test("a workspace dropped between two others lands there, after the sidebar's rows changed and after a first move", async () => {
+    const numbers = [1, 2, 3, 4, 5, 6, 7, 8];
+    const many = [personal, ...numbers.map(n => ({ id: `w${n}`, name: `Workspace ${n}`, ownerId: "u1", role: "owner" }))];
+    const sessions = numbers.flatMap(n => [1, 2, 3].map(k => ({ ...sessionRecord, id: `s${n}-${k}`, workspaceId: `w${n}`, title: `Session ${n}.${k}` })));
+    const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1280, height: 600, network: server({
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: many } },
+      [`GET ${ORIGIN}/api/sessions`]: { body: { sessions } },
+      [`PUT ${ORIGIN}/api/workspaces/order`]: (request: Request) => ({
+        body: { workspaces: [personal, ...(JSON.parse(request.body ?? "{}").workspaceIds as string[]).map(id => many.find(item => item.id === id)!)] } }),
+    }) });
+    await app.waitFor("id:workspace-row-w1");
+    for (const n of numbers) {
+      await app.waitFor(`id:workspace-row-w${n}`);
+      await app.press(`id:workspace-row-w${n}`);
+    }
+    await app.waitFor("id:workspace-row-w8");
+
+    await app.drag("id:workspace-row-w8", { y: -110 });
+    await app.waitUntil(() => orders(app).length === 1);
+    expect(orders(app)[0]).toEqual(["w1", "w2", "w3", "w4", "w5", "w8", "w6", "w7"]);
+    await app.waitUntil(() => app.texts().indexOf("Workspace 8") < app.texts().indexOf("Workspace 6"));
+
+    await app.drag("id:workspace-row-w1", { y: 100 });
+    await app.waitUntil(() => orders(app).length === 2);
+    expect(orders(app)[1]).toEqual(["w2", "w3", "w1", "w4", "w5", "w8", "w6", "w7"]);
   });
 
   test("its menu moves it up or down, and the private workspace's has neither", async () => {
