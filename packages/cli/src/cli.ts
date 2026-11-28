@@ -5,6 +5,7 @@ import { hostMain } from "../../../apps/runner/src/host-cli.js";
 import { identityMain } from "../../../apps/runner/src/identity-cli.js";
 import { ConnectorSetupError } from "../../../apps/runner/src/protocol.js";
 import { lazyPrivateHome, providePrivateHomes } from "../../../apps/runner/src/private-home.js";
+import { withholdProgramResumeToken } from "../../../apps/runner/src/program-resume.js";
 import packageJson from "../package.json" with { type: "json" };
 import { tuiMain } from "./tui.js";
 
@@ -30,6 +31,7 @@ Options:
 Run "pikibun connect --help" or "pikibun serve --help" for their options.
 `;
 
+withholdProgramResumeToken();
 const [command, ...args] = process.argv.slice(2);
 providePrivateHomes(host => lazyPrivateHome(import("../../../apps/server/src/local/home.js").then(home => home.createPrivateHome(host, {
   log: line => process.stderr.write(`${line}\n`),
