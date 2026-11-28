@@ -1,6 +1,7 @@
 import { cleanup, computed, createAnimatedValue, effect, keymap, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
 import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Input, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
 import { writeClipboard } from "./lib/clipboard";
+import { inTerminal } from "./lib/terminal";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
 
@@ -75,7 +76,7 @@ export function IconButton(props: {
   const keys = () => shortcutLabel(props.shortcut);
   return (
     <BaseButton testID={props.testID} accessibilityLabel={props.label} disabled={props.disabled} onPress={props.onPress} hitSlop={6}
-      tooltip={<Tooltip style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: palette().primary, borderRadius: radius.small, paddingHorizontal: 8, paddingVertical: 4 }}>
+      tooltip={inTerminal ? undefined : <Tooltip style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: palette().primary, borderRadius: radius.small, paddingHorizontal: 8, paddingVertical: 4 }}>
         <Text style={{ fontSize: text.caption, color: palette().onPrimary }}>{props.label}</Text>
         <If when={keys()}>{value => <Text style={{ fontSize: text.caption, color: palette().onPrimary, opacity: 0.65 }}>{value()}</Text>}</If>
       </Tooltip>}
