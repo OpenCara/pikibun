@@ -1,0 +1,84 @@
+{
+  "_version": 2,
+
+  "nav.new_session": { "en": "New session", "zh": "新建会话", "zh-Hant": "新增工作階段", "ja": "新しいセッション", "ko": "새 세션" },
+  "nav.sessions": { "en": "Sessions", "zh": "会话", "zh-Hant": "工作階段", "ja": "セッション", "ko": "세션" },
+  "nav.all_sessions": { "en": "All sessions", "zh": "所有会话", "zh-Hant": "所有工作階段", "ja": "すべてのセッション", "ko": "모든 세션" },
+  "nav.open_by_id": { "en": "Open by ID", "zh": "按 ID 打开", "zh-Hant": "依 ID 開啟", "ja": "ID で開く", "ko": "ID로 열기" },
+  "nav.open_session": { "en": "Open a session", "zh": "打开会话", "zh-Hant": "開啟工作階段", "ja": "セッションを開く", "ko": "세션 열기" },
+  "nav.open_session_by_id": { "en": "Open a session by ID", "zh": "按 ID 打开会话", "zh-Hant": "依 ID 開啟工作階段", "ja": "ID でセッションを開く", "ko": "ID로 세션 열기" },
+  "nav.commands": { "en": "Commands", "zh": "命令", "zh-Hant": "命令", "ja": "コマンド", "ko": "명령" },
+  "nav.settings": { "en": "Settings", "zh": "设置", "zh-Hant": "設定", "ja": "設定", "ko": "설정" },
+  "nav.join_workspace": { "en": "Join a workspace", "zh": "加入工作区", "zh-Hant": "加入工作區", "ja": "ワークスペースに参加", "ko": "워크스페이스 참가" },
+  "nav.archived": { "en": "Archived", "zh": "已归档", "zh-Hant": "已封存", "ja": "アーカイブ済み", "ko": "보관됨" },
+
+  "server.switch": { "en": "Switch server", "zh": "切换服务器", "zh-Hant": "切換伺服器", "ja": "サーバーを切り替え", "ko": "서버 전환" },
+  "server.add": { "en": "Add a server", "zh": "添加服务器", "zh-Hant": "新增伺服器", "ja": "サーバーを追加", "ko": "서버 추가" },
+  "server.this": { "en": "This server", "zh": "此服务器", "zh-Hant": "此伺服器", "ja": "このサーバー", "ko": "이 서버" },
+  "server.own": { "en": "Pikibun on %{computer}", "zh": "%{computer} 上的 Pikibun", "zh-Hant": "%{computer} 上的 Pikibun", "ja": "%{computer} の Pikibun", "ko": "%{computer}의 Pikibun" },
+  "server.own_stopped": {
+    "en": "This server · not running in this app: choose it to start it",
+    "zh": "此服务器 · 未在此应用中运行：选择它即可启动",
+    "zh-Hant": "此伺服器 · 未在此應用程式中執行：選擇它即可啟動",
+    "ja": "このサーバー · このアプリでは実行されていません：選ぶと起動します",
+    "ko": "이 서버 · 이 앱에서 실행 중이 아님: 선택하면 시작됩니다"
+  },
+  "server.own_running": { "en": "Running on this computer", "zh": "正在此电脑上运行", "zh-Hant": "正在這台電腦上執行", "ja": "このコンピューターで実行中", "ko": "이 컴퓨터에서 실행 중" },
+  "server.own_start": {
+    "en": "Starts your own Pikibun on this computer",
+    "zh": "在此电脑上启动你自己的 Pikibun",
+    "zh-Hant": "在這台電腦上啟動你自己的 Pikibun",
+    "ja": "このコンピューターで自分の Pikibun を起動します",
+    "ko": "이 컴퓨터에서 나만의 Pikibun을 시작합니다"
+  },
+
+  "commands.new_session_in": { "en": "New session in…", "zh": "在…中新建会话", "zh-Hant": "在…中新增工作階段", "ja": "ワークスペースを選んで新しいセッション…", "ko": "다른 워크스페이스에서 새 세션…" },
+  "commands.choose_workspace": { "en": "Choose a workspace", "zh": "选择工作区", "zh-Hant": "選擇工作區", "ja": "ワークスペースを選択", "ko": "워크스페이스 선택" },
+  "commands.switch_session": { "en": "Switch session…", "zh": "切换会话…", "zh-Hant": "切換工作階段…", "ja": "セッションを切り替え…", "ko": "세션 전환…" },
+  "commands.type_session_title": { "en": "Type a session's title", "zh": "输入会话标题", "zh-Hant": "輸入工作階段標題", "ja": "セッションのタイトルを入力", "ko": "세션 제목 입력" },
+  "commands.no_sessions": { "en": "No sessions yet", "zh": "还没有会话", "zh-Hant": "尚無工作階段", "ja": "セッションはまだありません", "ko": "아직 세션이 없습니다" },
+  "commands.workspaces": { "en": "Workspaces…", "zh": "工作区…", "zh-Hant": "工作區…", "ja": "ワークスペース…", "ko": "워크스페이스…" },
+  "commands.no_workspaces": { "en": "No workspaces yet", "zh": "还没有工作区", "zh-Hant": "尚無工作區", "ja": "ワークスペースはまだありません", "ko": "아직 워크스페이스가 없습니다" },
+  "commands.all_workspaces": { "en": "All workspaces", "zh": "所有工作区", "zh-Hant": "所有工作區", "ja": "すべてのワークスペース", "ko": "모든 워크스페이스" },
+  "commands.new_workspace": { "en": "New workspace", "zh": "新建工作区", "zh-Hant": "新增工作區", "ja": "新しいワークスペース", "ko": "새 워크스페이스" },
+
+  "settings.section.profile": { "en": "Profile", "zh": "个人资料", "zh-Hant": "個人資料", "ja": "プロフィール", "ko": "프로필" },
+  "settings.section.password": { "en": "Password", "zh": "密码", "zh-Hant": "密碼", "ja": "パスワード", "ko": "비밀번호" },
+  "settings.section.notifications": { "en": "Notifications", "zh": "通知", "zh-Hant": "通知", "ja": "通知", "ko": "알림" },
+  "settings.section.hosts": { "en": "Hosts", "zh": "主机", "zh-Hant": "主機", "ja": "ホスト", "ko": "호스트" },
+  "settings.section.workspaces": { "en": "Workspaces", "zh": "工作区", "zh-Hant": "工作區", "ja": "ワークスペース", "ko": "워크스페이스" },
+  "settings.section.mcp-sharing": { "en": "MCP sharing", "zh": "MCP 共享", "zh-Hant": "MCP 共用", "ja": "MCP 共有", "ko": "MCP 공유" },
+  "settings.section.admin": { "en": "Administration", "zh": "管理", "zh-Hant": "管理", "ja": "管理", "ko": "관리" },
+  "settings.section.desktop": { "en": "Local hosts", "zh": "本地主机", "zh-Hant": "本機主機", "ja": "ローカルホスト", "ko": "로컬 호스트" },
+  "settings.section.self-host": { "en": "Self host", "zh": "自托管", "zh-Hant": "自行託管", "ja": "セルフホスト", "ko": "셀프 호스팅" },
+  "settings.section.appearance": { "en": "Appearance", "zh": "外观", "zh-Hant": "外觀", "ja": "外観", "ko": "모양" },
+  "settings.this_device": { "en": "This device", "zh": "此设备", "zh-Hant": "此裝置", "ja": "このデバイス", "ko": "이 기기" },
+  "settings.server_version": { "en": "Pikibun server %{version}", "zh": "Pikibun 服务器 %{version}", "zh-Hant": "Pikibun 伺服器 %{version}", "ja": "Pikibun サーバー %{version}", "ko": "Pikibun 서버 %{version}" },
+
+  "appearance.theme": { "en": "Theme", "zh": "主题", "zh-Hant": "主題", "ja": "テーマ", "ko": "테마" },
+  "appearance.color_theme": { "en": "Color theme", "zh": "颜色主题", "zh-Hant": "色彩主題", "ja": "カラーテーマ", "ko": "색상 테마" },
+  "appearance.color_theme_hint": {
+    "en": "On this device. System follows its light or dark appearance.",
+    "zh": "仅限此设备。“系统”跟随设备的浅色或深色外观。",
+    "zh-Hant": "僅限此裝置。「系統」會跟隨裝置的淺色或深色外觀。",
+    "ja": "このデバイスのみ。「システム」はデバイスのライト／ダーク外観に従います。",
+    "ko": "이 기기에만 적용됩니다. '시스템'은 기기의 라이트 또는 다크 모드를 따릅니다."
+  },
+  "appearance.system": { "en": "System", "zh": "系统", "zh-Hant": "系統", "ja": "システム", "ko": "시스템" },
+  "appearance.light": { "en": "Light", "zh": "浅色", "zh-Hant": "淺色", "ja": "ライト", "ko": "라이트" },
+  "appearance.dark": { "en": "Dark", "zh": "深色", "zh-Hant": "深色", "ja": "ダーク", "ko": "다크" },
+  "appearance.language": { "en": "Language", "zh": "语言", "zh-Hant": "語言", "ja": "言語", "ko": "언어" },
+  "appearance.display_language": { "en": "Display language", "zh": "显示语言", "zh-Hant": "顯示語言", "ja": "表示言語", "ko": "표시 언어" },
+  "appearance.display_language_hint": {
+    "en": "On this device. System follows the device's preferred languages.",
+    "zh": "仅限此设备。“系统”跟随设备的首选语言。",
+    "zh-Hant": "僅限此裝置。「系統」會跟隨裝置的偏好語言。",
+    "ja": "このデバイスのみ。「システム」はデバイスの優先言語に従います。",
+    "ko": "이 기기에만 적용됩니다. '시스템'은 기기의 기본 언어를 따릅니다."
+  },
+
+  "time.just_now": { "en": "just now", "zh": "刚刚", "zh-Hant": "剛剛", "ja": "たった今", "ko": "방금" },
+  "time.minutes_ago": { "en": "%{n} min ago", "zh": "%{n} 分钟前", "zh-Hant": "%{n} 分鐘前", "ja": "%{n} 分前", "ko": "%{n}분 전" },
+  "time.hours_ago": { "en": "%{n} h ago", "zh": "%{n} 小时前", "zh-Hant": "%{n} 小時前", "ja": "%{n} 時間前", "ko": "%{n}시간 전" },
+  "time.days_ago": { "en": "%{n} d ago", "zh": "%{n} 天前", "zh-Hant": "%{n} 天前", "ja": "%{n} 日前", "ko": "%{n}일 전" }
+}

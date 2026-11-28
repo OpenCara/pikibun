@@ -59,6 +59,35 @@ describe("on a device", () => {
     expect(again.shows("text:Pikibun")).toBe(true);
   });
 
+  test("language: the device's first, chosen in Appearance, kept on the device", async () => {
+    const chinese = await open("../App.tsx", { network: server(), storage: signedIn, locale: "zh-CN" });
+    await chinese.press("id:open-settings");
+    await chinese.waitFor("text:外观");
+    chinese.dispose();
+    const traditional = await open("../App.tsx", { network: server(), storage: signedIn, locale: "zh-TW" });
+    await traditional.press("id:open-settings");
+    await traditional.waitFor("text:外觀");
+    traditional.dispose();
+    const app = await open("../App.tsx", { network: server(), storage: signedIn });
+    await app.press("id:open-settings");
+    await app.press("id:settings-section-appearance");
+    await app.waitFor("id:appearance-language");
+    expect(app.shows("text:Display language")).toBe(true);
+    await app.press("id:appearance-language");
+    await app.press("text:日本語");
+    await app.waitFor("text:表示言語");
+    expect(app.storage()["pikibun.language"]).toBe("ja");
+    app.dispose();
+    const again = await open("../App.tsx", { network: server(), storage: { ...signedIn, "pikibun.language": "ko" } });
+    await again.press("id:open-settings");
+    await again.waitFor("text:모양");
+    await again.press("id:settings-section-appearance");
+    await again.press("id:appearance-language");
+    await again.press("text:English");
+    await again.waitFor("text:Display language");
+    expect(again.storage()["pikibun.language"]).toBe("en");
+  });
+
   test("a workspace's row folds its sessions away and back", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn });
     await app.waitFor("id:session-row-s1");
