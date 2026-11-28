@@ -8,7 +8,7 @@ in [Models and tools](../models-and-tools.md#prompt-cache-warming); this note sa
 
 | Piece | Where |
 |---|---|
-| The policy: refresh delay, cache lifetime, the savings estimate, replayable requests, refresh options | pi-ai's `cache-warming` module (1.5.2), used as it is: `getCacheWarmingDelayMs`, `getPromptCacheTtlMs`, `evaluateCacheWarming`, `isCacheWarmingReplayable`, `getCacheWarmingRequestOptions`, `CACHE_WARMING_MAX_AGE_MS`, `CACHE_WARMING_MAX_IDLE_AGE_MS` |
+| The policy: refresh delay, cache lifetime, the savings estimate, replayable requests, refresh options | pi-ai's `cache-warming` module (1.5.2), used as it is: `getCacheWarmingDelayMs`, `getPromptCacheTtlMs`, `evaluateCacheWarming`, `isCacheWarmingReplayable`, `getCacheWarmingRequestOptions`, `CACHE_WARMING_MAX_AGE_MS`, `CACHE_WARMING_MAX_IDLE_AGE_MS`. Which models it warms follows the catalog's `promptCache`: from pi-ai 1.7.0 GitHub Copilot's Claude models declare it too, so their sessions are warmed with no change here |
 | Remembering each request, scheduling refreshes, the generation hooks | `apps/runner/src/session/cache-warming.ts` (`rememberRequests`, `CacheWarmers`) |
 | What the session knows: is the conversation busy, would its next request differ, is it the shared conversation | `sessionWarming` in the same file, over the session's `Harness` and metadata |
 | Wiring | `RunnerSession.openHarness`: the session's `Models` are wrapped, and the hooks sit on its `workspace-tools` extension, which every conversation of the session runs |

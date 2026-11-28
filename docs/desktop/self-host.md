@@ -29,7 +29,9 @@ The first two open the same page. If **Install Pikibun's command** appears, choo
 
 Choose **Start Pikibun**. Where this computer has no sandbox (macOS and Windows, or Linux without bubblewrap), the app first asks whether to **Run unsandboxed**: your sessions' commands then run as you, with access to your files and network. Read [Running without the sandbox](../hosts.md#running-without-the-sandbox) before you agree. If you cancel, nothing starts.
 
-The badge turns **Running**, and the page shows your Pikibun's address, `http://127.0.0.1:7878`. It is reachable from this computer only.
+The badge turns **Running**, and the page shows your Pikibun's address, `http://127.0.0.1:7878`.
+
+**Listens on** chooses where its port is open: **Every network interface** (the default), **This Mac only**, or one of this computer's network interfaces (`en0`, `tailscale0`), always with this computer's own loopback as well. Choosing another while it runs starts it again there, and the row shows the addresses it listens on. It answers as `http://127.0.0.1:7878` wherever it is reached, so another device uses it through a forwarded port (an SSH tunnel, a container's or virtual machine's port mapping); to serve other devices at an address of their own, [share it](#sharing-it-with-your-team). Choose **This Mac only** where nothing else should reach its port. `pikibun serve --listen` chooses the same in a terminal, several interfaces or addresses at once too.
 
 ## 3. Sign in to it
 
@@ -59,7 +61,7 @@ Every other Git provider, GitHub Enterprise Server included, connects with its o
 - **It runs while the app is open.** Quitting the app stops it. If it was running when you quit, it starts again at the next launch, and the app signs back in to it.
 - **Stop** on the Self host page stops it. It won't start again at the next launch until you start it.
 - **Switch to another server:** the server button at the bottom of the sidebar and **Settings → Profile → Servers** list the servers this app is signed in to: **Switch** changes to one, and **Add a server** signs in to another, without signing out of your Pikibun (see [Switching between servers](client.md#switching-between-servers)). Your Pikibun keeps running, and keeps its data, until you stop it.
-- **Sign in another app on this computer:** **Settings → Profile → Signed-in apps → Sign in an app** makes a [sign-in code](../accounts.md#signing-in-an-app-with-a-code), with nothing to type. Your Pikibun is reachable from this computer only, so the code works for apps here, not on your phone; for other devices, [share it](#sharing-it-with-your-team).
+- **Sign in another app on this computer:** **Settings → Profile → Signed-in apps → Sign in an app** makes a [sign-in code](../accounts.md#signing-in-an-app-with-a-code), with nothing to type. Your Pikibun answers as `http://127.0.0.1:7878`, so the code works for apps here, not on your phone; for other devices, [share it](#sharing-it-with-your-team).
 - **Your data** (the database, session backups, the server's secrets and this computer's pairing with it) is in `~/.local/share/pikibun/server`, shown under **State directory**. It is the same state `pikibun serve` uses in a terminal, so a Pikibun you set up there carries over. Only one of the two runs at a time.
 - **Recent activity** at the bottom of the page shows what the server did, and why it couldn't start.
 

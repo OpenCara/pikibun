@@ -1,4 +1,4 @@
-import type { AddressInfo } from 'node:net';
+import { createServer as createNetServer, type AddressInfo, type Server as NetServer } from 'node:net';
 import { createAdaptorServer } from '@hono/node-server';
 import type { ServerConfig } from './config.js';
 import { rejectUpgrade } from './connector-hub.js';
@@ -68,14 +68,22 @@ function sweep(name: string, ms: number, run: () => Promise<unknown>, overlappin
   return timer;
 }
 
+function listenOn(listener: NetServer, port: number, host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(port, host, () => { listener.off('error', reject); resolve(); });
+  });
+}
+
 export interface RunningServer {
   address: AddressInfo;
+  addresses: AddressInfo[];
   close(): Promise<void>;
   lost: Promise<Error>;
 }
 
 export async function startServer(config: ServerConfig): Promise<RunningServer> {
-  const { env, host, port, trustProxy, staticDir, preview } = config;
+  const { env, hosts, port, trustProxy, staticDir, preview } = config;
   const previewEnv = preview ? { ...env, APP_ORIGIN: preview.origin } : undefined;
   const environment = (url: string) => preview && new URL(url).origin === preview.origin ? previewEnv! : env;
   const hub = env.CONNECTOR_HUB!;
@@ -144,26 +152,35 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
     })().catch(error => rejectUpgrade(socket, connectorError(error)));
   });
 
-  const listening = Promise.withResolvers<void>();
-  server.once('error', listening.reject);
-  server.listen(port, host, () => listening.resolve());
-  try { await listening.promise; } catch (error) {
+  const [first, ...others] = hosts;
+  const extra: NetServer[] = [];
+  try {
+    await listenOn(server, port, first!);
+    const bound = (server.address() as AddressInfo).port;
+    for (const host of others) {
+      const listener = createNetServer(socket => server.emit('connection', socket));
+      extra.push(listener);
+      await listenOn(listener, bound, host);
+    }
+  } catch (error) {
+    for (const listener of [server, ...extra]) if (listener.listening) listener.close();
     for (const timer of timers) clearInterval(timer);
     await hub.close();
     await instanceLock.release();
     await env.DB.close();
     throw error;
   }
-  server.off('error', listening.reject);
 
   let closing: Promise<void> | undefined;
   const lost = Promise.withResolvers<Error>();
   const running: RunningServer = {
     address: server.address() as AddressInfo,
+    addresses: [server, ...extra].map(listener => listener.address() as AddressInfo),
     lost: lost.promise,
     close() {
       closing ??= (async () => {
         for (const timer of timers) clearInterval(timer);
+        for (const listener of extra) listener.close();
         const closed = new Promise<void>(resolve => server.close(() => resolve()));
         if ('closeAllConnections' in server) server.closeAllConnections();
         await hub.close();

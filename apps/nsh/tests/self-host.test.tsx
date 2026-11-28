@@ -89,6 +89,25 @@ describe("Self host", () => {
     expect(app.dialogs().length).toBe(0);
   });
 
+  test("chooses where Pikibun listens: every interface by default, this computer only or one interface, starting it again if it runs", async () => {
+    const { app, sent, showsText } = await openPanel({ sandboxed: true });
+    await app.waitFor("id:self-host-listen-choice");
+    await app.waitUntil(() => showsText("Every network interface"));
+    await app.press("id:self-host-listen-choice");
+    await app.press("text:This Mac only");
+    await app.press("id:self-host-start");
+    await app.waitFor("id:self-host-stop");
+    expect(sent()).toContain(JSON.stringify({ type: "start", listen: ["loopback"] }));
+    await app.waitUntil(() => showsText(`Listening on ${LOCAL}; changing it starts Pikibun again`));
+
+    await app.press("id:self-host-listen-choice");
+    await app.press("text:en0");
+    await app.waitUntil(() => sent().includes(JSON.stringify({ type: "start", listen: ["en0"] })));
+    expect(sent()).toContain(JSON.stringify({ type: "stop" }));
+    await app.waitUntil(() => showsText(`Listening on ${LOCAL}, http://192.168.1.20:7878`));
+    expect(app.dialogs().length).toBe(0);
+  });
+
   test("where this computer can't run sessions, it says why, asks no consent, and still serves", async () => {
     const { app, sent, showsText } = await openPanel({ hostProblem: "Pi has no models with configured authentication." });
     await app.waitUntil(() => showsText("Pi has no models with configured authentication."));

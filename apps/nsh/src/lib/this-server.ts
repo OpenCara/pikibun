@@ -34,6 +34,7 @@ export class ThisServer {
   readonly problem = signal<LaunchProblem | null>(null);
   readonly error = signal("");
   readonly logs = signal<LogLine[]>([]);
+  readonly listenChoice = signal<string[] | null>(null);
   private resume: Saved["resume"];
   private loaded?: Promise<void>;
   private readonly channel = new CommandChannel<ServerEvent, ServerRequest>({
@@ -146,15 +147,30 @@ export class ThisServer {
       }
     }
     this.error.set("");
-    const result = await this.channel.request({ type: "start", ...(unsandboxedConsent ? { unsandboxedConsent: true } : {}) });
+    const listen = untracked(this.listenChoice);
+    const result = await this.channel.request({ type: "start", ...(unsandboxedConsent ? { unsandboxedConsent: true } : {}), ...(listen ? { listen } : {}) });
     if (!result.ok && OLD_COMMAND.test(result.error.message)) {
       this.problem.set({ kind: "outdated" });
       return this.refuse("");
     }
     if (!result.ok) return this.refuse(result.error.message);
+    if (listen && untracked(this.listenChoice) === listen) this.listenChoice.set(null);
     this.setResume({ unsandboxedConsent });
     void this.refresh();
     return { ok: true };
+  }
+
+  listening(): string[] {
+    return this.listenChoice() ?? this.inspection()?.listen ?? ["all"];
+  }
+
+  async chooseListen(listen: string[]): Promise<Outcome> {
+    this.listenChoice.set(listen);
+    if (untracked(this.status).state === "stopped") return { ok: true };
+    const resume = this.resume;
+    const stopped = await this.stop();
+    if (!stopped.ok) return stopped;
+    return this.start(resume);
   }
 
   async stop(): Promise<Outcome> {

@@ -157,8 +157,8 @@ try {
 }
 const { env, staticDir, trustProxy } = config;
 const server = await startServer(config);
-const listening = `${server.address.address}:${server.address.port}`;
-console.log(`pikibun: listening on http://${listening} (database=${env.DB.provider}, storage=${env.BUCKET?.provider ?? 'none'}, workspaceDatabases=${env.WORKSPACE_DATABASES ? (env.WORKSPACE_DATABASES.privateHosts ? 'public+private' : 'public') : 'off'}, static=${staticDir}, trustProxy=${trustProxy})`);
+const listening = server.addresses.map(address => `http://${address.family === 'IPv6' ? `[${address.address}]` : address.address}:${address.port}`).join(', ');
+console.log(`pikibun: listening on ${listening} (database=${env.DB.provider}, storage=${env.BUCKET?.provider ?? 'none'}, workspaceDatabases=${env.WORKSPACE_DATABASES ? (env.WORKSPACE_DATABASES.privateHosts ? 'public+private' : 'public') : 'off'}, static=${staticDir}, trustProxy=${trustProxy})`);
 
 let stopping = false;
 void server.lost.then(() => {

@@ -3,8 +3,10 @@ import { readFile } from "node:fs/promises";
 import { acquireRunnerLease } from "./lease.js";
 import { RunnerService, createRunnerApp } from "./server.js";
 import { recoverResourceOrphans, validateResourceConfig, type ResourceConfig } from "./resources.js";
+import { withholdProgramResumeToken } from "./program-resume.js";
 
 if (Number(process.versions.node.split(".")[0]) < 24) throw new Error("This runner requires Node 24 or newer");
+withholdProgramResumeToken();
 let resources: Readonly<ResourceConfig> | undefined;
 if (process.env.RUNNER_RESOURCES_FILE) {
   try { resources = validateResourceConfig(JSON.parse(await readFile(process.env.RUNNER_RESOURCES_FILE, "utf8"))); }

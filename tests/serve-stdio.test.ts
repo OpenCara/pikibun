@@ -90,6 +90,8 @@ test("pikibun serve --stdio runs the local server for the app: no GitHub app, it
   assert.equal(inspected.inspection.stateDir, stateDir);
   assert.equal(inspected.inspection.port, port);
   assert.ok(!("githubClientId" in inspected.inspection));
+  assert.deepEqual(inspected.inspection.listen, ["all"], "it listens on every interface unless told otherwise");
+  assert.ok(Array.isArray(inspected.inspection.interfaces));
 
   const malformed = await server.request({ type: "start", github: { clientId: "Ov23liAbCdEf", clientSecret: "0123456789abcdef0123456789abcdef01234567" } });
   assert.ok(malformed.type === "result" && !malformed.ok);
@@ -102,6 +104,7 @@ test("pikibun serve --stdio runs the local server for the app: no GitHub app, it
   const running = await server.next(event => event.type === "status" && event.state === "running", before);
   assert.ok(running.type === "status");
   assert.equal(running.origin, origin);
+  assert.deepEqual(running.listening, [`http://0.0.0.0:${port}`]);
   assert.match(running.signInToken ?? "", /^[A-Za-z0-9_-]{43}$/);
   assert.notEqual(running.signInToken, claimSecret, "the token is made at this start, not kept in the state file");
   assert.ok(!server.output.some(line => !line.startsWith(STDIO_FRAME) && line.includes(running.signInToken!)), "the sign-in token goes only to the app, in its status");
@@ -132,8 +135,18 @@ test("pikibun serve --stdio runs the local server for the app: no GitHub app, it
   await server.next(event => event.type === "status" && event.state === "stopped", stopping);
   await assert.rejects(fetch(`${origin}/api/health`));
 
-  const restarted = await server.request({ type: "start" });
+  const misplaced = await server.request({ type: "start", listen: ["all", "eth0"] });
+  assert.ok(misplaced.type === "result" && !misplaced.ok);
+  assert.match(misplaced.error.message, /stand alone/);
+  const restarting = server.events.length;
+  const restarted = await server.request({ type: "start", listen: ["loopback"] });
   assert.ok(restarted.type === "result" && restarted.ok, "it starts again");
+  const loopbackOnly = await server.next(event => event.type === "status" && event.state === "running", restarting);
+  assert.ok(loopbackOnly.type === "status");
+  assert.deepEqual(loopbackOnly.listening, [origin], "the app chose this computer only");
+  const reinspected = await server.request({ type: "inspect" });
+  assert.ok(reinspected.type === "result" && reinspected.ok);
+  assert.deepEqual(reinspected.inspection?.listen, ["loopback"], "and it is remembered");
   closed = true;
   assert.equal(await server.close(), 0);
   await assert.rejects(fetch(`${origin}/api/health`));

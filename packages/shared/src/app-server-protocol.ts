@@ -4,15 +4,20 @@ export interface ServerStartRequest {
   type: "start";
   id: number;
   unsandboxedConsent?: boolean;
+  listen?: string[];
 }
 
 export interface ServerStopRequest { type: "stop"; id: number }
 
 export type ServerRequest = ServerInspectRequest | ServerStartRequest | ServerStopRequest;
 
+export interface ServerNetworkInterface { name: string; addresses: string[] }
+
 export interface ServerInspection {
   stateDir: string;
   port: number;
+  listen?: string[];
+  interfaces?: ServerNetworkInterface[];
   hostMode: "sandboxed" | "unsandboxed";
   unsandboxedWarning?: string;
   hostProblem?: string;
@@ -25,6 +30,7 @@ export interface ServerStatus {
   state: ServerState;
   origin?: string;
   signInToken?: string;
+  listening?: string[];
   host: ServerHostState;
 }
 
