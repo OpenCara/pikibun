@@ -86,17 +86,24 @@ test("a local server refuses state others could read or that a symlink points to
   await assert.rejects(loadLocalState(join(parent, "link")), /not a symlink/);
 });
 
-test("LOCAL_MODE listens on loopback only and needs its claim secret", async () => {
+test("LOCAL_MODE listens on this machine, and elsewhere only besides, and needs its claim secret", async () => {
   const base = { APP_ORIGIN: origin, SESSION_SECRET: "s".repeat(32), VAULT_KEY: Buffer.alloc(32, 1).toString("base64url"), DATABASE_URL: "sqlite::memory:" };
   const refused = async (settings: Record<string, string>, message: RegExp) => {
     await assert.rejects(loadConfig({ ...base, ...settings }), (error: unknown) => error instanceof ConfigurationError && message.test(error.message));
   };
   await refused({ LOCAL_MODE: "true" }, /LOCAL_CLAIM_SECRET/);
-  await refused({ LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, HOST: "0.0.0.0" }, /loopback only/);
+  await refused({ LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, HOST: "192.0.2.10" }, /on this machine too/);
+  await refused({ LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, HOST: "127.0.0.1," }, /several separated by commas/);
+  for (const [host, hosts] of [["0.0.0.0", ["0.0.0.0"]], ["127.0.0.1, 192.0.2.10,127.0.0.1", ["127.0.0.1", "192.0.2.10"]]] as const) {
+    const config = await loadConfig({ ...base, LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, HOST: host });
+    assert.deepEqual(config.hosts, hosts);
+    await config.env.CONNECTOR_HUB?.close();
+    await config.env.DB.close();
+  }
   await refused({ LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, APP_ORIGIN: "https://pikibun.example.com" }, /on this machine/);
   await refused({ LOCAL_MODE: "yes" }, /"true" or "false"/);
   const config = await loadConfig({ ...base, LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret });
-  assert.equal(config.host, "127.0.0.1");
+  assert.deepEqual(config.hosts, ["127.0.0.1"]);
   await config.env.CONNECTOR_HUB?.close();
   await config.env.DB.close();
 });
@@ -516,7 +523,7 @@ test("pikibun serve's server pairs this computer as its owner's host once they h
   assert.deepEqual((await connectors()).map(row => row.id), [paired!.id]);
 });
 
-const sharedBase = { origin: "https://pikibun.example.test", listen: "loopback" as const, trustProxy: true, signup: "invite" as const, passwordAuth: true, admins: ["password:admin", "github:4242"] };
+const sharedBase = { origin: "https://pikibun.example.test", trustProxy: true, signup: "invite" as const, passwordAuth: true, admins: ["password:admin", "github:4242"] };
 
 test("sharing settings are checked field by field, saved with the state, and keep their GitHub OAuth app until replaced", async t => {
   const stateDir = join(await directory(t), "server");
@@ -529,7 +536,7 @@ test("sharing settings are checked field by field, saved with the state, and kee
     [{ ...sharedBase, admins: ["github:1", "github:1"] }, /twice/],
     [{ ...sharedBase, passwordAuth: false }, /way to sign in/],
     [{ ...sharedBase, signup: "anyone" }, /create an account/],
-    [{ ...sharedBase, listen: "lan" }, /listens/],
+    [{ ...sharedBase, listen: "lan" }, /damaged/],
     [{ ...sharedBase, extra: 1 }, /unknown/],
   ] as const) {
     await assert.rejects(loadLocalState(stateDir, { shared: shared as never }), message, JSON.stringify(shared));
@@ -558,6 +565,7 @@ test("shared, the same state serves others at its public origin: no claim link, 
   assert.equal(server.mode, "shared");
   assert.equal(server.origin, "https://pikibun.example.test");
   assert.equal(server.address, `http://127.0.0.1:${port}`);
+  assert.deepEqual(server.listening, [`http://0.0.0.0:${port}`], "it listens on every interface by default");
   assert.equal(server.signInUrl(), null);
   const health = await (await fetch(`${server.address}/api/health`)).json() as Record<string, unknown>;
   assert.deepEqual([health.passwordAuth, health.githubSignup, health.passwordSignup, health.localServer], [true, "invite", "invite", undefined]);
@@ -578,11 +586,10 @@ test("pikibun serve --share takes its settings from the options once, then from 
   assert.throws(() => sharedSettings(undefined, {}), /--public-origin/);
   assert.throws(() => sharedSettings(undefined, { "public-origin": "https://pikibun.example.test" }), /--admin/);
   assert.throws(() => sharedSettings(undefined, { "public-origin": "http://pikibun.example.test", admin: ["github:1"] }), /HTTPS/);
-  assert.throws(() => sharedSettings(undefined, { "public-origin": "https://pikibun.example.test", admin: ["github:1"], listen: "lan" }), /--listen/);
   const first = sharedSettings(undefined, { "public-origin": "https://pikibun.example.test/", admin: ["github:1"] });
-  assert.deepEqual(first, { origin: "https://pikibun.example.test", admins: ["github:1"], listen: "loopback", signup: "invite", trustProxy: false, passwordAuth: false });
-  assert.deepEqual(sharedSettings({ ...first, signup: "open", passwordAuth: true }, { listen: "all" }),
-    { ...first, signup: "open", passwordAuth: true, listen: "all" });
+  assert.deepEqual(first, { origin: "https://pikibun.example.test", admins: ["github:1"], signup: "invite", trustProxy: false, passwordAuth: false });
+  assert.deepEqual(sharedSettings({ ...first, signup: "open", passwordAuth: true }, { "trust-proxy": true }),
+    { ...first, signup: "open", passwordAuth: true, trustProxy: true });
 });
 
 test("after serving others, running for its owner alone admits only the pinned owner: teammates' sign-ins and hosts are refused", async t => {

@@ -10,7 +10,7 @@ import { webBuild } from './static.js';
 
 export interface ServerConfig {
   env: Env;
-  host: string;
+  hosts: string[];
   port: number;
   trustProxy: boolean;
   staticDir: string;
@@ -78,13 +78,14 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
   if (env.SIGNUP !== undefined && !['open', 'invite', 'off'].includes(env.SIGNUP)) {
     throw new ConfigurationError('SIGNUP must be "open", "invite" or "off" (unset: GitHub sign-ups are open and password sign-ups need an invite).');
   }
-  const listenHost = processEnv.HOST || (env.LOCAL_MODE === 'true' ? '127.0.0.1' : '0.0.0.0');
+  const listenHosts = [...new Set((processEnv.HOST || (env.LOCAL_MODE === 'true' ? '127.0.0.1' : '0.0.0.0')).split(',').map(host => host.trim()))];
+  if (listenHosts.some(host => !host)) throw new ConfigurationError('HOST must be an address to listen on, or several separated by commas.');
   if (env.LOCAL_MODE !== undefined) {
     if (!['true', 'false'].includes(env.LOCAL_MODE)) throw new ConfigurationError('LOCAL_MODE must be "true" or "false".');
     if (env.LOCAL_MODE === 'true') {
       if (!env.LOCAL_CLAIM_SECRET || !/^[A-Za-z0-9_-]{43}$/.test(env.LOCAL_CLAIM_SECRET)) throw new ConfigurationError('LOCAL_MODE needs LOCAL_CLAIM_SECRET, a base64url-encoded random 32-byte value.');
       if (!LOOPBACK.includes(new URL(env.APP_ORIGIN).hostname.replace(/^\[|\]$/g, ''))) throw new ConfigurationError('LOCAL_MODE needs APP_ORIGIN on this machine, such as http://127.0.0.1:8787.');
-      if (!LOOPBACK.includes(listenHost)) throw new ConfigurationError('LOCAL_MODE listens on loopback only: leave HOST unset or set it to 127.0.0.1.');
+      if (!listenHosts.some(host => [...LOOPBACK, '0.0.0.0', '::'].includes(host))) throw new ConfigurationError('LOCAL_MODE listens on this machine too: include 127.0.0.1 (or 0.0.0.0) in HOST.');
       if (env.LOCAL_OWNER_ID !== undefined && !LOCAL_OWNER_ID.test(env.LOCAL_OWNER_ID)) throw new ConfigurationError('LOCAL_OWNER_ID must be a user ID such as github:12345 or password:alice.');
       if (env.LOCAL_OWNER_NAME !== undefined && !PASSWORD_USERNAME.test(env.LOCAL_OWNER_NAME)) throw new ConfigurationError('LOCAL_OWNER_NAME must be a username: 3 to 39 lowercase letters, digits, - and _.');
       if (env.LOCAL_FORWARD_SECRET !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(env.LOCAL_FORWARD_SECRET)) throw new ConfigurationError('LOCAL_FORWARD_SECRET must be a base64url-encoded random 32-byte value.');
@@ -130,7 +131,7 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
   env.CONNECTOR_HUB = new ConnectorHubRegistry(env);
   return {
     env, port, databaseUrl, storageUrl,
-    host: listenHost,
+    hosts: listenHosts,
     trustProxy: trustProxyValue === 'true',
     staticDir,
     ...(preview ? { preview } : {}),

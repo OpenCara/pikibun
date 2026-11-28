@@ -59,7 +59,7 @@ What keeps a code safe:
 
 - It works once and for 10 minutes. The server keeps only its hash, and you can have at most 5 waiting; **Cancel** ends one sooner.
 - Making one takes your password, or a GitHub sign-in from the last 15 minutes (**Sign in with GitHub again** brings you back), so a browser left signed in, or a stolen sign-in, can't turn itself into a 30-day app.
-- On a [Pikibun on your own computer](local.md), whose owner has neither, it takes a browser or app that signed in with the sign-in link itself: an app signed in with a code can't make the next one. Such a Pikibun is reachable from that computer only, so its codes sign in apps there, and the page shows no QR code.
+- On a [Pikibun on your own computer](local.md), whose owner has neither, it takes a browser or app that signed in with the sign-in link itself: an app signed in with a code can't make the next one. Such a Pikibun answers as its loopback address, `http://127.0.0.1:7878`, so its codes sign in apps on that computer, and the page shows no QR code.
 - It ends with the browser or app that made it: signing that out, changing your password or a suspension makes it worthless. An app signed in with a password-made code ends, as the password's sign-ins do, when the operator turns `PASSWORD_AUTH` off.
 - Anyone who has the link or the QR code can sign in as you until it is used or expires, so show it to nobody. The app always asks before a link signs it in, so a link someone sends you can't sign your app in to their account or their server unnoticed.
 

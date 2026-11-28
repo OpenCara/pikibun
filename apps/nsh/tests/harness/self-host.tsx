@@ -43,8 +43,9 @@ function link(answer: (request: { type: string; id: number; [key: string]: unkno
   };
 }
 
+let listen = ["all"];
 const inspection = (): ServerInspection => ({
-  stateDir: "/Users/ada/.local/share/pikibun/server", port: 7878,
+  stateDir: "/Users/ada/.local/share/pikibun/server", port: 7878, listen, interfaces: [{ name: "en0", addresses: ["192.168.1.20"] }],
   hostMode: params.sandboxed === true ? "sandboxed" : "unsandboxed",
   ...(params.sandboxed === true ? {} : { unsandboxedWarning: "WARNING: running WITHOUT a sandbox." }),
   ...(typeof params.hostProblem === "string" ? { hostProblem: params.hostProblem } : {}),
@@ -57,7 +58,9 @@ setServerLauncher(() => link((request, emit) => {
   if (request.type === "inspect") reply({ inspection: inspection() });
   else if (request.type === "start") {
     if (command === "old") { emit({ type: "result", id: request.id, ok: false, error: { message: "Add your GitHub OAuth app first: Pikibun signs you in with it." } }); return; }
-    emit({ type: "status", state: "running", origin: LOCAL, ...(params.noToken === true ? {} : { signInToken: SIGN_IN_TOKEN }), host: "waiting" });
+    if (Array.isArray(request.listen)) listen = request.listen as string[];
+    const listening = listen[0] === "all" ? ["http://0.0.0.0:7878"] : listen[0] === "loopback" ? [LOCAL] : [LOCAL, "http://192.168.1.20:7878"];
+    emit({ type: "status", state: "running", origin: LOCAL, listening, ...(params.noToken === true ? {} : { signInToken: SIGN_IN_TOKEN }), host: "waiting" });
     emit({ type: "log", level: "info", message: `Pikibun is running at ${LOCAL}, reachable from this computer only.` });
     reply();
   } else if (request.type === "stop") {

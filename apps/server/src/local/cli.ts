@@ -9,20 +9,27 @@ import { githubOAuthAppInstructions, LocalServerError, startLocalServer } from '
 import { readNewPassword } from '../password-accounts-cli.js';
 import { defaultLocalStateDir, LocalStateError, peekLocalState, sharedOrigin, validGitHubApp, type GitHubOAuthApp, type SharedConfig } from './state.js';
 import { openLocalStateTakingOver } from './discovery.js';
+import { DEFAULT_LISTEN, describeListen, LISTEN_ALL, parseListen, resolveListen } from './listen.js';
 
 const HELP = `Usage: pikibun serve [options]
 
 Run Pikibun on this computer, for yourself: the server and its web app on
-http://127.0.0.1:7878, reachable from this computer only, and this computer as
-the host that runs your sessions. No account at a Pikibun service, and no
-GitHub sign-in, is needed.
+http://127.0.0.1:7878, listening on every network interface unless --listen
+says otherwise, and this computer as the host that runs your sessions. No
+account at a Pikibun service, and no GitHub sign-in, is needed.
 
 Each run prints a private sign-in link: open it to sign in as this Pikibun's
 owner, the only account that can sign in. The Pikibun app signs you in itself.
 Everything is kept in the state directory; later runs need no options.
 
 Options:
-  --port PORT              Listen on 127.0.0.1:PORT (default 7878; remembered)
+  --port PORT              Listen on PORT (default 7878; remembered)
+  --listen WHERE           Where it listens (remembered): all (the default:
+                           every network interface), loopback (this computer
+                           only), or network interfaces and addresses such as
+                           tailscale0 or 192.168.1.20 (comma-separated or
+                           repeated; this computer's loopback is always
+                           included)
   --no-host                Serve only: run no sessions on this computer (pair
                            other machines with \`pikibun connect\` instead)
   --unsafe-no-sandbox      Run agent work directly on this computer without
@@ -46,8 +53,6 @@ Share it with others (a full multi-user server, from the same data):
   --admin USER_ID          An administrator, github:12345 or password:alice
                            (repeatable; required once). The first with an
                            account owns this computer's host
-  --listen WHERE           loopback (default: a proxy or tunnel on this
-                           computer) or all (a proxy on another machine)
   --trust-proxy            Honor the proxy's X-Forwarded-Proto/-Host
   --signup MODE            Who may create an account: invite (default), open
                            or off
@@ -112,8 +117,15 @@ async function hostOptions(values: Record<string, string | boolean | string[] | 
   };
 }
 
+export function listenChoice(values: readonly string[]): string[] {
+  const listen = parseListen(values);
+  const resolved = resolveListen(listen);
+  if (!resolved.ok) throw new ConnectorSetupError(`--listen: ${resolved.error}`);
+  return listen;
+}
+
 export function sharedSettings(saved: SharedConfig | undefined, values: {
-  'public-origin'?: string; admin?: string[]; listen?: string; 'trust-proxy'?: boolean; signup?: string; 'password-auth'?: boolean;
+  'public-origin'?: string; admin?: string[]; 'trust-proxy'?: boolean; signup?: string; 'password-auth'?: boolean;
 }): Omit<SharedConfig, 'github'> {
   const origin = values['public-origin'] ?? saved?.origin;
   if (!origin) throw new ConnectorSetupError('--share needs --public-origin https://... the first time: the address people open, served by your TLS proxy or tunnel.');
@@ -121,11 +133,9 @@ export function sharedSettings(saved: SharedConfig | undefined, values: {
   if (!parsed.ok) throw new ConnectorSetupError(`--public-origin: ${parsed.error}`);
   const admins = values.admin ?? saved?.admins;
   if (!admins?.length) throw new ConnectorSetupError('--share needs --admin USER_ID the first time (github:12345, which https://api.github.com/users/<login> shows as id, or password:alice).');
-  const listen = values.listen ?? saved?.listen ?? 'loopback';
-  if (listen !== 'loopback' && listen !== 'all') throw new ConnectorSetupError('--listen must be loopback or all.');
   const signup = values.signup ?? saved?.signup ?? 'invite';
   if (signup !== 'open' && signup !== 'invite' && signup !== 'off') throw new ConnectorSetupError('--signup must be open, invite or off.');
-  return { origin: parsed.origin, admins, listen, signup, trustProxy: values['trust-proxy'] ?? saved?.trustProxy ?? false,
+  return { origin: parsed.origin, admins, signup, trustProxy: values['trust-proxy'] ?? saved?.trustProxy ?? false,
     passwordAuth: values['password-auth'] ?? saved?.passwordAuth ?? false };
 }
 
@@ -141,18 +151,19 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
     'unsafe-no-sandbox': { type: 'boolean' }, 'sessions-leave-sandbox': { type: 'boolean' }, 'state-dir': { type: 'string' }, 'pi-agent-dir': { type: 'string' },
     model: { type: 'string', multiple: true }, resources: { type: 'string' },
     'allow-faux': { type: 'boolean' }, 'allow-test-shell': { type: 'boolean' }, 'test-mode': { type: 'boolean' },
-    share: { type: 'boolean' }, 'public-origin': { type: 'string' }, admin: { type: 'string', multiple: true }, listen: { type: 'string' },
+    share: { type: 'boolean' }, 'public-origin': { type: 'string' }, admin: { type: 'string', multiple: true }, listen: { type: 'string', multiple: true },
     'trust-proxy': { type: 'boolean' }, signup: { type: 'string' }, 'password-auth': { type: 'boolean' }, 'create-admin': { type: 'string' },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
   const share = values.share === true;
-  const shareOnly = ['public-origin', 'admin', 'listen', 'trust-proxy', 'signup', 'password-auth', 'create-admin', 'github-client-id'] as const;
+  const shareOnly = ['public-origin', 'admin', 'trust-proxy', 'signup', 'password-auth', 'create-admin', 'github-client-id'] as const;
   const misplaced = shareOnly.find(name => values[name] !== undefined);
   if (!share && misplaced) {
     throw new ConnectorSetupError(misplaced === 'github-client-id' ? '--github-client-id needs --share: for yourself alone, Pikibun signs you in without GitHub.' : `--${misplaced} needs --share.`);
   }
   const port = values.port === undefined ? undefined : Number(values.port);
   if (port !== undefined && !(Number.isInteger(port) && port >= 1024 && port <= 65535)) throw new ConnectorSetupError('--port must be a number from 1024 to 65535.');
+  const listen = values.listen === undefined ? undefined : listenChoice(values.listen);
   if (values['allow-faux'] && !values['test-mode']) throw new ConnectorSetupError('--allow-faux needs --test-mode: a server outside test mode offers no fixture models.');
   const stateDir = values['state-dir'] ?? defaultLocalStateDir();
   let server;
@@ -164,18 +175,19 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
     if (values['create-admin'] && !values['create-admin'].trim()) throw new ConnectorSetupError('--create-admin needs a username.');
     const hostSetup = values['no-host'] ? undefined : await hostOptions(values);
     const { state, release } = await openLocalStateTakingOver(stateDir, {
-      ...(shared ? { shared: { ...shared, ...(github ? { github } : {}) } } : {}), ...(port ? { port } : {}),
+      ...(shared ? { shared: { ...shared, ...(github ? { github } : {}) } } : {}), ...(port ? { port } : {}), ...(listen ? { listen } : {}),
     });
     const testSecret = values['test-mode'] ? Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url') : undefined;
     server = await startLocalServer({ stateDir, state, release, mode: shared ? 'shared' : 'local', ...(testSecret ? { extraEnv: {
       TEST_AUTH_ENABLED: 'true', TEST_AUTH_SECRET: testSecret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 24 * 3600_000).toISOString() } } : {}) });
     if (shared) {
-      process.stderr.write(`\nPikibun is shared at ${server.origin}, listening on ${server.address}.\n`
-        + `Point your TLS proxy or tunnel for ${server.origin} at ${server.address.replace('0.0.0.0', '<this computer>')}.\n`
-        + `Administrators: ${state.shared!.admins.join(', ')}. New accounts: ${state.shared!.signup}.\n`);
+      process.stderr.write(`\nPikibun is shared at ${server.origin}, listening on ${server.listening.join(', ')}.\n`
+        + `Point your TLS proxy or tunnel for ${server.origin} at ${server.listening.map(url => url.replace('0.0.0.0', '<this computer>')).join(' or ')}.\n`
+        + `Administrators: ${state.shared!.admins.join(', ')}. New accounts: ${state.shared!.signup}.\n`
+        + ((state.listen ?? DEFAULT_LISTEN)[0] === LISTEN_ALL ? 'Its plain HTTP port is open on every network interface: with your proxy on this computer, --listen loopback keeps others from reaching it but through the proxy.\n' : ''));
       if (values['create-admin']) process.stderr.write(`${await server.createAdmin(values['create-admin'].trim(), await readNewPassword())}\n`);
     } else {
-      process.stderr.write(`\nPikibun is running at ${server.origin} (this computer only).\n`
+      process.stderr.write(`\nPikibun is running at ${server.origin}, listening on ${server.listening.join(', ')} (${describeListen(state.listen ?? DEFAULT_LISTEN)}; choose with --listen).\n`
         + `Sign in as its owner with this link. It signs in whoever opens it, so keep it private:\n  ${server.signInUrl()}\n`);
     }
     if (testSecret) process.stderr.write(`Test mode for 24 hours. Test sign-in secret: ${testSecret}\n`);
