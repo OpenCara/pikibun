@@ -4882,8 +4882,7 @@ test('an owner or admin shares their own remote MCP connection with a whole work
   assert.deepEqual(teamShare(connection), { id: s.team.id, name: teamName, shared: false }, 'listed where its member is an owner or admin');
   const { connection: theirs } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections,
     { name: 'Tracker', url, headers: { Authorization: 'Bearer creator-token' } }), 201);
-  assert.equal(teamShare(theirs), undefined, 'a plain member has no workspace here to share with');
-  await denied(await s.creator.request('PUT', `${connections}/${theirs.id}/shares/${s.team.id}`), 403, 'forbidden');
+  assert.deepEqual(teamShare(theirs), { id: s.team.id, name: teamName, shared: false, needsApproval: true }, 'a plain member\'s share waits for an owner or admin');
   await denied(await s.creator.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`), 404, 'not_found');
   assert.equal(serverRows(), 0);
 
@@ -4967,6 +4966,90 @@ test('an owner or admin shares their own remote MCP connection with a whole work
   assert.ok(!stored.includes(secret), 'the shared connection\'s headers are never copied, shown or audited');
   const audits = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.mcp.connection_%'").all().map(row => row.action);
   assert.ok(['workspace.mcp.connection_shared', 'workspace.mcp.connection_unshared'].every(action => audits.includes(action)));
+});
+
+test('any member shares their own remote MCP connection with a workspace, which waits for an owner or admin to accept it', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const url = 'https://mcp.example.com/mcp';
+  const secret = 'creator-token-0123456789';
+  const fake = tokensMcpFake([secret]);
+  f.env.REMOTE_MCP_TRANSPORT = fake.transport;
+  const connections = '/api/mcp-connections';
+  const path = '/api/workspaces/' + s.team.id + '/mcp-servers';
+  const teamShare = (item: McpConnection) => item.shares.find(share => share.id === s.team.id);
+  const serverRows = () => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_mcp_servers WHERE workspace_id = ?').get(s.team.id)!.n);
+  const listed = async (client: typeof s.admin) => (await json<{ servers: WorkspaceMcpServer[] }>(await client.request('GET', path))).servers;
+
+  const { connection } = await json<{ connection: McpConnection }>(await s.creator.request('POST', connections,
+    { name: 'Tracker', url, headers: { Authorization: `Bearer ${secret}` } }), 201);
+  assert.equal(teamShare(connection)?.needsApproval, true);
+  const asked = (await json<{ connection: McpConnection }>(await s.creator.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`))).connection;
+  assert.deepEqual([teamShare(asked)?.shared, teamShare(asked)?.pending, teamShare(asked)?.server?.prefix], [true, true, 'tracker']);
+  await json(await s.creator.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`));
+  assert.equal(serverRows(), 1, 'asking again changes nothing');
+
+  const offered = async () => parseWorkspaceExtensionsAnswer(await json(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.team.id, remoteTools: true }))).remoteTools ?? [];
+  assert.deepEqual(await offered(), [], 'a pending share offers no tools');
+  const [pending] = await listed(s.admin);
+  assert.deepEqual([pending!.sharedBy?.pending, pending!.sharedBy?.active, pending!.tools.map(tool => tool.toolName)], [true, false, ['tracker_search']],
+    'owners and admins see it, with its tools, to decide');
+  assert.equal((await listed(s.creator))[0]?.sharedBy?.mine, true, 'its member sees it');
+  assert.deepEqual(await listed(s.host), [], 'other members don\'t see it until it\'s accepted');
+  await denied(await s.creator.request('POST', `${path}/${pending!.id}/accept`), 403, 'forbidden');
+  await denied(await s.host.request('POST', `${path}/${pending!.id}/accept`), 403, 'forbidden');
+  const { server: refreshed } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('PATCH', `${path}/${pending!.id}`, { readOnlyTools: ['search'], refresh: true }));
+  assert.deepEqual([refreshed.readOnlyTools, refreshed.error, refreshed.sharedBy?.pending], [['search'], undefined, true], 'an owner or admin prepares it before accepting');
+
+  const { server: accepted } = await json<{ server: WorkspaceMcpServer }>(await s.admin.request('POST', `${path}/${pending!.id}/accept`));
+  assert.deepEqual([accepted.sharedBy?.pending, accepted.sharedBy?.active], [undefined, true]);
+  assert.equal(teamShare((await json<{ connections: McpConnection[] }>(await s.creator.request('GET', connections))).connections[0]!)?.pending, undefined);
+  assert.equal((await listed(s.host)).length, 1);
+  const route = (await offered())[0]!.route;
+  const owner = s.session.ownerId;
+  const call = () => self(f, s.connector, route, { sessionId: s.session.id, actorId: owner, admissionId: admit(f, s.session.id, owner), callId: 'call-1', arguments: { query: 'bug' } });
+  assert.equal((await json<{ result: string }>(await call())).result, `search as ${secret}`, 'once accepted, it serves with its member\'s connection');
+
+  const membership = f.sqlite.prepare('SELECT * FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(s.team.id, s.creator.user.id)!;
+  f.sqlite.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(s.team.id, s.creator.user.id);
+  assert.deepEqual(await offered(), [], 'it stops once its member leaves');
+  f.sqlite.prepare('INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, ?, ?)')
+    .run(s.team.id, s.creator.user.id, 'member', new Date(Date.now() + 60_000).toISOString());
+  assert.deepEqual(await offered(), [], 'rejoining doesn\'t turn it back on: nobody accepted it for this membership');
+  assert.equal((await listed(s.admin))[0]!.sharedBy?.active, false);
+  f.sqlite.prepare('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?').run('admin', s.team.id, s.creator.user.id);
+  assert.deepEqual(await offered(), [], 'nor does becoming an admin after rejoining: an accepted share needs the membership it was accepted for');
+  f.sqlite.prepare('UPDATE workspace_members SET created_at = ?, role = ? WHERE workspace_id = ? AND user_id = ?')
+    .run(String(membership.created_at), String(membership.role), s.team.id, s.creator.user.id);
+  assert.equal((await offered()).length, 1);
+
+  await json(await s.creator.request('DELETE', `${connections}/${connection.id}/shares/${s.team.id}`));
+  assert.equal(serverRows(), 0);
+  await json(await s.creator.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`));
+  const [again] = await listed(s.admin);
+  assert.equal(again!.sharedBy?.pending, true, 'sharing anew asks again');
+  const reached = fake.calls.length;
+  await denied(await call(), 403, 'mcp_share_pending');
+  assert.equal(fake.calls.length, reached, 'a pending share runs nothing');
+  await json(await s.admin.request('DELETE', `${path}/${again!.id}`));
+  assert.equal(serverRows(), 0, 'declining removes it');
+  assert.equal(teamShare((await json<{ connections: McpConnection[] }>(await s.creator.request('GET', connections))).connections[0]!)?.shared, false);
+
+  await json(await s.creator.request('PUT', `${connections}/${connection.id}/shares/${s.team.id}`));
+  const [waiting] = await listed(s.admin);
+  for (let index = 0; index < 8; index++) {
+    await json(await s.admin.request('POST', path, { name: `Full ${index}`, prefix: `full${index}`, url: `https://full${index}.example.com/mcp` }), 201);
+  }
+  assert.equal(serverRows(), 9, 'a pending share takes none of the workspace\'s servers');
+  await denied(await s.admin.request('POST', `${path}/${waiting!.id}/accept`), 409, 'mcp_server_limit');
+  for (const server of (await listed(s.admin)).filter(item => item.prefix.startsWith('full'))) await json(await s.admin.request('DELETE', `${path}/${server.id}`));
+  const [left] = await listed(s.admin);
+  f.sqlite.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(s.team.id, s.creator.user.id);
+  await denied(await s.admin.request('POST', `${path}/${left!.id}/accept`), 409, 'mcp_share_ended');
+
+  const audits = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.mcp.connection_%'").all().map(row => row.action);
+  assert.ok(['workspace.mcp.connection_share_requested', 'workspace.mcp.connection_share_accepted', 'workspace.mcp.connection_share_declined']
+    .every(action => audits.includes(action)));
+  assert.ok(!audits.includes('workspace.mcp.connection_shared'), 'a plain member\'s share is requested, never shared outright');
 });
 
 test('a member signs in to their own remote MCP connection with OAuth from the web or the app, and bringing it lists a server\'s tools for members', async t => {

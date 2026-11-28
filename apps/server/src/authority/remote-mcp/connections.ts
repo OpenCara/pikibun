@@ -1,13 +1,14 @@
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import { sha256 } from '../../../../../packages/shared/src/crypto.js';
+import { workspaceManagerRoles } from '../../../../../packages/shared/src/policy.js';
 import {
   remoteMcpAppLink, remoteMcpHeaders, remoteMcpLimits, remoteMcpSharedPrefix, remoteMcpUrl, type McpConnection, type McpConnectionShare,
 } from '../../../../../packages/shared/src/remote-mcp.js';
 import type { AppContext, AppEnv, Env } from '../../types.js';
 import { appOrigin, fail, id, identifier, now, randomToken, requireOrigin } from '../../http.js';
 import { body, fields } from '../../schemas.js';
-import { requireMember, workspaceAdminSQL, workspaceManagerRolesSQL } from '../access.js';
+import { requireMember, workspaceManagerRolesSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
 import { assertVaultConfigured, decryptToken, encryptToken } from '../vault.js';
 import {
@@ -54,10 +55,17 @@ export async function connectionCredentials(env: Env, row: Pick<ConnectionRow, '
   return { headers, oauth: row.oauth_ciphertext ? { keeper: connectionKeeper(env, row.id, owner), ciphertext: row.oauth_ciphertext } : null };
 }
 
-export async function sharedConnection(env: Env, workspaceId: string, connectionId: string): Promise<ConnectionRow | null> {
+export const shareLiveSQL = (server: string, connection: string, member: string) => `(${server}.share_status = 'accepted'
+  AND (((${server}.accepted_by IS NULL OR ${server}.accepted_by = ${connection}.user_id) AND ${member}.role IN (${workspaceManagerRolesSQL}))
+    OR (${server}.accepted_by IS NOT NULL AND ${server}.accepted_by <> ${connection}.user_id AND ${member}.created_at <= ${server}.accepted_at)))`;
+
+export const acceptedServersSQL = `(SELECT COUNT(*) FROM workspace_mcp_servers WHERE workspace_id = ? AND share_status = 'accepted')`;
+
+export async function sharedConnection(env: Env, workspaceId: string, connectionId: string, pending = false): Promise<ConnectionRow | null> {
   return await env.DB.query<ConnectionRow>(`SELECT c.* FROM mcp_connections c
-      JOIN workspace_members m ON m.workspace_id = ? AND m.user_id = c.user_id AND m.role IN (${workspaceManagerRolesSQL})
-    WHERE c.id = ?`).bind(workspaceId, connectionId).first() ?? null;
+      JOIN workspace_mcp_servers s ON s.workspace_id = ? AND s.shared_connection_id = c.id
+      JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = c.user_id
+    WHERE c.id = ? AND (${shareLiveSQL('s', 'c', 'm')}${pending ? " OR s.share_status = 'pending'" : ''})`).bind(workspaceId, connectionId).first() ?? null;
 }
 
 export async function broughtConnection(env: Env, workspaceId: string, url: string, userId: string): Promise<ConnectionRow | null> {
@@ -100,31 +108,33 @@ async function views(env: Env, userId: string, rows: ConnectionRow[]): Promise<M
   const offered = await env.DB.query<{ url: string; id: string; name: string }>(`SELECT DISTINCT s.url, ws.id, ws.name
       FROM workspace_mcp_servers s JOIN workspaces ws ON ws.id = s.workspace_id JOIN workspace_members m ON m.workspace_id = ws.id AND m.user_id = ?
     WHERE s.sign_in_as <> 'workspace' AND ${notDeleted('ws.id')} ORDER BY ws.name, ws.id`).bind(userId).all();
-  const managed = await env.DB.query<{ id: string; name: string }>(`SELECT ws.id, ws.name
-      FROM workspaces ws JOIN workspace_members m ON m.workspace_id = ws.id AND m.user_id = ? AND m.role IN (${workspaceManagerRolesSQL})
+  const memberOf = await env.DB.query<{ id: string; name: string; role: string }>(`SELECT ws.id, ws.name, m.role
+      FROM workspaces ws JOIN workspace_members m ON m.workspace_id = ws.id AND m.user_id = ?
     WHERE ${notDeleted('ws.id')} ORDER BY ws.name, ws.id`).bind(userId).all();
-  const servers = await env.DB.query<{ id: string; workspace_id: string; prefix: string; url: string; shared_connection_id: string | null }>(`SELECT s.id, s.workspace_id,
-      s.prefix, s.url, s.shared_connection_id
-    FROM workspace_mcp_servers s JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = ? AND m.role IN (${workspaceManagerRolesSQL})`)
+  const servers = await env.DB.query<{ id: string; workspace_id: string; prefix: string; url: string; shared_connection_id: string | null; share_status: string }>(`SELECT s.id,
+      s.workspace_id, s.prefix, s.url, s.shared_connection_id, s.share_status
+    FROM workspace_mcp_servers s JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = ?`)
     .bind(userId).all();
-  const shared = await env.DB.query<{ id: string; workspace_id: string; name: string; prefix: string; shared_connection_id: string }>(`SELECT s.id, s.workspace_id,
-      ws.name, s.prefix, s.shared_connection_id
+  const shared = await env.DB.query<{ id: string; workspace_id: string; name: string; prefix: string; shared_connection_id: string; share_status: string }>(`SELECT s.id,
+      s.workspace_id, ws.name, s.prefix, s.shared_connection_id, s.share_status
     FROM workspace_mcp_servers s JOIN mcp_connections c ON c.id = s.shared_connection_id JOIN workspaces ws ON ws.id = s.workspace_id
     WHERE c.user_id = ? AND ${notDeleted('ws.id')} ORDER BY ws.name, ws.id`).bind(userId).all();
+  const sharedView = (server: typeof shared[number], workspace: { id: string; name: string }): McpConnectionShare => ({
+    id: workspace.id, name: workspace.name, shared: true, ...(server.share_status === 'pending' ? { pending: true } : {}), server: { id: server.id, prefix: server.prefix },
+  });
   const sharesOf = (row: ConnectionRow): McpConnectionShare[] => {
     const mine = shared.filter(item => item.shared_connection_id === row.id);
-    const listed: McpConnectionShare[] = managed.map(workspace => {
+    const listed: McpConnectionShare[] = memberOf.map(workspace => {
       const server = mine.find(item => item.workspace_id === workspace.id);
-      if (server) return { id: workspace.id, name: workspace.name, shared: true, server: { id: server.id, prefix: server.prefix } };
+      if (server) return sharedView(server, workspace);
       const there = servers.filter(item => item.workspace_id === workspace.id);
       const unavailable = there.some(item => item.url === row.url) ? 'It already has a remote MCP server at this address.'
-        : there.length >= remoteMcpLimits.servers ? `It already has the ${remoteMcpLimits.servers} remote MCP servers a workspace can have.` : undefined;
-      return { id: workspace.id, name: workspace.name, shared: false, ...(unavailable ? { unavailable } : {}) };
+        : there.filter(item => item.share_status === 'accepted').length >= remoteMcpLimits.servers ? `It already has the ${remoteMcpLimits.servers} remote MCP servers a workspace can have.` : undefined;
+      const needsApproval = !(workspaceManagerRoles as readonly string[]).includes(workspace.role);
+      return { id: workspace.id, name: workspace.name, shared: false, ...(needsApproval ? { needsApproval: true } : {}), ...(unavailable ? { unavailable } : {}) };
     });
     for (const server of mine) {
-      if (!listed.some(item => item.id === server.workspace_id)) {
-        listed.push({ id: server.workspace_id, name: server.name, shared: true, server: { id: server.id, prefix: server.prefix } });
-      }
+      if (!listed.some(item => item.id === server.workspace_id)) listed.push(sharedView(server, { id: server.workspace_id, name: server.name }));
     }
     return listed;
   };
@@ -391,32 +401,38 @@ export function registerMcpConnections(app: Hono<AppEnv>): void {
     const connectionId = identifier(c.req.param('connectionId'), 'connectionId');
     const workspaceId = identifier(c.req.param('workspaceId'), 'workspaceId');
     const row = await ownRow(c.env, actor, connectionId);
-    await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
+    const member = await requireMember(c.env, workspaceId, actor);
+    const pending = !(workspaceManagerRoles as readonly string[]).includes(member.role);
     if (await c.env.DB.query('SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND shared_connection_id = ?').bind(workspaceId, connectionId).first()) {
       return c.json({ connection: await viewOf(c.env, actor, connectionId) });
     }
-    const there = await c.env.DB.query<{ prefix: string; url: string }>('SELECT prefix, url FROM workspace_mcp_servers WHERE workspace_id = ?').bind(workspaceId).all();
+    const there = await c.env.DB.query<{ prefix: string; url: string; share_status: string }>('SELECT prefix, url, share_status FROM workspace_mcp_servers WHERE workspace_id = ?')
+      .bind(workspaceId).all();
     if (there.some(item => item.url === row.url)) {
       fail(409, 'mcp_server_at_address', 'This workspace already has a remote MCP server at this connection\'s address.');
     }
-    if (there.length >= remoteMcpLimits.servers) fail(409, 'mcp_server_limit', `A workspace has at most ${remoteMcpLimits.servers} remote MCP servers.`);
+    if (there.filter(item => item.share_status === 'accepted').length >= remoteMcpLimits.servers) {
+      fail(409, 'mcp_server_limit', `A workspace has at most ${remoteMcpLimits.servers} remote MCP servers.`);
+    }
     const prefix = remoteMcpSharedPrefix(row.name, there.map(item => item.prefix));
     const found = await listTools(c.env, row);
     await noteError(c.env, row.id, found.error);
     const serverId = id(); const at = now();
     const saved = await c.env.DB.query<{ id: string }>(`INSERT INTO workspace_mcp_servers (id, workspace_id, prefix, name, url, headers_ciphertext, header_names_json,
-        read_only_tools_json, tools_json, tools_over_limit, tools_unusable, enabled, sign_in_as, shared_connection_id, discovered_at, error, created_by, updated_by,
-        created_at, updated_at)
-      SELECT ?, ?, ?, ?, ?, NULL, '[]', '[]', ?, ?, ?, 1, 'workspace', ?, ?, ?, ?, ?, ?, ? WHERE ${workspaceAdminSQL}
-        AND (SELECT COUNT(*) FROM workspace_mcp_servers WHERE workspace_id = ?) < ?
+        read_only_tools_json, tools_json, tools_over_limit, tools_unusable, enabled, sign_in_as, shared_connection_id, share_status, accepted_by, accepted_at,
+        discovered_at, error, created_by, updated_by, created_at, updated_at)
+      SELECT ?, ?, ?, ?, ?, NULL, '[]', '[]', ?, ?, ?, 1, 'workspace', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND (? = 1 OR role IN (${workspaceManagerRolesSQL})))
+        AND ${acceptedServersSQL} < ?
         AND NOT EXISTS (SELECT 1 FROM workspace_mcp_servers WHERE workspace_id = ? AND (prefix = ? OR url = ? OR shared_connection_id = ?))
         AND EXISTS (SELECT 1 FROM mcp_connections WHERE id = ? AND user_id = ? AND url = ?)
       RETURNING id`)
       .bind(serverId, workspaceId, prefix, row.name, row.url, JSON.stringify(found.tools), found.leftOut.overLimit, found.leftOut.unusable, connectionId,
-        found.error ? null : at, found.error, actor, actor, at, at, workspaceId, actor, workspaceId, remoteMcpLimits.servers,
+        pending ? 'pending' : 'accepted', pending ? null : actor, pending ? null : at,
+        found.error ? null : at, found.error, actor, actor, at, at, workspaceId, actor, pending ? 1 : 0, workspaceId, remoteMcpLimits.servers,
         workspaceId, prefix, row.url, connectionId, connectionId, actor, row.url).first();
     if (!saved) fail(409, 'mcp_connection_share_conflict', 'The workspace, your role in it or the connection changed meanwhile: look again and retry.');
-    await auditStatement(c.env, actor, 'workspace.mcp.connection_shared', workspaceId, null,
+    await auditStatement(c.env, actor, pending ? 'workspace.mcp.connection_share_requested' : 'workspace.mcp.connection_shared', workspaceId, null,
       { connection: connectionId, server: serverId, prefix, url: row.url, ...discoveredDetail(found) }).run();
     return c.json({ connection: await viewOf(c.env, actor, connectionId) });
   });

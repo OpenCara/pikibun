@@ -64,6 +64,17 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
   async function patch(server: WorkspaceMcpServer, body: Record<string, unknown>, notice: string) {
     if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}`, { method: "PATCH", body }); }, notice)) resource.refresh();
   }
+  async function accept(server: WorkspaceMcpServer) {
+    if (!await confirm({ title: `Accept ${server.name}?`, confirmLabel: "Accept",
+      message: `Every member's sessions here then offer its tools and call them with ${server.sharedBy?.name ?? "its member"}'s account, while they still belong to this workspace. Check which of its tools only read, and turn off the ones sessions don't need.` })) return;
+    if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}/accept`, { method: "POST" }); },
+      "Accepted. Sessions offer its tools from their next message.")) resource.refresh();
+  }
+  async function decline(server: WorkspaceMcpServer) {
+    if (!await confirm({ title: `Decline ${server.name}?`, confirmLabel: "Decline", destructive: true,
+      message: `${server.sharedBy?.mine ? "Your" : `${server.sharedBy?.name ?? "Its member"}'s`} connection to it stays, not shared here.` })) return;
+    if (await action.run(async () => { await session().api(`${path()}/${segment(server.id)}`, { method: "DELETE" }); }, "Declined.")) resource.refresh();
+  }
   async function remove(server: WorkspaceMcpServer) {
     if (!await confirm({ title: `Remove ${server.name}?`, confirmLabel: "Remove", destructive: true,
       message: server.sharedBy ? `Sessions stop offering its tools from their next message. ${server.sharedBy.mine ? "Your" : `${server.sharedBy.name}'s`} connection to it stays, no longer shared here.`
@@ -128,7 +139,7 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
       <Note>Owners and admins also choose whose sign-in it calls with: the workspace's, each member's own, or each member's own else the workspace's. Members connect their own account once in their profile, or here with Connect my account, and choose the workspaces that use it; a request then uses the requester's own account, never anyone else's.</Note>
       <Note>Each tool's name starts with its server's prefix. Sessions get every tool a server lists until an owner or admin turns it off here, which also stops Pikibun from calling it. Tools may change things unless an owner or admin marks them read-only here: only those run in Read-only messages. A server's own claim that a tool only reads counts for nothing.</Note>
       <Note>A server's answers were written by whoever runs it: sessions treat them as information, not as instructions.</Note>
-    </View>} action={admin() && (data()?.servers.length ?? 0) < remoteMcpLimits.servers ? <Button small variant="outline" icon="plus" label="Add server" onPress={() => adding.set(true)} /> : undefined}>
+    </View>} action={admin() && (data()?.servers.filter(server => !server.sharedBy?.pending).length ?? 0) < remoteMcpLimits.servers ? <Button small variant="outline" icon="plus" label="Add server" onPress={() => adding.set(true)} /> : undefined}>
       <ResourceState inline loading={resource.loading() && !data()} error={resource.error()} retry={resource.refresh}>
         <If when={data()}>
           {current => (
@@ -140,7 +151,19 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
                 {server => (
                   <CollapsibleRow leading={<Icon name="sparkles" size={16} color={palette().muted} />} title={`${server().name} · ${server().prefix}_`}
                     hint={server().error ? `${server().url}\n${server().oauth && !signInFailed(server()) ? "Signed in · " : ""}${server().error}` : `${server().url}\n${server().tools.length} ${server().tools.length === 1 ? "tool" : "tools"}${server().toolsLeftOut ? " (some left out)" : ""}${offCount(server()) ? ` · ${offCount(server())} off` : ""}${server().oauth ? " · signed in" : ""}${server().headerNames.length ? ` · headers: ${server().headerNames.join(", ")}` : ""}${signInAsOf(server()) !== "workspace" ? ` · ${signInAsLabel(signInAsOf(server())).toLowerCase()}` : ""}`}
-                    trailing={<Badge tone={server().error ? "danger" : server().enabled ? "success" : "neutral"}>{server().error ? "Error" : server().enabled ? "On" : "Off"}</Badge>}>
+                    trailing={server().sharedBy?.pending ? <Badge tone="warning">Pending</Badge>
+                      : <Badge tone={server().error ? "danger" : server().enabled ? "success" : "neutral"}>{server().error ? "Error" : server().enabled ? "On" : "Off"}</Badge>}>
+                    <If when={server().sharedBy?.pending}>
+                      <Banner tone="warning" title="Waiting for approval" testID={`mcp-pending-${server().prefix}`}
+                        actions={admin() ? <>
+                          <Button small variant="primary" label="Accept" testID={`mcp-accept-${server().prefix}`} disabled={action.busy()} onPress={() => void accept(server())} />
+                          <Button small variant="ghost" label="Decline" testID={`mcp-decline-${server().prefix}`} disabled={action.busy()} onPress={() => void decline(server())} />
+                        </> : undefined}>
+                        {server().sharedBy!.mine
+                          ? "You shared your own connection to it with this workspace. Its tools are offered once an owner or admin accepts it."
+                          : `${server().sharedBy!.name} shared their own connection to it with this workspace. Once accepted, every member's requests call it with ${server().sharedBy!.name}'s account. Its tools aren't offered until then.`}
+                      </Banner>
+                    </If>
                     <If when={server().error}><Banner tone="danger" title={mcpErrorTitle(server())}>{server().error!}</Banner></If>
                     <If when={server().toolsLeftOut}><Banner tone="warning" title="Some of its tools are left out">{remoteMcpLeftOutNote(server().toolsLeftOut)}</Banner></If>
                     <If when={server().oauth}><Small>{`Signed in with OAuth on ${new Date(server().oauth!.signedInAt).toLocaleString()}.`}</Small></If>
@@ -177,13 +200,13 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
                       )}
                     </Each>
                     <If when={!server().tools.length && !server().error}><Small>It offers no tools.</Small></If>
-                    <If when={server().sharedBy}>
+                    <If when={server().sharedBy && !server().sharedBy!.pending ? server().sharedBy : undefined}>
                       {sharer => (
                         <View testID={`mcp-shared-by-${server().prefix}`} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
                           <View style={{ flex: 1, minWidth: 180 }}>
                             <Small>{sharer().active
                               ? `${sharer().mine ? "You" : sharer().name} shared ${sharer().mine ? "your" : "their"} own connection to it with this workspace: every member's requests call it with ${sharer().mine ? "your" : `${sharer().name}'s`} account.`
-                              : `${sharer().mine ? "You" : sharer().name}, who shared ${sharer().mine ? "your" : "their"} connection to it, ${sharer().mine ? "are" : "is"} no longer an owner or admin here: its tools aren't offered. Remove it.`}</Small>
+                              : `${sharer().mine ? "You" : sharer().name}, who shared ${sharer().mine ? "your" : "their"} connection to it, ${sharer().mine ? "have" : "has"} left this workspace or ${sharer().mine ? "are" : "is"} no longer the owner or admin who shared it: its tools aren't offered. Remove it.`}</Small>
                           </View>
                           <If when={sharer().mine && sharer().active}>
                             <Button small variant="outline" label="Manage sharing" onPress={() => props.go?.({ name: "settings", section: "mcp-sharing" })} />
@@ -228,7 +251,9 @@ export function WorkspaceMcpServers(props: { workspace: Workspace; go?: (route: 
                           <Button small variant="outline" label="Change sign-in" disabled={action.busy()} onPress={() => changing.set(server())} />
                         </If>
                         <Button small variant="outline" icon="refresh" label="List tools again" disabled={action.busy()} onPress={() => void patch(server(), { refresh: true }, "Listed its tools again.")} />
-                        <Button small variant="ghost" icon="trash" label="Remove" disabled={action.busy()} onPress={() => void remove(server())} />
+                        <If when={!server().sharedBy?.pending}>
+                          <Button small variant="ghost" icon="trash" label="Remove" disabled={action.busy()} onPress={() => void remove(server())} />
+                        </If>
                       </View>
                     </If>
                   </CollapsibleRow>
