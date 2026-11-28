@@ -88,8 +88,10 @@ test('a title\'s usage adds to the conversation\'s usage of its model', () => {
   const totals: UsageState['models'] = {};
   addTitleUsage(totals, 'p/m', usage(10, 5, 0.01));
   addTitleUsage(totals, 'p/m', { ...usage(1, 1, 0.5), reasoning: 4 });
+  addTitleUsage(totals, 'p/m', { ...usage(1, 3, 0), imageOutput: 2 });
+  addTitleUsage(totals, 'p/m', { ...usage(0, 2, 0), imageOutput: 1 });
   addTitleUsage(totals, 'q/n', usage(2, 2, 0));
-  assert.deepEqual(totals['p/m'], { ...usage(11, 6, 0.51), reasoning: 4 });
+  assert.deepEqual(totals['p/m'], { ...usage(12, 11, 0.51), reasoning: 4, imageOutput: 3 });
   assert.deepEqual(totals['q/n'], usage(2, 2, 0));
 });
 

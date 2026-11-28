@@ -445,7 +445,7 @@ type FixtureOptions = {
   unblock?: () => void;
   hostConfig?: () => Response | Promise<Response>;
   gpu?: 'dxg' | 'render';
-  piSettings?: Pick<LocalModels, 'compaction' | 'identity'>;
+  piSettings?: Pick<LocalModels, 'compaction'>;
   provide?: NonNullable<LocalModels['provide']>;
   extensionModels?: false;
   extensions?: HostExtensions;
@@ -653,7 +653,6 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.equal(config.allowFaux, false);
   assert.equal(config.allowTestShell, false);
   assert.equal(config.compaction, undefined, 'without Pi settings, sessions compact by pi-durable\'s defaults');
-  assert.equal(config.identity, undefined);
   assert.ok(config.sharedSecret.length >= 32);
   assert.notEqual(config.sharedSecret, credentials.token);
   assertWorkerBoundary(fixture.allCalls, fixture.allSockets, [config.sharedSecret]);
@@ -815,13 +814,11 @@ test('without a configuration from the control plane, a host runs with the defau
   }
 });
 
-test('sessions follow the compaction and attribution settings of the host\'s Pi', { timeout: 10000 }, async t => {
+test('sessions follow the compaction settings of the host\'s Pi', { timeout: 10000 }, async t => {
   const compaction = { reserveTokens: 8192, modelOverrides: { 'native.fixture/region/model': { keepRecentTokens: 4000 } } };
-  const fixture = await connectorFixture(t, { piSettings: { compaction, identity: { attribution: null } } });
+  const fixture = await connectorFixture(t, { piSettings: { compaction } });
   await startFixture(fixture);
-  const config = fixture.runtimes[0]!.config;
-  assert.deepEqual(config.compaction, compaction);
-  assert.deepEqual(config.identity, { attribution: null });
+  assert.deepEqual(fixture.runtimes[0]!.config.compaction, compaction);
 });
 
 test('github reads and merges reach the control plane over the connection, pass its refusals on, and allow read results above the callback limit', { timeout: 10000 }, async t => {

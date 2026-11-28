@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONNECTOR_ENVIRONMENT, HostWorkspace, chosenWorktree, hostOwnersSession, ownerHostEnvironment } from "../apps/runner/src/host-workspace.js";
+import { withholdProgramResumeToken } from "../apps/runner/src/program-resume.js";
 import { serverEnvironment, stringVars } from "../apps/server/src/config.js";
 import { runHostShell } from "../apps/runner/src/host-shell.js";
 import { Sandbox, type SandboxAuthorize } from "../apps/runner/src/sandbox.js";
@@ -207,7 +208,7 @@ test("the owner's environment leaves out Pikibun's variables always, and the ser
   const owners = { HOME: "/home/alice", SSH_AUTH_SOCK: "/run/agent", AWS_PROFILE: "work", AWS_SECRET_ACCESS_KEY: "alice-aws", AZURE_CLIENT_SECRET: "alice-azure",
     GH_TOKEN: "alice-gh", LOCAL_BIN: "/home/alice/bin" };
   const pikibun = { PIKIBUN_TOKEN: "x", RUNNER_SHARED_SECRET: "x", CONTROL_PLANE_URL: "x", GIT_DIR: "/repo/.git", GIT_WORK_TREE: "/repo", GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "core.x", GIT_CONFIG_VALUE_0: "y" };
+    GIT_CONFIG_KEY_0: "core.x", GIT_CONFIG_VALUE_0: "y", OSC7577_TOKEN: "terminal" };
   const server = Object.fromEntries(serverEnvironment.map(name => [name, "server"]));
   const alone = ownerHostEnvironment(identity, { ...owners, ...pikibun });
   for (const [name, value] of Object.entries(owners)) assert.equal(alone[name], value, `a connector of its own keeps the owner's ${name}`);
@@ -216,6 +217,15 @@ test("the owner's environment leaves out Pikibun's variables always, and the ser
   for (const name of serverEnvironment) assert.equal(inServer[name], undefined, `${name} of the server's process reaches the owner's commands`);
   for (const name of ["HOME", "SSH_AUTH_SOCK", "AWS_PROFILE", "AZURE_CLIENT_SECRET", "GH_TOKEN"]) assert.equal(inServer[name], owners[name as keyof typeof owners]);
   assert.ok(!CONNECTOR_ENVIRONMENT.test("AZURE_CLIENT_SECRET") && !CONNECTOR_ENVIRONMENT.test("LOCAL_BIN"), "the owner's own names are kept");
+});
+
+test("the connector takes a resuming terminal's token (OSC 7577) out of its own environment, so nothing it starts gets it", async () => {
+  const env: NodeJS.ProcessEnv = { OSC7577_TOKEN: "terminal", PATH: "/usr/bin" };
+  withholdProgramResumeToken(env);
+  assert.deepEqual(env, { PATH: "/usr/bin" });
+  for (const entry of ["packages/cli/src/cli.ts", "apps/runner/src/index.ts"]) {
+    assert.match(await readFile(entry, "utf8"), /^withholdProgramResumeToken\(\);$/m, `${entry} withholds the token as it starts`);
+  }
 });
 
 test("an unsandboxed clone session's Git uses the host user's own credential helpers, and no other session's does", hostMode, async t => {

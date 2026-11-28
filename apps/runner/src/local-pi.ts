@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { ClientIdentity } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
 import type { CompactionSettings } from "@earendil-works/pi-durable";
 import { getAgentDir, ModelRegistry, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
@@ -21,7 +20,6 @@ export interface LocalModels {
   manifest(): Promise<LocalModelSummary[]>;
   resolve(model: ModelDefinition): Promise<ResolvedLocalModel>;
   readonly compaction?: CompactionSettings;
-  readonly identity?: ClientIdentity;
   readonly modelRegistry?: ModelRegistry;
   provide?(sources: readonly ProviderSource[]): Promise<ProvidedModels[]>;
 }
@@ -48,7 +46,6 @@ export interface LocalPiOptions {
   defaultThinkingLevel?: ThinkingLevel;
   modelThinkingLevels?: ReadonlyMap<string, ThinkingLevel>;
   compaction?: CompactionSettings;
-  attribution?: false;
   loadProviders?: LoadProviders;
   runtimeFactory?: (options: { authPath?: string; modelsPath?: string; refreshOnCreate: false; allowModelNetwork: false }) => Promise<LocalPiRuntime>;
 }
@@ -58,7 +55,6 @@ export interface PiSettings {
   defaultThinkingLevel?: ThinkingLevel;
   modelThinkingLevels?: Map<string, ThinkingLevel>;
   compaction?: CompactionSettings;
-  attribution?: false;
 }
 
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
@@ -94,14 +90,12 @@ function compactionSettings(value: unknown): CompactionSettings {
   };
 }
 
-const telemetryFlag = (value: string) => value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
-
-export async function readPiSettings(agentDir?: string, env: NodeJS.ProcessEnv = process.env): Promise<PiSettings> {
+export async function readPiSettings(agentDir?: string): Promise<PiSettings> {
   const path = join(agentDir === undefined ? getAgentDir() : resolve(agentDir), "settings.json");
   let text: string | undefined;
   try { text = await readFile(path, "utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const value = (text === undefined ? {} : JSON.parse(text)) as { enabledModels?: unknown; defaultThinkingLevel?: unknown; modelThinkingLevels?: unknown; compaction?: unknown; enableInstallTelemetry?: unknown };
+  const value = (text === undefined ? {} : JSON.parse(text)) as { enabledModels?: unknown; defaultThinkingLevel?: unknown; modelThinkingLevels?: unknown; compaction?: unknown };
   const settings: PiSettings = {};
   const enabled = value.enabledModels;
   if (enabled !== undefined) {
@@ -122,11 +116,6 @@ export async function readPiSettings(agentDir?: string, env: NodeJS.ProcessEnv =
     settings.modelThinkingLevels = new Map(Object.entries(perModel as Record<string, ThinkingLevel>));
   }
   if (value.compaction !== undefined) settings.compaction = compactionSettings(value.compaction);
-  if (value.enableInstallTelemetry !== undefined && typeof value.enableInstallTelemetry !== "boolean") {
-    throw new Error("Pi settings.json enableInstallTelemetry must be true or false");
-  }
-  const telemetry = env.PI_TELEMETRY;
-  if (!(telemetry !== undefined ? telemetryFlag(telemetry) : value.enableInstallTelemetry !== false)) settings.attribution = false;
   return settings;
 }
 
@@ -134,6 +123,8 @@ export async function createPiRuntime(config: Parameters<NonNullable<LocalPiOpti
   const runtime = await ModelRuntime.create(config);
   try { await runtime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(15_000) }); }
   catch (error) { console.warn(`Pi's saved model catalogs could not be restored: ${error instanceof Error ? error.message : String(error)}`); }
+  const problem = runtime.getError();
+  if (problem) console.warn(`Pi's models.json error: ${problem}`);
   return runtime;
 }
 
@@ -257,7 +248,6 @@ export async function loadLocalPiModels(options: LocalPiOptions = {}): Promise<L
     provide,
     ...(modelRegistry ? { modelRegistry } : {}),
     ...(options.compaction ? { compaction: options.compaction } : {}),
-    ...(options.attribution === false ? { identity: { attribution: null } } : {}),
     async resolve(model) {
       const available = await manifest();
       const summary = available.find(item => item.provider === model.provider && item.modelId === model.modelId);

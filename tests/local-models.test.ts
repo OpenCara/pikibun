@@ -11,7 +11,7 @@ import type { ModelDefinition } from '../packages/shared/src/types.js';
 import type { LocalPiOptions, LocalPiRuntime } from '../apps/runner/src/local-pi.js';
 import { connectorLimits } from '../packages/shared/src/connector.js';
 import { connectorManifest } from '../apps/runner/src/connector.js';
-import { createFauxLocalModels, loadLocalPiModels, modelSummary, readPiSettings } from '../apps/runner/src/local-pi.js';
+import { createFauxLocalModels, createPiRuntime, loadLocalPiModels, modelSummary, readPiSettings } from '../apps/runner/src/local-pi.js';
 import { runnerModels } from '../apps/runner/src/provider.js';
 
 const secret = 'fixture-only-provider-credential-never-publish';
@@ -233,20 +233,20 @@ test('Pi settings are read from the global settings file and reject malformed va
   const agentDir = await mkdtemp(join(tmpdir(), 'local-pi-settings-fixture-'));
   t.after(() => rm(agentDir, { recursive: true, force: true }));
   const write = (settings: unknown) => writeFile(join(agentDir, 'settings.json'), JSON.stringify(settings));
-  assert.deepEqual(await readPiSettings(agentDir, {}), {});
+  assert.deepEqual(await readPiSettings(agentDir), {});
   await write({ enabledModels: ['relay/*', '*/claude-opus-5-5*'], defaultThinkingLevel: 'high', modelThinkingLevels: { 'relay/gpt-6-sol': 'max' }, theme: 'dark' });
-  assert.deepEqual(await readPiSettings(agentDir, {}), {
+  assert.deepEqual(await readPiSettings(agentDir), {
     enabledModels: ['relay/*', '*/claude-opus-5-5*'], defaultThinkingLevel: 'high', modelThinkingLevels: new Map([['relay/gpt-6-sol', 'max']]),
   });
   for (const enabledModels of ['relay/*', [42], ['']]) {
     await write({ enabledModels });
-    await assert.rejects(readPiSettings(agentDir, {}), /enabledModels must be a list/);
+    await assert.rejects(readPiSettings(agentDir), /enabledModels must be a list/);
   }
   await write({ defaultThinkingLevel: 'extreme' });
-  await assert.rejects(readPiSettings(agentDir, {}), /defaultThinkingLevel must be one of/);
+  await assert.rejects(readPiSettings(agentDir), /defaultThinkingLevel must be one of/);
   for (const modelThinkingLevels of [['high'], { 'relay/gpt-6-sol': 'extreme' }]) {
     await write({ modelThinkingLevels });
-    await assert.rejects(readPiSettings(agentDir, {}), /modelThinkingLevels must map/);
+    await assert.rejects(readPiSettings(agentDir), /modelThinkingLevels must map/);
   }
   for (const [compaction, message] of [
     ['on', /compaction must be an object/], [{ enabled: 'yes' }, /compaction.enabled must be true or false/],
@@ -255,36 +255,42 @@ test('Pi settings are read from the global settings file and reject malformed va
     [{ modelOverrides: { 'relay/gpt-6-sol': { reserveTokens: '8192' } } }, /compaction.modelOverrides\["relay\/gpt-6-sol"\].reserveTokens must be/],
   ] as const) {
     await write({ compaction });
-    await assert.rejects(readPiSettings(agentDir, {}), message);
+    await assert.rejects(readPiSettings(agentDir), message);
   }
   await write({ enableInstallTelemetry: 'no' });
-  await assert.rejects(readPiSettings(agentDir, {}), /enableInstallTelemetry must be true or false/);
+  assert.deepEqual(await readPiSettings(agentDir), {}, 'Pi 1.7.0 removed enableInstallTelemetry, so a stale value is ignored');
 });
 
-test('Pi compaction and attribution settings are read as Pi reads them, and offered with the models', async t => {
+test('Pi compaction settings are read as Pi reads them, and offered with the models', async t => {
   const agentDir = await mkdtemp(join(tmpdir(), 'local-pi-settings-fixture-'));
   t.after(() => rm(agentDir, { recursive: true, force: true }));
   const write = (settings: unknown) => writeFile(join(agentDir, 'settings.json'), JSON.stringify(settings));
   await write({ compaction: { enabled: true, reserveTokens: 8192, keepRecentTokens: 10000, unknown: 1,
     modelOverrides: { 'relay/small-32k': { reserveTokens: 4096, keepRecentTokens: 0 }, 'relay/large': {} } } });
-  const settings = await readPiSettings(agentDir, {});
+  const settings = await readPiSettings(agentDir);
   assert.deepEqual(settings, { compaction: { enabled: true, reserveTokens: 8192, keepRecentTokens: 10000,
     modelOverrides: { 'relay/small-32k': { reserveTokens: 4096, keepRecentTokens: 0 }, 'relay/large': {} } } });
-  await write({ enableInstallTelemetry: false });
-  assert.deepEqual(await readPiSettings(agentDir, {}), { attribution: false });
-  assert.deepEqual(await readPiSettings(agentDir, { PI_TELEMETRY: 'yes' }), {});
-  await write({ enableInstallTelemetry: true });
-  assert.deepEqual(await readPiSettings(agentDir, { PI_TELEMETRY: '0' }), { attribution: false });
-  await rm(join(agentDir, 'settings.json'));
-  assert.deepEqual(await readPiSettings(agentDir, { PI_TELEMETRY: 'false' }), { attribution: false });
 
   const fixture = runtimeFixture();
   const plain = await loadLocalPiModels({ runtimeFactory: fixture.runtimeFactory });
   assert.equal(plain.compaction, undefined);
-  assert.equal(plain.identity, undefined, 'without settings, sessions keep pi-durable\'s identity, which attributes them to pi');
-  const configured = await loadLocalPiModels({ runtimeFactory: fixture.runtimeFactory, compaction: settings.compaction, attribution: false });
+  const configured = await loadLocalPiModels({ runtimeFactory: fixture.runtimeFactory, compaction: settings.compaction });
   assert.deepEqual(configured.compaction, settings.compaction);
-  assert.deepEqual(configured.identity, { attribution: null });
+});
+
+test('Pi\'s runtime warns of an invalid models.json, as Pi 1.7.0 does in every mode', async t => {
+  const agentDir = await mkdtemp(join(tmpdir(), 'local-pi-models-json-fixture-'));
+  t.after(() => rm(agentDir, { recursive: true, force: true }));
+  const config = { authPath: join(agentDir, 'auth.json'), modelsPath: join(agentDir, 'models.json'), refreshOnCreate: false as const, allowModelNetwork: false as const };
+  const warnings: string[] = [];
+  t.mock.method(console, 'warn', (message: string) => { warnings.push(message); });
+  await createPiRuntime(config);
+  assert.deepEqual(warnings, []);
+  await writeFile(config.modelsPath, JSON.stringify({ providers: { relay: { baseUrl: 'https://relay.example', api: 'openai-completions', apiKey: 'RELAY_KEY',
+    models: [{ id: 'small', contextWindow: '32000' }] } } }));
+  await createPiRuntime(config);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /^Pi's models\.json error: .*contextWindow/s);
 });
 
 test('faux is explicit fixture-only opt-in and never an unsupported-provider fallback', async () => {
