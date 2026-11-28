@@ -95,13 +95,27 @@ export function createAppData(): AppData {
     const hiding = pendingHidden();
     return Object.keys(hiding).length ? ordered.map(item => (item.id in hiding ? { ...item, hidden: hiding[item.id] } : item)) : ordered;
   });
-  let reorders = 0;
-  let hides = 0;
+  let writes = 0;
   effect(() => rememberLocalSessions(sessions.data()?.sessions ?? []));
   const sorted = computed(() => [...(sessions.data()?.sessions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   working = computed(() => liveActivity()?.activity === "working"
     || sorted().some(session => session.status !== "archived" && session.activity === "working"));
   const lastWorkspaceId = signal("");
+  async function writeWorkspaces(path: string, body: Record<string, unknown>): Promise<void> {
+    const write = ++writes;
+    const settle = () => { pendingOrder.set(null); pendingHidden.set({}); };
+    try {
+      const result = await untracked(session).api<{ workspaces: Workspace[] }>(path, { method: "PUT", body });
+      if (write !== writes) return;
+      workspaces.replace(result);
+      settle();
+    } catch (reason) {
+      if (write !== writes) return;
+      settle();
+      void workspaces.refresh();
+      throw reason;
+    }
+  }
   const lastChat = signal<ChatPreference | undefined>(undefined);
   Storage.getItem(LAST_CHAT_KEY).then(raw => { if (!lastChat()) lastChat.set(parseChatPreference(raw)); }, () => undefined);
   const lastAuto = signal<AutoPreference | undefined>(undefined);
@@ -119,35 +133,13 @@ export function createAppData(): AppData {
     workspacesLoading: () => workspaces.loading() && !workspaces.data(),
     workspacesError: workspaces.error,
     refreshWorkspaces: workspaces.refresh,
-    async reorderWorkspaces(ids) {
-      const reorder = ++reorders;
+    reorderWorkspaces(ids) {
       pendingOrder.set([...ids]);
-      try {
-        const result = await untracked(session).api<{ workspaces: Workspace[] }>("/api/workspaces/order", { method: "PUT", body: { workspaceIds: ids } });
-        if (reorder !== reorders) return;
-        workspaces.replace(result);
-        pendingOrder.set(null);
-      } catch (reason) {
-        if (reorder !== reorders) return;
-        pendingOrder.set(null);
-        void workspaces.refresh();
-        throw reason;
-      }
+      return writeWorkspaces("/api/workspaces/order", { workspaceIds: ids });
     },
-    async hideWorkspace(id, hidden) {
-      const change = ++hides;
+    hideWorkspace(id, hidden) {
       pendingHidden.update(current => ({ ...current, [id]: hidden }));
-      try {
-        const result = await untracked(session).api<{ workspaces: Workspace[] }>(`/api/workspaces/${segment(id)}/hidden`, { method: "PUT", body: { hidden } });
-        if (change !== hides) return;
-        workspaces.replace(result);
-        pendingHidden.set({});
-      } catch (reason) {
-        if (change !== hides) return;
-        pendingHidden.set({});
-        void workspaces.refresh();
-        throw reason;
-      }
+      return writeWorkspaces(`/api/workspaces/${segment(id)}/hidden`, { hidden });
     },
     lastWorkspaceId,
     setLastWorkspaceId: id => lastWorkspaceId.set(id),

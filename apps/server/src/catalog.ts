@@ -296,8 +296,8 @@ export function registerCatalog(app: Hono<AppEnv>): void {
       hidden
         ? c.env.DB.query<never>(`INSERT INTO workspace_hidden (user_id, workspace_id, created_at)
           SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?)
-            AND NOT EXISTS (SELECT 1 FROM workspace_hidden WHERE user_id = ? AND workspace_id = ?)`)
-          .bind(userId, workspaceId, now(), workspaceId, userId, userId, workspaceId)
+          ON CONFLICT (user_id, workspace_id) DO NOTHING`)
+          .bind(userId, workspaceId, now(), workspaceId, userId)
         : c.env.DB.query<never>('DELETE FROM workspace_hidden WHERE user_id = ? AND workspace_id = ?').bind(userId, workspaceId),
       workspacesStatement(c.env, userId),
     ]);
