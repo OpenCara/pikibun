@@ -9,7 +9,7 @@ import { githubOAuthAppInstructions, LocalServerError, startLocalServer } from '
 import { readNewPassword } from '../password-accounts-cli.js';
 import { defaultLocalStateDir, LocalStateError, peekLocalState, sharedOrigin, validGitHubApp, type GitHubOAuthApp, type SharedConfig } from './state.js';
 import { openLocalStateTakingOver } from './discovery.js';
-import { DEFAULT_LISTEN, describeListen, listenError, parseListen } from './listen.js';
+import { DEFAULT_LISTEN, describeListen, LISTEN_ALL, parseListen, resolveListen } from './listen.js';
 
 const HELP = `Usage: pikibun serve [options]
 
@@ -119,8 +119,8 @@ async function hostOptions(values: Record<string, string | boolean | string[] | 
 
 export function listenChoice(values: readonly string[]): string[] {
   const listen = parseListen(values);
-  const error = listenError(listen);
-  if (error) throw new ConnectorSetupError(`--listen: ${error}`);
+  const resolved = resolveListen(listen);
+  if (!resolved.ok) throw new ConnectorSetupError(`--listen: ${resolved.error}`);
   return listen;
 }
 
@@ -183,7 +183,8 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
     if (shared) {
       process.stderr.write(`\nPikibun is shared at ${server.origin}, listening on ${server.listening.join(', ')}.\n`
         + `Point your TLS proxy or tunnel for ${server.origin} at ${server.listening.map(url => url.replace('0.0.0.0', '<this computer>')).join(' or ')}.\n`
-        + `Administrators: ${state.shared!.admins.join(', ')}. New accounts: ${state.shared!.signup}.\n`);
+        + `Administrators: ${state.shared!.admins.join(', ')}. New accounts: ${state.shared!.signup}.\n`
+        + ((state.listen ?? DEFAULT_LISTEN)[0] === LISTEN_ALL ? 'Its plain HTTP port is open on every network interface: with your proxy on this computer, --listen loopback keeps others from reaching it but through the proxy.\n' : ''));
       if (values['create-admin']) process.stderr.write(`${await server.createAdmin(values['create-admin'].trim(), await readNewPassword())}\n`);
     } else {
       process.stderr.write(`\nPikibun is running at ${server.origin}, listening on ${server.listening.join(', ')} (${describeListen(state.listen ?? DEFAULT_LISTEN)}; choose with --listen).\n`

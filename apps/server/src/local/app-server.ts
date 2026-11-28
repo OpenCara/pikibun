@@ -12,7 +12,7 @@ import { startLocalHost, type LocalHost } from './host.js';
 import { LocalServerError, startLocalServer, type LocalServer } from './launch.js';
 import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, peekLocalState } from './state.js';
 import { openLocalStateTakingOver } from './discovery.js';
-import { DEFAULT_LISTEN, describeListen, interfaceChoices, listenError } from './listen.js';
+import { DEFAULT_LISTEN, describeListen, interfaceChoices, resolveListen } from './listen.js';
 
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const requestSchema: z.ZodType<ServerRequest> = z.discriminatedUnion('type', [
@@ -83,8 +83,8 @@ async function start(request: ServerStartRequest): Promise<void> {
 }
 
 async function launch(request: ServerStartRequest): Promise<void> {
-  const listenProblem = request.listen === undefined ? undefined : listenError(request.listen);
-  if (listenProblem) throw new ServerFailure(listenProblem);
+  const resolved = request.listen === undefined ? undefined : resolveListen(request.listen);
+  if (resolved && !resolved.ok) throw new ServerFailure(resolved.error);
   const { state, release } = await openLocalStateTakingOver(stateDir, request.listen ? { listen: request.listen } : {});
   const host = await hostCheck().catch(async (error: unknown) => { await release(); throw error; });
   const server = await startLocalServer({ stateDir, state, release, mode: 'local', ...(staticDir ? { staticDir } : {}) });

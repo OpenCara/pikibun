@@ -6,8 +6,9 @@ export const LISTEN_LOOPBACK = 'loopback';
 export const DEFAULT_LISTEN: readonly string[] = [LISTEN_ALL];
 export const LOOPBACK_ADDRESS = '127.0.0.1';
 const EVERY_ADDRESS = '0.0.0.0';
+const EVERY_IPV6_ADDRESS = '::';
 const MAX_PLACES = 16;
-const INTERFACE_NAME = /^[A-Za-z0-9][\w.@:-]{0,63}$/;
+const INTERFACE_NAME = /^[A-Za-z0-9][\w .@:()-]{0,62}[\w.@:()-]$|^[A-Za-z0-9]$/;
 
 export interface NetworkInterfaceChoice { name: string; addresses: string[] }
 
@@ -52,7 +53,13 @@ export function resolveListen(listen: readonly string[], interfaces: Interfaces 
     if (!own.length) return { ok: false, error: `The network interface ${place} has no address to listen on: is it up?` };
     for (const address of own) addresses.add(address);
   }
-  return { ok: true, addresses: [...addresses] };
+  return { ok: true, addresses: withoutCovered([...addresses]) };
+}
+
+function withoutCovered(addresses: string[]): string[] {
+  if (addresses.includes(EVERY_IPV6_ADDRESS)) return [EVERY_IPV6_ADDRESS];
+  if (addresses.includes(EVERY_ADDRESS)) return addresses.filter(address => address === EVERY_ADDRESS || isIP(address) === 6);
+  return addresses;
 }
 
 export function listenUrl(address: string, port: number): string {

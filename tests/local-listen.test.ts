@@ -17,6 +17,7 @@ const interfaces = {
   lo: [info("127.0.0.1", { internal: true }), info("::1", { internal: true })],
   eth0: [info("192.168.1.20"), info("fe80::1", { scopeid: 2 } as Partial<NetworkInterfaceInfo>)],
   tailscale0: [info("100.64.1.2"), info("fd7a:115c:a1e0::2")],
+  "vEthernet (WSL)": [info("172.20.0.1")],
   down0: [info("fe80::9", { scopeid: 4 } as Partial<NetworkInterfaceInfo>)],
 };
 
@@ -27,15 +28,16 @@ async function directory(t: TestContext): Promise<string> {
 }
 
 test("where a local server listens is all, loopback, or network interfaces and addresses, each once", () => {
-  for (const good of [["all"], ["loopback"], ["eth0"], ["tailscale0", "192.168.1.20", "fd7a::2"]]) assert.equal(listenError(good), undefined, good.join());
+  for (const good of [["all"], ["loopback"], ["eth0"], ["tailscale0", "192.168.1.20", "fd7a::2"], ["Ethernet 2", "vEthernet (WSL)"], ["e"]]) assert.equal(listenError(good), undefined, good.join());
   for (const [bad, message] of [
     [[], /Choose where/], ["all", /Choose where/], [Array.from({ length: 17 }, (_, index) => `eth${index}`), /up to 16/],
-    [["eth0 ; rm"], /network interface such as eth0/], [[""], /network interface such as eth0/], [[7], /network interface such as eth0/],
+    [["eth0 ; rm"], /network interface such as eth0/], [[""], /network interface such as eth0/], [[7], /network interface such as eth0/], [["eth0 "], /network interface such as eth0/],
     [["eth0", "eth0"], /twice/], [["all", "eth0"], /stand alone/], [["loopback", "eth0"], /stand alone/],
   ] as const) assert.match(listenError(bad) ?? "", message, JSON.stringify(bad));
   assert.deepEqual(parseListen(["tailscale0, 192.168.1.20", "", " eth0 "]), ["tailscale0", "192.168.1.20", "eth0"]);
-  assert.deepEqual(listenChoice(["tailscale0,eth0"]), ["tailscale0", "eth0"]);
+  assert.deepEqual(listenChoice(["192.0.2.5, 127.0.0.1"]), ["192.0.2.5", "127.0.0.1"]);
   assert.throws(() => listenChoice(["all,eth0"]), /--listen: all and loopback stand alone/);
+  assert.throws(() => listenChoice(["nosuchif9"]), /--listen: This computer has no network interface named nosuchif9/, "a choice that can't be used is refused before it is saved");
   assert.equal(describeListen(["all"]), "every network interface");
   assert.equal(describeListen(["loopback"]), "this computer only");
   assert.equal(describeListen(["tailscale0", "eth0"]), "this computer and tailscale0, eth0");
@@ -47,7 +49,11 @@ test("a local server's listen choice resolves to the addresses it binds, always 
   assert.deepEqual(resolveListen(["eth0"], interfaces), { ok: true, addresses: ["127.0.0.1", "192.168.1.20"] }, "link-local IPv6 needs a scope, so it is left out");
   assert.deepEqual(resolveListen(["tailscale0", "192.168.1.20", "127.0.0.1"], interfaces),
     { ok: true, addresses: ["127.0.0.1", "100.64.1.2", "fd7a:115c:a1e0::2", "192.168.1.20"] });
-  assert.deepEqual(resolveListen(["wlan0"], interfaces), { ok: false, error: "This computer has no network interface named wlan0 (it has down0, eth0, lo, tailscale0)." });
+  assert.deepEqual(resolveListen(["0.0.0.0"], interfaces), { ok: true, addresses: ["0.0.0.0"] }, "a wildcard covers loopback, which would collide with it");
+  assert.deepEqual(resolveListen(["tailscale0", "0.0.0.0"], interfaces), { ok: true, addresses: ["fd7a:115c:a1e0::2", "0.0.0.0"] });
+  assert.deepEqual(resolveListen(["eth0", "::"], interfaces), { ok: true, addresses: ["::"] });
+  assert.deepEqual(resolveListen(["vEthernet (WSL)"], interfaces), { ok: true, addresses: ["127.0.0.1", "172.20.0.1"] });
+  assert.deepEqual(resolveListen(["wlan0"], interfaces), { ok: false, error: "This computer has no network interface named wlan0 (it has down0, eth0, lo, tailscale0, vEthernet (WSL))." });
   assert.deepEqual(resolveListen(["down0"], interfaces), { ok: false, error: "The network interface down0 has no address to listen on: is it up?" });
   assert.equal(resolveListen(["all", "eth0"], interfaces).ok, false);
   assert.equal(listenUrl("fd7a:115c:a1e0::2", 7878), "http://[fd7a:115c:a1e0::2]:7878");
@@ -55,6 +61,7 @@ test("a local server's listen choice resolves to the addresses it binds, always 
   assert.deepEqual(interfaceChoices(interfaces), [
     { name: "eth0", addresses: ["192.168.1.20"] },
     { name: "tailscale0", addresses: ["100.64.1.2", "fd7a:115c:a1e0::2"] },
+    { name: "vEthernet (WSL)", addresses: ["172.20.0.1"] },
   ], "the app is offered the interfaces that reach beyond this computer");
 });
 
@@ -109,5 +116,11 @@ test("a local server listens on each address of the interfaces it was given besi
   const nowhere = await loadLocalState(stateDir, { listen: ["192.0.2.123"] });
   await assert.rejects(startLocalServer({ stateDir, state: nowhere, staticDir: web }), /can't listen on 192\.0\.2\.123: this computer has no such address/);
   const missing = await loadLocalState(stateDir, { listen: ["nosuchif9"] });
-  await assert.rejects(startLocalServer({ stateDir, state: missing, staticDir: web }), /no network interface named nosuchif9/);
+  await assert.rejects(startLocalServer({ stateDir, state: missing, staticDir: web }), /no network interface named nosuchif9\b.*Choose where Pikibun listens with --listen/);
+
+  const everywhere = await loadLocalState(stateDir, { listen: ["0.0.0.0"] });
+  const wildcard = await startLocalServer({ stateDir, state: everywhere, staticDir: web });
+  t.after(() => wildcard.close());
+  assert.deepEqual(wildcard.listening, [`http://0.0.0.0:${port}`], "--listen 0.0.0.0 starts, as all does");
+  assert.equal((await fetch(`${wildcard.address}/api/health`)).status, 200);
 });

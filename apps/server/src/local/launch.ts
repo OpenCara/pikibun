@@ -74,7 +74,7 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   if (mode === 'shared' && !shared) throw new LocalServerError('Set up sharing first: its public HTTPS address, sign-in and administrators.');
   if (mode === 'shared' && options.headless) throw new LocalServerError('A shared Pikibun runs from `pikibun serve --share`, not headless.');
   const listen = resolveListen(state.listen ?? DEFAULT_LISTEN);
-  if (!listen.ok) throw new LocalServerError(listen.error);
+  if (!listen.ok) throw new LocalServerError(`${listen.error} Choose where Pikibun listens with --listen, or under Listens on in the app.`);
   const origin = shared ? shared.origin : `http://${LOCAL_ORIGIN_HOST}:${state.port}`;
   const common: Record<string, string> = {
     APP_ORIGIN: origin, HOST: listen.addresses.join(','), PORT: String(state.port),
