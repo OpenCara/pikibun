@@ -13,7 +13,7 @@ describe("times in the language the app shows", () => {
     expect(relativeTime(ago(5), now)).toBe("5 min ago");
     expect(relativeTime(ago(180), now)).toBe("3 h ago");
     expect(relativeTime(ago(2 * 1440), now)).toBe("2 d ago");
-    expect(dateLabel(new Date(2026, 2, 12))).toBe("Mar 12, 2026");
+    expect(dateLabel(new Date(Date.UTC(2026, 2, 12, 12)))).toBe("Mar 12, 2026");
     setLocale(null);
   });
 
@@ -24,20 +24,27 @@ describe("times in the language the app shows", () => {
     expect(relativeTime(ago(5), now)).toBe("5 分鐘前");
     setLocale("ja");
     expect(relativeTime(ago(180), now)).toBe("3 時間前");
-    expect(dateLabel(new Date(2026, 2, 12))).toContain("2026");
-    expect(dateLabel(new Date(2026, 2, 12))).toContain("12");
+    expect(dateLabel(new Date(Date.UTC(2026, 2, 12, 12)))).toContain("2026");
+    expect(dateLabel(new Date(Date.UTC(2026, 2, 12, 12)))).toContain("12");
     setLocale("ko");
     expect(relativeTime(ago(2 * 1440), now)).toBe("2일 전");
     expect(relativeTime(ago(0), now)).toBe("방금");
     setLocale(null);
   });
 
-  test("a time follows the person's 12- or 24-hour clock", () => {
-    const at = new Date(2026, 2, 12, 15, 4);
-    expect(dateTimeFormat("time", "en-US", "h23", "UTC").format(at)).toContain("15:04");
+  test("a time follows the person's 12- or 24-hour clock and time zone", () => {
+    const at = Date.UTC(2026, 2, 12, 15, 4);
+    expect(dateTimeFormat("time", "en-US", "h23", "UTC").format(at)).toBe("Mar 12, 2026, 15:04");
     expect(dateTimeFormat("time", "en-US", "h12", "UTC").format(at)).toContain("3:04 PM");
     expect(dateTimeFormat("time", "ja", "h23", "UTC").format(at)).toContain("15:04");
-    expect(dateTimeFormat("time", "en-US", "h23", "Asia/Tokyo")).not.toBe(dateTimeFormat("time", "en-US", "h23", "UTC"));
+    expect(dateTimeFormat("time", "en-US", "h23", "+09:00").format(at)).toBe("Mar 13, 2026, 00:04");
+    expect(dateTimeFormat("date", "en-US", "h23", "+09:00").format(at)).toBe("Mar 13, 2026");
+    expect(dateTimeFormat("date", "en-US", "h23", "UTC").format(at)).toBe("Mar 12, 2026");
+  });
+
+  test("a zone Intl does not know formats in local time rather than failing", () => {
+    const at = new Date(2026, 2, 12, 15, 4);
+    expect(dateTimeFormat("time", "en-US", "h23", "Not/AZone").format(at)).toContain("15:04");
   });
 
   test("a date that does not parse is shown as it is", () => {

@@ -63,9 +63,14 @@ export function dateTimeFormat(kind: "date" | "time", tag: string, hourCycle: st
   const key = `${kind} ${tag} ${hourCycle} ${timeZone}`;
   let format = formatters.get(key);
   if (!format) {
-    format = new Intl.DateTimeFormat(tag, kind === "date"
+    const options: Intl.DateTimeFormatOptions = kind === "date"
       ? { year: "numeric", month: "short", day: "numeric" }
-      : { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: hourCycle as Intl.DateTimeFormatOptions["hourCycle"] });
+      : { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: hourCycle as Intl.DateTimeFormatOptions["hourCycle"] };
+    try {
+      format = new Intl.DateTimeFormat(tag, { ...options, timeZone });
+    } catch {
+      format = new Intl.DateTimeFormat(tag, options);
+    }
     formatters.set(key, format);
   }
   return format;
