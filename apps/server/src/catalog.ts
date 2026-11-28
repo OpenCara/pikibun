@@ -240,22 +240,28 @@ export async function ensurePersonalWorkspace(env: Env, userId: string): Promise
 
 const MAX_ORDERED_WORKSPACES = 1000;
 
-function workspacesStatement(env: Env, userId: string): Query<Omit<Workspace, 'personal'> & { personal: number }> {
-  return env.DB.query<Omit<Workspace, 'personal'> & { personal: number }>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
-      CASE WHEN p.workspace_id IS NULL THEN 0 ELSE 1 END AS personal
+type WorkspaceRow = Omit<Workspace, 'personal' | 'hidden'> & { personal: number; hidden: number };
+
+function workspacesStatement(env: Env, userId: string): Query<WorkspaceRow> {
+  return env.DB.query<WorkspaceRow>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
+      CASE WHEN p.workspace_id IS NULL THEN 0 ELSE 1 END AS personal,
+      CASE WHEN h.workspace_id IS NULL OR p.workspace_id IS NOT NULL THEN 0 ELSE 1 END AS hidden
     FROM workspaces w
     INNER JOIN workspace_members member ON member.workspace_id = w.id AND member.user_id = ?
     LEFT JOIN personal_workspaces p ON p.workspace_id = w.id AND p.user_id = member.user_id
     LEFT JOIN workspace_order o ON o.workspace_id = w.id AND o.user_id = member.user_id
+    LEFT JOIN workspace_hidden h ON h.workspace_id = w.id AND h.user_id = member.user_id
     ORDER BY CASE WHEN p.workspace_id IS NULL THEN 1 ELSE 0 END, CASE WHEN o.position IS NULL THEN 1 ELSE 0 END, o.position, w.created_at, w.id`).bind(userId);
 }
 
-const listedWorkspaces = (rows: (Omit<Workspace, 'personal'> & { personal: number })[]): Workspace[] =>
-  rows.map(row => ({ ...row, personal: Number(row.personal) === 1 }));
+const listedWorkspaces = (rows: WorkspaceRow[]): Workspace[] =>
+  rows.map(({ hidden, ...row }) => ({ ...row, personal: Number(row.personal) === 1, ...(Number(hidden) === 1 ? { hidden: true } : {}) }));
 
 const workspaceOrderBody = z.strictObject({
   workspaceIds: z.array(identifierSchema('workspaceIds')).max(MAX_ORDERED_WORKSPACES).refine(ids => new Set(ids).size === ids.length),
 });
+
+const workspaceHiddenBody = z.strictObject({ hidden: z.boolean() });
 
 export function registerCatalog(app: Hono<AppEnv>): void {
   app.get('/api/workspaces', async c => {
@@ -267,12 +273,32 @@ export function registerCatalog(app: Hono<AppEnv>): void {
   app.put('/api/workspaces/order', async c => {
     const userId = c.get('auth').userId;
     const { workspaceIds: ids } = await parsedBody(c, workspaceOrderBody, { maxBytes: 256 * 1024, message: 'Invalid workspaceIds.' });
-    const result = await c.env.DB.batch<Omit<Workspace, 'personal'> & { personal: number }>([
+    const result = await c.env.DB.batch<WorkspaceRow>([
       c.env.DB.query<never>('DELETE FROM workspace_order WHERE user_id = ?').bind(userId),
       ...ids.map((workspaceId, position) => c.env.DB.query<never>(`INSERT INTO workspace_order (user_id, workspace_id, position)
         SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?)
           AND NOT EXISTS (SELECT 1 FROM personal_workspaces WHERE workspace_id = ?)`)
         .bind(userId, workspaceId, position, workspaceId, userId, workspaceId)),
+      workspacesStatement(c.env, userId),
+    ]);
+    return c.json({ workspaces: listedWorkspaces(result[result.length - 1]!.results) });
+  });
+
+  app.put('/api/workspaces/:id/hidden', async c => {
+    const workspaceId = identifier(c.req.param('id'), 'workspaceId');
+    const userId = c.get('auth').userId;
+    const { hidden } = await parsedBody(c, workspaceHiddenBody, { maxBytes: 1024, message: 'Invalid hidden.' });
+    await requireMember(c.env, workspaceId, userId);
+    if (hidden && await c.env.DB.query('SELECT 1 AS found FROM personal_workspaces WHERE workspace_id = ?').bind(workspaceId).first()) {
+      fail(400, 'invalid_input', 'The private workspace stays in the sidebar.');
+    }
+    const result = await c.env.DB.batch<WorkspaceRow>([
+      hidden
+        ? c.env.DB.query<never>(`INSERT INTO workspace_hidden (user_id, workspace_id, created_at)
+          SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?)
+            AND NOT EXISTS (SELECT 1 FROM workspace_hidden WHERE user_id = ? AND workspace_id = ?)`)
+          .bind(userId, workspaceId, now(), workspaceId, userId, userId, workspaceId)
+        : c.env.DB.query<never>('DELETE FROM workspace_hidden WHERE user_id = ? AND workspace_id = ?').bind(userId, workspaceId),
       workspacesStatement(c.env, userId),
     ]);
     return c.json({ workspaces: listedWorkspaces(result[result.length - 1]!.results) });
@@ -392,6 +418,9 @@ export function registerCatalog(app: Hono<AppEnv>): void {
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, targetId, auditId),
       c.env.DB.query(`DELETE FROM workspace_order WHERE workspace_id = ? AND user_id = ?
+        AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
+        .bind(workspaceId, targetId, auditId),
+      c.env.DB.query(`DELETE FROM workspace_hidden WHERE workspace_id = ? AND user_id = ?
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, targetId, auditId),
       removal.toolGroup,
