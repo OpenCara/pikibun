@@ -191,7 +191,7 @@ export function addUsage(totals: Record<string, Usage>, key: string, usage: Usag
     return;
   }
   for (const field of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[field] += usage[field];
-  for (const field of ["cacheWrite1h", "reasoning"] as const) if (usage[field] !== undefined) total[field] = (total[field] ?? 0) + usage[field];
+  for (const field of ["cacheWrite1h", "reasoning", "imageOutput"] as const) if (usage[field] !== undefined) total[field] = (total[field] ?? 0) + usage[field];
   for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[field] += usage.cost[field];
 }
 
