@@ -13,7 +13,7 @@ import type { BrokeredToolDefinition } from '../../../../../packages/shared/src/
 import type { AppContext, AppEnv, Env, SessionRow } from '../../types.js';
 import { appOrigin, fail, id, identifier, now, randomToken, requireOrigin, text, userIdentifier } from '../../http.js';
 import { body, fields } from '../../schemas.js';
-import { requireMember, sessionAccess, workspaceAdminSQL, workspaceManagerRolesSQL } from '../access.js';
+import { requireMember, sessionAccess, workspaceAdminSQL } from '../access.js';
 import { auditStatement } from '../audit.js';
 import { privateResponse } from '../auth.js';
 import { workspaceExtensions } from '../extension-policy.js';
@@ -24,7 +24,7 @@ import { assertVaultConfigured, decryptToken, encryptToken } from '../vault.js';
 import { callRemoteMcpTool } from './client.js';
 import {
   broughtConnection, connectionAppBegin, connectionAppCallback, connectionAppFinish, connectionCredentials, connectionWebCallback, registerMcpConnections,
-  sharedConnection, viewerConnections, type ConnectionRow,
+  sharedConnection, shareLiveSQL, viewerConnections, type ConnectionRow,
 } from './connections.js';
 import {
   APP_BEGIN_PATH, APP_CALLBACK_PATH, APP_EXPIRED, appPage, appRedirectUri, callbackCode, callbackState, discover, discoveredDetail, exchangeCode, failure,
@@ -38,18 +38,23 @@ interface ServerRow {
   read_only_tools_json: string; off_tools_json: string | null; tools_json: string; enabled: number | string; discovered_at: string | null; error: string | null; updated_at: string;
   oauth_ciphertext: string | null; oauth_by: string | null; oauth_at: string | null;
   tools_over_limit: number | string | null; tools_unusable: number | string | null; sign_in_as: RemoteMcpSignInAs; shared_connection_id: string | null;
+  share_status: 'pending' | 'accepted' | null; accepted_by: string | null; accepted_at: string | null;
 }
 
 const activeShareSQL = (server: string) => `(${server}.shared_connection_id IS NULL OR EXISTS (SELECT 1 FROM mcp_connections sc
-  JOIN workspace_members sm ON sm.user_id = sc.user_id AND sm.workspace_id = ${server}.workspace_id AND sm.role IN (${workspaceManagerRolesSQL})
-  WHERE sc.id = ${server}.shared_connection_id))`;
+  JOIN workspace_members sm ON sm.user_id = sc.user_id AND sm.workspace_id = ${server}.workspace_id
+  WHERE sc.id = ${server}.shared_connection_id AND ${shareLiveSQL(server, 'sc', 'sm')}))`;
+
+const pendingShare = (row: Pick<ServerRow, 'shared_connection_id' | 'share_status'>) => !!row.shared_connection_id && row.share_status === 'pending';
 
 async function sharers(env: Env, workspaceId: string, viewer: string): Promise<Map<string, McpServerSharer>> {
-  const rows = await env.DB.query<{ id: string; user_id: string; display_name: string; member: number | string | null }>(`SELECT c.id, c.user_id, u.display_name,
-      (SELECT 1 FROM workspace_members m WHERE m.workspace_id = s.workspace_id AND m.user_id = c.user_id AND m.role IN (${workspaceManagerRolesSQL})) AS member
+  const rows = await env.DB.query<{ id: string; user_id: string; display_name: string; live: number | string | null; share_status: string }>(`SELECT c.id,
+      c.user_id, u.display_name, s.share_status,
+      (SELECT 1 FROM workspace_members m WHERE m.workspace_id = s.workspace_id AND m.user_id = c.user_id AND ${shareLiveSQL('s', 'c', 'm')}) AS live
     FROM workspace_mcp_servers s JOIN mcp_connections c ON c.id = s.shared_connection_id JOIN users u ON u.id = c.user_id
     WHERE s.workspace_id = ?`).bind(workspaceId).all();
-  return new Map(rows.map(row => [row.id, { userId: row.user_id, name: row.display_name, mine: row.user_id === viewer, active: Number(row.member) === 1 }]));
+  return new Map(rows.map(row => [row.id, { userId: row.user_id, name: row.display_name, mine: row.user_id === viewer, active: Number(row.live) === 1,
+    ...(row.share_status === 'pending' ? { pending: true } : {}) }]));
 }
 
 function notShared(row: ServerRow): void {
@@ -120,8 +125,8 @@ const hasSignIn = (credentials: Credentials) => !!credentials.oauth || Object.ke
 
 interface Chosen { credentials: Credentials; owner: SignInOwner; connection?: string }
 
-async function sharedCredentials(env: Env, row: ServerRow): Promise<Chosen | null> {
-  const connection = row.shared_connection_id ? await sharedConnection(env, row.workspace_id, row.shared_connection_id) : null;
+async function sharedCredentials(env: Env, row: ServerRow, pending = false): Promise<Chosen | null> {
+  const connection = row.shared_connection_id ? await sharedConnection(env, row.workspace_id, row.shared_connection_id, pending) : null;
   return connection ? { credentials: await connectionCredentials(env, connection, 'sharer'), owner: 'sharer', connection: connection.id } : null;
 }
 
@@ -238,6 +243,9 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
     const tool = server ? parsedTools(server.tools_json).find(item => remoteMcpToolKey(item.name) === key) : undefined;
     const toolName = server && tool ? remoteMcpToolName(server.prefix, tool.name) : undefined;
     if (!server || !tool || !toolName) fail(404, 'mcp_tool_not_found', 'This workspace has no such remote MCP tool now, or its server is turned off.');
+    if (pendingShare(server)) {
+      fail(403, 'mcp_share_pending', `${server.name} was shared with this workspace by a member and waits for an owner or admin to accept it. Nothing ran.`);
+    }
     if (parsedList(server.off_tools_json ?? '[]').includes(tool.name)) {
       fail(404, 'mcp_tool_not_found', `${toolName} is turned off in this workspace: its owners and admins turn it on again on the settings page. Nothing ran.`);
     }
@@ -256,7 +264,8 @@ export async function remoteMcpCall(c: AppContext, connectorId: string): Promise
   }
   const chosen = await chooseCredentials(c.env, server, actorId);
   if (!chosen && server.shared_connection_id) {
-    fail(403, 'mcp_share_ended', `${server.name} calls with the connection a member shared with this workspace, and they are no longer one of its owners or admins. Nothing ran.`);
+    fail(403, 'mcp_share_ended', `${server.name} calls with the connection a member shared with this workspace, and that share no longer serves: they left the workspace,`
+      + ' or, having shared it as an owner or admin, are no longer one. Nothing ran.');
   }
   if (!chosen) {
     fail(403, 'mcp_connection_required', `${server.name} signs in with each member's own account, and the requester brought none to this workspace: they connect it under`
@@ -283,10 +292,36 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id'));
     const actor = c.get('auth').userId;
     const member = await requireMember(c.env, workspaceId, actor);
+    const admin = member.role === 'owner' || member.role === 'admin';
     const rows = await c.env.DB.query<ServerRow>('SELECT * FROM workspace_mcp_servers WHERE workspace_id = ? ORDER BY created_at, prefix').bind(workspaceId).all();
     const mine = await viewerConnections(c.env, workspaceId, actor);
     const sharedBy = await sharers(c.env, workspaceId, actor);
-    return c.json({ servers: rows.map(row => view(row, mine.get(row.url), sharedBy)), admin: member.role === 'owner' || member.role === 'admin' });
+    const shown = rows.filter(row => admin || !pendingShare(row) || sharedBy.get(row.shared_connection_id!)?.mine);
+    return c.json({ servers: shown.map(row => view(row, mine.get(row.url), sharedBy)), admin });
+  });
+
+  app.post('/api/workspaces/:id/mcp-servers/:serverId/accept', async c => {
+    const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
+    const serverId = identifier(c.req.param('serverId'), 'serverId');
+    await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
+    const row = await serverRow(c.env, workspaceId, serverId);
+    if (!pendingShare(row)) return c.json({ server: await serverView(c.env, workspaceId, serverId, actor) });
+    const at = now();
+    const accepted = await c.env.DB.query<{ id: string }>(`UPDATE workspace_mcp_servers SET share_status = 'accepted', accepted_by = ?, accepted_at = ?, updated_by = ?, updated_at = ?
+      WHERE id = ? AND workspace_id = ? AND share_status = 'pending' AND ${workspaceAdminSQL}
+        AND EXISTS (SELECT 1 FROM mcp_connections sc JOIN workspace_members sm ON sm.user_id = sc.user_id AND sm.workspace_id = workspace_mcp_servers.workspace_id
+          WHERE sc.id = workspace_mcp_servers.shared_connection_id)
+      RETURNING id`)
+      .bind(actor, at, actor, at, serverId, workspaceId, workspaceId, actor).first();
+    if (!accepted) {
+      await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
+      const current = await serverRow(c.env, workspaceId, serverId);
+      if (pendingShare(current)) fail(409, 'mcp_share_ended', 'The member who shared it no longer belongs to this workspace: remove it.');
+      return c.json({ server: await serverView(c.env, workspaceId, serverId, actor) });
+    }
+    await auditStatement(c.env, actor, 'workspace.mcp.connection_share_accepted', workspaceId, null,
+      { server: serverId, prefix: row.prefix, connection: row.shared_connection_id, url: row.url }).run();
+    return c.json({ server: await serverView(c.env, workspaceId, serverId, actor) });
   });
 
   app.post('/api/workspaces/:id/mcp-servers', async c => {
@@ -351,8 +386,8 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     let lister = workspaceCredentials(c.env, serverId, headers, signOut ? null : row.oauth_ciphertext);
     let listedBy: SignInOwner = 'workspace';
     if (reach && row.shared_connection_id) {
-      const sharer = await sharedCredentials(c.env, row)
-        ?? fail(409, 'mcp_share_ended', 'The member who shared this server\'s connection is no longer an owner or admin of this workspace, so its tools can\'t be listed: remove it.');
+      const sharer = await sharedCredentials(c.env, row, pendingShare(row))
+        ?? fail(409, 'mcp_share_ended', 'The share of this server\'s connection no longer serves (its member left the workspace, or, having shared it as an owner or admin, is no longer one), so its tools can\'t be listed: remove it.');
       lister = sharer.credentials; listedBy = 'sharer';
     } else if (reach && signInAs !== 'workspace' && !hasSignIn(lister)) {
       const own = await broughtConnection(c.env, workspaceId, url, actor);
@@ -396,7 +431,10 @@ export function registerRemoteMcp(app: Hono<AppEnv>): void {
     const row = await serverRow(c.env, workspaceId, serverId);
     await c.env.DB.batch([
       c.env.DB.query(`DELETE FROM workspace_mcp_servers WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL}`).bind(serverId, workspaceId, workspaceId, actor),
-      auditStatement(c.env, actor, 'workspace.mcp.removed', workspaceId, null, { server: serverId, prefix: row.prefix }),
+      pendingShare(row)
+        ? auditStatement(c.env, actor, 'workspace.mcp.connection_share_declined', workspaceId, null,
+          { server: serverId, prefix: row.prefix, connection: row.shared_connection_id, url: row.url })
+        : auditStatement(c.env, actor, 'workspace.mcp.removed', workspaceId, null, { server: serverId, prefix: row.prefix }),
     ]);
     return c.json({ ok: true });
   });

@@ -63,34 +63,48 @@ workspace, so that every member's requests there call the server with that one a
 would, without anyone typing its secret into the workspace. It is managed in **Settings → MCP sharing**, which lists
 each of the member's connections with the workspaces they could share it with and a switch for each.
 
-- **Who**: only an owner or admin of the workspace shares with it (`PUT /api/mcp-connections/:id/shares/:workspace`,
-  `forbidden` otherwise), since sharing adds a server, and so tools, to every session there, which only they do
-  otherwise. The page lists only the workspaces the member owns or administers (`McpConnection.shares`), plus any
-  they shared with before and no longer administer, so they can still withdraw it.
+- **Who**: any member of the workspace shares with it (`PUT /api/mcp-connections/:id/shares/:workspace`). An owner's
+  or admin's share takes effect at once (audited `workspace.mcp.connection_shared`). Anyone else's adds the server as
+  **pending** (`workspace_mcp_servers.share_status = 'pending'`, audited `workspace.mcp.connection_share_requested`),
+  since sharing adds tools to every session there, which only owners and admins decide: a pending server offers no
+  tools (`workspaceRemoteTools`), refuses calls (`mcp_share_pending`, nothing sent) and is listed only to the
+  workspace's owners and admins and to its member. The page lists every workspace the member belongs to
+  (`McpConnection.shares`, with `needsApproval` where sharing would wait and `pending` while it does), plus any they
+  shared with before and left, so they can still withdraw it.
+- **Accepting**: an owner or admin sees a pending server on the workspace's settings page with its tools (listed with
+  the member's connection, which they can list again and mark read-only or off before deciding), and accepts it
+  (`POST /api/workspaces/:id/mcp-servers/:server/accept`, audited `workspace.mcp.connection_share_accepted`, which
+  keeps `accepted_by` and `accepted_at`) or declines it by removing it (audited `workspace.mcp.connection_share_declined`).
+  Accepting refuses a share whose member has left (`mcp_share_ended`).
 - **What**: sharing adds a server to the workspace (`workspace_mcp_servers.shared_connection_id`, unique per workspace
   and connection) with the connection's name and address, a prefix made from its name (`remoteMcpSharedPrefix`), no
   headers or OAuth sign-in of its own, `sign_in_as = 'workspace'`, and its tools listed with the connection. It counts
   toward the workspace's 8 servers, and a workspace that already has a server at the address can't take it
   (`mcp_server_at_address`): members bring their own connections to that one instead.
 - **Its sign-in stays the member's**: the connection's secret is never copied into the workspace. A call
-  (`chooseCredentials`) decrypts the connection's own headers or OAuth sign-in, and only while the member who shared it
-  is still an owner or admin of the workspace (`sharedConnection` joins `workspace_members` on a manager role). Once
-  they leave or lose that role, its tools aren't offered (`workspaceRemoteTools`) and a call is refused
-  (`mcp_share_ended`, nothing sent). Rejoining as a plain member doesn't turn it back on, since no owner or admin
-  would have agreed to it this time; only being an owner or admin again does, which could share it anew anyway.
-  Every call's audit names the connection.
+  (`chooseCredentials`) decrypts the connection's own headers or OAuth sign-in, and only while the share serves
+  (`shareLiveSQL`): it was accepted, and either
+  - its member shared it as an owner or admin themselves (`accepted_by` is the sharer, or empty for shares made before
+    acceptance existed), and is still an owner or admin of the workspace, since nobody else agreed to it; or
+  - another owner or admin accepted it, and its member still belongs to the workspace, in any role, by the membership
+    they had then (`workspace_members.created_at` no later than `accepted_at`).
+
+  Otherwise its tools aren't offered (`workspaceRemoteTools`) and a call is refused (`mcp_share_ended`, nothing sent).
+  Rejoining doesn't turn it back on, since no owner or admin agreed to it for the new membership; an owner or admin
+  sharing it themselves, only being one again does, which could share it anew anyway. Every call's audit names the
+  connection.
 - **What the workspace's owners and admins still do**: rename it, turn it off, mark its read-only tools, list its
   tools again (with the shared connection) and remove it. They can't change its address, headers, OAuth sign-in or
   `signInAs` (`mcp_server_shared`), since any of those would send the member's account somewhere else or replace it.
 - **Ending it**: the member withdraws it from the page (`DELETE …/shares/:workspace`, whatever their role there now),
-  removes the connection (the server goes with it, `ON DELETE CASCADE`), or leaves the workspace or stops being one of
-  its owners or admins (the server stays, inactive, for its owners and admins to remove). An owner or admin
-  removing the server ends it too. Checking the connection (changing its sign-in, signing in, **Check again**) lists
+  removes the connection (the server goes with it, `ON DELETE CASCADE`), or leaves the workspace, or, having shared it
+  as an owner or admin, stops being one (the server stays, inactive, for its owners and admins to remove). An owner
+  or admin removing the server ends it too, and declines it while it is pending. Checking the connection (changing its sign-in, signing in, **Check again**) lists
   the tools again for every workspace it is shared with, or notes the error there.
 
-Both are audited in the workspace (`workspace.mcp.connection_shared`, `workspace.mcp.connection_unshared`). Sharing
-asks the member to confirm, because what members do with the server is done as them and may spend what their account
-pays for.
+Sharing and withdrawing are audited in the workspace (`workspace.mcp.connection_shared` or
+`workspace.mcp.connection_share_requested`, `workspace.mcp.connection_unshared`). Sharing asks the member to confirm,
+because what members do with the server is done as them and may spend what their account pays for.
 
 ## The tool list
 

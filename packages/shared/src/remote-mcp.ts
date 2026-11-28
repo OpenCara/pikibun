@@ -67,12 +67,15 @@ export interface McpServerSharer {
   name: string;
   mine: boolean;
   active: boolean;
+  pending?: boolean;
 }
 
 export interface McpConnectionShare {
   id: string;
   name: string;
   shared: boolean;
+  pending?: boolean;
+  needsApproval?: boolean;
   server?: { id: string; prefix: string };
   unavailable?: string;
 }

@@ -14,8 +14,9 @@ function hostOf(url: string): string {
 }
 
 function shareHint(share: McpConnectionShare): string {
+  if (share.shared && share.pending) return "Waiting for an owner or admin of this workspace to accept it: its tools aren't offered until then";
   if (share.shared) return `Shared: every member's sessions here offer its tools${share.server ? ` (${share.server.prefix}_*)` : ""} and call them with your account`;
-  return share.unavailable ?? "Not shared";
+  return share.unavailable ?? (share.needsApproval ? "Not shared. Sharing here waits for an owner or admin to accept it" : "Not shared");
 }
 
 function About() {
@@ -23,7 +24,8 @@ function About() {
     <View style={{ gap: 8 }}>
       <Note>Sharing one of your remote MCP servers with a workspace adds it to that workspace: every member's sessions there offer its tools and call them with your own account, whoever asks. What they do with it is done as you, and may spend what your account pays for.</Note>
       <Note>Its sign-in stays yours, kept encrypted, never shown to anyone. The workspace's owners and admins choose which of its tools only read, and can turn it off or remove it, but can't change its address or sign-in.</Note>
-      <Note>Sharing stops at once when you turn it off here, remove the connection from your profile, or leave the workspace or stop being one of its owners or admins. Only the workspaces you own or administer are listed.</Note>
+      <Note>Any member can share with their workspaces. In a workspace you own or administer, it's shared at once; in any other, it waits until one of its owners or admins accepts it.</Note>
+      <Note>Sharing stops at once when you turn it off here, remove the connection from your profile, or leave the workspace. One you shared as an owner or admin also stops if you stop being one.</Note>
     </View>
   );
 }
@@ -35,12 +37,15 @@ export function McpSharing(props: SectionProps) {
   const anywhere = () => connections().some(connection => sharesOf(connection).length > 0);
   const path = (connection: McpConnection, share: McpConnectionShare) => `/api/mcp-connections/${segment(connection.id)}/shares/${segment(share.id)}`;
   async function toggle(connection: McpConnection, share: McpConnectionShare, on: boolean) {
+    const asking = !!share.needsApproval;
     if (on && !await confirm({
-      title: `Share ${connection.name} with ${share.name}?`, confirmLabel: "Share",
-      message: `Every member of ${share.name} can then use its tools in their sessions with your account on ${hostOf(connection.url)}: what they do with it is done as you. Pikibun never shows them its sign-in, and you can stop sharing it here at any time.`,
+      title: asking ? `Ask ${share.name} to use ${connection.name}?` : `Share ${connection.name} with ${share.name}?`, confirmLabel: asking ? "Ask" : "Share",
+      message: `${asking ? `Once one of ${share.name}'s owners or admins accepts it, every member` : `Every member of ${share.name}`} can use its tools in their sessions with your account on ${hostOf(connection.url)}: what they do with it is done as you. Pikibun never shows them its sign-in, and you can stop sharing it here at any time.`,
     })) return;
     if (await action.run(async () => { await session().api(path(connection, share), { method: on ? "PUT" : "DELETE" }); },
-      on ? `${share.name} offers ${connection.name}'s tools to every member from their next message.` : `${share.name} no longer uses ${connection.name}.`)) resource.refresh();
+      !on ? `${share.name} no longer uses ${connection.name}.`
+        : asking ? `Asked ${share.name}'s owners and admins to accept ${connection.name}. Its tools are offered once one of them does.`
+        : `${share.name} offers ${connection.name}'s tools to every member from their next message.`)) resource.refresh();
   }
   return (
     <SectionPage testID="settings-mcp-sharing">
@@ -57,7 +62,7 @@ export function McpSharing(props: SectionProps) {
           <If when={action.error() || action.notice()}><Feedback error={action.error()} notice={action.notice()} /></If>
           <If when={!anywhere()}>
             <Section title="Share remote MCP servers" info={<About />}>
-              <Row title="No workspace to share with" hint="You share your remote MCP servers with the workspaces you own or administer, and you own or administer none" />
+              <Row title="No workspace to share with" hint="You share your remote MCP servers with the workspaces you belong to, and you belong to none" />
             </Section>
           </If>
           <Each of={connections()} key={connection => connection.id}>
@@ -67,7 +72,7 @@ export function McpSharing(props: SectionProps) {
                 <If when={connection().error}>
                   <Row title="Its sign-in needs attention" hint={`${connection().error!}\nFix it in your profile: the workspaces it's shared with can't use it meanwhile.`} />
                 </If>
-                <If when={sharesOf(connection()).length} else={<Row title="No workspace to share with" hint="Only the workspaces you own or administer are listed" />}>
+                <If when={sharesOf(connection()).length} else={<Row title="No workspace to share with" hint="The workspaces you belong to are listed here" />}>
                   <Each of={sharesOf(connection())} key={share => share.id}>
                     {share => (
                       <Row testID={`mcp-share-${connection().id}-${share().id}`} title={share().name} hint={shareHint(share())}

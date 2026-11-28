@@ -95,6 +95,26 @@ describe("settings", () => {
     expect(app.requests().some(item => item.url === `${ORIGIN}/api/mcp-connections/mc1/shares/w2`)).toBe(false);
   });
 
+  test("MCP sharing asks a workspace's owners and admins to accept a share from a member who is neither", async () => {
+    const at = "2026-11-20T10:00:00.000Z";
+    let asked = false;
+    const mine = () => ({ id: "mc1", name: "Linear", url: "https://mcp.linear.app/mcp", headerNames: ["Authorization"], workspaces: [], offeredIn: [], createdAt: at, updatedAt: at,
+      shares: [asked ? { id: "w1", name: workspace.name, shared: true, pending: true, server: { id: "srv1", prefix: "linear" } }
+        : { id: "w1", name: workspace.name, shared: false, needsApproval: true }] });
+    const app = await openSettings("mcp-sharing", {
+      [`GET ${ORIGIN}/api/mcp-connections`]: () => ({ body: { connections: [mine()] } }),
+      [`PUT ${ORIGIN}/api/mcp-connections/mc1/shares/w1`]: () => { asked = true; return { body: { connection: mine() } }; },
+    });
+    await app.waitFor("id:mcp-share-mc1-w1");
+    expect(app.texts().join(" ")).toContain("Sharing here waits for an owner or admin to accept it");
+    const titles: string[] = [];
+    app.onDialog(dialog => { titles.push(dialog.title ?? ""); return dialog.title?.startsWith("Ask ") ? "Ask" : null; });
+    await app.press("id:mcp-share-toggle-mc1-w1");
+    await app.waitFor(`text:Asked ${workspace.name}'s owners and admins to accept Linear. Its tools are offered once one of them does.`);
+    expect(titles).toEqual([`Ask ${workspace.name} to use Linear?`]);
+    await app.waitUntil(() => app.texts().join(" ").includes("Waiting for an owner or admin of this workspace to accept it"));
+  });
+
   test("Password sets a first password where the server takes them", async () => {
     const app = await openSettings("password", {
       [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, passwordAuth: true, testMode: true } },
@@ -806,6 +826,31 @@ describe("settings", () => {
     expect(shown).not.toContain("Change sign-in");
     expect(app.shows("id:mcp-sign-in-linear")).toBe(false);
     expect(shown).toContain("List tools again");
+  });
+
+  test("Workspaces shows an admin a remote MCP server a member shared, waiting for approval, and accepts it once confirmed", async () => {
+    const at = "2026-01-01T00:00:00.000Z";
+    let pending = true;
+    const server = () => ({ id: "m2", name: "Linear", prefix: "linear", url: "https://mcp.linear.app/mcp", enabled: true, signInAs: "workspace", headerNames: [], readOnlyTools: [],
+      offTools: [], tools: [{ name: "search", toolName: "linear_search", description: "Search.", inputSchema: { type: "object" }, readOnly: false, off: false }], updatedAt: at,
+      sharedBy: { userId: "u2", name: "Grace", mine: false, active: !pending, ...(pending ? { pending: true } : {}) } });
+    const app = await openSettings("workspaces", {
+      [`GET ${ORIGIN}/api/workspaces/w1/mcp-servers`]: () => ({ body: { servers: [server()], admin: true } }),
+      [`POST ${ORIGIN}/api/workspaces/w1/mcp-servers/m2/accept`]: () => { pending = false; return { body: { server: server() } }; },
+    });
+    await openWorkspace(app, "agents");
+    await app.waitFor("text:Linear · linear_");
+    await app.press("text:Linear · linear_");
+    await app.waitFor("id:mcp-pending-linear");
+    expect(app.texts().join(" ")).toContain("Grace shared their own connection to it with this workspace.");
+    expect(app.texts().join(" ")).not.toContain("Remove");
+    const titles: string[] = [];
+    app.onDialog(dialog => { titles.push(dialog.title ?? ""); return dialog.title?.startsWith("Accept ") ? "Accept" : null; });
+    await app.press("id:mcp-accept-linear");
+    await app.waitFor("text:Accepted. Sessions offer its tools from their next message.");
+    expect(titles).toEqual(["Accept Linear?"]);
+    await app.waitFor("id:mcp-shared-by-linear");
+    expect(app.shows("id:mcp-pending-linear")).toBe(false);
   });
 
   test("Workspaces shows the workspace's memory and the notes agents proposed, and an admin adds one to the memory as they save it", async () => {
