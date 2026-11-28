@@ -1,4 +1,4 @@
-import { locale } from "nsh";
+import { locale, localeSettings } from "nsh";
 import { t } from "nsh/i18n";
 import type { SessionView } from "../../../../packages/shared/src/types";
 import { cacheHitRate } from "../../../../packages/shared/src/usage";
@@ -59,17 +59,21 @@ export function usageStatus(view: Pick<SessionView, "context" | "usage"> | undef
 }
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
-function dateFormat(kind: "date" | "time"): Intl.DateTimeFormat {
-  const tag = locale();
-  const key = `${kind} ${tag}`;
+export function dateTimeFormat(kind: "date" | "time", tag: string, hourCycle: string, timeZone: string): Intl.DateTimeFormat {
+  const key = `${kind} ${tag} ${hourCycle} ${timeZone}`;
   let format = formatters.get(key);
   if (!format) {
     format = new Intl.DateTimeFormat(tag, kind === "date"
       ? { year: "numeric", month: "short", day: "numeric" }
-      : { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      : { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: hourCycle as Intl.DateTimeFormatOptions["hourCycle"] });
     formatters.set(key, format);
   }
   return format;
+}
+
+function dateFormat(kind: "date" | "time"): Intl.DateTimeFormat {
+  const { hourCycle, timeZone } = localeSettings();
+  return dateTimeFormat(kind, locale(), hourCycle, timeZone);
 }
 
 export function dateLabel(date: Date): string {

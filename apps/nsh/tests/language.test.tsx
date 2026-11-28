@@ -1,6 +1,6 @@
 import { setLocale } from "nsh/i18n";
 import { describe, expect, test } from "nsh/test";
-import { dateLabel, relativeTime, timestamp } from "../src/lib/format";
+import { dateLabel, dateTimeFormat, relativeTime, timestamp } from "../src/lib/format";
 import { traditionalAliases } from "../src/lib/language";
 
 const now = Date.UTC(2026, 10, 20, 12, 0);
@@ -30,6 +30,14 @@ describe("times in the language the app shows", () => {
     expect(relativeTime(ago(2 * 1440), now)).toBe("2일 전");
     expect(relativeTime(ago(0), now)).toBe("방금");
     setLocale(null);
+  });
+
+  test("a time follows the person's 12- or 24-hour clock", () => {
+    const at = new Date(2026, 2, 12, 15, 4);
+    expect(dateTimeFormat("time", "en-US", "h23", "UTC").format(at)).toContain("15:04");
+    expect(dateTimeFormat("time", "en-US", "h12", "UTC").format(at)).toContain("3:04 PM");
+    expect(dateTimeFormat("time", "ja", "h23", "UTC").format(at)).toContain("15:04");
+    expect(dateTimeFormat("time", "en-US", "h23", "Asia/Tokyo")).not.toBe(dateTimeFormat("time", "en-US", "h23", "UTC"));
   });
 
   test("a date that does not parse is shown as it is", () => {

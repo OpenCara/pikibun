@@ -35,8 +35,10 @@ their system calls it.
 
 `relativeTime` takes its words from the translations ("5 min ago", "5 分钟前"), since Native Shell's `Intl` has no
 `RelativeTimeFormat`; dates and timestamps go through `Intl.DateTimeFormat` for `locale()`, so each language writes its
-own order and month names ("Mar 12, 2026" in American English). Native Shell carries the formatting data of the
-languages the translations have.
+own order and month names ("Mar 12, 2026" in American English). Times follow the person's 12- or 24-hour clock
+(`localeSettings().hourCycle`), and the formatters are kept per language, clock and time zone, so a change of any of
+them while the app runs makes new ones. Native Shell carries the formatting data of the languages the translations
+have.
 
 ## Checks
 
